@@ -4,7 +4,10 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-embassy-executor = { version = "0.9", default-features = false, features = ["executor-interrupt", "arch-spin"] }
+embassy-executor = { version = "0.9", default-features = false, features = ["executor-thread", "arch-x86_64"] }
+
+[patch.crates-io]
+embassy-executor = { path = "vendor/embassy-executor" }
 
 
 [profile.dev]
