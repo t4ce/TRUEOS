@@ -9,6 +9,21 @@ pub struct LimineSmpRequest {
 unsafe impl Sync for LimineSmpRequest {}
 
 #[repr(C)]
+pub struct LimineHhdmRequest {
+    _id: [u64; 4],
+    _revision: u64,
+    pub response: *const LimineHhdmResponse,
+}
+
+unsafe impl Sync for LimineHhdmRequest {}
+
+#[repr(C)]
+pub struct LimineHhdmResponse {
+    pub revision: u64,
+    pub offset: u64,
+}
+
+#[repr(C)]
 pub struct LimineSmpResponse {
     pub revision: u64,
     pub flags: u32,
@@ -47,3 +62,20 @@ pub static LIMINE_SMP_REQUEST: LimineSmpRequest = LimineSmpRequest {
     response: core::ptr::null(),
     flags: 0,
 };
+
+#[used]
+#[link_section = ".limine_requests"]
+pub static LIMINE_HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+    _id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x48dcf1cb8ad2b852,
+        0x63984e959a98244b,
+    ],
+    _revision: 0,
+    response: core::ptr::null(),
+};
+
+pub fn hhdm_offset() -> Option<u64> {
+    unsafe { LIMINE_HHDM_REQUEST.response.as_ref().map(|resp| resp.offset) }
+}

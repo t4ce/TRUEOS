@@ -1,7 +1,12 @@
 use core::arch::asm;
-
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, Ordering};
+
+use x86_64::{
+    registers::control::Cr3,
+    structures::paging::{PageTable, PageTableFlags},
+    PhysAddr,
+};
 
 const CONFIG_ADDRESS_PORT: u16 = 0xCF8;
 const CONFIG_DATA_PORT: u16 = 0xCFC;
@@ -158,6 +163,81 @@ impl Drop for ConfigLockGuard {
     }
 }
 
+/// Map a physical MMIO range using 2MiB huge pages into the identity map with UC/WT flags.
+/// Assumes bootloader left low memory identity-mapped and page tables accessible at their phys addrs.
+fn map_mmio_identity_2m(phys_base: u64, size: usize) -> bool {
+    const PAGE_2M: u64 = 0x20_0000;
+
+    let (cr3_frame, _) = Cr3::read();
+    let cr3_phys = cr3_frame.start_address().as_u64();
+    if cr3_phys == 0 {
+        crate::debugcon_write_str("mmio map: cr3=0\n");
+        return false;
+    }
+
+    let hhdm_off = crate::limine::hhdm_offset().unwrap_or(0);
+
+    // Page tables are reachable either identity-mapped or via the HHDM offset.
+    let phys_to_virt = |pa: u64| (pa.wrapping_add(hhdm_off)) as *mut PageTable;
+
+    let pml4_ptr = phys_to_virt(cr3_phys);
+    if pml4_ptr.is_null() {
+        crate::debugcon_write_str("mmio map: pml4 null\n");
+        return false;
+    }
+
+    let start = phys_base & !(PAGE_2M - 1);
+    let end = phys_base
+        .saturating_add(size as u64)
+        .saturating_add(PAGE_2M - 1)
+        & !(PAGE_2M - 1);
+
+    let flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE
+        | PageTableFlags::HUGE_PAGE
+        | PageTableFlags::WRITE_THROUGH
+        | PageTableFlags::NO_CACHE;
+
+    let mut cur = start;
+    while cur < end {
+        let l4 = ((cur >> 39) & 0x1FF) as usize;
+        let l3 = ((cur >> 30) & 0x1FF) as usize;
+        let l2 = ((cur >> 21) & 0x1FF) as usize;
+
+        unsafe {
+            let pml4 = &mut *pml4_ptr;
+            let pml4e = &mut pml4[l4];
+            if !pml4e.flags().contains(PageTableFlags::PRESENT) {
+                crate::debugcon_write_str("mmio map: missing PML4E\n");
+                return false;
+            }
+
+            let pdpt_ptr = phys_to_virt(pml4e.addr().as_u64());
+            let pdpt = &mut *pdpt_ptr;
+            let pdpte = &mut pdpt[l3];
+            if !pdpte.flags().contains(PageTableFlags::PRESENT) {
+                crate::debugcon_write_str("mmio map: missing PDPTE\n");
+                return false;
+            }
+            if pdpte.flags().contains(PageTableFlags::HUGE_PAGE) {
+                // 1GiB page already covers this address; skip.
+                cur = cur.saturating_add(PAGE_2M);
+                continue;
+            }
+
+            let pd_ptr = phys_to_virt(pdpte.addr().as_u64());
+            let pd = &mut *pd_ptr;
+            let pde = &mut pd[l2];
+            pde.set_addr(PhysAddr::new(cur), flags);
+        }
+
+        cur = cur.saturating_add(PAGE_2M);
+    }
+
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct PciFunction {
     bus: u8,
@@ -232,22 +312,6 @@ pub async fn pci_enumerate_task() {
     }
 
     crate::debugcon_write_str("pci: done\n");
-
-    if let Some(loc) = xhci_loc {
-        crate::debugcon_write_str("pci: xhci found\n");
-        enable_mem_and_bus_master(loc);
-
-        if let Some(mmio_base) = read_mmio_bar(loc, 0) {
-            crate::debugcon_write_str("pci: xhci bar0=");
-            write_hex_u64(mmio_base);
-            crate::debugcon_write_byte(b'\n');
-            //crate::usb::init_xhci_from_mmio(mmio_base).await;
-        } else {
-            crate::debugcon_write_str("pci: xhci mmio bar missing\n");
-        }
-    } else {
-        crate::debugcon_write_str("pci: no xhci controller found\n");
-    }
 }
 
 fn log_func(func: &PciFunction) {
@@ -303,6 +367,11 @@ fn read_mmio_bar(location: DeviceLocation, bar_index: u8) -> Option<u64> {
     }
 
     Some(base)
+}
+
+fn mmio_phys_to_virt(phys: u64) -> u64 {
+    // Use physical address directly; rely on bootloader identity mapping for MMIO.
+    phys
 }
 
 #[inline(always)]
