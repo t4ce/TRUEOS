@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+embassy-executor = { version = "0.9", default-features = false, features = ["executor-interrupt", "arch-spin"] }
+
 
 [profile.dev]
 panic = "abort"
