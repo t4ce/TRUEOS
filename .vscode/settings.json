@@ -1,3 +1,11 @@
 {
-    "idf.pythonInstallPath": "/usr/bin/python"
+    "idf.pythonInstallPath": "/usr/bin/python",
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.cargo.target": "86_64.json",
+    "rust-analyzer.check.extraArgs": [
+        "-Z",
+        "build-std=core,alloc,compiler_builtins",
+        "--target",
+        "86_64.json"
+    ]
 }
