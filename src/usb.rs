@@ -3,23 +3,22 @@ use core::{
 	task::{Poll},
 	time::Duration,
 };
-use crab_usb::{impl_trait, BoxFuture, EventHandler, FutureExt, Kernel};
+use crab_usb::{impl_extern_trait, BoxFuture, EventHandler, FutureExt, Kernel};
 struct KernelImpl;
-impl_trait! {
-	impl Kernel for KernelImpl {
-		fn sleep<'a>(duration: Duration) -> BoxFuture<'a, ()> {
-			async move {
-				let mut iterations = duration.as_micros().saturating_mul(100);
-				while iterations > 0 {
-					spin_loop();
-					iterations -= 1;
-				}
-			}.boxed()
-		}
+#[impl_extern_trait(name = "crab_usb_0_4", abi = "c")]
+impl Kernel for KernelImpl {
+	fn sleep<'a>(duration: Duration) -> BoxFuture<'a, ()> {
+		async move {
+			let mut iterations = duration.as_micros().saturating_mul(100);
+			while iterations > 0 {
+				spin_loop();
+				iterations -= 1;
+			}
+		}.boxed()
+	}
 
-		fn page_size() -> usize {
-			4096
-		}
+	fn page_size() -> usize {
+		4096
 	}
 }
 
