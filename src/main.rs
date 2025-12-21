@@ -3,7 +3,12 @@
 
 use core::panic::PanicInfo;
 
+extern crate alloc;
+
 mod limine;
+mod pci;
+mod allocators;
+mod usb;
 
 use embassy_executor::raw::Executor;
 use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
@@ -13,10 +18,16 @@ const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 #[repr(C, align(64))]
 struct ExecutorStorage([u8; BSP_EXECUTOR_SIZE]);
 
-// Keep this in a file-backed section so it is mapped even if the loader fails
-// to allocate/map the PT_LOAD memsz>filesz (".bss") tail early on.
 #[link_section = ".data"]
 static mut BSP_EXECUTOR_STORAGE: ExecutorStorage = ExecutorStorage([0xA5; BSP_EXECUTOR_SIZE]);
+
+#[inline(always)]
+unsafe fn init_bsp_executor() -> &'static Executor {
+    let storage_ptr = core::ptr::addr_of_mut!(BSP_EXECUTOR_STORAGE);
+    let bsp_executor_ptr = (*storage_ptr).0.as_mut_ptr() as *mut Executor;
+    core::ptr::write(bsp_executor_ptr, Executor::new(core::ptr::null_mut()));
+    &*bsp_executor_ptr
+}
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -28,10 +39,14 @@ pub extern "C" fn _start() -> ! {
     if long_mode_active() { debugcon_write_str("64bit"); } else { debugcon_write_str("32bit"); }
     start_aps();
 
-    let storage_ptr = core::ptr::addr_of_mut!(BSP_EXECUTOR_STORAGE);
-    let bsp_executor_ptr = unsafe { (*storage_ptr).0.as_mut_ptr() as *mut Executor };
-    unsafe { core::ptr::write(bsp_executor_ptr, Executor::new(core::ptr::null_mut())) };
-    let bsp_executor = unsafe { &*bsp_executor_ptr };
+    // Bootstrap heap using fallback region until proper memory map handling is in place.
+    let (heap_ptr, heap_len) = allocators::fallback_heap_span();
+    allocators::init_linked_list_heap(heap_ptr as usize, heap_len);
+
+    let bsp_executor = unsafe { init_bsp_executor() };
+    let spawner = bsp_executor.spawner();
+    spawner.must_spawn(pci::pci_enumerate_task());
+    unsafe { bsp_executor.poll() };
     
     let mut counter: u64 = 0;
     loop {
@@ -39,6 +54,7 @@ pub extern "C" fn _start() -> ! {
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
             unsafe { bsp_executor.poll() };
+            usb::poll_usb_events();
         }
     }
 }
@@ -68,14 +84,14 @@ fn start_aps() {
 }
 
 #[inline(always)]
-fn debugcon_write_str(s: &str) {
+pub(crate) fn debugcon_write_str(s: &str) {
     for &b in s.as_bytes() {
         unsafe { outb(0xE9, b) };
     }
 }
 
 #[inline(always)]
-fn debugcon_write_byte(b: u8) {
+pub(crate) fn debugcon_write_byte(b: u8) {
     unsafe { outb(0xE9, b) };
 }
 
