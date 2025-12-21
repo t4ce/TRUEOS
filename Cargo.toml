@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 embassy-executor = { path = "vendor/embassy-executor", default-features = false, features = ["executor-thread", "arch-x86_64"] }
+crab-usb = { path = "vendor/crab-usb/usb-host", default-features = false }
 
 
 [profile.dev]
