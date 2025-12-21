@@ -30,7 +30,7 @@ iso:
 	$(LIMINE_DIR)/limine bios-install $(ISO_PATH)
 
 run: iso
-	qemu-system-x86_64 -cdrom $(ISO_PATH) -m 2000M -smp cores=4 -debugcon stdio
+	qemu-system-x86_64 -cdrom $(ISO_PATH) -m 2000M -smp cores=4 -debugcon stdio -device i8042
 
 clean:
 	$(CARGO) clean
