@@ -66,7 +66,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
-            debugcon_write_byte(b'-');
+            debugcon_write_byte(b'0');
         }
     }
 }
@@ -74,40 +74,23 @@ pub extern "C" fn _start() -> ! {
 extern "C" fn ap_entry(cpu: *mut LimineSmpCpu) {
     if !cpu.is_null() {
         let cpu = unsafe { &*cpu };
-        debugcon_write_byte(b'A');
-        debugcon_write_hex_u8(cpu.lapic_id as u8);
-    }
-    let mut counter: u64 = 0;
-    loop {
-        counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
-            debugcon_write_byte(b'1');
+        let mut counter: u64 = 0;
+        loop {
+            counter = counter.wrapping_add(1);
+            if counter % 100_000_000 == 0 {
+                debugcon_write_byte(b'0' + cpu.lapic_id as u8);
+            }
         }
     }
 }
 
 fn start_aps() {
-    let resp = LIMINE_SMP_REQUEST.response;
-    if resp.is_null() {
-        return;
-    }
-    let resp = unsafe { &*resp };
-    debugcon_write_byte(b'B');
-    debugcon_write_hex_u8(resp.bsp_lapic_id as u8);
-    let count = resp.cpu_count as usize;
+    let resp = unsafe { &*LIMINE_SMP_REQUEST.response };
+    let count: usize = resp.cpu_count as usize;
     let cpus = resp.cpus;
-    if cpus.is_null() {
-        return;
-    }
     for idx in 0..count {
         let cpu_ptr = unsafe { *cpus.add(idx) };
-        if cpu_ptr.is_null() {
-            continue;
-        }
         let cpu = unsafe { &mut *cpu_ptr };
-        if cpu.lapic_id == resp.bsp_lapic_id {
-            continue;
-        }
         cpu.goto_address = ap_entry;
     }
 }
@@ -122,20 +105,6 @@ fn debugcon_write_str(s: &str) {
 #[inline(always)]
 fn debugcon_write_byte(b: u8) {
     unsafe { outb(0xE9, b) };
-}
-
-#[inline(always)]
-fn debugcon_write_hex_u8(val: u8) {
-    debugcon_write_byte(nibble_to_hex(val >> 4));
-    debugcon_write_byte(nibble_to_hex(val & 0x0F));
-}
-
-#[inline(always)]
-fn nibble_to_hex(val: u8) -> u8 {
-    match val & 0x0F {
-        0..=9 => b'0' + (val & 0x0F),
-        _ => b'A' + ((val & 0x0F) - 10),
-    }
 }
 
 #[inline(always)]
