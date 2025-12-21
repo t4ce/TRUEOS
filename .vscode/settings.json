@@ -7,5 +7,16 @@
         "build-std=core,alloc,compiler_builtins",
         "--target",
         "86_64.json"
+    ],
+    "rust-analyzer.check.overrideCommand": [
+        "cargo",
+        "+nightly",
+        "check",
+        "-Z",
+        "build-std=core,alloc,compiler_builtins",
+        "--target",
+        "86_64.json",
+        "--bin",
+        "falseos"
     ]
 }

@@ -4,6 +4,7 @@ use core::{
 	time::Duration,
 };
 use crab_usb::{impl_extern_trait, BoxFuture, EventHandler, FutureExt, Kernel};
+use spin::Mutex;
 struct KernelImpl;
 #[impl_extern_trait(name = "crab_usb_0_4", abi = "c")]
 impl Kernel for KernelImpl {
@@ -22,7 +23,7 @@ impl Kernel for KernelImpl {
 	}
 }
 
-static mut USB_HANDLER: Option<EventHandler> = None;
+static USB_HANDLER: Mutex<Option<EventHandler>> = Mutex::new(None);
 
 #[embassy_executor::task]
 pub async fn usb_poll_task() {
@@ -33,10 +34,8 @@ pub async fn usb_poll_task() {
 }
 
 pub fn poll_usb_events() {
-	unsafe {
-		if let Some(handler) = USB_HANDLER.as_ref() {
-			handler.handle_event();
-		}
+	if let Some(handler) = USB_HANDLER.lock().as_ref() {
+		handler.handle_event();
 	}
 }
 
