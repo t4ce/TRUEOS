@@ -75,7 +75,3 @@ pub static LIMINE_HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     _revision: 0,
     response: core::ptr::null(),
 };
-
-pub fn hhdm_offset() -> Option<u64> {
-    unsafe { LIMINE_HHDM_REQUEST.response.as_ref().map(|resp| resp.offset) }
-}
