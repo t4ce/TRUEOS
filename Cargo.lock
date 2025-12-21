@@ -240,6 +240,7 @@ version = "0.0.1"
 dependencies = [
  "crab-usb",
  "embassy-executor",
+ "spin",
  "x86_64",
 ]
 

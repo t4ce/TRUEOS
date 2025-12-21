@@ -21,7 +21,8 @@ unsafe impl GlobalAlloc for Allocator {
             return null_mut();
         }
         NEXT = end;
-        unsafe { FALLBACK_HEAP.as_mut_ptr().add(start) }
+        let base = core::ptr::addr_of!(FALLBACK_HEAP) as *const u8;
+        base.wrapping_add(start) as *mut u8
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
