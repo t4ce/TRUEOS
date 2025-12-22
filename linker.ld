@@ -3,6 +3,11 @@ ENTRY(_start)
 KERNEL_OFFSET = 0xffffffff80000000;
 KERNEL_PHYS_BASE = 0x00100000;
 
+PHDRS {
+  headers PT_PHDR PHDRS FLAGS(0x4); /* Map the program header table itself. */
+  text    PT_LOAD FILEHDR PHDRS FLAGS(0x7); /* Map ELF header + PHDRs in higher half. */
+}
+
 SECTIONS
 {
   /* Higher-half kernel mapped at KERNEL_OFFSET, loaded at KERNEL_PHYS_BASE. */
@@ -68,9 +73,4 @@ SECTIONS
     *(.eh_frame)
     *(.comment)
   }
-}
-
-PHDRS
-{
-  text PT_LOAD FLAGS(0x7);   /* RWX */
 }
