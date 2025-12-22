@@ -1,8 +1,5 @@
 [build]
 target = "86_64.json"
- 
-[target.'cfg(target_os = "none")']
-linker = "rust-lld"
 rustflags = [
   "-C", "link-arg=-Tlinker.ld",
   "-C", "link-arg=--no-gc-sections",
@@ -11,6 +8,9 @@ rustflags = [
   "-C", "relocation-model=static",
   "-C", "force-frame-pointers=yes"
 ]
+ 
+[target.'86_64.json']
+linker = "rust-lld"
 
 [unstable]
 build-std = ["core", "compiler_builtins", "alloc"]
