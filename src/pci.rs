@@ -1,186 +1,59 @@
 use core::arch::asm;
-use core::hint::spin_loop;
-use core::sync::atomic::{AtomicBool, Ordering};
 
-const CONFIG_ADDRESS_PORT: u16 = 0xCF8;
-const CONFIG_DATA_PORT: u16 = 0xCFC;
-const CONFIG_ACCESS_ENABLE: u32 = 0x8000_0000;
+use heapless::Vec;
+use spin::Mutex;
 
-static CONFIG_LOCK: AtomicBool = AtomicBool::new(false);
+const CFG_ADDR: u16 = 0xCF8;
+const CFG_DATA: u16 = 0xCFC;
+const CFG_ENABLE: u32 = 0x8000_0000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeviceLocation {
-    bus: u8,
-    slot: u8,
-    function: u8,
+const MAX_PCI_DEVICES: usize = 256; // adjust if you need more than 256 entries
+
+#[derive(Copy, Clone, Debug)]
+pub struct PciDevice {
+    pub bus: u8,
+    pub slot: u8,
+    pub function: u8,
+    pub vendor: u16,
+    pub device: u16,
+    pub class: u8,
+    pub subclass: u8,
+    pub prog_if: u8,
 }
 
-impl DeviceLocation {
-    pub fn new(bus: u8, slot: u8, function: u8) -> Option<Self> {
-        if slot < 32 && function < 8 {
-            Some(Self {
-                bus,
-                slot,
-                function,
-            })
-        } else {
-            None
-        }
-    }
+static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
 
-    pub const fn bus(self) -> u8 {
-        self.bus
-    }
-
-    pub const fn slot(self) -> u8 {
-        self.slot
-    }
-
-    pub const fn function(self) -> u8 {
-        self.function
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfigAccessError {
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct ConfigSpace;
-
-impl ConfigSpace {
-    pub const fn new() -> Self {
-        Self
-    }
-    pub fn read_u16(&self, location: DeviceLocation, offset: u8) -> Result<u16, ConfigAccessError> {
-        let aligned = offset & !0x03;
-        let value = self.read_aligned_u32(location, aligned)?;
-        let shift = ((offset & 0x03) as u32) * 8;
-        Ok(((value >> shift) & 0xFFFF) as u16)
-    }
- 
-    pub fn read_u8(&self, location: DeviceLocation, offset: u8) -> Result<u8, ConfigAccessError> {
-        let aligned = offset & !0x03;
-        let value = self.read_aligned_u32(location, aligned)?;
-        let shift = ((offset & 0x03) as u32) * 8;
-        Ok(((value >> shift) & 0xFF) as u8)
-    }
-
-    fn read_aligned_u32(
-        &self,
-        location: DeviceLocation,
-        offset: u8,
-    ) -> Result<u32, ConfigAccessError> {
-        debug_assert_eq!(offset & 0x03, 0);
-        let address = compose_address(location, offset);
-        let _guard = ConfigLockGuard::lock();
-        unsafe {
-            outl(CONFIG_ADDRESS_PORT, address);
-            Ok(inl(CONFIG_DATA_PORT))
-        }
-    }
-}
-
-static CONFIG: ConfigSpace = ConfigSpace::new();
-
-fn compose_address(location: DeviceLocation, offset: u8) -> u32 {
-    CONFIG_ACCESS_ENABLE
-        | ((location.bus as u32) << 16)
-        | ((location.slot as u32) << 11)
-        | ((location.function as u32) << 8)
-        | ((offset as u32) & 0xFC)
-}
-
-struct ConfigLockGuard;
-
-impl ConfigLockGuard {
-    #[inline(always)]
-    fn lock() -> Self {
-        while CONFIG_LOCK
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            spin_loop();
-        }
-        Self
-    }
-}
-
-impl Drop for ConfigLockGuard {
-    fn drop(&mut self) {
-        CONFIG_LOCK.store(false, Ordering::Release);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct PciFunction {
-    bus: u8,
-    slot: u8,
-    function: u8,
-    vendor_id: u16,
-    device_id: u16,
-    class_code: u8,
-    subclass: u8,
-    prog_if: u8,
-    header_type: u8,
-}
-
-fn read_function(location: DeviceLocation) -> Option<PciFunction> {
-    let vendor_id = CONFIG.read_u16(location, 0x00).ok()?;
-    if vendor_id == 0xFFFF {
-        return None;
-    }
-
-    let device_id = CONFIG.read_u16(location, 0x02).ok()?;
-    let prog_if = CONFIG.read_u8(location, 0x09).ok()?;
-    let subclass = CONFIG.read_u8(location, 0x0A).ok()?;
-    let class_code = CONFIG.read_u8(location, 0x0B).ok()?;
-    let header_type = CONFIG.read_u8(location, 0x0E).ok()?;
-
-    Some(PciFunction {
-        bus: location.bus(),
-        slot: location.slot(),
-        function: location.function(),
-        vendor_id,
-        device_id,
-        class_code,
-        subclass,
-        prog_if,
-        header_type,
-    })
-}
-
-#[embassy_executor::task]
-pub async fn pci_enumerate_task() {
+pub fn enumerate_once() {
     crate::debugcon_write_str("pci: enumerate\n");
 
-    let mut xhci_loc: Option<DeviceLocation> = None;
+    // start fresh each time we enumerate
+    DEVICES.lock().clear();
 
     for bus in 0u8..=255 {
         for slot in 0u8..32 {
-            let Some(loc0) = DeviceLocation::new(bus, slot, 0) else {
+            let vendor0 = read_u16(bus, slot, 0, 0x00);
+            if vendor0 == 0xFFFF {
                 continue;
-            };
-            let Some(func0) = read_function(loc0) else {
-                continue;
-            };
-
-            log_func(&func0);
-            if xhci_loc.is_none() && is_xhci(&func0) {
-                xhci_loc = Some(loc0);
             }
 
-            let functions = if (func0.header_type & 0x80) != 0 { 8 } else { 1 };
+            let device0 = read_u16(bus, slot, 0, 0x02);
+            let class0 = read_u8(bus, slot, 0, 0x0B);
+            let subclass0 = read_u8(bus, slot, 0, 0x0A);
+            let prog_if0 = read_u8(bus, slot, 0, 0x09);
+            let header0 = read_u8(bus, slot, 0, 0x0E);
+            record_device(bus, slot, 0, vendor0, device0, class0, subclass0, prog_if0);
+
+            let functions = if (header0 & 0x80) != 0 { 8 } else { 1 };
             for function in 1..functions {
-                let Some(loc) = DeviceLocation::new(bus, slot, function) else {
+                let vendor = read_u16(bus, slot, function, 0x00);
+                if vendor == 0xFFFF {
                     continue;
-                };
-                if let Some(func) = read_function(loc) {
-                    log_func(&func);
-                    if xhci_loc.is_none() && is_xhci(&func) {
-                        xhci_loc = Some(loc);
-                    }
                 }
+                let device = read_u16(bus, slot, function, 0x02);
+                let class = read_u8(bus, slot, function, 0x0B);
+                let subclass = read_u8(bus, slot, function, 0x0A);
+                let prog_if = read_u8(bus, slot, function, 0x09);
+                record_device(bus, slot, function, vendor, device, class, subclass, prog_if);
             }
         }
     }
@@ -188,29 +61,122 @@ pub async fn pci_enumerate_task() {
     crate::debugcon_write_str("pci: done\n");
 }
 
-fn log_func(func: &PciFunction) {
-    crate::debugcon_write_str("pci ");
-    write_hex_u8(func.bus);
-    crate::debugcon_write_byte(b':');
-    write_hex_u8(func.slot);
-    crate::debugcon_write_byte(b'.');
-    write_hex_u8(func.function);
-
-    crate::debugcon_write_str(" vid=");
-    write_hex_u16(func.vendor_id);
-    crate::debugcon_write_str(" did=");
-    write_hex_u16(func.device_id);
-    crate::debugcon_write_str(" class=");
-    write_hex_u8(func.class_code);
-    crate::debugcon_write_byte(b':');
-    write_hex_u8(func.subclass);
-    crate::debugcon_write_byte(b':');
-    write_hex_u8(func.prog_if);
-    crate::debugcon_write_byte(b'\n');
+fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
+    CFG_ENABLE
+        | ((bus as u32) << 16)
+        | ((slot as u32) << 11)
+        | ((function as u32) << 8)
+        | ((offset as u32) & 0xFC)
 }
 
-fn is_xhci(func: &PciFunction) -> bool {
-    func.class_code == 0x0C && func.subclass == 0x03 && func.prog_if == 0x30
+fn read_u16(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
+    let aligned = read_u32(bus, slot, function, offset & !0x03);
+    let shift = ((offset & 0x03) as u32) * 8;
+    ((aligned >> shift) & 0xFFFF) as u16
+}
+
+fn read_u8(bus: u8, slot: u8, function: u8, offset: u8) -> u8 {
+    let aligned = read_u32(bus, slot, function, offset & !0x03);
+    let shift = ((offset & 0x03) as u32) * 8;
+    ((aligned >> shift) & 0xFF) as u8
+}
+
+fn write_u16(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
+    let aligned_off = offset & !0x03;
+    let shift = ((offset & 0x03) as u32) * 8;
+    let mask = !(0xFFFFu32 << shift);
+
+    let current = read_u32(bus, slot, function, aligned_off);
+    let new_val = (current & mask) | ((value as u32) << shift);
+    write_u32(bus, slot, function, aligned_off, new_val);
+}
+
+fn read_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
+    debug_assert_eq!(offset & 0x03, 0);
+    let addr = cfg_address(bus, slot, function, offset);
+    unsafe {
+        outl(CFG_ADDR, addr);
+        inl(CFG_DATA)
+    }
+}
+
+fn write_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
+    debug_assert_eq!(offset & 0x03, 0);
+    let addr = cfg_address(bus, slot, function, offset);
+    unsafe {
+        outl(CFG_ADDR, addr);
+        outl(CFG_DATA, value);
+    }
+}
+
+fn record_device(bus: u8, slot: u8, function: u8, vendor: u16, device: u16, class: u8, subclass: u8, prog_if: u8) {
+    push_device(PciDevice { bus, slot, function, vendor, device, class, subclass, prog_if });
+}
+
+fn push_device(dev: PciDevice) {
+    let mut lock = DEVICES.lock();
+    if lock.push(dev).is_err() {
+        crate::debugconf!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+    }
+}
+
+/// Log all detected devices once, after enumeration has populated the list.
+pub fn log_devices_once() {
+    with_devices(|list| {
+        for dev in list {
+            crate::debugconf!(
+                "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                dev.vendor,
+                dev.device,
+                dev.class,
+                dev.subclass,
+                dev.prog_if
+            );
+        }
+    });
+}
+
+/// Iterate over detected devices without exposing the mutex. Useful for later registration.
+pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
+    let lock = DEVICES.lock();
+    f(lock.as_slice())
+}
+
+pub fn first_xhci() -> Option<(PciDevice, u64)> {
+    with_devices(|list| {
+        list.iter().find_map(|dev| {
+            if dev.class == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
+                read_bar0(dev.bus, dev.slot, dev.function).map(|bar| (*dev, bar))
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Enable MMIO decoding and bus mastering so the device will respond on BARs.
+pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
+    let mut cmd = read_u16(bus, slot, function, 0x04);
+    cmd |= 0x0006; // bit1 MEM space, bit2 bus master
+    write_u16(bus, slot, function, 0x04, cmd);
+}
+
+fn read_bar0(bus: u8, slot: u8, function: u8) -> Option<u64> {
+    let bar_lo = read_u32(bus, slot, function, 0x10);
+    if (bar_lo & 0x1) != 0 {
+        // I/O BAR not supported here
+        return None;
+    }
+    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
+    if is_64 {
+        let bar_hi = read_u32(bus, slot, function, 0x14);
+        base |= (bar_hi as u64) << 32;
+    }
+    Some(base)
 }
 
 #[inline(always)]
@@ -225,21 +191,3 @@ unsafe fn inl(port: u16) -> u32 {
     val
 }
 
-#[inline(always)]
-fn write_hex_u8(v: u8) {
-    write_hex_nibble(v >> 4);
-    write_hex_nibble(v & 0x0F);
-}
-
-#[inline(always)]
-fn write_hex_u16(v: u16) {
-    write_hex_u8((v >> 8) as u8);
-    write_hex_u8(v as u8);
-}
-
-#[inline(always)]
-fn write_hex_nibble(v: u8) {
-    let v = v & 0x0F;
-    let c = if v < 10 { b'0' + v } else { b'A' + (v - 10) };
-    crate::debugcon_write_byte(c);
-}
