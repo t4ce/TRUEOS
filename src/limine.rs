@@ -24,6 +24,43 @@ pub struct LimineHhdmResponse {
 }
 
 #[repr(C)]
+pub struct LimineMemmapRequest {
+    _id: [u64; 4],
+    _revision: u64,
+    pub response: *const LimineMemmapResponse,
+}
+
+unsafe impl Sync for LimineMemmapRequest {}
+
+#[repr(C)]
+pub struct LimineMemmapResponse {
+    pub revision: u64,
+    pub entry_count: u64,
+    pub entries: *const *const LimineMemmapEntry,
+}
+
+#[repr(C)]
+pub struct LimineMemmapEntry {
+    pub base: u64,
+    pub length: u64,
+    pub typ: u64,
+}
+
+pub fn memmap_entries() -> Option<&'static [*const LimineMemmapEntry]> {
+    let resp_ptr = LIMINE_MEMMAP_REQUEST.response;
+    if resp_ptr.is_null() {
+        return None;
+    }
+    let resp = unsafe { &*resp_ptr };
+    let entries = resp.entries;
+    let count = resp.entry_count as usize;
+    if entries.is_null() || count == 0 {
+        return None;
+    }
+    Some(unsafe { core::slice::from_raw_parts(entries, count) })
+}
+
+#[repr(C)]
 pub struct LimineSmpResponse {
     pub revision: u64,
     pub flags: u32,
@@ -75,3 +112,25 @@ pub static LIMINE_HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     _revision: 0,
     response: core::ptr::null(),
 };
+
+#[used]
+#[link_section = ".limine_requests"]
+pub static LIMINE_MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
+    _id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x67cf3d9d378a806f,
+        0xe304acdfc50c3c62,
+    ],
+    _revision: 0,
+    response: core::ptr::null(),
+};
+
+pub fn hhdm_offset() -> Option<u64> {
+    let resp_ptr = LIMINE_HHDM_REQUEST.response;
+    if resp_ptr.is_null() {
+        return None;
+    }
+    let resp = unsafe { &*resp_ptr };
+    Some(resp.offset)
+}
