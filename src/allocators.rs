@@ -1,5 +1,8 @@
+use alloc::alloc::alloc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
+
+use crate::debugconf;
 
 pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 
@@ -30,3 +33,15 @@ unsafe impl GlobalAlloc for Allocator {
 
 #[global_allocator]
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
+
+pub fn alloc_demo() {
+    let layout = Layout::from_size_align(512, 1).unwrap();
+    let ptr = unsafe { alloc(layout) };
+    if ptr.is_null() {
+        debugconf!("alloc demo: failed\n");
+        return;
+    }
+    unsafe { core::ptr::write(ptr, 0xFFu8); }
+    let first = unsafe { core::ptr::read(ptr) };
+    debugconf!("alloc demo: ptr=0x{:X} first={:02X}\n", ptr as usize, first);
+}
