@@ -38,17 +38,17 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     if long_mode_active() { debugcon_write_str("64bit"); } else { debugcon_write_str("32bit"); }
     start_aps();
-    let bsp_executor = unsafe { init_bsp_executor() };
-    let spawner = bsp_executor.spawner();
-    spawner.must_spawn(pci::pci_enumerate_task());
-    spawner.must_spawn(usb::usb_poll_task());
-    unsafe { bsp_executor.poll() };
+    //let bsp_executor = unsafe { init_bsp_executor() };
+    //let spawner = bsp_executor.spawner();
+    //spawner.must_spawn(pci::pci_enumerate_task());
+    //spawner.must_spawn(usb::usb_poll_task());
+    //unsafe { bsp_executor.poll() };
     let mut counter: u64 = 0;
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
-            unsafe { bsp_executor.poll() };
+           // unsafe { bsp_executor.poll() };
         }
     }
 }
