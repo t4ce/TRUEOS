@@ -101,7 +101,7 @@ dependencies = [
  "thiserror",
  "tock-registers 0.10.1",
  "trait-ffi",
- "usb-if",
+ "usb-if 0.3.2",
  "xhci",
 ]
 
@@ -245,9 +245,12 @@ name = "falseos"
 version = "0.0.1"
 dependencies = [
  "crab-usb",
+ "dma-api",
  "embassy-executor",
+ "futures",
  "heapless",
  "spin",
+ "usb-if 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "x86_64",
 ]
 
@@ -603,6 +606,19 @@ checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 [[package]]
 name = "usb-if"
 version = "0.3.2"
+dependencies = [
+ "futures",
+ "log",
+ "num_enum",
+ "spin",
+ "thiserror",
+]
+
+[[package]]
+name = "usb-if"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e65d6eb0234039a404fb41e610b2e70a7872d499449ab1fe175ed001a686715"
 dependencies = [
  "futures",
  "log",

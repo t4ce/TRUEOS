@@ -9,6 +9,9 @@ x86_64 = { version = "0.15.4", default-features = false, features = ["instructio
 spin = "0.10"
 heapless = { version = "0.8", default-features = false }
 crab-usb = { path = "CrabUSB/usb-host", default-features = false }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+usb-if = { version = "0.3.2", default-features = false }
+dma-api = { version = "0.5.2", default-features = false, features = ["alloc"] }
 
 
 [profile.dev]
