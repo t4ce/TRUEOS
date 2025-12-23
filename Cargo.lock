@@ -301,6 +301,7 @@ dependencies = [
  "embassy-time-driver",
  "futures",
  "heapless",
+ "limine",
  "spin",
  "usb-if 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "x86_64",
@@ -425,6 +426,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9049f8ff49f75b946f95557148e70230499c8a642bf2d6528246afc7d0282d17"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "limine"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af6d2ee42712e7bd2c787365cd1dab06ef59a61becbf87bec7b32b970bd2594b"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

@@ -1,11 +1,8 @@
 use heapless::Vec;
+use limine::memory_map::EntryType;
 use spin::Mutex;
 
 use crate::debugconf;
-
-const LIMINE_MEMMAP_USABLE: u64 = 0;
-const LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
-const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64 = 2;
 
 const KERNEL_OFFSET: u64 = 0xffffffff80000000;
 const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
@@ -63,23 +60,17 @@ pub fn init_from_limine() {
         hhdm,
     };
 
-    for &ptr in entries {
-        if ptr.is_null() {
-            continue;
-        }
-        let e = unsafe { &*ptr };
+    for entry in entries {
         let allowed = matches!(
-            e.typ,
-            LIMINE_MEMMAP_USABLE
-                | LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE
-                | LIMINE_MEMMAP_ACPI_RECLAIMABLE
+            entry.entry_type,
+            EntryType::USABLE | EntryType::BOOTLOADER_RECLAIMABLE | EntryType::ACPI_RECLAIMABLE
         );
         if !allowed {
             continue;
         }
 
-        let base = e.base;
-        let len = e.length;
+        let base = entry.base;
+        let len = entry.length;
         if base < MIN_DMA_BASE || len < MIN_DMA_LEN {
             debugconf!("dma: skip usable base=0x{:X} len=0x{:X}\n", base, len);
             continue;
