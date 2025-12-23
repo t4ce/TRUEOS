@@ -8,6 +8,7 @@ embassy-executor = { path = "vendor/embassy-executor", default-features = false,
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
 spin = "0.10"
 heapless = { version = "0.8", default-features = false }
+crab-usb = { path = "CrabUSB/usb-host", default-features = false }
 
 
 [profile.dev]
