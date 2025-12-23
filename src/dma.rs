@@ -46,72 +46,7 @@ pub fn init_from_limine() {
 
     debugconf!("dma: scanning memmap entries={} (usable, bootloader reclaim, ACPI reclaim)\n", entries.len());
 
-    let mut best_base: u64 = 0;
-    let mut best_len: u64 = 0;
-    let mut fallback_base: u64 = 0;
-    let mut fallback_len: u64 = 0;
 
-    for &ptr in entries {
-        if ptr.is_null() {
-            continue;
-        }
-        let e = unsafe { &*ptr };
-        let allowed = matches!(
-            e.typ,
-            LIMINE_MEMMAP_USABLE | LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE | LIMINE_MEMMAP_ACPI_RECLAIMABLE
-        );
-        if !allowed {
-            continue;
-        }
-        let base = e.base;
-        let len = e.length;
-        let too_low = base < MIN_DMA_BASE;
-        let too_small = len < MIN_DMA_LEN;
-        if too_low || too_small {
-            debugconf!("dma: skip usable base=0x{:X} len=0x{:X} reason={}{}\n",
-                base,
-                len,
-                if too_low { "low" } else { "" },
-                if too_small { ",small" } else { "" },
-            );
-        } else if base > best_base {
-            // Prefer the highest region that meets our minimums.
-            best_base = base;
-            best_len = len;
-        }
-
-        // Track the largest usable region as a fallback even if it failed the main filters.
-        if len > fallback_len {
-            fallback_base = base;
-            fallback_len = len;
-        }
-    }
-
-    if best_len == 0 {
-        if fallback_len == 0 {
-            debugconf!("dma: no suitable usable region found\n");
-            return;
-        }
-        debugconf!("dma: using fallback region base=0x{:X} len=0x{:X}\n", fallback_base, fallback_len);
-        best_base = fallback_base;
-        best_len = fallback_len;
-    }
-
-    let start = align_up(best_base, 4096);
-    let end = best_base.saturating_add(best_len);
-
-    *DMA.lock() = Some(DmaBump {
-        next: start,
-        end,
-        hhdm,
-    });
-
-    debugconf!(
-        "dma: region phys=0x{:X}..0x{:X} (len={} KiB)\n",
-        start,
-        end,
-        (end.saturating_sub(start)) / 1024
-    );
 }
 
 /// Allocate a physically contiguous DMA buffer.
