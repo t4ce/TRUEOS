@@ -1,4 +1,32 @@
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::{read_volatile, write_volatile, NonNull};
+use spin::Mutex;
+
+#[derive(Copy, Clone, Debug)]
+pub struct ControllerInfo {
+    pub bus: u8,
+    pub slot: u8,
+    pub function: u8,
+    pub bar_phys: u64,
+    pub bar_size: u64,
+    pub mmio_base: NonNull<u8>,
+    pub supports_64bit: bool,
+}
+
+unsafe impl Send for ControllerInfo {}
+unsafe impl Sync for ControllerInfo {}
+
+static FIRST_CONTROLLER: Mutex<Option<ControllerInfo>> = Mutex::new(None);
+
+fn set_first_controller(info: ControllerInfo) {
+    let mut guard = FIRST_CONTROLLER.lock();
+    if guard.is_none() {
+        *guard = Some(info);
+    }
+}
+
+pub fn controller_info() -> Option<ControllerInfo> {
+    FIRST_CONTROLLER.lock().clone()
+}
 
 pub fn init_once() {
     let Some(hhdm) = crate::limine::hhdm_offset() else {
@@ -42,14 +70,29 @@ pub fn init_once() {
             unsafe {
                 let caplength = read_volatile(cap.add(0x00) as *const u8) as u64;
                 let hci_version = read_volatile(cap.add(0x02) as *const u16);
+                let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
+                let supports_64bit = (hccparams1 & 0x1) != 0;
                 let op = cap.add(caplength as usize) as *mut u32;
 
                 crate::debugconf!(
-                    "xhci: caplen=0x{:X} ver=0x{:04X} op=0x{:X}\n",
+                    "xhci: caplen=0x{:X} ver=0x{:04X} op=0x{:X} ac64={}\n",
                     caplength,
                     hci_version,
-                    op as usize
+                    op as usize,
+                    supports_64bit
                 );
+
+                if let Some(nn) = NonNull::new(cap) {
+                    set_first_controller(ControllerInfo {
+                        bus: dev.bus,
+                        slot: dev.slot,
+                        function: dev.function,
+                        bar_phys: base,
+                        bar_size: size as u64,
+                        mmio_base: nn,
+                        supports_64bit,
+                    });
+                }
 
                 const USBCMD: usize = 0x00 / 4;
                 const USBSTS: usize = 0x04 / 4;
