@@ -105,7 +105,6 @@ impl FreeList {
                 continue;
             }
 
-            // Split tail if we have room for another free block.
             let next_block = if remaining >= minimum_block_size() {
                 let next_start = block_start + total_used;
                 let next_ptr = next_start as *mut FreeBlock;
@@ -115,14 +114,12 @@ impl FreeList {
                 });
                 Some(NonNull::new_unchecked(next_ptr))
             } else {
-                // Hand out the whole block to avoid leaking tiny fragments.
                 remaining = 0;
                 block.next
             };
             let alloc_block_size = if remaining == 0 { block.size } else { total_used };
             block.size = alloc_block_size;
 
-            // Remove current from free list.
             match prev {
                 Some(mut p) => p.as_mut().next = next_block,
                 None => self.head = next_block,
@@ -152,7 +149,6 @@ impl FreeList {
         let mut block_ptr = block_start as *mut FreeBlock;
         block_ptr.write(FreeBlock { size: block_size, next: None });
 
-        // Insert sorted by address.
         let mut prev: Option<NonNull<FreeBlock>> = None;
         let mut current = self.head;
 
@@ -176,10 +172,8 @@ impl FreeList {
             self.head = Some(new_node);
         }
 
-        // Coalesce with next.
         self.try_merge_with_next(new_node);
 
-        // Coalesce with previous if adjacent.
         if let Some(mut p) = prev {
             self.try_merge_with_next(p);
         }

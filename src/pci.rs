@@ -7,7 +7,7 @@ const CFG_ADDR: u16 = 0xCF8;
 const CFG_DATA: u16 = 0xCFC;
 const CFG_ENABLE: u32 = 0x8000_0000;
 
-const MAX_PCI_DEVICES: usize = 256; // adjust if you need more than 256 entries
+const MAX_PCI_DEVICES: usize = 256;
 
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
@@ -29,7 +29,6 @@ static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
 pub fn enumerate_once() {
     crate::debugcon_write_str("pci: enumerate\n");
 
-    // start fresh each time we enumerate
     DEVICES.lock().clear();
 
     for bus in 0u8..=255 {
@@ -143,7 +142,6 @@ fn push_device(dev: PciDevice) {
     }
 }
 
-/// Log all detected devices once, after enumeration has populated the list.
 pub fn log_devices_once() {
     with_devices(|list| {
         for dev in list {
@@ -162,15 +160,11 @@ pub fn log_devices_once() {
     });
 }
 
-/// Iterate over detected devices without exposing the mutex. Useful for later registration.
 pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     let lock = DEVICES.lock();
     f(lock.as_slice())
 }
 
-/// Read BAR0 as raw 32-bit (and optional upper 32-bit for 64-bit BARs).
-///
-/// This is purely a config-space read; it does not touch device MMIO.
 pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
     let bar_lo = read_u32(bus, slot, function, 0x10);
     if (bar_lo & 0x1) != 0 {
@@ -186,18 +180,14 @@ pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
     }
 }
 
-/// Enable MMIO decoding and bus mastering so the device will respond on BARs.
 pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     let mut cmd = read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
     write_u16(bus, slot, function, 0x04, cmd);
 }
-/// Compute BAR0 size in bytes by writing all 1s and reading the mask back.
-/// Restores the original BAR contents before returning.
 pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     let orig_lo = read_u32(bus, slot, function, 0x10);
     if (orig_lo & 0x1) != 0 {
-        // I/O BAR
         return None;
     }
 
@@ -208,7 +198,6 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         0
     };
 
-    // Write all 1s to learn which address bits the device hardwires to zero.
     write_u32(bus, slot, function, 0x10, 0xFFFF_FFF0);
     if is_64 {
         write_u32(bus, slot, function, 0x14, 0xFFFF_FFFF);
@@ -221,7 +210,6 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         0
     };
 
-    // Restore the original BAR contents.
     write_u32(bus, slot, function, 0x10, orig_lo);
     if is_64 {
         write_u32(bus, slot, function, 0x14, orig_hi);
@@ -233,7 +221,6 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         mask_lo as u64
     };
 
-    // The size is encoded as zero bits; invert and add one to get the length.
     let size_mask = mask & !0xFu64;
     if size_mask == 0 {
         return None;

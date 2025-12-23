@@ -203,7 +203,6 @@ unsafe fn outb(port: u16, val: u8) {
 }
 
 unsafe fn enable_sse() {
-    // Enable SSE instructions before Rust-generated code touches XMM registers.
     let mut cr0 = Cr0::read();
     cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
     cr0.insert(Cr0Flags::MONITOR_COPROCESSOR);
@@ -217,7 +216,7 @@ unsafe fn enable_sse() {
 #[inline(always)]
 fn long_mode_active() -> bool {
     const EFER_MSR: u32 = 0xC000_0080;
-    const EFER_LMA_BIT: u64 = 1 << 10; // Long Mode Active
+    const EFER_LMA_BIT: u64 = 1 << 10;
 
     unsafe {
         let mut lo: u32 = 0;
