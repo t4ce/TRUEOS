@@ -9,7 +9,6 @@ const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256; // adjust if you need more than 256 entries
 
-const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 
@@ -169,37 +168,6 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     f(lock.as_slice())
 }
 
-pub fn first_xhci() -> Option<(PciDevice, u64)> {
-    with_devices(|list| {
-        list.iter().find_map(|dev| {
-            if dev.class == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
-                read_bar0(dev.bus, dev.slot, dev.function).map(|bar| (*dev, bar))
-            } else {
-                None
-            }
-        })
-    })
-}
-
-/// Read the PCI Command (0x04) and Status (0x06) registers.
-pub fn read_command_status(bus: u8, slot: u8, function: u8) -> (u16, u16) {
-    let command = read_u16(bus, slot, function, 0x04);
-    let status = read_u16(bus, slot, function, 0x06);
-    (command, status)
-}
-
-/// True if the given command value has memory-space decoding enabled.
-#[inline(always)]
-pub fn command_has_mem_space(command: u16) -> bool {
-    (command & PCI_COMMAND_MEM_SPACE) != 0
-}
-
-/// True if the given command value has bus mastering enabled.
-#[inline(always)]
-pub fn command_has_bus_master(command: u16) -> bool {
-    (command & PCI_COMMAND_BUS_MASTER) != 0
-}
-
 /// Read BAR0 as raw 32-bit (and optional upper 32-bit for 64-bit BARs).
 ///
 /// This is purely a config-space read; it does not touch device MMIO.
@@ -224,22 +192,6 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
     write_u16(bus, slot, function, 0x04, cmd);
 }
-
-fn read_bar0(bus: u8, slot: u8, function: u8) -> Option<u64> {
-    let bar_lo = read_u32(bus, slot, function, 0x10);
-    if (bar_lo & 0x1) != 0 {
-        // I/O BAR not supported here
-        return None;
-    }
-    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
-    let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
-    if is_64 {
-        let bar_hi = read_u32(bus, slot, function, 0x14);
-        base |= (bar_hi as u64) << 32;
-    }
-    Some(base)
-}
-
 /// Compute BAR0 size in bytes by writing all 1s and reading the mask back.
 /// Restores the original BAR contents before returning.
 pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {

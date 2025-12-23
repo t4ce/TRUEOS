@@ -24,7 +24,6 @@ pub enum MapError {
     InvalidArgs,
     InvalidPointer,
     FrameAllocationFailed,
-    MapFailed,
 }
 
 pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
