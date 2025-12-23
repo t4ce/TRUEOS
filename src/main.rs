@@ -15,13 +15,11 @@ mod mmio;
 mod pci;
 mod xhci;
 mod usb;
-mod interrupts;
 mod time;
 
 use embassy_executor::raw::Executor;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use ::limine::mp::Cpu as LimineCpu;
-use x86_64::instructions::interrupts as cpu_ints;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
@@ -49,8 +47,6 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
     gdt::install();
-    interrupts::install();
-    cpu_ints::enable();
 
     log_limine_markers();
 
