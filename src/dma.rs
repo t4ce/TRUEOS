@@ -243,7 +243,7 @@ impl DmaAllocator {
         let virt_u64 = virt as u64;
 
         // Kernel image: mapped at KERNEL_OFFSET + phys, e.g. .bss fallback heap.
-        let kernel_end_virt = unsafe { core::ptr::addr_of!(kernel_end) as u64 };
+        let kernel_end_virt = core::ptr::addr_of!(kernel_end) as u64;
         if virt_u64 >= KERNEL_VIRT_BASE && virt_u64 < kernel_end_virt {
             return Some(virt_u64.saturating_sub(KERNEL_OFFSET));
         }
@@ -287,9 +287,9 @@ impl DmaAllocator {
 
         let mut idx = 1;
         while idx < self.regions.len() {
-            let (prev_start, prev_end) = {
+            let prev_end = {
                 let prev = self.regions[idx - 1];
-                (prev.start, prev.end)
+                prev.end
             };
             let curr = self.regions[idx];
             if prev_end >= curr.start {
