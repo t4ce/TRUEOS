@@ -52,16 +52,15 @@ pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
     gdt::install();
     interrupts::install();
-    
-    // log_limine_markers();
+    log_limine_markers();
     dma::init_from_limine();
-    //dma::alloc_test_once();
+    dma::alloc_test_once();
     pci::enumerate_once();
     xhci::init_once();
-    // pci::log_devices_once();
-    // log_memmap_once();
-    // allocators::alloc_demo();
-    // start_aps();
+    pci::log_devices_once();
+    log_memmap_once();
+    allocators::alloc_demo();
+    start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
