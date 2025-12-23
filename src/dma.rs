@@ -7,6 +7,16 @@ const LIMINE_MEMMAP_USABLE: u64 = 0;
 const LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
 const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64 = 2;
 
+// Mirrors linker.ld so we can translate kernel higher-half addresses back to physical.
+const KERNEL_OFFSET: u64 = 0xffffffff80000000;
+const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
+const KERNEL_VIRT_BASE: u64 = KERNEL_OFFSET + KERNEL_PHYS_BASE;
+
+extern "C" {
+    // Placed by linker.ld; marks the end of the kernel image in virtual space.
+    static kernel_end: u8;
+}
+
 // Keep away from the very bottom; anything above 64 KiB is fine for now.
 const MIN_DMA_BASE: u64 = 64 * 1024;
 // Minimum length we accept before falling back to the largest usable chunk.
@@ -231,10 +241,19 @@ impl DmaAllocator {
 
     fn virt_to_phys(&self, virt: usize) -> Option<u64> {
         let virt_u64 = virt as u64;
-        if virt_u64 < self.hhdm {
-            return None;
+
+        // Kernel image: mapped at KERNEL_OFFSET + phys, e.g. .bss fallback heap.
+        let kernel_end_virt = unsafe { core::ptr::addr_of!(kernel_end) as u64 };
+        if virt_u64 >= KERNEL_VIRT_BASE && virt_u64 < kernel_end_virt {
+            return Some(virt_u64.saturating_sub(KERNEL_OFFSET));
         }
-        Some(virt_u64 - self.hhdm)
+
+        // Fast path: HHDM direct mapping.
+        if virt_u64 >= self.hhdm {
+            return Some(virt_u64 - self.hhdm);
+        }
+
+        None
     }
 
     fn free_region(&mut self, phys: u64, size: u64) {
