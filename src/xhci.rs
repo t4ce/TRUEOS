@@ -29,10 +29,10 @@ pub fn controller_info() -> Option<ControllerInfo> {
 }
 
 pub fn init_once() {
-    let Some(hhdm) = crate::limine::hhdm_offset() else {
+    if crate::limine::hhdm_offset().is_none() {
         crate::debugconf!("xhci: no HHDM\n");
         return;
-    };
+    }
 
     let mut did_any = false;
     crate::pci::with_devices(|list| {
@@ -66,8 +66,17 @@ pub fn init_once() {
                 size
             );
 
-            let cap = (base + hhdm) as *mut u8;
+            let map_len = if size == 0 { 0x10_000usize } else { size as usize };
+            let mmio = match crate::mmio::map_mmio_region(base, map_len) {
+                Ok(ptr) => ptr,
+                Err(err) => {
+                    crate::debugconf!("xhci: failed to map MMIO: {:?}\n", err);
+                    break;
+                }
+            };
+
             unsafe {
+                let cap = mmio.as_ptr();
                 let caplength = read_volatile(cap.add(0x00) as *const u8) as u64;
                 let hci_version = read_volatile(cap.add(0x02) as *const u16);
                 let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
@@ -82,17 +91,15 @@ pub fn init_once() {
                     supports_64bit
                 );
 
-                if let Some(nn) = NonNull::new(cap) {
-                    set_first_controller(ControllerInfo {
-                        bus: dev.bus,
-                        slot: dev.slot,
-                        function: dev.function,
-                        bar_phys: base,
-                        bar_size: size as u64,
-                        mmio_base: nn,
-                        supports_64bit,
-                    });
-                }
+                set_first_controller(ControllerInfo {
+                    bus: dev.bus,
+                    slot: dev.slot,
+                    function: dev.function,
+                    bar_phys: base,
+                    bar_size: size as u64,
+                    mmio_base: mmio,
+                    supports_64bit,
+                });
 
                 const USBCMD: usize = 0x00 / 4;
                 const USBSTS: usize = 0x04 / 4;

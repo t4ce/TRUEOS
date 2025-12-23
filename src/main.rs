@@ -11,8 +11,8 @@ mod limine;
 mod pci;
 mod allocators;
 mod dma;
+mod mmio;
 mod xhci;
-mod usb;
 
 use embassy_executor::raw::Executor;
 use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
@@ -47,7 +47,7 @@ pub extern "C" fn _start() -> ! {
     // dma::alloc_test_once();
     pci::enumerate_once();
     xhci::init_once();
-    usb::init_once();
+   
     // pci::log_devices_once();
     // log_memmap_once();
     // allocators::alloc_demo();
