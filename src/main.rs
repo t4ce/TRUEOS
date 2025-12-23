@@ -19,7 +19,7 @@ mod interrupts;
 mod time;
 
 use embassy_executor::raw::Executor;
-use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
+use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
@@ -87,8 +87,11 @@ fn log_limine_markers() {
         None => debugconf!("LIMINE HHDM MISSING\n"),
     }
 
-    let req_ptr = &limine::LIMINE_MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = limine::LIMINE_MEMMAP_REQUEST.response as usize;
+    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
+    let resp_ptr = limine::MEMMAP_REQUEST
+        .get_response()
+        .map(|r| r as *const _ as usize)
+        .unwrap_or(0);
     if let Some(entries) = limine::memmap_entries() {
         debugconf!(
             "LIMINE MEMMAP OK entries={} req=0x{:X} resp=0x{:X}\n",
@@ -105,28 +108,24 @@ fn log_limine_markers() {
     }
 }
 
-extern "C" fn ap_entry(cpu: *mut LimineSmpCpu) {
-    if !cpu.is_null() {
-        let cpu = unsafe { &*cpu };
-        let mut counter: u64 = 0;
-        loop {
-            counter = counter.wrapping_add(1);
-            if counter % 100_000_000 == 0 {
-                debugcon_write_byte(b'0' + cpu.lapic_id as u8);
-            }
+unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
+    let mut counter: u64 = 0;
+    loop {
+        counter = counter.wrapping_add(1);
+        if counter % 100_000_000 == 0 {
+            debugcon_write_byte(b'0' + cpu.lapic_id as u8);
         }
     }
 }
 
 fn start_aps() {
-    let resp_ptr = LIMINE_SMP_REQUEST.response;
-    let resp = unsafe { &*resp_ptr };
-    let count: usize = resp.cpu_count as usize;
-    let cpus = resp.cpus;
-    for idx in 0..count {
-        let cpu_ptr = unsafe { *cpus.add(idx) };
-        let cpu = unsafe { &mut *cpu_ptr };
-        cpu.goto_address = ap_entry;
+    let Some(resp) = limine::smp_response() else {
+        debugconf!("smp response missing\n");
+        return;
+    };
+
+    for cpu in resp.cpus() {
+        cpu.goto_address.write(ap_entry);
     }
 }
 
@@ -145,41 +144,26 @@ pub(crate) fn debugcon_write_byte(b: u8) {
 pub(crate) struct DebugCon;
 
 fn log_memmap_once() {
-    let req_ptr = &limine::LIMINE_MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = limine::LIMINE_MEMMAP_REQUEST.response as usize;
+    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
+    let resp_ptr = limine::MEMMAP_REQUEST
+        .get_response()
+        .map(|r| r as *const _ as usize)
+        .unwrap_or(0);
     debugconf!("memmap req=0x{:X} resp=0x{:X}\n", req_ptr, resp_ptr);
 
     if let Some(entries) = limine::memmap_entries() {
         debugconf!("memmap entries={} (showing all)\n", entries.len());
-        for &ptr in entries {
-            if ptr.is_null() {
-                continue;
-            }
-            let e = unsafe { &*ptr };
+        for entry in entries {
             debugconf!(
                 "memmap {:016X}-{:016X} len=0x{:X} type={}\n",
-                e.base,
-                e.base + e.length,
-                e.length,
-                memmap_type_name(e.typ)
+                entry.base,
+                entry.base + entry.length,
+                entry.length,
+                limine::memmap_type_name(entry.entry_type)
             );
         }
     } else {
         debugconf!("memmap unavailable\n");
-    }
-}
-
-fn memmap_type_name(t: u64) -> &'static str {
-    match t {
-        0 => "USABLE",
-        1 => "RESERVED",
-        2 => "ACPI_RECLAIMABLE",
-        3 => "ACPI_NVS",
-        4 => "BAD_MEMORY",
-        5 => "BOOTLOADER_RECLAIMABLE",
-        6 => "KERNEL_AND_MODULES",
-        7 => "FRAMEBUFFER",
-        _ => "OTHER",
     }
 }
 
