@@ -1,5 +1,5 @@
 use crate::{debugconf, xhci};
-use core::{ptr::read_volatile, ptr::NonNull, time::Duration};
+use core::{ptr::NonNull, time::Duration};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use crab_usb::{impl_trait, BoxFuture, Kernel, USBHost};
@@ -123,4 +123,17 @@ async fn crab_usb_init_task(info: xhci::ControllerInfo) {
         info.mmio_base.as_ptr() as usize,
         mask,
     );
+}
+
+pub fn poll_crab_events_once() -> bool {
+    let handler = {
+        let mut host = USB_HOST.lock();
+        host.as_mut().map(|h| h.event_handler())
+    };
+
+    if let Some(handler) = handler {
+        handler.handle_event()
+    } else {
+        false
+    }
 }
