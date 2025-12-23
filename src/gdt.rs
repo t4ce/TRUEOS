@@ -18,7 +18,10 @@ static mut DOUBLE_FAULT_STACK: AlignedStack = AlignedStack([0; IST_STACK_SIZE]);
 pub fn install() {
     let tss = TSS.call_once(|| {
         let mut tss = TaskStateSegment::new();
-        let stack_start = unsafe { VirtAddr::from_ptr(DOUBLE_FAULT_STACK.0.as_ptr()) };
+        let stack_start = {
+            let ptr = unsafe { core::ptr::addr_of!(DOUBLE_FAULT_STACK.0) as *const u8 };
+            VirtAddr::from_ptr(ptr)
+        };
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] =
             stack_start + IST_STACK_SIZE as u64;
         tss

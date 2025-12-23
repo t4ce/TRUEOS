@@ -1,7 +1,7 @@
-use crate::{debugconf, limine, xhci};
+use crate::{debugconf, xhci};
 use core::{ptr::read_volatile, ptr::NonNull, time::Duration};
 use embassy_executor::Spawner;
-use embassy_time::{with_timeout, Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use crab_usb::{impl_trait, BoxFuture, Kernel, USBHost};
 use dma_api::{Direction, Osal};
 use futures::FutureExt;

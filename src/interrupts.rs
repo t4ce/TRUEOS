@@ -22,9 +22,7 @@ pub fn install() {
         idt
     });
 
-    unsafe {
-        IDT.get().expect("IDT initialized").load();
-    }
+    IDT.get().expect("IDT initialized").load();
 }
 
 extern "x86-interrupt" fn page_fault_handler(

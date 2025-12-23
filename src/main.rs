@@ -146,7 +146,7 @@ pub(crate) struct DebugCon;
 
 fn log_memmap_once() {
     let req_ptr = &limine::LIMINE_MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = unsafe { limine::LIMINE_MEMMAP_REQUEST.response as usize };
+    let resp_ptr = limine::LIMINE_MEMMAP_REQUEST.response as usize;
     debugconf!("memmap req=0x{:X} resp=0x{:X}\n", req_ptr, resp_ptr);
 
     if let Some(entries) = limine::memmap_entries() {
