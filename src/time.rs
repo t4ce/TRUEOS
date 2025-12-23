@@ -28,16 +28,12 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
-    // Prefer CPUID 0x15 (TSC/core crystal ratio).
-    // If unavailable, fall back to CPUID 0x16 base frequency (MHz).
-    // If both are missing, use a conservative default.
     unsafe {
         let r15 = __cpuid(0x15);
         let denom = r15.eax as u64;
         let numer = r15.ebx as u64;
         let crystal_hz = r15.ecx as u64;
         if denom != 0 && numer != 0 && crystal_hz != 0 {
-            // tsc_hz = crystal_hz * numer / denom
             return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
         }
 
@@ -48,13 +44,10 @@ fn detect_tsc_hz() -> u64 {
         }
     }
 
-    // QEMU often uses invariant TSC, but frequency discovery may be unavailable.
     1_000_000_000
 }
 
 fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64) -> u64 {
-    // ticks = delta_seconds * TICK_HZ = delta_tsc / tsc_hz * TICK_HZ
-    // Compute as (delta_tsc * TICK_HZ) / tsc_hz using u128 to avoid overflow.
     ((delta_tsc as u128) * (TICK_HZ as u128) / (tsc_hz as u128)) as u64
 }
 
@@ -102,7 +95,6 @@ impl Driver for TimeDriver {
 
         let mut queue = QUEUE.lock();
 
-        // Keep queue sorted by `at` (earliest first).
         let mut idx = 0;
         while idx < queue.len() {
             if at < queue[idx].at {
@@ -117,7 +109,6 @@ impl Driver for TimeDriver {
         };
 
         if queue.insert(idx, entry).is_err() {
-            // Queue full: drop the farthest wake if this one is earlier.
             if let Some(last) = queue.last() {
                 if at < last.at {
                     let _ = queue.pop();

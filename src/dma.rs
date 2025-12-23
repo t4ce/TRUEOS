@@ -7,19 +7,15 @@ const LIMINE_MEMMAP_USABLE: u64 = 0;
 const LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
 const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64 = 2;
 
-// Mirrors linker.ld so we can translate kernel higher-half addresses back to physical.
 const KERNEL_OFFSET: u64 = 0xffffffff80000000;
 const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
 const KERNEL_VIRT_BASE: u64 = KERNEL_OFFSET + KERNEL_PHYS_BASE;
 
 extern "C" {
-    // Placed by linker.ld; marks the end of the kernel image in virtual space.
     static kernel_end: u8;
 }
 
-// Keep away from the very bottom; anything above 64 KiB is fine for now.
 const MIN_DMA_BASE: u64 = 64 * 1024;
-// Minimum length we accept before falling back to the largest usable chunk.
 const MIN_DMA_LEN: u64 = 4 * 1024;
 
 #[derive(Copy, Clone, Debug)]
@@ -51,10 +47,6 @@ const fn align_up(value: u64, align: u64) -> u64 {
     }
 }
 
-/// Initialize a simple physical bump allocator for DMA buffers.
-///
-/// Uses Limine memmap to find a usable RAM region and returns HHDM-backed
-/// virtual addresses for CPU access.
 pub fn init_from_limine() {
     let Some(hhdm) = crate::limine::hhdm_offset() else {
         debugconf!("dma: no HHDM, cannot init\n");
@@ -136,16 +128,12 @@ pub fn init_from_limine() {
     }
 }
 
-/// Allocate a physically contiguous DMA buffer.
-///
-/// Returns (physical_address, virtual_pointer_in_hhdm).
 pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
     let mut lock = DMA.lock();
     let alloc = lock.as_mut()?;
     alloc.alloc(size, align)
 }
 
-/// Return DMA memory back to the allocator.
 pub fn dealloc(ptr: *mut u8, size: usize) {
     if ptr.is_null() || size == 0 {
         return;
@@ -167,7 +155,6 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     alloc.free_region(phys, size as u64);
 }
 
-/// Translate an HHDM virtual pointer back to its physical address.
 pub fn virt_to_phys(ptr: *const u8) -> Option<u64> {
     if ptr.is_null() {
         return None;
@@ -210,7 +197,6 @@ impl DmaAllocator {
                 continue;
             }
 
-            // Remove current region and reinsert leftovers (before/after).
             self.regions.remove(idx);
             let mut insert_pos = idx;
             if region.start < phys {
@@ -242,13 +228,11 @@ impl DmaAllocator {
     fn virt_to_phys(&self, virt: usize) -> Option<u64> {
         let virt_u64 = virt as u64;
 
-        // Kernel image: mapped at KERNEL_OFFSET + phys, e.g. .bss fallback heap.
         let kernel_end_virt = core::ptr::addr_of!(kernel_end) as u64;
         if virt_u64 >= KERNEL_VIRT_BASE && virt_u64 < kernel_end_virt {
             return Some(virt_u64.saturating_sub(KERNEL_OFFSET));
         }
 
-        // Fast path: HHDM direct mapping.
         if virt_u64 >= self.hhdm {
             return Some(virt_u64 - self.hhdm);
         }
