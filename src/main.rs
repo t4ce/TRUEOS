@@ -19,7 +19,9 @@ mod interrupts;
 mod time;
 
 use embassy_executor::raw::Executor;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use ::limine::mp::Cpu as LimineCpu;
+use x86_64::instructions::interrupts as cpu_ints;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
@@ -45,43 +47,49 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if long_mode_active() {
-        debugcon_write_str("64bit");
-    }
-
     unsafe { enable_sse(); }
     gdt::install();
     interrupts::install();
+    cpu_ints::enable();
+
     log_limine_markers();
+
     dma::init_from_limine();
     dma::alloc_test_once();
+
     pci::enumerate_once();
-    xhci::init_once();
     pci::log_devices_once();
+    xhci::init_once();
+
     log_memmap_once();
+
     allocators::alloc_demo();
+
     start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
 
     usb::init_crab_controller(&spawner);
+    spawner.spawn(usb_poll_task());
     
     let mut counter: u64 = 0;
     loop {
-        
         if counter % 10000 == 0 {
             time::poll();
             unsafe { bsp_executor.poll() };
         }
         counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
+        if counter % 10_000_000 == 0 {
             debugcon_write_byte(b'0');
         }
     }
 }
 
 fn log_limine_markers() {
+    if long_mode_active() {
+        debugcon_write_str("64bit");
+    }
     match limine::hhdm_offset() {
         Some(off) => debugconf!("LIMINE HHDM OK offset=0x{:X}\n", off),
         None => debugconf!("LIMINE HHDM MISSING\n"),
@@ -149,10 +157,7 @@ fn log_memmap_once() {
         .get_response()
         .map(|r| r as *const _ as usize)
         .unwrap_or(0);
-    debugconf!("memmap req=0x{:X} resp=0x{:X}\n", req_ptr, resp_ptr);
-
     if let Some(entries) = limine::memmap_entries() {
-        debugconf!("memmap entries={} (showing all)\n", entries.len());
         for entry in entries {
             debugconf!(
                 "memmap {:016X}-{:016X} len=0x{:X} type={}\n",
@@ -162,9 +167,7 @@ fn log_memmap_once() {
                 limine::memmap_type_name(entry.entry_type)
             );
         }
-    } else {
-        debugconf!("memmap unavailable\n");
-    }
+    } 
 }
 
 impl Write for DebugCon {
@@ -184,6 +187,18 @@ macro_rules! debugconf {
 #[inline(always)]
 unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+}
+
+#[embassy_executor::task]
+async fn usb_poll_task() {
+    loop {
+        let handled = usb::poll_crab_events_once();
+        if handled {
+            Timer::after(EmbassyDuration::from_micros(500)).await;
+        } else {
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+    }
 }
 
 unsafe fn enable_sse() {
