@@ -51,7 +51,6 @@ pub extern "C" fn _start() -> ! {
 
     unsafe { enable_sse(); }
     gdt::install();
-
     interrupts::install();
     
     // log_limine_markers();
@@ -59,11 +58,9 @@ pub extern "C" fn _start() -> ! {
     //dma::alloc_test_once();
     pci::enumerate_once();
     xhci::init_once();
-
     // pci::log_devices_once();
     // log_memmap_once();
     // allocators::alloc_demo();
-
     // start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
@@ -73,14 +70,11 @@ pub extern "C" fn _start() -> ! {
     
     let mut counter: u64 = 0;
     loop {
-        // Drive Embassy timers + task scheduling.
         
-        
-        if counter % 1000 == 0 {
-            unsafe { bsp_executor.poll() };
+        if counter % 10000 == 0 {
             time::poll();
+            unsafe { bsp_executor.poll() };
         }
-
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
