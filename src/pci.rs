@@ -220,6 +220,49 @@ fn read_bar0(bus: u8, slot: u8, function: u8) -> Option<u64> {
     Some(base)
 }
 
+/// Compute BAR0 size in bytes by writing all 1s and reading the mask back.
+/// Restores the original BAR contents before returning.
+pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
+    let orig_lo = read_u32(bus, slot, function, 0x10);
+    if (orig_lo & 0x1) != 0 {
+        // I/O BAR
+        return None;
+    }
+
+    let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
+    let orig_hi = if is_64 { read_u32(bus, slot, function, 0x14) } else { 0 };
+
+    // Write all 1s to learn which address bits the device hardwires to zero.
+    write_u32(bus, slot, function, 0x10, 0xFFFF_FFF0);
+    if is_64 {
+        write_u32(bus, slot, function, 0x14, 0xFFFF_FFFF);
+    }
+
+    let mask_lo = read_u32(bus, slot, function, 0x10);
+    let mask_hi = if is_64 { read_u32(bus, slot, function, 0x14) } else { 0 };
+
+    // Restore the original BAR contents.
+    write_u32(bus, slot, function, 0x10, orig_lo);
+    if is_64 {
+        write_u32(bus, slot, function, 0x14, orig_hi);
+    }
+
+    let mask = if is_64 {
+        ((mask_hi as u64) << 32) | mask_lo as u64
+    } else {
+        mask_lo as u64
+    };
+
+    // The size is encoded as zero bits; invert and add one to get the length.
+    let size_mask = mask & !0xFu64;
+    if size_mask == 0 {
+        return None;
+    }
+
+    let size = (!size_mask).wrapping_add(1);
+    Some(size)
+}
+
 #[inline(always)]
 unsafe fn outl(port: u16, val: u32) {
     asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));

@@ -3,9 +3,13 @@ use spin::Mutex;
 use crate::debugconf;
 
 const LIMINE_MEMMAP_USABLE: u64 = 0;
+const LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
+const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64 = 2;
 
-// Keep away from low memory/kernel/bootloader areas.
-const MIN_DMA_BASE: u64 = 16 * 1024 * 1024;
+// Keep away from the very bottom; anything above 64 KiB is fine for now.
+const MIN_DMA_BASE: u64 = 64 * 1024;
+// Minimum length we accept before falling back to the largest usable chunk.
+const MIN_DMA_LEN: u64 = 4 * 1024;
 
 #[derive(Copy, Clone)]
 struct DmaBump {
@@ -40,33 +44,57 @@ pub fn init_from_limine() {
         return;
     };
 
+    debugconf!("dma: scanning memmap entries={} (usable, bootloader reclaim, ACPI reclaim)\n", entries.len());
+
     let mut best_base: u64 = 0;
     let mut best_len: u64 = 0;
+    let mut fallback_base: u64 = 0;
+    let mut fallback_len: u64 = 0;
 
     for &ptr in entries {
         if ptr.is_null() {
             continue;
         }
         let e = unsafe { &*ptr };
-        if e.typ != LIMINE_MEMMAP_USABLE {
+        let allowed = matches!(
+            e.typ,
+            LIMINE_MEMMAP_USABLE | LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE | LIMINE_MEMMAP_ACPI_RECLAIMABLE
+        );
+        if !allowed {
             continue;
         }
         let base = e.base;
         let len = e.length;
-        if base < MIN_DMA_BASE || len < 2 * 1024 * 1024 {
-            continue;
-        }
-
-        // Prefer the highest region to avoid collisions with early kernel memory.
-        if base > best_base {
+        let too_low = base < MIN_DMA_BASE;
+        let too_small = len < MIN_DMA_LEN;
+        if too_low || too_small {
+            debugconf!("dma: skip usable base=0x{:X} len=0x{:X} reason={}{}\n",
+                base,
+                len,
+                if too_low { "low" } else { "" },
+                if too_small { ",small" } else { "" },
+            );
+        } else if base > best_base {
+            // Prefer the highest region that meets our minimums.
             best_base = base;
             best_len = len;
+        }
+
+        // Track the largest usable region as a fallback even if it failed the main filters.
+        if len > fallback_len {
+            fallback_base = base;
+            fallback_len = len;
         }
     }
 
     if best_len == 0 {
-        debugconf!("dma: no suitable usable region found\n");
-        return;
+        if fallback_len == 0 {
+            debugconf!("dma: no suitable usable region found\n");
+            return;
+        }
+        debugconf!("dma: using fallback region base=0x{:X} len=0x{:X}\n", fallback_base, fallback_len);
+        best_base = fallback_base;
+        best_len = fallback_len;
     }
 
     let start = align_up(best_base, 4096);
