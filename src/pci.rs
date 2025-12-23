@@ -9,6 +9,10 @@ const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256; // adjust if you need more than 256 entries
 
+const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
+const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
+const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+
 #[derive(Copy, Clone, Debug)]
 pub struct PciDevice {
     pub bus: u8,
@@ -157,10 +161,47 @@ pub fn first_xhci() -> Option<(PciDevice, u64)> {
     })
 }
 
+/// Read the PCI Command (0x04) and Status (0x06) registers.
+pub fn read_command_status(bus: u8, slot: u8, function: u8) -> (u16, u16) {
+    let command = read_u16(bus, slot, function, 0x04);
+    let status = read_u16(bus, slot, function, 0x06);
+    (command, status)
+}
+
+/// True if the given command value has memory-space decoding enabled.
+#[inline(always)]
+pub fn command_has_mem_space(command: u16) -> bool {
+    (command & PCI_COMMAND_MEM_SPACE) != 0
+}
+
+/// True if the given command value has bus mastering enabled.
+#[inline(always)]
+pub fn command_has_bus_master(command: u16) -> bool {
+    (command & PCI_COMMAND_BUS_MASTER) != 0
+}
+
+/// Read BAR0 as raw 32-bit (and optional upper 32-bit for 64-bit BARs).
+///
+/// This is purely a config-space read; it does not touch device MMIO.
+pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
+    let bar_lo = read_u32(bus, slot, function, 0x10);
+    if (bar_lo & 0x1) != 0 {
+        return (bar_lo, None);
+    }
+
+    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    if is_64 {
+        let bar_hi = read_u32(bus, slot, function, 0x14);
+        (bar_lo, Some(bar_hi))
+    } else {
+        (bar_lo, None)
+    }
+}
+
 /// Enable MMIO decoding and bus mastering so the device will respond on BARs.
 pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     let mut cmd = read_u16(bus, slot, function, 0x04);
-    cmd |= 0x0006; // bit1 MEM space, bit2 bus master
+    cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
     write_u16(bus, slot, function, 0x04, cmd);
 }
 

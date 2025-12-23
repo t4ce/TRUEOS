@@ -3,6 +3,7 @@
 
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
+use core::ptr::read_volatile;
 
 extern crate alloc;
 
@@ -10,6 +11,7 @@ mod limine;
 mod pci;
 mod allocators;
 mod xhci;
+mod dma;
 
 use embassy_executor::raw::Executor;
 use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
@@ -39,23 +41,71 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     if long_mode_active() { debugcon_write_str("64bit"); }
 
-    log_limine_markers();
+    // log_limine_markers();
+    dma::init_from_limine();
+    dma::alloc_test_once();
 
     pci::enumerate_once();
-    pci::log_devices_once();
+    // pci::log_devices_once();
     // log_memmap_once();
-    allocators::alloc_demo();
+    // allocators::alloc_demo();
 
     if let Some((dev, bar0)) = pci::first_xhci() {
         debugconf!("xhci candidate {:02X}:{:02X}.{} bar0=0x{:X}\n", dev.bus, dev.slot, dev.function, bar0);
+
+        let (cmd_before, status_before) = pci::read_command_status(dev.bus, dev.slot, dev.function);
+        debugconf!(
+            "xhci pci cmd(before)=0x{:04X} status=0x{:04X} mem={} bm={}\n",
+            cmd_before,
+            status_before,
+            pci::command_has_mem_space(cmd_before) as u8,
+            pci::command_has_bus_master(cmd_before) as u8,
+        );
+
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
-        // let init_res = unsafe { xhci::Xhci::init(bar0 as usize) };
-        //if init_res.is_none() {
-        //    debugconf!("xhci init skipped\n");
-        //}
+
+        let (cmd_after, status_after) = pci::read_command_status(dev.bus, dev.slot, dev.function);
+        debugconf!(
+            "xhci pci cmd(after )=0x{:04X} status=0x{:04X} mem={} bm={}\n",
+            cmd_after,
+            status_after,
+            pci::command_has_mem_space(cmd_after) as u8,
+            pci::command_has_bus_master(cmd_after) as u8,
+        );
+
+        let (bar0_lo, bar0_hi) = pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
+        match bar0_hi {
+            Some(hi) => debugconf!("xhci bar0 raw lo=0x{:08X} hi=0x{:08X}\n", bar0_lo, hi),
+            None => debugconf!("xhci bar0 raw lo=0x{:08X}\n", bar0_lo),
+        }
+
+        // Minimal, read-only MMIO probe of xHCI capability header.
+        // Reads: CAPLENGTH + HCIVERSION (dword 0), HCSPARAMS1 (dword 1).
+        if let Some(hhdm) = limine::hhdm_offset() {
+            let mmio = (bar0 as usize).wrapping_add(hhdm as usize) as *const u32;
+            unsafe {
+                let cap0 = read_volatile(mmio.add(0));
+                let hcs1 = read_volatile(mmio.add(1));
+
+                let caplength = (cap0 & 0xFF) as u8;
+                let hci_version = ((cap0 >> 16) & 0xFFFF) as u16;
+                let max_slots = (hcs1 & 0xFF) as u8;
+                let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+
+                debugconf!(
+                    "xhci mmio caplen=0x{:02X} hci_ver=0x{:04X} slots={} ports={}\n",
+                    caplength,
+                    hci_version,
+                    max_slots,
+                    max_ports
+                );
+            }
+        } else {
+            debugconf!("xhci mmio probe skipped (no HHDM)\n");
+        }
     } 
     
-    start_aps();
+    //start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
