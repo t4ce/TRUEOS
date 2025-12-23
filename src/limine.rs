@@ -80,11 +80,7 @@ pub struct LimineSmpCpu {
 
 #[used]
 #[link_section = ".limine_requests"]
-static LIMINE_BASE_REVISION: [u64; 3] = [
-    0xf9562b2d5c95a6c8,
-    0x6a7b384944536bdc,
-    0,
-];
+static LIMINE_BASE_REVISION: [u64; 3] = [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 0];
 
 #[used]
 #[link_section = ".limine_requests"]

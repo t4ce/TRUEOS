@@ -66,7 +66,11 @@ pub fn init_once() {
                 size
             );
 
-            let map_len = if size == 0 { 0x10_000usize } else { size as usize };
+            let map_len = if size == 0 {
+                0x10_000usize
+            } else {
+                size as usize
+            };
             let mmio = match crate::mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {

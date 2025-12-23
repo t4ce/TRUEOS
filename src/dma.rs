@@ -68,7 +68,9 @@ pub fn init_from_limine() {
         let e = unsafe { &*ptr };
         let allowed = matches!(
             e.typ,
-            LIMINE_MEMMAP_USABLE | LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE | LIMINE_MEMMAP_ACPI_RECLAIMABLE
+            LIMINE_MEMMAP_USABLE
+                | LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE
+                | LIMINE_MEMMAP_ACPI_RECLAIMABLE
         );
         if !allowed {
             continue;
@@ -88,7 +90,11 @@ pub fn init_from_limine() {
         }
 
         if allocator.regions.push(DmaRegion { start, end }).is_err() {
-            debugconf!("dma: region list full, dropping 0x{:X}..0x{:X}\n", start, end);
+            debugconf!(
+                "dma: region list full, dropping 0x{:X}..0x{:X}\n",
+                start,
+                end
+            );
         }
     }
 
@@ -141,7 +147,10 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     };
 
     let Some(phys) = alloc.virt_to_phys(ptr as usize) else {
-        debugconf!("dma: dealloc pointer outside HHDM virt=0x{:X}\n", ptr as usize);
+        debugconf!(
+            "dma: dealloc pointer outside HHDM virt=0x{:X}\n",
+            ptr as usize
+        );
         return;
     };
 
@@ -195,11 +204,23 @@ impl DmaAllocator {
             self.regions.remove(idx);
             let mut insert_pos = idx;
             if region.start < phys {
-                let _ = self.regions.insert(insert_pos, DmaRegion { start: region.start, end: phys });
+                let _ = self.regions.insert(
+                    insert_pos,
+                    DmaRegion {
+                        start: region.start,
+                        end: phys,
+                    },
+                );
                 insert_pos += 1;
             }
             if end < region.end {
-                let _ = self.regions.insert(insert_pos, DmaRegion { start: end, end: region.end });
+                let _ = self.regions.insert(
+                    insert_pos,
+                    DmaRegion {
+                        start: end,
+                        end: region.end,
+                    },
+                );
             }
 
             let virt = phys.wrapping_add(self.hhdm) as *mut u8;
