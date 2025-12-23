@@ -5,13 +5,7 @@ use x86_64::{
     registers::control::Cr3,
     structures::paging::{
         mapper::{MapToError, Mapper},
-        FrameAllocator,
-        OffsetPageTable,
-        Page,
-        PageSize,
-        PageTable,
-        PageTableFlags,
-        PhysFrame,
+        FrameAllocator, OffsetPageTable, Page, PageSize, PageTable, PageTableFlags, PhysFrame,
         Size4KiB,
     },
     PhysAddr, VirtAddr,
@@ -39,9 +33,7 @@ pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapEr
 
     let phys_start = phys_base & !(PAGE_SIZE - 1);
     let offset = (phys_base - phys_start) as usize;
-    let span = requested
-        .checked_add(offset)
-        .ok_or(MapError::InvalidArgs)? as u64;
+    let span = requested.checked_add(offset).ok_or(MapError::InvalidArgs)? as u64;
     let total = align_up(span, PAGE_SIZE);
 
     let _guard = PAGING_LOCK.lock();
@@ -102,7 +94,9 @@ unsafe impl FrameAllocator<Size4KiB> for PageTableAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         const SIZE: usize = Size4KiB::SIZE as usize;
         let (phys, virt) = dma::alloc(SIZE, SIZE)?;
-        unsafe { core::ptr::write_bytes(virt, 0, SIZE); }
+        unsafe {
+            core::ptr::write_bytes(virt, 0, SIZE);
+        }
         Some(PhysFrame::containing_address(PhysAddr::new(phys)))
     }
 }

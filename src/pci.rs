@@ -57,7 +57,9 @@ pub fn enumerate_once() {
                 let class = read_u8(bus, slot, function, 0x0B);
                 let subclass = read_u8(bus, slot, function, 0x0A);
                 let prog_if = read_u8(bus, slot, function, 0x09);
-                record_device(bus, slot, function, vendor, device, class, subclass, prog_if);
+                record_device(
+                    bus, slot, function, vendor, device, class, subclass, prog_if,
+                );
             }
         }
     }
@@ -113,8 +115,26 @@ fn write_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
     }
 }
 
-fn record_device(bus: u8, slot: u8, function: u8, vendor: u16, device: u16, class: u8, subclass: u8, prog_if: u8) {
-    push_device(PciDevice { bus, slot, function, vendor, device, class, subclass, prog_if });
+fn record_device(
+    bus: u8,
+    slot: u8,
+    function: u8,
+    vendor: u16,
+    device: u16,
+    class: u8,
+    subclass: u8,
+    prog_if: u8,
+) {
+    push_device(PciDevice {
+        bus,
+        slot,
+        function,
+        vendor,
+        device,
+        class,
+        subclass,
+        prog_if,
+    });
 }
 
 fn push_device(dev: PciDevice) {
@@ -230,7 +250,11 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     }
 
     let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
-    let orig_hi = if is_64 { read_u32(bus, slot, function, 0x14) } else { 0 };
+    let orig_hi = if is_64 {
+        read_u32(bus, slot, function, 0x14)
+    } else {
+        0
+    };
 
     // Write all 1s to learn which address bits the device hardwires to zero.
     write_u32(bus, slot, function, 0x10, 0xFFFF_FFF0);
@@ -239,7 +263,11 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     }
 
     let mask_lo = read_u32(bus, slot, function, 0x10);
-    let mask_hi = if is_64 { read_u32(bus, slot, function, 0x14) } else { 0 };
+    let mask_hi = if is_64 {
+        read_u32(bus, slot, function, 0x14)
+    } else {
+        0
+    };
 
     // Restore the original BAR contents.
     write_u32(bus, slot, function, 0x10, orig_lo);
@@ -274,4 +302,3 @@ unsafe fn inl(port: u16) -> u32 {
     asm!("in eax, dx", in("dx") port, out("eax") val, options(nomem, nostack, preserves_flags));
     val
 }
-

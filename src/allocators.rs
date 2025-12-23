@@ -41,7 +41,9 @@ pub fn alloc_demo() {
         debugconf!("alloc demo: failed\n");
         return;
     }
-    unsafe { core::ptr::write(ptr, 0xFFu8); }
+    unsafe {
+        core::ptr::write(ptr, 0xFFu8);
+    }
     let first = unsafe { core::ptr::read(ptr) };
     debugconf!("alloc demo: ptr=0x{:X} first={:02X}\n", ptr as usize, first);
 }
