@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "QEMU (gdbstub, paused)",
+      "type": "shell",
+      "command": "make iso && echo __QEMU_BG_BEGIN__ && (qemu-system-x86_64 -cdrom bld/falseos.iso -d int -no-reboot -m 8000M -smp cores=4 -debugcon stdio -device i8042 -device nec-usb-xhci,id=xhci -device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 -device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 -S -s & echo $! > .vscode/qemu.pid; echo __QEMU_BG_READY__; wait $!)",
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "owner": "qemu",
+          "pattern": [
+            {
+              "regexp": ".*"
+            }
+          ],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "__QEMU_BG_BEGIN__",
+            "endsPattern": "__QEMU_BG_READY__"
+          }
+        }
+      ]
+    }
+  ]
+}
