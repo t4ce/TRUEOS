@@ -1,22 +1,26 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
-use core::ptr::read_volatile;
 
 extern crate alloc;
 
 mod allocators;
 mod dma;
+mod gdt;
 mod limine;
 mod mmio;
 mod pci;
 mod xhci;
 mod usb;
+mod interrupts;
+mod time;
 
 use embassy_executor::raw::Executor;
 use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
+use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -45,31 +49,40 @@ pub extern "C" fn _start() -> ! {
         debugcon_write_str("64bit");
     }
 
-    log_limine_markers();
+    unsafe { enable_sse(); }
+    gdt::install();
+
+    interrupts::install();
+    
+    // log_limine_markers();
     dma::init_from_limine();
-    // dma::alloc_test_once();
+    //dma::alloc_test_once();
     pci::enumerate_once();
     xhci::init_once();
-    usb::init_crab_controller();
 
     // pci::log_devices_once();
     // log_memmap_once();
     // allocators::alloc_demo();
 
-    //start_aps();
+    // start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
 
+    usb::init_crab_controller(&spawner);
+    
     let mut counter: u64 = 0;
     loop {
+        
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
         }
-
         if counter % 10_000_000 == 0 {
-            unsafe { bsp_executor.poll() };
+             unsafe { bsp_executor.poll() };
+        }
+        if counter % 100_000 == 0 {
+             time::poll();
         }
     }
 }
@@ -81,7 +94,7 @@ fn log_limine_markers() {
     }
 
     let req_ptr = &limine::LIMINE_MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = unsafe { limine::LIMINE_MEMMAP_REQUEST.response as usize };
+    let resp_ptr = limine::LIMINE_MEMMAP_REQUEST.response as usize;
     if let Some(entries) = limine::memmap_entries() {
         debugconf!(
             "LIMINE MEMMAP OK entries={} req=0x{:X} resp=0x{:X}\n",
@@ -193,6 +206,18 @@ macro_rules! debugconf {
 #[inline(always)]
 unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+}
+
+unsafe fn enable_sse() {
+    // Enable SSE instructions before Rust-generated code touches XMM registers.
+    let mut cr0 = Cr0::read();
+    cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
+    cr0.insert(Cr0Flags::MONITOR_COPROCESSOR);
+    Cr0::write(cr0);
+
+    let mut cr4 = Cr4::read();
+    cr4.insert(Cr4Flags::OSFXSR | Cr4Flags::OSXMMEXCPT_ENABLE);
+    Cr4::write(cr4);
 }
 
 #[inline(always)]

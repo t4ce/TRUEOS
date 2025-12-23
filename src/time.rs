@@ -1,0 +1,132 @@
+use core::arch::x86_64::{__cpuid, _rdtsc};
+use core::sync::atomic::{AtomicU64, Ordering};
+use core::task::Waker;
+
+use embassy_time_driver::{Driver, TICK_HZ};
+use heapless::Vec;
+use spin::{Mutex, Once};
+
+struct WakeEntry {
+    at: u64,
+    waker: Waker,
+}
+
+const MAX_WAKEUPS: usize = 64;
+
+static START_TSC: AtomicU64 = AtomicU64::new(0);
+static TSC_HZ: AtomicU64 = AtomicU64::new(0);
+static INIT: Once<()> = Once::new();
+
+static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
+
+fn init_once() {
+    INIT.call_once(|| {
+        let start = unsafe { _rdtsc() as u64 };
+        START_TSC.store(start, Ordering::Relaxed);
+        TSC_HZ.store(detect_tsc_hz().max(1), Ordering::Relaxed);
+    });
+}
+
+fn detect_tsc_hz() -> u64 {
+    // Prefer CPUID 0x15 (TSC/core crystal ratio).
+    // If unavailable, fall back to CPUID 0x16 base frequency (MHz).
+    // If both are missing, use a conservative default.
+    unsafe {
+        let r15 = __cpuid(0x15);
+        let denom = r15.eax as u64;
+        let numer = r15.ebx as u64;
+        let crystal_hz = r15.ecx as u64;
+        if denom != 0 && numer != 0 && crystal_hz != 0 {
+            // tsc_hz = crystal_hz * numer / denom
+            return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
+        }
+
+        let r16 = __cpuid(0x16);
+        let base_mhz = (r16.eax & 0xFFFF) as u64;
+        if base_mhz != 0 {
+            return base_mhz * 1_000_000;
+        }
+    }
+
+    // QEMU often uses invariant TSC, but frequency discovery may be unavailable.
+    1_000_000_000
+}
+
+fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64) -> u64 {
+    // ticks = delta_seconds * TICK_HZ = delta_tsc / tsc_hz * TICK_HZ
+    // Compute as (delta_tsc * TICK_HZ) / tsc_hz using u128 to avoid overflow.
+    ((delta_tsc as u128) * (TICK_HZ as u128) / (tsc_hz as u128)) as u64
+}
+
+pub fn poll() {
+    init_once();
+
+    let now = embassy_time_driver::now();
+    let mut to_wake: Vec<Waker, MAX_WAKEUPS> = Vec::new();
+
+    {
+        let mut queue = QUEUE.lock();
+        while let Some(first) = queue.first() {
+            if first.at > now {
+                break;
+            }
+            let entry = queue.remove(0);
+            let _ = to_wake.push(entry.waker);
+        }
+    }
+
+    for w in to_wake {
+        w.wake();
+    }
+}
+
+struct TimeDriver;
+
+impl Driver for TimeDriver {
+    fn now(&self) -> u64 {
+        init_once();
+
+        let start = START_TSC.load(Ordering::Relaxed);
+        let tsc_hz = TSC_HZ.load(Ordering::Relaxed).max(1);
+        let tsc = unsafe { _rdtsc() as u64 };
+        let delta = tsc.wrapping_sub(start);
+        ticks_from_tsc_delta(delta, tsc_hz)
+    }
+
+    fn schedule_wake(&self, at: u64, waker: &Waker) {
+        let now = self.now();
+        if at <= now {
+            waker.wake_by_ref();
+            return;
+        }
+
+        let mut queue = QUEUE.lock();
+
+        // Keep queue sorted by `at` (earliest first).
+        let mut idx = 0;
+        while idx < queue.len() {
+            if at < queue[idx].at {
+                break;
+            }
+            idx += 1;
+        }
+
+        let entry = WakeEntry {
+            at,
+            waker: waker.clone(),
+        };
+
+        if queue.insert(idx, entry).is_err() {
+            // Queue full: drop the farthest wake if this one is earlier.
+            if let Some(last) = queue.last() {
+                if at < last.at {
+                    let _ = queue.pop();
+                    let insert_idx = idx.min(queue.len());
+                    let _ = queue.insert(insert_idx, WakeEntry { at, waker: waker.clone() });
+                }
+            }
+        }
+    }
+}
+
+embassy_time_driver::time_driver_impl!(static DRIVER: TimeDriver = TimeDriver);
