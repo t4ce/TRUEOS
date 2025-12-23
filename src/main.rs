@@ -10,7 +10,6 @@ extern crate alloc;
 mod limine;
 mod pci;
 mod allocators;
-mod xhci;
 mod dma;
 
 use embassy_executor::raw::Executor;
@@ -43,13 +42,11 @@ pub extern "C" fn _start() -> ! {
 
     log_limine_markers();
     dma::init_from_limine();
-    dma::alloc_test_once();
-
+    // dma::alloc_test_once();
     pci::enumerate_once();
     // pci::log_devices_once();
-    log_memmap_once();
+    // log_memmap_once();
     // allocators::alloc_demo();
-
 
     //start_aps();
 
