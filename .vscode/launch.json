@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FalseOS (attach gdb to QEMU :1234)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/86_64/debug/falseos",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": true,
+      "preLaunchTask": "QEMU (gdbstub, paused)",
+      "externalConsole": false,
+      "setupCommands": [
+        {
+          "description": "Use x86_64 arch",
+          "text": "set architecture i386:x86-64",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

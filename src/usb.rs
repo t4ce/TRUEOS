@@ -48,8 +48,6 @@ pub fn init_crab_controller(spawner: &Spawner) {
             if let Err(e) = spawner.spawn(crab_usb_init_task(info)) {
                 debugconf!("usb: failed to spawn init task: {:?}\n", e);
             }
-        } else {
-            debugconf!("usb: xHCI controller info missing\n");
         }
     });
 }
@@ -88,10 +86,21 @@ async fn crab_usb_init_task(info: xhci::ControllerInfo) {
 
     let mut host = USBHost::new_xhci(info.mmio_base, mask);
 
+    debugconf!(
+        "usb: starting CrabUSB init bus={:02X}:{:02X}.{} mmio=0x{:X} mask=0x{:X}\n",
+        info.bus,
+        info.slot,
+        info.function,
+        info.mmio_base.as_ptr() as usize,
+        mask,
+    );
+
     if let Err(e) = host.init().await {
-        debugconf!("usb: CrabUSB init failed: {:?}\n", e);
+        debugconf!("usb: CrabUSB init failed: {} ({:?})\n", e, e);
         return;
     }
+
+    debugconf!("usb: CrabUSB init ok\n");
 
     *USB_HOST.lock() = Some(host);
 
