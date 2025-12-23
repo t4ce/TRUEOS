@@ -7,12 +7,13 @@ use core::ptr::read_volatile;
 
 extern crate alloc;
 
-mod limine;
-mod pci;
 mod allocators;
 mod dma;
+mod limine;
 mod mmio;
+mod pci;
 mod xhci;
+mod usb;
 
 use embassy_executor::raw::Executor;
 use limine::{LimineSmpCpu, LIMINE_SMP_REQUEST};
@@ -40,14 +41,17 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    if long_mode_active() { debugcon_write_str("64bit"); }
+    if long_mode_active() {
+        debugcon_write_str("64bit");
+    }
 
     log_limine_markers();
     dma::init_from_limine();
     // dma::alloc_test_once();
     pci::enumerate_once();
     xhci::init_once();
-   
+    usb::init_crab_controller();
+
     // pci::log_devices_once();
     // log_memmap_once();
     // allocators::alloc_demo();
@@ -86,7 +90,11 @@ fn log_limine_markers() {
             resp_ptr
         );
     } else {
-        debugconf!("LIMINE MEMMAP MISSING req=0x{:X} resp=0x{:X}\n", req_ptr, resp_ptr);
+        debugconf!(
+            "LIMINE MEMMAP MISSING req=0x{:X} resp=0x{:X}\n",
+            req_ptr,
+            resp_ptr
+        );
     }
 }
 
@@ -137,7 +145,9 @@ fn log_memmap_once() {
     if let Some(entries) = limine::memmap_entries() {
         debugconf!("memmap entries={} (showing all)\n", entries.len());
         for &ptr in entries {
-            if ptr.is_null() { continue; }
+            if ptr.is_null() {
+                continue;
+            }
             let e = unsafe { &*ptr };
             debugconf!(
                 "memmap {:016X}-{:016X} len=0x{:X} type={}\n",
