@@ -129,6 +129,35 @@ pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
     alloc.alloc(size, align)
 }
 
+/// Return DMA memory back to the allocator.
+pub fn dealloc(ptr: *mut u8, size: usize) {
+    if ptr.is_null() || size == 0 {
+        return;
+    }
+
+    let mut lock = DMA.lock();
+    let Some(alloc) = lock.as_mut() else {
+        return;
+    };
+
+    let Some(phys) = alloc.virt_to_phys(ptr as usize) else {
+        debugconf!("dma: dealloc pointer outside HHDM virt=0x{:X}\n", ptr as usize);
+        return;
+    };
+
+    alloc.free_region(phys, size as u64);
+}
+
+/// Translate an HHDM virtual pointer back to its physical address.
+pub fn virt_to_phys(ptr: *const u8) -> Option<u64> {
+    if ptr.is_null() {
+        return None;
+    }
+    let lock = DMA.lock();
+    let alloc = lock.as_ref()?;
+    alloc.virt_to_phys(ptr as usize)
+}
+
 pub fn alloc_test_once() {
     if DMA.lock().is_none() {
         debugconf!("dma: not initialized\n");
@@ -177,5 +206,59 @@ impl DmaAllocator {
             return Some((phys, virt));
         }
         None
+    }
+
+    fn virt_to_phys(&self, virt: usize) -> Option<u64> {
+        let virt_u64 = virt as u64;
+        if virt_u64 < self.hhdm {
+            return None;
+        }
+        Some(virt_u64 - self.hhdm)
+    }
+
+    fn free_region(&mut self, phys: u64, size: u64) {
+        if size == 0 {
+            return;
+        }
+
+        let start = phys;
+        let end = start.saturating_add(size);
+        if end <= start {
+            return;
+        }
+
+        let mut idx = 0;
+        while idx < self.regions.len() && self.regions[idx].start < start {
+            idx += 1;
+        }
+
+        if self.regions.insert(idx, DmaRegion { start, end }).is_err() {
+            debugconf!("dma: free list full dropping 0x{:X}..0x{:X}\n", start, end);
+            return;
+        }
+
+        self.merge_regions();
+    }
+
+    fn merge_regions(&mut self) {
+        if self.regions.len() < 2 {
+            return;
+        }
+
+        let mut idx = 1;
+        while idx < self.regions.len() {
+            let (prev_start, prev_end) = {
+                let prev = self.regions[idx - 1];
+                (prev.start, prev.end)
+            };
+            let curr = self.regions[idx];
+            if prev_end >= curr.start {
+                let new_end = prev_end.max(curr.end);
+                self.regions[idx - 1].end = new_end;
+                self.regions.remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
     }
 }
