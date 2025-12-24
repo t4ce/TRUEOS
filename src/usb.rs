@@ -1,4 +1,4 @@
-use crate::{debugconf, dma, inbound, osal, xhci};
+use crate::{debugconf, dma, hid::{self, HidRuntime}, osal, xhci};
 use crate::xhci::{
     decode_port_status,
     endpoint_target,
@@ -13,20 +13,10 @@ use crate::xhci::{
     XhciContext,
     ErstEntry,
 };
-use inbound::HidKind;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-#[derive(Copy, Clone, Debug)]
-struct HidEpInfo {
-    configuration: u8,
-    interface: u8,
-    address: u8,
-    max_packet: u16,
-    interval: u8,
-    protocol: u8,
-}
 
 #[embassy_executor::task]
 pub async fn usb_scout(info: xhci::ControllerInfo) {
@@ -592,7 +582,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
     // Parse config to find first HID boot interrupt IN endpoint.
     let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_total_len as usize) };
-    let ep_info = parse_hid_boot_ep(cfg_slice);
+    let ep_info = hid::parse_boot_endpoint(cfg_slice);
     let Some(ep) = ep_info else {
         debugconf!("usb: no HID boot interrupt IN endpoint found\n");
         return;
@@ -606,7 +596,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         ep.configuration,
         ep.protocol
     );
-    let hid_kind = HidKind::from(ep.protocol);
+    let hid_kind = hid::hid_kind_from_protocol(ep.protocol);
 
     // SET_CONFIGURATION (standard request) to chosen configuration.
     let setup_cfg = Trb {
@@ -647,57 +637,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         return;
     }
 
-    // Issue HID class requests: SET_PROTOCOL(boot) and SET_IDLE(0) on the interface.
-    async fn hid_class_nodata(
-        ctx: &XhciContext,
-        ep0_ring: &mut TrbRing,
-        slot_id: u32,
-        request: u8,
-        value: u16,
-        index: u16,
-    ) -> Result<(), ()> {
-        let setup = Trb {
-            d0: (0x21u32) | ((request as u32) << 8) | ((value as u32) << 16),
-            d1: index as u32,
-            d2: 8 | (2 << 16),
-            d3: trb_type(2) | (1 << 6),
-        };
-        let status = Trb {
-            d0: 0,
-            d1: 0,
-            d2: 0,
-            d3: trb_type(4) | (1 << 5),
-        };
-        if !ep0_ring.push(setup) || !ep0_ring.push(status) {
-            debugconf!("usb: ep0 ring overflow for hid class req\n");
-            return Err(());
-        }
-        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-
-        let Some(evt) = xhci::wait_for_event(
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                evt_type == 32
-            },
-            400,
-            EmbassyDuration::from_millis(5)
-        )
-        .await
-        else {
-            debugconf!("usb: timeout waiting for hid class req {}\n", request);
-            return Err(());
-        };
-
-        let completion = (evt.d2 >> 24) & 0xFF;
-        debugconf!("usb: hid class req {} cc={} value=0x{:04X}\n", request, completion, value);
-        if completion == 1 {
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    let _ = hid_class_nodata(
+    let _ = hid::class_request_nodata(
         &ctx,
         &mut ep0_ring,
         slot_id,
@@ -707,7 +647,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     )
     .await;
 
-    let _ = hid_class_nodata(
+    let _ = hid::class_request_nodata(
         &ctx,
         &mut ep0_ring,
         slot_id,
@@ -885,6 +825,12 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     };
     unsafe { write_bytes(rep_virt, 0, 16) };
 
+    hid::register_runtime(HidRuntime {
+        ep,
+        report_virt: rep_virt,
+        hid_kind,
+    });
+
     let normal = Trb {
         d0: lo(rep_phys),
         d1: hi(rep_phys),
@@ -900,7 +846,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 }
 
 #[embassy_executor::task]
-pub async fn usb_init_task(info: xhci::ControllerInfo) {
+pub async fn usb_init_task(_info: xhci::ControllerInfo) {
     loop {
         let evt_opt = xhci::wait_for_event(
             |evt| {
@@ -913,87 +859,19 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         .await;
 
         if let Some(evt) = evt_opt {
-            let completion = (evt.d2 >> 24) & 0xFF;
-            debugconf!("usb: interrupt IN cc={} len={}\n", completion, ep.max_packet);
-            let data = unsafe { core::slice::from_raw_parts(rep_virt, ep.max_packet as usize) };
-            debugconf!(
-                "usb: report bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
-                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]
-            );
-            inbound::push_report(hid_kind, data);
+            if let Some(runtime) = hid::runtime() {
+                let completion = (evt.d2 >> 24) & 0xFF;
+                let data = unsafe {
+                    core::slice::from_raw_parts(runtime.report_virt, runtime.ep.max_packet as usize)
+                };
+                hid::handle_report(&runtime, completion, data);
+            } else {
+                debugconf!("usb: interrupt IN but no registered HID runtime\n");
+            }
             break;
         } else {
             debugconf!("usb: waiting for interrupt \n");
         }
     }
-}
-
-fn parse_hid_boot_ep(cfg: &[u8]) -> Option<HidEpInfo> {
-    let mut idx = 0usize;
-    let mut config_value = 1u8;
-    let mut current_iface: Option<u8> = None;
-    let mut current_proto: u8 = 0;
-    let mut current_subclass: u8 = 0;
-
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        let ty = cfg[idx + 1];
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
-            }
-            4 => {
-                // Interface descriptor: [0]=len [1]=type [2]=iface [3]=alt [4]=numep [5]=class [6]=subclass [7]=proto
-                if len >= 8 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_subclass = cfg[idx + 6];
-                    current_proto = cfg[idx + 7];
-                }
-            }
-            5 => {
-                if let Some(iface) = current_iface {
-                    let class = 0x03u8;
-                    let subclass = current_subclass;
-                    let proto = current_proto;
-                    if class == 0x03 && subclass == 0x01 && (proto == 0x01 || proto == 0x02) {
-                        if len >= 7 {
-                            let ep_addr = cfg[idx + 2];
-                            let attrs = cfg[idx + 3];
-                            let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                            let interval = cfg[idx + 6];
-                            if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
-                                debugconf!(
-                                    "usb: parse hid ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
-                                    iface,
-                                    ep_addr,
-                                    max_packet,
-                                    interval,
-                                    config_value,
-                                    subclass,
-                                    proto
-                                );
-                                return Some(HidEpInfo {
-                                    configuration: config_value,
-                                    interface: iface,
-                                    address: ep_addr,
-                                    max_packet,
-                                    interval,
-                                    protocol: proto,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        idx += len;
-    }
-    None
 }
 
