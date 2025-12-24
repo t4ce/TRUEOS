@@ -1,8 +1,6 @@
-use crate::{debugconf, dma, hid::{self, HidRuntime}, osal, xhci};
+use crate::{debugconf, dma, hid::{self, BootAttachParams}, osal, xhci};
 use crate::xhci::{
     decode_port_status,
-    endpoint_target,
-    context_index,
     write_reg64,
     trb_type,
     lo,
@@ -505,9 +503,11 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         }
     }
 
+    let cfg_slice_len = cfg_total_len.min(256) as usize;
+    let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_slice_len) };
+
     // Dump the fetched config descriptor set for debugging.
     {
-        let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_total_len as usize) };
         let mut idx = 0usize;
         while idx + 2 <= cfg_slice.len() {
             let len = cfg_slice[idx] as usize;
@@ -519,211 +519,22 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
             idx += len;
         }
     }
-
-    // Parse config to find first HID boot interrupt IN endpoint.
-    let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_total_len as usize) };
-    let ep_info = hid::parse_boot_endpoint(cfg_slice);
-    let Some(ep) = ep_info else {
-        debugconf!("usb: no HID boot interrupt IN endpoint found\n");
-        return;
-    };
-    debugconf!(
-        "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
-        ep.address,
-        ep.max_packet,
-        ep.interval,
-        ep.interface,
-        ep.configuration,
-        ep.protocol
-    );
-    let hid_kind = hid::hid_kind_from_protocol(ep.protocol);
-
-    // SET_CONFIGURATION (standard request) to chosen configuration.
-    let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((ep.configuration as u32) << 16),
-        d1: 0,
-        d2: 8 | (2 << 16),
-        d3: trb_type(2) | (1 << 6),
-    };
-    let status_cfg = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-        d3: trb_type(4) | (1 << 5),
-    };
-    if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        debugconf!("usb: ep0 ring overflow for set_configuration\n");
-        return;
-    }
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-    let Some(set_cfg_evt) = xhci::wait_for_event(
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            evt_type == 32
-        },
-        400,
-        EmbassyDuration::from_millis(5)
-    )
-    .await
-    else {
-        debugconf!("usb: timeout waiting for set-configuration\n");
-        return;
-    };
-
-
-    let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
-    if completion != 1 {
-        return;
-    }
-
-    let _ = hid::class_request_nodata(
-        &ctx,
-        &mut ep0_ring,
+    let attach_params = BootAttachParams {
+        ctx: &ctx,
+        cmd_ring: &mut cmd_ring,
+        ep0_ring: &mut ep0_ring,
         slot_id,
-        0x0B, // SET_PROTOCOL
-        0,
-        ep.interface as u16,
-    )
-    .await;
-
-    let _ = hid::class_request_nodata(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        0x0A, // SET_IDLE
-        0,
-        ep.interface as u16,
-    )
-    .await;
-
-    // Configure interrupt IN endpoint for the found HID interface.
-    let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc ep ring\n");
-            return;
-        }
+        cfg: cfg_slice,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
     };
-    unsafe { write_bytes(ep_ring_virt, 0, 32 * size_of::<Trb>()) };
-    let mut ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, 32) };
 
-    let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc input ctx for cfg-ep\n");
-            return;
-        }
-    };
-    unsafe { write_bytes(input_cfg_virt, 0, 4096) };
-
-    // Add flags + endpoint context rebuilt with experimental settings.
-    let ep_target = endpoint_target(ep.address);
-    let ep_ctx_index = context_index(ep.address);
-
-    unsafe {
-        let add_flags_ptr = input_cfg_virt as *mut u32;
-        // Add only slot + new endpoint (omit ep0 in add-flags).
-        write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_ctx_index));
-
-        let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
-        let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
-        let ep_ctx = input_cfg_virt.add(ep_ctx_off) as *mut u32;
-
-        // Copy current slot context from device context to preserve address/state.
-        let dev_slot_ctx = dev_ctx_virt as *const u32;
-        for i in 0..ctx_stride_words {
-            write_volatile(slot_ctx.add(i), read_volatile(dev_slot_ctx.add(i)));
-        }
-
-        // Context Entries: try ep_ctx_index + 1 for this run.
-        let mut dw0 = read_volatile(slot_ctx.add(0));
-        dw0 = (dw0 & !(0x1F << 27)) | ((ep_ctx_index + 1) << 27);
-        write_volatile(slot_ctx.add(0), dw0);
-
-        // Ensure root port value is preserved (dw1 bits 23:16).
-        let mut dw1 = read_volatile(slot_ctx.add(1));
-        dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
-        write_volatile(slot_ctx.add(1), dw1);
-
-        const EP_TYPE_INT_IN: u32 = 7;
-        let mps = (ep.max_packet as u32) & 0x7FF;
-        let interval = if speed_code == 3 {
-            core::cmp::min(15u32, ep.interval.saturating_sub(1) as u32)
-        } else {
-            ep.interval as u32
-        };
-
-        // Build endpoint context with conservative payload and DCS=0 on TR dequeue.
-        write_volatile(ep_ctx.add(0), interval << 16);
-        write_volatile(ep_ctx.add(1), (mps << 16) | (EP_TYPE_INT_IN << 3) | (3 << 1));
-        let dq = ep_ring.phys & !0xF; // DCS = 0 for this experiment
-        write_volatile(ep_ctx.add(2), lo(dq));
-        write_volatile(ep_ctx.add(3), hi(dq));
-        let avg_trb_len = 8u32;
-        let max_esit_payload = 4u32;
-        write_volatile(ep_ctx.add(4), (avg_trb_len << 16) | max_esit_payload);
-
-    }
-
-    let cfg_ep_cmd = Trb {
-        d0: lo(input_cfg_phys),
-        d1: hi(input_cfg_phys),
-        d2: 0,
-        d3: trb_type(12) | (slot_id << 24),
-    };
-    if !cmd_ring.push(cfg_ep_cmd) {
-        debugconf!("usb: cmd ring full before configure-endpoint\n");
+    if hid::attach_boot_device(attach_params).await.is_err() {
         return;
     }
-    unsafe { write_volatile(ctx.doorbell.add(0), 0) };
-
-    let Some(cfg_evt) = xhci::wait_for_event(
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            evt_type == 33
-        },
-        400,
-        EmbassyDuration::from_millis(5)
-    )
-    .await
-    else {
-        debugconf!("usb: timeout waiting for configure-endpoint\n");
-        return;
-    };
-
-    let completion = (cfg_evt.d2 >> 24) & 0xFF;
-    if completion != 1 {
-        return;
-    }
-
-    // Arm one interrupt IN transfer to read a boot report.
-    let (rep_phys, rep_virt) = match dma::alloc(16, 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc report buffer\n");
-            return;
-        }
-    };
-    unsafe { write_bytes(rep_virt, 0, 16) };
-
-    hid::register_runtime(HidRuntime {
-        ep,
-        report_virt: rep_virt,
-        hid_kind,
-    });
-
-    let normal = Trb {
-        d0: lo(rep_phys),
-        d1: hi(rep_phys),
-        d2: 8,
-        d3: trb_type(1) | (1 << 5),
-    };
-    if !ep_ring.push(normal) {
-        debugconf!("usb: ep ring full before interrupt IN\n");
-        return;
-    }
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
-
 }
 
 #[embassy_executor::task]
