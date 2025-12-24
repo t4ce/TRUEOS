@@ -8,6 +8,7 @@ extern crate alloc;
 mod allocators;
 mod dma;
 mod gdt;
+mod hid;
 mod limine;
 mod mmio;
 mod pci;
