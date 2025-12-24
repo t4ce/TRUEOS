@@ -15,6 +15,7 @@ mod xhci;
 mod osal;
 mod usb;
 mod time;
+mod inbound;
 
 use embassy_executor::{raw::Executor, Spawner};
 use ::limine::mp::Cpu as LimineCpu;
@@ -79,7 +80,7 @@ pub extern "C" fn _start() -> ! {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
-            log_hpet_counter_once();
+            //log_hpet_counter_once();
         }
     }
 }

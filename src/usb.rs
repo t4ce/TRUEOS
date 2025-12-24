@@ -1,53 +1,22 @@
-use crate::{debugconf, dma, osal, xhci};
+use crate::{debugconf, dma, inbound, osal, xhci};
+use crate::xhci::{
+    decode_port_status,
+    endpoint_target,
+    context_index,
+    write_reg64,
+    trb_type,
+    lo,
+    hi,
+    EventRing,
+    Trb,
+    TrbRing,
+    XhciContext,
+    ErstEntry,
+};
+use inbound::HidKind;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-
-#[repr(C, align(16))]
-#[derive(Copy, Clone, Default)]
-struct Trb {
-    d0: u32,
-    d1: u32,
-    d2: u32,
-    d3: u32,
-}
-
-#[repr(C, packed)]
-#[derive(Copy, Clone, Default)]
-struct ErstEntry {
-    seg_base_lo: u32,
-    seg_base_hi: u32,
-    seg_size: u32,
-    rsvd: u32,
-}
-
-struct TrbRing {
-    phys: u64,
-    trbs: *mut Trb,
-    len: usize,
-    enqueue: usize,
-    cycle: bool,
-}
-
-struct EventRing {
-    phys: u64,
-    trbs: *mut Trb,
-    count: usize,
-    dequeue: usize,
-    cycle: bool,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct XhciContext {
-    pub caplength: u8,
-    pub hci_version: u16,
-    pub hcsparams1: u32,
-    pub hccparams1: u32,
-    pub op_base: *mut u32,
-    pub doorbell: *mut u32,
-    pub runtime: *mut u32,
-    pub port_count: u8,
-}
 
 #[derive(Copy, Clone, Debug)]
 struct HidEpInfo {
@@ -56,77 +25,9 @@ struct HidEpInfo {
     address: u8,
     max_packet: u16,
     interval: u8,
+    protocol: u8,
 }
 
-impl XhciContext {
-    /// # Safety
-    /// Caller must ensure `info.mmio_base` is a valid mapped MMIO pointer.
-    pub unsafe fn new(info: xhci::ControllerInfo) -> Self {
-        let cap = info.mmio_base.as_ptr();
-        let caplength = read_volatile(cap.add(0x00) as *const u8);
-        let hci_version = read_volatile(cap.add(0x02) as *const u16);
-        let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
-        let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
-        let dboff = read_volatile(cap.add(0x14) as *const u32) & !0x1F;
-        let rtsoff = read_volatile(cap.add(0x18) as *const u32) & !0x1F;
-        let op_base = cap.add(caplength as usize) as *mut u32;
-        let doorbell = cap.add(dboff as usize) as *mut u32;
-        let runtime = cap.add(rtsoff as usize) as *mut u32;
-        let port_count = ((hcsparams1 >> 24) & 0xFF) as u8;
-
-        XhciContext {
-            caplength,
-            hci_version,
-            hcsparams1,
-            hccparams1,
-            op_base,
-            doorbell,
-            runtime,
-            port_count,
-        }
-    }
-
-    pub unsafe fn portsc(&self, port_idx: usize) -> u32 {
-        const PORT_BLOCK_OFFSET: usize = 0x400;
-        const PORT_STRIDE: usize = 0x10;
-        let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
-        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *const u32;
-        read_volatile(port_ptr)
-    }
-
-    pub unsafe fn reset_port(&self, port_idx: usize) {
-        const PORT_BLOCK_OFFSET: usize = 0x400;
-        const PORT_STRIDE: usize = 0x10;
-        const PORTSC_PR: u32 = 1 << 4;
-        let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
-        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
-        let status = read_volatile(port_ptr);
-        write_volatile(port_ptr, status | PORTSC_PR);
-    }
-
-}
-
-fn endpoint_target(ep_addr: u8) -> u32 {
-    let ep_num = (ep_addr & 0x0F) as u32;
-    let dir_in = (ep_addr & 0x80) != 0;
-    // Doorbell target uses the DCI numbering (slot=0, ep0=1, ep1-out=2, ep1-in=3, ...).
-    if ep_num == 0 {
-        1
-    } else {
-        ep_num * 2 + if dir_in { 1 } else { 0 }
-    }
-}
-
-fn context_index(ep_addr: u8) -> u32 {
-    let ep_num = (ep_addr & 0x0F) as u32;
-    let dir_in = (ep_addr & 0x80) != 0;
-    // Context index layout used here: slot=0, ep0=1, epN-out=2*N, epN-in=2*N+1.
-    if ep_num == 0 {
-        1
-    } else {
-        ep_num * 2 + if dir_in { 1 } else { 0 }
-    }
-}
 
 #[embassy_executor::task]
 pub async fn usb_init_task(info: xhci::ControllerInfo) {
@@ -663,13 +564,15 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         return;
     };
     debugconf!(
-        "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={}\n",
+        "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
         ep.address,
         ep.max_packet,
         ep.interval,
         ep.interface,
-        ep.configuration
+        ep.configuration,
+        ep.protocol
     );
+    let hid_kind = HidKind::from(ep.protocol);
 
     // SET_CONFIGURATION (standard request) to chosen configuration.
     let setup_cfg = Trb {
@@ -971,6 +874,7 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
                 let data = unsafe { core::slice::from_raw_parts(rep_virt, ep.max_packet as usize) };
                 debugconf!("usb: report bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
                     data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]);
+                inbound::push_report(hid_kind, data);
                 break;
             }
         }
@@ -985,29 +889,6 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
     loop {
         Timer::after(EmbassyDuration::from_millis(500)).await;
     }
-}
-
-fn decode_port_status(status: u32) -> (bool, bool, &'static str) {
-    const PORTSC_CCS: u32 = 1 << 0;
-    const PORTSC_PED: u32 = 1 << 1;
-    const PORTSC_SPEED_SHIFT: u32 = 10;
-    const PORTSC_SPEED_MASK: u32 = 0xF << PORTSC_SPEED_SHIFT;
-
-    let connected = (status & PORTSC_CCS) != 0;
-    let enabled = (status & PORTSC_PED) != 0;
-    let speed_code = (status & PORTSC_SPEED_MASK) >> PORTSC_SPEED_SHIFT;
-
-    let speed = match speed_code {
-        0 => "none",
-        1 => "full",
-        2 => "low",
-        3 => "high",
-        4 => "super",
-        5 => "super+",
-        _ => "unknown",
-    };
-
-    (connected, enabled, speed)
 }
 
 fn parse_hid_boot_ep(cfg: &[u8]) -> Option<HidEpInfo> {
@@ -1065,6 +946,7 @@ fn parse_hid_boot_ep(cfg: &[u8]) -> Option<HidEpInfo> {
                                     address: ep_addr,
                                     max_packet,
                                     interval,
+                                    protocol: proto,
                                 });
                             }
                         }
@@ -1078,137 +960,3 @@ fn parse_hid_boot_ep(cfg: &[u8]) -> Option<HidEpInfo> {
     None
 }
 
-impl TrbRing {
-    /// # Safety
-    /// Caller must ensure `trbs` points to a DMA-mapped, zeroed region of `len` TRBs.
-    unsafe fn new(phys: u64, trbs: *mut Trb, len: usize) -> Self {
-        let ring = TrbRing {
-            phys,
-            trbs,
-            len,
-            enqueue: 0,
-            cycle: true,
-        };
-        ring.init_link_trb();
-        ring
-    }
-
-    unsafe fn init_link_trb(&self) {
-        const TRB_TYPE_LINK: u32 = 6;
-        if self.len < 2 {
-            return;
-        }
-        let link_idx = self.len - 1;
-        let link_ptr = self.trbs.add(link_idx);
-        let mut link = Trb {
-            d0: lo(self.phys),
-            d1: hi(self.phys),
-            d2: 0,
-            d3: trb_type(TRB_TYPE_LINK) | (1 << 1), // toggle cycle on wrap
-        };
-        link.d3 |= 1; // ring starts with cycle bit set
-        write_volatile(link_ptr, link);
-    }
-
-    fn push(&mut self, mut trb: Trb) -> bool {
-        if self.len < 2 {
-            return false;
-        }
-
-        let usable = self.len - 1;
-        if self.enqueue >= usable {
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
-
-        trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
-        unsafe { write_volatile(self.trbs.add(self.enqueue), trb) };
-        self.enqueue += 1;
-        if self.enqueue >= usable {
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
-        true
-    }
-
-    fn crcr_value(&self) -> u64 {
-        self.phys | if self.cycle { 1 } else { 0 }
-    }
-
-    fn dequeue_ptr(&self) -> u64 {
-        // TR Dequeue Pointer format: bit0 = DCS; bits 3:1 reserved; pointer bits 63:4.
-        (self.phys & !0xF) | 1
-    }
-}
-
-impl EventRing {
-    /// # Safety
-    /// Caller must ensure `trbs` points to a DMA region with `count` TRBs.
-    unsafe fn new(phys: u64, trbs: *mut Trb, count: usize) -> Self {
-        EventRing {
-            phys,
-            trbs,
-            count,
-            dequeue: 0,
-            cycle: true,
-        }
-    }
-
-    unsafe fn update_erdp(&self, intr0: *mut u32) {
-        const ERDP: usize = 0x18 / 4;
-        let ptr = self.phys + (self.dequeue as u64 * size_of::<Trb>() as u64);
-        write_volatile(intr0.add(ERDP + 1), hi(ptr));
-        write_volatile(intr0.add(ERDP), lo(ptr) | (1 << 3));
-    }
-
-    unsafe fn pop(&mut self, intr0: *mut u32) -> Option<Trb> {
-        if self.count == 0 {
-            return None;
-        }
-
-        let trb = read_volatile(self.trbs.add(self.dequeue));
-        let trb_cycle = (trb.d3 & 1) != 0;
-        if trb_cycle != self.cycle {
-            return None;
-        }
-
-        self.dequeue += 1;
-        if self.dequeue >= self.count {
-            self.dequeue = 0;
-            self.cycle = !self.cycle;
-        }
-
-        self.update_erdp(intr0);
-        Some(trb)
-    }
-
-    fn last_trb_phys(&self) -> u64 {
-        if self.count == 0 {
-            return self.phys;
-        }
-        let idx = if self.dequeue == 0 {
-            self.count - 1
-        } else {
-            self.dequeue - 1
-        };
-        self.phys + (idx as u64) * size_of::<Trb>() as u64
-    }
-}
-
-const fn lo(val: u64) -> u32 {
-    (val & 0xFFFF_FFFF) as u32
-}
-
-const fn hi(val: u64) -> u32 {
-    (val >> 32) as u32
-}
-
-const fn trb_type(ty: u32) -> u32 {
-    ty << 10
-}
-
-unsafe fn write_reg64(base: *mut u32, byte_offset: usize, value: u64) {
-    let ptr = base.add(byte_offset / 4);
-    write_volatile(ptr, lo(value));
-    write_volatile(ptr.add(1), hi(value));
-}
