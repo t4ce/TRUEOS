@@ -57,10 +57,10 @@ pub extern "C" fn _start() -> ! {
     dma::alloc_test_once();
 
     pci::enumerate_once();
-    pci::log_devices_once();
+    //pci::log_devices_once();
     xhci::init_once();
 
-    log_memmap_once();
+    //log_memmap_once();
 
     allocators::alloc_demo();
 
@@ -79,6 +79,7 @@ pub extern "C" fn _start() -> ! {
         counter = counter.wrapping_add(1);
         if counter % 10_000_000 == 0 {
             debugcon_write_byte(b'0');
+            log_hpet_counter_once();
         }
     }
 }
@@ -173,6 +174,33 @@ fn log_memmap_once() {
             );
         }
     } 
+}
+
+fn log_hpet_counter_once() {
+    const HPET_BASE: u64 = 0xFED0_0000;
+    const HPET_CFG_OFFSET: usize = 0x10;
+    const HPET_MAIN_COUNTER_OFFSET: usize = 0xF0;
+
+    let region = match mmio::map_mmio_region(HPET_BASE, 0x1000) {
+        Ok(r) => r,
+        Err(e) => {
+            debugconf!("HPET map failed: {:?}\n", e);
+            return;
+        }
+    };
+
+    unsafe {
+        let base = region.as_ptr();
+        let cfg = base.add(HPET_CFG_OFFSET) as *mut u64;
+        let counter = base.add(HPET_MAIN_COUNTER_OFFSET) as *const u64;
+
+        let mut current_cfg = cfg.read_volatile();
+        current_cfg |= 1; // enable main counter
+        cfg.write_volatile(current_cfg);
+
+        let ticks = counter.read_volatile();
+        debugconf!("HPET counter=0x{:016X}\n", ticks);
+    }
 }
 
 impl Write for DebugCon {
