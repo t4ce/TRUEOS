@@ -77,7 +77,7 @@ pub extern "C" fn _start() -> ! {
             unsafe { bsp_executor.poll() };
         }
         counter = counter.wrapping_add(1);
-        if counter % 10_000_000 == 0 {
+        if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
             log_hpet_counter_once();
         }
