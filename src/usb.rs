@@ -24,14 +24,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
     let ctx = unsafe { XhciContext::new(info) };
     let csz_64 = (ctx.hccparams1 & (1 << 2)) != 0;
-    debugconf!(
-        "usb: xhci caps len=0x{:X} ver=0x{:04X} ports={} ac64={} csz_64={}\n",
-        ctx.caplength,
-        ctx.hci_version,
-        ctx.port_count,
-        (ctx.hccparams1 & 0x1) != 0,
-        csz_64
-    );
     // Size of each context entry depends on controller capability (CSZ bit).
     let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
     let ctx_stride_words: usize = ctx_stride_bytes / 4;
@@ -93,15 +85,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     let mut selected_port: Option<(u8, u32)> = None;
     for port in 0..ctx.port_count {
         let status = unsafe { ctx.portsc(port as usize) };
-        let (connected, enabled, speed) = decode_port_status(status);
-        debugconf!(
-            "usb: port {:02} status=0x{:08X} connected={} enabled={} speed={}\n",
-            port + 1,
-            status,
-            connected,
-            enabled,
-            speed
-        );
+        let (connected, enabled, _) = decode_port_status(status);
         if connected && selected_port.is_none() {
             selected_port = Some(((port + 1) as u8, status));
         }
@@ -309,21 +293,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         write_volatile(ep0_ctx.add(3), hi(dq));
         write_volatile(ep0_ctx.add(4), 8); // average TRB length = 8 for control
 
-        debugconf!(
-            "usb: pre-address slot ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X}\n",
-            read_volatile(slot_ctx.add(0)),
-            read_volatile(slot_ctx.add(1)),
-            read_volatile(slot_ctx.add(2)),
-            read_volatile(slot_ctx.add(3))
-        );
-        debugconf!(
-            "usb: pre-address ep0 ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-            read_volatile(ep0_ctx.add(0)),
-            read_volatile(ep0_ctx.add(1)),
-            read_volatile(ep0_ctx.add(2)),
-            read_volatile(ep0_ctx.add(3)),
-            read_volatile(ep0_ctx.add(4))
-        );
     }
 
     // ADDRESS_DEVICE command referencing the input context.
@@ -383,8 +352,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         );
         return;
     }
-    debugconf!("usb: address-device ok slot={}\n", slot_id);
-
     // Buffer for device descriptor.
     let (desc_phys, desc_virt) = match dma::alloc(64, 64) {
         Some(pair) => pair,
@@ -424,7 +391,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-    let Some(desc_evt) = xhci::wait_for_event(
+    let Some(_desc_evt) = xhci::wait_for_event(
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type == 32 {
@@ -451,17 +418,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         debugconf!("usb: timeout waiting for transfer event\n");
         return;
     };
-    debugconf!(
-        "usb: transfer event cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-        (desc_evt.d2 >> 24) & 0xFF,
-        desc_evt.d0,
-        desc_evt.d1,
-        desc_evt.d2,
-        desc_evt.d3
-    );
-
-    let first = unsafe { *desc_virt };
-    debugconf!("usb: device descriptor first byte=0x{:02X}\n", first);
 
     // Fetch configuration descriptor (first 9 bytes to learn total length).
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
@@ -533,15 +489,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         };
 
         let completion = (evt.d2 >> 24) & 0xFF;
-        debugconf!(
-            "usb: cfg transfer cc={} len={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-            completion,
-            length,
-            evt.d0,
-            evt.d1,
-            evt.d2,
-            evt.d3
-        );
         if completion == 1 {
             Ok(())
         } else {
@@ -552,7 +499,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     let mut cfg_total_len: u16 = 0;
     if get_cfg(&ctx, &mut ep0_ring, slot_id, cfg_phys, 9).await.is_ok() {
         cfg_total_len = unsafe { *(cfg_virt.add(2) as *const u16) };
-        debugconf!("usb: config total length={}\n", cfg_total_len);
         let req_len = cfg_total_len.min(256) as u16;
         if req_len > 9 {
             let _ = get_cfg(&ctx, &mut ep0_ring, slot_id, cfg_phys, req_len).await;
@@ -570,12 +516,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
             }
             let ty = cfg_slice[idx + 1];
             debugconf!("usb: cfg desc idx={} len={} ty=0x{:02X}\n", idx, len, ty);
-            let mut off = 0usize;
-            while off < len {
-                let b = cfg_slice[idx + off];
-                debugconf!("usb:   b[{}]={:02X}\n", off, b);
-                off += 1;
-            }
             idx += len;
         }
     }
@@ -632,7 +572,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
 
     let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
-    debugconf!("usb: set-configuration cc={}\n", completion);
     if completion != 1 {
         return;
     }
@@ -724,26 +663,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         let max_esit_payload = 4u32;
         write_volatile(ep_ctx.add(4), (avg_trb_len << 16) | max_esit_payload);
 
-        debugconf!(
-            "usb: input add_flags=0x{:08X} drop_flags=0x{:08X}\n",
-            read_volatile(add_flags_ptr.add(1)),
-            read_volatile(add_flags_ptr)
-        );
-        debugconf!(
-            "usb: input slot ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X}\n",
-            read_volatile(slot_ctx.add(0)),
-            read_volatile(slot_ctx.add(1)),
-            read_volatile(slot_ctx.add(2)),
-            read_volatile(slot_ctx.add(3))
-        );
-        debugconf!(
-            "usb: input ep ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-            read_volatile(ep_ctx.add(0)),
-            read_volatile(ep_ctx.add(1)),
-            read_volatile(ep_ctx.add(2)),
-            read_volatile(ep_ctx.add(3)),
-            read_volatile(ep_ctx.add(4)),
-        );
     }
 
     let cfg_ep_cmd = Trb {
@@ -773,44 +692,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     };
 
     let completion = (cfg_evt.d2 >> 24) & 0xFF;
-    debugconf!(
-        "usb: configure-endpoint cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-        completion,
-        slot_id,
-        cfg_evt.d0,
-        cfg_evt.d1,
-        cfg_evt.d2,
-        cfg_evt.d3
-    );
-    unsafe {
-        let slot_ctx = dev_ctx_virt as *const u32;
-        let ep0_ctx = dev_ctx_virt.add(ctx_stride_bytes) as *const u32;
-        let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
-        let ep_ctx = dev_ctx_virt.add(ep_ctx_off) as *const u32;
-        debugconf!(
-            "usb: slot ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X}\n",
-            read_volatile(slot_ctx.add(0)),
-            read_volatile(slot_ctx.add(1)),
-            read_volatile(slot_ctx.add(2)),
-            read_volatile(slot_ctx.add(3))
-        );
-        debugconf!(
-            "usb: ep0 ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-            read_volatile(ep0_ctx.add(0)),
-            read_volatile(ep0_ctx.add(1)),
-            read_volatile(ep0_ctx.add(2)),
-            read_volatile(ep0_ctx.add(3)),
-            read_volatile(ep0_ctx.add(4)),
-        );
-        debugconf!(
-            "usb: ep ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-            read_volatile(ep_ctx.add(0)),
-            read_volatile(ep_ctx.add(1)),
-            read_volatile(ep_ctx.add(2)),
-            read_volatile(ep_ctx.add(3)),
-            read_volatile(ep_ctx.add(4)),
-        );
-    }
     if completion != 1 {
         return;
     }
@@ -865,12 +746,8 @@ pub async fn usb_init_task(_info: xhci::ControllerInfo) {
                     core::slice::from_raw_parts(runtime.report_virt, runtime.ep.max_packet as usize)
                 };
                 hid::handle_report(&runtime, completion, data);
-            } else {
-                debugconf!("usb: interrupt IN but no registered HID runtime\n");
             }
             break;
-        } else {
-            debugconf!("usb: waiting for interrupt \n");
         }
     }
 }
