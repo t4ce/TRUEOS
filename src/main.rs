@@ -1,9 +1,7 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt)]
 
-use core::fmt::{self, Write};
-use core::panic::PanicInfo;
+use core::{fmt::{self, Write}, panic::PanicInfo};
 
 extern crate alloc;
 
@@ -14,13 +12,17 @@ mod limine;
 mod mmio;
 mod pci;
 mod xhci;
+mod osal;
 mod usb;
 mod time;
 
-use embassy_executor::raw::Executor;
+use embassy_executor::{raw::Executor, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+use spin::Once;
+
+use crate::usb::crab_usb_init_task;
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -29,6 +31,9 @@ struct ExecutorStorage([u8; BSP_EXECUTOR_SIZE]);
 
 #[link_section = ".data"]
 static mut BSP_EXECUTOR_STORAGE: ExecutorStorage = ExecutorStorage([0xA5; BSP_EXECUTOR_SIZE]);
+
+static USB_INIT: Once<()> = Once::new();
+static USB_CONTROLLER_INFO: Once<xhci::ControllerInfo> = Once::new();
 
 #[inline(always)]
 unsafe fn init_bsp_executor() -> &'static Executor {
@@ -66,7 +71,7 @@ pub extern "C" fn _start() -> ! {
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
 
-    usb::init_crab_controller(&spawner);
+    init_crab_controller(&spawner);
     spawner.spawn(usb_poll_task());
     
     let mut counter: u64 = 0;
@@ -110,6 +115,14 @@ fn log_limine_markers() {
             resp_ptr
         );
     }
+}
+
+fn init_crab_controller(spawner: &Spawner) {
+    USB_INIT.call_once(|| {
+        if let Some(info) = xhci::controller_info() {
+            spawner.spawn(usb::crab_usb_init_task(info));
+        }
+    });
 }
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
@@ -190,9 +203,9 @@ async fn usb_poll_task() {
     loop {
         let handled = usb::poll_crab_events_once();
         if handled {
-            Timer::after(EmbassyDuration::from_micros(500)).await;
+            Timer::after(EmbassyDuration::from_micros(50)).await;
         } else {
-            Timer::after(EmbassyDuration::from_millis(10)).await;
+            Timer::after(EmbassyDuration::from_millis(50)).await;
         }
     }
 }
