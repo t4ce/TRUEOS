@@ -17,12 +17,11 @@ mod usb;
 mod time;
 
 use embassy_executor::{raw::Executor, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
-use crate::usb::crab_usb_init_task;
+use crate::usb::usb_init_task;
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -33,7 +32,6 @@ struct ExecutorStorage([u8; BSP_EXECUTOR_SIZE]);
 static mut BSP_EXECUTOR_STORAGE: ExecutorStorage = ExecutorStorage([0xA5; BSP_EXECUTOR_SIZE]);
 
 static USB_INIT: Once<()> = Once::new();
-static USB_CONTROLLER_INFO: Once<xhci::ControllerInfo> = Once::new();
 
 #[inline(always)]
 unsafe fn init_bsp_executor() -> &'static Executor {
@@ -70,10 +68,8 @@ pub extern "C" fn _start() -> ! {
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
+    init_usb_controller(&spawner);
 
-    init_crab_controller(&spawner);
-    spawner.spawn(usb_poll_task());
-    
     let mut counter: u64 = 0;
     loop {
         if counter % 10000 == 0 {
@@ -117,14 +113,6 @@ fn log_limine_markers() {
     }
 }
 
-fn init_crab_controller(spawner: &Spawner) {
-    USB_INIT.call_once(|| {
-        if let Some(info) = xhci::controller_info() {
-            spawner.spawn(usb::crab_usb_init_task(info));
-        }
-    });
-}
-
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     let mut counter: u64 = 0;
     loop {
@@ -144,6 +132,14 @@ fn start_aps() {
     for cpu in resp.cpus() {
         cpu.goto_address.write(ap_entry);
     }
+}
+
+fn init_usb_controller(spawner: &Spawner) {
+    USB_INIT.call_once(|| {
+        if let Some(info) = xhci::controller_info() {
+            spawner.spawn(usb_init_task(info));
+        }
+    });
 }
 
 #[inline(always)]
@@ -196,18 +192,6 @@ macro_rules! debugconf {
 #[inline(always)]
 unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
-}
-
-#[embassy_executor::task]
-async fn usb_poll_task() {
-    loop {
-        let handled = usb::poll_crab_events_once();
-        if handled {
-            Timer::after(EmbassyDuration::from_micros(50)).await;
-        } else {
-            Timer::after(EmbassyDuration::from_millis(50)).await;
-        }
-    }
 }
 
 unsafe fn enable_sse() {
