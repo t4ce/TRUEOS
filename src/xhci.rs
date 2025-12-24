@@ -1,5 +1,7 @@
 use core::mem::size_of;
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use heapless::Vec;
 use spin::Mutex;
 
 #[derive(Copy, Clone, Debug)]
@@ -259,6 +261,69 @@ pub struct EventRing {
     cycle: bool,
 }
 
+unsafe impl Send for EventRing {}
+
+const EVENT_BUFFER_CAP: usize = 128;
+
+struct EventBuffer {
+    entries: Vec<Trb, EVENT_BUFFER_CAP>,
+}
+
+impl EventBuffer {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, evt: Trb) {
+        if self.entries.push(evt).is_err() {
+            let _ = self.entries.remove(0);
+            let _ = self.entries.push(evt);
+        }
+    }
+
+    fn take_matching<F>(&mut self, predicate: &mut F) -> Option<Trb>
+    where
+        F: FnMut(&Trb) -> bool,
+    {
+        for idx in 0..self.entries.len() {
+            if predicate(&self.entries[idx]) {
+                return Some(self.entries.remove(idx));
+            }
+        }
+        None
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+static EVENT_BUFFER: Mutex<EventBuffer> = Mutex::new(EventBuffer::new());
+
+struct EventRingState {
+    ring: Option<EventRing>,
+    intr0: *mut u32,
+}
+
+unsafe impl Send for EventRingState {}
+
+impl EventRingState {
+    const fn new() -> Self {
+        Self {
+            ring: None,
+            intr0: null_mut(),
+        }
+    }
+
+    fn has_ring(&self) -> bool {
+        self.ring.is_some() && !self.intr0.is_null()
+    }
+}
+
+static EVENT_RING_STATE: Mutex<EventRingState> = Mutex::new(EventRingState::new());
+
 #[derive(Copy, Clone, Debug)]
 pub struct XhciContext {
     pub caplength: u8,
@@ -474,6 +539,107 @@ impl EventRing {
             self.dequeue - 1
         };
         self.phys + (idx as u64) * size_of::<Trb>() as u64
+    }
+
+    pub async fn wait_for_trb<F>(
+        &mut self,
+        ctx: &XhciContext,
+        mut predicate: F,
+        timeout_iters: usize,
+        delay: EmbassyDuration,
+    ) -> Option<Trb>
+    where
+        F: FnMut(Trb) -> Option<Trb>,
+    {
+        let intr0 = unsafe { ctx.runtime.add(0x20 / 4) };
+        let mut polls = 0usize;
+        loop {
+            if let Some(evt) = unsafe { self.pop(intr0) } {
+                if let Some(done) = predicate(evt) {
+                    return Some(done);
+                }
+            }
+            polls += 1;
+            if polls > timeout_iters {
+                return None;
+            }
+            Timer::after(delay).await;
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn controller_poll_task(info: ControllerInfo) {
+    crate::debugconf!(
+        "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
+        info.bus,
+        info.slot,
+        info.function
+    );
+
+    loop {
+        let evt_opt = {
+            let mut state = EVENT_RING_STATE.lock();
+            let intr0 = state.intr0;
+            if let Some(ring) = state.ring.as_mut() {
+                if !intr0.is_null() {
+                    unsafe { ring.pop(intr0) }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(evt) = evt_opt {
+            enqueue_event(evt);
+        } else {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    }
+}
+
+fn enqueue_event(evt: Trb) {
+    let mut buf = EVENT_BUFFER.lock();
+    buf.push(evt);
+}
+
+fn try_take_matching_event<F>(predicate: &mut F) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let mut buf = EVENT_BUFFER.lock();
+    buf.take_matching(predicate)
+}
+
+pub fn install_event_ring(ring: EventRing, intr0: *mut u32) {
+    {
+        let mut state = EVENT_RING_STATE.lock();
+        state.ring = Some(ring);
+        state.intr0 = intr0;
+    }
+    EVENT_BUFFER.lock().clear();
+}
+
+pub async fn wait_for_event<F>(
+    mut predicate: F,
+    timeout_iters: usize,
+    delay: EmbassyDuration,
+) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let mut polls = 0usize;
+    loop {
+        if let Some(evt) = try_take_matching_event(&mut predicate) {
+            return Some(evt);
+        }
+        polls += 1;
+        if polls > timeout_iters {
+            return None;
+        }
+        Timer::after(delay).await;
     }
 }
 

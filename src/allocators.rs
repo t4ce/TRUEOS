@@ -146,7 +146,7 @@ impl FreeList {
         let tag = *tag_ptr;
         let block_size = tag.block_size;
         let block_start = tag.block_start;
-        let mut block_ptr = block_start as *mut FreeBlock;
+        let block_ptr = block_start as *mut FreeBlock;
         block_ptr.write(FreeBlock { size: block_size, next: None });
 
         let mut prev: Option<NonNull<FreeBlock>> = None;
@@ -174,7 +174,7 @@ impl FreeList {
 
         self.try_merge_with_next(new_node);
 
-        if let Some(mut p) = prev {
+        if let Some(p) = prev {
             self.try_merge_with_next(p);
         }
     }
@@ -183,7 +183,7 @@ impl FreeList {
         let node_size = node.as_ref().size;
         let node_end = (node.as_ptr() as usize).saturating_add(node_size);
 
-        if let Some(mut next_ptr) = node.as_ref().next {
+        if let Some(next_ptr) = node.as_ref().next {
             let next_start = next_ptr.as_ptr() as usize;
             if node_end == next_start {
                 let next_size = next_ptr.as_ref().size;
