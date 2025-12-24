@@ -8,7 +8,6 @@ extern crate alloc;
 mod allocators;
 mod dma;
 mod gdt;
-mod hid;
 mod limine;
 mod mmio;
 mod pci;
@@ -77,9 +76,7 @@ pub extern "C" fn _start() -> ! {
 
     if let Some(info) = xhci::controller_info() {
         let _ = spawner.spawn(xhci::controller_poll_task(info));
-    } else {
-        debugconf!("xhci: poll task skipped (no controller info)\n");
-    }
+    } 
 
     let mut counter: u64 = 0;
     loop {
