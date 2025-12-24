@@ -1,3 +1,4 @@
+use core::mem::size_of;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use spin::Mutex;
 
@@ -222,4 +223,274 @@ fn bootstrap_ports(cap_base: usize, cap_length: usize, hcsparams1: u32) {
             final_status
         );
     }
+}
+
+#[repr(C, align(16))]
+#[derive(Copy, Clone, Default)]
+pub struct Trb {
+    pub d0: u32,
+    pub d1: u32,
+    pub d2: u32,
+    pub d3: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone, Default)]
+pub struct ErstEntry {
+    pub seg_base_lo: u32,
+    pub seg_base_hi: u32,
+    pub seg_size: u32,
+    pub rsvd: u32,
+}
+
+pub struct TrbRing {
+    pub phys: u64,
+    pub trbs: *mut Trb,
+    pub len: usize,
+    enqueue: usize,
+    cycle: bool,
+}
+
+pub struct EventRing {
+    pub phys: u64,
+    pub trbs: *mut Trb,
+    pub count: usize,
+    dequeue: usize,
+    cycle: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct XhciContext {
+    pub caplength: u8,
+    pub hci_version: u16,
+    pub hcsparams1: u32,
+    pub hccparams1: u32,
+    pub op_base: *mut u32,
+    pub doorbell: *mut u32,
+    pub runtime: *mut u32,
+    pub port_count: u8,
+}
+
+impl XhciContext {
+    /// # Safety
+    /// Caller must ensure `info.mmio_base` is a valid mapped MMIO pointer.
+    pub unsafe fn new(info: ControllerInfo) -> Self {
+        let cap = info.mmio_base.as_ptr();
+        let caplength = read_volatile(cap.add(0x00) as *const u8);
+        let hci_version = read_volatile(cap.add(0x02) as *const u16);
+        let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
+        let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
+        let dboff = read_volatile(cap.add(0x14) as *const u32) & !0x1F;
+        let rtsoff = read_volatile(cap.add(0x18) as *const u32) & !0x1F;
+        let op_base = cap.add(caplength as usize) as *mut u32;
+        let doorbell = cap.add(dboff as usize) as *mut u32;
+        let runtime = cap.add(rtsoff as usize) as *mut u32;
+        let port_count = ((hcsparams1 >> 24) & 0xFF) as u8;
+
+        XhciContext {
+            caplength,
+            hci_version,
+            hcsparams1,
+            hccparams1,
+            op_base,
+            doorbell,
+            runtime,
+            port_count,
+        }
+    }
+
+    pub unsafe fn portsc(&self, port_idx: usize) -> u32 {
+        const PORT_BLOCK_OFFSET: usize = 0x400;
+        const PORT_STRIDE: usize = 0x10;
+        let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
+        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *const u32;
+        read_volatile(port_ptr)
+    }
+
+    pub unsafe fn reset_port(&self, port_idx: usize) {
+        const PORT_BLOCK_OFFSET: usize = 0x400;
+        const PORT_STRIDE: usize = 0x10;
+        const PORTSC_PR: u32 = 1 << 4;
+        let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
+        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
+        let status = read_volatile(port_ptr);
+        write_volatile(port_ptr, status | PORTSC_PR);
+    }
+}
+
+pub fn endpoint_target(ep_addr: u8) -> u32 {
+    let ep_num = (ep_addr & 0x0F) as u32;
+    let dir_in = (ep_addr & 0x80) != 0;
+    if ep_num == 0 {
+        1
+    } else {
+        ep_num * 2 + if dir_in { 1 } else { 0 }
+    }
+}
+
+pub fn context_index(ep_addr: u8) -> u32 {
+    let ep_num = (ep_addr & 0x0F) as u32;
+    let dir_in = (ep_addr & 0x80) != 0;
+    if ep_num == 0 {
+        1
+    } else {
+        ep_num * 2 + if dir_in { 1 } else { 0 }
+    }
+}
+
+pub fn decode_port_status(status: u32) -> (bool, bool, &'static str) {
+    const PORTSC_CCS: u32 = 1 << 0;
+    const PORTSC_PED: u32 = 1 << 1;
+    const PORTSC_SPEED_SHIFT: u32 = 10;
+    const PORTSC_SPEED_MASK: u32 = 0xF << PORTSC_SPEED_SHIFT;
+
+    let connected = (status & PORTSC_CCS) != 0;
+    let enabled = (status & PORTSC_PED) != 0;
+    let speed_code = (status & PORTSC_SPEED_MASK) >> PORTSC_SPEED_SHIFT;
+
+    let speed = match speed_code {
+        0 => "none",
+        1 => "full",
+        2 => "low",
+        3 => "high",
+        4 => "super",
+        5 => "super+",
+        _ => "unknown",
+    };
+
+    (connected, enabled, speed)
+}
+
+impl TrbRing {
+    /// # Safety
+    /// Caller must ensure `trbs` points to a DMA-mapped, zeroed region of `len` TRBs.
+    pub unsafe fn new(phys: u64, trbs: *mut Trb, len: usize) -> Self {
+        let ring = TrbRing {
+            phys,
+            trbs,
+            len,
+            enqueue: 0,
+            cycle: true,
+        };
+        ring.init_link_trb();
+        ring
+    }
+
+    unsafe fn init_link_trb(&self) {
+        const TRB_TYPE_LINK: u32 = 6;
+        if self.len < 2 {
+            return;
+        }
+        let link_idx = self.len - 1;
+        let link_ptr = self.trbs.add(link_idx);
+        let mut link = Trb {
+            d0: lo(self.phys),
+            d1: hi(self.phys),
+            d2: 0,
+            d3: trb_type(TRB_TYPE_LINK) | (1 << 1),
+        };
+        link.d3 |= 1;
+        write_volatile(link_ptr, link);
+    }
+
+    pub fn push(&mut self, mut trb: Trb) -> bool {
+        if self.len < 2 {
+            return false;
+        }
+
+        let usable = self.len - 1;
+        if self.enqueue >= usable {
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
+        unsafe { write_volatile(self.trbs.add(self.enqueue), trb) };
+        self.enqueue += 1;
+        if self.enqueue >= usable {
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+        true
+    }
+
+    pub fn crcr_value(&self) -> u64 {
+        self.phys | if self.cycle { 1 } else { 0 }
+    }
+
+    pub fn dequeue_ptr(&self) -> u64 {
+        (self.phys & !0xF) | 1
+    }
+}
+
+impl EventRing {
+    /// # Safety
+    /// Caller must ensure `trbs` points to a DMA region with `count` TRBs.
+    pub unsafe fn new(phys: u64, trbs: *mut Trb, count: usize) -> Self {
+        EventRing {
+            phys,
+            trbs,
+            count,
+            dequeue: 0,
+            cycle: true,
+        }
+    }
+
+    pub unsafe fn update_erdp(&self, intr0: *mut u32) {
+        const ERDP: usize = 0x18 / 4;
+        let ptr = self.phys + (self.dequeue as u64 * size_of::<Trb>() as u64);
+        write_volatile(intr0.add(ERDP + 1), hi(ptr));
+        write_volatile(intr0.add(ERDP), lo(ptr) | (1 << 3));
+    }
+
+    pub unsafe fn pop(&mut self, intr0: *mut u32) -> Option<Trb> {
+        if self.count == 0 {
+            return None;
+        }
+
+        let trb = read_volatile(self.trbs.add(self.dequeue));
+        let trb_cycle = (trb.d3 & 1) != 0;
+        if trb_cycle != self.cycle {
+            return None;
+        }
+
+        self.dequeue += 1;
+        if self.dequeue >= self.count {
+            self.dequeue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        self.update_erdp(intr0);
+        Some(trb)
+    }
+
+    pub fn last_trb_phys(&self) -> u64 {
+        if self.count == 0 {
+            return self.phys;
+        }
+        let idx = if self.dequeue == 0 {
+            self.count - 1
+        } else {
+            self.dequeue - 1
+        };
+        self.phys + (idx as u64) * size_of::<Trb>() as u64
+    }
+}
+
+pub const fn lo(val: u64) -> u32 {
+    (val & 0xFFFF_FFFF) as u32
+}
+
+pub const fn hi(val: u64) -> u32 {
+    (val >> 32) as u32
+}
+
+pub const fn trb_type(ty: u32) -> u32 {
+    ty << 10
+}
+
+pub unsafe fn write_reg64(base: *mut u32, byte_offset: usize, value: u64) {
+    let ptr = base.add(byte_offset / 4);
+    write_volatile(ptr, lo(value));
+    write_volatile(ptr.add(1), hi(value));
 }
