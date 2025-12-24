@@ -28,9 +28,8 @@ struct HidEpInfo {
     protocol: u8,
 }
 
-
 #[embassy_executor::task]
-pub async fn usb_init_task(info: xhci::ControllerInfo) {
+pub async fn usb_scout(info: xhci::ControllerInfo) {
     osal::ensure_dma_api_initialized();
 
     let ctx = unsafe { XhciContext::new(info) };
@@ -139,6 +138,7 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         write_volatile(intr0.add(ERSTBA), lo(erst_phys));
         write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
         event_ring.update_erdp(intr0);
+        xhci::install_event_ring(event_ring, intr0);
         const IMAN_IE: u32 = 1 << 1;
         write_volatile(intr0.add(IMAN), IMAN_IE);
 
@@ -159,8 +159,7 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
             spin -= 1;
         }
     }
-
-    // Issue ENABLE_SLOT to get a slot id.
+       // Issue ENABLE_SLOT to get a slot id.
     let enable_slot = Trb {
         d0: 0,
         d1: 0,
@@ -175,41 +174,53 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         write_volatile(ctx.doorbell.add(0), 0);
     }
 
-    let mut slot_id = 0u32;
-    let mut polls = 0;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+    let Some(enable_evt) = xhci::wait_for_event(
+        |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
-            if evt_type == 33 && completion == 1 {
-                slot_id = (evt.d3 >> 24) & 0xFF;
-                debugconf!("usb: enable-slot ok slot={}\n", slot_id);
-                break;
+            if evt_type == 33 {
+                true
+            } else {
+                let completion = (evt.d2 >> 24) & 0xFF;
+                debugconf!(
+                    "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                    evt_type,
+                    completion,
+                    evt.d0,
+                    evt.d1,
+                    evt.d2,
+                    evt.d3
+                );
+                false
             }
-            let trb_phys = event_ring.last_trb_phys();
-            debugconf!(
-                "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] erdp=0x{:016X}\n",
-                evt_type,
-                completion,
-                evt.d0,
-                evt.d1,
-                evt.d2,
-                evt.d3,
-                trb_phys
-            );
-        }
+        },
+        400,
+        EmbassyDuration::from_millis(5)
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for enable-slot completion\n");
+        return;
+    };
 
-        polls += 1;
-        if polls > 400 {
-            debugconf!("usb: timeout waiting for enable-slot completion\n");
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
-
-    if slot_id == 0 {
+    let completion = (enable_evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        debugconf!(
+            "usb: enable-slot failed cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            completion,
+            enable_evt.d0,
+            enable_evt.d1,
+            enable_evt.d2,
+            enable_evt.d3
+        );
         return;
     }
+
+    let slot_id = (enable_evt.d3 >> 24) & 0xFF;
+    if slot_id == 0 {
+        debugconf!("usb: enable-slot returned slot 0\n");
+        return;
+    }
+    debugconf!("usb: enable-slot ok slot={}\n", slot_id);
 
     // Prepare contexts for the selected port only.
     let port_idx = (target_port - 1) as usize;
@@ -338,42 +349,51 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
 
-    polls = 0;
-    let mut addressed = false;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+        let Some(addr_evt) = xhci::wait_for_event(
+        |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_type == 33 && completion == 1 && evt_slot == slot_id {
-                addressed = true;
-                debugconf!("usb: address-device ok slot={}\n", slot_id);
-                break;
+            if evt_type == 33 {
+                true
+            } else {
+                let completion = (evt.d2 >> 24) & 0xFF;
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                debugconf!(
+                    "usb: unexpected event type={} cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                    evt_type,
+                    completion,
+                    evt_slot,
+                    evt.d0,
+                    evt.d1,
+                    evt.d2,
+                    evt.d3
+                );
+                false
             }
-            let trb_phys = event_ring.last_trb_phys();
-            debugconf!(
-                "usb: unexpected event type={} cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] erdp=0x{:016X}\n",
-                evt_type,
-                completion,
-                evt_slot,
-                evt.d0,
-                evt.d1,
-                evt.d2,
-                evt.d3,
-                trb_phys
-            );
-        }
-        polls += 1;
-        if polls > 400 {
-            debugconf!("usb: timeout waiting for address-device\n");
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(500)).await;
-    }
+        },
+        400,
+        EmbassyDuration::from_millis(500)
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for address-device\n");
+        return;
+    };
 
-    if !addressed {
+    let completion = (addr_evt.d2 >> 24) & 0xFF;
+    let evt_slot = (addr_evt.d3 >> 24) & 0xFF;
+    if completion != 1 || evt_slot != slot_id {
+        debugconf!(
+            "usb: address-device unexpected completion cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            completion,
+            evt_slot,
+            addr_evt.d0,
+            addr_evt.d1,
+            addr_evt.d2,
+            addr_evt.d3
+        );
         return;
     }
+    debugconf!("usb: address-device ok slot={}\n", slot_id);
 
     // Buffer for device descriptor.
     let (desc_phys, desc_virt) = match dma::alloc(64, 64) {
@@ -414,41 +434,41 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-    polls = 0;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+    let Some(desc_evt) = xhci::wait_for_event(
+        |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
             if evt_type == 32 {
+                true
+            } else {
+                let completion = (evt.d2 >> 24) & 0xFF;
                 debugconf!(
-                    "usb: transfer event cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                    "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                    evt_type,
                     completion,
                     evt.d0,
                     evt.d1,
                     evt.d2,
                     evt.d3
                 );
-                break;
+                false
             }
-            let trb_phys = event_ring.last_trb_phys();
-            debugconf!(
-                "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] erdp=0x{:016X}\n",
-                evt_type,
-                completion,
-                evt.d0,
-                evt.d1,
-                evt.d2,
-                evt.d3,
-                trb_phys
-            );
-        }
-        polls += 1;
-        if polls > 800 {
-            debugconf!("usb: timeout waiting for transfer event\n");
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
+        },
+        800,
+        EmbassyDuration::from_millis(5)
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for transfer event\n");
+        return;
+    };
+    debugconf!(
+        "usb: transfer event cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+        (desc_evt.d2 >> 24) & 0xFF,
+        desc_evt.d0,
+        desc_evt.d1,
+        desc_evt.d2,
+        desc_evt.d3
+    );
 
     let first = unsafe { *desc_virt };
     debugconf!("usb: device descriptor first byte=0x{:02X}\n", first);
@@ -465,7 +485,6 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
 
     async fn get_cfg(
         ctx: &XhciContext,
-        event_ring: &mut EventRing,
         ep0_ring: &mut TrbRing,
         slot_id: u32,
         cfg_phys: u64,
@@ -495,43 +514,58 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         }
         unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-        let mut polls_cfg = 0;
-        loop {
-            if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+        let Some(evt) = xhci::wait_for_event(
+            |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
-                let completion = (evt.d2 >> 24) & 0xFF;
                 if evt_type == 32 {
+                    true
+                } else {
+                    let completion = (evt.d2 >> 24) & 0xFF;
                     debugconf!(
-                        "usb: cfg transfer cc={} len={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                        "usb: unexpected cfg event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                        evt_type,
                         completion,
-                        length,
                         evt.d0,
                         evt.d1,
                         evt.d2,
                         evt.d3
                     );
-                    if completion == 1 {
-                        return Ok(());
-                    }
-                    return Err(());
+                    false
                 }
-            }
-            polls_cfg += 1;
-            if polls_cfg > 800 {
-                debugconf!("usb: timeout waiting for cfg transfer len={}\n", length);
-                return Err(());
-            }
-            Timer::after(EmbassyDuration::from_millis(5)).await;
+            },
+            800,
+            EmbassyDuration::from_millis(5)
+        )
+        .await
+        else {
+            debugconf!("usb: timeout waiting for cfg transfer len={}\n", length);
+            return Err(());
+        };
+
+        let completion = (evt.d2 >> 24) & 0xFF;
+        debugconf!(
+            "usb: cfg transfer cc={} len={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            completion,
+            length,
+            evt.d0,
+            evt.d1,
+            evt.d2,
+            evt.d3
+        );
+        if completion == 1 {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 
     let mut cfg_total_len: u16 = 0;
-    if get_cfg(&ctx, &mut event_ring, &mut ep0_ring, slot_id, cfg_phys, 9).await.is_ok() {
+    if get_cfg(&ctx, &mut ep0_ring, slot_id, cfg_phys, 9).await.is_ok() {
         cfg_total_len = unsafe { *(cfg_virt.add(2) as *const u16) };
         debugconf!("usb: config total length={}\n", cfg_total_len);
         let req_len = cfg_total_len.min(256) as u16;
         if req_len > 9 {
-            let _ = get_cfg(&ctx, &mut event_ring, &mut ep0_ring, slot_id, cfg_phys, req_len).await;
+            let _ = get_cfg(&ctx, &mut ep0_ring, slot_id, cfg_phys, req_len).await;
         }
     }
 
@@ -592,31 +626,30 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         return;
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-    let mut polls_cfg = 0;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+    let Some(set_cfg_evt) = xhci::wait_for_event(
+        |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
-            if evt_type == 32 {
-                debugconf!("usb: set-configuration cc={}\n", completion);
-                if completion != 1 {
-                    return;
-                }
-                break;
-            }
-        }
-        polls_cfg += 1;
-        if polls_cfg > 400 {
-            debugconf!("usb: timeout waiting for set-configuration\n");
-            return;
-        }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
+            evt_type == 32
+        },
+        400,
+        EmbassyDuration::from_millis(5)
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for set-configuration\n");
+        return;
+    };
+
+
+    let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
+    debugconf!("usb: set-configuration cc={}\n", completion);
+    if completion != 1 {
+        return;
     }
 
     // Issue HID class requests: SET_PROTOCOL(boot) and SET_IDLE(0) on the interface.
     async fn hid_class_nodata(
         ctx: &XhciContext,
-        event_ring: &mut EventRing,
         ep0_ring: &mut TrbRing,
         slot_id: u32,
         request: u8,
@@ -641,28 +674,31 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
         }
         unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-        let mut polls = 0;
-        loop {
-            if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+        let Some(evt) = xhci::wait_for_event(
+            |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
-                let completion = (evt.d2 >> 24) & 0xFF;
-                if evt_type == 32 {
-                    debugconf!("usb: hid class req {} cc={} value=0x{:04X}\n", request, completion, value);
-                    return if completion == 1 { Ok(()) } else { Err(()) };
-                }
-            }
-            polls += 1;
-            if polls > 400 {
-                debugconf!("usb: timeout waiting for hid class req {}\n", request);
-                return Err(());
-            }
-            Timer::after(EmbassyDuration::from_millis(5)).await;
+                evt_type == 32
+            },
+            400,
+            EmbassyDuration::from_millis(5)
+        )
+        .await
+        else {
+            debugconf!("usb: timeout waiting for hid class req {}\n", request);
+            return Err(());
+        };
+
+        let completion = (evt.d2 >> 24) & 0xFF;
+        debugconf!("usb: hid class req {} cc={} value=0x{:04X}\n", request, completion, value);
+        if completion == 1 {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 
     let _ = hid_class_nodata(
         &ctx,
-        &mut event_ring,
         &mut ep0_ring,
         slot_id,
         0x0B, // SET_PROTOCOL
@@ -673,7 +709,6 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
 
     let _ = hid_class_nodata(
         &ctx,
-        &mut event_ring,
         &mut ep0_ring,
         slot_id,
         0x0A, // SET_IDLE
@@ -783,63 +818,61 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
 
-    polls_cfg = 0;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
+    let Some(cfg_evt) = xhci::wait_for_event(
+        |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
-            if evt_type == 33 {
-                debugconf!(
-                    "usb: configure-endpoint cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-                    completion,
-                    slot_id,
-                    evt.d0,
-                    evt.d1,
-                    evt.d2,
-                    evt.d3
-                );
-                // Dump the slot/endpoint context the controller wrote back to the device context for sanity regardless of success.
-                unsafe {
-                    let slot_ctx = dev_ctx_virt as *const u32;
-                    let ep0_ctx = dev_ctx_virt.add(ctx_stride_bytes) as *const u32;
-                    let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
-                    let ep_ctx = dev_ctx_virt.add(ep_ctx_off) as *const u32;
-                    debugconf!(
-                        "usb: slot ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X}\n",
-                        read_volatile(slot_ctx.add(0)),
-                        read_volatile(slot_ctx.add(1)),
-                        read_volatile(slot_ctx.add(2)),
-                        read_volatile(slot_ctx.add(3))
-                    );
-                    debugconf!(
-                        "usb: ep0 ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-                        read_volatile(ep0_ctx.add(0)),
-                        read_volatile(ep0_ctx.add(1)),
-                        read_volatile(ep0_ctx.add(2)),
-                        read_volatile(ep0_ctx.add(3)),
-                        read_volatile(ep0_ctx.add(4)),
-                    );
-                    debugconf!(
-                        "usb: ep ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
-                        read_volatile(ep_ctx.add(0)),
-                        read_volatile(ep_ctx.add(1)),
-                        read_volatile(ep_ctx.add(2)),
-                        read_volatile(ep_ctx.add(3)),
-                        read_volatile(ep_ctx.add(4)),
-                    );
-                }
-                if completion != 1 {
-                    return;
-                }
-                break;
-            }
-        }
-        polls_cfg += 1;
-        if polls_cfg > 400 {
-            debugconf!("usb: timeout waiting for configure-endpoint\n");
-            return;
-        }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
+            evt_type == 33
+        },
+        400,
+        EmbassyDuration::from_millis(5)
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for configure-endpoint\n");
+        return;
+    };
+
+    let completion = (cfg_evt.d2 >> 24) & 0xFF;
+    debugconf!(
+        "usb: configure-endpoint cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+        completion,
+        slot_id,
+        cfg_evt.d0,
+        cfg_evt.d1,
+        cfg_evt.d2,
+        cfg_evt.d3
+    );
+    unsafe {
+        let slot_ctx = dev_ctx_virt as *const u32;
+        let ep0_ctx = dev_ctx_virt.add(ctx_stride_bytes) as *const u32;
+        let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
+        let ep_ctx = dev_ctx_virt.add(ep_ctx_off) as *const u32;
+        debugconf!(
+            "usb: slot ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X}\n",
+            read_volatile(slot_ctx.add(0)),
+            read_volatile(slot_ctx.add(1)),
+            read_volatile(slot_ctx.add(2)),
+            read_volatile(slot_ctx.add(3))
+        );
+        debugconf!(
+            "usb: ep0 ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
+            read_volatile(ep0_ctx.add(0)),
+            read_volatile(ep0_ctx.add(1)),
+            read_volatile(ep0_ctx.add(2)),
+            read_volatile(ep0_ctx.add(3)),
+            read_volatile(ep0_ctx.add(4)),
+        );
+        debugconf!(
+            "usb: ep ctx dw0=0x{:08X} dw1=0x{:08X} dw2=0x{:08X} dw3=0x{:08X} dw4=0x{:08X}\n",
+            read_volatile(ep_ctx.add(0)),
+            read_volatile(ep_ctx.add(1)),
+            read_volatile(ep_ctx.add(2)),
+            read_volatile(ep_ctx.add(3)),
+            read_volatile(ep_ctx.add(4)),
+        );
+    }
+    if completion != 1 {
+        return;
     }
 
     // Arm one interrupt IN transfer to read a boot report.
@@ -864,30 +897,34 @@ pub async fn usb_init_task(info: xhci::ControllerInfo) {
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
 
-    polls_cfg = 0;
-    loop {
-        if let Some(evt) = unsafe { event_ring.pop(ctx.runtime.add(0x20 / 4)) } {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            let completion = (evt.d2 >> 24) & 0xFF;
-            if evt_type == 32 {
-                debugconf!("usb: interrupt IN cc={} len={}\n", completion, ep.max_packet);
-                let data = unsafe { core::slice::from_raw_parts(rep_virt, ep.max_packet as usize) };
-                debugconf!("usb: report bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
-                    data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]);
-                inbound::push_report(hid_kind, data);
-                break;
-            }
-        }
-        polls_cfg += 1;
-        if polls_cfg % 1000 == 0 {
-            debugconf!("usb: waiting for interrupt IN (press a key)...\n");
-        }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
+}
 
-    // Placeholder async wait to keep task alive while we flesh out rings/commands.
+#[embassy_executor::task]
+pub async fn usb_init_task(info: xhci::ControllerInfo) {
     loop {
-        Timer::after(EmbassyDuration::from_millis(500)).await;
+        let evt_opt = xhci::wait_for_event(
+            |evt| {
+                let evt_type = (evt.d3 >> 10) & 0x3F;
+                evt_type == 32
+            },
+            1000,
+            EmbassyDuration::from_millis(5)
+        )
+        .await;
+
+        if let Some(evt) = evt_opt {
+            let completion = (evt.d2 >> 24) & 0xFF;
+            debugconf!("usb: interrupt IN cc={} len={}\n", completion, ep.max_packet);
+            let data = unsafe { core::slice::from_raw_parts(rep_virt, ep.max_packet as usize) };
+            debugconf!(
+                "usb: report bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]
+            );
+            inbound::push_report(hid_kind, data);
+            break;
+        } else {
+            debugconf!("usb: waiting for interrupt \n");
+        }
     }
 }
 

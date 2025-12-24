@@ -27,7 +27,7 @@ pub fn memmap_entries() -> Option<&'static [&'static memory_map::Entry]> {
 }
 
 pub fn smp_response() -> Option<&'static response::MpResponse> {
-    unsafe { SMP_REQUEST.get_response() }
+    SMP_REQUEST.get_response()
 }
 
 pub fn memmap_type_name(entry_type: memory_map::EntryType) -> &'static str {

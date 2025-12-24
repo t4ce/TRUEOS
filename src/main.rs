@@ -15,14 +15,14 @@ mod xhci;
 mod osal;
 mod usb;
 mod time;
-mod inbound;
+
 
 use embassy_executor::{raw::Executor, Spawner};
 use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
-use crate::usb::usb_init_task;
+use crate::usb::usb_scout;
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -31,8 +31,6 @@ struct ExecutorStorage([u8; BSP_EXECUTOR_SIZE]);
 
 #[link_section = ".data"]
 static mut BSP_EXECUTOR_STORAGE: ExecutorStorage = ExecutorStorage([0xA5; BSP_EXECUTOR_SIZE]);
-
-static USB_INIT: Once<()> = Once::new();
 
 #[inline(always)]
 unsafe fn init_bsp_executor() -> &'static Executor {
@@ -69,7 +67,18 @@ pub extern "C" fn _start() -> ! {
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
-    init_usb_controller(&spawner);
+
+    Once::new().call_once(|| {
+        if let Some(info) = xhci::controller_info() {
+            spawner.spawn(usb_scout(info));
+        }
+    });
+
+    if let Some(info) = xhci::controller_info() {
+        let _ = spawner.spawn(xhci::controller_poll_task(info));
+    } else {
+        debugconf!("xhci: poll task skipped (no controller info)\n");
+    }
 
     let mut counter: u64 = 0;
     loop {
@@ -78,7 +87,7 @@ pub extern "C" fn _start() -> ! {
             unsafe { bsp_executor.poll() };
         }
         counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
+        if counter % 10_000_000 == 0 {
             debugcon_write_byte(b'0');
             //log_hpet_counter_once();
         }
@@ -134,14 +143,6 @@ fn start_aps() {
     for cpu in resp.cpus() {
         cpu.goto_address.write(ap_entry);
     }
-}
-
-fn init_usb_controller(spawner: &Spawner) {
-    USB_INIT.call_once(|| {
-        if let Some(info) = xhci::controller_info() {
-            spawner.spawn(usb_init_task(info));
-        }
-    });
 }
 
 #[inline(always)]
