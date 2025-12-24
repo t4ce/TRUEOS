@@ -83,6 +83,7 @@ pub fn init_once() {
                 let cap = mmio.as_ptr();
                 let caplength = read_volatile(cap.add(0x00) as *const u8) as u64;
                 let hci_version = read_volatile(cap.add(0x02) as *const u16);
+                let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
                 let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
                 let supports_64bit = (hccparams1 & 0x1) != 0;
                 let op = cap.add(caplength as usize) as *mut u32;
@@ -157,6 +158,8 @@ pub fn init_once() {
                 }
 
                 crate::debugconf!("xhci: reset ok sts=0x{:X}\n", sts);
+
+                bootstrap_ports(cap as usize, caplength as usize, hcsparams1);
             }
 
             break;
@@ -165,5 +168,58 @@ pub fn init_once() {
 
     if !did_any {
         crate::debugconf!("xhci: not found\n");
+    }
+}
+
+fn bootstrap_ports(cap_base: usize, cap_length: usize, hcsparams1: u32) {
+    const PORT_BLOCK_OFFSET: usize = 0x400;
+    const PORT_STRIDE: usize = 0x10;
+    const PORTSC_CCS: u32 = 1 << 0;
+    const PORTSC_PED: u32 = 1 << 1;
+    const PORTSC_PR: u32 = 1 << 4;
+    const PORTSC_PP: u32 = 1 << 9;
+
+    let port_count = ((hcsparams1 >> 24) & 0xFF) as usize;
+    if port_count == 0 {
+        crate::debugconf!("xhci: no ports to bootstrap\n");
+        return;
+    }
+
+    let op_base = cap_base.saturating_add(cap_length);
+    let port_base = op_base.saturating_add(PORT_BLOCK_OFFSET);
+
+    crate::debugconf!("xhci: bootstrapping {} port(s)\n", port_count);
+
+    for port_idx in 0..port_count {
+        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
+        let mut status = unsafe { read_volatile(port_ptr) };
+        if (status & PORTSC_PP) == 0 {
+            unsafe { write_volatile(port_ptr, status | PORTSC_PP) };
+            status |= PORTSC_PP;
+        }
+        if (status & PORTSC_CCS) == 0 {
+            continue;
+        }
+        if (status & PORTSC_PED) != 0 {
+            continue;
+        }
+
+        unsafe { write_volatile(port_ptr, status | PORTSC_PR) };
+        let mut spin: u32 = 1_000_000;
+        while spin > 0 {
+            let poll = unsafe { read_volatile(port_ptr) };
+            let reset_cleared = (poll & PORTSC_PR) == 0;
+            let enabled = (poll & PORTSC_PED) != 0;
+            if enabled || reset_cleared {
+                break;
+            }
+            spin -= 1;
+        }
+        let final_status = unsafe { read_volatile(port_ptr) };
+        crate::debugconf!(
+            "xhci: port {:02} bootstrap done status=0x{:08X}\n",
+            port_idx + 1,
+            final_status
+        );
     }
 }

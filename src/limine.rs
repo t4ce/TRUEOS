@@ -17,12 +17,12 @@ pub static HHDM_REQUEST: request::HhdmRequest = request::HhdmRequest::new();
 pub static MEMMAP_REQUEST: request::MemoryMapRequest = request::MemoryMapRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {
-    let resp = unsafe { HHDM_REQUEST.get_response()? };
+    let resp = HHDM_REQUEST.get_response()?;
     Some(resp.offset())
 }
 
 pub fn memmap_entries() -> Option<&'static [&'static memory_map::Entry]> {
-    let resp = unsafe { MEMMAP_REQUEST.get_response()? };
+    let resp =  MEMMAP_REQUEST.get_response()? ;
     Some(resp.entries())
 }
 
