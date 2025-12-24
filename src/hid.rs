@@ -42,7 +42,7 @@ pub fn runtime() -> Option<HidRuntime> {
 
 pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8]) {
     debugconf!(
-        "hid: interrupt IN cc={} len={} ep=0x{:02X} proto={}\n",
+        "[hid] interrupt IN cc={} len={} ep=0x{:02X} proto={}\n",
         completion,
         runtime.ep.max_packet,
         runtime.ep.address,
@@ -51,7 +51,7 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8]) {
     if !data.is_empty() {
         let preview_len = data.len().min(8);
         for i in 0..preview_len {
-            debugconf!("hid:   data[{}]=0x{:02X}\n", i, data[i]);
+            debugconf!("[hid]   data[{}]=0x{:02X}\n", i, data[i]);
         }
     }
     // TODO: route data to input subsystem when available (e.g., inbound::push_report).
@@ -96,7 +96,7 @@ pub fn parse_boot_endpoint(cfg: &[u8]) -> Option<HidEpInfo> {
                             let interval = cfg[idx + 6];
                             if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
                                 debugconf!(
-                                    "usb: parse hid ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
+                                    "[hid] parse ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
                                     iface,
                                     ep_addr,
                                     max_packet,
@@ -146,7 +146,7 @@ pub async fn class_request_nodata(
         d3: trb_type(4) | (1 << 5),
     };
     if !ep0_ring.push(setup) || !ep0_ring.push(status) {
-        debugconf!("usb: ep0 ring overflow for hid class req\n");
+        debugconf!("[hid] ep0 ring overflow for class request\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -161,12 +161,12 @@ pub async fn class_request_nodata(
     )
     .await
     else {
-        debugconf!("usb: timeout waiting for hid class req {}\n", request);
+        debugconf!("[hid] timeout waiting for class request {}\n", request);
         return Err(());
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
-    debugconf!("usb: hid class req {} cc={} value=0x{:04X}\n", request, completion, value);
+    debugconf!("[hid] class req {} cc={} value=0x{:04X}\n", request, completion, value);
     if completion == 1 {
         Ok(())
     } else {
