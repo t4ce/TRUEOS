@@ -12,6 +12,7 @@ spin = "0.10"
 heapless = { version = "0.8", default-features = false }
 dma-api = { version = "0.5.2", default-features = false, features = ["alloc"] }
 limine = { version = "0.5", default-features = false }
+acpi = { version = "5", default-features = false }
 
 
 [profile.dev]
