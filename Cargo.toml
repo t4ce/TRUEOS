@@ -17,6 +17,7 @@ font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 rdrand = { version = "0.8", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
+fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
 
 [profile.dev]
 panic = "abort"
