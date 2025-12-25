@@ -1,4 +1,4 @@
-use crate::{debugconf, dma, xhci};
+use crate::{debugconf, dma, xhci, input};
 use crate::xhci::{Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
@@ -70,13 +70,36 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residua
         runtime.hid_kind,
         lo(runtime.report_phys)
     );
-    if !data.is_empty() {
-        let preview_len = data.len().min(8);
-        for i in 0..preview_len {
-            debugconf!("[hid]   data[{}]=0x{:02X}\n", i, data[i]);
+    if runtime.hid_kind == 2 {
+        // Boot mouse: buttons, dx, dy, wheel (optional).
+        if data.len() >= 3 {
+            let buttons = data[0];
+            let dx = data[1] as i8;
+            let dy = data[2] as i8;
+            let wheel = if data.len() > 3 { data[3] as i8 } else { 0 };
+            input::push_event(input::InputEvent::Mouse(input::MouseEvent { buttons, dx, dy, wheel }));
+        }
+    } else if runtime.hid_kind == 1 {
+        // Boot keyboard: modifiers + 6 keycodes
+        if data.len() >= 8 {
+            let modifiers = data[0];
+            let mut keys = [0u8; 6];
+            keys.copy_from_slice(&data[2..8]);
+            if keys.iter().any(|&k| k != 0) || modifiers != 0 {
+                debugconf!(
+                    "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
+                    modifiers,
+                    keys[0],
+                    keys[1],
+                    keys[2],
+                    keys[3],
+                    keys[4],
+                    keys[5]
+                );
+            }
+            input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent { modifiers, keys }));
         }
     }
-    // TODO: route data to input subsystem when available (e.g., inbound::push_report).
 }
 
 /// One-shot synthetic boot-keyboard report to verify the pipeline.
@@ -234,7 +257,11 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     let Some(set_cfg_evt) = xhci::wait_for_event(
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            evt_type == 32
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
         },
         400,
         EmbassyDuration::from_millis(5)
@@ -417,7 +444,11 @@ pub async fn class_request_nodata(
     let Some(evt) = xhci::wait_for_event(
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
-            evt_type == 32
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
         },
         400,
         EmbassyDuration::from_millis(5)
