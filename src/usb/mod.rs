@@ -1,4 +1,5 @@
 pub mod hid;
+pub mod input;
 pub mod pen;
 pub mod print;
 
