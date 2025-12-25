@@ -36,8 +36,8 @@ pub fn random_u64() -> Option<u64> {
 /// Log detected RNG capabilities.
 pub fn log_rng_caps() {
     // Keep the logging path trivial to avoid exercising fmt machinery on fragile early stacks.
-    let rdrand = true;//has_rdrand();
-    let rdseed = true;//has_rdseed();
+    let rdrand = has_rdrand();
+    let rdseed = has_rdseed();
     match (rdrand, rdseed) {
         (true, true) => crate::debugconf!("RNG: RDRAND and RDSEED available.\n"),
         (true, false) => crate::debugconf!("RNG: RDRAND available, RDSEED unavailable.\n"),
