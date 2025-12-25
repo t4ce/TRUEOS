@@ -55,11 +55,11 @@ pub extern "C" fn _start() -> ! {
     pci::dma::alloc_test_once();
 
     pci::enumerate_once();
-    //pci::log_devices_once();
+    pci::log_devices_once();
     pci::tga::init_once();
     pci::xhci::init_once();
 
-    //log_memmap_once();
+    log_memmap_once();
 
     allocators::alloc_demo();
 
@@ -79,7 +79,7 @@ pub extern "C" fn _start() -> ! {
         let _ = spawner.spawn(pci::xhci::poll_task(info));
     } 
 
-    // reads from our dma buffs into 
+    // reads from our dma buffs into usb rings
     if let Some(info) = pci::xhci::controller_info() {
         let _ = spawner.spawn(usb::poll_task(info));
     }
@@ -139,8 +139,6 @@ fn log_limine_markers() {
 }
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
-    let ok_color = crate::vga::HEADER_INDICATOR_PINK;
-
     let total_slots = limine::smp_response()
         .map(|resp| resp.cpus().len().max(1))
         .unwrap_or(1);
@@ -151,7 +149,6 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     loop {
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0' + cpu.lapic_id as u8);
-            let _ = vga::render_header_indicator(slot, total_slots, ok_color, (counter as u16) % 360);
         }
         counter = counter.wrapping_add(1);
     }
