@@ -1,13 +1,16 @@
 use font8x8::{UnicodeFonts, BASIC_FONTS};
+use libm::{cosf, roundf, sinf};
 use spin::Once;
+
+use core::f32::consts::PI;
 
 const FONT_W: usize = 8;
 const FONT_H: usize = 8;
 const CHAR_SPACING: usize = 1;
 const DEFAULT_FG_COLOR: u32 = 0x00_FF_FF_FF;
 const DEFAULT_BG_COLOR: u32 = 0x00_08_18_30;
-const DEFAULT_SHADOW_COLOR: u32 = 0x00_00_00_00;
-pub(super) const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
+pub const DEFAULT_SHADOW_COLOR: u32 = 0x00_00_00_00;
+pub const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
 const BANNER_X: usize = 16;
 const BANNER_Y: usize = 8;
 const TOP_MARGIN: usize = 50;
@@ -59,6 +62,55 @@ pub fn framebuffer_dimensions() -> Option<(u32, u32)> {
 
 pub fn header_height() -> usize {
     TOP_MARGIN
+}
+
+pub fn draw_header_square(total_slots: usize, slot: usize, color: u32, degree: u32) -> bool {
+    with_framebuffer(|fb| {
+        let slot = slot % total_slots;
+        let total_width = TOP_MARGIN.saturating_mul(total_slots);
+        let left = (fb.width as isize / 2) - (total_width as isize / 2);
+        let origin_x = left + (TOP_MARGIN as isize * slot as isize);
+        let origin_x = origin_x as usize;
+
+        fb.clear_rect(origin_x, 0, TOP_MARGIN, TOP_MARGIN, color);
+
+        let side = TOP_MARGIN / 2 - 10;
+        if side > 0 {
+            let cx = origin_x as f32 + (TOP_MARGIN as f32) * 0.5;
+            let cy = (TOP_MARGIN as f32) * 0.5;
+            let half = (side as f32) * 0.5;
+
+            let angle = ((degree % 360) as f32) * (PI / 180.0);
+            let (c, s) = (cosf(angle), sinf(angle));
+
+            let corners = [
+                (-half, -half),
+                (half, -half),
+                (half, half),
+                (-half, half),
+            ];
+
+            let mut pts = [(0_i32, 0_i32); 4];
+            for (i, (dx, dy)) in corners.into_iter().enumerate() {
+                let rx = dx * c - dy * s;
+                let ry = dx * s + dy * c;
+                pts[i] = (
+                    roundf(cx + rx) as i32,
+                    roundf(cy + ry) as i32,
+                );
+            }
+
+            let white = DEFAULT_FG_COLOR;
+            for i in 0..4 {
+                let (x0, y0) = pts[i];
+                let (x1, y1) = pts[(i + 1) % 4];
+                fb.draw_line(x0, y0, x1, y1, white);
+            }
+        }
+
+        true
+    })
+    .unwrap_or(false)
 }
 
 fn with_framebuffer<R>(f: impl FnOnce(&FramebufferSurface) -> R) -> Option<R> {
