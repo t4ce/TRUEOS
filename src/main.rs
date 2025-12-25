@@ -10,6 +10,8 @@ mod pci;
 mod usb;
 mod time;
 mod phys;
+mod rng;
+
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
@@ -61,7 +63,7 @@ pub extern "C" fn _start() -> ! {
 
     allocators::alloc_demo();
 
-    //start_aps();
+    start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
@@ -84,12 +86,20 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(input_logger());
 
+    vga::render_framebuffer_banner("FalseOS");
+
+    rng::log_rng_caps();
+
     let mut counter: u64 = 0;
     loop {
-        if counter % 10000 == 0 {
+        if counter % 10_000 == 0 {
             time::poll();
             unsafe { bsp_executor.poll() };
         }
+        if counter % 1_000_000 == 0 {
+            vga::cube::tick();
+        }
+
         counter = counter.wrapping_add(1);
         if counter % 10_000_000 == 0 {
             debugcon_write_byte(b'0');
@@ -129,12 +139,21 @@ fn log_limine_markers() {
 }
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
+    let ok_color = crate::vga::HEADER_INDICATOR_PINK;
+
+    let total_slots = limine::smp_response()
+        .map(|resp| resp.cpus().len().max(1))
+        .unwrap_or(1);
+
+    let slot = (cpu.lapic_id as usize) % total_slots;
+
     let mut counter: u64 = 0;
     loop {
-        counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0' + cpu.lapic_id as u8);
+            let _ = vga::render_header_indicator(slot, total_slots, ok_color, (counter as u16) % 360);
         }
+        counter = counter.wrapping_add(1);
     }
 }
 
@@ -148,6 +167,32 @@ fn start_aps() {
         cpu.goto_address.write(ap_entry);
     }
 }
+/* 
+#[task(pool_size = 256)]
+async fn ap_heartbeat(apic_id: u8) {
+    let Some(idx) = lane::idx_for_apic(apic_id) else {
+        return;
+    };
+    let fb_present = crate::vga::try_framebuffer_dimensions().is_some();
+    crate::log_info!("Heartbeat: core {} started (fb={}).", apic_id, fb_present);
+    let mut ticks: u64 = 0;
+
+    loop {
+        HEARTBEAT_TICKS[idx].fetch_add(1, Ordering::Relaxed);
+        ticks = ticks.wrapping_add(1);
+
+        let ok_color = crate::vga::HEADER_INDICATOR_PINK;
+        let angle_deg = (ticks as u16) % 360;
+        let total_slots = crate::run::smp::detected_core_count();
+        let slot = crate::run::smp::indicator_slot_for_apic(apic_id).unwrap_or(idx);
+        if crate::vga::render_header_indicator(slot, total_slots, ok_color, angle_deg) {
+            HEARTBEAT_DRAW_OK[idx].fetch_add(1, Ordering::Relaxed);
+        } else {
+            HEARTBEAT_DRAW_SKIPPED[idx].fetch_add(1, Ordering::Relaxed);
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+}*/
 
 #[embassy_executor::task]
 async fn input_logger() {

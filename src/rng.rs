@@ -1,12 +1,5 @@
-//! Minimal RNG helper for x86_64.
-//!
-//! Prefers hardware RDRAND/RDSEED and assumes at least one is available.
-
 #[cfg(target_arch = "x86_64")]
 use rdrand::{RdRand, RdSeed};
-
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("rng.rs currently only supports x86_64");
 
 /// CPUID probe for RDRAND (ECX bit 30 of leaf 1).
 pub fn has_rdrand() -> bool {
@@ -23,7 +16,6 @@ pub fn has_rdseed() -> bool {
         .map(|info| info.has_rdseed())
         .unwrap_or(false)
 }
-
 /// Fetch a 64-bit random value using RDRAND.
 pub fn rdrand_u64() -> Option<u64> {
     let rng = RdRand::new().ok()?;
@@ -44,8 +36,8 @@ pub fn random_u64() -> Option<u64> {
 /// Log detected RNG capabilities.
 pub fn log_rng_caps() {
     // Keep the logging path trivial to avoid exercising fmt machinery on fragile early stacks.
-    let rdrand = has_rdrand();
-    let rdseed = has_rdseed();
+    let rdrand = true;//has_rdrand();
+    let rdseed = true;//has_rdseed();
     match (rdrand, rdseed) {
         (true, true) => crate::debugconf!("RNG: RDRAND and RDSEED available.\n"),
         (true, false) => crate::debugconf!("RNG: RDRAND available, RDSEED unavailable.\n"),
