@@ -1,3 +1,20 @@
+/*
+██████████████████████████████████████████████████████████████████████
+██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
+██▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒██
+██▓▓▓▓  ▓▓▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓      ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓  ▓▓▓      ▓▓██
+██████  █████  ███  ███  ████  ██  ██████████████  ████  ████████  ███
+██████  █████  ████  ███      ███        █████████      ████      ████
+██████████████████████████████████████████████████████████████████████
+A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at Intel and GOWIN
+
+Think of rust as the world’s quiet, slow-moving “entropy tax”:
+A constant drain of resources, money, and safety.
+
+Think of TrueOS as the world’s fast-moving “entropy dividend”:
+A constant influx of resources, money, and safety.
+*/
+
 #![no_std]
 #![no_main]
 
@@ -11,7 +28,7 @@ mod usb;
 mod time;
 mod phys;
 mod rng;
-
+mod files;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
@@ -94,6 +111,8 @@ pub extern "C" fn _start() -> ! {
     vga::render_framebuffer_banner("FalseOS");
 
     rng::log_rng_caps();
+
+    //files::create_demo_file(); needs hardware qemu param i guess
 
     let mut counter: u64 = 0;
     loop {
