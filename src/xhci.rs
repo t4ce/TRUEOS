@@ -253,6 +253,9 @@ pub struct TrbRing {
     cycle: bool,
 }
 
+unsafe impl Send for TrbRing {}
+unsafe impl Sync for TrbRing {}
+
 pub struct EventRing {
     pub phys: u64,
     pub trbs: *mut Trb,
@@ -519,6 +522,17 @@ impl EventRing {
             return None;
         }
 
+        // Lowest-level trace: every event pulled directly from the ring.
+        crate::debugconf!(
+            "xhci: evt dequeue={} cycle={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            self.dequeue,
+            self.cycle as u8,
+            trb.d0,
+            trb.d1,
+            trb.d2,
+            trb.d3
+        );
+
         self.dequeue += 1;
         if self.dequeue >= self.count {
             self.dequeue = 0;
@@ -569,7 +583,7 @@ impl EventRing {
 }
 
 #[embassy_executor::task]
-pub async fn controller_poll_task(info: ControllerInfo) {
+pub async fn poll_task(info: ControllerInfo) {
     crate::debugconf!(
         "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
         info.bus,
