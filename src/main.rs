@@ -5,7 +5,6 @@ extern crate alloc;
 
 mod allocators;
 mod dma;
-mod gdt;
 mod limine;
 mod mmio;
 mod pci;
@@ -47,7 +46,6 @@ fn panic(_info: &PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
-    gdt::install();
 
     log_limine_markers();
 
