@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-use core::{fmt::{self, Write}, panic::PanicInfo};
-
 extern crate alloc;
 
 mod allocators;
@@ -16,12 +14,11 @@ mod osal;
 mod usb;
 mod time;
 
-
+use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
 use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
-
 use crate::usb::usb_scout;
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
@@ -63,7 +60,7 @@ pub extern "C" fn _start() -> ! {
 
     allocators::alloc_demo();
 
-    start_aps();
+    //start_aps();
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
@@ -74,9 +71,15 @@ pub extern "C" fn _start() -> ! {
         }
     });
 
+    // reads from hardware into dma buffs
     if let Some(info) = xhci::controller_info() {
-        let _ = spawner.spawn(xhci::controller_poll_task(info));
+        let _ = spawner.spawn(xhci::poll_task(info));
     } 
+
+    // reads from our dma buffs into 
+    if let Some(info) = xhci::controller_info() {
+        let _ = spawner.spawn(usb::poll_task(info));
+    }
 
     let mut counter: u64 = 0;
     loop {
