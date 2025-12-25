@@ -211,6 +211,7 @@ dependencies = [
  "embassy-executor",
  "embassy-time",
  "embassy-time-driver",
+ "fatfs",
  "font8x8",
  "heapless",
  "libm",
@@ -219,6 +220,15 @@ dependencies = [
  "rdrand",
  "spin",
  "x86_64",
+]
+
+[[package]]
+name = "fatfs"
+version = "0.4.0"
+source = "git+https://github.com/rafalh/rust-fatfs#4eccb50d011146fbed20e133d33b22f3c27292e7"
+dependencies = [
+ "bitflags",
+ "log",
 ]
 
 [[package]]
