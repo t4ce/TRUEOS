@@ -1,5 +1,7 @@
-use crate::{debugconf, dma, xhci, input};
-use crate::xhci::{Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
+use crate::debugconf;
+use crate::pci::{dma, xhci};
+use crate::pci::xhci::{Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
+use crate::usb::input;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use spin::Mutex;

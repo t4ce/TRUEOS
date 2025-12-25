@@ -4,15 +4,10 @@
 extern crate alloc;
 
 mod allocators;
-mod dma;
 mod limine;
-mod mmio;
 mod pci;
-mod xhci;
-mod osal;
 mod usb;
 mod time;
-mod input;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
@@ -21,6 +16,7 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 use crate::usb::usb_scout;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use crate::pci::mmio;
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -49,12 +45,12 @@ pub extern "C" fn _start() -> ! {
 
     log_limine_markers();
 
-    dma::init_from_limine();
-    dma::alloc_test_once();
+    pci::dma::init_from_limine();
+    pci::dma::alloc_test_once();
 
     pci::enumerate_once();
     //pci::log_devices_once();
-    xhci::init_once();
+    pci::xhci::init_once();
 
     //log_memmap_once();
 
@@ -66,18 +62,18 @@ pub extern "C" fn _start() -> ! {
     let spawner = bsp_executor.spawner();
 
     Once::new().call_once(|| {
-        if let Some(info) = xhci::controller_info() {
+        if let Some(info) = pci::xhci::controller_info() {
             spawner.spawn(usb_scout(info));
         }
     });
 
     // reads from hardware into dma buffs
-    if let Some(info) = xhci::controller_info() {
-        let _ = spawner.spawn(xhci::poll_task(info));
+    if let Some(info) = pci::xhci::controller_info() {
+        let _ = spawner.spawn(pci::xhci::poll_task(info));
     } 
 
     // reads from our dma buffs into 
-    if let Some(info) = xhci::controller_info() {
+    if let Some(info) = pci::xhci::controller_info() {
         let _ = spawner.spawn(usb::poll_task(info));
     }
 
@@ -152,12 +148,12 @@ fn start_aps() {
 async fn input_logger() {
     // Simple logger: prints keystrokes as ASCII when possible, otherwise '!' for any input event.
     loop {
-        if let Some(evt) = input::pop_event() {
+        if let Some(evt) = usb::input::pop_event() {
             match evt {
-                input::InputEvent::Keyboard(kbd) => {
+                usb::input::InputEvent::Keyboard(kbd) => {
                     let shift = (kbd.modifiers & (1 << 1)) != 0 || (kbd.modifiers & (1 << 5)) != 0;
                     if let Some(&code) = kbd.keys.iter().find(|&&c| c != 0) {
-                        if let Some(ch) = input::boot_keycode_to_ascii(code, shift) {
+                        if let Some(ch) = usb::input::boot_keycode_to_ascii(code, shift) {
                             debugcon_write_byte(ch);
                         } else {
                             debugcon_write_byte(b'!');
@@ -166,7 +162,7 @@ async fn input_logger() {
                         debugcon_write_byte(b'!');
                     }
                 }
-                input::InputEvent::Mouse(mouse) => {
+                usb::input::InputEvent::Mouse(mouse) => {
                     if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
                         debugconf!(
                             "[mouse] btn=0x{:02X} dx={} dy={} wheel={}\n",

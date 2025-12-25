@@ -11,7 +11,9 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use crate::{dma, limine};
+use crate::limine;
+
+use super::dma;
 
 const DEFAULT_MMIO_WINDOW: usize = 0x10_000;
 const PAGE_SIZE: u64 = Size4KiB::SIZE;

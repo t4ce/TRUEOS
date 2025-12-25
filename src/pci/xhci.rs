@@ -74,7 +74,7 @@ pub fn init_once() {
             } else {
                 size as usize
             };
-            let mmio = match crate::mmio::map_mmio_region(base, map_len) {
+            let mmio = match super::mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {
                     crate::debugconf!("xhci: failed to map MMIO: {:?}\n", err);

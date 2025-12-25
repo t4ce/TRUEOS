@@ -17,7 +17,7 @@ struct DmaOsal;
 
 impl Osal for DmaOsal {
     fn map(&self, addr: NonNull<u8>, _size: usize, _direction: Direction) -> u64 {
-        match crate::dma::virt_to_phys(addr.as_ptr()) {
+        match super::dma::virt_to_phys(addr.as_ptr()) {
             Some(phys) => phys,
             None => {
                 debugconf!(
@@ -31,14 +31,14 @@ impl Osal for DmaOsal {
 
     unsafe fn alloc(&self, _dma_mask: u64, layout: core::alloc::Layout) -> *mut u8 {
         let align = layout.align().max(64);
-        match crate::dma::alloc(layout.size(), align) {
+        match super::dma::alloc(layout.size(), align) {
             Some((_phys, virt)) => virt,
             None => core::ptr::null_mut(),
         }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        crate::dma::dealloc(ptr, layout.size());
+        super::dma::dealloc(ptr, layout.size());
     }
 
     fn unmap(&self, _addr: NonNull<u8>, _size: usize) {}
