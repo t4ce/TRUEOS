@@ -3,8 +3,9 @@ pub mod input;
 pub mod pen;
 pub mod print;
 
-use crate::{debugconf, dma, osal, xhci};
-use crate::xhci::{
+use crate::debugconf;
+use crate::pci::{dma, osal, xhci};
+use crate::pci::xhci::{
     decode_port_status,
     write_reg64,
     trb_type,
