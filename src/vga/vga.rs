@@ -12,29 +12,27 @@ const LINE_SPACING: usize = 4;
 const DEFAULT_FG_COLOR: u32 = 0x00_FF_FF_FF;
 const DEFAULT_BG_COLOR: u32 = 0x00_08_18_30;
 const DEFAULT_SHADOW_COLOR: u32 = 0x00_00_00_00;
-const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
-pub const HEADER_INDICATOR_PINK: u32 = PINK_FG_COLOR;
+pub(super) const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
 const LEFT_MARGIN: usize = 16;
 const BANNER_X: usize = 16;
 const BANNER_Y: usize = 8;
 // Reserved header area (banner + indicators + cube). Log output starts below this.
 const TOP_MARGIN: usize = 50;
-const HEADER_INDICATOR_SIZE: usize = 25;
 const TEXT_LINE_HEIGHT: usize = FONT_H + LINE_SPACING;
 const VGA_TEXT_PHYS: usize = 0xB8000;
-const VGA_COLUMNS: usize = 80;
+pub(super) const VGA_COLUMNS: usize = 80;
 const VGA_ROWS: usize = 25;
 const VGA_TEXT_CELLS: usize = VGA_COLUMNS * VGA_ROWS;
 const LEGACY_DEFAULT_COLOR: u8 = 0x1F;
 const LEGACY_STATS_COLOR: u8 = 0x1D;
 const LOG_GUARD_MAX_BYTES: usize = 512;
 
-struct FramebufferSurface {
+pub(super) struct FramebufferSurface {
     addr: *mut u8,
     pitch: usize,
     bytes_per_pixel: usize,
-    width: usize,
-    height: usize,
+    pub(super) width: usize,
+    pub(super) height: usize,
     cursor_x: usize,
     cursor_y: usize,
     default_fg_color: u32,
@@ -48,7 +46,7 @@ struct FramebufferSurface {
 unsafe impl Send for FramebufferSurface {}
 unsafe impl Sync for FramebufferSurface {}
 
-static FRAMEBUFFER: Mutex<Option<FramebufferSurface>> = Mutex::new(None);
+pub(super) static FRAMEBUFFER: Mutex<Option<FramebufferSurface>> = Mutex::new(None);
 static LEGACY_ROW: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
@@ -59,7 +57,6 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
     if let Some(fb) = surface.as_mut() {
         fb.clear();
     }
-    // Reserve row 0 for the boot banner so logs don't overwrite it.
     LEGACY_ROW.store(1, Ordering::Relaxed);
 }
 
@@ -180,157 +177,6 @@ pub fn header_height() -> usize {
     TOP_MARGIN
 }
 
-const TRIG_SCALE: i32 = 1024;
-// Fixed-point sin(deg) table scaled by TRIG_SCALE.
-const SIN_DEG: [i16; 360] = [
-    0, 18, 36, 54, 71, 89, 107, 125, 143, 160, 178, 195, 213, 230, 248, 265, 282, 299, 316, 333,
-    350, 367, 384, 400, 416, 433, 449, 465, 481, 496, 512, 527, 543, 558, 573, 587, 602, 616, 630,
-    644, 658, 672, 685, 698, 711, 724, 737, 749, 761, 773, 784, 796, 807, 818, 828, 839, 849, 859,
-    868, 878, 887, 896, 904, 912, 920, 928, 935, 943, 949, 956, 962, 968, 974, 979, 984, 989, 994,
-    998, 1002, 1005, 1008, 1011, 1014, 1016, 1018, 1020, 1022, 1023, 1023, 1024, 1024, 1024, 1023,
-    1023, 1022, 1020, 1018, 1016, 1014, 1011, 1008, 1005, 1002, 998, 994, 989, 984, 979, 974, 968,
-    962, 956, 949, 943, 935, 928, 920, 912, 904, 896, 887, 878, 868, 859, 849, 839, 828, 818, 807,
-    796, 784, 773, 761, 749, 737, 724, 711, 698, 685, 672, 658, 644, 630, 616, 602, 587, 573, 558,
-    543, 527, 512, 496, 481, 465, 449, 433, 416, 400, 384, 367, 350, 333, 316, 299, 282, 265, 248,
-    230, 213, 195, 178, 160, 143, 125, 107, 89, 71, 54, 36, 18, 0, -18, -36, -54, -71, -89, -107,
-    -125, -143, -160, -178, -195, -213, -230, -248, -265, -282, -299, -316, -333, -350, -367, -384,
-    -400, -416, -433, -449, -465, -481, -496, -512, -527, -543, -558, -573, -587, -602, -616, -630,
-    -644, -658, -672, -685, -698, -711, -724, -737, -749, -761, -773, -784, -796, -807, -818, -828,
-    -839, -849, -859, -868, -878, -887, -896, -904, -912, -920, -928, -935, -943, -949, -956, -962,
-    -968, -974, -979, -984, -989, -994, -998, -1002, -1005, -1008, -1011, -1014, -1016, -1018,
-    -1020, -1022, -1023, -1023, -1024, -1024, -1024, -1023, -1023, -1022, -1020, -1018, -1016,
-    -1014, -1011, -1008, -1005, -1002, -998, -994, -989, -984, -979, -974, -968, -962, -956, -949,
-    -943, -935, -928, -920, -912, -904, -896, -887, -878, -868, -859, -849, -839, -828, -818, -807,
-    -796, -784, -773, -761, -749, -737, -724, -711, -698, -685, -672, -658, -644, -630, -616, -602,
-    -587, -573, -558, -543, -527, -512, -496, -481, -465, -449, -433, -416, -400, -384, -367, -350,
-    -333, -316, -299, -282, -265, -248, -230, -213, -195, -178, -160, -143, -125, -107, -89, -71,
-    -54, -36, -18,
-];
-
-#[inline(always)]
-fn sin_cos_scaled(angle_deg: u16) -> (i32, i32) {
-    let a = (angle_deg as usize) % 360;
-    let sin = SIN_DEG[a] as i32;
-    let cos = SIN_DEG[(a + 90) % 360] as i32;
-    (sin, cos)
-}
-
-fn draw_rotated_square_outline(
-    fb: &mut FramebufferSurface,
-    origin_x: usize,
-    origin_y: usize,
-    size: usize,
-    angle_deg: u16,
-    color: u32,
-) {
-    if size < 3 {
-        return;
-    }
-
-    // Leave a small margin so rotation is visible but stays tidy.
-    let half = (((size as i32 - 1) / 2) - 1).max(1);
-
-    let (sin, cos) = sin_cos_scaled(angle_deg);
-    let cx = origin_x as i32 + (size as i32 / 2);
-    let cy = origin_y as i32 + (size as i32 / 2);
-
-    let corners = [(-half, -half), (half, -half), (half, half), (-half, half)];
-
-    let mut pts: [(i32, i32); 4] = [(0, 0); 4];
-    for (i, (dx, dy)) in corners.iter().copied().enumerate() {
-        let rx = (dx * cos - dy * sin) / TRIG_SCALE;
-        let ry = (dx * sin + dy * cos) / TRIG_SCALE;
-        pts[i] = (cx + rx, cy + ry);
-    }
-
-    for i in 0..4 {
-        let (x0, y0) = pts[i];
-        let (x1, y1) = pts[(i + 1) % 4];
-        fb.draw_line(x0, y0, x1, y1, color);
-    }
-}
-
-/// Draw a tiny per-core indicator inside the reserved header area.
-///
-/// - Framebuffer: draws a rotated outline-only square.
-/// - Legacy VGA text: draws a small bracket marker in row 0.
-pub fn render_header_indicator(
-    slot: usize,
-    total_slots: usize,
-    color: u32,
-    angle_deg: u16,
-) -> bool {
-    // Prefer framebuffer.
-    if let Some(mut guard) = FRAMEBUFFER.try_lock() {
-        if let Some(fb) = guard.as_mut() {
-            let w = fb.width;
-            let block = HEADER_INDICATOR_SIZE;
-            let step = block;
-            let total_slots = total_slots.max(1);
-            let strip_w = total_slots.saturating_mul(block);
-            let start_x = (w / 2).saturating_sub(strip_w / 2);
-            let x = start_x.saturating_add(slot.saturating_mul(step));
-            let y = 0;
-            if x < w {
-                // Keep it inside the reserved header area.
-                let max_h = header_height().min(fb.height);
-                let bh = block.min(max_h.saturating_sub(y));
-                if bh > 0 {
-                    let bw = block.min(w.saturating_sub(x));
-                    let size = bw.min(bh);
-                    // With zero spacing, never clear outside this indicator.
-                    fb.clear_rect(x, y, bw, bh, 0x0000_0000);
-                    draw_rotated_square_outline(fb, x, y, size, angle_deg, color);
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    // Fallback: legacy VGA text mode. Row 0 is reserved for the banner.
-    let total_slots = total_slots.max(1);
-    let strip_cols = total_slots.saturating_mul(2);
-    let start_col = (VGA_COLUMNS.saturating_sub(strip_cols)) / 2;
-    let col = start_col.saturating_add(slot.saturating_mul(2));
-    let color: u8 = 0x0D; // light magenta
-    write_legacy_vga_text("[]", color, 0, col)
-}
-
-/// Best-effort framebuffer dimensions that never blocks.
-///
-/// Useful from low-priority tasks (e.g. per-core heartbeat) where skipping a frame
-/// is preferable to contending on the framebuffer lock.
-pub fn try_framebuffer_dimensions() -> Option<(u32, u32)> {
-    FRAMEBUFFER
-        .try_lock()
-        .and_then(|guard| guard.as_ref().map(|fb| (fb.width as u32, fb.height as u32)))
-}
-
-pub fn write_legacy_vga_text(text: &str, color: u8, row: usize, col: usize) -> bool {
-    let start = row.saturating_mul(VGA_COLUMNS).saturating_add(col);
-    let max_cells = VGA_TEXT_CELLS;
-    if start >= max_cells {
-        return false;
-    }
-    let buffer_ptr = phys::phys_to_virt(VGA_TEXT_PHYS);
-    if buffer_ptr == 0 {
-        return false;
-    }
-    let mut cell_index = start;
-    for byte in text.bytes() {
-        if cell_index >= max_cells {
-            break;
-        }
-        let cell_value = ((color as u16) << 8) | byte as u16;
-        unsafe {
-            core::ptr::write_volatile((buffer_ptr as *mut u16).add(cell_index), cell_value);
-        }
-        cell_index += 1;
-    }
-    true
-}
-
 fn append_legacy_line(line: &str, is_stats: bool) {
     let color = if is_stats {
         LEGACY_STATS_COLOR
@@ -349,7 +195,6 @@ fn append_legacy_line(line: &str, is_stats: bool) {
     } else {
         line
     };
-    let _ = write_legacy_vga_text(truncated, color, row, 0);
 }
 
 fn scroll_legacy_text(color: u8) {
@@ -559,7 +404,7 @@ impl FramebufferSurface {
         self.write_pixel(xu, yu, color);
     }
 
-    fn draw_line(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u32) {
+    pub(super) fn draw_line(&mut self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u32) {
         let dx = (x1 - x0).abs();
         let sx = if x0 < x1 { 1 } else { -1 };
         let dy = -(y1 - y0).abs();
@@ -583,7 +428,7 @@ impl FramebufferSurface {
         }
     }
 
-    fn clear_rect(
+    pub(super) fn clear_rect(
         &mut self,
         origin_x: usize,
         origin_y: usize,
