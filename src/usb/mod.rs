@@ -40,6 +40,15 @@ struct DeviceEntry {
 const MAX_DEVICES: usize = 8;
 static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
 static HID_TEST_INJECTED: AtomicBool = AtomicBool::new(false);
+static ENUM_READY: AtomicBool = AtomicBool::new(false);
+
+struct EnumReadyGuard;
+
+impl Drop for EnumReadyGuard {
+    fn drop(&mut self) {
+        ENUM_READY.store(true, Ordering::Release);
+    }
+}
 
 fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     let mut guard = DEVICES.lock();
@@ -63,6 +72,8 @@ fn any_hid_registered() -> bool {
 
 #[embassy_executor::task]
 pub async fn usb_scout(info: xhci::ControllerInfo) {
+    ENUM_READY.store(false, Ordering::Release);
+    let _guard = EnumReadyGuard;
     osal::ensure_dma_api_initialized();
 
     let ctx = unsafe { XhciContext::new(info) };
@@ -570,12 +581,16 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         {
             register_device(slot_id as u32, target_port, DeviceKind::Hid);
             handled = true;
+            // Hand off this slot to the poller; stop consuming its events here.
+            continue;
         } else if pen::try_handle(cfg_slice, target_port) {
             register_device(slot_id as u32, target_port, DeviceKind::Pen);
             handled = true;
+            continue;
         } else if print::try_handle(cfg_slice, target_port) {
             register_device(slot_id as u32, target_port, DeviceKind::Printer);
             handled = true;
+            continue;
         }
 
         if !handled {
@@ -589,6 +604,11 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
     let ctx = unsafe { XhciContext::new(info) };
 
     loop {
+        if !ENUM_READY.load(Ordering::Acquire) {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+            continue;
+        }
+
         let evt_opt = xhci::wait_for_event(
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
