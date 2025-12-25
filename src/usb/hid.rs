@@ -2,7 +2,6 @@ use crate::{debugconf, dma, xhci, input};
 use crate::xhci::{Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
 use heapless::Vec;
@@ -25,6 +24,8 @@ pub struct HidRuntime {
     pub slot_id: u32,
     pub ep_target: u32,
     pub ep_ring: TrbRing,
+    pub seq: u64,
+    pub last_nonzero_seq: u64,
 }
 
 unsafe impl Send for HidRuntime {}
@@ -32,8 +33,6 @@ unsafe impl Sync for HidRuntime {}
 
 const MAX_HID_DEVICES: usize = 4;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
-static TEST_INJECTED: AtomicBool = AtomicBool::new(false);
-
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
     // Placeholder: higher-level input stack not wired in yet.
     protocol
@@ -60,16 +59,45 @@ where
     guard.iter_mut().find(|r| r.slot_id == slot_id).map(f)
 }
 
-pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residual: u32) {
+pub fn debug_dump_hid_state() {
+    let guard = HID_RUNTIMES.lock();
+    if guard.is_empty() {
+        debugconf!("[hid] runtimes: none\n");
+        return;
+    }
+
+    debugconf!("[hid] runtimes: {}\n", guard.len());
+    for r in guard.iter() {
+        let (enq, cyc) = r.ep_ring.state_snapshot();
+        debugconf!(
+            "[hid] slot={} ep=0x{:02X} proto={} seq={} last_nonzero={} ring_enq={} ring_cyc={}\n",
+            r.slot_id,
+            r.ep.address,
+            r.hid_kind,
+            r.seq,
+            r.last_nonzero_seq,
+            enq,
+            cyc as u8
+        );
+    }
+}
+
+pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], residual: u32) {
+    runtime.seq = runtime.seq.wrapping_add(1);
+
     debugconf!(
-        "[hid] interrupt IN cc={} rem={} len={} ep=0x{:02X} proto={} phys=0x{:08X}\n",
+        "[hid] interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X} data={:02X?}\n",
+        runtime.slot_id,
         completion,
         residual,
-        runtime.ep.max_packet,
+        data.len(),
         runtime.ep.address,
         runtime.hid_kind,
-        lo(runtime.report_phys)
+        runtime.seq,
+        lo(runtime.report_phys),
+        data
     );
+
     if runtime.hid_kind == 2 {
         // Boot mouse: buttons, dx, dy, wheel (optional).
         if data.len() >= 3 {
@@ -77,6 +105,18 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residua
             let dx = data[1] as i8;
             let dy = data[2] as i8;
             let wheel = if data.len() > 3 { data[3] as i8 } else { 0 };
+            if buttons != 0 || dx != 0 || dy != 0 || wheel != 0 {
+                runtime.last_nonzero_seq = runtime.seq;
+                debugconf!(
+                    "[mouse] buttons=0x{:02X} dx={} dy={} wheel={} (slot={} seq={})\n",
+                    buttons,
+                    dx,
+                    dy,
+                    wheel,
+                    runtime.slot_id,
+                    runtime.seq
+                );
+            }
             input::push_event(input::InputEvent::Mouse(input::MouseEvent { buttons, dx, dy, wheel }));
         }
     } else if runtime.hid_kind == 1 {
@@ -86,6 +126,7 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residua
             let mut keys = [0u8; 6];
             keys.copy_from_slice(&data[2..8]);
             if keys.iter().any(|&k| k != 0) || modifiers != 0 {
+                runtime.last_nonzero_seq = runtime.seq;
                 debugconf!(
                     "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
                     modifiers,
@@ -102,25 +143,7 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residua
     }
 }
 
-/// One-shot synthetic boot-keyboard report to verify the pipeline.
-/// Injects the letter 'p' (usage 0x13) into the report buffer.
-pub fn inject_test_report() {
-    if TEST_INJECTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    let mut guard = HID_RUNTIMES.lock();
-    if let Some(runtime) = guard.first_mut() {
-        let len = runtime.report_len as usize;
-        unsafe { write_bytes(runtime.report_virt, 0, len) };
-        if len > 2 {
-            unsafe { *runtime.report_virt.add(2) = 0x13 }; // 'p' keycode in boot protocol
-        }
-
-        let data = unsafe { core::slice::from_raw_parts(runtime.report_virt, len) };
-        handle_report(runtime, 1, data, 0);
-    }
-}
+// NOTE: No synthetic HID injections; reports now only reflect real device data.
 
 pub fn parse_boot_endpoint(cfg: &[u8]) -> Option<HidEpInfo> {
     let mut idx = 0usize;
@@ -300,11 +323,14 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     unsafe { write_bytes(input_cfg_virt, 0, 4096) };
 
     let ep_target = endpoint_target(ep.address);
+    // Input context array index (slot=1, ep0=2, ep1out=3, ep1in=4, ...)
     let ep_ctx_index = context_index(ep.address);
+    // Add Context Flags bit index (slot=0, ep0=1, ep1out=2, ep1in=3, ...)
+    let ep_add_bit = ep_ctx_index - 1;
 
     unsafe {
         let add_flags_ptr = input_cfg_virt as *mut u32;
-        write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_ctx_index));
+        write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_add_bit));
 
         let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
         let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
@@ -316,7 +342,9 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         }
 
         let mut dw0 = read_volatile(slot_ctx.add(0));
-        dw0 = (dw0 & !(0x1F << 27)) | ((ep_ctx_index + 1) << 27);
+        // Context Entries = highest valid endpoint context index in *device* context
+        // (slot=0, ep0=1, ep1out=2, ep1in=3, ...), which corresponds to (ep_ctx_index - 1).
+        dw0 = (dw0 & !(0x1F << 27)) | (ep_add_bit << 27);
         write_volatile(slot_ctx.add(0), dw0);
 
         let mut dw1 = read_volatile(slot_ctx.add(1));
@@ -332,7 +360,8 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         };
 
         write_volatile(ep_ctx.add(0), interval << 16);
-        write_volatile(ep_ctx.add(1), (mps << 16) | (EP_TYPE_INT_IN << 3) | (3 << 1));
+        // CErr is the low 2 bits of DW1.
+        write_volatile(ep_ctx.add(1), (mps << 16) | (EP_TYPE_INT_IN << 3) | 3);
         // Set dequeue pointer with the current ring cycle bit (DCS) set.
         // Using the raw phys address would leave DCS cleared and the host would
         // ignore our queued transfer ring.
@@ -410,6 +439,8 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         slot_id,
         ep_target: ep_target as u32,
         ep_ring,
+        seq: 0,
+        last_nonzero_seq: 0,
     });
 
     Ok(())

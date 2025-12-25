@@ -483,6 +483,10 @@ impl TrbRing {
     pub fn dequeue_ptr(&self) -> u64 {
         (self.phys & !0xF) | 1
     }
+
+    pub fn state_snapshot(&self) -> (usize, bool) {
+        (self.enqueue, self.cycle)
+    }
 }
 
 impl EventRing {
