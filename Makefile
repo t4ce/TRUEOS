@@ -65,7 +65,7 @@ iso: $(LIMINE_STAMP)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
 
 run: iso
-	qemu-system-x86_64 -cdrom $(ISO_PATH) -d int -no-reboot -m 8000M -smp cores=4 -debugcon stdio -device i8042 -device nec-usb-xhci,id=xhci -device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 -device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
+	qemu-system-x86_64 -cdrom $(ISO_PATH) -m 2000M -smp cores=4 -debugcon stdio -device i8042 -device nec-usb-xhci,id=xhci -device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 -device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
 
 clean:
 	$(CARGO) clean

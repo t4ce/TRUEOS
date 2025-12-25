@@ -397,13 +397,7 @@ pub fn endpoint_target(ep_addr: u8) -> u32 {
 }
 
 pub fn context_index(ep_addr: u8) -> u32 {
-    let ep_num = (ep_addr & 0x0F) as u32;
-    let dir_in = (ep_addr & 0x80) != 0;
-    if ep_num == 0 {
-        1
-    } else {
-        ep_num * 2 + if dir_in { 1 } else { 0 }
-    }
+    endpoint_target(ep_addr) + 1
 }
 
 pub fn decode_port_status(status: u32) -> (bool, bool, &'static str) {

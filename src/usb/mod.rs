@@ -60,6 +60,8 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     if guard.push(DeviceEntry { slot_id, port, kind }).is_err() {
         debugconf!("usb: device table full, dropping slot {}\n", slot_id);
     }
+    // Signal that at least one device is enumerated so poll_task can start.
+    ENUM_READY.store(true, Ordering::Release);
 }
 
 fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
@@ -437,21 +439,11 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         let Some(_desc_evt) = xhci::wait_for_event(
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type == 32 {
-                    true
-                } else {
-                    let completion = (evt.d2 >> 24) & 0xFF;
-                    debugconf!(
-                        "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-                        evt_type,
-                        completion,
-                        evt.d0,
-                        evt.d1,
-                        evt.d2,
-                        evt.d3
-                    );
-                    false
+                if evt_type != 32 {
+                    return false;
                 }
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                evt_slot == slot_id
             },
             800,
             EmbassyDuration::from_millis(5)
@@ -505,21 +497,11 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         let Some(evt) = xhci::wait_for_event(
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type == 32 {
-                    true
-                } else {
-                    let completion = (evt.d2 >> 24) & 0xFF;
-                    debugconf!(
-                        "usb: unexpected cfg event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-                        evt_type,
-                        completion,
-                        evt.d0,
-                        evt.d1,
-                        evt.d2,
-                        evt.d3
-                    );
-                    false
+                if evt_type != 32 {
+                    return false;
                 }
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                evt_slot == slot_id as u32
             },
             800,
             EmbassyDuration::from_millis(5)
@@ -612,7 +594,11 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
         let evt_opt = xhci::wait_for_event(
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
-                evt_type == 32
+                if evt_type != 32 {
+                    return false;
+                }
+                let evt_slot = (evt.d3 >> 24) as u32;
+                device_kind_for_slot(evt_slot).is_some()
             },
             400,
             EmbassyDuration::from_millis(5)

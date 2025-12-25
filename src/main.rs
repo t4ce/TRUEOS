@@ -13,6 +13,7 @@ mod xhci;
 mod osal;
 mod usb;
 mod time;
+mod input;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
@@ -20,6 +21,7 @@ use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 use crate::usb::usb_scout;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
@@ -80,6 +82,8 @@ pub extern "C" fn _start() -> ! {
     if let Some(info) = xhci::controller_info() {
         let _ = spawner.spawn(usb::poll_task(info));
     }
+
+    let _ = spawner.spawn(input_logger());
 
     let mut counter: u64 = 0;
     loop {
@@ -143,6 +147,42 @@ fn start_aps() {
 
     for cpu in resp.cpus() {
         cpu.goto_address.write(ap_entry);
+    }
+}
+
+#[embassy_executor::task]
+async fn input_logger() {
+    // Simple logger: prints keystrokes as ASCII when possible, otherwise '!' for any input event.
+    loop {
+        if let Some(evt) = input::pop_event() {
+            match evt {
+                input::InputEvent::Keyboard(kbd) => {
+                    let shift = (kbd.modifiers & (1 << 1)) != 0 || (kbd.modifiers & (1 << 5)) != 0;
+                    if let Some(&code) = kbd.keys.iter().find(|&&c| c != 0) {
+                        if let Some(ch) = input::boot_keycode_to_ascii(code, shift) {
+                            debugcon_write_byte(ch);
+                        } else {
+                            debugcon_write_byte(b'!');
+                        }
+                    } else {
+                        debugcon_write_byte(b'!');
+                    }
+                }
+                input::InputEvent::Mouse(mouse) => {
+                    if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
+                        debugconf!(
+                            "[mouse] btn=0x{:02X} dx={} dy={} wheel={}\n",
+                            mouse.buttons,
+                            mouse.dx,
+                            mouse.dy,
+                            mouse.wheel
+                        );
+                    }
+                }
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        }
     }
 }
 
