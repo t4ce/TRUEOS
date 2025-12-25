@@ -21,8 +21,6 @@ fn render(angle_deg: f32) {
         Some((w, h)) => (w as i32, h as i32),
         None => return,
     };
-
-    // Render the cube in the reserved header/banner area (top-right).
     let header_h = vga::header_height().min(height as usize) as i32;
     if header_h <= 0 {
         return;
