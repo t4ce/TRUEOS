@@ -22,6 +22,8 @@ use crate::usb::usb_scout;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::pci::mmio;
 
+static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
+
 const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
 
 #[repr(C, align(64))]
@@ -63,7 +65,10 @@ pub extern "C" fn _start() -> ! {
 
     allocators::alloc_demo();
 
-    start_aps();
+    let resp = *SMP_RESP.call_once(|| limine::smp_response().expect("LIMINE SMP MISSING"));
+    for cpu in resp.cpus() {
+        cpu.goto_address.write(ap_entry);
+    }
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
@@ -139,14 +144,21 @@ fn log_limine_markers() {
 }
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
-    let total_slots = limine::smp_response()
-        .map(|resp| resp.cpus().len().max(1))
-        .unwrap_or(1);
-
+    // floating-point math (SSE) needs per core enabling
+    enable_sse();
+    let total_slots = SMP_RESP
+        .get()
+        .map(|r| r.cpus().len())
+        .unwrap_or(1)
+        .max(1);
     let slot = (cpu.lapic_id as usize) % total_slots;
 
     let mut counter: u64 = 0;
     loop {
+        if counter % 10_000_000 == 0 {
+            vga::draw_header_square(total_slots, slot, vga::DEFAULT_SHADOW_COLOR, (counter % 360) as u32);
+            
+        }
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0' + cpu.lapic_id as u8);
         }
@@ -154,46 +166,8 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     }
 }
 
-fn start_aps() {
-    let Some(resp) = limine::smp_response() else {
-        debugconf!("smp response missing\n");
-        return;
-    };
-
-    for cpu in resp.cpus() {
-        cpu.goto_address.write(ap_entry);
-    }
-}
-/* 
-#[task(pool_size = 256)]
-async fn ap_heartbeat(apic_id: u8) {
-    let Some(idx) = lane::idx_for_apic(apic_id) else {
-        return;
-    };
-    let fb_present = crate::vga::try_framebuffer_dimensions().is_some();
-    crate::log_info!("Heartbeat: core {} started (fb={}).", apic_id, fb_present);
-    let mut ticks: u64 = 0;
-
-    loop {
-        HEARTBEAT_TICKS[idx].fetch_add(1, Ordering::Relaxed);
-        ticks = ticks.wrapping_add(1);
-
-        let ok_color = crate::vga::HEADER_INDICATOR_PINK;
-        let angle_deg = (ticks as u16) % 360;
-        let total_slots = crate::run::smp::detected_core_count();
-        let slot = crate::run::smp::indicator_slot_for_apic(apic_id).unwrap_or(idx);
-        if crate::vga::render_header_indicator(slot, total_slots, ok_color, angle_deg) {
-            HEARTBEAT_DRAW_OK[idx].fetch_add(1, Ordering::Relaxed);
-        } else {
-            HEARTBEAT_DRAW_SKIPPED[idx].fetch_add(1, Ordering::Relaxed);
-        }
-        Timer::after(Duration::from_millis(10)).await;
-    }
-}*/
-
 #[embassy_executor::task]
 async fn input_logger() {
-    // Simple logger: prints keystrokes as ASCII when possible, otherwise '!' for any input event.
     loop {
         if let Some(evt) = usb::input::pop_event() {
             match evt {
