@@ -17,9 +17,30 @@ use crate::xhci::{
 };
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 
 use self::hid::BootAttachParams;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum DeviceKind {
+    Hid,
+    Printer,
+    Pen,
+}
+
+static DEVICE_KIND: Mutex<Option<DeviceKind>> = Mutex::new(None);
+static HID_TEST_INJECTED: AtomicBool = AtomicBool::new(false);
+
+fn set_device_kind(kind: DeviceKind) {
+    let mut guard = DEVICE_KIND.lock();
+    *guard = Some(kind);
+}
+
+fn current_device_kind() -> Option<DeviceKind> {
+    *DEVICE_KIND.lock()
+}
 
 #[embassy_executor::task]
 pub async fn usb_scout(info: xhci::ControllerInfo) {
@@ -511,10 +532,12 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     }
 
     if print::try_handle(cfg_slice, target_port) {
+        set_device_kind(DeviceKind::Printer);
         return;
     }
 
     if pen::try_handle(cfg_slice, target_port) {
+        set_device_kind(DeviceKind::Pen);
         return;
     }
 
@@ -534,30 +557,113 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     if hid::attach_boot_device(attach_params).await.is_err() {
         return;
     }
+    set_device_kind(DeviceKind::Hid);
 }
 
 #[embassy_executor::task]
-pub async fn usb_init_task(_info: xhci::ControllerInfo) {
-    loop {
-        let evt_opt = xhci::wait_for_event(
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                evt_type == 32
-            },
-            1000,
-            EmbassyDuration::from_millis(5)
-        )
-        .await;
+pub async fn poll_task(info: xhci::ControllerInfo) {
+    let ctx = unsafe { XhciContext::new(info) };
 
-        if let Some(evt) = evt_opt {
-            if let Some(runtime) = hid::runtime() {
-                let completion = (evt.d2 >> 24) & 0xFF;
-                let data = unsafe {
-                    core::slice::from_raw_parts(runtime.report_virt, runtime.ep.max_packet as usize)
+    loop {
+        match current_device_kind() {
+            Some(DeviceKind::Hid) => {
+                if !hid::has_runtime() {
+                    Timer::after(EmbassyDuration::from_millis(25)).await;
+                    continue;
+                }
+
+                // One-shot synthetic HID report after a short delay to verify the path end-to-end.
+                if !HID_TEST_INJECTED.swap(true, Ordering::SeqCst) {
+                    Timer::after(EmbassyDuration::from_millis(200)).await;
+                    hid::inject_test_report();
+                }
+
+                let evt_opt = xhci::wait_for_event(
+                    |evt| {
+                        let evt_type = (evt.d3 >> 10) & 0x3F;
+                        evt_type == 32
+                    },
+                    400,
+                    EmbassyDuration::from_millis(5)
+                )
+                .await;
+
+                let Some(evt) = evt_opt else {
+                    continue;
                 };
-                hid::handle_report(&runtime, completion, data);
+
+                // Log every transfer event before routing, so we see ignored slots/types.
+                let evt_type = (evt.d3 >> 10) & 0x3F;
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                let evt_cc = (evt.d2 >> 24) & 0xFF;
+                debugconf!(
+                    "usb: transfer event pre-dispatch type={} slot={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                    evt_type,
+                    evt_slot,
+                    evt_cc,
+                    evt.d0,
+                    evt.d1,
+                    evt.d2,
+                    evt.d3
+                );
+
+                let handled = hid::with_runtime_mut(|runtime| {
+                    let evt_slot = (evt.d3 >> 24) & 0xFF;
+                    if evt_slot as u32 != runtime.slot_id {
+                        return false;
+                    }
+
+                    let completion = (evt.d2 >> 24) & 0xFF;
+                    // Residual length from event TRB (bits 0..23 of d2) shows how much was left.
+                    let residual = evt.d2 & 0x00FF_FFFF;
+                    let data_len = runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
+                    let data = unsafe {
+                        core::slice::from_raw_parts(runtime.report_virt, data_len)
+                    };
+                    hid::handle_report(runtime, completion, data, residual);
+
+                    let normal = Trb {
+                        d0: lo(runtime.report_phys),
+                        d1: hi(runtime.report_phys),
+                        d2: runtime.report_len,
+                        d3: trb_type(1) | (1 << 5),
+                    };
+
+                    if !runtime.ep_ring.push(normal) {
+                        debugconf!("usb: failed to requeue HID interrupt IN transfer\n");
+                    } else {
+                        unsafe {
+                            write_volatile(
+                                ctx.doorbell.add(runtime.slot_id as usize),
+                                runtime.ep_target
+                            );
+                        }
+                    }
+                    true
+                })
+                .unwrap_or(false);
+
+                if !handled {
+                    let evt_type = (evt.d3 >> 10) & 0x3F;
+                    let evt_slot = (evt.d3 >> 24) & 0xFF;
+                    debugconf!(
+                        "usb: ignoring transfer event type={} slot={} (no handler)\n",
+                        evt_type,
+                        evt_slot
+                    );
+                }
             }
-            break;
+            Some(DeviceKind::Printer) => {
+                debugconf!("usb: printer devices are not supported yet\n");
+                Timer::after(EmbassyDuration::from_millis(1000)).await;
+            }
+            Some(DeviceKind::Pen) => {
+                debugconf!("usb: mass-storage devices are not supported yet\n");
+                Timer::after(EmbassyDuration::from_millis(1000)).await;
+            }
+            None => {
+                Timer::after(EmbassyDuration::from_millis(25)).await;
+            }
         }
     }
 }

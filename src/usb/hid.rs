@@ -2,10 +2,10 @@ use crate::{debugconf, dma, xhci};
 use crate::xhci::{Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
 
-#[derive(Copy, Clone, Debug)]
 pub struct HidEpInfo {
     pub configuration: u8,
     pub interface: u8,
@@ -15,17 +15,22 @@ pub struct HidEpInfo {
     pub protocol: u8,
 }
 
-#[derive(Copy, Clone, Debug)]
 pub struct HidRuntime {
     pub ep: HidEpInfo,
+    pub report_phys: u64,
     pub report_virt: *mut u8,
+    pub report_len: u32,
     pub hid_kind: u8,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub ep_ring: TrbRing,
 }
 
 unsafe impl Send for HidRuntime {}
 unsafe impl Sync for HidRuntime {}
 
 static HID_RUNTIME: Mutex<Option<HidRuntime>> = Mutex::new(None);
+static TEST_INJECTED: AtomicBool = AtomicBool::new(false);
 
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
     // Placeholder: higher-level input stack not wired in yet.
@@ -37,17 +42,27 @@ pub fn register_runtime(runtime: HidRuntime) {
     *guard = Some(runtime);
 }
 
-pub fn runtime() -> Option<HidRuntime> {
-    *HID_RUNTIME.lock()
+pub fn has_runtime() -> bool {
+    HID_RUNTIME.lock().is_some()
 }
 
-pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8]) {
+pub fn with_runtime_mut<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut HidRuntime) -> R,
+{
+    let mut guard = HID_RUNTIME.lock();
+    guard.as_mut().map(f)
+}
+
+pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residual: u32) {
     debugconf!(
-        "[hid] interrupt IN cc={} len={} ep=0x{:02X} proto={}\n",
+        "[hid] interrupt IN cc={} rem={} len={} ep=0x{:02X} proto={} phys=0x{:08X}\n",
         completion,
+        residual,
         runtime.ep.max_packet,
         runtime.ep.address,
-        runtime.hid_kind
+        runtime.hid_kind,
+        lo(runtime.report_phys)
     );
     if !data.is_empty() {
         let preview_len = data.len().min(8);
@@ -56,6 +71,25 @@ pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8]) {
         }
     }
     // TODO: route data to input subsystem when available (e.g., inbound::push_report).
+}
+
+/// One-shot synthetic boot-keyboard report to verify the pipeline.
+/// Injects the letter 'p' (usage 0x13) into the report buffer.
+pub fn inject_test_report() {
+    if TEST_INJECTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    with_runtime_mut(|runtime| {
+        let len = runtime.report_len as usize;
+        unsafe { write_bytes(runtime.report_virt, 0, len) };
+        if len > 2 {
+            unsafe { *runtime.report_virt.add(2) = 0x13 }; // 'p' keycode in boot protocol
+        }
+
+        let data = unsafe { core::slice::from_raw_parts(runtime.report_virt, len) };
+        handle_report(runtime, 1, data, 0);
+    });
 }
 
 pub fn parse_boot_endpoint(cfg: &[u8]) -> Option<HidEpInfo> {
@@ -265,11 +299,16 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
 
         write_volatile(ep_ctx.add(0), interval << 16);
         write_volatile(ep_ctx.add(1), (mps << 16) | (EP_TYPE_INT_IN << 3) | (3 << 1));
-        let dq = ep_ring.phys & !0xF;
+        // Set dequeue pointer with the current ring cycle bit (DCS) set.
+        // Using the raw phys address would leave DCS cleared and the host would
+        // ignore our queued transfer ring.
+        let dq = ep_ring.dequeue_ptr();
         write_volatile(ep_ctx.add(2), lo(dq));
         write_volatile(ep_ctx.add(3), hi(dq));
-        let avg_trb_len = 8u32;
-        let max_esit_payload = 4u32;
+
+        // Use the endpoint's packet size consistently for scheduling hints.
+        let avg_trb_len = mps;
+        let max_esit_payload = mps;
         write_volatile(ep_ctx.add(4), (avg_trb_len << 16) | max_esit_payload);
     }
 
@@ -304,25 +343,22 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         return Err(());
     }
 
-    let (rep_phys, rep_virt) = match dma::alloc(16, 64) {
+    let report_bytes = core::cmp::max(usize::from(ep.max_packet), 8);
+    let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
         Some(pair) => pair,
         None => {
             debugconf!("usb: failed to alloc report buffer\n");
             return Err(());
         }
     };
-    unsafe { write_bytes(rep_virt, 0, 16) };
+    unsafe { write_bytes(rep_virt, 0, report_bytes) };
 
-    register_runtime(HidRuntime {
-        ep,
-        report_virt: rep_virt,
-        hid_kind,
-    });
+    let report_len = ep.max_packet as u32;
 
     let normal = Trb {
         d0: lo(rep_phys),
         d1: hi(rep_phys),
-        d2: 8,
+        d2: report_len,
         d3: trb_type(1) | (1 << 5),
     };
     if !ep_ring.push(normal) {
@@ -330,6 +366,17 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
+
+    register_runtime(HidRuntime {
+        ep,
+        report_phys: rep_phys,
+        report_virt: rep_virt,
+        report_len,
+        hid_kind,
+        slot_id,
+        ep_target: ep_target as u32,
+        ep_ring,
+    });
 
     Ok(())
 }
