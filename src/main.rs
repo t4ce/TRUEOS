@@ -5,9 +5,11 @@ extern crate alloc;
 
 mod allocators;
 mod limine;
+mod vga;
 mod pci;
 mod usb;
 mod time;
+mod phys;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use embassy_executor::{raw::Executor, Spawner};
@@ -45,11 +47,14 @@ pub extern "C" fn _start() -> ! {
 
     log_limine_markers();
 
+    vga::init(limine::framebuffer_response());
+
     pci::dma::init_from_limine();
     pci::dma::alloc_test_once();
 
     pci::enumerate_once();
     //pci::log_devices_once();
+    pci::tga::init_once();
     pci::xhci::init_once();
 
     //log_memmap_once();
