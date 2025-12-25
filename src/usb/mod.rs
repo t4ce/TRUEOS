@@ -39,7 +39,6 @@ struct DeviceEntry {
 
 const MAX_DEVICES: usize = 8;
 static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
-static HID_TEST_INJECTED: AtomicBool = AtomicBool::new(false);
 static ENUM_READY: AtomicBool = AtomicBool::new(false);
 
 struct EnumReadyGuard;
@@ -47,6 +46,7 @@ struct EnumReadyGuard;
 impl Drop for EnumReadyGuard {
     fn drop(&mut self) {
         ENUM_READY.store(true, Ordering::Release);
+        debugconf!("usb: ENUM_READY set by scout completion\n");
     }
 }
 
@@ -62,6 +62,12 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY.store(true, Ordering::Release);
+    debugconf!(
+        "usb: slot {} registered as {:?} on port {}\n",
+        slot_id,
+        kind,
+        port
+    );
 }
 
 fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
@@ -584,11 +590,18 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 #[embassy_executor::task]
 pub async fn poll_task(info: xhci::ControllerInfo) {
     let ctx = unsafe { XhciContext::new(info) };
+    let mut heartbeat: u32 = 0;
+    let mut idle_timeouts: u32 = 0;
 
     loop {
         if !ENUM_READY.load(Ordering::Acquire) {
             Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
+        }
+
+        heartbeat = heartbeat.wrapping_add(1);
+        if heartbeat % 500 == 0 {
+            debugconf!("usb: poll heartbeat ready loops={}\n", heartbeat);
         }
 
         let evt_opt = xhci::wait_for_event(
@@ -606,9 +619,16 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
         .await;
 
         let Some(evt) = evt_opt else {
+            idle_timeouts = idle_timeouts.wrapping_add(1);
+            if idle_timeouts % 20 == 0 {
+                debugconf!("usb: idle (no transfer events) timeouts={}\n", idle_timeouts);
+                crate::usb::hid::debug_dump_hid_state();
+            }
             Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
         };
+
+        idle_timeouts = 0;
 
         let evt_slot = (evt.d3 >> 24) as u32;
         let evt_type = (evt.d3 >> 10) & 0x3F;
@@ -630,11 +650,6 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
                     continue;
                 }
 
-                if !HID_TEST_INJECTED.swap(true, Ordering::SeqCst) {
-                    Timer::after(EmbassyDuration::from_millis(200)).await;
-                    hid::inject_test_report();
-                }
-
                 let handled = hid::with_runtime_mut_by_slot(evt_slot, |runtime| {
                     let completion = (evt.d2 >> 24) & 0xFF;
                     let residual = evt.d2 & 0x00FF_FFFF;
@@ -651,15 +666,31 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
                         d3: trb_type(1) | (1 << 5),
                     };
 
+                    let before = runtime.ep_ring.state_snapshot();
                     if !runtime.ep_ring.push(normal) {
                         debugconf!("usb: failed to requeue HID interrupt IN transfer\n");
                     } else {
+                        let after = runtime.ep_ring.state_snapshot();
+                        debugconf!(
+                            "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
+                            runtime.slot_id,
+                            runtime.ep_target,
+                            before.0,
+                            before.1 as u8,
+                            after.0,
+                            after.1 as u8
+                        );
                         unsafe {
                             write_volatile(
                                 ctx.doorbell.add(runtime.slot_id as usize),
                                 runtime.ep_target
                             );
                         }
+                        debugconf!(
+                            "[hid] doorbell slot={} target={} rung\n",
+                            runtime.slot_id,
+                            runtime.ep_target
+                        );
                     }
                     true
                 })
