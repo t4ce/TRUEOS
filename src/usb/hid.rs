@@ -5,6 +5,7 @@ use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
+use heapless::Vec;
 
 pub struct HidEpInfo {
     pub configuration: u8,
@@ -29,7 +30,8 @@ pub struct HidRuntime {
 unsafe impl Send for HidRuntime {}
 unsafe impl Sync for HidRuntime {}
 
-static HID_RUNTIME: Mutex<Option<HidRuntime>> = Mutex::new(None);
+const MAX_HID_DEVICES: usize = 4;
+static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 static TEST_INJECTED: AtomicBool = AtomicBool::new(false);
 
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
@@ -38,20 +40,24 @@ pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
 }
 
 pub fn register_runtime(runtime: HidRuntime) {
-    let mut guard = HID_RUNTIME.lock();
-    *guard = Some(runtime);
+    let mut guard = HID_RUNTIMES.lock();
+    if let Some(existing) = guard.iter_mut().find(|r| r.slot_id == runtime.slot_id) {
+        *existing = runtime;
+        return;
+    }
+    let _ = guard.push(runtime);
 }
 
 pub fn has_runtime() -> bool {
-    HID_RUNTIME.lock().is_some()
+    !HID_RUNTIMES.lock().is_empty()
 }
 
-pub fn with_runtime_mut<F, R>(f: F) -> Option<R>
+pub fn with_runtime_mut_by_slot<F, R>(slot_id: u32, f: F) -> Option<R>
 where
     F: FnOnce(&mut HidRuntime) -> R,
 {
-    let mut guard = HID_RUNTIME.lock();
-    guard.as_mut().map(f)
+    let mut guard = HID_RUNTIMES.lock();
+    guard.iter_mut().find(|r| r.slot_id == slot_id).map(f)
 }
 
 pub fn handle_report(runtime: &HidRuntime, completion: u32, data: &[u8], residual: u32) {
@@ -80,7 +86,8 @@ pub fn inject_test_report() {
         return;
     }
 
-    with_runtime_mut(|runtime| {
+    let mut guard = HID_RUNTIMES.lock();
+    if let Some(runtime) = guard.first_mut() {
         let len = runtime.report_len as usize;
         unsafe { write_bytes(runtime.report_virt, 0, len) };
         if len > 2 {
@@ -89,7 +96,7 @@ pub fn inject_test_report() {
 
         let data = unsafe { core::slice::from_raw_parts(runtime.report_virt, len) };
         handle_report(runtime, 1, data, 0);
-    });
+    }
 }
 
 pub fn parse_boot_endpoint(cfg: &[u8]) -> Option<HidEpInfo> {
