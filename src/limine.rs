@@ -16,6 +16,10 @@ pub static HHDM_REQUEST: request::HhdmRequest = request::HhdmRequest::new();
 #[link_section = ".limine_requests"]
 pub static MEMMAP_REQUEST: request::MemoryMapRequest = request::MemoryMapRequest::new();
 
+#[used]
+#[link_section = ".limine_requests"]
+pub static FRAMEBUFFER_REQUEST: request::FramebufferRequest = request::FramebufferRequest::new();
+
 pub fn hhdm_offset() -> Option<u64> {
     let resp = HHDM_REQUEST.get_response()?;
     Some(resp.offset())
@@ -24,6 +28,10 @@ pub fn hhdm_offset() -> Option<u64> {
 pub fn memmap_entries() -> Option<&'static [&'static memory_map::Entry]> {
     let resp =  MEMMAP_REQUEST.get_response()? ;
     Some(resp.entries())
+}
+
+pub fn framebuffer_response() -> Option<&'static response::FramebufferResponse> {
+    FRAMEBUFFER_REQUEST.get_response()
 }
 
 pub fn smp_response() -> Option<&'static response::MpResponse> {

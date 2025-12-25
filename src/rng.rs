@@ -1,0 +1,57 @@
+//! Minimal RNG helper for x86_64.
+//!
+//! Prefers hardware RDRAND/RDSEED and assumes at least one is available.
+
+#[cfg(target_arch = "x86_64")]
+use rdrand::{RdRand, RdSeed};
+
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("rng.rs currently only supports x86_64");
+
+/// CPUID probe for RDRAND (ECX bit 30 of leaf 1).
+pub fn has_rdrand() -> bool {
+    raw_cpuid::CpuId::new()
+        .get_feature_info()
+        .map(|info| info.has_rdrand())
+        .unwrap_or(false)
+}
+
+/// CPUID probe for RDSEED (EBX bit 18 of leaf 7, subleaf 0).
+pub fn has_rdseed() -> bool {
+    raw_cpuid::CpuId::new()
+        .get_extended_feature_info()
+        .map(|info| info.has_rdseed())
+        .unwrap_or(false)
+}
+
+/// Fetch a 64-bit random value using RDRAND.
+pub fn rdrand_u64() -> Option<u64> {
+    let rng = RdRand::new().ok()?;
+    rng.try_next_u64().ok()
+}
+
+/// Fetch a 64-bit seed value using RDSEED.
+pub fn rdseed_u64() -> Option<u64> {
+    let rng = RdSeed::new().ok()?;
+    rng.try_next_u64().ok()
+}
+
+/// Best-effort random value: prefer RDSEED, fall back to RDRAND if RDSEED busy.
+pub fn random_u64() -> Option<u64> {
+    rdseed_u64().or_else(rdrand_u64)
+}
+
+/// Log detected RNG capabilities.
+pub fn log_rng_caps() {
+    // Keep the logging path trivial to avoid exercising fmt machinery on fragile early stacks.
+    let rdrand = has_rdrand();
+    let rdseed = has_rdseed();
+    match (rdrand, rdseed) {
+        (true, true) => crate::debugconf!("RNG: RDRAND and RDSEED available.\n"),
+        (true, false) => crate::debugconf!("RNG: RDRAND available, RDSEED unavailable.\n"),
+        (false, true) => crate::debugconf!("RNG: RDSEED available, RDRAND unavailable.\n"),
+        (false, false) => crate::debugconf!(
+            "RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n"
+        ),
+    }
+}
