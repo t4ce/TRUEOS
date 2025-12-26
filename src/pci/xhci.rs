@@ -455,6 +455,18 @@ impl TrbRing {
         write_volatile(link_ptr, link);
     }
 
+    #[inline(always)]
+    unsafe fn set_link_cycle_bit(&self, cycle: bool) {
+        if self.len < 2 {
+            return;
+        }
+        let link_idx = self.len - 1;
+        let link_ptr = self.trbs.add(link_idx);
+        let mut link = read_volatile(link_ptr);
+        link.d3 = (link.d3 & !1) | (cycle as u32);
+        write_volatile(link_ptr, link);
+    }
+
     pub fn push(&mut self, mut trb: Trb) -> bool {
         if self.len < 2 {
             return false;
@@ -462,6 +474,7 @@ impl TrbRing {
 
         let usable = self.len - 1;
         if self.enqueue >= usable {
+            // Shouldn't happen (we never enqueue into the Link TRB slot), but recover.
             self.enqueue = 0;
             self.cycle = !self.cycle;
         }
@@ -470,6 +483,10 @@ impl TrbRing {
         unsafe { write_volatile(self.trbs.add(self.enqueue), trb) };
         self.enqueue += 1;
         if self.enqueue >= usable {
+            // We just filled the last usable TRB. Ensure the Link TRB's cycle bit
+            // matches the current cycle so the controller can follow it, then
+            // toggle for the next pass.
+            unsafe { self.set_link_cycle_bit(self.cycle) };
             self.enqueue = 0;
             self.cycle = !self.cycle;
         }
@@ -520,16 +537,20 @@ impl EventRing {
             return None;
         }
 
-        // Lowest-level trace: every event pulled directly from the ring.
-        crate::debugconf!(
-            "xhci: evt dequeue={} cycle={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-            self.dequeue,
-            self.cycle as u8,
-            trb.d0,
-            trb.d1,
-            trb.d2,
-            trb.d3
-        );
+        // Lowest-level trace can overwhelm the system (especially on real hardware
+        // when Port Status Change Events storm). Keep it off by default.
+        const TRACE_EVENT_TRBS: bool = false;
+        if TRACE_EVENT_TRBS {
+            crate::debugconf!(
+                "xhci: evt dequeue={} cycle={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+                self.dequeue,
+                self.cycle as u8,
+                trb.d0,
+                trb.d1,
+                trb.d2,
+                trb.d3
+            );
+        }
 
         self.dequeue += 1;
         if self.dequeue >= self.count {
@@ -580,6 +601,31 @@ impl EventRing {
     }
 }
 
+#[inline(always)]
+unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
+    if port_id == 0 {
+        return;
+    }
+    // Port ID is 1-based.
+    let port_idx = (port_id as usize).saturating_sub(1);
+
+    // RW1C change bits in PORTSC. Writing 1 clears, writing 0 leaves unchanged.
+    const PORTSC_CSC: u32 = 1 << 17;
+    const PORTSC_PEC: u32 = 1 << 18;
+    const PORTSC_WRC: u32 = 1 << 19;
+    const PORTSC_OCC: u32 = 1 << 20;
+    const PORTSC_PRC: u32 = 1 << 21;
+    const PORTSC_PLC: u32 = 1 << 22;
+    const PORTSC_CEC: u32 = 1 << 23;
+    const RW1C_MASK: u32 = PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
+
+    const PORT_BLOCK_OFFSET: usize = 0x400;
+    const PORT_STRIDE: usize = 0x10;
+    let port_base = (ctx.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
+    let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
+    write_volatile(port_ptr, RW1C_MASK);
+}
+
 #[embassy_executor::task]
 pub async fn poll_task(info: ControllerInfo) {
     crate::debugconf!(
@@ -588,6 +634,8 @@ pub async fn poll_task(info: ControllerInfo) {
         info.slot,
         info.function
     );
+
+    let ctx = unsafe { XhciContext::new(info) };
 
     loop {
         let evt_opt = {
@@ -605,6 +653,16 @@ pub async fn poll_task(info: ControllerInfo) {
         };
 
         if let Some(evt) = evt_opt {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type == 34 {
+                // Port Status Change Event: must be acked by clearing PORTSC change bits,
+                // otherwise the controller can keep generating the same event forever.
+                let port_id = (evt.d0 >> 24) as u8;
+                unsafe { clear_port_change_bits(&ctx, port_id) };
+                // Drop it; higher layers currently rescan via PORTSC anyway.
+                continue;
+            }
+
             enqueue_event(evt);
         } else {
             Timer::after(EmbassyDuration::from_millis(1)).await;

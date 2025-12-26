@@ -49,6 +49,16 @@ pub fn register_runtime(runtime: HidRuntime) {
     let _ = guard.push(runtime);
 }
 
+pub fn unregister_runtime(slot_id: u32) -> bool {
+    let mut guard = HID_RUNTIMES.lock();
+    if let Some(idx) = guard.iter().position(|r| r.slot_id == slot_id) {
+        let _ = guard.remove(idx);
+        true
+    } else {
+        false
+    }
+}
+
 pub fn has_runtime() -> bool {
     !HID_RUNTIMES.lock().is_empty()
 }
