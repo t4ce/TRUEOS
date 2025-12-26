@@ -2,7 +2,9 @@ use font8x8::{UnicodeFonts, BASIC_FONTS};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
+use core::fmt;
 use core::f32::consts::PI;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 const FONT_W: usize = 8;
 const FONT_H: usize = 8;
@@ -14,6 +16,7 @@ pub const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
 const BANNER_X: usize = 16;
 const BANNER_Y: usize = 8;
 const TOP_MARGIN: usize = 50;
+const LOG_LINE_HEIGHT: usize = FONT_H + 1;
 
 pub(super) struct FramebufferSurface {
     addr: *mut u8,
@@ -27,6 +30,32 @@ unsafe impl Send for FramebufferSurface {}
 unsafe impl Sync for FramebufferSurface {}
 
 static FRAMEBUFFER: Once<Option<FramebufferSurface>> = Once::new();
+static LOG_NEXT_Y: AtomicUsize = AtomicUsize::new(TOP_MARGIN);
+static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
+
+fn log_advance_line(fb_height: usize, current_y: usize) -> usize {
+    let start_y = TOP_MARGIN;
+    let mut next = current_y.saturating_add(LOG_LINE_HEIGHT);
+    if next.saturating_add(LOG_LINE_HEIGHT) > fb_height {
+        next = start_y;
+    }
+    next
+}
+
+struct VgaLogWriter {
+    fg: u32,
+    bg: u32,
+    shadow: u32,
+    ended_with_newline: bool,
+}
+
+impl fmt::Write for VgaLogWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.ended_with_newline = s.ends_with('\n');
+        let _ = log(s, self.fg, self.bg, self.shadow);
+        Ok(())
+    }
+}
 
 pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
     let _ = FRAMEBUFFER.call_once(|| {
@@ -54,6 +83,98 @@ pub fn render_framebuffer_banner(text: &str) -> bool {
         true
     })
     .unwrap_or(false)
+}
+
+fn render_string(
+    text: &str,
+    origin_x: usize,
+    origin_y: usize,
+    fg: u32,
+    bg: u32,
+    shadow: u32,
+) -> bool {
+    with_framebuffer(|fb| {
+        fb.blit_text(text, origin_x, origin_y, fg, bg, shadow);
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
+    with_framebuffer(|fb| {
+        let start_y = TOP_MARGIN;
+
+        let mut y = LOG_NEXT_Y.load(Ordering::Relaxed);
+        if y < start_y {
+            y = start_y;
+        }
+        if y.saturating_add(LOG_LINE_HEIGHT) > fb.height {
+            y = start_y;
+        }
+
+        for chunk in text.split_inclusive('\n') {
+            let (part, has_nl) = match chunk.strip_suffix('\n') {
+                Some(p) => (p, true),
+                None => (chunk, false),
+            };
+
+            if !part.is_empty() {
+                let x = LOG_CUR_X.load(Ordering::Relaxed).min(fb.width);
+                fb.blit_text(part, x, y, fg, bg, shadow);
+
+                let advance = part
+                    .chars()
+                    .count()
+                    .saturating_mul(FONT_W + CHAR_SPACING);
+                LOG_CUR_X.store(x.saturating_add(advance).min(fb.width), Ordering::Relaxed);
+            }
+
+            if has_nl {
+                y = log_advance_line(fb.height, y);
+                LOG_NEXT_Y.store(y, Ordering::Relaxed);
+                LOG_CUR_X.store(0, Ordering::Relaxed);
+            }
+        }
+
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn log_fmt(args: fmt::Arguments<'_>, fg: u32, bg: u32, shadow: u32) -> bool {
+    // Best-effort: ignore fmt errors (we never return Err in our writer).
+    let mut w = VgaLogWriter {
+        fg,
+        bg,
+        shadow,
+        ended_with_newline: false,
+    };
+    let _ = fmt::write(&mut w, args);
+    true
+}
+
+pub fn logln(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
+    LOG_CUR_X.store(0, Ordering::Relaxed);
+    let _ = log(text, fg, bg, shadow);
+    if !text.ends_with('\n') {
+        let _ = log("\n", fg, bg, shadow);
+    }
+    true
+}
+
+pub fn logln_fmt(args: fmt::Arguments<'_>, fg: u32, bg: u32, shadow: u32) -> bool {
+    LOG_CUR_X.store(0, Ordering::Relaxed);
+    let mut w = VgaLogWriter {
+        fg,
+        bg,
+        shadow,
+        ended_with_newline: false,
+    };
+    let _ = fmt::write(&mut w, args);
+    if !w.ended_with_newline {
+        let _ = log("\n", fg, bg, shadow);
+    }
+    true
 }
 
 pub fn framebuffer_dimensions() -> Option<(u32, u32)> {

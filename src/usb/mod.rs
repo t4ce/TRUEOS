@@ -42,6 +42,168 @@ struct DeviceEntry {
 const MAX_DEVICES: usize = 8;
 static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
 static ENUM_READY: AtomicBool = AtomicBool::new(false);
+static SCOUT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct UsbControllerState {
+    info: xhci::ControllerInfo,
+    ctx: XhciContext,
+    ctx_stride_bytes: usize,
+    ctx_stride_words: usize,
+    dcbaa_phys: u64,
+    dcbaa_virt: *mut u8,
+    cmd_ring: TrbRing,
+    _cmd_phys: u64,
+    _cmd_virt: *mut u8,
+    _evt_phys: u64,
+    _evt_virt: *mut u8,
+    _erst_phys: u64,
+    _erst_virt: *mut u8,
+}
+
+unsafe impl Send for UsbControllerState {}
+unsafe impl Sync for UsbControllerState {}
+
+static USB_CTRL: Mutex<Option<UsbControllerState>> = Mutex::new(None);
+
+fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()> {
+    osal::ensure_dma_api_initialized();
+
+    let ctx = unsafe { XhciContext::new(info) };
+    let csz_64 = (ctx.hccparams1 & (1 << 2)) != 0;
+    let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
+    let ctx_stride_words: usize = ctx_stride_bytes / 4;
+
+    let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
+    let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
+        Some(pair) => pair,
+        None => {
+            debugconf!("usb: failed to alloc dcbaa\n");
+            return Err(());
+        }
+    };
+    unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
+
+    const CMD_RING_TRBS: usize = 64;
+    let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
+        Some(pair) => pair,
+        None => {
+            debugconf!("usb: failed to alloc cmd ring\n");
+            return Err(());
+        }
+    };
+    unsafe { write_bytes(cmd_virt_raw, 0, CMD_RING_TRBS * size_of::<Trb>()) };
+    let mut cmd_ring = unsafe { TrbRing::new(cmd_phys, cmd_virt_raw as *mut Trb, CMD_RING_TRBS) };
+
+    const EVENT_RING_TRBS: usize = 64;
+    let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
+        Some(pair) => pair,
+        None => {
+            debugconf!("usb: failed to alloc event ring\n");
+            return Err(());
+        }
+    };
+    unsafe { write_bytes(evt_virt_raw, 0, EVENT_RING_TRBS * size_of::<Trb>()) };
+    let mut event_ring = unsafe { EventRing::new(evt_phys, evt_virt_raw as *mut Trb, EVENT_RING_TRBS) };
+
+    let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
+        Some(pair) => pair,
+        None => {
+            debugconf!("usb: failed to alloc ERST\n");
+            return Err(());
+        }
+    };
+    unsafe {
+        write_bytes(erst_virt, 0, size_of::<ErstEntry>());
+        let entry = &mut *(erst_virt as *mut ErstEntry);
+        entry.seg_base_lo = lo(evt_phys);
+        entry.seg_base_hi = hi(evt_phys);
+        entry.seg_size = EVENT_RING_TRBS as u32;
+    }
+
+    unsafe {
+        write_reg64(ctx.op_base, 0x30, dcbaa_phys);
+        // CONFIG.MaxSlotsEn: must be >= number of slots we intend to use.
+        // Real hardware is much less forgiving than QEMU if this is too small.
+        let slots_en = core::cmp::max(1, core::cmp::min(255, max_slots)) as u32;
+        write_volatile(ctx.op_base.add(0x38 / 4), slots_en);
+
+        const IMAN: usize = 0x00 / 4;
+        const ERSTSZ: usize = 0x08 / 4;
+        const ERSTBA: usize = 0x10 / 4;
+        let intr0 = ctx.runtime.add(0x20 / 4);
+        write_volatile(intr0.add(ERSTSZ), 1);
+        write_volatile(intr0.add(ERSTBA), lo(erst_phys));
+        write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
+        event_ring.update_erdp(intr0);
+        xhci::install_event_ring(event_ring, intr0);
+        const IMAN_IE: u32 = 1 << 1;
+        write_volatile(intr0.add(IMAN), IMAN_IE);
+
+        write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
+
+        const USBCMD: usize = 0x00 / 4;
+        const USBSTS: usize = 0x04 / 4;
+        const USBCMD_RS: u32 = 1 << 0;
+        const USBCMD_INTE: u32 = 1 << 2;
+        const USBSTS_HCH: u32 = 1 << 0;
+        write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS | USBCMD_INTE);
+        let mut spin: u32 = 1_000_000;
+        while spin > 0 {
+            let sts = read_volatile(ctx.op_base.add(USBSTS));
+            if (sts & USBSTS_HCH) == 0 {
+                break;
+            }
+            spin -= 1;
+        }
+    }
+
+    debugconf!("usb: controller initialized; ready for rescans\n");
+
+    Ok(UsbControllerState {
+        info,
+        ctx,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        dcbaa_phys,
+        dcbaa_virt,
+        cmd_ring,
+        _cmd_phys: cmd_phys,
+        _cmd_virt: cmd_virt_raw,
+        _evt_phys: evt_phys,
+        _evt_virt: evt_virt_raw,
+        _erst_phys: erst_phys,
+        _erst_virt: erst_virt,
+    })
+}
+
+fn has_device_on_port(port: u8) -> bool {
+    DEVICES.lock().iter().any(|d| d.port == port)
+}
+
+fn cleanup_disconnected<const N: usize>(connected: &Vec<(u8, u32), N>) {
+    let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
+    {
+        let mut guard = DEVICES.lock();
+        let mut idx = 0usize;
+        while idx < guard.len() {
+            let port = guard[idx].port;
+            let still_connected = connected.iter().any(|(p, _)| *p == port);
+            if still_connected {
+                idx += 1;
+                continue;
+            }
+            let entry = guard.remove(idx);
+            let _ = removed.push((entry.slot_id, entry.kind));
+        }
+    }
+
+    for (slot_id, kind) in removed.into_iter() {
+        if kind == DeviceKind::Hid {
+            let _ = hid::unregister_runtime(slot_id);
+        }
+        debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
+    }
+}
 
 struct EnumReadyGuard;
 
@@ -82,117 +244,74 @@ fn any_hid_registered() -> bool {
 
 #[embassy_executor::task]
 pub async fn usb_scout(info: xhci::ControllerInfo) {
-    ENUM_READY.store(false, Ordering::Release);
-    let _guard = EnumReadyGuard;
-    osal::ensure_dma_api_initialized();
-
-    let ctx = unsafe { XhciContext::new(info) };
-    let csz_64 = (ctx.hccparams1 & (1 << 2)) != 0;
-    let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
-    let ctx_stride_words: usize = ctx_stride_bytes / 4;
-
-    let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
-    let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc dcbaa\n");
-            return;
-        }
-    };
-    unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
-
-    const CMD_RING_TRBS: usize = 64;
-    let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc cmd ring\n");
-            return;
-        }
-    };
-    unsafe { write_bytes(cmd_virt_raw, 0, CMD_RING_TRBS * size_of::<Trb>()) };
-    let mut cmd_ring = unsafe { TrbRing::new(cmd_phys, cmd_virt_raw as *mut Trb, CMD_RING_TRBS) };
-
-    const EVENT_RING_TRBS: usize = 64;
-    let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc event ring\n");
-            return;
-        }
-    };
-    unsafe { write_bytes(evt_virt_raw, 0, EVENT_RING_TRBS * size_of::<Trb>()) };
-    let mut event_ring = unsafe {
-        EventRing::new(
-            evt_phys,
-            evt_virt_raw as *mut Trb,
-            EVENT_RING_TRBS,
-        )
-    };
-
-    let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
-        Some(pair) => pair,
-        None => {
-            debugconf!("usb: failed to alloc ERST\n");
-            return;
-        }
-    };
-    unsafe {
-        write_bytes(erst_virt, 0, size_of::<ErstEntry>());
-        let entry = &mut *(erst_virt as *mut ErstEntry);
-        entry.seg_base_lo = lo(evt_phys);
-        entry.seg_base_hi = hi(evt_phys);
-        entry.seg_size = EVENT_RING_TRBS as u32;
-    }
-
-    let mut connected: Vec<(u8, u32), 16> = Vec::new();
-    for port in 0..ctx.port_count {
-        let status = unsafe { ctx.portsc(port as usize) };
-        let (connected_flag, _, _) = decode_port_status(status);
-        if connected_flag {
-            let _ = connected.push(((port + 1) as u8, status));
-        }
-    }
-
-    if connected.is_empty() {
-        debugconf!("usb: no connected devices detected\n");
+    if SCOUT_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        debugconf!("usb: scout already running; skipping\n");
         return;
     }
 
-    unsafe {
-        write_reg64(ctx.op_base, 0x30, dcbaa_phys);
-        write_volatile(ctx.op_base.add(0x38 / 4), 1);
-
-        const IMAN: usize = 0x00 / 4;
-        const ERSTSZ: usize = 0x08 / 4;
-        const ERSTBA: usize = 0x10 / 4;
-        let intr0 = ctx.runtime.add(0x20 / 4);
-        write_volatile(intr0.add(ERSTSZ), 1);
-        write_volatile(intr0.add(ERSTBA), lo(erst_phys));
-        write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
-        event_ring.update_erdp(intr0);
-        xhci::install_event_ring(event_ring, intr0);
-        const IMAN_IE: u32 = 1 << 1;
-        write_volatile(intr0.add(IMAN), IMAN_IE);
-
-        write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
-
-        const USBCMD: usize = 0x00 / 4;
-        const USBSTS: usize = 0x04 / 4;
-        const USBCMD_RS: u32 = 1 << 0;
-        const USBCMD_INTE: u32 = 1 << 2;
-        const USBSTS_HCH: u32 = 1 << 0;
-        write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS | USBCMD_INTE);
-        let mut spin: u32 = 1_000_000;
-        while spin > 0 {
-            let sts = read_volatile(ctx.op_base.add(USBSTS));
-            if (sts & USBSTS_HCH) == 0 {
-                break;
-            }
-            spin -= 1;
+    struct ScoutRunGuard;
+    impl Drop for ScoutRunGuard {
+        fn drop(&mut self) {
+            SCOUT_RUNNING.store(false, Ordering::Release);
         }
     }
 
-    for (target_port, mut port_status) in connected.into_iter() {
+    let _scout_guard = ScoutRunGuard;
+
+    // Take controller state out of the mutex so we don't hold a spinlock across `.await`.
+    let mut state = USB_CTRL.lock().take();
+    let mut state = match state {
+        Some(existing) => existing,
+        None => {
+            // First run: do controller init. Keep ENUM_READY false until the first scan completes.
+            ENUM_READY.store(false, Ordering::Release);
+            let _guard = EnumReadyGuard;
+            match init_controller(info) {
+                Ok(s) => s,
+                Err(()) => {
+                    return;
+                }
+            }
+        }
+    };
+
+    // Always rescan ports; enumerate newly connected devices.
+    let mut connected: Vec<(u8, u32), 64> = Vec::new();
+    let mut connected_overflowed = false;
+    for port in 0..state.ctx.port_count {
+        let status = unsafe { state.ctx.portsc(port as usize) };
+        let (connected_flag, _, _) = decode_port_status(status);
+        if connected_flag {
+            if connected.push(((port + 1) as u8, status)).is_err() {
+                connected_overflowed = true;
+            }
+        }
+    }
+
+    // If we couldn't record all connected ports, don't treat missing entries as disconnects.
+    if connected_overflowed {
+        debugconf!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
+    } else {
+        cleanup_disconnected(&connected);
+    }
+
+    for (target_port, port_status) in connected.iter().copied() {
+        if has_device_on_port(target_port) {
+            continue;
+        }
+
+        // Enumerate this port.
+        let ctx = &state.ctx;
+        let dcbaa_virt = state.dcbaa_virt;
+        let ctx_stride_bytes = state.ctx_stride_bytes;
+        let ctx_stride_words = state.ctx_stride_words;
+        let cmd_ring = &mut state.cmd_ring;
+        let mut port_status = port_status;
+
+
         let enable_slot = Trb {
             d0: 0,
             d1: 0,
@@ -556,7 +675,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         let mut handled = false;
         if hid::attach_boot_device(BootAttachParams {
             ctx: &ctx,
-            cmd_ring: &mut cmd_ring,
+            cmd_ring,
             ep0_ring: &mut ep0_ring,
             slot_id,
             cfg: cfg_slice,
@@ -587,6 +706,8 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
             debugconf!("usb: device on port {} not claimed\n", target_port);
         }
     }
+
+    *USB_CTRL.lock() = Some(state);
 }
 
 #[embassy_executor::task]
@@ -622,11 +743,6 @@ pub async fn poll_task(info: xhci::ControllerInfo) {
 
         let Some(evt) = evt_opt else {
             idle_timeouts = idle_timeouts.wrapping_add(1);
-            if idle_timeouts % 20 == 0 {
-                debugconf!("usb: idle (no transfer events) timeouts={}\n", idle_timeouts);
-                crate::usb::hid::debug_dump_hid_state();
-            }
-            Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
         };
 
