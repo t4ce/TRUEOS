@@ -59,7 +59,7 @@ unsafe fn init_bsp_executor() -> &'static Executor {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+    loop {debugcon_write_byte(b'!');}
 }
 
 #[no_mangle]
@@ -74,11 +74,11 @@ pub extern "C" fn _start() -> ! {
     pci::dma::alloc_test_once();
 
     pci::enumerate_once();
-    pci::log_devices_once();
-    pci::tga::init_once();
+    //pci::log_devices_once();
+    //pci::tga::init_once();
     pci::xhci::init_once();
 
-    log_memmap_once();
+    //log_memmap_once();
 
     allocators::alloc_demo();
 
@@ -90,12 +90,6 @@ pub extern "C" fn _start() -> ! {
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
 
-    Once::new().call_once(|| {
-        if let Some(info) = pci::xhci::controller_info() {
-            spawner.spawn(usb_scout(info));
-        }
-    });
-
     // reads from hardware into dma buffs
     if let Some(info) = pci::xhci::controller_info() {
         let _ = spawner.spawn(pci::xhci::poll_task(info));
@@ -106,9 +100,21 @@ pub extern "C" fn _start() -> ! {
         let _ = spawner.spawn(usb::poll_task(info));
     }
 
+    // Enumerate USB devices once. Re-running this while poll tasks are active
+    // reprograms the controller and can disrupt in-flight transfers.
+    if let Some(info) = pci::xhci::controller_info() {
+        let _ = spawner.spawn(usb_scout(info));
+    }
+
     let _ = spawner.spawn(input_logger());
 
     vga::render_framebuffer_banner("FalseOS");
+
+    let white = 0x00_FF_FF_FF;
+    let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
+    vga::logln("test", white, bg, shadow);
+    vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
+    vga::log("log: ", white, bg, shadow);
 
     rng::log_rng_caps();
 
@@ -120,15 +126,24 @@ pub extern "C" fn _start() -> ! {
             time::poll();
             unsafe { bsp_executor.poll() };
         }
+
         if counter % 1_000_000 == 0 {
             vga::cube::tick();
         }
-
-        counter = counter.wrapping_add(1);
-        if counter % 10_000_000 == 0 {
+        
+        if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
             //log_hpet_counter_once();
         }
+
+        // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
+        if counter % 1_000_000_000 == 0 {
+            if let Some(info) = pci::xhci::controller_info() {
+                let _ = spawner.spawn(usb_scout(info));
+            }
+        }
+
+        counter = counter.wrapping_add(1);
     }
 }
 
@@ -193,23 +208,15 @@ async fn input_logger() {
                 usb::input::InputEvent::Keyboard(kbd) => {
                     let shift = (kbd.modifiers & (1 << 1)) != 0 || (kbd.modifiers & (1 << 5)) != 0;
                     if let Some(&code) = kbd.keys.iter().find(|&&c| c != 0) {
-                        if let Some(ch) = usb::input::boot_keycode_to_ascii(code, shift) {
-                            debugcon_write_byte(ch);
-                        } else {
-                            debugcon_write_byte(b'!');
-                        }
-                    } else {
-                        debugcon_write_byte(b'!');
-                    }
+                            debugconf!(
+                                "[keybd]"
+                            );
+                    } 
                 }
                 usb::input::InputEvent::Mouse(mouse) => {
                     if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
                         debugconf!(
-                            "[mouse] btn=0x{:02X} dx={} dy={} wheel={}\n",
-                            mouse.buttons,
-                            mouse.dx,
-                            mouse.dy,
-                            mouse.wheel
+                            "[mouse]"
                         );
                     }
                 }
@@ -291,6 +298,10 @@ impl Write for DebugCon {
 macro_rules! debugconf {
     ($($tt:tt)*) => {{
         let _ = core::fmt::write(&mut $crate::DebugCon, format_args!($($tt)*));
+        let white = 0x00_FF_FF_FF;
+        let (_, bg, shadow) = $crate::vga::current_colors()
+            .unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
+        let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
     }};
 }
 
