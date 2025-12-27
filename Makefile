@@ -54,6 +54,9 @@ iso: $(LIMINE_STAMP)
 	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_DIR)/
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
 	xorriso -as mkisofs \
+		-iso-level 3 -full-iso9660-filenames \
+		-R \
+		-J -joliet-long \
 		-m limine-build \
 		-m limine-prefix \
 		-m falseos.iso \
