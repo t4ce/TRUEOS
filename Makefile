@@ -9,7 +9,7 @@ QEMU_MEM ?= 8000M
 QEMU_SMP ?= cores=4
 
 QEMU_COMMON_FLAGS = -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
-QEMU_USB_FLAGS = \
+QEMU_USB_FLAGS = -machine pc,hpet=on \
 	-device nec-usb-xhci,id=xhci \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
@@ -81,9 +81,8 @@ run: iso
 	$(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
 run-gdb-paused-bg: iso
-	@echo __QEMU_BG_BEGIN__
-	@mkdir -p .vscode
-	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS) & echo $$! ; wait $$!)
+	@echo FalseOS QEMU GO
+	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
 
 clean:
 	$(CARGO) clean

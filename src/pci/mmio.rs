@@ -29,7 +29,16 @@ pub enum MapError {
 }
 
 pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
-    let requested = cmp::max(size, DEFAULT_MMIO_WINDOW);
+    map_mmio_region_custom(phys_base, cmp::max(size, DEFAULT_MMIO_WINDOW))
+}
+
+/// Map exactly the requested size (no default window expansion).
+pub fn map_mmio_region_exact(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
+    map_mmio_region_custom(phys_base, size)
+}
+
+fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>, MapError> {
+    let requested = map_size;
     let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
 
     let phys_start = phys_base & !(PAGE_SIZE - 1);
