@@ -22,6 +22,7 @@ extern crate alloc;
 
 mod allocators;
 mod limine;
+mod limlog;
 mod vga;
 mod pci;
 mod usb;
@@ -66,7 +67,8 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
 
-    log_limine_markers();
+    limlog::log_limine_markers();
+    phys::register_memory_metadata();
 
     vga::init(limine::framebuffer_response());
 
@@ -112,9 +114,7 @@ pub extern "C" fn _start() -> ! {
 
     let white = 0x00_FF_FF_FF;
     let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
-    vga::logln("test", white, bg, shadow);
     vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
-    vga::log("log: ", white, bg, shadow);
 
     rng::log_rng_caps();
 
@@ -140,36 +140,6 @@ pub extern "C" fn _start() -> ! {
         }
 
         counter = counter.wrapping_add(1);
-    }
-}
-
-fn log_limine_markers() {
-    if long_mode_active() {
-        debugcon_write_str("64bit");
-    }
-    match limine::hhdm_offset() {
-        Some(off) => debugconf!("LIMINE HHDM OK offset=0x{:X}\n", off),
-        None => debugconf!("LIMINE HHDM MISSING\n"),
-    }
-
-    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = limine::MEMMAP_REQUEST
-        .get_response()
-        .map(|r| r as *const _ as usize)
-        .unwrap_or(0);
-    if let Some(entries) = limine::memmap_entries() {
-        debugconf!(
-            "LIMINE MEMMAP OK entries={} req=0x{:X} resp=0x{:X}\n",
-            entries.len(),
-            req_ptr,
-            resp_ptr
-        );
-    } else {
-        debugconf!(
-            "LIMINE MEMMAP MISSING req=0x{:X} resp=0x{:X}\n",
-            req_ptr,
-            resp_ptr
-        );
     }
 }
 
@@ -318,7 +288,7 @@ unsafe fn enable_sse() {
 }
 
 #[inline(always)]
-fn long_mode_active() -> bool {
+pub(crate) fn long_mode_active() -> bool {
     const EFER_MSR: u32 = 0xC000_0080;
     const EFER_LMA_BIT: u64 = 1 << 10;
 

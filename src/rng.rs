@@ -28,14 +28,7 @@ pub fn rdseed_u64() -> Option<u64> {
     rng.try_next_u64().ok()
 }
 
-/// Best-effort random value: prefer RDSEED, fall back to RDRAND if RDSEED busy.
-pub fn random_u64() -> Option<u64> {
-    rdseed_u64().or_else(rdrand_u64)
-}
-
-/// Log detected RNG capabilities.
 pub fn log_rng_caps() {
-    // Keep the logging path trivial to avoid exercising fmt machinery on fragile early stacks.
     let rdrand = has_rdrand();
     let rdseed = has_rdseed();
     match (rdrand, rdseed) {
@@ -45,5 +38,19 @@ pub fn log_rng_caps() {
         (false, false) => crate::debugconf!(
             "RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n"
         ),
+    }
+
+    if rdseed {
+        match rdseed_u64() {
+            Some(val) => crate::debugconf!("RNG: RDSEED sample = 0x{:016X}\n", val),
+            None => crate::debugconf!("RNG: RDSEED sample failed (busy?).\n"),
+        }
+    }
+
+    if rdrand {
+        match rdrand_u64() {
+            Some(val) => crate::debugconf!("RNG: RDRAND sample = 0x{:016X}\n", val),
+            None => crate::debugconf!("RNG: RDRAND sample failed.\n"),
+        }
     }
 }
