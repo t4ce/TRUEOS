@@ -205,6 +205,17 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         const USBSTS: usize = 0x04 / 4;
         const USBCMD_RS: u32 = 1 << 0;
         const USBSTS_HCH: u32 = 1 << 0;
+
+        // Clear sticky status bits that are RW1C. On some real machines these can be
+        // left set by firmware (notably SRE) and the controller may refuse to run.
+        // Bits: HSE(2), EINT(3), PCD(4), SRE(10)
+        const USBSTS_RW1C_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10);
+        let sts0 = read_volatile(ctx.op_base.add(USBSTS));
+        let clear = sts0 & USBSTS_RW1C_MASK;
+        if clear != 0 {
+            write_volatile(ctx.op_base.add(USBSTS), clear);
+        }
+
         write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS);
         let mut spin: u32 = 1_000_000;
         while spin > 0 {
@@ -607,8 +618,8 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
             |evt| {
                 (((evt.d3 >> 10) & 0x3F) == 33) && (((evt.d3 >> 24) & 0xFF) == slot_id)
             },
-            400,
-            EmbassyDuration::from_millis(500)
+            2000,
+            EmbassyDuration::from_millis(5)
         )
         .await
         else {
@@ -894,26 +905,30 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                         debugconf!("usb: failed to requeue HID interrupt IN transfer\n");
                     } else {
                         let after = runtime.ep_ring.state_snapshot();
-                        debugconf!(
-                            "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
-                            runtime.slot_id,
-                            runtime.ep_target,
-                            before.0,
-                            before.1 as u8,
-                            after.0,
-                            after.1 as u8
-                        );
+                        if hid::HID_LOGS {
+                            debugconf!(
+                                "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
+                                runtime.slot_id,
+                                runtime.ep_target,
+                                before.0,
+                                before.1 as u8,
+                                after.0,
+                                after.1 as u8
+                            );
+                        }
                         unsafe {
                             write_volatile(
                                 ctx.doorbell.add(runtime.slot_id as usize),
                                 runtime.ep_target
                             );
                         }
-                        debugconf!(
-                            "[hid] doorbell slot={} target={} rung\n",
-                            runtime.slot_id,
-                            runtime.ep_target
-                        );
+                        if hid::HID_LOGS {
+                            debugconf!(
+                                "[hid] doorbell slot={} target={} rung\n",
+                                runtime.slot_id,
+                                runtime.ep_target
+                            );
+                        }
                     }
                     true
                 })

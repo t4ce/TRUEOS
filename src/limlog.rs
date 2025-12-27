@@ -60,6 +60,23 @@ pub fn log_limine_markers() {
         ),
         None => debugconf!("LIMINE PERF MISSING\n"),
     }
+
+    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
+    let resp_ptr = limine::MEMMAP_REQUEST
+        .get_response()
+        .map(|r| r as *const _ as usize)
+        .unwrap_or(0);
+    if let Some(entries) = limine::memmap_entries() {
+        for entry in entries {
+            debugconf!(
+                "memmap {:016X}-{:016X} len=0x{:X} type={}\n",
+                entry.base,
+                entry.base + entry.length,
+                entry.length,
+                limine::memmap_type_name(entry.entry_type)
+            );
+        }
+    } 
 }
 
 fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
