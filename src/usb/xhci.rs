@@ -3,9 +3,11 @@ use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
+use crate::pci::mmio;
 
+/// Firmware-provided information about the physical xHC (controller hardware).
 #[derive(Copy, Clone, Debug)]
-pub struct ControllerInfo {
+pub struct XhcInfo {
     pub bus: u8,
     pub slot: u8,
     pub function: u8,
@@ -15,19 +17,20 @@ pub struct ControllerInfo {
     pub supports_64bit: bool,
 }
 
-unsafe impl Send for ControllerInfo {}
-unsafe impl Sync for ControllerInfo {}
+unsafe impl Send for XhcInfo {}
+unsafe impl Sync for XhcInfo {}
 
-static FIRST_CONTROLLER: Mutex<Option<ControllerInfo>> = Mutex::new(None);
+static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
 
-fn set_first_controller(info: ControllerInfo) {
+fn set_first_xhc(info: XhcInfo) {
     let mut guard = FIRST_CONTROLLER.lock();
     if guard.is_none() {
         *guard = Some(info);
     }
 }
 
-pub fn controller_info() -> Option<ControllerInfo> {
+/// Returns cached information about the first detected xHC hardware block.
+pub fn xhc_info() -> Option<XhcInfo> {
     FIRST_CONTROLLER.lock().clone()
 }
 
@@ -74,7 +77,7 @@ pub fn init_once() {
             } else {
                 size as usize
             };
-            let mmio = match super::mmio::map_mmio_region(base, map_len) {
+            let mmio = match mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {
                     crate::debugconf!("xhci: failed to map MMIO: {:?}\n", err);
@@ -99,7 +102,7 @@ pub fn init_once() {
                     supports_64bit
                 );
 
-                set_first_controller(ControllerInfo {
+                set_first_xhc(XhcInfo {
                     bus: dev.bus,
                     slot: dev.slot,
                     function: dev.function,
@@ -327,11 +330,13 @@ impl EventRingState {
 
 static EVENT_RING_STATE: Mutex<EventRingState> = Mutex::new(EventRingState::new());
 
+/// Software-side state for the xHCI (driver) view of the controller.
 #[derive(Copy, Clone, Debug)]
 pub struct XhciContext {
     pub caplength: u8,
     pub hci_version: u16,
     pub hcsparams1: u32,
+    pub hcsparams2: u32,
     pub hccparams1: u32,
     pub op_base: *mut u32,
     pub doorbell: *mut u32,
@@ -342,11 +347,12 @@ pub struct XhciContext {
 impl XhciContext {
     /// # Safety
     /// Caller must ensure `info.mmio_base` is a valid mapped MMIO pointer.
-    pub unsafe fn new(info: ControllerInfo) -> Self {
+    pub unsafe fn new(info: XhcInfo) -> Self {
         let cap = info.mmio_base.as_ptr();
         let caplength = read_volatile(cap.add(0x00) as *const u8);
         let hci_version = read_volatile(cap.add(0x02) as *const u16);
         let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
+        let hcsparams2 = read_volatile(cap.add(0x08) as *const u32);
         let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
         let dboff = read_volatile(cap.add(0x14) as *const u32) & !0x1F;
         let rtsoff = read_volatile(cap.add(0x18) as *const u32) & !0x1F;
@@ -359,6 +365,7 @@ impl XhciContext {
             caplength,
             hci_version,
             hcsparams1,
+            hcsparams2,
             hccparams1,
             op_base,
             doorbell,
@@ -379,10 +386,56 @@ impl XhciContext {
         const PORT_BLOCK_OFFSET: usize = 0x400;
         const PORT_STRIDE: usize = 0x10;
         const PORTSC_PR: u32 = 1 << 4;
+        const PORTSC_LWS: u32 = 1 << 16;
         let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
         let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
-        let status = read_volatile(port_ptr);
-        write_volatile(port_ptr, status | PORTSC_PR);
+
+        // PORTSC contains RW1C and RW1S bits. Never mirror RW1S bits as 1
+        // (except the one we intentionally trigger), otherwise we may retrigger
+        // actions or enter undefined controller behavior on real hardware.
+        let cur = read_volatile(port_ptr);
+        let mut writeback = cur;
+        // Never mirror RW1S bits back as 1.
+        writeback &= !(PORTSC_PR | PORTSC_LWS);
+        // Trigger a port reset.
+        writeback |= PORTSC_PR;
+        write_volatile(port_ptr, writeback);
+    }
+
+    pub unsafe fn ensure_port_powered(&self, port_idx: usize) {
+        const PORT_BLOCK_OFFSET: usize = 0x400;
+        const PORT_STRIDE: usize = 0x10;
+        const PORTSC_PP: u32 = 1 << 9;
+        const PORTSC_LWS: u32 = 1 << 16;
+        let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
+        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
+
+        let cur = read_volatile(port_ptr);
+        if (cur & PORTSC_PP) != 0 {
+            return;
+        }
+
+        let mut writeback = cur;
+        // Avoid writing RW1S bits as 1 accidentally.
+        // (PR is RW1S too; don't retrigger it while powering.)
+        writeback &= !(1 << 4);
+        writeback &= !PORTSC_LWS;
+        // Power on.
+        writeback |= PORTSC_PP;
+        write_volatile(port_ptr, writeback);
+    }
+
+    pub fn max_scratchpad_buffers(&self) -> u32 {
+        // Max Scratchpad Buffers field spans bits [26:21] (low) and [31:27] (high).
+        let low = (self.hcsparams2 >> 21) & 0x1F;
+        let high = (self.hcsparams2 >> 27) & 0x1F;
+        (high << 5) | low
+    }
+
+    /// Returns the PAGESIZE register bitmask (bit n => 2^(12+n) supported).
+    pub unsafe fn page_size_mask(&self) -> u32 {
+        const PAGESIZE: usize = 0x08 / 4;
+        read_volatile(self.op_base.add(PAGESIZE))
     }
 }
 
@@ -602,7 +655,7 @@ impl EventRing {
 }
 
 #[inline(always)]
-unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
+pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     if port_id == 0 {
         return;
     }
@@ -644,7 +697,7 @@ unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
 }
 
 #[embassy_executor::task]
-pub async fn poll_task(info: ControllerInfo) {
+pub async fn poll_task(info: XhcInfo) {
     crate::debugconf!(
         "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
         info.bus,
