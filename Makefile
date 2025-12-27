@@ -4,6 +4,16 @@ TARGET_DIR := target/86_64
 BUILD_MODE := debug
 KERNEL_BIN := $(TARGET_DIR)/$(BUILD_MODE)/falseos
 
+QEMU ?= qemu-system-x86_64
+QEMU_MEM ?= 8000M
+QEMU_SMP ?= cores=4
+
+QEMU_COMMON_FLAGS = -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
+QEMU_USB_FLAGS = \
+	-device nec-usb-xhci,id=xhci \
+	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
+	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
+
 ISO_DIR := bld
 ISO_PATH := bld/falseos.iso
 LIMINE_CFG := limine.conf
@@ -15,7 +25,7 @@ LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 LIMINE_BIN := $(LIMINE_PREFIX)/bin/limine
 
 
-.PHONY: iso run clean
+.PHONY: iso run run-debug run-gdb-paused run-gdb-paused-bg clean
 
 $(LIMINE_STAMP):
 	mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
@@ -68,14 +78,12 @@ iso: $(LIMINE_STAMP)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
 
 run: iso
-	qemu-system-x86_64 \
-		-cdrom $(ISO_PATH) \
-		-m 2000M \
-		-smp cores=4 \
-		-debugcon stdio \
-		-device qemu-xhci,id=xhci \
-		-device usb-mouse,bus=xhci.0,port=1 \
-		-device usb-kbd,bus=xhci.0,port=2
+	$(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
+
+run-gdb-paused-bg: iso
+	@echo __QEMU_BG_BEGIN__
+	@mkdir -p .vscode
+	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS) & echo $$! > .vscode/qemu.pid; wait $$!)
 
 clean:
 	$(CARGO) clean
