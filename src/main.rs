@@ -177,14 +177,14 @@ async fn input_logger() {
                     let shift = (kbd.modifiers & (1 << 1)) != 0 || (kbd.modifiers & (1 << 5)) != 0;
                     if let Some(&code) = kbd.keys.iter().find(|&&c| c != 0) {
                             debugconf!(
-                                "[keybd]"
+                                "[keybd]\n"
                             );
                     } 
                 }
                 usb::input::InputEvent::Mouse(mouse) => {
                     if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
                         debugconf!(
-                            "[mouse]"
+                            "[mouse]\n"
                         );
                     }
                 }
@@ -208,25 +208,6 @@ pub(crate) fn debugcon_write_byte(b: u8) {
 }
 
 pub(crate) struct DebugCon;
-
-fn log_memmap_once() {
-    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = limine::MEMMAP_REQUEST
-        .get_response()
-        .map(|r| r as *const _ as usize)
-        .unwrap_or(0);
-    if let Some(entries) = limine::memmap_entries() {
-        for entry in entries {
-            debugconf!(
-                "memmap {:016X}-{:016X} len=0x{:X} type={}\n",
-                entry.base,
-                entry.base + entry.length,
-                entry.length,
-                limine::memmap_type_name(entry.entry_type)
-            );
-        }
-    } 
-}
 
 impl Write for DebugCon {
     fn write_str(&mut self, s: &str) -> fmt::Result {

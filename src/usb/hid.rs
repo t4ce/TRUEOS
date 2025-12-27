@@ -8,6 +8,17 @@ use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
 use heapless::Vec;
 
+// Local switch to silence noisy HID debug output.
+pub(crate) const HID_LOGS: bool = false;
+
+macro_rules! hidlog {
+    ($($arg:tt)*) => {{
+        if HID_LOGS {
+            debugconf!($($arg)*);
+        }
+    }};
+}
+
 pub struct HidEpInfo {
     pub configuration: u8,
     pub interface: u8,
@@ -74,14 +85,14 @@ where
 pub fn debug_dump_hid_state() {
     let guard = HID_RUNTIMES.lock();
     if guard.is_empty() {
-        debugconf!("[hid] runtimes: none\n");
+        hidlog!("[hid] runtimes: none\n");
         return;
     }
 
-    debugconf!("[hid] runtimes: {}\n", guard.len());
+    hidlog!("[hid] runtimes: {}\n", guard.len());
     for r in guard.iter() {
         let (enq, cyc) = r.ep_ring.state_snapshot();
-        debugconf!(
+        hidlog!(
             "[hid] slot={} ep=0x{:02X} proto={} seq={} last_nonzero={} ring_enq={} ring_cyc={}\n",
             r.slot_id,
             r.ep.address,
@@ -97,7 +108,7 @@ pub fn debug_dump_hid_state() {
 pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], residual: u32) {
     runtime.seq = runtime.seq.wrapping_add(1);
 
-    debugconf!(
+    hidlog!(
         "[hid] interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X} data={:02X?}\n",
         runtime.slot_id,
         completion,
@@ -119,7 +130,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             let wheel = if data.len() > 3 { data[3] as i8 } else { 0 };
             if buttons != 0 || dx != 0 || dy != 0 || wheel != 0 {
                 runtime.last_nonzero_seq = runtime.seq;
-                debugconf!(
+                hidlog!(
                     "[mouse] buttons=0x{:02X} dx={} dy={} wheel={} (slot={} seq={})\n",
                     buttons,
                     dx,
@@ -139,7 +150,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             keys.copy_from_slice(&data[2..8]);
             if keys.iter().any(|&k| k != 0) || modifiers != 0 {
                 runtime.last_nonzero_seq = runtime.seq;
-                debugconf!(
+                hidlog!(
                     "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
                     modifiers,
                     keys[0],
@@ -195,7 +206,7 @@ pub fn parse_boot_endpoint(cfg: &[u8]) -> Option<HidEpInfo> {
                             let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
                             let interval = cfg[idx + 6];
                             if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
-                                debugconf!(
+                                hidlog!(
                                     "[hid] parse ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
                                     iface,
                                     ep_addr,
@@ -253,15 +264,15 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     } = params;
 
     if cfg.is_empty() {
-        debugconf!("[hid] empty configuration descriptor\n");
+        hidlog!("[hid] empty configuration descriptor\n");
         return Err(());
     }
 
     let Some(ep) = parse_boot_endpoint(cfg) else {
-        debugconf!("[hid] no HID boot interrupt IN endpoint found\n");
+        hidlog!("[hid] no HID boot interrupt IN endpoint found\n");
         return Err(());
     };
-    debugconf!(
+    hidlog!(
         "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
         ep.address,
         ep.max_packet,
@@ -275,17 +286,19 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     let setup_cfg = Trb {
         d0: 0x0000 | ((9u32) << 8) | ((ep.configuration as u32) << 16),
         d1: 0,
-        d2: 8 | (2 << 16),
+        // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
+        d2: 8,
         d3: trb_type(2) | (1 << 6),
     };
     let status_cfg = Trb {
         d0: 0,
         d1: 0,
         d2: 0,
-        d3: trb_type(4) | (1 << 5),
+        // Status Stage TRB: DIR=1 (IN) for no-data control transfers
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        debugconf!("usb: ep0 ring overflow for set_configuration\n");
+        hidlog!("usb: ep0 ring overflow for set_configuration\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -303,7 +316,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     )
     .await
     else {
-        debugconf!("usb: timeout waiting for set-configuration\n");
+        hidlog!("usb: timeout waiting for set-configuration\n");
         return Err(());
     };
 
@@ -318,7 +331,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc ep ring\n");
+            hidlog!("usb: failed to alloc ep ring\n");
             return Err(());
         }
     };
@@ -328,7 +341,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc input ctx for cfg-ep\n");
+            hidlog!("usb: failed to alloc input ctx for cfg-ep\n");
             return Err(());
         }
     };
@@ -394,7 +407,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         d3: trb_type(12) | (slot_id << 24),
     };
     if !cmd_ring.push(cfg_ep_cmd) {
-        debugconf!("usb: cmd ring full before configure-endpoint\n");
+        hidlog!("usb: cmd ring full before configure-endpoint\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
@@ -409,7 +422,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     )
     .await
     else {
-        debugconf!("usb: timeout waiting for configure-endpoint\n");
+        hidlog!("usb: timeout waiting for configure-endpoint\n");
         return Err(());
     };
 
@@ -422,7 +435,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
     let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc report buffer\n");
+            hidlog!("usb: failed to alloc report buffer\n");
             return Err(());
         }
     };
@@ -437,7 +450,7 @@ pub async fn attach_boot_device(params: BootAttachParams<'_>) -> Result<(), ()> 
         d3: trb_type(1) | (1 << 5),
     };
     if !ep_ring.push(normal) {
-        debugconf!("usb: ep ring full before interrupt IN\n");
+        hidlog!("usb: ep ring full before interrupt IN\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
@@ -469,17 +482,19 @@ pub async fn class_request_nodata(
     let setup = Trb {
         d0: (0x21u32) | ((request as u32) << 8) | ((value as u32) << 16),
         d1: index as u32,
-        d2: 8 | (2 << 16),
+        // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
+        d2: 8,
         d3: trb_type(2) | (1 << 6),
     };
     let status = Trb {
         d0: 0,
         d1: 0,
         d2: 0,
-        d3: trb_type(4) | (1 << 5),
+        // Status Stage TRB: DIR=1 (IN) for no-data control transfers
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup) || !ep0_ring.push(status) {
-        debugconf!("[hid] ep0 ring overflow for class request\n");
+        hidlog!("[hid] ep0 ring overflow for class request\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -498,12 +513,12 @@ pub async fn class_request_nodata(
     )
     .await
     else {
-        debugconf!("[hid] timeout waiting for class request {}\n", request);
+        hidlog!("[hid] timeout waiting for class request {}\n", request);
         return Err(());
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
-    debugconf!("[hid] class req {} cc={} value=0x{:04X}\n", request, completion, value);
+    hidlog!("[hid] class req {} cc={} value=0x{:04X}\n", request, completion, value);
     if completion == 1 {
         Ok(())
     } else {

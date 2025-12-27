@@ -1,5 +1,6 @@
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
+use core::sync::atomic::{fence, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -15,6 +16,64 @@ pub struct XhcInfo {
     pub bar_size: u64,
     pub mmio_base: NonNull<u8>,
     pub supports_64bit: bool,
+}
+
+/// Attempt xHCI legacy BIOS/OS ownership handoff.
+///
+/// On some real machines the firmware keeps the controller "owned" unless the OS
+/// sets OS Owned Semaphore in the xHCI Legacy Support extended capability.
+unsafe fn bios_handoff_if_present(cap: *mut u8, hccparams1: u32) {
+    // xECP: offset (in DWORDs) from capability base.
+    let mut ecp_dwords = ((hccparams1 >> 16) & 0xFFFF) as usize;
+    if ecp_dwords == 0 {
+        return;
+    }
+
+    for _ in 0..64 {
+        let off_bytes = ecp_dwords * 4;
+        let hdr = read_volatile(cap.add(off_bytes) as *const u32);
+        let cap_id = (hdr & 0xFF) as u8;
+        let next = ((hdr >> 8) & 0xFF) as usize;
+
+        if cap_id == 1 {
+            // Legacy Support capability.
+            let legsup = cap.add(off_bytes) as *mut u32;
+            let legctlsts = cap.add(off_bytes + 4) as *mut u32;
+
+            const BIOS_OWNED: u32 = 1 << 16;
+            const OS_OWNED: u32 = 1 << 24;
+
+            // Request OS ownership.
+            let mut v = read_volatile(legsup);
+            if (v & OS_OWNED) == 0 {
+                v |= OS_OWNED;
+                write_volatile(legsup, v);
+                fence(Ordering::SeqCst);
+            }
+
+            // Wait for BIOS to drop ownership.
+            let mut spin: u32 = 5_000_000;
+            while spin != 0 {
+                let cur = read_volatile(legsup);
+                if (cur & BIOS_OWNED) == 0 {
+                    break;
+                }
+                spin -= 1;
+            }
+
+            // Disable SMIs and clear pending SMI status bits.
+            // Lower 16 bits are SMI enables; upper 16 bits are RW1C status.
+            let ctl = read_volatile(legctlsts);
+            write_volatile(legctlsts, ctl & 0xFFFF_0000);
+            fence(Ordering::SeqCst);
+            return;
+        }
+
+        if next == 0 {
+            break;
+        }
+        ecp_dwords += next;
+    }
 }
 
 unsafe impl Send for XhcInfo {}
@@ -102,6 +161,9 @@ pub fn init_once() {
                     supports_64bit
                 );
 
+                // Real hardware may require BIOS/OS ownership handoff.
+                bios_handoff_if_present(cap, hccparams1);
+
                 set_first_xhc(XhcInfo {
                     bus: dev.bus,
                     slot: dev.slot,
@@ -164,8 +226,6 @@ pub fn init_once() {
                 }
 
                 crate::debugconf!("xhci: reset ok sts=0x{:X}\n", sts);
-
-                bootstrap_ports(cap as usize, caplength as usize, hcsparams1);
             }
 
             break;
@@ -174,59 +234,6 @@ pub fn init_once() {
 
     if !did_any {
         crate::debugconf!("xhci: not found\n");
-    }
-}
-
-fn bootstrap_ports(cap_base: usize, cap_length: usize, hcsparams1: u32) {
-    const PORT_BLOCK_OFFSET: usize = 0x400;
-    const PORT_STRIDE: usize = 0x10;
-    const PORTSC_CCS: u32 = 1 << 0;
-    const PORTSC_PED: u32 = 1 << 1;
-    const PORTSC_PR: u32 = 1 << 4;
-    const PORTSC_PP: u32 = 1 << 9;
-
-    let port_count = ((hcsparams1 >> 24) & 0xFF) as usize;
-    if port_count == 0 {
-        crate::debugconf!("xhci: no ports to bootstrap\n");
-        return;
-    }
-
-    let op_base = cap_base.saturating_add(cap_length);
-    let port_base = op_base.saturating_add(PORT_BLOCK_OFFSET);
-
-    crate::debugconf!("xhci: bootstrapping {} port(s)\n", port_count);
-
-    for port_idx in 0..port_count {
-        let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
-        let mut status = unsafe { read_volatile(port_ptr) };
-        if (status & PORTSC_PP) == 0 {
-            unsafe { write_volatile(port_ptr, status | PORTSC_PP) };
-            status |= PORTSC_PP;
-        }
-        if (status & PORTSC_CCS) == 0 {
-            continue;
-        }
-        if (status & PORTSC_PED) != 0 {
-            continue;
-        }
-
-        unsafe { write_volatile(port_ptr, status | PORTSC_PR) };
-        let mut spin: u32 = 1_000_000;
-        while spin > 0 {
-            let poll = unsafe { read_volatile(port_ptr) };
-            let reset_cleared = (poll & PORTSC_PR) == 0;
-            let enabled = (poll & PORTSC_PED) != 0;
-            if enabled || reset_cleared {
-                break;
-            }
-            spin -= 1;
-        }
-        let final_status = unsafe { read_volatile(port_ptr) };
-        crate::debugconf!(
-            "xhci: port {:02} bootstrap done status=0x{:08X}\n",
-            port_idx + 1,
-            final_status
-        );
     }
 }
 
@@ -269,7 +276,7 @@ pub struct EventRing {
 
 unsafe impl Send for EventRing {}
 
-const EVENT_BUFFER_CAP: usize = 128;
+const EVENT_BUFFER_CAP: usize = 512;
 
 struct EventBuffer {
     entries: Vec<Trb, EVENT_BUFFER_CAP>,

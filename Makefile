@@ -9,11 +9,11 @@ QEMU_MEM ?= 8000M
 QEMU_SMP ?= cores=4
 
 QEMU_COMMON_FLAGS = -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
-QEMU_USB_FLAGS = -machine pc,hpet=on \
+QEMU_USB_FLAGS =  \
 	-device nec-usb-xhci,id=xhci \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
-
+  
 ISO_DIR := bld
 ISO_PATH := bld/falseos.iso
 LIMINE_CFG := limine.conf
