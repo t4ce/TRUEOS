@@ -1,4 +1,8 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::{ptr, sync::atomic::{AtomicU64, Ordering}};
+
+extern "C" {
+    static kernel_end: u8;
+}
 
 static HEAP_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 static HEAP_PHYS_BASE: AtomicU64 = AtomicU64::new(0);
@@ -22,6 +26,20 @@ pub fn register_kernel_image(virt_base: usize, phys_base: usize, length: usize) 
     KERNEL_VIRT_BASE.store(virt_base as u64, Ordering::SeqCst);
     KERNEL_PHYS_BASE.store(phys_base as u64, Ordering::SeqCst);
     KERNEL_LEN.store(length as u64, Ordering::SeqCst);
+}
+
+/// Capture Limine-provided mapping metadata for later address translation.
+pub fn register_memory_metadata() {
+    if let Some(hhdm) = crate::limine::hhdm_offset() {
+        register_hhdm_base(hhdm as usize);
+    }
+
+    if let Some((virt_base, phys_base)) = crate::limine::executable_address_bases() {
+        let virt_base = virt_base as usize;
+        let phys_base = phys_base as usize;
+        let kernel_len = unsafe { ptr::addr_of!(kernel_end) as usize }.saturating_sub(virt_base);
+        register_kernel_image(virt_base, phys_base, kernel_len);
+    }
 }
 
 /// Translate a physical address into a higher-half direct map (if present).

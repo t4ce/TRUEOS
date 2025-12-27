@@ -4,14 +4,6 @@ use spin::Mutex;
 
 use crate::debugconf;
 
-const KERNEL_OFFSET: u64 = 0xffffffff80000000;
-const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
-const KERNEL_VIRT_BASE: u64 = KERNEL_OFFSET + KERNEL_PHYS_BASE;
-
-extern "C" {
-    static kernel_end: u8;
-}
-
 const MIN_DMA_BASE: u64 = 64 * 1024;
 const MIN_DMA_LEN: u64 = 4 * 1024;
 
@@ -217,15 +209,13 @@ impl DmaAllocator {
     }
 
     fn virt_to_phys(&self, virt: usize) -> Option<u64> {
-        let virt_u64 = virt as u64;
-
-        let kernel_end_virt = core::ptr::addr_of!(kernel_end) as u64;
-        if virt_u64 >= KERNEL_VIRT_BASE && virt_u64 < kernel_end_virt {
-            return Some(virt_u64.saturating_sub(KERNEL_OFFSET));
+        if virt >= self.hhdm as usize {
+            return Some((virt as u64).saturating_sub(self.hhdm));
         }
 
-        if virt_u64 >= self.hhdm {
-            return Some(virt_u64 - self.hhdm);
+        let phys = crate::phys::virt_to_phys(virt as *const u8);
+        if phys != virt as u64 {
+            return Some(phys);
         }
 
         None
