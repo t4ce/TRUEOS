@@ -131,13 +131,9 @@ pub extern "C" fn _start() -> ! {
             vga::cube::tick();
         }
         
+        // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
-            //log_hpet_counter_once();
-        }
-
-        // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
-        if counter % 1_000_000_000 == 0 {
             if let Some(info) = pci::xhci::controller_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }

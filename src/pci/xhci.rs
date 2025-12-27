@@ -619,11 +619,28 @@ unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     const PORTSC_CEC: u32 = 1 << 23;
     const RW1C_MASK: u32 = PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
 
+    // RW1S bits: writing 1 would *trigger* an action. Don't mirror these back.
+    const PORTSC_PR: u32 = 1 << 4; // Port Reset (RW1S)
+    const PORTSC_LWS: u32 = 1 << 16; // Link Write Strobe (RW1S)
+
     const PORT_BLOCK_OFFSET: usize = 0x400;
     const PORT_STRIDE: usize = 0x10;
     let port_base = (ctx.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
     let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
-    write_volatile(port_ptr, RW1C_MASK);
+
+    // Preserve current state bits; only clear the change bits that are set.
+    let cur = read_volatile(port_ptr);
+    let clear = cur & RW1C_MASK;
+    if clear == 0 {
+        return;
+    }
+    let mut writeback = cur;
+    // Never write back RW1S bits as 1 (could retrigger reset/link state changes).
+    writeback &= !(PORTSC_PR | PORTSC_LWS);
+    // Ensure we only write 1s for change bits we want to clear.
+    writeback &= !RW1C_MASK;
+    writeback |= clear;
+    write_volatile(port_ptr, writeback);
 }
 
 #[embassy_executor::task]
