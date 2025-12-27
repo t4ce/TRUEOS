@@ -12,7 +12,7 @@ use crate::{
     outb,
     outl,
     outw,
-    pci::mmio,
+    pci::{self, mmio},
 };
 
 pub mod hpet;
@@ -73,6 +73,14 @@ impl AcpiIdentityHandler {
     unsafe fn write_phys<T>(&self, phys_addr: usize, value: T) {
         let ptr = self.map_ptr(phys_addr, core::mem::size_of::<T>());
         core::ptr::write_volatile(ptr.as_ptr() as *mut T, value);
+    }
+
+    fn split_pci_address(address: PciAddress) -> (u8, u8, u8) {
+        let segment = address.segment();
+        if segment != 0 {
+            panic!("PCI segment {} unsupported by legacy config access", segment);
+        }
+        (address.bus(), address.device(), address.function())
     }
 }
 
@@ -147,28 +155,34 @@ impl AcpiHandler for AcpiIdentityHandler {
         unsafe { outl(port, value) };
     }
 
-    fn read_pci_u8(&self, _address: PciAddress, _offset: u16) -> u8 {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn read_pci_u8(&self, address: PciAddress, offset: u16) -> u8 {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_read_u8(bus, slot, function, offset)
     }
 
-    fn read_pci_u16(&self, _address: PciAddress, _offset: u16) -> u16 {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn read_pci_u16(&self, address: PciAddress, offset: u16) -> u16 {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_read_u16(bus, slot, function, offset)
     }
 
-    fn read_pci_u32(&self, _address: PciAddress, _offset: u16) -> u32 {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn read_pci_u32(&self, address: PciAddress, offset: u16) -> u32 {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_read_u32(bus, slot, function, offset)
     }
 
-    fn write_pci_u8(&self, _address: PciAddress, _offset: u16, _value: u8) {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn write_pci_u8(&self, address: PciAddress, offset: u16, value: u8) {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_write_u8(bus, slot, function, offset, value);
     }
 
-    fn write_pci_u16(&self, _address: PciAddress, _offset: u16, _value: u16) {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn write_pci_u16(&self, address: PciAddress, offset: u16, value: u16) {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_write_u16(bus, slot, function, offset, value);
     }
 
-    fn write_pci_u32(&self, _address: PciAddress, _offset: u16, _value: u32) {
-        panic!("PCI config access via ACPI handler is not implemented");
+    fn write_pci_u32(&self, address: PciAddress, offset: u16, value: u32) {
+        let (bus, slot, function) = Self::split_pci_address(address);
+        pci::config_write_u32(bus, slot, function, offset, value);
     }
 
     fn nanos_since_boot(&self) -> u64 {

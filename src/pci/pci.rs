@@ -95,6 +95,16 @@ fn write_u16(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
     write_u32(bus, slot, function, aligned_off, new_val);
 }
 
+fn write_u8(bus: u8, slot: u8, function: u8, offset: u8, value: u8) {
+    let aligned_off = offset & !0x03;
+    let shift = ((offset & 0x03) as u32) * 8;
+    let mask = !(0xFFu32 << shift);
+
+    let current = read_u32(bus, slot, function, aligned_off);
+    let new_val = (current & mask) | ((value as u32) << shift);
+    write_u32(bus, slot, function, aligned_off, new_val);
+}
+
 fn read_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     debug_assert_eq!(offset & 0x03, 0);
     let addr = cfg_address(bus, slot, function, offset);
@@ -184,6 +194,45 @@ pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     let mut cmd = read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
     write_u16(bus, slot, function, 0x04, cmd);
+}
+
+fn normalize_offset(offset: u16) -> u8 {
+    if offset > 0xFF {
+        panic!("Extended PCI config offset 0x{:X} unsupported", offset);
+    }
+    offset as u8
+}
+
+pub fn config_read_u8(bus: u8, slot: u8, function: u8, offset: u16) -> u8 {
+    read_u8(bus, slot, function, normalize_offset(offset))
+}
+
+pub fn config_read_u16(bus: u8, slot: u8, function: u8, offset: u16) -> u16 {
+    read_u16(bus, slot, function, normalize_offset(offset))
+}
+
+pub fn config_read_u32(bus: u8, slot: u8, function: u8, offset: u16) -> u32 {
+    let off = normalize_offset(offset);
+    if off & 0x3 != 0 {
+        panic!("Unaligned PCI config dword read at offset 0x{:X}", offset);
+    }
+    read_u32(bus, slot, function, off)
+}
+
+pub fn config_write_u8(bus: u8, slot: u8, function: u8, offset: u16, value: u8) {
+    write_u8(bus, slot, function, normalize_offset(offset), value);
+}
+
+pub fn config_write_u16(bus: u8, slot: u8, function: u8, offset: u16, value: u16) {
+    write_u16(bus, slot, function, normalize_offset(offset), value);
+}
+
+pub fn config_write_u32(bus: u8, slot: u8, function: u8, offset: u16, value: u32) {
+    let off = normalize_offset(offset);
+    if off & 0x3 != 0 {
+        panic!("Unaligned PCI config dword write at offset 0x{:X}", offset);
+    }
+    write_u32(bus, slot, function, off, value);
 }
 pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     let orig_lo = read_u32(bus, slot, function, 0x10);
