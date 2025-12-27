@@ -39,6 +39,10 @@ pub static DATE_AT_BOOT_REQUEST: request::DateAtBootRequest = request::DateAtBoo
 pub static BOOTLOADER_PERFORMANCE_REQUEST: BootloaderPerformanceRequest =
     BootloaderPerformanceRequest::new();
 
+#[used]
+#[link_section = ".limine_requests"]
+pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
+
 pub fn hhdm_offset() -> Option<u64> {
     let resp = HHDM_REQUEST.get_response()?;
     Some(resp.offset())
@@ -69,6 +73,11 @@ pub fn boot_timestamp_secs() -> Option<u64> {
 
 pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse> {
     BOOTLOADER_PERFORMANCE_REQUEST.get_response()
+}
+
+pub fn rsdp_address() -> Option<u64> {
+    let resp = RSDP_REQUEST.get_response()?;
+    Some(resp.address() as u64)
 }
 
 pub fn memmap_type_name(entry_type: memory_map::EntryType) -> &'static str {
