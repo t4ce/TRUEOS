@@ -21,6 +21,7 @@ A constant influx of resources, money, and safety.
 extern crate alloc;
 
 mod allocators;
+mod acpi;
 mod limine;
 mod limlog;
 mod vga;
@@ -32,6 +33,7 @@ mod rng;
 mod files;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
+use ::acpi::sdt::hpet;
 use embassy_executor::{raw::Executor, Spawner};
 use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
@@ -66,21 +68,19 @@ fn panic(_info: &PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
-
-    limlog::log_limine_markers();
+    // limlog::log_limine_markers(); log_memmap_once();
     phys::register_memory_metadata();
 
+    pci::dma::init_from_limine(); //pci::dma::alloc_test_once();
+    pci::enumerate_once(); //pci::log_devices_once();
+    
+    acpi::ensure_tables();
+    acpi::hpet::ensure();
+
     vga::init(limine::framebuffer_response());
-
-    pci::dma::init_from_limine();
-    pci::dma::alloc_test_once();
-
-    pci::enumerate_once();
-    //pci::log_devices_once();
+    
     //pci::tga::init_once();
     pci::xhci::init_once();
-
-    //log_memmap_once();
 
     allocators::alloc_demo();
 
@@ -226,33 +226,6 @@ fn log_memmap_once() {
     } 
 }
 
-fn log_hpet_counter_once() {
-    const HPET_BASE: u64 = 0xFED0_0000;
-    const HPET_CFG_OFFSET: usize = 0x10;
-    const HPET_MAIN_COUNTER_OFFSET: usize = 0xF0;
-
-    let region = match mmio::map_mmio_region(HPET_BASE, 0x1000) {
-        Ok(r) => r,
-        Err(e) => {
-            debugconf!("HPET map failed: {:?}\n", e);
-            return;
-        }
-    };
-
-    unsafe {
-        let base = region.as_ptr();
-        let cfg = base.add(HPET_CFG_OFFSET) as *mut u64;
-        let counter = base.add(HPET_MAIN_COUNTER_OFFSET) as *const u64;
-
-        let mut current_cfg = cfg.read_volatile();
-        current_cfg |= 1; // enable main counter
-        cfg.write_volatile(current_cfg);
-
-        let ticks = counter.read_volatile();
-        debugconf!("HPET counter=0x{:016X}\n", ticks);
-    }
-}
-
 impl Write for DebugCon {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         debugcon_write_str(s);
@@ -272,8 +245,39 @@ macro_rules! debugconf {
 }
 
 #[inline(always)]
-unsafe fn outb(port: u16, val: u8) {
+pub(crate) unsafe fn inb(port: u16) -> u8 {
+    let mut value: u8;
+    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub(crate) unsafe fn inw(port: u16) -> u16 {
+    let mut value: u16;
+    core::arch::asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub(crate) unsafe fn inl(port: u16) -> u32 {
+    let mut value: u32;
+    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
+#[inline(always)]
+pub(crate) unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub(crate) unsafe fn outw(port: u16, val: u16) {
+    core::arch::asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
+}
+
+#[inline(always)]
+pub(crate) unsafe fn outl(port: u16, val: u32) {
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
 }
 
 unsafe fn enable_sse() {
