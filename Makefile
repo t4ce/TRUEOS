@@ -83,7 +83,7 @@ run: iso
 run-gdb-paused-bg: iso
 	@echo __QEMU_BG_BEGIN__
 	@mkdir -p .vscode
-	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS) & echo $$! > .vscode/qemu.pid; wait $$!)
+	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS) & echo $$! ; wait $$!)
 
 clean:
 	$(CARGO) clean
