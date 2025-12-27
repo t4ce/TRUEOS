@@ -11,7 +11,7 @@ A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at Intel and GOWIN
 Think of rust as the world’s quiet, slow-moving “entropy tax”:
 A constant drain of resources, money, and safety.
 
-Think of TrueOS as the world’s fast-moving “entropy dividend”:
+Think of FalseOS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 */
 
@@ -80,7 +80,7 @@ pub extern "C" fn _start() -> ! {
     vga::init(limine::framebuffer_response());
     
     //pci::tga::init_once();
-    pci::xhci::init_once();
+    usb::xhci::init_once();
 
     allocators::alloc_demo();
 
@@ -93,18 +93,18 @@ pub extern "C" fn _start() -> ! {
     let spawner = bsp_executor.spawner();
 
     // reads from hardware into dma buffs
-    if let Some(info) = pci::xhci::controller_info() {
-        let _ = spawner.spawn(pci::xhci::poll_task(info));
+    if let Some(info) = usb::xhci::xhc_info() {
+        let _ = spawner.spawn(usb::xhci::poll_task(info));
     } 
 
     // reads from our dma buffs into usb rings
-    if let Some(info) = pci::xhci::controller_info() {
+    if let Some(info) = usb::xhci::xhc_info() {
         let _ = spawner.spawn(usb::poll_task(info));
     }
 
     // Enumerate USB devices once. Re-running this while poll tasks are active
     // reprograms the controller and can disrupt in-flight transfers.
-    if let Some(info) = pci::xhci::controller_info() {
+    if let Some(info) = usb::xhci::xhc_info() {
         let _ = spawner.spawn(usb_scout(info));
     }
 
@@ -134,7 +134,7 @@ pub extern "C" fn _start() -> ! {
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
-            if let Some(info) = pci::xhci::controller_info() {
+            if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
         }
@@ -146,11 +146,13 @@ pub extern "C" fn _start() -> ! {
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     // floating-point math (SSE) needs per core enabling
     enable_sse();
+    
     let total_slots = SMP_RESP
         .get()
-        .map(|r| r.cpus().len())
-        .unwrap_or(1)
-        .max(1);
+        .expect("SMP response missing")
+        .cpus()
+        .len();
+
     let slot = (cpu.lapic_id as usize) % total_slots;
 
     let mut counter: u64 = 0;

@@ -2,10 +2,11 @@ pub mod hid;
 pub mod input;
 pub mod pen;
 pub mod print;
+pub mod xhci;
 
 use crate::debugconf;
-use crate::pci::{dma, osal, xhci};
-use crate::pci::xhci::{
+use crate::pci::{dma, osal};
+use self::xhci::{
     decode_port_status,
     write_reg64,
     trb_type,
@@ -39,18 +40,22 @@ struct DeviceEntry {
     kind: DeviceKind,
 }
 
+const SCRATCHPAD_BUF_SIZE: usize = 4096;
 const MAX_DEVICES: usize = 8;
 static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
 static ENUM_READY: AtomicBool = AtomicBool::new(false);
 static SCOUT_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct UsbControllerState {
-    info: xhci::ControllerInfo,
+    info: xhci::XhcInfo,
     ctx: XhciContext,
     ctx_stride_bytes: usize,
     ctx_stride_words: usize,
     dcbaa_phys: u64,
     dcbaa_virt: *mut u8,
+    scratchpad_array_phys: u64,
+    scratchpad_array_virt: *mut u8,
+    scratchpad_count: u32,
     cmd_ring: TrbRing,
     _cmd_phys: u64,
     _cmd_virt: *mut u8,
@@ -65,10 +70,18 @@ unsafe impl Sync for UsbControllerState {}
 
 static USB_CTRL: Mutex<Option<UsbControllerState>> = Mutex::new(None);
 
-fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()> {
+fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     osal::ensure_dma_api_initialized();
 
     let ctx = unsafe { XhciContext::new(info) };
+    let page_size_mask = unsafe { ctx.page_size_mask() };
+    if (page_size_mask & 0x1) == 0 {
+        debugconf!(
+            "usb: xhci lacks 4K page support PAGESIZE=0x{:X}\n",
+            page_size_mask
+        );
+        return Err(());
+    }
     let csz_64 = (ctx.hccparams1 & (1 << 2)) != 0;
     let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
     let ctx_stride_words: usize = ctx_stride_bytes / 4;
@@ -82,6 +95,56 @@ fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()>
         }
     };
     unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
+
+    let scratchpad_count = ctx.max_scratchpad_buffers() as usize;
+    let mut scratchpad_array_phys: u64 = 0;
+    let mut scratchpad_array_virt: *mut u8 = core::ptr::null_mut();
+    if scratchpad_count > 0 {
+        let array_bytes = scratchpad_count * core::mem::size_of::<u64>();
+        let (sp_array_phys, sp_array_virt) = match dma::alloc(array_bytes, 64) {
+            Some(pair) => pair,
+            None => {
+                debugconf!(
+                    "usb: failed to alloc scratchpad array count={}\n",
+                    scratchpad_count
+                );
+                return Err(());
+            }
+        };
+        unsafe { write_bytes(sp_array_virt, 0, array_bytes) };
+
+        for idx in 0..scratchpad_count {
+            let (buf_phys, buf_virt) = match dma::alloc(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE) {
+                Some(pair) => pair,
+                None => {
+                    debugconf!(
+                        "usb: failed to alloc scratchpad buffer {}/{}\n",
+                        idx + 1,
+                        scratchpad_count
+                    );
+                    return Err(());
+                }
+            };
+            unsafe {
+                write_bytes(buf_virt, 0, SCRATCHPAD_BUF_SIZE);
+                let arr_ptr = sp_array_virt as *mut u64;
+                write_volatile(arr_ptr.add(idx), buf_phys);
+            }
+        }
+
+        unsafe {
+            let dcbaa = dcbaa_virt as *mut u64;
+            write_volatile(dcbaa, sp_array_phys);
+        }
+
+        scratchpad_array_phys = sp_array_phys;
+        scratchpad_array_virt = sp_array_virt;
+        debugconf!(
+            "usb: scratchpads={} array=0x{:X}\n",
+            scratchpad_count,
+            sp_array_phys
+        );
+    }
 
     const CMD_RING_TRBS: usize = 64;
     let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
@@ -127,7 +190,6 @@ fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()>
         let slots_en = core::cmp::max(1, core::cmp::min(255, max_slots)) as u32;
         write_volatile(ctx.op_base.add(0x38 / 4), slots_en);
 
-        const IMAN: usize = 0x00 / 4;
         const ERSTSZ: usize = 0x08 / 4;
         const ERSTBA: usize = 0x10 / 4;
         let intr0 = ctx.runtime.add(0x20 / 4);
@@ -136,17 +198,14 @@ fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()>
         write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
         event_ring.update_erdp(intr0);
         xhci::install_event_ring(event_ring, intr0);
-        const IMAN_IE: u32 = 1 << 1;
-        write_volatile(intr0.add(IMAN), IMAN_IE);
 
         write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
 
         const USBCMD: usize = 0x00 / 4;
         const USBSTS: usize = 0x04 / 4;
         const USBCMD_RS: u32 = 1 << 0;
-        const USBCMD_INTE: u32 = 1 << 2;
         const USBSTS_HCH: u32 = 1 << 0;
-        write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS | USBCMD_INTE);
+        write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS);
         let mut spin: u32 = 1_000_000;
         while spin > 0 {
             let sts = read_volatile(ctx.op_base.add(USBSTS));
@@ -166,6 +225,9 @@ fn init_controller(info: xhci::ControllerInfo) -> Result<UsbControllerState, ()>
         ctx_stride_words,
         dcbaa_phys,
         dcbaa_virt,
+        scratchpad_array_phys,
+        scratchpad_array_virt,
+        scratchpad_count: scratchpad_count as u32,
         cmd_ring,
         _cmd_phys: cmd_phys,
         _cmd_virt: cmd_virt_raw,
@@ -180,7 +242,10 @@ fn has_device_on_port(port: u8) -> bool {
     DEVICES.lock().iter().any(|d| d.port == port)
 }
 
-fn cleanup_disconnected<const N: usize>(connected: &Vec<(u8, u32), N>) {
+async fn cleanup_disconnected<const N: usize>(
+    connected: &Vec<(u8, u32), N>,
+    state: &mut UsbControllerState,
+) {
     let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
     {
         let mut guard = DEVICES.lock();
@@ -198,11 +263,70 @@ fn cleanup_disconnected<const N: usize>(connected: &Vec<(u8, u32), N>) {
     }
 
     for (slot_id, kind) in removed.into_iter() {
+        if let Err(()) = disable_slot(state, slot_id).await {
+            debugconf!("usb: disable-slot for slot {} failed\n", slot_id);
+        }
         if kind == DeviceKind::Hid {
             let _ = hid::unregister_runtime(slot_id);
         }
         debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
     }
+}
+
+async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -> Result<(), ()> {
+    if slot_id == 0 {
+        return Err(());
+    }
+
+    let disable = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        d3: trb_type(10) | (slot_id << 24),
+    };
+    if !state.cmd_ring.push(disable) {
+        debugconf!("usb: cmd ring full before disable-slot\n");
+        return Err(());
+    }
+    unsafe {
+        write_volatile(state.ctx.doorbell.add(0), 0);
+    }
+
+    let Some(evt) = xhci::wait_for_event(
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 33 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
+        },
+        400,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    else {
+        debugconf!("usb: timeout waiting for disable-slot completion slot={}\n", slot_id);
+        return Err(());
+    };
+
+    let completion = (evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        debugconf!("usb: disable-slot failed slot={} cc={}\n", slot_id, completion);
+        return Err(());
+    }
+
+    unsafe {
+        let dcbaa = state.dcbaa_virt as *mut u64;
+        let idx = slot_id as usize;
+        let max_slots = core::cmp::max(1, (state.ctx.hcsparams1 & 0xFF) as usize + 1);
+        if idx < max_slots {
+            write_volatile(dcbaa.add(idx), 0);
+        }
+    }
+
+    debugconf!("usb: disable-slot complete slot={}\n", slot_id);
+    Ok(())
 }
 
 struct EnumReadyGuard;
@@ -243,7 +367,7 @@ fn any_hid_registered() -> bool {
 }
 
 #[embassy_executor::task]
-pub async fn usb_scout(info: xhci::ControllerInfo) {
+pub async fn usb_scout(info: xhci::XhcInfo) {
     if SCOUT_RUNNING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -295,7 +419,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
     if connected_overflowed {
         debugconf!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
     } else {
-        cleanup_disconnected(&connected);
+        cleanup_disconnected(&connected, &mut state).await;
     }
 
     for (target_port, port_status) in connected.iter().copied() {
@@ -310,7 +434,43 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
         let ctx_stride_words = state.ctx_stride_words;
         let cmd_ring = &mut state.cmd_ring;
         let mut port_status = port_status;
+        let port_idx = (target_port - 1) as usize;
+        const PORTSC_PED: u32 = 1 << 1;
+        const PORTSC_PR: u32 = 1 << 4;
 
+        unsafe {
+            ctx.ensure_port_powered(port_idx);
+            xhci::clear_port_change_bits(ctx, target_port);
+            ctx.reset_port(port_idx);
+        }
+        let mut reset_polls = 0;
+        loop {
+            port_status = unsafe { ctx.portsc(port_idx) };
+            let pr_clear = (port_status & PORTSC_PR) == 0;
+            let ped_set = (port_status & PORTSC_PED) != 0;
+            if pr_clear && ped_set {
+                break;
+            }
+            reset_polls += 1;
+            if reset_polls > 1000 {
+                let (connected, enabled, speed) = decode_port_status(port_status);
+                let pls = (port_status >> 5) & 0xF;
+                debugconf!(
+                    "usb: port {} reset timed out status=0x{:08X} ccs={} ped={} speed={} pls=0x{:X}\n",
+                    target_port,
+                    port_status,
+                    connected,
+                    enabled,
+                    speed,
+                    pls
+                );
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        }
+        if reset_polls > 1000 {
+            continue;
+        }
 
         let enable_slot = Trb {
             d0: 0,
@@ -328,22 +488,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
         let Some(enable_evt) = xhci::wait_for_event(
             |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type == 33 {
-                    true
-                } else {
-                    let completion = (evt.d2 >> 24) & 0xFF;
-                    debugconf!(
-                        "usb: unexpected event type={} cc={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-                        evt_type,
-                        completion,
-                        evt.d0,
-                        evt.d1,
-                        evt.d2,
-                        evt.d3
-                    );
-                    false
-                }
+                ((evt.d3 >> 10) & 0x3F) == 33
             },
             400,
             EmbassyDuration::from_millis(5)
@@ -373,35 +518,6 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
             continue;
         }
         debugconf!("usb: enable-slot ok slot={} port={}\n", slot_id, target_port);
-
-        let port_idx = (target_port - 1) as usize;
-        const PORTSC_PED: u32 = 1 << 1;
-        const PORTSC_PR: u32 = 1 << 4;
-        unsafe {
-            ctx.reset_port(port_idx);
-        }
-        let mut reset_polls = 0;
-        loop {
-            port_status = unsafe { ctx.portsc(port_idx) };
-            let pr_clear = (port_status & PORTSC_PR) == 0;
-            let ped_set = (port_status & PORTSC_PED) != 0;
-            if pr_clear && ped_set {
-                break;
-            }
-            reset_polls += 1;
-            if reset_polls > 400 {
-                debugconf!(
-                    "usb: port {} reset timed out status=0x{:08X}\n",
-                    target_port,
-                    port_status
-                );
-                break;
-            }
-            Timer::after(EmbassyDuration::from_millis(5)).await;
-        }
-        if reset_polls > 400 {
-            continue;
-        }
 
         let speed_code = (port_status >> 10) & 0xF;
         let max_packet = match speed_code {
@@ -459,14 +575,20 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
             write_volatile(slot_ctx.add(1), root_port);
 
             const EP_TYPE_CONTROL: u32 = 4;
-            let ep_type_field = EP_TYPE_CONTROL << 16;
-            write_volatile(ep0_ctx.add(0), ep_type_field);
-            let max_packet_field = max_packet as u32;
-            write_volatile(ep0_ctx.add(1), max_packet_field);
+            const CERR_MAX_RETRIES: u32 = 3;
+            // Control endpoints typically use interval 0.
+            write_volatile(ep0_ctx.add(0), 0);
+            let max_packet_field = ((max_packet as u32) & 0x7FF) << 16;
+            let ep_type_field = EP_TYPE_CONTROL << 3;
+            write_volatile(
+                ep0_ctx.add(1),
+                max_packet_field | ep_type_field | CERR_MAX_RETRIES,
+            );
             let dq = ep0_ring.dequeue_ptr();
             write_volatile(ep0_ctx.add(2), lo(dq));
             write_volatile(ep0_ctx.add(3), hi(dq));
-            write_volatile(ep0_ctx.add(4), 8);
+            let avg_trb_len = core::cmp::max(8u32, max_packet as u32);
+            write_volatile(ep0_ctx.add(4), avg_trb_len << 16);
         }
 
         let addr_dev = Trb {
@@ -483,24 +605,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 
         let Some(addr_evt) = xhci::wait_for_event(
             |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type == 33 {
-                    true
-                } else {
-                    let completion = (evt.d2 >> 24) & 0xFF;
-                    let evt_slot = (evt.d3 >> 24) & 0xFF;
-                    debugconf!(
-                        "usb: unexpected event type={} cc={} slot={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
-                        evt_type,
-                        completion,
-                        evt_slot,
-                        evt.d0,
-                        evt.d1,
-                        evt.d2,
-                        evt.d3
-                    );
-                    false
-                }
+                (((evt.d3 >> 10) & 0x3F) == 33) && (((evt.d3 >> 24) & 0xFF) == slot_id)
             },
             400,
             EmbassyDuration::from_millis(500)
@@ -711,7 +816,7 @@ pub async fn usb_scout(info: xhci::ControllerInfo) {
 }
 
 #[embassy_executor::task]
-pub async fn poll_task(info: xhci::ControllerInfo) {
+pub async fn poll_task(info: xhci::XhcInfo) {
     let ctx = unsafe { XhciContext::new(info) };
     let mut heartbeat: u32 = 0;
     let mut idle_timeouts: u32 = 0;
