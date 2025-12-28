@@ -836,8 +836,10 @@ pub fn log_ports_table(ctx: &XhciContext) {
         let pls = ((portsc >> 5) & 0xF) as u8;
         let pp = (portsc & (1 << 9)) != 0;
         let speed_code = ((portsc >> 10) & 0xF) as u8;
+        if speed_code == 0 {
+            continue;
+        }
         let speed = match speed_code {
-            0 => "none",
             1 => "full",
             2 => "low",
             3 => "high",
