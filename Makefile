@@ -76,6 +76,7 @@ iso: $(LIMINE_STAMP)
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_DIR)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
+	cp $(ISO_PATH) /media/t4ce/Data20TB/
 
 run: iso
 	$(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)

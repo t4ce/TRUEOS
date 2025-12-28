@@ -270,13 +270,20 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         mask_lo as u64
     };
 
-    let size_mask = mask & !0xFu64;
-    if size_mask == 0 {
-        return None;
+    if is_64 {
+        let size_mask = mask & !0xFu64;
+        if size_mask == 0 {
+            return None;
+        }
+        Some((!size_mask).wrapping_add(1))
+    } else {
+        // For 32-bit BARs, do the inversion in 32-bit space.
+        let size_mask = (mask_lo & !0xFu32);
+        if size_mask == 0 {
+            return None;
+        }
+        Some(((!size_mask).wrapping_add(1)) as u64)
     }
-
-    let size = (!size_mask).wrapping_add(1);
-    Some(size)
 }
 
 #[inline(always)]
