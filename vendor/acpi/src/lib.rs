@@ -142,10 +142,12 @@ where
         core::iter::from_fn(move || {
             if num_entries > 0 {
                 unsafe {
+                    // Entries start immediately after the SDT header (36 bytes), which is not
+                    // guaranteed to be aligned to 8 bytes for XSDT. Use unaligned reads.
                     let entry = if entry_size == 4 {
-                        *table_entries_ptr.cast::<u32>() as usize
+                        core::ptr::read_unaligned(table_entries_ptr.cast::<u32>()) as usize
                     } else {
-                        *table_entries_ptr.cast::<u64>() as usize
+                        core::ptr::read_unaligned(table_entries_ptr.cast::<u64>()) as usize
                     };
                     table_entries_ptr = table_entries_ptr.byte_add(entry_size);
                     num_entries -= 1;
