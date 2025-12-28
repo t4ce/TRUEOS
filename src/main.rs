@@ -68,16 +68,18 @@ fn panic(_info: &PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
+    vga::init(limine::framebuffer_response());
+    
     // limlog::log_limine_markers(); log_memmap_once();
     phys::register_memory_metadata();
 
     pci::dma::init_from_limine(); //pci::dma::alloc_test_once();
-    pci::enumerate_once(); //pci::log_devices_once();
+    pci::enumerate_once(); pci::log_devices_once();
     
     acpi::ensure_tables();
     acpi::hpet::ensure();
 
-    vga::init(limine::framebuffer_response());
+    
     
     //pci::tga::init_once();
     usb::xhci::init_once();

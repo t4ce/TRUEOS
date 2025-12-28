@@ -131,11 +131,15 @@ pub fn init_once() {
                 size
             );
 
-            let map_len = if size == 0 {
-                0x10_000usize
-            } else {
-                size as usize
-            };
+            // xHCI MMIO spaces can be large, but the register blocks we touch live in the
+            // beginning. Mapping a bounded window avoids insane mappings if BAR sizing is odd.
+            let mut map_len = if size == 0 { 0x10_000usize } else { size as usize };
+            if map_len < 0x10_000 {
+                map_len = 0x10_000;
+            }
+            if map_len > 0x1_00000 {
+                map_len = 0x1_00000;
+            }
             let mmio = match mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {
@@ -393,6 +397,7 @@ impl XhciContext {
         const PORT_BLOCK_OFFSET: usize = 0x400;
         const PORT_STRIDE: usize = 0x10;
         const PORTSC_PR: u32 = 1 << 4;
+        const PORTSC_PED: u32 = 1 << 1;
         const PORTSC_LWS: u32 = 1 << 16;
         let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
         let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
@@ -404,6 +409,8 @@ impl XhciContext {
         let mut writeback = cur;
         // Never mirror RW1S bits back as 1.
         writeback &= !(PORTSC_PR | PORTSC_LWS);
+        // PED is RW1C on xHCI; writing 1 would disable the port.
+        writeback &= !PORTSC_PED;
         // Trigger a port reset.
         writeback |= PORTSC_PR;
         write_volatile(port_ptr, writeback);
@@ -413,6 +420,7 @@ impl XhciContext {
         const PORT_BLOCK_OFFSET: usize = 0x400;
         const PORT_STRIDE: usize = 0x10;
         const PORTSC_PP: u32 = 1 << 9;
+        const PORTSC_PED: u32 = 1 << 1;
         const PORTSC_LWS: u32 = 1 << 16;
         let port_base = (self.op_base as usize).saturating_add(PORT_BLOCK_OFFSET);
         let port_ptr = (port_base + port_idx * PORT_STRIDE) as *mut u32;
@@ -427,6 +435,8 @@ impl XhciContext {
         // (PR is RW1S too; don't retrigger it while powering.)
         writeback &= !(1 << 4);
         writeback &= !PORTSC_LWS;
+        // PED is RW1C; never write it as 1.
+        writeback &= !PORTSC_PED;
         // Power on.
         writeback |= PORTSC_PP;
         write_volatile(port_ptr, writeback);
@@ -682,6 +692,8 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     // RW1S bits: writing 1 would *trigger* an action. Don't mirror these back.
     const PORTSC_PR: u32 = 1 << 4; // Port Reset (RW1S)
     const PORTSC_LWS: u32 = 1 << 16; // Link Write Strobe (RW1S)
+    // PED is RW1C: writing 1 would disable the port.
+    const PORTSC_PED: u32 = 1 << 1;
 
     const PORT_BLOCK_OFFSET: usize = 0x400;
     const PORT_STRIDE: usize = 0x10;
@@ -697,6 +709,8 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     let mut writeback = cur;
     // Never write back RW1S bits as 1 (could retrigger reset/link state changes).
     writeback &= !(PORTSC_PR | PORTSC_LWS);
+    // Never write PED as 1 (RW1C).
+    writeback &= !PORTSC_PED;
     // Ensure we only write 1s for change bits we want to clear.
     writeback &= !RW1C_MASK;
     writeback |= clear;
@@ -735,6 +749,8 @@ pub async fn poll_task(info: XhcInfo) {
                 // Port Status Change Event: must be acked by clearing PORTSC change bits,
                 // otherwise the controller can keep generating the same event forever.
                 let port_id = (evt.d0 >> 24) as u8;
+
+                // (debug log removed)
                 unsafe { clear_port_change_bits(&ctx, port_id) };
                 // Drop it; higher layers currently rescan via PORTSC anyway.
                 continue;
@@ -800,6 +816,59 @@ pub const fn hi(val: u64) -> u32 {
 
 pub const fn trb_type(ty: u32) -> u32 {
     ty << 10
+}
+
+pub fn log_ports_table(ctx: &XhciContext) {
+    crate::debugconf!(
+        "xhci: ports={} (PORTSC: ccs ped pr pp pls speed csc pec prc plc cec)\n",
+        ctx.port_count
+    );
+    crate::debugconf!(
+        "xhci: #  PORTSC       ccs ped pr pp pls spd   csc pec prc plc cec\n"
+    );
+
+    for port in 0..ctx.port_count {
+        let portsc = unsafe { ctx.portsc(port as usize) };
+
+        let ccs = (portsc & (1 << 0)) != 0;
+        let ped = (portsc & (1 << 1)) != 0;
+        let pr = (portsc & (1 << 4)) != 0;
+        let pls = ((portsc >> 5) & 0xF) as u8;
+        let pp = (portsc & (1 << 9)) != 0;
+        let speed_code = ((portsc >> 10) & 0xF) as u8;
+        let speed = match speed_code {
+            0 => "none",
+            1 => "full",
+            2 => "low",
+            3 => "high",
+            4 => "super",
+            5 => "super+",
+            _ => "unk",
+        };
+
+        let csc = (portsc & (1 << 17)) != 0;
+        let pec = (portsc & (1 << 18)) != 0;
+        let prc = (portsc & (1 << 21)) != 0;
+        let plc = (portsc & (1 << 22)) != 0;
+        let cec = (portsc & (1 << 23)) != 0;
+
+        crate::debugconf!(
+            "xhci: {:>2}  0x{:08X}  {:>3} {:>3} {:>2} {:>2} 0x{:X}  {:>5}  {:>3} {:>3} {:>3} {:>3} {:>3}\n",
+            port + 1,
+            portsc,
+            ccs as u8,
+            ped as u8,
+            pr as u8,
+            pp as u8,
+            pls,
+            speed,
+            csc as u8,
+            pec as u8,
+            prc as u8,
+            plc as u8,
+            cec as u8,
+        );
+    }
 }
 
 pub unsafe fn write_reg64(base: *mut u32, byte_offset: usize, value: u64) {
