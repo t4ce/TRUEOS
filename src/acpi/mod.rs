@@ -16,6 +16,7 @@ use crate::{
 };
 
 pub mod hpet;
+pub mod bgrt;
 
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 

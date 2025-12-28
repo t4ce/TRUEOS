@@ -6,6 +6,13 @@ use core::fmt;
 use core::f32::consts::PI;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+pub struct Image<'a> {
+    pub width: usize,
+    pub height: usize,
+    /// Pixels are row-major, 32-bit, in the same channel order the framebuffer expects.
+    pub pixels: &'a [u32],
+}
+
 const FONT_W: usize = 8;
 const FONT_H: usize = 8;
 const CHAR_SPACING: usize = 1;
@@ -375,6 +382,32 @@ impl FramebufferSurface {
             }
         }
     }
+
+    fn blit_image(&self, origin_x: usize, origin_y: usize, image: &Image<'_>) {
+        if image.width == 0 || image.height == 0 {
+            return;
+        }
+        let expected = image.width.saturating_mul(image.height);
+        if image.pixels.len() < expected {
+            return;
+        }
+
+        for y in 0..image.height {
+            let dst_y = origin_y.saturating_add(y);
+            if dst_y >= self.height {
+                break;
+            }
+            let row_off = y.saturating_mul(image.width);
+            for x in 0..image.width {
+                let dst_x = origin_x.saturating_add(x);
+                if dst_x >= self.width {
+                    break;
+                }
+                let src = image.pixels[row_off.saturating_add(x)];
+                self.write_pixel(dst_x, dst_y, src);
+            }
+        }
+    }
 }
 
 pub fn draw_line(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
@@ -383,4 +416,12 @@ pub fn draw_line(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
 
 pub fn clear_rect(origin_x: usize, origin_y: usize, width: usize, height: usize, color: u32) {
     let _ = with_framebuffer(|fb| fb.clear_rect(origin_x, origin_y, width, height, color));
+}
+
+pub fn blit_image(origin_x: usize, origin_y: usize, image: &Image<'_>) -> bool {
+    with_framebuffer(|fb| {
+        fb.blit_image(origin_x, origin_y, image);
+        true
+    })
+    .unwrap_or(false)
 }
