@@ -67,7 +67,10 @@ pub fn log_once() {
 
         // If it is a BMP we understand, blit (cropped to 256x256) into the framebuffer.
         if let Some(bmp) = bmp {
-            let _ = blit_bmp_to_vga(addr, off_x as usize, off_y as usize, &bmp);
+            let (dst_x, dst_y) = vga::framebuffer_dimensions()
+                .map(|(w, h)| (w as usize, h as usize))
+                .unwrap_or((0, 0));
+            let _ = blit_bmp_to_vga(addr, dst_x, dst_y, &bmp);
         }
     });
 }
@@ -158,14 +161,20 @@ fn blit_bmp_to_vga(phys_addr: u64, origin_x: usize, origin_y: usize, bmp: &BmpIn
     match (bmp.bpp, bmp.compression) {
         (24, 0) => blit_bmp24(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h),
         (32, 0) => blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, None),
-        (32, 3) => blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, Some(read_masks(phys_addr, bmp))),
+        (32, 3) => {
+            if let Some(masks) = read_masks(phys_addr, bmp) {
+                blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, Some(masks))
+            } else {
+                false
+            }
+        }
         (8, 0) => blit_bmp_indexed(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, 8),
         (4, 0) => blit_bmp_indexed(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, 4),
         _ => false,
     }
 }
 
-fn read_masks(phys_addr: u64, bmp: &BmpInfo) -> Option<(u32, u32, u32)> {
+fn read_masks(phys_addr: u64, _bmp: &BmpInfo) -> Option<(u32, u32, u32)> {
     // For BI_BITFIELDS, masks immediately follow the BITMAPINFOHEADER.
     let masks_off = phys_addr.checked_add(14 + 40)?;
     if !phys_range_looks_safe(masks_off, 12) {
@@ -194,7 +203,9 @@ fn blit_bmp24(
     let row_bytes = width.saturating_mul(3);
     let row_stride = (row_bytes + 3) & !3;
     let pixel_bytes = row_stride.saturating_mul(height);
-    let data_phys = phys_addr.checked_add(bmp.data_offset as u64)?;
+    let Some(data_phys) = phys_addr.checked_add(bmp.data_offset as u64) else {
+        return false;
+    };
 
     if !range_fits_in_file(bmp, pixel_bytes as u64) {
         return false;
@@ -203,7 +214,9 @@ fn blit_bmp24(
         return false;
     }
 
-    let mapped = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok()?;
+    let Some(mapped) = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok() else {
+        return false;
+    };
     let src = mapped.as_ptr();
 
     let expected = copy_w.saturating_mul(copy_h);
@@ -245,7 +258,9 @@ fn blit_bmp32(
     let row_bytes = width.saturating_mul(4);
     let row_stride = row_bytes;
     let pixel_bytes = row_stride.saturating_mul(height);
-    let data_phys = phys_addr.checked_add(bmp.data_offset as u64)?;
+    let Some(data_phys) = phys_addr.checked_add(bmp.data_offset as u64) else {
+        return false;
+    };
 
     if !range_fits_in_file(bmp, pixel_bytes as u64) {
         return false;
@@ -254,7 +269,9 @@ fn blit_bmp32(
         return false;
     }
 
-    let mapped = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok()?;
+    let Some(mapped) = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok() else {
+        return false;
+    };
     let src = mapped.as_ptr();
 
     let expected = copy_w.saturating_mul(copy_h);
@@ -299,7 +316,9 @@ fn blit_bmp_indexed(
     let row_bits = width.saturating_mul(bpp as usize);
     let row_stride = ((row_bits + 31) / 32) * 4; // padded to 4-byte boundary
     let pixel_bytes = row_stride.saturating_mul(height);
-    let data_phys = phys_addr.checked_add(bmp.data_offset as u64)?;
+    let Some(data_phys) = phys_addr.checked_add(bmp.data_offset as u64) else {
+        return false;
+    };
 
     if !range_fits_in_file(bmp, pixel_bytes as u64) {
         return false;
@@ -311,11 +330,15 @@ fn blit_bmp_indexed(
     // Palette begins at header end; for indexed BI_RGB, palette entries are 4 bytes (B,G,R,0).
     let palette_entries = 1usize << bpp;
     let palette_bytes = palette_entries.saturating_mul(4).min(MAX_PALETTE * 4);
-    let palette_phys = phys_addr.checked_add(14 + 40)?;
+    let Some(palette_phys) = phys_addr.checked_add(14 + 40) else {
+        return false;
+    };
     if !phys_range_looks_safe(palette_phys, palette_bytes as u64) {
         return false;
     }
-    let pal_map = mmio::map_mmio_region_exact(palette_phys, palette_bytes).ok()?;
+    let Some(pal_map) = mmio::map_mmio_region_exact(palette_phys, palette_bytes).ok() else {
+        return false;
+    };
     let pal_ptr = pal_map.as_ptr();
     unsafe {
         for i in 0..palette_entries.min(MAX_PALETTE) {
@@ -327,7 +350,9 @@ fn blit_bmp_indexed(
         }
     }
 
-    let mapped = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok()?;
+    let Some(mapped) = mmio::map_mmio_region_exact(data_phys, pixel_bytes).ok() else {
+        return false;
+    };
     let src = mapped.as_ptr();
 
     let expected = copy_w.saturating_mul(copy_h);
