@@ -205,6 +205,71 @@ async fn control_in(
     }
 }
 
+async fn update_ep0_max_packet(
+    ctx: &XhciContext,
+    cmd_ring: &mut TrbRing,
+    input_ctx_phys: u64,
+    input_ctx_virt: *mut u8,
+    dev_ctx_virt: *mut u8,
+    ctx_stride_bytes: usize,
+    ctx_stride_words: usize,
+    slot_id: u32,
+    new_mps: u16,
+) -> Result<(), ()> {
+    // Reprogram EP0 Max Packet Size using Evaluate Context, copying current slot/ep0
+    // state from the output device context and only overriding the MPS field.
+    unsafe {
+        write_bytes(input_ctx_virt, 0, 4096);
+
+        let add_flags_ptr = input_ctx_virt as *mut u32;
+        write_volatile(add_flags_ptr.add(1), 0x3); // slot + ep0
+
+        let slot_src = dev_ctx_virt as *const u32;
+        let slot_dst = input_ctx_virt.add(ctx_stride_bytes) as *mut u32;
+        for i in 0..ctx_stride_words {
+            write_volatile(slot_dst.add(i), read_volatile(slot_src.add(i)));
+        }
+
+        let ep0_src = dev_ctx_virt.add(ctx_stride_bytes) as *const u32;
+        let ep0_dst = input_ctx_virt.add(ctx_stride_bytes * 2) as *mut u32;
+        for i in 0..ctx_stride_words {
+            write_volatile(ep0_dst.add(i), read_volatile(ep0_src.add(i)));
+        }
+
+        let mut dw1 = read_volatile(ep0_dst.add(1));
+        dw1 &= !0xFFFF_0000; // clear Max Packet Size field
+        dw1 |= ((new_mps as u32) & 0x7FF) << 16;
+        write_volatile(ep0_dst.add(1), dw1);
+    }
+
+    let eval_evt = submit_cmd_and_wait(
+        ctx,
+        cmd_ring,
+        Trb {
+            d0: lo(input_ctx_phys),
+            d1: hi(input_ctx_phys),
+            d2: 0,
+            d3: trb_type(13) | (slot_id << 24),
+        },
+        Some(slot_id),
+        "eval-ctx-ep0",
+        800,
+        EmbassyDuration::from_millis(5),
+    )
+    .await?;
+
+    if trb_cc(&eval_evt) != 1 {
+        usbv!(
+            "usb: eval-ctx-ep0 cc={} slot={}\n",
+            trb_cc(&eval_evt),
+            slot_id
+        );
+        return Err(());
+    }
+
+    Ok(())
+}
+
 async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let ctx = state.ctx;
     let dcbaa_virt = state.dcbaa_virt;
@@ -254,6 +319,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         port_status
     );
 
+    // Clear any change bits raised during reset (e.g., PRC/CSC) before continuing.
+    unsafe {
+        xhci::clear_port_change_bits(&ctx, target_port);
+    }
+
     let enable_evt = match submit_cmd_and_wait(
         &ctx,
         &mut state.cmd_ring,
@@ -298,6 +368,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         4 => 512,
         _ => 8,
     } as u16;
+    let mut ep0_mps = max_packet;
 
     let (dev_ctx_phys, dev_ctx_virt) = match dma::alloc(4096, 64) {
         Some(pair) => pair,
@@ -405,6 +476,64 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             return;
         }
     };
+    unsafe { write_bytes(desc_virt, 0, 64) };
+
+    // First grab the 8-byte header to learn bMaxPacketSize0, then, if needed,
+    // reprogram EP0 MPS via Evaluate Context before pulling the full descriptor.
+    let mut dev_mps0_hdr: u8 = ep0_mps as u8;
+    if let Ok((_cc, hdr_xfer)) = control_in(
+        &ctx,
+        &mut ep0_ring,
+        slot_id,
+        setup_get_descriptor(1, 0, 8),
+        desc_phys,
+        8,
+        "get-devdesc-8",
+        800,
+    )
+    .await
+    {
+        let hdr_len = (hdr_xfer as usize).min(8);
+        let hdr = unsafe { core::slice::from_raw_parts(desc_virt, hdr_len) };
+        if hdr_len >= 8 {
+            dev_mps0_hdr = hdr[7];
+        }
+    }
+
+    let desired_mps0 = match dev_mps0_hdr {
+        0 => ep0_mps,
+        8 | 16 | 32 | 64 => dev_mps0_hdr as u16,
+        9 => 512, // SuperSpeed encodes 512-byte EP0 as 9
+        _ => ep0_mps,
+    };
+
+    if desired_mps0 != ep0_mps {
+        if update_ep0_max_packet(
+            &ctx,
+            &mut state.cmd_ring,
+            input_ctx_phys,
+            input_ctx_virt,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            slot_id,
+            desired_mps0,
+        )
+        .await
+        .is_err()
+        {
+            let _ = disable_slot(state, slot_id).await;
+            return;
+        }
+        ep0_mps = desired_mps0;
+        usbv!(
+            "usb: enum port {} ep0 mps updated to {} slot={}\n",
+            target_port,
+            ep0_mps,
+            slot_id
+        );
+    }
+
     unsafe { write_bytes(desc_virt, 0, 64) };
 
     if control_in(

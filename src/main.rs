@@ -72,18 +72,17 @@ pub extern "C" fn _start() -> ! {
     vga::init(limine::framebuffer_response());
 
     // If booted via UEFI, parse+log the EFI System Table once.
-    uefi::log_system_table_once();
+    // uefi::log_system_table_once(); bugged. never worked.
     
     // limlog::log_limine_markers(); log_memmap_once();
     phys::register_memory_metadata();
 
-    pci::dma::init_from_limine(); //pci::dma::alloc_test_once();
-    pci::enumerate_once(); pci::log_devices_once();
+    pci::dma::init_from_limine(); // pci::dma::alloc_test_once();
+    pci::enumerate_once(); // pci::log_devices_once();
     
     acpi::ensure_tables();
-    acpi::hpet::ensure();
-
-    
+    acpi::bgrt::log_once();
+    acpi::hpet::ensure(); rng::log_rng_caps();
     
     //pci::tga::init_once();
     usb::xhci::init_once();
@@ -122,7 +121,7 @@ pub extern "C" fn _start() -> ! {
     let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
     vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
 
-    rng::log_rng_caps();
+    
 
     //files::create_demo_file(); needs hardware qemu param i guess
 
