@@ -97,10 +97,12 @@ async fn submit_cmd_and_wait(
     cmd_ring: &mut TrbRing,
     cmd: Trb,
     slot_filter: Option<u32>,
+    what: &'static str,
     timeout_iters: usize,
     delay: EmbassyDuration,
 ) -> Result<Trb, ()> {
     if !cmd_ring.push(cmd) {
+        usbv!("usb: {}: cmd ring full\n", what);
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
@@ -122,7 +124,10 @@ async fn submit_cmd_and_wait(
         delay,
     )
     .await
-    .ok_or(())?;
+    .ok_or(())
+    .map_err(|_| {
+        usbv!("usb: {}: timeout waiting for command completion\n", what);
+    })?;
 
     Ok(evt)
 }
@@ -145,6 +150,7 @@ async fn control_in(
     setup: Trb,
     buf_phys: u64,
     length: u16,
+    what: &'static str,
     timeout_iters: usize,
 ) -> Result<(u32, u16), ()> {
     let data = Trb {
@@ -162,6 +168,7 @@ async fn control_in(
     };
 
     if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
+        usbv!("usb: {}: ep0 ring full\n", what);
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -179,7 +186,10 @@ async fn control_in(
         EmbassyDuration::from_millis(5),
     )
     .await
-    .ok_or(())?;
+    .ok_or(())
+    .map_err(|_| {
+        usbv!("usb: {}: timeout waiting for transfer event\n", what);
+    })?;
 
     let completion = trb_cc(&evt);
     let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
@@ -190,6 +200,7 @@ async fn control_in(
     if completion == 1 || completion == 13 {
         Ok((completion, transferred))
     } else {
+        usbv!("usb: {}: transfer failed cc={}\n", what, completion);
         Err(())
     }
 }
@@ -203,6 +214,12 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let port_idx = (target_port - 1) as usize;
     const PORTSC_PED: u32 = 1 << 1;
     const PORTSC_PR: u32 = 1 << 4;
+
+    usbv!(
+        "usb: enum port {} begin portsc=0x{:08X}\n",
+        target_port,
+        unsafe { ctx.portsc(port_idx) }
+    );
 
     unsafe {
         ctx.ensure_port_powered(port_idx);
@@ -231,6 +248,12 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         Timer::after(EmbassyDuration::from_millis(5)).await;
     }
 
+    usbv!(
+        "usb: enum port {} reset-ok portsc=0x{:08X}\n",
+        target_port,
+        port_status
+    );
+
     let enable_evt = match submit_cmd_and_wait(
         &ctx,
         &mut state.cmd_ring,
@@ -241,13 +264,17 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             d3: trb_type(9),
         },
         None,
+        "enable-slot",
         400,
         EmbassyDuration::from_millis(5),
     )
     .await
     {
         Ok(evt) => evt,
-        Err(()) => return,
+        Err(()) => {
+            usbv!("usb: enum port {} enable-slot failed\n", target_port);
+            return;
+        }
     };
 
     if trb_cc(&enable_evt) != 1 {
@@ -259,6 +286,8 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     if slot_id == 0 {
         return;
     }
+
+    usbv!("usb: enum port {} enable-slot-ok slot={}\n", target_port, slot_id);
 
     // From here on: always disable the slot on failure.
 
@@ -342,6 +371,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             d3: trb_type(11) | (slot_id << 24),
         },
         Some(slot_id),
+        "address-device",
         2000,
         EmbassyDuration::from_millis(5),
     )
@@ -349,15 +379,24 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     {
         Ok(evt) => evt,
         Err(()) => {
+            usbv!("usb: enum port {} address-device failed slot={}\n", target_port, slot_id);
             let _ = disable_slot(state, slot_id).await;
             return;
         }
     };
 
     if trb_cc(&addr_evt) != 1 {
+        usbv!(
+            "usb: enum port {} address-device cc={} slot={}\n",
+            target_port,
+            trb_cc(&addr_evt),
+            slot_id
+        );
         let _ = disable_slot(state, slot_id).await;
         return;
     }
+
+    usbv!("usb: enum port {} address-ok slot={}\n", target_port, slot_id);
 
     let (desc_phys, desc_virt) = match dma::alloc(64, 64) {
         Some(pair) => pair,
@@ -375,14 +414,18 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         setup_get_descriptor(1, 0, 18),
         desc_phys,
         18,
+        "get-devdesc",
         800,
     )
     .await
     .is_err()
     {
+        usbv!("usb: enum port {} get-devdesc failed slot={}\n", target_port, slot_id);
         let _ = disable_slot(state, slot_id).await;
         return;
     }
+
+    usbv!("usb: enum port {} devdesc-ok slot={}\n", target_port, slot_id);
 
     let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_num_cfg) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
@@ -408,6 +451,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         setup_get_descriptor(2, 0, 9),
         cfg_phys,
         9,
+        "get-cfg-hdr",
         800,
     )
     .await
@@ -427,11 +471,19 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
                 setup_get_descriptor(2, 0, req_len),
                 cfg_phys,
                 req_len,
+                "get-cfg-full",
                 800,
             )
             .await;
         }
     }
+
+    usbv!(
+        "usb: enum port {} cfgdesc len={} slot={}\n",
+        target_port,
+        cfg_total_len,
+        slot_id
+    );
 
     let cfg_slice_len = cfg_total_len.min(256) as usize;
     let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_slice_len) };
@@ -473,6 +525,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     .unwrap_or(0);
 
     if hid_count > 0 {
+        usbv!("usb: enum port {} claimed HID slot={} count={}\n", target_port, slot_id, hid_count);
         register_device(slot_id as u32, target_port, DeviceKind::Hid);
         return;
     }
@@ -492,15 +545,18 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     .await
     .is_ok()
     {
+        usbv!("usb: enum port {} claimed MASS slot={}\n", target_port, slot_id);
         register_device(slot_id as u32, target_port, DeviceKind::Mass);
         return;
     }
 
     if pen::try_handle(cfg_slice, target_port) {
+        usbv!("usb: enum port {} claimed PEN slot={}\n", target_port, slot_id);
         register_device(slot_id as u32, target_port, DeviceKind::Pen);
         return;
     }
     if print::try_handle(cfg_slice, target_port) {
+        usbv!("usb: enum port {} claimed PRINTER slot={}\n", target_port, slot_id);
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
         return;
     }
@@ -565,6 +621,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     }
 
     let _ = disable_slot(state, slot_id).await;
+    usbv!("usb: enum port {} disable-slot (not claimed) slot={}\n", target_port, slot_id);
 }
 
 fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {

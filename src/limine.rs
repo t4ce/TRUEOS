@@ -43,6 +43,10 @@ pub static BOOTLOADER_PERFORMANCE_REQUEST: BootloaderPerformanceRequest =
 #[link_section = ".limine_requests"]
 pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 
+#[used]
+#[link_section = ".limine_requests"]
+pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
+
 pub fn hhdm_offset() -> Option<u64> {
     let resp = HHDM_REQUEST.get_response()?;
     Some(resp.offset())
@@ -78,6 +82,11 @@ pub fn bootloader_performance() -> Option<&'static BootloaderPerformanceResponse
 pub fn rsdp_address() -> Option<u64> {
     let resp = RSDP_REQUEST.get_response()?;
     Some(resp.address() as u64)
+}
+
+pub fn efi_system_table_address() -> Option<u64> {
+    let resp = EFI_SYSTEM_TABLE_REQUEST.get_response()?;
+    Some(resp.address)
 }
 
 pub fn memmap_type_name(entry_type: memory_map::EntryType) -> &'static str {
@@ -141,6 +150,46 @@ impl BootloaderPerformanceRequest {
     }
 
     pub fn get_response(&self) -> Option<&'static BootloaderPerformanceResponse> {
+        let resp = self.response;
+        if resp.is_null() {
+            None
+        } else {
+            Some(unsafe { &*resp })
+        }
+    }
+}
+
+#[repr(C)]
+pub struct EfiSystemTableResponse {
+    revision: u64,
+    pub address: u64,
+}
+
+#[repr(C)]
+pub struct EfiSystemTableRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: *mut EfiSystemTableResponse,
+}
+
+unsafe impl Sync for EfiSystemTableRequest {}
+
+impl EfiSystemTableRequest {
+    pub const fn new() -> Self {
+        // LIMINE_EFI_SYSTEM_TABLE_REQUEST_ID { LIMINE_COMMON_MAGIC, 0x5ceba5163eaaf6d6, 0x0a6981610cf65fcc }
+        Self {
+            id: [
+                0xc7b1dd30df4c8b88,
+                0x0a82e883a194f07b,
+                0x5ceba5163eaaf6d6,
+                0x0a6981610cf65fcc,
+            ],
+            revision: 0,
+            response: ptr::null_mut(),
+        }
+    }
+
+    pub fn get_response(&self) -> Option<&'static EfiSystemTableResponse> {
         let resp = self.response;
         if resp.is_null() {
             None
