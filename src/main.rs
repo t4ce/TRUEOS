@@ -31,6 +31,7 @@ mod time;
 mod phys;
 mod rng;
 mod files;
+mod uefi;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;
@@ -69,6 +70,9 @@ fn panic(_info: &PanicInfo) -> ! {
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
     vga::init(limine::framebuffer_response());
+
+    // If booted via UEFI, parse+log the EFI System Table once.
+    uefi::log_system_table_once();
     
     // limlog::log_limine_markers(); log_memmap_once();
     phys::register_memory_metadata();
