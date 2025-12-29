@@ -3,12 +3,14 @@ use spin::Mutex;
 
 #[derive(Copy, Clone, Debug)]
 pub struct KeyboardEvent {
+    pub slot_id: u32,
     pub modifiers: u8,
     pub keys: [u8; 6],
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct MouseEvent {
+    pub slot_id: u32,
     pub buttons: u8,
     pub dx: i8,
     pub dy: i8,

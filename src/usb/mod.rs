@@ -77,8 +77,7 @@ unsafe impl Sync for UsbControllerState {}
 
 static USB_CTRL: Mutex<Option<UsbControllerState>> = Mutex::new(None);
 
-// Keep USB logging minimal by default.
-const USB_LOG_VERBOSE: bool = true;
+const USB_LOG_VERBOSE: bool = false;
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{
