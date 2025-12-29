@@ -21,6 +21,8 @@ surface_reexport!(hash => ::core::hash);
 surface_reexport!(marker => ::core::marker);
 surface_reexport!(convert => ::core::convert);
 surface_reexport!(default => ::core::default);
+surface_reexport!(any => ::core::any);
+surface_reexport!(error => ::core::error);
 surface_reexport!(iter => ::core::iter);
 surface_reexport!(num => ::core::num);
 surface_reexport!(option => ::core::option);
@@ -28,6 +30,16 @@ surface_reexport!(result => ::core::result);
 surface_reexport!(vec => ::alloc::vec);
 surface_reexport!(string => ::alloc::string);
 surface_reexport!(boxed => ::alloc::boxed);
+
+pub mod prelude {
+    //! Convenience exports for the most common `surface` types.
+    pub use crate::surface::boxed::Box;
+    pub use crate::surface::fmt::{Debug, Display};
+    pub use crate::surface::option::Option;
+    pub use crate::surface::result::Result;
+    pub use crate::surface::string::{String, ToString};
+    pub use crate::surface::vec::Vec;
+}
 
 pub mod sync {
     pub use core::sync::atomic::{
