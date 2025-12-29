@@ -34,6 +34,7 @@ mod rng;
 mod files;
 mod uefi;
 mod surface;
+mod strings;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;

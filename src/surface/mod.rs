@@ -25,14 +25,30 @@ surface_reexport!(any => ::core::any);
 surface_reexport!(error => ::core::error);
 surface_reexport!(iter => ::core::iter);
 surface_reexport!(num => ::core::num);
+surface_reexport!(future => ::core::future);
+surface_reexport!(task => ::core::task);
 surface_reexport!(option => ::core::option);
 surface_reexport!(result => ::core::result);
 surface_reexport!(vec => ::alloc::vec);
 surface_reexport!(string => ::alloc::string);
 surface_reexport!(boxed => ::alloc::boxed);
 
+pub mod env {
+    use crate::surface::string::String;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum VarError {
+        NotPresent,
+        NotUnicode,
+        Unsupported,
+    }
+
+    pub fn var(_key: &str) -> Result<String, VarError> {
+        Err(VarError::Unsupported)
+    }
+}
+
 pub mod prelude {
-    //! Convenience exports for the most common `surface` types.
     pub use crate::surface::boxed::Box;
     pub use crate::surface::fmt::{Debug, Display};
     pub use crate::surface::option::Option;
@@ -64,4 +80,13 @@ pub mod collections {
     pub use heapless::*;
     pub use ::alloc::collections::{BinaryHeap, BTreeMap, BTreeSet, LinkedList, VecDeque};
     pub use hashbrown::{HashMap, HashSet};
+}
+
+pub mod unicode {
+    //! Feature-gated Unicode helpers re-exported from third-party crates.
+    #[cfg(feature = "surface-unicode-segmentation")]
+    pub use unicode_segmentation as segmentation;
+
+    #[cfg(feature = "surface-unicode-normalization")]
+    pub use unicode_normalization as normalization;
 }
