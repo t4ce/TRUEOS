@@ -18,6 +18,11 @@ use crate::{
 pub mod hpet;
 pub mod bgrt;
 pub mod facp;
+pub mod tpm2;
+pub mod dmar;
+pub mod fpdt;
+pub mod uefi_tbl;
+pub mod ssdt;
 
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
