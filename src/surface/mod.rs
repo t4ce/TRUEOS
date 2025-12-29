@@ -1,5 +1,5 @@
 pub use ::core as Core;
-pub use ::alloc as Alloc;
+pub use ::alloc as alloc;
 
 macro_rules! surface_reexport {
     ($name:ident => $path:path) => {
@@ -28,6 +28,7 @@ surface_reexport!(num => ::core::num);
 surface_reexport!(future => ::core::future);
 surface_reexport!(task => ::core::task);
 surface_reexport!(option => ::core::option);
+surface_reexport!(panic => ::core::panic);
 surface_reexport!(result => ::core::result);
 surface_reexport!(vec => ::alloc::vec);
 surface_reexport!(string => ::alloc::string);

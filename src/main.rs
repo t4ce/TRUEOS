@@ -66,7 +66,9 @@ unsafe fn init_bsp_executor() -> &'static Executor {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {debugcon_write_byte(b'!');}
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+    dump_stack_trace(64);
+    loop { debugcon_write_byte(b'!'); }
 }
 
 #[no_mangle]
@@ -275,6 +277,43 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
     loop {
         unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
+    }
+}
+
+#[inline(always)]
+fn dump_stack_trace(max_frames: usize) {
+    let mut rbp: *const usize;
+    unsafe {
+        core::arch::asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
+    }
+
+    debugconf!("stack trace (up to {} frames)\n", max_frames);
+
+    let mut frames = 0usize;
+    while frames < max_frames {
+        if rbp.is_null() {
+            break;
+        }
+
+        // Each frame: [saved_rbp, return_rip]. Bail if unreadable/corrupt.
+        let (saved_rbp, ret_addr) = unsafe { (core::ptr::read(rbp), core::ptr::read(rbp.add(1))) };
+
+        if ret_addr == 0 {
+            break;
+        }
+
+        debugconf!("  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n", frames, rbp as usize, ret_addr);
+
+        // Basic sanity: enforce forward progress and 16-byte alignment of the caller frame.
+        if saved_rbp as usize <= rbp as usize {
+            break;
+        }
+        if (saved_rbp as usize) & 0xF != 0 {
+            break;
+        }
+
+        rbp = saved_rbp as *const usize;
+        frames += 1;
     }
 }
 

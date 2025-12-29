@@ -21,6 +21,8 @@ readarray -t PROVIDED < <(
     rg -o -N "^\s*pub\s+mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*(;|\{)" "$SURFACE_MOD" --replace '$1' || true
     # Modules generated via the surface_reexport! macro.
     rg -o -N "^\s*surface_reexport!\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*=>" "$SURFACE_MOD" --replace '$1' || true
+    # Top-level pub use aliases (e.g., `pub use ::alloc as alloc;`).
+    rg -o -N "^\s*pub\s+use\s+::[A-Za-z_][A-Za-z0-9_]*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;" "$SURFACE_MOD" --replace '$1' || true
   } | sort -u
 )
 
