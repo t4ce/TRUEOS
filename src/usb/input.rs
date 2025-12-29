@@ -6,6 +6,8 @@ pub struct KeyboardEvent {
     pub slot_id: u32,
     pub modifiers: u8,
     pub keys: [u8; 6],
+    // ASCII translation of `keys` (US layout, shift-aware). 0 means "no key / not representable".
+    pub ascii: [u8; 6],
 }
 
 #[derive(Copy, Clone, Debug)]

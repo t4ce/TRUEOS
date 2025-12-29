@@ -5,8 +5,6 @@
 //! `surface-pattern-accel` feature is enabled we lean on `memchr`/`twoway`
 //! for tighter single-byte and substring searches.
 
-use core::str;
-
 #[cfg(feature = "surface-pattern-accel")]
 use memchr::memchr;
 #[cfg(feature = "surface-pattern-accel")]

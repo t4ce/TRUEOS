@@ -1,10 +1,7 @@
 use crate::debugconf;
 use crate::pci::dma;
 use super::xhci::{self, Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
-use crate::{
-    strings,
-    usb::input,
-};
+use crate::usb::input;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use spin::Mutex;
@@ -14,7 +11,7 @@ use heapless::{String as HString, Vec};
 const MAX_REPORT_DESC: usize = 512;
 
 // Local switch to silence noisy HID debug output.
-pub(crate) const HID_LOGS: bool = true;
+pub(crate) const HID_LOGS: bool = false;
 
 macro_rules! hidlog {
     ($($arg:tt)*) => {{
@@ -75,7 +72,7 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
     }
 }
 
-fn kbd_debug_ascii(keys: &[u8; 6], modifiers: u8) -> crate::surface::string::String {
+fn kbd_debug_ascii(keys: &[u8; 6], modifiers: u8) -> HString<16> {
     let shift = hid_kbd_shift(modifiers);
     let mut out: HString<16> = HString::new();
     for &k in keys.iter() {
@@ -83,10 +80,13 @@ fn kbd_debug_ascii(keys: &[u8; 6], modifiers: u8) -> crate::surface::string::Str
             continue;
         }
         if let Some(ch) = hid_boot_keycode_to_ascii(k, shift) {
-            let _ = out.push(ch);
+            // Keep logs one-line: don't emit control characters.
+            if ch.is_ascii_graphic() || ch == ' ' {
+                let _ = out.push(ch);
+            }
         }
     }
-    strings::sanitize_ascii(out.as_str())
+    out
 }
 
 pub struct HidEpInfo {
@@ -239,6 +239,18 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             let modifiers = data[0];
             let mut keys = [0u8; 6];
             keys.copy_from_slice(&data[2..8]);
+
+            let shift = hid_kbd_shift(modifiers);
+            let mut ascii = [0u8; 6];
+            for (dst, &k) in ascii.iter_mut().zip(keys.iter()) {
+                if k == 0 {
+                    *dst = 0;
+                    continue;
+                }
+                *dst = hid_boot_keycode_to_ascii(k, shift)
+                    .and_then(|ch| if ch.is_ascii() { Some(ch as u8) } else { None })
+                    .unwrap_or(b'?');
+            }
             if keys.iter().any(|&k| k != 0) || modifiers != 0 {
                 runtime.last_nonzero_seq = runtime.seq;
                 let chars = kbd_debug_ascii(&keys, modifiers);
@@ -258,6 +270,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 slot_id: runtime.slot_id,
                 modifiers,
                 keys,
+                ascii,
             }));
         }
     }

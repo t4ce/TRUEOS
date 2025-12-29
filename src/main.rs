@@ -132,8 +132,6 @@ pub extern "C" fn _start() -> ! {
     let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
     vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
 
-    
-
     //files::create_demo_file(); needs hardware qemu param i guess
 
     let mut counter: u64 = 0;
@@ -191,17 +189,25 @@ async fn input_logger() {
             match evt {
                 usb::input::InputEvent::Keyboard(kbd) => {
                     if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
+                        let show = |b: u8| -> char {
+                            if b == 0 {
+                                '.'
+                            } else if (b as char).is_ascii_graphic() || b == b' ' {
+                                b as char
+                            } else {
+                                '?'
+                            }
+                        };
                         debugconf!(
-                            "[keybd] [{}] [{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}]\n",
+                            "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
                             kbd.slot_id,
                             kbd.modifiers,
-                            0,
-                            kbd.keys[0],
-                            kbd.keys[1],
-                            kbd.keys[2],
-                            kbd.keys[3],
-                            kbd.keys[4],
-                            kbd.keys[5]
+                            show(kbd.ascii[0]),
+                            show(kbd.ascii[1]),
+                            show(kbd.ascii[2]),
+                            show(kbd.ascii[3]),
+                            show(kbd.ascii[4]),
+                            show(kbd.ascii[5])
                         );
                     }
                 }
