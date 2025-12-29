@@ -81,6 +81,7 @@ pub extern "C" fn _start() -> ! {
     pci::enumerate_once(); // pci::log_devices_once();
     
     acpi::ensure_tables();
+    acpi::facp::log_once();
     acpi::bgrt::log_once();
     acpi::hpet::ensure(); rng::log_rng_caps();
     
@@ -179,17 +180,30 @@ async fn input_logger() {
         if let Some(evt) = usb::input::pop_event() {
             match evt {
                 usb::input::InputEvent::Keyboard(kbd) => {
-                    let shift = (kbd.modifiers & (1 << 1)) != 0 || (kbd.modifiers & (1 << 5)) != 0;
-                    if let Some(&code) = kbd.keys.iter().find(|&&c| c != 0) {
-                            debugconf!(
-                                "[keybd]\n"
-                            );
-                    } 
+                    if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
+                        debugconf!(
+                            "[keybd] [{}] [{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}][{:02X}]\n",
+                            kbd.slot_id,
+                            kbd.modifiers,
+                            0,
+                            kbd.keys[0],
+                            kbd.keys[1],
+                            kbd.keys[2],
+                            kbd.keys[3],
+                            kbd.keys[4],
+                            kbd.keys[5]
+                        );
+                    }
                 }
                 usb::input::InputEvent::Mouse(mouse) => {
                     if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
                         debugconf!(
-                            "[mouse]\n"
+                            "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
+                            mouse.slot_id,
+                            mouse.dx,
+                            mouse.dy,
+                            mouse.buttons,
+                            mouse.wheel
                         );
                     }
                 }

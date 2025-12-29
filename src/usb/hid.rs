@@ -8,8 +8,10 @@ use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
 use heapless::Vec;
 
+const MAX_REPORT_DESC: usize = 512;
+
 // Local switch to silence noisy HID debug output.
-pub(crate) const HID_LOGS: bool = false;
+pub(crate) const HID_LOGS: bool = true;
 
 macro_rules! hidlog {
     ($($arg:tt)*) => {{
@@ -26,6 +28,7 @@ pub struct HidEpInfo {
     pub max_packet: u16,
     pub interval: u8,
     pub protocol: u8,
+    pub report_desc_len: u16,
 }
 
 pub struct HidRuntime {
@@ -154,7 +157,13 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                     runtime.seq
                 );
             }
-            input::push_event(input::InputEvent::Mouse(input::MouseEvent { buttons, dx, dy, wheel }));
+            input::push_event(input::InputEvent::Mouse(input::MouseEvent {
+                slot_id: runtime.slot_id,
+                buttons,
+                dx,
+                dy,
+                wheel,
+            }));
         }
     } else if runtime.hid_kind == 1 {
         // Boot keyboard: modifiers + 6 keycodes
@@ -175,7 +184,11 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                     keys[5]
                 );
             }
-            input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent { modifiers, keys }));
+            input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent {
+                slot_id: runtime.slot_id,
+                modifiers,
+                keys,
+            }));
         }
     }
 }
@@ -189,6 +202,7 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
     let mut current_alt: u8 = 0;
     let mut current_proto: u8 = 0;
     let mut current_subclass: u8 = 0;
+    let mut current_report_len: u16 = 0;
     let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
 
     while idx + 2 <= cfg.len() {
@@ -209,8 +223,15 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                     current_alt = cfg[idx + 3];
                     current_subclass = cfg[idx + 6];
                     current_proto = cfg[idx + 7];
+                    current_report_len = 0;
                 } else {
                     current_iface = None;
+                }
+            }
+            0x21 => {
+                // HID descriptor: extract report descriptor length for the current interface.
+                if len >= 9 {
+                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
                 }
             }
             5 => {
@@ -236,6 +257,7 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                                     max_packet,
                                     interval,
                                     protocol: proto,
+                                    report_desc_len: current_report_len,
                                 })
                                 .is_err()
                                 {
@@ -267,6 +289,128 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
     }
 
     endpoints
+}
+
+async fn fetch_report_descriptor(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    iface: u8,
+    len: usize,
+) -> Option<Vec<u8, MAX_REPORT_DESC>> {
+    let want_len = core::cmp::min(len, MAX_REPORT_DESC);
+    let (phys, virt) = dma::alloc(want_len, 64)?;
+    unsafe { write_bytes(virt, 0, want_len) };
+
+    let setup = Trb {
+        d0: (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16), // bmRequestType=IN, GET_DESCRIPTOR, wValue type=0x22 id=0
+        d1: iface as u32,                                     // wIndex = interface
+        d2: want_len as u32,                                  // wLength
+        d3: trb_type(2) | (1 << 6),
+    };
+
+    let data = Trb {
+        d0: lo(phys),
+        d1: hi(phys),
+        d2: want_len as u32,
+        d3: trb_type(3) | (1 << 16), // IN data stage
+    };
+
+    let status = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        // Status stage for IN data is OUT (DIR=0)
+        d3: trb_type(4) | (1 << 5),
+    };
+
+    if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
+        hidlog!("[hid] ep0 ring overflow for report descriptor fetch\n");
+        return None;
+    }
+
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+
+    let Some(evt) = xhci::wait_for_event(
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
+        },
+        400,
+        EmbassyDuration::from_millis(5)
+    )
+    .await
+    else {
+        hidlog!("[hid] timeout waiting for report descriptor\n");
+        return None;
+    };
+
+    let completion = (evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        hidlog!("[hid] report descriptor fetch cc={} iface={} len={}\n", completion, iface, want_len);
+        return None;
+    }
+
+    let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
+    let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
+    let _ = out.extend_from_slice(data_slice);
+    Some(out)
+}
+
+fn analyze_keyboard_report_descriptor(desc: &[u8]) -> Option<(Option<u8>, u16)> {
+    // Heuristic: look for Input items on Usage Page 0x07 with report_size=1 and report_count>=8.
+    let mut idx = 0usize;
+    let mut usage_page: u16 = 0;
+    let mut report_size: u16 = 0;
+    let mut report_count: u16 = 0;
+    let mut report_id: Option<u8> = None;
+    let mut best_bits: u16 = 0;
+
+    while idx < desc.len() {
+        let b = desc[idx];
+        let size = (b & 0x03) as usize;
+        let kind = (b >> 2) & 0x03;
+        let tag = b & 0xFC;
+        let mut val: u32 = 0;
+        for i in 0..size {
+            if idx + 1 + i < desc.len() {
+                val |= (desc[idx + 1 + i] as u32) << (8 * i);
+            }
+        }
+
+        if kind == 1 {
+            // Global items
+            match tag {
+                0x04 => usage_page = val as u16,
+                0x07 => report_size = val as u16,
+                0x09 => report_count = val as u16,
+                0x08 => report_id = Some(val as u8),
+                _ => {}
+            }
+        } else if kind == 0 {
+            // Main items
+            if tag == 0x80 {
+                if usage_page == 0x07 && report_size == 1 && report_count >= 8 {
+                    let bits = report_size.saturating_mul(report_count);
+                    if bits > best_bits {
+                        best_bits = bits;
+                    }
+                }
+            }
+        }
+
+        idx += 1 + size;
+    }
+
+    if best_bits > 0 {
+        Some((report_id, best_bits))
+    } else {
+        None
+    }
 }
 
 pub struct BootAttachParams<'a> {
@@ -487,6 +631,28 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         unsafe { write_bytes(rep_virt, 0, report_bytes) };
 
         let report_len = ep.max_packet as u32;
+
+        if hid_kind == 1 && ep.report_desc_len > 0 {
+            if let Some(desc) = fetch_report_descriptor(ctx, &mut ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await {
+                if let Some((rid, bits)) = analyze_keyboard_report_descriptor(&desc) {
+                    hidlog!(
+                        "[hid] iface={} slot={} keyboard report descriptor len={} nkro_bits={} report_id={:?}\n",
+                        ep.interface,
+                        slot_id,
+                        desc.len(),
+                        bits,
+                        rid
+                    );
+                } else {
+                    hidlog!(
+                        "[hid] iface={} slot={} keyboard report descriptor len={} no bitmap nkro found\n",
+                        ep.interface,
+                        slot_id,
+                        desc.len()
+                    );
+                }
+            }
+        }
 
         let normal = Trb {
             d0: lo(rep_phys),
