@@ -64,48 +64,17 @@ collect_std_root_modules() {
     return 1
   fi
 
-  # Parse module-like names exported by std:
-  # - `pub mod foo;` / `pub mod foo {`
-  # - `pub use core::{foo, bar, ...};` (fmt/mem/etc are commonly exported this way)
-  # - `pub use alloc::{...};`
-  python3 - "$stdlib" <<'PY'
-import re
-import sys
+  # Keep this *strict*: only `pub mod X` from std's crate root.
+  # (Std also re-exports modules from core/alloc, but those can be derived
+  # more safely by checking filesystem module presence instead of parsing
+  # `pub use ...` blocks which may include macros and primitives.)
+  rg -o -N "^\\s*pub\\s+mod\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(;|\\{)" "$stdlib" --replace '$1' \
+    | sort -u
+}
 
-path = sys.argv[1]
-text = open(path, 'r', encoding='utf-8', errors='ignore').read()
-
-mods = set()
-
-# pub mod foo;
-for m in re.finditer(r"^\s*pub\s+mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:;|\{)", text, re.M):
-    mods.add(m.group(1))
-
-# pub use core::foo; / pub use core::foo::bar; / pub use core::foo::{...}
-for m in re.finditer(r"^\s*pub\s+use\s+(core|alloc)::([A-Za-z_][A-Za-z0-9_]*)\b", text, re.M):
-    mods.add(m.group(2))
-
-# pub use core::{a, b, c}; and multi-line variants.
-for m in re.finditer(r"^\s*pub\s+use\s+(core|alloc)::\{(.*?)\};", text, re.M | re.S):
-    body = m.group(2)
-    # strip comments
-    body = re.sub(r"//.*", "", body)
-    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
-    for part in body.split(','):
-        part = part.strip()
-        if not part:
-            continue
-        # handle `name as alias` and `self`/`super`
-        name = part.split()[0]
-        if name in {"self", "super"}:
-            continue
-        # keep lowercase-ish identifiers only (filters out types like `String`)
-        if re.match(r"^[a-z][a-z0-9_]*$", name):
-            mods.add(name)
-
-for name in sorted(mods):
-    print(name)
-PY
+module_exists_in_src() {
+  local base="$1" name="$2"
+  [[ -f "$base/$name.rs" || -f "$base/$name/mod.rs" || -d "$base/$name" ]]
 }
 
 array_contains() {
@@ -222,13 +191,48 @@ fi
 if [[ "$MODE" == "vs-std" ]]; then
   print_header "surface vs toolchain std (top-level modules)"
 
-  readarray -t STD_ROOT < <(collect_std_root_modules || true)
-  if ((${#STD_ROOT[@]} == 0)); then
+  sysroot="$(rustc --print sysroot 2>/dev/null || true)"
+  if [[ -z "$sysroot" ]]; then
+    echo "(unable to locate rustc sysroot)"
+    exit 0
+  fi
+
+  core_src="$sysroot/lib/rustlib/src/rust/library/core/src"
+  alloc_src="$sysroot/lib/rustlib/src/rust/library/alloc/src"
+
+  readarray -t STD_PUBMODS < <(collect_std_root_modules || true)
+  if ((${#STD_PUBMODS[@]} == 0)); then
     echo "(unable to load std module list; ensure rust-src is installed)"
     exit 0
   fi
 
+  # Build an "extended" std root module set:
+  # - Start with std's `pub mod` list.
+  # - Add core/alloc modules *only for names we provide in surface*, by
+  #   checking their presence in rust-src (avoids accidentally counting
+  #   macros/primitives as modules).
+  declare -A STD_SET=()
+  for s in "${STD_PUBMODS[@]}"; do
+    STD_SET["$s"]=1
+  done
+  for p in "${PROVIDED[@]}"; do
+    if [[ -n "${STD_SET[$p]+x}" ]]; then
+      continue
+    fi
+    if [[ -d "$core_src" ]] && module_exists_in_src "$core_src" "$p"; then
+      STD_SET["$p"]=1
+      continue
+    fi
+    if [[ -d "$alloc_src" ]] && module_exists_in_src "$alloc_src" "$p"; then
+      STD_SET["$p"]=1
+      continue
+    fi
+  done
+
+  readarray -t STD_ROOT < <(printf '%s\n' "${!STD_SET[@]}" | sort -u)
+
   std_count=${#STD_ROOT[@]}
+  std_pubmod_count=${#STD_PUBMODS[@]}
   surface_count=${#PROVIDED[@]}
 
   overlap=0
@@ -251,6 +255,7 @@ if [[ "$MODE" == "vs-std" ]]; then
   fi
 
   echo "std modules: $std_count"
+  echo "std pub-mod modules: $std_pubmod_count"
   echo "surface modules: $surface_count"
   echo "overlap: $overlap ($pct%)"
   echo "surface-only: $extra"
