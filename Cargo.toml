@@ -19,6 +19,13 @@ raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
 hashbrown = { version = "0.14", default-features = false }
+unicode-segmentation = { version = "1", default-features = false, optional = true }
+unicode-normalization = { version = "0.1", default-features = false, optional = true }
+
+[features]
+default = []
+surface-unicode-segmentation = ["dep:unicode-segmentation"]
+surface-unicode-normalization = ["dep:unicode-normalization"]
 
 [profile.dev]
 panic = "abort"
