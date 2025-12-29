@@ -23,6 +23,7 @@ need_cmd sort
 need_cmd comm
 need_cmd wc
 need_cmd sed
+need_cmd awk
 
 sysroot="$(rustc --print sysroot 2>/dev/null || true)"
 if [[ -z "$sysroot" ]]; then
@@ -73,11 +74,36 @@ readarray -t SURFACE_NAMES < <(
   } | sed '/^$/d' | sort -u
 )
 
-# Strict: only `pub mod X` at std crate root.
+# Strict: `pub mod X` at std crate root.
+# Default: ignore `#[unstable(...)]` modules (nightly-only/internal) so the diff
+# focuses on the "std-shaped" stable surface.
+# Set SURFACE_REPORT_INCLUDE_UNSTABLE=1 to include them.
 readarray -t STD_PUBMODS < <(
-  rg -o -N "^\s*pub\s+mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*(;|\{)" "$stdlib" --replace '$1' \
-    | sed '/^$/d' \
-    | sort -u
+  awk -v include_unstable="${SURFACE_REPORT_INCLUDE_UNSTABLE:-0}" '
+    BEGIN { unstable_pending = 0 }
+    /^[[:space:]]*#[[:space:]]*\[[[:space:]]*unstable([^A-Za-z0-9_]|$)/ { unstable_pending = 1; next }
+    /^[[:space:]]*#[[:space:]]*\[/ { next } # other attrs; keep pending state
+    /^[[:space:]]*\/\// { next }           # comments/doc comments
+    /^[[:space:]]*$/ { next }               # blank
+    {
+      line = $0
+      if (line ~ /^[[:space:]]*pub[[:space:]]+mod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*/) {
+        name = line
+        sub(/^[[:space:]]*pub[[:space:]]+mod[[:space:]]+/, "", name)
+        sub(/[[:space:];\{].*$/, "", name)
+        if (include_unstable != 0 || unstable_pending == 0) {
+          print name
+        }
+        unstable_pending = 0
+        next
+      }
+
+      # Any other item consumes pending attrs so `#[unstable]` does not leak.
+      if (line ~ /^[[:space:]]*(pub[[:space:]]+)?(use|fn|struct|enum|trait|type|const|static|mod|impl|extern|macro_rules!|macro)([^A-Za-z0-9_]|$)/) {
+        unstable_pending = 0
+      }
+    }
+  ' "$stdlib" | sort -u
 )
 
 surface_count=${#SURFACE_NAMES[@]}
