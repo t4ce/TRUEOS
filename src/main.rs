@@ -82,6 +82,11 @@ pub extern "C" fn _start() -> ! {
     
     acpi::ensure_tables();
     acpi::facp::log_once();
+    acpi::tpm2::log_once();
+    acpi::dmar::log_once();
+    acpi::fpdt::log_once();
+    acpi::uefi_tbl::log_once();
+    acpi::ssdt::log_once();
     acpi::bgrt::log_once();
     acpi::hpet::ensure(); rng::log_rng_caps();
     
