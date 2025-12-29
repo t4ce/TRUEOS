@@ -61,7 +61,7 @@ pub mod prelude {
     pub use crate::surface::fmt::{Debug, Display};
     pub use crate::surface::option::Option;
     #[cfg(feature = "surface-pattern")]
-    pub use crate::surface::pattern::Pattern;
+    pub use crate::surface::pat::Pattern;
     pub use crate::surface::result::Result;
     pub use crate::surface::string::{String, ToString};
     pub use crate::surface::vec::Vec;
@@ -77,9 +77,16 @@ pub mod sync {
 }
 
 #[cfg(feature = "surface-pattern")]
-pub mod pattern;
+mod pattern;
+
+#[cfg(feature = "surface-pattern")]
+pub mod pat {
+    pub use super::pattern::*;
+}
 
 pub mod io;
+pub mod path;
+pub mod strings;
 
 pub mod time {
     pub use crate::time::*;

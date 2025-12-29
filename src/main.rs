@@ -34,9 +34,9 @@ mod rng;
 mod files;
 mod uefi;
 mod surface;
-mod strings;
-mod path;
 mod backtrace;
+
+pub use surface::{path, strings};
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;
@@ -45,7 +45,6 @@ use ::limine::mp::Cpu as LimineCpu;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 use crate::usb::usb_scout;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::pci::mmio;
 
 static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
@@ -124,7 +123,7 @@ pub extern "C" fn _start() -> ! {
         let _ = spawner.spawn(usb_scout(info));
     }
 
-    let _ = spawner.spawn(input_logger());
+    let _ = spawner.spawn(usb::hid::input_logger());
 
     vga::render_framebuffer_banner("FalseOS");
 
@@ -182,53 +181,6 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     }
 }
 
-#[embassy_executor::task]
-async fn input_logger() {
-    loop {
-        if let Some(evt) = usb::input::pop_event() {
-            match evt {
-                usb::input::InputEvent::Keyboard(kbd) => {
-                    if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
-                        let show = |b: u8| -> char {
-                            if b == 0 {
-                                '.'
-                            } else if (b as char).is_ascii_graphic() || b == b' ' {
-                                b as char
-                            } else {
-                                '?'
-                            }
-                        };
-                        debugconf!(
-                            "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
-                            kbd.slot_id,
-                            kbd.modifiers,
-                            show(kbd.ascii[0]),
-                            show(kbd.ascii[1]),
-                            show(kbd.ascii[2]),
-                            show(kbd.ascii[3]),
-                            show(kbd.ascii[4]),
-                            show(kbd.ascii[5])
-                        );
-                    }
-                }
-                usb::input::InputEvent::Mouse(mouse) => {
-                    if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
-                        debugconf!(
-                            "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
-                            mouse.slot_id,
-                            mouse.dx,
-                            mouse.dy,
-                            mouse.buttons,
-                            mouse.wheel
-                        );
-                    }
-                }
-            }
-        } else {
-            Timer::after(EmbassyDuration::from_millis(5)).await;
-        }
-    }
-}
 
 #[inline(always)]
 pub(crate) fn debugcon_write_str(s: &str) {
