@@ -35,6 +35,7 @@ mod files;
 mod uefi;
 mod surface;
 mod strings;
+mod path;
 mod backtrace;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
