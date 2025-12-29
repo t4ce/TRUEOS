@@ -17,8 +17,9 @@ A constant influx of resources, money, and safety.
 
 #![no_std]
 #![no_main]
+#![feature(alloc_error_handler)]
 
-extern crate alloc;
+pub extern crate alloc;
 
 mod allocators;
 mod acpi;
@@ -32,6 +33,7 @@ mod phys;
 mod rng;
 mod files;
 mod uefi;
+mod surface;
 
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;
@@ -92,8 +94,6 @@ pub extern "C" fn _start() -> ! {
     
     //pci::tga::init_once();
     usb::xhci::init_once();
-
-    allocators::alloc_demo();
 
     let resp = *SMP_RESP.call_once(|| limine::smp_response().expect("LIMINE SMP MISSING"));
     for cpu in resp.cpus() {
@@ -249,6 +249,32 @@ macro_rules! debugconf {
             .unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
         let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
     }};
+}
+
+#[alloc_error_handler]
+fn alloc_error(layout: core::alloc::Layout) -> ! {
+    let stats = crate::allocators::heap_stats();
+    crate::debugconf!(
+        "OOM: alloc request size={} align={}\n",
+        layout.size(),
+        layout.align()
+    );
+    crate::debugconf!(
+        "OOM: heap 0x{:X}..0x{:X} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+        stats.heap_start,
+        stats.heap_end,
+        stats.usable_start,
+        stats.usable_total,
+        stats.free_bytes,
+        stats.largest_free_block,
+        stats.free_blocks,
+        stats.initialized
+    );
+
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+    loop {
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
+    }
 }
 
 #[inline(always)]

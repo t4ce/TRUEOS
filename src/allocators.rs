@@ -214,18 +214,60 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static GLOBAL_ALLOCATOR: Allocator = Allocator;
 
-pub fn alloc_demo() {
-    let layout = Layout::from_size_align(512, 1).unwrap();
-    let ptr = unsafe { alloc(layout) };
-    if ptr.is_null() {
-        debugconf!("alloc demo: failed\n");
-        return;
-    }
+#[derive(Copy, Clone, Debug)]
+pub struct HeapStats {
+    pub heap_start: usize,
+    pub heap_end: usize,
+    pub usable_start: usize,
+    pub usable_total: usize,
+    pub free_bytes: usize,
+    pub largest_free_block: usize,
+    pub free_blocks: usize,
+    pub initialized: bool,
+}
+
+pub fn heap_stats() -> HeapStats {
+    let heap_start = unsafe { FALLBACK_HEAP.as_ptr() as usize };
+    let heap_end = heap_start.saturating_add(FALLBACK_HEAP_SIZE);
+    let usable_start = align_up(heap_start, align_of::<FreeBlock>());
+    let usable_total = if usable_start >= heap_end {
+        0
+    } else {
+        heap_end - usable_start
+    };
+
+    let mut guard = ALLOCATOR.lock();
     unsafe {
-        core::ptr::write(ptr, 0xFFu8);
+        if !guard.initialized {
+            guard.init_once();
+        }
     }
-    let first = unsafe { core::ptr::read(ptr) };
-    debugconf!("alloc demo: ptr=0x{:X} first={:02X}\n", ptr as usize, first);
+
+    let mut free_bytes = 0usize;
+    let mut largest_free_block = 0usize;
+    let mut free_blocks = 0usize;
+    let mut current = guard.head;
+    while let Some(block_ptr) = current {
+        // Safety: free list nodes are managed by the allocator.
+        let block = unsafe { block_ptr.as_ref() };
+        free_blocks += 1;
+        free_bytes = free_bytes.saturating_add(block.size);
+        if block.size > largest_free_block {
+            largest_free_block = block.size;
+        }
+        current = block.next;
+    }
+
+    HeapStats {
+        heap_start,
+        heap_end,
+        usable_start,
+        usable_total,
+        free_bytes,
+        largest_free_block,
+        free_blocks,
+        initialized: guard.initialized,
+    }
 }
 
 const fn minimum_block_size() -> usize {
