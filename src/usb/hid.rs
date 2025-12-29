@@ -1,12 +1,15 @@
 use crate::debugconf;
 use crate::pci::dma;
 use super::xhci::{self, Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
-use crate::usb::input;
+use crate::{
+    strings,
+    usb::input,
+};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use spin::Mutex;
 use embassy_time::Duration as EmbassyDuration;
-use heapless::Vec;
+use heapless::{String as HString, Vec};
 
 const MAX_REPORT_DESC: usize = 512;
 
@@ -19,6 +22,71 @@ macro_rules! hidlog {
             debugconf!($($arg)*);
         }
     }};
+}
+
+#[inline]
+fn hid_kbd_shift(modifiers: u8) -> bool {
+    // HID boot keyboard modifier bits:
+    // 0 LCtrl, 1 LShift, 2 LAlt, 3 LGUI, 4 RCtrl, 5 RShift, 6 RAlt, 7 RGUI
+    (modifiers & ((1 << 1) | (1 << 5))) != 0
+}
+
+#[inline]
+fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
+    // Minimal US layout mapping for HID Usage Page 0x07 (Keyboard/Keypad).
+    // This is *not* a Unicode keyboard decoder; it just produces ASCII for common keys.
+    match key {
+        // a-z
+        0x04..=0x1D => {
+            let base = (key - 0x04) + b'a';
+            let ch = base as char;
+            Some(if shift { ch.to_ascii_uppercase() } else { ch })
+        }
+
+        // 1-0
+        0x1E => Some(if shift { '!' } else { '1' }),
+        0x1F => Some(if shift { '@' } else { '2' }),
+        0x20 => Some(if shift { '#' } else { '3' }),
+        0x21 => Some(if shift { '$' } else { '4' }),
+        0x22 => Some(if shift { '%' } else { '5' }),
+        0x23 => Some(if shift { '^' } else { '6' }),
+        0x24 => Some(if shift { '&' } else { '7' }),
+        0x25 => Some(if shift { '*' } else { '8' }),
+        0x26 => Some(if shift { '(' } else { '9' }),
+        0x27 => Some(if shift { ')' } else { '0' }),
+
+        // space
+        0x2C => Some(' '),
+
+        // punctuation
+        0x2D => Some(if shift { '_' } else { '-' }),
+        0x2E => Some(if shift { '+' } else { '=' }),
+        0x2F => Some(if shift { '{' } else { '[' }),
+        0x30 => Some(if shift { '}' } else { ']' }),
+        0x31 => Some(if shift { '|' } else { '\\' }),
+        0x33 => Some(if shift { ':' } else { ';' }),
+        0x34 => Some(if shift { '"' } else { '\'' }),
+        0x35 => Some(if shift { '~' } else { '`' }),
+        0x36 => Some(if shift { '<' } else { ',' }),
+        0x37 => Some(if shift { '>' } else { '.' }),
+        0x38 => Some(if shift { '?' } else { '/' }),
+
+        _ => None,
+    }
+}
+
+fn kbd_debug_ascii(keys: &[u8; 6], modifiers: u8) -> crate::surface::string::String {
+    let shift = hid_kbd_shift(modifiers);
+    let mut out: HString<16> = HString::new();
+    for &k in keys.iter() {
+        if k == 0 {
+            continue;
+        }
+        if let Some(ch) = hid_boot_keycode_to_ascii(k, shift) {
+            let _ = out.push(ch);
+        }
+    }
+    strings::sanitize_ascii(out.as_str())
 }
 
 pub struct HidEpInfo {
@@ -173,15 +241,17 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             keys.copy_from_slice(&data[2..8]);
             if keys.iter().any(|&k| k != 0) || modifiers != 0 {
                 runtime.last_nonzero_seq = runtime.seq;
+                let chars = kbd_debug_ascii(&keys, modifiers);
                 hidlog!(
-                    "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X}\n",
+                    "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} chars='{}'\n",
                     modifiers,
                     keys[0],
                     keys[1],
                     keys[2],
                     keys[3],
                     keys[4],
-                    keys[5]
+                    keys[5],
+                    chars
                 );
             }
             input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent {

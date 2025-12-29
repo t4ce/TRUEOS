@@ -1,4 +1,3 @@
-pub use ::core as Core;
 pub use ::alloc as alloc;
 
 macro_rules! surface_reexport {
@@ -61,6 +60,8 @@ pub mod prelude {
     pub use crate::surface::boxed::Box;
     pub use crate::surface::fmt::{Debug, Display};
     pub use crate::surface::option::Option;
+    #[cfg(feature = "surface-pattern")]
+    pub use crate::surface::pattern::Pattern;
     pub use crate::surface::result::Result;
     pub use crate::surface::string::{String, ToString};
     pub use crate::surface::vec::Vec;
@@ -74,6 +75,9 @@ pub mod sync {
     pub use alloc::sync::{Arc, Weak};
     pub use spin::{Mutex, MutexGuard, Once, RwLock, RwLockReadGuard, RwLockWriteGuard};
 }
+
+#[cfg(feature = "surface-pattern")]
+pub mod pattern;
 
 pub mod io;
 
