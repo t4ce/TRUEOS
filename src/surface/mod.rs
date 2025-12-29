@@ -72,9 +72,11 @@ pub mod time {
     pub use crate::time::*;
 }
 
-pub mod rand {
+pub mod random {
     pub use crate::rng::*;
 }
+
+pub use random as rand;
 
 pub mod collections {
     pub use heapless::*;
