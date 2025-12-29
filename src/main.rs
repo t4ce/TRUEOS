@@ -17,7 +17,7 @@ A constant influx of resources, money, and safety.
 
 #![no_std]
 #![no_main]
-#![feature(alloc_error_handler)]
+#![feature(alloc_error_handler, f16, f128)]
 
 pub extern crate alloc;
 
