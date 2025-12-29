@@ -29,6 +29,15 @@ surface_reexport!(vec => ::alloc::vec);
 surface_reexport!(string => ::alloc::string);
 surface_reexport!(boxed => ::alloc::boxed);
 
+pub mod sync {
+    pub use core::sync::atomic::{
+        compiler_fence, fence, AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize,
+        AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+    };
+    pub use alloc::sync::{Arc, Weak};
+    pub use spin::{Mutex, MutexGuard, Once, RwLock, RwLockReadGuard, RwLockWriteGuard};
+}
+
 pub mod io;
 
 pub mod time {
