@@ -569,3 +569,149 @@ pub const fn sink() -> Sink {
 pub const fn repeat(byte: u8) -> Repeat {
     Repeat { byte }
 }
+
+#[cfg(feature = "surface-core2")]
+pub mod core2 {
+    use super::*;
+    use ::core2::io as c2;
+
+    const SURFACE_ERROR_MSG: &str = "surface io error";
+
+    #[inline]
+    fn to_core2_error_kind(kind: ErrorKind) -> c2::ErrorKind {
+        match kind {
+            ErrorKind::UnexpectedEof => c2::ErrorKind::UnexpectedEof,
+            ErrorKind::WriteZero => c2::ErrorKind::WriteZero,
+            ErrorKind::WouldBlock => c2::ErrorKind::WouldBlock,
+            ErrorKind::InvalidInput => c2::ErrorKind::InvalidInput,
+            ErrorKind::InvalidData => c2::ErrorKind::InvalidData,
+            ErrorKind::Interrupted => c2::ErrorKind::Interrupted,
+            ErrorKind::Other => c2::ErrorKind::Other,
+        }
+    }
+
+    #[inline]
+    fn from_core2_error_kind(kind: c2::ErrorKind) -> ErrorKind {
+        match kind {
+            c2::ErrorKind::UnexpectedEof => ErrorKind::UnexpectedEof,
+            c2::ErrorKind::WriteZero => ErrorKind::WriteZero,
+            c2::ErrorKind::WouldBlock => ErrorKind::WouldBlock,
+            c2::ErrorKind::InvalidInput => ErrorKind::InvalidInput,
+            c2::ErrorKind::InvalidData => ErrorKind::InvalidData,
+            c2::ErrorKind::Interrupted => ErrorKind::Interrupted,
+            _ => ErrorKind::Other,
+        }
+    }
+
+    #[inline]
+    fn to_core2_error(err: Error) -> c2::Error {
+        c2::Error::new(to_core2_error_kind(err.kind()), SURFACE_ERROR_MSG)
+    }
+
+    #[inline]
+    fn from_core2_error(err: c2::Error) -> Error {
+        Error::new(from_core2_error_kind(err.kind()))
+    }
+
+    #[inline]
+    fn to_core2_seek_from(from: SeekFrom) -> c2::SeekFrom {
+        match from {
+            SeekFrom::Start(v) => c2::SeekFrom::Start(v),
+            SeekFrom::End(v) => c2::SeekFrom::End(v),
+            SeekFrom::Current(v) => c2::SeekFrom::Current(v),
+        }
+    }
+
+    #[inline]
+    fn from_core2_seek_from(from: c2::SeekFrom) -> SeekFrom {
+        match from {
+            c2::SeekFrom::Start(v) => SeekFrom::Start(v),
+            c2::SeekFrom::End(v) => SeekFrom::End(v),
+            c2::SeekFrom::Current(v) => SeekFrom::Current(v),
+        }
+    }
+
+    pub struct ToCore2<T>(pub T);
+
+    impl<T> ToCore2<T> {
+        pub fn into_inner(self) -> T {
+            self.0
+        }
+    }
+
+    impl<T: Read> c2::Read for ToCore2<T> {
+        fn read(&mut self, buf: &mut [u8]) -> c2::Result<usize> {
+            self.0.read(buf).map_err(to_core2_error)
+        }
+    }
+
+    impl<T: Write> c2::Write for ToCore2<T> {
+        fn write(&mut self, buf: &[u8]) -> c2::Result<usize> {
+            self.0.write(buf).map_err(to_core2_error)
+        }
+
+        fn flush(&mut self) -> c2::Result<()> {
+            self.0.flush().map_err(to_core2_error)
+        }
+    }
+
+    impl<T: Seek> c2::Seek for ToCore2<T> {
+        fn seek(&mut self, pos: c2::SeekFrom) -> c2::Result<u64> {
+            self.0
+                .seek(from_core2_seek_from(pos))
+                .map_err(to_core2_error)
+        }
+    }
+
+    impl<T: BufRead> c2::BufRead for ToCore2<T> {
+        fn fill_buf(&mut self) -> c2::Result<&[u8]> {
+            self.0.fill_buf().map_err(to_core2_error)
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.0.consume(amt);
+        }
+    }
+
+    pub struct FromCore2<T>(pub T);
+
+    impl<T> FromCore2<T> {
+        pub fn into_inner(self) -> T {
+            self.0
+        }
+    }
+
+    impl<T: c2::Read> Read for FromCore2<T> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            self.0.read(buf).map_err(from_core2_error)
+        }
+    }
+
+    impl<T: c2::Write> Write for FromCore2<T> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+            self.0.write(buf).map_err(from_core2_error)
+        }
+
+        fn flush(&mut self) -> Result<()> {
+            self.0.flush().map_err(from_core2_error)
+        }
+    }
+
+    impl<T: c2::Seek> Seek for FromCore2<T> {
+        fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+            self.0
+                .seek(to_core2_seek_from(pos))
+                .map_err(from_core2_error)
+        }
+    }
+
+    impl<T: c2::BufRead> BufRead for FromCore2<T> {
+        fn fill_buf(&mut self) -> Result<&[u8]> {
+            self.0.fill_buf().map_err(from_core2_error)
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.0.consume(amt);
+        }
+    }
+}
