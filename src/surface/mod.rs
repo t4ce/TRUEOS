@@ -56,6 +56,10 @@ pub mod env {
     }
 }
 
+pub mod fs;
+
+pub mod os;
+
 pub mod prelude {
     pub use crate::surface::boxed::Box;
     pub use crate::surface::fmt::{Debug, Display};
