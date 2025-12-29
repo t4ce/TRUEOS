@@ -83,7 +83,6 @@ pub mod collections {
 }
 
 pub mod unicode {
-    //! Feature-gated Unicode helpers re-exported from third-party crates.
     #[cfg(feature = "surface-unicode-segmentation")]
     pub use unicode_segmentation as segmentation;
 
