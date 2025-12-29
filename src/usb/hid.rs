@@ -5,7 +5,7 @@ use crate::usb::input;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use spin::Mutex;
-use embassy_time::Duration as EmbassyDuration;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{String as HString, Vec};
 
 const MAX_REPORT_DESC: usize = 512;
@@ -272,6 +272,54 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 keys,
                 ascii,
             }));
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub(crate) async fn input_logger() {
+    loop {
+        if let Some(evt) = input::pop_event() {
+            match evt {
+                input::InputEvent::Keyboard(kbd) => {
+                    if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
+                        let show = |b: u8| -> char {
+                            if b == 0 {
+                                '.'
+                            } else if (b as char).is_ascii_graphic() || b == b' ' {
+                                b as char
+                            } else {
+                                '?'
+                            }
+                        };
+                        debugconf!(
+                            "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
+                            kbd.slot_id,
+                            kbd.modifiers,
+                            show(kbd.ascii[0]),
+                            show(kbd.ascii[1]),
+                            show(kbd.ascii[2]),
+                            show(kbd.ascii[3]),
+                            show(kbd.ascii[4]),
+                            show(kbd.ascii[5])
+                        );
+                    }
+                }
+                input::InputEvent::Mouse(mouse) => {
+                    if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
+                        debugconf!(
+                            "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
+                            mouse.slot_id,
+                            mouse.dx,
+                            mouse.dy,
+                            mouse.buttons,
+                            mouse.wheel
+                        );
+                    }
+                }
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
         }
     }
 }
