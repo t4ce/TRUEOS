@@ -1,5 +1,10 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
-use core::{fmt, sync::atomic::{AtomicU32, Ordering}};
+use core::{
+    fmt,
+    hash::{Hash, Hasher},
+    ptr,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
@@ -204,9 +209,32 @@ impl DeviceDescriptor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy)]
 pub struct DeviceHandle {
     node: &'static DeviceNode,
+}
+
+impl fmt::Debug for DeviceHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceHandle")
+            .field("id", &self.id())
+            .field("kind", &self.node.info.kind)
+            .finish()
+    }
+}
+
+impl PartialEq for DeviceHandle {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.node, other.node)
+    }
+}
+
+impl Eq for DeviceHandle {}
+
+impl Hash for DeviceHandle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.node as *const DeviceNode as usize).hash(state);
+    }
 }
 
 impl DeviceHandle {
@@ -357,7 +385,7 @@ pub fn register_device<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHand
 where
     D: BlockDevice + 'static,
 {
-    let mut driver: Box<dyn BlockDevice> = Box::new(device);
+    let driver: Box<dyn BlockDevice> = Box::new(device);
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();
     let dma_alignment = driver.dma_alignment_bytes().max(1);
