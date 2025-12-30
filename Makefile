@@ -10,6 +10,8 @@ QEMU_SMP ?= cores=4
 
 QEMU_COMMON_FLAGS = -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
 QEMU_USB_FLAGS =  \
+	-drive file=disk.img,if=none,format=raw,id=nvme0 \
+	-device nvme,drive=nvme0,serial=deadbeef \
 	-device nec-usb-xhci,id=xhci \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
