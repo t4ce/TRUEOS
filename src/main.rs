@@ -38,6 +38,7 @@ mod backtrace;
 mod percpu;
 mod turbo;
 mod tga;
+mod disc;
 
 pub(crate) use crate::surface as std;
 
@@ -166,6 +167,7 @@ pub extern "C" fn _start() -> ! {
 
     pci::dma::init_from_limine(); pci::dma::alloc_test_once();
     pci::enumerate_once(); pci::log_devices_once();
+    disc::probe_once();
     tga::init_once();
     
     acpi::ensure_tables();
