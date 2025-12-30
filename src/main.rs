@@ -66,6 +66,32 @@ unsafe fn init_bsp_executor() -> &'static Executor {
     &*bsp_executor_ptr
 }
 
+#[inline(always)]
+fn log_stack_ptrs(tag: &str) {
+    let rsp: u64;
+    let rbp: u64;
+    unsafe {
+        core::arch::asm!(
+            "mov {}, rsp",
+            out(reg) rsp,
+            options(nomem, nostack, preserves_flags)
+        );
+        core::arch::asm!(
+            "mov {}, rbp",
+            out(reg) rbp,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    crate::debugconf!(
+        "stack({}): rsp=0x{:016X} rbp=0x{:016X} (requested_size={} bytes)\n",
+        tag,
+        rsp,
+        rbp,
+        8 * 1024 * 1024
+    );
+}
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
@@ -84,13 +110,42 @@ pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
     vga::init(limine::framebuffer_response());
 
-    crate::strings::smoke_test();
+    log_stack_ptrs("bsp:entry");
 
     // If booted via UEFI, parse+log the EFI System Table once.
     // uefi::log_system_table_once(); bugged. never worked.
     
     // limlog::log_limine_markers(); log_memmap_once();
     phys::register_memory_metadata();
+    phys::init_pmm_from_limine();
+
+    const HEAP_CANDIDATES: [usize; 7] = [
+        1024 * 1024 * 1024,
+        512 * 1024 * 1024,
+        256 * 1024 * 1024,
+        128 * 1024 * 1024,
+        64 * 1024 * 1024,
+        32 * 1024 * 1024,
+        16 * 1024 * 1024,
+    ];
+    let mut heap_ready = false;
+    for &size in HEAP_CANDIDATES.iter() {
+        if let Some(arena) = phys::reserve_heap_arena(size, 2 * 1024 * 1024) {
+            if allocators::install_heap_arena(arena) {
+                heap_ready = true;
+                break;
+            }
+        }
+    }
+    if !heap_ready {
+        crate::debugconf!(
+            "heap: fallback ({} KiB) active\n",
+            allocators::FALLBACK_HEAP_SIZE / 1024
+        );
+    }
+
+    crate::strings::smoke_test();
+    //crate::path::smoke_test();
 
     pci::dma::init_from_limine(); // pci::dma::alloc_test_once();
     pci::enumerate_once(); // pci::log_devices_once();
@@ -232,9 +287,11 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
         layout.align()
     );
     crate::debugconf!(
-        "OOM: heap 0x{:X}..0x{:X} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+        "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats.heap_start,
         stats.heap_end,
+        stats.phys_start,
+        stats.source,
         stats.usable_start,
         stats.usable_total,
         stats.free_bytes,
