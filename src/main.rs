@@ -36,6 +36,7 @@ mod uefi;
 mod surface;
 mod backtrace;
 mod percpu;
+mod turbo;
 
 pub(crate) use crate::surface as std;
 
@@ -114,12 +115,13 @@ pub extern "C" fn _start() -> ! {
 
     log_stack_ptrs("bsp:entry");
 
-    // If booted via UEFI, parse+log the EFI System Table once.
-    // uefi::log_system_table_once(); bugged. never worked.
-    
+
     limlog::log_limine_markers(); //limlog::log_memmap_once();
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
+
+    // If booted via UEFI, parse+log the EFI System Table once.
+    uefi::log_system_table_once(); //bugged. never worked.
 
     const HEAP_CANDIDATES: [usize; 7] = [
         1024 * 1024 * 1024,
@@ -152,8 +154,16 @@ pub extern "C" fn _start() -> ! {
     crate::path::smoke_test();
     crate::pattern::smoke_test();
 
-    pci::dma::init_from_limine(); // pci::dma::alloc_test_once();
-    pci::enumerate_once(); // pci::log_devices_once();
+    let desired_turbo = turbo::desired_state();
+    let local_turbo = turbo::local_state();
+    crate::debugconf!(
+        "turbo: desired={:?} local={:?}\n",
+        desired_turbo,
+        local_turbo
+    );
+
+    pci::dma::init_from_limine(); pci::dma::alloc_test_once();
+    pci::enumerate_once(); pci::log_devices_once();
     
     acpi::ensure_tables();
     acpi::facp::log_once();
