@@ -19,20 +19,12 @@ raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
 hashbrown = { version = "0.14", default-features = false }
-memchr = { version = "2", default-features = false, optional = true }
-twoway = { version = "0.2", default-features = false, optional = true }
-unicode-segmentation = { version = "1", default-features = false, optional = true }
-unicode-normalization = { version = "0.1", default-features = false, optional = true }
+memchr = { version = "2", default-features = false }
+twoway = { version = "0.2", default-features = false }
+unicode-segmentation = { version = "1", default-features = false }
+unicode-normalization = { version = "0.1", default-features = false }
 smoltcp = { version = "0.11", default-features = false, features = ["alloc", "proto-ipv4", "socket-raw", "socket-udp", "socket-tcp", "medium-ethernet"] }
-core2 = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
-
-[features]
-default = []
-surface-pattern = []
-surface-pattern-accel = ["surface-pattern", "dep:memchr", "dep:twoway"]
-surface-unicode-segmentation = ["dep:unicode-segmentation"]
-surface-unicode-normalization = ["dep:unicode-normalization"]
-surface-core2 = ["dep:core2"]
+core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 
 [profile.dev]
 panic = "abort"

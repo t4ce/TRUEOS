@@ -35,10 +35,12 @@ mod files;
 mod uefi;
 mod surface;
 mod backtrace;
+mod percpu;
 
 pub(crate) use crate::surface as std;
 
 pub use surface::{path, strings};
+pub use surface::pat as pattern;
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;
 use embassy_executor::{raw::Executor, Spawner};
@@ -115,7 +117,7 @@ pub extern "C" fn _start() -> ! {
     // If booted via UEFI, parse+log the EFI System Table once.
     // uefi::log_system_table_once(); bugged. never worked.
     
-    // limlog::log_limine_markers(); log_memmap_once();
+    limlog::log_limine_markers(); //limlog::log_memmap_once();
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
@@ -144,8 +146,11 @@ pub extern "C" fn _start() -> ! {
         );
     }
 
+    percpu::init_bsp();
+
     crate::strings::smoke_test();
     crate::path::smoke_test();
+    crate::pattern::smoke_test();
 
     pci::dma::init_from_limine(); // pci::dma::alloc_test_once();
     pci::enumerate_once(); // pci::log_devices_once();
@@ -223,7 +228,7 @@ pub extern "C" fn _start() -> ! {
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     // floating-point math (SSE) needs per core enabling
     enable_sse();
-    
+
     let total_slots = SMP_RESP
         .get()
         .expect("SMP response missing")
@@ -232,6 +237,8 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
 
     let slot = (cpu.lapic_id as usize) % total_slots;
 
+    percpu::init_ap(cpu.lapic_id as u32, slot as u32);
+    
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000_000 == 0 {
