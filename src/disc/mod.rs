@@ -1,5 +1,6 @@
 pub mod block;
 pub mod nvme;
+pub mod partition;
 
 static PROBE_ONCE: spin::Once<()> = spin::Once::new();
 
