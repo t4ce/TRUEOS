@@ -37,6 +37,7 @@ mod surface;
 mod backtrace;
 mod percpu;
 mod turbo;
+mod tga;
 
 pub(crate) use crate::surface as std;
 
@@ -121,7 +122,7 @@ pub extern "C" fn _start() -> ! {
     phys::init_pmm_from_limine();
 
     // If booted via UEFI, parse+log the EFI System Table once.
-    uefi::log_system_table_once(); //bugged. never worked.
+    // uefi::log_system_table_once(); // its crashreboots on our baremetal testrig 
 
     const HEAP_CANDIDATES: [usize; 7] = [
         1024 * 1024 * 1024,
@@ -150,6 +151,7 @@ pub extern "C" fn _start() -> ! {
 
     percpu::init_bsp();
 
+    // crate::io::smoke_test(); Todo - Make the SMoke
     crate::strings::smoke_test();
     crate::path::smoke_test();
     crate::pattern::smoke_test();
@@ -164,6 +166,7 @@ pub extern "C" fn _start() -> ! {
 
     pci::dma::init_from_limine(); pci::dma::alloc_test_once();
     pci::enumerate_once(); pci::log_devices_once();
+    tga::init_once();
     
     acpi::ensure_tables();
     acpi::facp::log_once();
@@ -175,7 +178,6 @@ pub extern "C" fn _start() -> ! {
     acpi::bgrt::log_once();
     acpi::hpet::ensure(); rng::log_rng_caps();
     
-    //pci::tga::init_once();
     usb::xhci::init_once();
 
     let resp = *SMP_RESP.call_once(|| limine::smp_response().expect("LIMINE SMP MISSING"));
@@ -185,6 +187,10 @@ pub extern "C" fn _start() -> ! {
 
     let bsp_executor = unsafe { init_bsp_executor() };
     let spawner = bsp_executor.spawner();
+
+    if tga::is_online() {
+        let _ = spawner.spawn(tga::blink_task());
+    }
 
     // reads from hardware into dma buffs
     if let Some(info) = usb::xhci::xhc_info() {
