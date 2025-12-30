@@ -145,7 +145,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     crate::strings::smoke_test();
-    //crate::path::smoke_test();
+    crate::path::smoke_test();
 
     pci::dma::init_from_limine(); // pci::dma::alloc_test_once();
     pci::enumerate_once(); // pci::log_devices_once();

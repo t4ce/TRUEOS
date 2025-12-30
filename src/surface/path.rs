@@ -160,6 +160,10 @@ impl PathBuf {
         Self { inner: String::new() }
     }
 
+    pub fn as_str(&self) -> &str {
+        self.inner.as_str()
+    }
+
     pub fn from<S: AsRef<str>>(s: S) -> Self {
         Self { inner: s.as_ref().to_owned() }
     }
@@ -176,7 +180,7 @@ impl PathBuf {
     }
 
     pub fn as_path(&self) -> &Path {
-        Path::new(self.as_str())
+        Path::new(self.inner.as_str())
     }
 
     pub fn push<P: AsRef<Path>>(&mut self, path: P) {
