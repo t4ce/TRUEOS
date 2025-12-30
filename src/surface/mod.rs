@@ -1,3 +1,5 @@
+#![allow(unused, dead_code)]
+
 pub use ::alloc as alloc;
 
 macro_rules! surface_reexport {
@@ -64,7 +66,6 @@ pub mod prelude {
     pub use crate::surface::boxed::Box;
     pub use crate::surface::fmt::{Debug, Display};
     pub use crate::surface::option::Option;
-    #[cfg(feature = "surface-pattern")]
     pub use crate::surface::pat::Pattern;
     pub use crate::surface::result::Result;
     pub use crate::surface::string::{String, ToString};
@@ -80,10 +81,8 @@ pub mod sync {
     pub use spin::{Mutex, MutexGuard, Once, RwLock, RwLockReadGuard, RwLockWriteGuard};
 }
 
-#[cfg(feature = "surface-pattern")]
 mod pattern;
 
-#[cfg(feature = "surface-pattern")]
 pub mod pat {
     pub use super::pattern::*;
 }
@@ -109,9 +108,7 @@ pub mod collections {
 }
 
 pub mod unicode {
-    #[cfg(feature = "surface-unicode-segmentation")]
     pub use unicode_segmentation as segmentation;
 
-    #[cfg(feature = "surface-unicode-normalization")]
     pub use unicode_normalization as normalization;
 }

@@ -1,13 +1,4 @@
-//! Minimal pattern abstraction for `surface` string APIs.
-//!
-//! This is deliberately tiny to stay `no_std`-friendly while still allowing
-//! callers to plug in their own matchers. When the optional
-//! `surface-pattern-accel` feature is enabled we lean on `memchr`/`twoway`
-//! for tighter single-byte and substring searches.
-
-#[cfg(feature = "surface-pattern-accel")]
 use memchr::memchr;
-#[cfg(feature = "surface-pattern-accel")]
 use twoway::find_str;
 
 /// Lightweight string search primitive mirroring a subset of `std::str::pattern`.
@@ -27,11 +18,8 @@ impl<'a, 'b> Pattern<'a> for &'b str {
             return Some(0);
         }
 
-        #[cfg(feature = "surface-pattern-accel")]
-        {
-            if let Some(idx) = find_str(haystack, *self) {
-                return Some(idx);
-            }
+        if let Some(idx) = find_str(haystack, *self) {
+            return Some(idx);
         }
 
         haystack.find(*self)
@@ -40,12 +28,9 @@ impl<'a, 'b> Pattern<'a> for &'b str {
 
 impl<'a> Pattern<'a> for char {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
-        #[cfg(feature = "surface-pattern-accel")]
-        {
-            if (*self as u32) < 0x80 {
-                if let Some(idx) = memchr(*self as u8, haystack.as_bytes()) {
-                    return Some(idx);
-                }
+        if (*self as u32) < 0x80 {
+            if let Some(idx) = memchr(*self as u8, haystack.as_bytes()) {
+                return Some(idx);
             }
         }
 
@@ -103,4 +88,22 @@ where
         }
         None
     }
+}
+
+/// Ensures the Pattern implementations keep working for fundamental cases.
+pub fn smoke_test() {
+    let haystack = "abc123xyz";
+
+    let mut str_pat = "123";
+    assert_eq!(Pattern::find_in(&mut str_pat, haystack), Some(3));
+
+    let mut char_pat = 'x';
+    assert_eq!(Pattern::find_in(&mut char_pat, haystack), Some(6));
+
+    let slice_storage = ['x', 'y'];
+    let mut slice_pat: &[char] = &slice_storage;
+    assert_eq!(Pattern::find_in(&mut slice_pat, haystack), Some(6));
+
+    let mut predicate = |ch: char| ch == 'z';
+    assert_eq!(Pattern::find_in(&mut predicate, haystack), Some(8));
 }
