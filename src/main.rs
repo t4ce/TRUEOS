@@ -36,8 +36,9 @@ mod uefi;
 mod surface;
 mod backtrace;
 
-pub use surface::{path, strings};
+pub(crate) use crate::surface as std;
 
+pub use surface::{path, strings};
 use core::{fmt::{self, Write}, panic::PanicInfo};
 use ::acpi::sdt::hpet;
 use embassy_executor::{raw::Executor, Spawner};
@@ -69,13 +70,21 @@ unsafe fn init_bsp_executor() -> &'static Executor {
 fn panic(_info: &PanicInfo) -> ! {
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
     backtrace::print(64);
-    loop { debugcon_write_byte(b'!'); }
+    let mut counter: u64 = 0;
+    loop {
+        counter = counter.wrapping_add(1);
+        if counter % 100_000_000 == 0 {
+            debugcon_write_byte(b'!');
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     unsafe { enable_sse(); }
     vga::init(limine::framebuffer_response());
+
+    crate::strings::smoke_test();
 
     // If booted via UEFI, parse+log the EFI System Table once.
     // uefi::log_system_table_once(); bugged. never worked.

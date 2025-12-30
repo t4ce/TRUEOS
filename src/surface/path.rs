@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use alloc::{borrow::ToOwned, string::String};
+use alloc::{borrow::{Cow, ToOwned}, string::String};
 use core::borrow::Borrow;
 use core::ops::Deref;
 
@@ -38,6 +38,10 @@ impl Path {
 
     pub fn as_str(&self) -> &str {
         &self.inner
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.as_str().as_bytes()
     }
 
     pub fn is_absolute(&self) -> bool {
@@ -158,6 +162,17 @@ impl PathBuf {
 
     pub fn from<S: AsRef<str>>(s: S) -> Self {
         Self { inner: s.as_ref().to_owned() }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, core::str::Utf8Error> {
+        core::str::from_utf8(bytes).map(Self::from)
+    }
+
+    pub fn from_bytes_lossy(bytes: &[u8]) -> Self {
+        match String::from_utf8_lossy(bytes) {
+            Cow::Borrowed(s) => PathBuf::from(s),
+            Cow::Owned(s) => PathBuf::from(s),
+        }
     }
 
     pub fn as_path(&self) -> &Path {
