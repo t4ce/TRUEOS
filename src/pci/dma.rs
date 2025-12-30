@@ -1,155 +1,71 @@
-use heapless::Vec;
-use limine::memory_map::EntryType;
-use spin::Mutex;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::debugconf;
 
 const MIN_DMA_BASE: u64 = 64 * 1024;
-const MIN_DMA_LEN: u64 = 4 * 1024;
+const DMA_MAX_PHYS: u64 = 0x1_0000_0000; // stay under 4 GiB for legacy devices
 
-#[derive(Copy, Clone, Debug)]
-struct DmaRegion {
-    start: u64,
-    end: u64,
-}
-
-#[derive(Clone)]
-struct DmaAllocator {
-    regions: Vec<DmaRegion, MAX_DMA_REGIONS>,
-    hhdm: u64,
-}
-
-const MAX_DMA_REGIONS: usize = 64;
-
-static DMA: Mutex<Option<DmaAllocator>> = Mutex::new(None);
-
-#[inline(always)]
-const fn align_up(value: u64, align: u64) -> u64 {
-    if align <= 1 {
-        return value;
-    }
-    let rem = value % align;
-    if rem == 0 {
-        value
-    } else {
-        value + (align - rem)
-    }
-}
+static DMA_READY: AtomicBool = AtomicBool::new(false);
 
 pub fn init_from_limine() {
-    let Some(hhdm) = crate::limine::hhdm_offset() else {
+    if crate::limine::hhdm_offset().is_none() {
         debugconf!("dma: no HHDM, cannot init\n");
         return;
-    };
-
-    let Some(entries) = crate::limine::memmap_entries() else {
-        debugconf!("dma: no memmap, cannot init\n");
-        return;
-    };
-
-    let mut allocator = DmaAllocator {
-        regions: Vec::new(),
-        hhdm,
-    };
-
-    for entry in entries {
-        let allowed = matches!(
-            entry.entry_type,
-            EntryType::USABLE | EntryType::BOOTLOADER_RECLAIMABLE | EntryType::ACPI_RECLAIMABLE
-        );
-        if !allowed {
-            continue;
-        }
-
-        let base = entry.base;
-        let len = entry.length;
-        if base < MIN_DMA_BASE || len < MIN_DMA_LEN {
-            debugconf!("dma: skip usable base=0x{:X} len=0x{:X}\n", base, len);
-            continue;
-        }
-
-        let start = align_up(base.max(MIN_DMA_BASE), 4096);
-        let end = base.saturating_add(len);
-        if end <= start {
-            continue;
-        }
-
-        if allocator.regions.push(DmaRegion { start, end }).is_err() {
-            debugconf!(
-                "dma: region list full, dropping 0x{:X}..0x{:X}\n",
-                start,
-                end
-            );
-        }
     }
 
-    let slice = allocator.regions.as_mut_slice();
-    slice.sort_by(|a, b| a.start.cmp(&b.start));
+    DMA_READY.store(true, Ordering::Release);
+    debugconf!(
+        "dma: PMM-backed allocations active span=0x{:X}..0x{:X}\n",
+        MIN_DMA_BASE,
+        DMA_MAX_PHYS
+    );
+}
 
-    let mut dma = DMA.lock();
-    if allocator.regions.is_empty() {
-        *dma = None;
-        debugconf!("dma: no suitable regions\n");
+fn ensure_ready() -> bool {
+    if DMA_READY.load(Ordering::Acquire) {
+        true
     } else {
-        let region_count = allocator.regions.len();
-        let total_kib: u64 = allocator
-            .regions
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .sum::<u64>()
-            / 1024;
-        let first = allocator.regions[0];
-        let last = allocator.regions[region_count - 1];
-        *dma = Some(allocator);
-        debugconf!(
-            "dma: regions={} span=0x{:X}..0x{:X} total={} KiB\n",
-            region_count,
-            first.start,
-            last.end,
-            total_kib
-        );
+        debugconf!("dma: not initialized\n");
+        false
     }
 }
 
 pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
-    let mut lock = DMA.lock();
-    let alloc = lock.as_mut()?;
-    alloc.alloc(size, align)
+    if size == 0 || !ensure_ready() {
+        return None;
+    }
+
+    let align = align.max(1);
+    let phys = crate::phys::alloc_phys_range(size, align, MIN_DMA_BASE, Some(DMA_MAX_PHYS))?;
+    let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
+    Some((phys, virt))
 }
 
 pub fn dealloc(ptr: *mut u8, size: usize) {
-    if ptr.is_null() || size == 0 {
+    if ptr.is_null() || size == 0 || !ensure_ready() {
         return;
     }
 
-    let mut lock = DMA.lock();
-    let Some(alloc) = lock.as_mut() else {
+    let Some(phys) = crate::phys::virt_to_phys_checked(ptr as *const u8) else {
+        debugconf!("dma: dealloc pointer outside known mappings virt=0x{:X}\n", ptr as usize);
         return;
     };
 
-    let Some(phys) = alloc.virt_to_phys(ptr as usize) else {
+    if !crate::phys::free_phys_range(phys, size) {
         debugconf!(
-            "dma: dealloc pointer outside HHDM virt=0x{:X}\n",
-            ptr as usize
+            "dma: failed to free region phys=0x{:X} size=0x{:X}\n",
+            phys,
+            size
         );
-        return;
-    };
-
-    alloc.free_region(phys, size as u64);
+    }
 }
 
 pub fn virt_to_phys(ptr: *const u8) -> Option<u64> {
-    if ptr.is_null() {
-        return None;
-    }
-    let lock = DMA.lock();
-    let alloc = lock.as_ref()?;
-    alloc.virt_to_phys(ptr as usize)
+    crate::phys::virt_to_phys_checked(ptr)
 }
 
 pub fn alloc_test_once() {
-    if DMA.lock().is_none() {
-        debugconf!("dma: not initialized\n");
+    if !ensure_ready() {
         return;
     }
 
@@ -165,105 +81,4 @@ pub fn alloc_test_once() {
 
     debugconf!("dma: alloc1 phys=0x{:X} virt=0x{:X}\n", p1, v1 as usize);
     debugconf!("dma: alloc2 phys=0x{:X} virt=0x{:X}\n", p2, v2 as usize);
-}
-
-impl DmaAllocator {
-    fn alloc(&mut self, size: usize, align: usize) -> Option<(u64, *mut u8)> {
-        let size_u64 = u64::try_from(size).ok()?;
-        let align_u64 = u64::try_from(align.max(1)).ok()?;
-
-        for idx in 0..self.regions.len() {
-            let region = self.regions[idx];
-            let phys = align_up(region.start, align_u64);
-            let end = phys.checked_add(size_u64)?;
-            if end > region.end {
-                continue;
-            }
-
-            self.regions.remove(idx);
-            let mut insert_pos = idx;
-            if region.start < phys {
-                let _ = self.regions.insert(
-                    insert_pos,
-                    DmaRegion {
-                        start: region.start,
-                        end: phys,
-                    },
-                );
-                insert_pos += 1;
-            }
-            if end < region.end {
-                let _ = self.regions.insert(
-                    insert_pos,
-                    DmaRegion {
-                        start: end,
-                        end: region.end,
-                    },
-                );
-            }
-
-            let virt = phys.wrapping_add(self.hhdm) as *mut u8;
-            return Some((phys, virt));
-        }
-        None
-    }
-
-    fn virt_to_phys(&self, virt: usize) -> Option<u64> {
-        if virt >= self.hhdm as usize {
-            return Some((virt as u64).saturating_sub(self.hhdm));
-        }
-
-        let phys = crate::phys::virt_to_phys(virt as *const u8);
-        if phys != virt as u64 {
-            return Some(phys);
-        }
-
-        None
-    }
-
-    fn free_region(&mut self, phys: u64, size: u64) {
-        if size == 0 {
-            return;
-        }
-
-        let start = phys;
-        let end = start.saturating_add(size);
-        if end <= start {
-            return;
-        }
-
-        let mut idx = 0;
-        while idx < self.regions.len() && self.regions[idx].start < start {
-            idx += 1;
-        }
-
-        if self.regions.insert(idx, DmaRegion { start, end }).is_err() {
-            debugconf!("dma: free list full dropping 0x{:X}..0x{:X}\n", start, end);
-            return;
-        }
-
-        self.merge_regions();
-    }
-
-    fn merge_regions(&mut self) {
-        if self.regions.len() < 2 {
-            return;
-        }
-
-        let mut idx = 1;
-        while idx < self.regions.len() {
-            let prev_end = {
-                let prev = self.regions[idx - 1];
-                prev.end
-            };
-            let curr = self.regions[idx];
-            if prev_end >= curr.start {
-                let new_end = prev_end.max(curr.end);
-                self.regions[idx - 1].end = new_end;
-                self.regions.remove(idx);
-            } else {
-                idx += 1;
-            }
-        }
-    }
 }

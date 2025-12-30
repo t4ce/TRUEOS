@@ -28,7 +28,7 @@ pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest = reque
 #[used]
 #[link_section = ".limine_requests"]
 pub static STACK_SIZE_REQUEST: request::StackSizeRequest =
-    request::StackSizeRequest::new().with_size(8 * 1024 * 1024);
+    request::StackSizeRequest::new().with_size(16 * 1024 * 1024);
 
 #[used]
 #[link_section = ".limine_requests"]

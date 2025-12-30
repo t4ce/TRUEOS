@@ -4,7 +4,10 @@ use core::mem::{align_of, size_of};
 use core::ptr::{addr_of, addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
 
-use crate::debugconf;
+use crate::{
+    debugconf,
+    phys::{self, HeapArena},
+};
 
 pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 
@@ -23,9 +26,19 @@ struct AllocTag {
     block_size: usize,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HeapSourceKind {
+    Fallback,
+    Arena,
+}
+
 struct FreeList {
     head: Option<NonNull<FreeBlock>>,
     initialized: bool,
+    heap_virt_start: usize,
+    heap_len: usize,
+    heap_phys_start: usize,
+    heap_source: HeapSourceKind,
 }
 
 unsafe impl Send for FreeList {}
@@ -35,6 +48,10 @@ impl FreeList {
         Self {
             head: None,
             initialized: false,
+            heap_virt_start: 0,
+            heap_len: 0,
+            heap_phys_start: 0,
+            heap_source: HeapSourceKind::Fallback,
         }
     }
 
@@ -43,8 +60,8 @@ impl FreeList {
             return;
         }
 
-        let heap_start = addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize;
-        let heap_end = heap_start + FALLBACK_HEAP_SIZE;
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let heap_end = heap_start + heap_len;
 
         let block_start = align_up(heap_start, align_of::<FreeBlock>());
         if block_start >= heap_end {
@@ -183,6 +200,24 @@ impl FreeList {
         }
     }
 
+    fn install_heap(&mut self, virt_start: usize, phys_start: usize, len: usize) {
+        self.heap_virt_start = virt_start;
+        self.heap_len = len;
+        self.heap_phys_start = phys_start;
+        self.heap_source = HeapSourceKind::Arena;
+    }
+
+    fn ensure_heap_backing(&mut self) -> (usize, usize) {
+        if self.heap_len == 0 {
+            let start = unsafe { addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize };
+            self.heap_virt_start = start;
+            self.heap_len = FALLBACK_HEAP_SIZE;
+            self.heap_phys_start = 0;
+            self.heap_source = HeapSourceKind::Fallback;
+        }
+        (self.heap_virt_start, self.heap_len)
+    }
+
     unsafe fn try_merge_with_next(&mut self, mut node: NonNull<FreeBlock>) {
         let node_size = node.as_ref().size;
         let node_end = (node.as_ptr() as usize).saturating_add(node_size);
@@ -222,30 +257,28 @@ static GLOBAL_ALLOCATOR: Allocator = Allocator;
 pub struct HeapStats {
     pub heap_start: usize,
     pub heap_end: usize,
+    pub phys_start: usize,
     pub usable_start: usize,
     pub usable_total: usize,
     pub free_bytes: usize,
     pub largest_free_block: usize,
     pub free_blocks: usize,
     pub initialized: bool,
+    pub source: HeapSourceKind,
 }
 
 pub fn heap_stats() -> HeapStats {
-    let heap_start = unsafe { addr_of!(FALLBACK_HEAP) as *const u8 as usize };
-    let heap_end = heap_start.saturating_add(FALLBACK_HEAP_SIZE);
-    let usable_start = align_up(heap_start, align_of::<FreeBlock>());
-    let usable_total = if usable_start >= heap_end {
-        0
-    } else {
-        heap_end - usable_start
-    };
-
     let mut guard = ALLOCATOR.lock();
     unsafe {
         if !guard.initialized {
             guard.init_once();
         }
     }
+
+    let (heap_start, heap_len) = guard.ensure_heap_backing();
+    let heap_end = heap_start.saturating_add(heap_len);
+    let usable_start = align_up(heap_start, align_of::<FreeBlock>());
+    let usable_total = heap_end.saturating_sub(usable_start);
 
     let mut free_bytes = 0usize;
     let mut largest_free_block = 0usize;
@@ -265,13 +298,42 @@ pub fn heap_stats() -> HeapStats {
     HeapStats {
         heap_start,
         heap_end,
+        phys_start: guard.heap_phys_start,
         usable_start,
         usable_total,
         free_bytes,
         largest_free_block,
         free_blocks,
         initialized: guard.initialized,
+        source: guard.heap_source,
     }
+}
+
+pub fn install_heap_arena(arena: HeapArena) -> bool {
+    if arena.length < minimum_block_size() {
+        debugconf!(
+            "heap: requested arena too small size={} bytes (need >= {})\n",
+            arena.length,
+            minimum_block_size()
+        );
+        return false;
+    }
+
+    let mut guard = ALLOCATOR.lock();
+    if guard.initialized {
+        debugconf!("heap: allocator already initialized; cannot swap backing\n");
+        return false;
+    }
+
+    guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+    phys::register_heap(arena.virt_start, arena.phys_start as usize, arena.length);
+    debugconf!(
+        "heap: arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
+        arena.virt_start,
+        arena.phys_start,
+        arena.length / (1024 * 1024)
+    );
+    true
 }
 
 const fn minimum_block_size() -> usize {
