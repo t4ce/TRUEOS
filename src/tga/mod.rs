@@ -2,8 +2,8 @@ use spin::Once;
 
 use crate::pci::PciDevice;
 
-const TGA_VENDOR_ID: u16 = 0x1011; // DEC vendor
-const TGA_DEVICE_ID: u16 = 0x0004; // TGA adapter
+const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
+const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
 
 static INIT: Once<()> = Once::new();
 
