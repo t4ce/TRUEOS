@@ -24,39 +24,6 @@ pub struct PciDevice {
     pub prog_if: u8,
 }
 
-fn storage_kind(class: u8, subclass: u8, prog_if: u8) -> Option<&'static str> {
-    if class != 0x01 {
-        return None;
-    }
-
-    match (subclass, prog_if) {
-        (0x08, 0x02) => Some("NVMe"),
-        (0x08, _) => Some("NVM"),
-        (0x06, 0x01) => Some("SATA AHCI"),
-        (0x06, _) => Some("SATA"),
-        (0x07, _) => Some("SAS"),
-        (0x04, _) => Some("RAID"),
-        (0x01, _) => Some("IDE"),
-        _ => Some("Mass Storage"),
-    }
-}
-
-fn bar_mem_base_from_raw32(bar: u32) -> Option<u64> {
-    if (bar & 0x1) != 0 {
-        return None;
-    }
-    Some((bar & 0xFFFF_FFF0) as u64)
-}
-
-fn bar_mem_base_from_raw64(bar_lo: u32, bar_hi: u32) -> Option<u64> {
-    if (bar_lo & 0x1) != 0 {
-        return None;
-    }
-    let lo = (bar_lo & 0xFFFF_FFF0) as u64;
-    let hi = bar_hi as u64;
-    Some((hi << 32) | lo)
-}
-
 static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
 
 const ECAM_MAX_REGIONS: usize = 8;
@@ -316,60 +283,17 @@ fn push_device(dev: PciDevice) {
 pub fn log_devices_once() {
     with_devices(|list| {
         for dev in list {
-            if let Some(kind) = storage_kind(dev.class, dev.subclass, dev.prog_if) {
-                // NVMe: MMIO is BAR0 (usually 64-bit). AHCI: ABAR is typically BAR5.
-                let mut mmio: Option<u64> = None;
-                if dev.subclass == 0x08 {
-                    let (bar0_lo, bar0_hi) = read_bar0_raw(dev.bus, dev.slot, dev.function);
-                    mmio = match bar0_hi {
-                        Some(hi) => bar_mem_base_from_raw64(bar0_lo, hi),
-                        None => bar_mem_base_from_raw32(bar0_lo),
-                    };
-                } else if dev.subclass == 0x06 {
-                    let bar5 = config_read_u32(dev.bus, dev.slot, dev.function, 0x24);
-                    mmio = bar_mem_base_from_raw32(bar5);
-                }
-
-                match mmio {
-                    Some(base) => crate::debugconf!(
-                        "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X} kind={} mmio=0x{:X}\n",
-                        dev.bus,
-                        dev.slot,
-                        dev.function,
-                        dev.vendor,
-                        dev.device,
-                        dev.class,
-                        dev.subclass,
-                        dev.prog_if,
-                        kind,
-                        base
-                    ),
-                    None => crate::debugconf!(
-                        "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X} kind={}\n",
-                        dev.bus,
-                        dev.slot,
-                        dev.function,
-                        dev.vendor,
-                        dev.device,
-                        dev.class,
-                        dev.subclass,
-                        dev.prog_if,
-                        kind
-                    ),
-                }
-            } else {
-                crate::debugconf!(
-                    "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X}\n",
-                    dev.bus,
-                    dev.slot,
-                    dev.function,
-                    dev.vendor,
-                    dev.device,
-                    dev.class,
-                    dev.subclass,
-                    dev.prog_if
-                );
-            }
+            crate::debugconf!(
+                "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                dev.vendor,
+                dev.device,
+                dev.class,
+                dev.subclass,
+                dev.prog_if
+            );
         }
     });
 }
