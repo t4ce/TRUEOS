@@ -570,7 +570,6 @@ pub const fn repeat(byte: u8) -> Repeat {
     Repeat { byte }
 }
 
-#[cfg(feature = "surface-core2")]
 pub mod core2 {
     use super::*;
     use ::core2::io as c2;
