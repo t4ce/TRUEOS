@@ -1,7 +1,7 @@
 use alloc::alloc::alloc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem::{align_of, size_of};
-use core::ptr::{addr_of_mut, null_mut, NonNull};
+use core::ptr::{addr_of, addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
 
 use crate::debugconf;
@@ -43,7 +43,7 @@ impl FreeList {
             return;
         }
 
-        let heap_start = FALLBACK_HEAP.as_ptr() as usize;
+        let heap_start = addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize;
         let heap_end = heap_start + FALLBACK_HEAP_SIZE;
 
         let block_start = align_up(heap_start, align_of::<FreeBlock>());
@@ -97,16 +97,20 @@ impl FreeList {
                 }
             };
 
-            let mut remaining = block.size.saturating_sub(total_used);
+            // If we split, the next free-list node must be properly aligned for `FreeBlock`.
+            // This padding is accounted to the allocated block size.
+            let aligned_used = align_up(total_used, align_of::<FreeBlock>());
 
-            if total_used > block.size {
+            if aligned_used > block.size {
                 prev = Some(block_ptr);
                 current = block.next;
                 continue;
             }
 
+            let mut remaining = block.size.saturating_sub(aligned_used);
+
             let next_block = if remaining >= minimum_block_size() {
-                let next_start = block_start + total_used;
+                let next_start = block_start + aligned_used;
                 let next_ptr = next_start as *mut FreeBlock;
                 next_ptr.write(FreeBlock {
                     size: remaining,
@@ -117,7 +121,7 @@ impl FreeList {
                 remaining = 0;
                 block.next
             };
-            let alloc_block_size = if remaining == 0 { block.size } else { total_used };
+            let alloc_block_size = if remaining == 0 { block.size } else { aligned_used };
             block.size = alloc_block_size;
 
             match prev {
@@ -227,7 +231,7 @@ pub struct HeapStats {
 }
 
 pub fn heap_stats() -> HeapStats {
-    let heap_start = unsafe { FALLBACK_HEAP.as_ptr() as usize };
+    let heap_start = unsafe { addr_of!(FALLBACK_HEAP) as *const u8 as usize };
     let heap_end = heap_start.saturating_add(FALLBACK_HEAP_SIZE);
     let usable_start = align_up(heap_start, align_of::<FreeBlock>());
     let usable_total = if usable_start >= heap_end {
