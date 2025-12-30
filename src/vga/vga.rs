@@ -9,7 +9,6 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub struct Image<'a> {
     pub width: usize,
     pub height: usize,
-    /// Pixels are row-major, 32-bit, in the same channel order the framebuffer expects.
     pub pixels: &'a [u32],
 }
 
@@ -92,21 +91,6 @@ pub fn render_framebuffer_banner(text: &str) -> bool {
     .unwrap_or(false)
 }
 
-fn render_string(
-    text: &str,
-    origin_x: usize,
-    origin_y: usize,
-    fg: u32,
-    bg: u32,
-    shadow: u32,
-) -> bool {
-    with_framebuffer(|fb| {
-        fb.blit_text(text, origin_x, origin_y, fg, bg, shadow);
-        true
-    })
-    .unwrap_or(false)
-}
-
 pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
     with_framebuffer(|fb| {
         let start_y = TOP_MARGIN;
@@ -164,21 +148,6 @@ pub fn logln(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
     LOG_CUR_X.store(0, Ordering::Relaxed);
     let _ = log(text, fg, bg, shadow);
     if !text.ends_with('\n') {
-        let _ = log("\n", fg, bg, shadow);
-    }
-    true
-}
-
-pub fn logln_fmt(args: fmt::Arguments<'_>, fg: u32, bg: u32, shadow: u32) -> bool {
-    LOG_CUR_X.store(0, Ordering::Relaxed);
-    let mut w = VgaLogWriter {
-        fg,
-        bg,
-        shadow,
-        ended_with_newline: false,
-    };
-    let _ = fmt::write(&mut w, args);
-    if !w.ended_with_newline {
         let _ = log("\n", fg, bg, shadow);
     }
     true
