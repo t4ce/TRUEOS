@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 use x86_64::registers::model_specific::Msr;
 
 const MSR_IA32_MISC_ENABLE: u32 = 0x1A0;
@@ -29,8 +29,6 @@ impl TurboState {
 }
 
 static DESIRED: AtomicU8 = AtomicU8::new(TurboState::Turbo.to_u8());
-static LOGGED_ERROR: AtomicBool = AtomicBool::new(false);
-
 pub fn set_desired(state: TurboState) -> TurboState {
     let prev = DESIRED.swap(state.to_u8(), Ordering::AcqRel);
     TurboState::from_u8(prev)
@@ -40,8 +38,17 @@ pub fn desired_state() -> TurboState {
     TurboState::from_u8(DESIRED.load(Ordering::Acquire))
 }
 
+pub fn local_state() -> TurboState {
+    let value = unsafe { Msr::new(MSR_IA32_MISC_ENABLE).read() };
+    if (value & TURBO_DISABLE_BIT) != 0 {
+        TurboState::NoTurbo
+    } else {
+        TurboState::Turbo
+    }
+}
+
 pub fn apply_local(state: TurboState) -> Result<(), &'static str> {
-    let msr = Msr::new(MSR_IA32_MISC_ENABLE);
+    let mut msr = Msr::new(MSR_IA32_MISC_ENABLE);
     let mut value = unsafe { msr.read() };
     let want_disable = state == TurboState::NoTurbo;
     let has_disable = (value & TURBO_DISABLE_BIT) != 0;

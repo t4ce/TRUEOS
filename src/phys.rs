@@ -65,7 +65,7 @@ pub fn register_memory_metadata() {
     if let Some((virt_base, phys_base)) = crate::limine::executable_address_bases() {
         let virt_base = virt_base as usize;
         let phys_base = phys_base as usize;
-        let kernel_len = unsafe { ptr::addr_of!(kernel_end) as usize }.saturating_sub(virt_base);
+        let kernel_len = (ptr::addr_of!(kernel_end) as usize).saturating_sub(virt_base);
         register_kernel_image(virt_base, phys_base, kernel_len);
     }
 }
@@ -192,13 +192,6 @@ pub fn phys_to_virt(phys: usize) -> usize {
     }
 }
 
-/// Translate a kernel virtual address into a guest-physical address for MMIO/DMA.
-#[inline(always)]
-pub fn virt_to_phys<T>(ptr: *const T) -> u64 {
-    translate_virt(ptr as usize).unwrap_or(ptr as usize as u64)
-}
-
-/// Checked variant that reports `None` when the mapping is unknown.
 #[inline(always)]
 pub fn virt_to_phys_checked<T>(ptr: *const T) -> Option<u64> {
     translate_virt(ptr as usize)

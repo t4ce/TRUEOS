@@ -209,7 +209,7 @@ impl FreeList {
 
     fn ensure_heap_backing(&mut self) -> (usize, usize) {
         if self.heap_len == 0 {
-            let start = unsafe { addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize };
+            let start = addr_of_mut!(FALLBACK_HEAP) as *mut u8 as usize;
             self.heap_virt_start = start;
             self.heap_len = FALLBACK_HEAP_SIZE;
             self.heap_phys_start = 0;
