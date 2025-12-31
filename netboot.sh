@@ -18,6 +18,8 @@ sudo nmcli dev set enp5s0 managed yes
 sudo nmcli dev set wlo1 managed yes
 sudo ip addr flush dev enp5s0
 
-#evtl neuen code pullen: CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu cargo outdated
+# evtl neuen code pullen: CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu cargo outdated
 
-# if disc is missing: qemu-img create -f raw disk.img 1G
+# full build from github
+# qemu-img create -f raw disk.img 1G
+# git submodule init update
