@@ -1,6 +1,8 @@
+use core::fmt::{self, Write};
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use heapless::Vec as HVec;
+use log::{LevelFilter, Log, Metadata, Record};
 use spin::{Mutex, RwLock};
 
 const DEFAULT_BAUD: u32 = 921_600;
@@ -52,9 +54,13 @@ impl BootLog {
         if self.flushed {
             return;
         }
+
+        // Once we start flushing, stop recording new bytes into the bootlog.
+        // New logs will still be routed directly to active backends.
+        BOOTLOG_ENABLED.store(false, Ordering::Release);
+
         if self.len == 0 || self.cap == 0 {
             self.flushed = true;
-            BOOTLOG_ENABLED.store(false, Ordering::Release);
             return;
         }
 
@@ -64,17 +70,23 @@ impl BootLog {
             self.cap - (self.len - self.head)
         };
 
+        let mut consumed = 0usize;
         for _ in 0..self.len {
-            let _ = backend.try_write_byte(self.preheap[idx]);
+            if !backend.try_write_byte(self.preheap[idx]) {
+                break;
+            }
+            consumed += 1;
             idx += 1;
             if idx >= self.cap {
                 idx = 0;
             }
         }
 
-        self.len = 0;
-        self.flushed = true;
-        BOOTLOG_ENABLED.store(false, Ordering::Release);
+        // Keep remaining bytes for a later retry if the backend applied backpressure.
+        self.len = self.len.saturating_sub(consumed);
+        if self.len == 0 {
+            self.flushed = true;
+        }
     }
 }
 
@@ -182,10 +194,12 @@ static ROUTING: RwLock<RoutingTable> = RwLock::new(RoutingTable::new());
 
 #[inline(always)]
 pub(crate) fn try_write_byte(b: u8) -> bool {
+    // Lock ordering: ROUTING -> BOOTLOG (promotion paths take ROUTING write then BOOTLOG).
+    // This avoids ROUTING/BOOTLOG lock inversion under SMP.
+    let guard = ROUTING.read();
     if BOOTLOG_ENABLED.load(Ordering::Acquire) {
         BOOTLOG.lock().record(b);
     }
-    let guard = ROUTING.read();
     let mut ok = guard.primary.try_write_byte(b);
     for backend in guard.mirrors.iter() {
         ok |= backend.try_write_byte(b);
@@ -249,10 +263,37 @@ pub(crate) fn promote_backend(backend: &'static dyn SerialBackend) -> Result<(),
 
     // Flush buffered boot logs while holding the write lock so they appear
     // before any new logs routed to the promoted backend.
-    if BOOTLOG_ENABLED.load(Ordering::Acquire) {
-        BOOTLOG.lock().flush_to(backend);
-    }
+    BOOTLOG.lock().flush_to(backend);
     Ok(())
+}
+
+pub(crate) fn promote_backend_exclusive(
+    backend: &'static dyn SerialBackend,
+) -> Result<(), BackendError> {
+    let mut guard = ROUTING.write();
+    guard.drop_mirror(backend);
+    guard.primary = backend;
+    guard.mirrors.clear();
+
+    let baud = desired_baud();
+    let _ = backend.apply_baud(baud);
+
+    // Flush buffered boot logs while holding the write lock so they appear
+    // before any new logs routed to the promoted backend.
+    BOOTLOG.lock().flush_to(backend);
+    Ok(())
+}
+
+/// Attempt to continue draining any buffered bootlog bytes to the current primary.
+///
+/// This is non-blocking: it stops when the backend applies backpressure.
+pub(crate) fn poll_bootlog_flush() {
+    // Lock ordering: ROUTING -> BOOTLOG (same as `try_write_byte`).
+    let guard = ROUTING.read();
+    if BOOTLOG_ENABLED.load(Ordering::Acquire) {
+        return;
+    }
+    BOOTLOG.lock().flush_to(guard.primary);
 }
 
 pub(crate) fn desired_baud() -> u32 {
@@ -266,5 +307,48 @@ pub(crate) fn set_desired_baud(baud: u32) {
     let _ = guard.primary.apply_baud(clamped);
     for backend in guard.mirrors.iter() {
         let _ = backend.apply_baud(clamped);
+    }
+}
+
+struct TruelogFmtWriter;
+
+impl fmt::Write for TruelogFmtWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        crate::truelog::write_str(s);
+        Ok(())
+    }
+}
+
+struct TrueLogger;
+
+impl Log for TrueLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level().to_level_filter() <= log::max_level()
+    }
+
+    fn log(&self, record: &Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
+        let mut writer = TruelogFmtWriter;
+        if record.target().is_empty() {
+            let _ = write!(&mut writer, "[{}] ", record.level());
+        } else {
+            let _ = write!(&mut writer, "[{}:{}] ", record.level(), record.target());
+        }
+        let _ = writer.write_fmt(*record.args());
+        let _ = writer.write_str("\n");
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: TrueLogger = TrueLogger;
+const DEFAULT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+
+pub(crate) fn init_log_shim() {
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(DEFAULT_LOG_LEVEL);
     }
 }
