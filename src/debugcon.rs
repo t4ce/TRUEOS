@@ -1,16 +1,28 @@
 use core::fmt::{self, Write};
 
 #[inline(always)]
-pub(crate) fn debugcon_write_str(s: &str) {
+pub(crate) fn debugcon_write_str_raw(s: &str) {
     for &b in s.as_bytes() {
         unsafe { crate::portio::outb(0xE9, b) };
+    }
+}
+
+#[inline(always)]
+pub(crate) fn debugcon_write_byte_raw(b: u8) {
+    unsafe { crate::portio::outb(0xE9, b) };
+}
+
+#[inline(always)]
+pub(crate) fn debugcon_write_str(s: &str) {
+    for &b in s.as_bytes() {
+        debugcon_write_byte_raw(b);
         let _ = crate::truelog::try_write_byte(b);
     }
 }
 
 #[inline(always)]
 pub(crate) fn debugcon_write_byte(b: u8) {
-    unsafe { crate::portio::outb(0xE9, b) };
+    debugcon_write_byte_raw(b);
     let _ = crate::truelog::try_write_byte(b);
 }
 

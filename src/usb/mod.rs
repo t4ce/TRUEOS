@@ -1286,6 +1286,12 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             continue;
         }
 
+        // Handle delayed ESP32 promotion (flushes early bootlog when it happens).
+        esp32::poll_promotion();
+
+        // Continue draining any buffered bootlog bytes after promotion.
+        crate::truelog::poll_bootlog_flush();
+
         heartbeat = heartbeat.wrapping_add(1);
 
         let evt_opt = xhci::wait_for_event(

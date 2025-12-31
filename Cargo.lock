@@ -277,6 +277,7 @@ dependencies = [
  "heapless 0.9.2",
  "libm",
  "limine",
+ "log",
  "memchr",
  "raw-cpuid",
  "rdrand",

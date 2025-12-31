@@ -1,6 +1,6 @@
 use crate::debugconf;
 use crate::truelog::{self, BackendRole, SerialBackend};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use heapless::Deque;
 use spin::Mutex;
 
@@ -10,6 +10,12 @@ const ESPRESSIF_VID: u16 = 0x303A;
 const ALLOWED_PIDS: &[u16] = &[0x1001];
 const ESP32_TX_QUEUE_CAP: usize = 1024 * 1024;
 static ESP32_TX_QUEUE: Mutex<Deque<u8, ESP32_TX_QUEUE_CAP>> = Mutex::new(Deque::new());
+
+// Promote a little later to avoid dropping early bringup logs during fast USB enumeration.
+// The bootlog ring in `truelog` keeps buffering until the first promotion flush.
+const PROMOTE_DELAY_MS: u64 = 1000;
+static PROMOTE_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
+static PROMOTE_PENDING: AtomicBool = AtomicBool::new(false);
 
 fn is_allowed_device(vid: u16, pid: u16) -> bool {
     if vid != ESPRESSIF_VID {
@@ -60,17 +66,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     cdc_acm::set_tx_complete_callback(Some(esp32_on_cdc_tx_complete));
     backend().drain();
 
-    if let Err(err) = truelog::promote_backend(backend()) {
-        debugconf!(
-            "serial: failed to promote esp32 usb backend err={:?} slot={}\n",
-            err,
-            params.slot_id
-        );
-    } else {
-        debugconf!("serial: promoted esp32 usb backend (primary) slot={}\n", params.slot_id);
-        let _ = backend().try_write(b"[esp32] truelog primary\n");
-        backend().drain();
-    }
+    schedule_promotion();
+    debugconf!(
+        "serial: esp32 usb backend attached; will promote in {}ms slot={}\n",
+        PROMOTE_DELAY_MS,
+        params.slot_id
+    );
 
     Ok(())
 }
@@ -81,6 +82,53 @@ pub fn unregister_slot(slot_id: u32) {
         backend().clear_tx_queue();
         let _ = truelog::unregister_backend(backend());
         BACKEND_REGISTERED.store(false, Ordering::Release);
+
+        PROMOTE_PENDING.store(false, Ordering::Release);
+        PROMOTE_DEADLINE_TICKS.store(0, Ordering::Release);
+    }
+}
+
+fn schedule_promotion() {
+    // Convert ms to embassy ticks (time driver uses `embassy_time_driver::TICK_HZ`).
+    let now = embassy_time_driver::now();
+    let delay_ticks = PROMOTE_DELAY_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ as u64)
+        / 1000;
+    let deadline = now.saturating_add(delay_ticks);
+    PROMOTE_DEADLINE_TICKS.store(deadline, Ordering::Release);
+    PROMOTE_PENDING.store(true, Ordering::Release);
+}
+
+pub(crate) fn poll_promotion() {
+    if !PROMOTE_PENDING.load(Ordering::Acquire) {
+        return;
+    }
+    let deadline = PROMOTE_DEADLINE_TICKS.load(Ordering::Acquire);
+    if deadline == 0 {
+        return;
+    }
+    let now = embassy_time_driver::now();
+    if now < deadline {
+        return;
+    }
+
+    // Only promote if the device is still active.
+    if backend().active_slot().is_none() {
+        PROMOTE_PENDING.store(false, Ordering::Release);
+        return;
+    }
+
+    match truelog::promote_backend_exclusive(backend()) {
+        Ok(()) => {
+            PROMOTE_PENDING.store(false, Ordering::Release);
+            debugconf!("serial: promoted esp32 usb backend (primary)\n");
+            let _ = backend().try_write(b"[esp32] truelog primary\n");
+            backend().drain();
+        }
+        Err(err) => {
+            // Keep pending; we'll retry on subsequent polls.
+            debugconf!("serial: esp32 promote retry err={:?}\n", err);
+        }
     }
 }
 
@@ -128,9 +176,9 @@ impl Esp32UsbBackend {
         let mut enqueued = 0usize;
         for &b in bytes {
             if q.push_back(b).is_err() {
-                // Ring semantics: drop oldest to keep newest.
-                let _ = q.pop_front();
-                let _ = q.push_back(b);
+                // Apply backpressure: preserve the oldest buffered bytes (bringup story)
+                // and drop new bytes when the queue is full.
+                break;
             }
             enqueued += 1;
         }
