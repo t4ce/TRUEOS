@@ -1,4 +1,7 @@
-use core::{ptr, sync::atomic::{AtomicU64, Ordering}};
+use core::{
+    ptr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use heapless::Vec;
 use limine::memory_map::EntryType;
 use spin::Mutex;

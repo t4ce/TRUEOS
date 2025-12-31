@@ -108,7 +108,11 @@ pub struct PciAddress {
 
 impl PciAddress {
     pub const fn new(bus: u8, slot: u8, function: u8) -> Self {
-        Self { bus, slot, function }
+        Self {
+            bus,
+            slot,
+            function,
+        }
     }
 }
 
@@ -350,7 +354,9 @@ struct Registry {
 
 impl Registry {
     const fn new() -> Self {
-        Self { devices: Vec::new() }
+        Self {
+            devices: Vec::new(),
+        }
     }
 
     fn insert(&mut self, node: &'static DeviceNode) {
@@ -389,10 +395,7 @@ where
     let block_size = driver.block_size_bytes();
     let block_count = driver.block_count();
     let dma_alignment = driver.dma_alignment_bytes().max(1);
-    let max_transfer = driver
-        .max_transfer_bytes()
-        .max(block_size as u64)
-        .max(1);
+    let max_transfer = driver.max_transfer_bytes().max(block_size as u64).max(1);
     let writable = driver.supports_write() && !descriptor.read_only;
 
     let id = allocate_id();

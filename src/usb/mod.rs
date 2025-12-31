@@ -1,3 +1,4 @@
+pub mod cdc_acm;
 pub mod hid;
 pub mod input;
 pub mod mass;
@@ -5,20 +6,12 @@ pub mod pen;
 pub mod print;
 pub mod xhci;
 
+use self::xhci::{
+    decode_port_status, hi, lo, trb_type, write_reg64, ErstEntry, EventRing, Trb, TrbRing,
+    XhciContext,
+};
 use crate::debugconf;
 use crate::pci::{dma, osal};
-use self::xhci::{
-    decode_port_status,
-    write_reg64,
-    trb_type,
-    lo,
-    hi,
-    EventRing,
-    Trb,
-    TrbRing,
-    XhciContext,
-    ErstEntry,
-};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -26,6 +19,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
+use self::cdc_acm::AttachParams as CdcAttachParams;
 use self::hid::BootAttachParams;
 use self::mass::AttachParams as MassAttachParams;
 
@@ -35,6 +29,7 @@ enum DeviceKind {
     Mass,
     Printer,
     Pen,
+    Cdc,
 }
 #[derive(Copy, Clone, Debug)]
 struct DeviceEntry {
@@ -136,8 +131,8 @@ fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -> Trb {
     let w_value = ((desc_type as u16) << 8) | (desc_index as u16);
     Trb {
         d0: (0x80u32) | (0x06u32 << 8) | ((w_value as u32) << 16),
-        d1: (length as u32) << 16, // wIndex=0
-        d2: 8 | (2 << 16),         // 8-byte setup, TRT=IN
+        d1: (length as u32) << 16,  // wIndex=0
+        d2: 8 | (2 << 16),          // 8-byte setup, TRT=IN
         d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
     }
 }
@@ -198,6 +193,74 @@ async fn control_in(
     // CC=13 is a normal short packet completion on control-IN reads.
     if completion == 1 || completion == 13 {
         Ok((completion, transferred))
+    } else {
+        usbv!("usb: {}: transfer failed cc={}\n", what, completion);
+        Err(())
+    }
+}
+
+pub(super) async fn control_out(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    setup: Trb,
+    buf_phys: Option<u64>,
+    length: u16,
+    what: &'static str,
+    timeout_iters: usize,
+) -> Result<(), ()> {
+    if !ep0_ring.push(setup) {
+        usbv!("usb: {}: ep0 ring full (setup)\n", what);
+        return Err(());
+    }
+
+    if let Some(phys) = buf_phys {
+        let data = Trb {
+            d0: lo(phys),
+            d1: hi(phys),
+            d2: length as u32,
+            d3: trb_type(3),
+        };
+        if !ep0_ring.push(data) {
+            usbv!("usb: {}: ep0 ring full (data)\n", what);
+            return Err(());
+        }
+    }
+
+    let status = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
+    };
+    if !ep0_ring.push(status) {
+        usbv!("usb: {}: ep0 ring full (status)\n", what);
+        return Err(());
+    }
+
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+
+    let evt = xhci::wait_for_event(
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
+        },
+        timeout_iters,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    .ok_or(())
+    .map_err(|_| {
+        usbv!("usb: {}: timeout waiting for transfer event\n", what);
+    })?;
+
+    let completion = trb_cc(&evt);
+    if completion == 1 {
+        Ok(())
     } else {
         usbv!("usb: {}: transfer failed cc={}\n", what, completion);
         Err(())
@@ -356,7 +419,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         return;
     }
 
-    usbv!("usb: enum port {} enable-slot-ok slot={}\n", target_port, slot_id);
+    usbv!(
+        "usb: enum port {} enable-slot-ok slot={}\n",
+        target_port,
+        slot_id
+    );
 
     // From here on: always disable the slot on failure.
 
@@ -449,7 +516,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     {
         Ok(evt) => evt,
         Err(()) => {
-            usbv!("usb: enum port {} address-device failed slot={}\n", target_port, slot_id);
+            usbv!(
+                "usb: enum port {} address-device failed slot={}\n",
+                target_port,
+                slot_id
+            );
             let _ = disable_slot(state, slot_id).await;
             return;
         }
@@ -466,7 +537,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         return;
     }
 
-    usbv!("usb: enum port {} address-ok slot={}\n", target_port, slot_id);
+    usbv!(
+        "usb: enum port {} address-ok slot={}\n",
+        target_port,
+        slot_id
+    );
 
     let (desc_phys, desc_virt) = match dma::alloc(64, 64) {
         Some(pair) => pair,
@@ -548,12 +623,20 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     .await
     .is_err()
     {
-        usbv!("usb: enum port {} get-devdesc failed slot={}\n", target_port, slot_id);
+        usbv!(
+            "usb: enum port {} get-devdesc failed slot={}\n",
+            target_port,
+            slot_id
+        );
         let _ = disable_slot(state, slot_id).await;
         return;
     }
 
-    usbv!("usb: enum port {} devdesc-ok slot={}\n", target_port, slot_id);
+    usbv!(
+        "usb: enum port {} devdesc-ok slot={}\n",
+        target_port,
+        slot_id
+    );
 
     let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_num_cfg) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
@@ -653,8 +736,37 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     .unwrap_or(0);
 
     if hid_count > 0 {
-        usbv!("usb: enum port {} claimed HID slot={} count={}\n", target_port, slot_id, hid_count);
+        usbv!(
+            "usb: enum port {} claimed HID slot={} count={}\n",
+            target_port,
+            slot_id,
+            hid_count
+        );
         register_device(slot_id as u32, target_port, DeviceKind::Hid);
+        return;
+    }
+
+    if cdc_acm::attach_device(CdcAttachParams {
+        ctx: &ctx,
+        cmd_ring: &mut state.cmd_ring,
+        ep0_ring: &mut ep0_ring,
+        slot_id,
+        cfg: cfg_slice,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+    })
+    .await
+    .is_ok()
+    {
+        usbv!(
+            "usb: enum port {} claimed CDC slot={}\n",
+            target_port,
+            slot_id
+        );
+        register_device(slot_id as u32, target_port, DeviceKind::Cdc);
         return;
     }
 
@@ -673,18 +785,30 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     .await
     .is_ok()
     {
-        usbv!("usb: enum port {} claimed MASS slot={}\n", target_port, slot_id);
+        usbv!(
+            "usb: enum port {} claimed MASS slot={}\n",
+            target_port,
+            slot_id
+        );
         register_device(slot_id as u32, target_port, DeviceKind::Mass);
         return;
     }
 
     if pen::try_handle(cfg_slice, target_port) {
-        usbv!("usb: enum port {} claimed PEN slot={}\n", target_port, slot_id);
+        usbv!(
+            "usb: enum port {} claimed PEN slot={}\n",
+            target_port,
+            slot_id
+        );
         register_device(slot_id as u32, target_port, DeviceKind::Pen);
         return;
     }
     if print::try_handle(cfg_slice, target_port) {
-        usbv!("usb: enum port {} claimed PRINTER slot={}\n", target_port, slot_id);
+        usbv!(
+            "usb: enum port {} claimed PRINTER slot={}\n",
+            target_port,
+            slot_id
+        );
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
         return;
     }
@@ -694,7 +818,9 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let (ccs, ped, speed) = decode_port_status(portsc);
     let pls = (portsc >> 5) & 0xF;
 
-    let port_log_idx = (target_port as usize).saturating_sub(1).min(LOG_PORTS_MAX - 1);
+    let port_log_idx = (target_port as usize)
+        .saturating_sub(1)
+        .min(LOG_PORTS_MAX - 1);
     let key = ((dev_vid as u32) << 16) | (dev_pid as u32);
     let prev = NOT_CLAIMED_KEY[port_log_idx].load(Ordering::Relaxed);
     if prev != key {
@@ -749,7 +875,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     }
 
     let _ = disable_slot(state, slot_id).await;
-    usbv!("usb: enum port {} disable-slot (not claimed) slot={}\n", target_port, slot_id);
+    usbv!(
+        "usb: enum port {} disable-slot (not claimed) slot={}\n",
+        target_port,
+        slot_id
+    );
 }
 
 fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
@@ -848,7 +978,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         }
     };
     unsafe { write_bytes(evt_virt_raw, 0, EVENT_RING_TRBS * size_of::<Trb>()) };
-    let mut event_ring = unsafe { EventRing::new(evt_phys, evt_virt_raw as *mut Trb, EVENT_RING_TRBS) };
+    let mut event_ring =
+        unsafe { EventRing::new(evt_phys, evt_virt_raw as *mut Trb, EVENT_RING_TRBS) };
 
     let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
         Some(pair) => pair,
@@ -963,6 +1094,8 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = hid::unregister_runtime(slot_id);
         } else if kind == DeviceKind::Mass {
             let _ = mass::unregister_runtime(slot_id);
+        } else if kind == DeviceKind::Cdc {
+            let _ = cdc_acm::unregister_runtime(slot_id);
         }
         debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
     }
@@ -1034,16 +1167,32 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
         existing.port = port;
         return;
     }
-    if guard.push(DeviceEntry { slot_id, port, kind }).is_err() {
+    if guard
+        .push(DeviceEntry {
+            slot_id,
+            port,
+            kind,
+        })
+        .is_err()
+    {
         debugconf!("usb: device table full, dropping slot {}\n", slot_id);
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY.store(true, Ordering::Release);
-    debugconf!("usb: device claimed slot={} port={} kind={:?}\n", slot_id, port, kind);
+    debugconf!(
+        "usb: device claimed slot={} port={} kind={:?}\n",
+        slot_id,
+        port,
+        kind
+    );
 }
 
 fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
-    DEVICES.lock().iter().find(|d| d.slot_id == slot_id).map(|d| d.kind)
+    DEVICES
+        .lock()
+        .iter()
+        .find(|d| d.slot_id == slot_id)
+        .map(|d| d.kind)
 }
 
 fn any_hid_registered() -> bool {
@@ -1145,7 +1294,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 device_kind_for_slot(evt_slot).is_some()
             },
             400,
-            EmbassyDuration::from_millis(5)
+            EmbassyDuration::from_millis(5),
         )
         .await;
 
@@ -1220,18 +1369,26 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 .unwrap_or(false);
 
                 if !handled {
-                    usbv!("usb: ignoring transfer event slot={} (no HID runtime)\n", evt_slot);
+                    usbv!(
+                        "usb: ignoring transfer event slot={} (no HID runtime)\n",
+                        evt_slot
+                    );
                 }
             }
             Some(DeviceKind::Mass) => {
                 // Mass storage transfers are driven by the mass driver; nothing to do here yet.
             }
-            Some(DeviceKind::Printer) => {
+            Some(DeviceKind::Cdc) => {
+                if !cdc_acm::handle_transfer_event(&evt) {
+                    usbv!(
+                        "usb: ignoring transfer event slot={} (no CDC runtime)\n",
+                        evt_slot
+                    );
+                }
             }
-            Some(DeviceKind::Pen) => {
-            }
-            None => {
-            }
+            Some(DeviceKind::Printer) => {}
+            Some(DeviceKind::Pen) => {}
+            None => {}
         }
     }
 }

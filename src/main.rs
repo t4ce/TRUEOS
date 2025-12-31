@@ -21,37 +21,42 @@ A constant influx of resources, money, and safety.
 
 pub extern crate alloc;
 
-mod allocators;
 mod acpi;
+mod allocators;
+mod backtrace;
+mod debugcon;
+mod disc;
 mod limine;
 mod limlog;
-mod vga;
 mod pci;
-mod usb;
-mod time;
-mod phys;
-mod rng;
-mod files;
-mod uefi;
-mod surface;
-mod backtrace;
 mod percpu;
-mod turbo;
+mod phys;
+mod portio;
+mod rng;
+mod serial;
+mod surface;
 mod tga;
-mod disc;
+mod time;
+mod turbo;
+mod uefi;
+mod usb;
+mod vga;
+
+pub(crate) use debugcon::{debugcon_write_byte, debugcon_write_str};
+pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 
 pub(crate) use crate::surface as std;
 
-pub use surface::{path, strings};
-pub use surface::pat as pattern;
-use core::{fmt::{self, Write}, panic::PanicInfo};
-use ::acpi::sdt::hpet;
-use embassy_executor::{raw::Executor, Spawner};
-use ::limine::mp::Cpu as LimineCpu;
-use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
-use spin::Once;
-use crate::usb::usb_scout;
 use crate::pci::mmio;
+use crate::usb::usb_scout;
+use ::acpi::sdt::hpet;
+use ::limine::mp::Cpu as LimineCpu;
+use core::panic::PanicInfo;
+use embassy_executor::{raw::Executor, Spawner};
+use spin::Once;
+pub use surface::pat as pattern;
+pub use surface::{io, path, strings};
+use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
 
@@ -112,18 +117,19 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    unsafe { enable_sse(); }
+    unsafe {
+        enable_sse();
+    }
     vga::init(limine::framebuffer_response());
 
     log_stack_ptrs("bsp:entry");
-
 
     limlog::log_limine_markers(); //limlog::log_memmap_once();
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
     // If booted via UEFI, parse+log the EFI System Table once.
-    // uefi::log_system_table_once(); // its crashreboots on our baremetal testrig 
+    // uefi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
     const HEAP_CANDIDATES: [usize; 7] = [
         1024 * 1024 * 1024,
@@ -152,7 +158,7 @@ pub extern "C" fn _start() -> ! {
 
     percpu::init_bsp();
 
-    // crate::io::smoke_test(); Todo - Make the SMoke
+    crate::io::smoke_test();
     crate::strings::smoke_test();
     crate::path::smoke_test();
     crate::pattern::smoke_test();
@@ -165,11 +171,13 @@ pub extern "C" fn _start() -> ! {
         local_turbo
     );
 
-    pci::dma::init_from_limine(); pci::dma::alloc_test_once();
-    pci::enumerate_once(); pci::log_devices_once();
+    pci::dma::init_from_limine();
+    pci::dma::alloc_test_once();
+    pci::enumerate_once();
+    pci::log_devices_once();
     disc::probe_once();
     tga::init_once();
-    
+
     acpi::ensure_tables();
     acpi::facp::log_once();
     acpi::tpm2::log_once();
@@ -178,8 +186,9 @@ pub extern "C" fn _start() -> ! {
     acpi::uefi_tbl::log_once();
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
-    acpi::hpet::ensure(); rng::log_rng_caps();
-    
+    acpi::hpet::ensure();
+    rng::log_rng_caps();
+
     usb::xhci::init_once();
 
     let resp = *SMP_RESP.call_once(|| limine::smp_response().expect("LIMINE SMP MISSING"));
@@ -197,7 +206,7 @@ pub extern "C" fn _start() -> ! {
     // reads from hardware into dma buffs
     if let Some(info) = usb::xhci::xhc_info() {
         let _ = spawner.spawn(usb::xhci::poll_task(info));
-    } 
+    }
 
     // reads from our dma buffs into usb rings
     if let Some(info) = usb::xhci::xhc_info() {
@@ -218,7 +227,7 @@ pub extern "C" fn _start() -> ! {
     let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
     vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
 
-    //files::create_demo_file(); needs hardware qemu param i guess
+    //disc::files::create_demo_file(); needs hardware qemu param i guess
 
     let mut counter: u64 = 0;
     loop {
@@ -230,7 +239,7 @@ pub extern "C" fn _start() -> ! {
         if counter % 1_000_000 == 0 {
             vga::cube::tick();
         }
-        
+
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0');
@@ -247,124 +256,27 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     // floating-point math (SSE) needs per core enabling
     enable_sse();
 
-    let total_slots = SMP_RESP
-        .get()
-        .expect("SMP response missing")
-        .cpus()
-        .len();
+    let total_slots = SMP_RESP.get().expect("SMP response missing").cpus().len();
 
     let slot = (cpu.lapic_id as usize) % total_slots;
 
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
-    
+
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000_000 == 0 {
-            vga::draw_header_square(total_slots, slot, vga::DEFAULT_SHADOW_COLOR, (counter % 360) as u32);
-            
+            vga::draw_header_square(
+                total_slots,
+                slot,
+                vga::DEFAULT_SHADOW_COLOR,
+                (counter % 360) as u32,
+            );
         }
         if counter % 100_000_000 == 0 {
             debugcon_write_byte(b'0' + cpu.lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
-}
-
-
-#[inline(always)]
-pub(crate) fn debugcon_write_str(s: &str) {
-    for &b in s.as_bytes() {
-        unsafe { outb(0xE9, b) };
-    }
-}
-
-#[inline(always)]
-pub(crate) fn debugcon_write_byte(b: u8) {
-    unsafe { outb(0xE9, b) };
-}
-
-pub(crate) struct DebugCon;
-
-impl Write for DebugCon {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        debugcon_write_str(s);
-        Ok(())
-    }
-}
-
-#[macro_export]
-macro_rules! debugconf {
-    ($($tt:tt)*) => {{
-        let _ = core::fmt::write(&mut $crate::DebugCon, format_args!($($tt)*));
-        let white = 0x00_FF_FF_FF;
-        let (_, bg, shadow) = $crate::vga::current_colors()
-            .unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
-        let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
-    }};
-}
-
-#[alloc_error_handler]
-fn alloc_error(layout: core::alloc::Layout) -> ! {
-    let stats = crate::allocators::heap_stats();
-    crate::debugconf!(
-        "OOM: alloc request size={} align={}\n",
-        layout.size(),
-        layout.align()
-    );
-    crate::debugconf!(
-        "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
-        stats.heap_start,
-        stats.heap_end,
-        stats.phys_start,
-        stats.source,
-        stats.usable_start,
-        stats.usable_total,
-        stats.free_bytes,
-        stats.largest_free_block,
-        stats.free_blocks,
-        stats.initialized
-    );
-
-    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
-    loop {
-        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
-    }
-}
-
-#[inline(always)]
-pub(crate) unsafe fn inb(port: u16) -> u8 {
-    let mut value: u8;
-    core::arch::asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
-}
-
-#[inline(always)]
-pub(crate) unsafe fn inw(port: u16) -> u16 {
-    let mut value: u16;
-    core::arch::asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
-}
-
-#[inline(always)]
-pub(crate) unsafe fn inl(port: u16) -> u32 {
-    let mut value: u32;
-    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
-}
-
-#[inline(always)]
-pub(crate) unsafe fn outb(port: u16, val: u8) {
-    core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
-}
-
-#[inline(always)]
-pub(crate) unsafe fn outw(port: u16, val: u16) {
-    core::arch::asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
-}
-
-#[inline(always)]
-pub(crate) unsafe fn outl(port: u16, val: u32) {
-    core::arch::asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
 }
 
 unsafe fn enable_sse() {
@@ -380,20 +292,11 @@ unsafe fn enable_sse() {
 
 #[inline(always)]
 pub(crate) fn long_mode_active() -> bool {
-    const EFER_MSR: u32 = 0xC000_0080;
+    use x86_64::registers::model_specific::Msr;
+
+    const IA32_EFER: u32 = 0xC000_0080;
     const EFER_LMA_BIT: u64 = 1 << 10;
 
-    unsafe {
-        let mut lo: u32 = 0;
-        let mut hi: u32 = 0;
-        core::arch::asm!(
-            "rdmsr",
-            in("ecx") EFER_MSR,
-            out("eax") lo,
-            out("edx") hi,
-            options(nomem, nostack, preserves_flags)
-        );
-        let efer = ((hi as u64) << 32) | lo as u64;
-        (efer & EFER_LMA_BIT) != 0
-    }
+    let efer = unsafe { Msr::new(IA32_EFER).read() };
+    (efer & EFER_LMA_BIT) != 0
 }

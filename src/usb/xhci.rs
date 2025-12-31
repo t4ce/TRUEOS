@@ -1,10 +1,10 @@
+use crate::pci::mmio;
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{fence, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
-use crate::pci::mmio;
 
 /// Firmware-provided information about the physical xHC (controller hardware).
 #[derive(Copy, Clone, Debug)]
@@ -133,7 +133,11 @@ pub fn init_once() {
 
             // xHCI MMIO spaces can be large, but the register blocks we touch live in the
             // beginning. Mapping a bounded window avoids insane mappings if BAR sizing is odd.
-            let mut map_len = if size == 0 { 0x10_000usize } else { size as usize };
+            let mut map_len = if size == 0 {
+                0x10_000usize
+            } else {
+                size as usize
+            };
             if map_len < 0x10_000 {
                 map_len = 0x10_000;
             }
@@ -687,12 +691,13 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     const PORTSC_PRC: u32 = 1 << 21;
     const PORTSC_PLC: u32 = 1 << 22;
     const PORTSC_CEC: u32 = 1 << 23;
-    const RW1C_MASK: u32 = PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
+    const RW1C_MASK: u32 =
+        PORTSC_CSC | PORTSC_PEC | PORTSC_WRC | PORTSC_OCC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC;
 
     // RW1S bits: writing 1 would *trigger* an action. Don't mirror these back.
     const PORTSC_PR: u32 = 1 << 4; // Port Reset (RW1S)
     const PORTSC_LWS: u32 = 1 << 16; // Link Write Strobe (RW1S)
-    // PED is RW1C: writing 1 would disable the port.
+                                     // PED is RW1C: writing 1 would disable the port.
     const PORTSC_PED: u32 = 1 << 1;
 
     const PORT_BLOCK_OFFSET: usize = 0x400;
@@ -823,9 +828,7 @@ pub fn log_ports_table(ctx: &XhciContext) {
         "xhci: ports={} (PORTSC: ccs ped pr pp pls speed csc pec prc plc cec)\n",
         ctx.port_count
     );
-    crate::debugconf!(
-        "xhci: #  PORTSC       ccs ped pr pp pls spd   csc pec prc plc cec\n"
-    );
+    crate::debugconf!("xhci: #  PORTSC       ccs ped pr pp pls spd   csc pec prc plc cec\n");
 
     for port in 0..ctx.port_count {
         let portsc = unsafe { ctx.portsc(port as usize) };

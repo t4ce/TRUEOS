@@ -1,28 +1,22 @@
 use core::{hint, ptr::NonNull};
 
-use acpi::{AcpiTables, Handler as AcpiHandler, PhysicalMapping, PciAddress};
+use acpi::{AcpiTables, Handler as AcpiHandler, PciAddress, PhysicalMapping};
 use embassy_time_driver::TICK_HZ;
 use spin::Once;
 
 use crate::{
-    inb,
-    inl,
-    inw,
-    limine,
-    outb,
-    outl,
-    outw,
+    inb, inl, inw, limine, outb, outl, outw,
     pci::{self, mmio},
 };
 
-pub mod hpet;
 pub mod bgrt;
-pub mod facp;
-pub mod tpm2;
 pub mod dmar;
+pub mod facp;
 pub mod fpdt;
-pub mod uefi_tbl;
+pub mod hpet;
 pub mod ssdt;
+pub mod tpm2;
+pub mod uefi_tbl;
 
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
@@ -39,7 +33,8 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                 let mut count = 0usize;
                 for (phys, header) in tables.table_headers() {
                     count += 1;
-                    let table_len = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(header.length)) };
+                    let table_len =
+                        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(header.length)) };
                     crate::debugconf!(
                         "ACPI TABLE {} @0x{:X} len=0x{:X}\n",
                         header.signature.as_str(),
@@ -66,8 +61,9 @@ pub(crate) struct AcpiIdentityHandler;
 impl AcpiIdentityHandler {
     #[inline(always)]
     fn map_ptr(&self, phys_addr: usize, size: usize) -> NonNull<u8> {
-        mmio::map_mmio_region(phys_addr as u64, size)
-            .unwrap_or_else(|err| panic!("ACPI map {:x} size {} failed: {:?}", phys_addr, size, err))
+        mmio::map_mmio_region(phys_addr as u64, size).unwrap_or_else(|err| {
+            panic!("ACPI map {:x} size {} failed: {:?}", phys_addr, size, err)
+        })
     }
 
     #[inline(always)]
@@ -85,14 +81,21 @@ impl AcpiIdentityHandler {
     fn split_pci_address(address: PciAddress) -> (u8, u8, u8) {
         let segment = address.segment();
         if segment != 0 {
-            panic!("PCI segment {} unsupported by legacy config access", segment);
+            panic!(
+                "PCI segment {} unsupported by legacy config access",
+                segment
+            );
         }
         (address.bus(), address.device(), address.function())
     }
 }
 
 impl AcpiHandler for AcpiIdentityHandler {
-    unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> PhysicalMapping<Self, T> {
+    unsafe fn map_physical_region<T>(
+        &self,
+        physical_address: usize,
+        size: usize,
+    ) -> PhysicalMapping<Self, T> {
         let mapped = self.map_ptr(physical_address, size);
         let ptr = NonNull::new(mapped.as_ptr() as *mut T).expect("ACPI mapping null");
         PhysicalMapping {

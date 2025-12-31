@@ -35,9 +35,9 @@ pub fn log_rng_caps() {
         (true, true) => crate::debugconf!("RNG: RDRAND and RDSEED available.\n"),
         (true, false) => crate::debugconf!("RNG: RDRAND available, RDSEED unavailable.\n"),
         (false, true) => crate::debugconf!("RNG: RDSEED available, RDRAND unavailable.\n"),
-        (false, false) => crate::debugconf!(
-            "RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n"
-        ),
+        (false, false) => {
+            crate::debugconf!("RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n")
+        }
     }
 
     if rdseed {

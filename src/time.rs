@@ -113,7 +113,13 @@ impl Driver for TimeDriver {
                 if at < last.at {
                     let _ = queue.pop();
                     let insert_idx = idx.min(queue.len());
-                    let _ = queue.insert(insert_idx, WakeEntry { at, waker: waker.clone() });
+                    let _ = queue.insert(
+                        insert_idx,
+                        WakeEntry {
+                            at,
+                            waker: waker.clone(),
+                        },
+                    );
                 }
             }
         }

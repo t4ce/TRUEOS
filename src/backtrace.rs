@@ -33,7 +33,10 @@ pub fn collect(max_frames: usize) -> Vec<Frame, MAX_FRAMES> {
             break;
         }
 
-        let _ = frames.push(Frame { rbp: rbp as usize, rip: ret_addr });
+        let _ = frames.push(Frame {
+            rbp: rbp as usize,
+            rip: ret_addr,
+        });
 
         // Basic sanity: enforce forward progress and 16-byte alignment of caller frame.
         if saved_rbp <= rbp as usize {
@@ -54,6 +57,11 @@ pub fn print(max_frames: usize) {
     let frames = collect(max_frames);
     crate::debugconf!("stack trace ({} frames)\n", frames.len());
     for (idx, frame) in frames.iter().enumerate() {
-        crate::debugconf!("  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n", idx, frame.rbp, frame.rip);
+        crate::debugconf!(
+            "  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n",
+            idx,
+            frame.rbp,
+            frame.rip
+        );
     }
 }

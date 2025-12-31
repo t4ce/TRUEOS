@@ -10,7 +10,9 @@ static LOG_ONCE: Once<()> = Once::new();
 
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
-        let Some(tables) = ensure_tables() else { return; };
+        let Some(tables) = ensure_tables() else {
+            return;
+        };
 
         let mut found = false;
         for (phys, hdr) in tables.table_headers() {
@@ -18,13 +20,15 @@ pub fn log_once() {
                 continue;
             }
             found = true;
-            let len = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
+            let len =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
             if let Ok(mapped) = mmio::map_mmio_region_exact(phys as u64, len) {
                 let base = mapped.as_ptr();
                 // FPDT contains a series of performance records. Log first record header if present.
                 if len >= 44 {
                     let rec_type = unsafe { core::ptr::read_unaligned(base.add(36) as *const u16) };
-                    let rec_len = unsafe { core::ptr::read_unaligned(base.add(38) as *const u16) } as usize;
+                    let rec_len =
+                        unsafe { core::ptr::read_unaligned(base.add(38) as *const u16) } as usize;
                     debugconf!(
                         "FPDT: len=0x{:X} first_record_type=0x{:04X} first_record_len=0x{:X}\n",
                         len,

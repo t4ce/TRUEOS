@@ -1,6 +1,6 @@
 #![allow(unused, dead_code)]
 
-pub use ::alloc as alloc;
+pub use ::alloc;
 
 macro_rules! surface_reexport {
     ($name:ident => $path:path) => {
@@ -73,11 +73,11 @@ pub mod prelude {
 }
 
 pub mod sync {
+    pub use alloc::sync::{Arc, Weak};
     pub use core::sync::atomic::{
         compiler_fence, fence, AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize,
         AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
     };
-    pub use alloc::sync::{Arc, Weak};
     pub use spin::{Mutex, MutexGuard, Once, RwLock, RwLockReadGuard, RwLockWriteGuard};
 }
 
@@ -102,9 +102,9 @@ pub mod random {
 pub use random as rand;
 
 pub mod collections {
-    pub use heapless::*;
-    pub use ::alloc::collections::{BinaryHeap, BTreeMap, BTreeSet, LinkedList, VecDeque};
+    pub use ::alloc::collections::{BTreeMap, BTreeSet, BinaryHeap, LinkedList, VecDeque};
     pub use hashbrown::{HashMap, HashSet};
+    pub use heapless::*;
 }
 
 pub mod unicode {

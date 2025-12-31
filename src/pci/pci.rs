@@ -75,7 +75,11 @@ fn init_ecam_once() {
                 seg0_count += 1;
             }
         }
-        crate::debugconf!("pci: MCFG present (regions={}, seg0={})\n", regions.len(), seg0_count);
+        crate::debugconf!(
+            "pci: MCFG present (regions={}, seg0={})\n",
+            regions.len(),
+            seg0_count
+        );
         for r in regions.iter() {
             if r.segment == 0 {
                 crate::debugconf!(

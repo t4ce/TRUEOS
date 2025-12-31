@@ -1,12 +1,14 @@
+use super::xhci::{
+    self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
+};
 use crate::debugconf;
 use crate::pci::dma;
-use super::xhci::{self, Trb, TrbRing, XhciContext, context_index, endpoint_target, hi, lo, trb_type};
 use crate::usb::input;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use spin::Mutex;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{String as HString, Vec};
+use spin::Mutex;
 
 const MAX_REPORT_DESC: usize = 512;
 
@@ -380,17 +382,22 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                                     .iter()
                                     .any(|e| e.interface == iface && e.address == ep_addr)
                                 {
-                                    hidlog!("[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n", iface, ep_addr);
-                                } else if endpoints.push(HidEpInfo {
-                                    configuration: config_value,
-                                    interface: iface,
-                                    address: ep_addr,
-                                    max_packet,
-                                    interval,
-                                    protocol: proto,
-                                    report_desc_len: current_report_len,
-                                })
-                                .is_err()
+                                    hidlog!(
+                                        "[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n",
+                                        iface,
+                                        ep_addr
+                                    );
+                                } else if endpoints
+                                    .push(HidEpInfo {
+                                        configuration: config_value,
+                                        interface: iface,
+                                        address: ep_addr,
+                                        max_packet,
+                                        interval,
+                                        protocol: proto,
+                                        report_desc_len: current_report_len,
+                                    })
+                                    .is_err()
                                 {
                                     hidlog!(
                                         "[hid] HID endpoint list full, dropping iface={} addr=0x{:02X}\n",
@@ -472,7 +479,7 @@ async fn fetch_report_descriptor(
             evt_slot == slot_id
         },
         400,
-        EmbassyDuration::from_millis(5)
+        EmbassyDuration::from_millis(5),
     )
     .await
     else {
@@ -482,7 +489,12 @@ async fn fetch_report_descriptor(
 
     let completion = (evt.d2 >> 24) & 0xFF;
     if completion != 1 {
-        hidlog!("[hid] report descriptor fetch cc={} iface={} len={}\n", completion, iface, want_len);
+        hidlog!(
+            "[hid] report descriptor fetch cc={} iface={} len={}\n",
+            completion,
+            iface,
+            want_len
+        );
         return None;
     }
 
@@ -582,10 +594,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         return Err(());
     }
 
-    let config_value = endpoints
-        .first()
-        .map(|e| e.configuration)
-        .unwrap_or(1);
+    let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
 
     let setup_cfg = Trb {
         d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
@@ -616,7 +625,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             evt_slot == slot_id
         },
         400,
-        EmbassyDuration::from_millis(5)
+        EmbassyDuration::from_millis(5),
     )
     .await
     else {
@@ -630,8 +639,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     }
 
     for ep in endpoints.iter() {
-        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
+        let _ =
+            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+        let _ =
+            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
     }
 
     let mut attached = 0usize;
@@ -738,7 +749,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
                 evt_type == 33
             },
             400,
-            EmbassyDuration::from_millis(5)
+            EmbassyDuration::from_millis(5),
         )
         .await
         else {
@@ -764,7 +775,15 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         let report_len = ep.max_packet as u32;
 
         if hid_kind == 1 && ep.report_desc_len > 0 {
-            if let Some(desc) = fetch_report_descriptor(ctx, &mut ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await {
+            if let Some(desc) = fetch_report_descriptor(
+                ctx,
+                &mut ep0_ring,
+                slot_id,
+                ep.interface,
+                ep.report_desc_len as usize,
+            )
+            .await
+            {
                 if let Some((rid, bits)) = analyze_keyboard_report_descriptor(&desc) {
                     hidlog!(
                         "[hid] iface={} slot={} keyboard report descriptor len={} nkro_bits={} report_id={:?}\n",
@@ -858,7 +877,7 @@ pub async fn class_request_nodata(
             evt_slot == slot_id
         },
         400,
-        EmbassyDuration::from_millis(5)
+        EmbassyDuration::from_millis(5),
     )
     .await
     else {
@@ -867,7 +886,12 @@ pub async fn class_request_nodata(
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
-    hidlog!("[hid] class req {} cc={} value=0x{:04X}\n", request, completion, value);
+    hidlog!(
+        "[hid] class req {} cc={} value=0x{:04X}\n",
+        request,
+        completion,
+        value
+    );
     if completion == 1 {
         Ok(())
     } else {

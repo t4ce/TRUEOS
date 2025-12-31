@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
-use alloc::{borrow::{Cow, ToOwned}, string::String};
+use alloc::{
+    borrow::{Cow, ToOwned},
+    string::String,
+};
 use core::borrow::Borrow;
 use core::ops::Deref;
 
@@ -66,16 +69,22 @@ impl Path {
 
     pub fn file_name(&self) -> Option<&str> {
         let s = self.trim_trailing_slash();
-        let name = s.rsplit_once('/')
-            .map(|(_, tail)| tail)
-            .unwrap_or(s);
-        if name.is_empty() { None } else { Some(name) }
+        let name = s.rsplit_once('/').map(|(_, tail)| tail).unwrap_or(s);
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
     }
 
     pub fn file_stem(&self) -> Option<&str> {
         let name = self.file_name()?;
         if let Some((stem, _)) = name.rsplit_once('.') {
-            if stem.is_empty() { None } else { Some(stem) }
+            if stem.is_empty() {
+                None
+            } else {
+                Some(stem)
+            }
         } else {
             Some(name)
         }
@@ -84,7 +93,11 @@ impl Path {
     pub fn extension(&self) -> Option<&str> {
         let name = self.file_name()?;
         let (_stem, ext) = name.rsplit_once('.')?;
-        if ext.is_empty() { None } else { Some(ext) }
+        if ext.is_empty() {
+            None
+        } else {
+            Some(ext)
+        }
     }
 
     pub fn with_extension(&self, ext: &str) -> PathBuf {
@@ -132,7 +145,11 @@ impl Path {
         let b = base.as_ref().as_str();
         let s = self.as_str();
         if b == "/" {
-            return if self.is_absolute() { Ok(self) } else { Err(StripPrefixError) };
+            return if self.is_absolute() {
+                Ok(self)
+            } else {
+                Err(StripPrefixError)
+            };
         }
         if let Some(rest) = s.strip_prefix(b) {
             if rest.is_empty() {
@@ -146,18 +163,28 @@ impl Path {
     }
 
     pub fn components(&self) -> Components<'_> {
-        Components { path: self.as_str(), pos: 0, yielded_root: false }
+        Components {
+            path: self.as_str(),
+            pos: 0,
+            yielded_root: false,
+        }
     }
 
     fn trim_trailing_slash(&self) -> &str {
         let s = self.as_str();
-        if s.len() > 1 { s.trim_end_matches('/') } else { s }
+        if s.len() > 1 {
+            s.trim_end_matches('/')
+        } else {
+            s
+        }
     }
 }
 
 impl PathBuf {
     pub fn new() -> Self {
-        Self { inner: String::new() }
+        Self {
+            inner: String::new(),
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -165,7 +192,9 @@ impl PathBuf {
     }
 
     pub fn from<S: AsRef<str>>(s: S) -> Self {
-        Self { inner: s.as_ref().to_owned() }
+        Self {
+            inner: s.as_ref().to_owned(),
+        }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, core::str::Utf8Error> {
@@ -257,7 +286,9 @@ impl From<String> for PathBuf {
 
 impl From<&str> for PathBuf {
     fn from(value: &str) -> Self {
-        Self { inner: value.to_owned() }
+        Self {
+            inner: value.to_owned(),
+        }
     }
 }
 
@@ -366,7 +397,10 @@ fn smoke_test_prefix() {
         Err(_) => crate::debugconf!("path: strip_prefix('/usr') => ERR\n"),
     }
     match sp_src.strip_prefix(Path::new("/nope")) {
-        Ok(rest) => crate::debugconf!("path: strip_prefix('/nope') => '{}' (unexpected)\n", rest.as_str()),
+        Ok(rest) => crate::debugconf!(
+            "path: strip_prefix('/nope') => '{}' (unexpected)\n",
+            rest.as_str()
+        ),
         Err(_) => crate::debugconf!("path: strip_prefix('/nope') => ERR (expected)\n"),
     }
 }

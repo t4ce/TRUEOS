@@ -59,7 +59,13 @@ fn init_with(lapic_id: u32, cpu_index: u32, tag: &str) {
     let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
     unsafe { gs_base.write(ptr as u64) };
 
-    debugconf!("percpu({}): gs_base=0x{:016X} lapic_id={} cpu_index={}\n", tag, ptr as u64, lapic_id, cpu_index);
+    debugconf!(
+        "percpu({}): gs_base=0x{:016X} lapic_id={} cpu_index={}\n",
+        tag,
+        ptr as u64,
+        lapic_id,
+        cpu_index
+    );
 }
 
 #[inline(always)]

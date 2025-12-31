@@ -163,7 +163,15 @@ fn blit_bmp_to_vga(phys_addr: u64, origin_x: usize, origin_y: usize, bmp: &BmpIn
         (32, 0) => blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, None),
         (32, 3) => {
             if let Some(masks) = read_masks(phys_addr, bmp) {
-                blit_bmp32(phys_addr, origin_x, origin_y, bmp, copy_w, copy_h, Some(masks))
+                blit_bmp32(
+                    phys_addr,
+                    origin_x,
+                    origin_y,
+                    bmp,
+                    copy_w,
+                    copy_h,
+                    Some(masks),
+                )
             } else {
                 false
             }
@@ -226,7 +234,11 @@ fn blit_bmp24(
 
     unsafe {
         for y in 0..copy_h {
-            let src_row = if bmp.top_down { y } else { (height - 1).saturating_sub(y) };
+            let src_row = if bmp.top_down {
+                y
+            } else {
+                (height - 1).saturating_sub(y)
+            };
             let src_row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             for x in 0..copy_w {
@@ -234,9 +246,8 @@ fn blit_bmp24(
                 let b = core::ptr::read_volatile(px.add(0));
                 let g = core::ptr::read_volatile(px.add(1));
                 let r = core::ptr::read_volatile(px.add(2));
-                BGRT_PIXELS[dst_row_off.saturating_add(x)] = ((r as u32) << 16)
-                    | ((g as u32) << 8)
-                    | (b as u32);
+                BGRT_PIXELS[dst_row_off.saturating_add(x)] =
+                    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
             }
         }
     }
@@ -286,11 +297,16 @@ fn blit_bmp32(
 
     unsafe {
         for y in 0..copy_h {
-            let src_row = if bmp.top_down { y } else { (height - 1).saturating_sub(y) };
+            let src_row = if bmp.top_down {
+                y
+            } else {
+                (height - 1).saturating_sub(y)
+            };
             let src_row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             for x in 0..copy_w {
-                let px = core::ptr::read_volatile(src_row_ptr.add(x.saturating_mul(4)) as *const u32);
+                let px =
+                    core::ptr::read_volatile(src_row_ptr.add(x.saturating_mul(4)) as *const u32);
                 let r = ((px & rm) >> rshift) as u32;
                 let g = ((px & gm) >> gshift) as u32;
                 let b = ((px & bm) >> bshift) as u32;
@@ -362,7 +378,11 @@ fn blit_bmp_indexed(
 
     unsafe {
         for y in 0..copy_h {
-            let src_row = if bmp.top_down { y } else { (height - 1).saturating_sub(y) };
+            let src_row = if bmp.top_down {
+                y
+            } else {
+                (height - 1).saturating_sub(y)
+            };
             let row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             match bpp {
@@ -387,7 +407,13 @@ fn blit_bmp_indexed(
     emit_image(origin_x, origin_y, copy_w, copy_h, expected)
 }
 
-fn emit_image(origin_x: usize, origin_y: usize, width: usize, height: usize, expected: usize) -> bool {
+fn emit_image(
+    origin_x: usize,
+    origin_y: usize,
+    width: usize,
+    height: usize,
+    expected: usize,
+) -> bool {
     let img = unsafe {
         vga::Image {
             width,

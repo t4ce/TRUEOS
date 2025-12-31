@@ -1,5 +1,6 @@
 use alloc::alloc::alloc;
 use core::alloc::{GlobalAlloc, Layout};
+use core::arch::asm;
 use core::mem::{align_of, size_of};
 use core::ptr::{addr_of, addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
@@ -138,7 +139,11 @@ impl FreeList {
                 remaining = 0;
                 block.next
             };
-            let alloc_block_size = if remaining == 0 { block.size } else { aligned_used };
+            let alloc_block_size = if remaining == 0 {
+                block.size
+            } else {
+                aligned_used
+            };
             block.size = alloc_block_size;
 
             match prev {
@@ -168,7 +173,10 @@ impl FreeList {
         let block_size = tag.block_size;
         let block_start = tag.block_start;
         let block_ptr = block_start as *mut FreeBlock;
-        block_ptr.write(FreeBlock { size: block_size, next: None });
+        block_ptr.write(FreeBlock {
+            size: block_size,
+            next: None,
+        });
 
         let mut prev: Option<NonNull<FreeBlock>> = None;
         let mut current = self.head;
@@ -346,10 +354,43 @@ fn align_up(addr: usize, align: usize) -> usize {
 }
 
 fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
-    let payload_start = align_up(block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(), layout.align());
+    let payload_start = align_up(
+        block_start + size_of::<FreeBlock>() + size_of::<AllocTag>(),
+        layout.align(),
+    );
     if payload_start > usize::MAX - layout.size() {
         None
     } else {
         Some(payload_start)
+    }
+}
+
+#[alloc_error_handler]
+fn alloc_error(layout: Layout) -> ! {
+    let stats = heap_stats();
+    debugconf!(
+        "OOM: alloc request size={} align={}\n",
+        layout.size(),
+        layout.align()
+    );
+    debugconf!(
+        "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
+        stats.heap_start,
+        stats.heap_end,
+        stats.phys_start,
+        stats.source,
+        stats.usable_start,
+        stats.usable_total,
+        stats.free_bytes,
+        stats.largest_free_block,
+        stats.free_blocks,
+        stats.initialized
+    );
+
+    unsafe {
+        asm!("cli", options(nomem, nostack));
+        loop {
+            asm!("hlt", options(nomem, nostack));
+        }
     }
 }
