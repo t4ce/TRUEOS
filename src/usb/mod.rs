@@ -1,4 +1,5 @@
 pub mod cdc_acm;
+pub mod esp32s3;
 pub mod hid;
 pub mod input;
 pub mod mass;
@@ -743,6 +744,34 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             hid_count
         );
         register_device(slot_id as u32, target_port, DeviceKind::Hid);
+        return;
+    }
+
+    if esp32s3::try_attach(
+        dev_vid,
+        dev_pid,
+        CdcAttachParams {
+            ctx: &ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring: &mut ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+        },
+    )
+    .await
+    .is_ok()
+    {
+        usbv!(
+            "usb: enum port {} claimed ESP32-S3 CDC slot={}\n",
+            target_port,
+            slot_id
+        );
+        register_device(slot_id as u32, target_port, DeviceKind::Cdc);
         return;
     }
 

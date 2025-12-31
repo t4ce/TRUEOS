@@ -34,6 +34,7 @@ mod phys;
 mod portio;
 mod rng;
 mod serial;
+mod truelog;
 mod surface;
 mod tga;
 mod time;
