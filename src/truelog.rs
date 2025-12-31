@@ -1,12 +1,82 @@
 use core::ptr;
-use core::sync::atomic::{AtomicU32, Ordering};
-use heapless::Vec;
-use spin::RwLock;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use heapless::Vec as HVec;
+use spin::{Mutex, RwLock};
 
 const DEFAULT_BAUD: u32 = 921_600;
 const MAX_SERIAL_MIRRORS: usize = 4;
-
+const PREHEAP_BOOTLOG_CAP: usize = 1024 * 1024;
 static DESIRED_BAUD: AtomicU32 = AtomicU32::new(DEFAULT_BAUD);
+static BOOTLOG_ENABLED: AtomicBool = AtomicBool::new(true);
+static BOOTLOG: Mutex<BootLog> = Mutex::new(BootLog::new());
+
+struct BootLog {
+    preheap: [u8; PREHEAP_BOOTLOG_CAP],
+    cap: usize,
+    head: usize,
+    len: usize,
+    flushed: bool,
+}
+
+impl BootLog {
+    const fn new() -> Self {
+        Self {
+            preheap: [0u8; PREHEAP_BOOTLOG_CAP],
+            cap: PREHEAP_BOOTLOG_CAP,
+            head: 0,
+            len: 0,
+            flushed: false,
+        }
+    }
+
+    fn record(&mut self, b: u8) {
+        if self.flushed {
+            return;
+        }
+        if self.cap == 0 {
+            return;
+        }
+
+        self.preheap[self.head] = b;
+
+        self.head += 1;
+        if self.head >= self.cap {
+            self.head = 0;
+        }
+        if self.len < self.cap {
+            self.len += 1;
+        }
+    }
+
+    fn flush_to(&mut self, backend: &'static dyn SerialBackend) {
+        if self.flushed {
+            return;
+        }
+        if self.len == 0 || self.cap == 0 {
+            self.flushed = true;
+            BOOTLOG_ENABLED.store(false, Ordering::Release);
+            return;
+        }
+
+        let mut idx = if self.head >= self.len {
+            self.head - self.len
+        } else {
+            self.cap - (self.len - self.head)
+        };
+
+        for _ in 0..self.len {
+            let _ = backend.try_write_byte(self.preheap[idx]);
+            idx += 1;
+            if idx >= self.cap {
+                idx = 0;
+            }
+        }
+
+        self.len = 0;
+        self.flushed = true;
+        BOOTLOG_ENABLED.store(false, Ordering::Release);
+    }
+}
 
 pub trait SerialBackend: Sync {
     fn name(&self) -> &'static str;
@@ -46,14 +116,14 @@ pub enum BackendError {
 
 struct RoutingTable {
     primary: &'static dyn SerialBackend,
-    mirrors: Vec<&'static dyn SerialBackend, MAX_SERIAL_MIRRORS>,
+    mirrors: HVec<&'static dyn SerialBackend, MAX_SERIAL_MIRRORS>,
 }
 
 impl RoutingTable {
     const fn new() -> Self {
         Self {
             primary: &crate::serial::COM1_BACKEND,
-            mirrors: Vec::new(),
+            mirrors: HVec::new(),
         }
     }
 
@@ -112,6 +182,9 @@ static ROUTING: RwLock<RoutingTable> = RwLock::new(RoutingTable::new());
 
 #[inline(always)]
 pub(crate) fn try_write_byte(b: u8) -> bool {
+    if BOOTLOG_ENABLED.load(Ordering::Acquire) {
+        BOOTLOG.lock().record(b);
+    }
     let guard = ROUTING.read();
     let mut ok = guard.primary.try_write_byte(b);
     for backend in guard.mirrors.iter() {
@@ -172,7 +245,14 @@ pub(crate) fn promote_backend(backend: &'static dyn SerialBackend) -> Result<(),
     if !guard.contains(backend) {
         guard.add_mirror(backend)?;
     }
-    guard.promote(backend)
+    guard.promote(backend)?;
+
+    // Flush buffered boot logs while holding the write lock so they appear
+    // before any new logs routed to the promoted backend.
+    if BOOTLOG_ENABLED.load(Ordering::Acquire) {
+        BOOTLOG.lock().flush_to(backend);
+    }
+    Ok(())
 }
 
 pub(crate) fn desired_baud() -> u32 {

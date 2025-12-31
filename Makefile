@@ -14,8 +14,9 @@ QEMU_USB_FLAGS =  \
 	-device nvme,drive=nvme0,serial=deadbeef \
 	-device nec-usb-xhci,id=xhci \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
-	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0
-  
+	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 \
+	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost0
+
 ISO_DIR := bld
 ISO_PATH := bld/falseos.iso
 LIMINE_CFG := limine.conf
@@ -79,12 +80,8 @@ iso: $(LIMINE_STAMP)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
 	cp $(ISO_PATH) /media/t4ce/Data20TB/
 
-run: iso
-	$(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
-
 run-gdb-paused-bg: iso
-	@echo FalseOS QEMU GO
-	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
+	@(sudo $(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
 
 clean:
 	$(CARGO) clean

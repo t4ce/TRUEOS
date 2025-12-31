@@ -1,8 +1,8 @@
-use crate::{debugcon_write_str, debugconf, limine, long_mode_active};
+use crate::{debugconf, limine, long_mode_active};
 
 pub fn log_limine_markers() {
     if long_mode_active() {
-        debugcon_write_str("64bit");
+        debugconf!("64bit");
     }
     match limine::hhdm_offset() {
         Some(off) => debugconf!("LIMINE HHDM OK offset=0x{:X}\n", off),

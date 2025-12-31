@@ -1,5 +1,5 @@
 pub mod cdc_acm;
-pub mod esp32s3;
+pub mod esp32;
 pub mod hid;
 pub mod input;
 pub mod mass;
@@ -20,7 +20,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
-use self::cdc_acm::AttachParams as CdcAttachParams;
+use self::esp32::AttachParams as Esp32AttachParams;
 use self::hid::BootAttachParams;
 use self::mass::AttachParams as MassAttachParams;
 
@@ -747,35 +747,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         return;
     }
 
-    if esp32s3::try_attach(
-        dev_vid,
-        dev_pid,
-        CdcAttachParams {
-            ctx: &ctx,
-            cmd_ring: &mut state.cmd_ring,
-            ep0_ring: &mut ep0_ring,
-            slot_id,
-            cfg: cfg_slice,
-            dev_ctx_virt,
-            ctx_stride_bytes,
-            ctx_stride_words,
-            speed_code,
-            target_port,
-        },
-    )
-    .await
-    .is_ok()
-    {
-        usbv!(
-            "usb: enum port {} claimed ESP32-S3 CDC slot={}\n",
-            target_port,
-            slot_id
-        );
-        register_device(slot_id as u32, target_port, DeviceKind::Cdc);
-        return;
-    }
-
-    if cdc_acm::attach_device(CdcAttachParams {
+    if esp32::attach_device(Esp32AttachParams {
         ctx: &ctx,
         cmd_ring: &mut state.cmd_ring,
         ep0_ring: &mut ep0_ring,
@@ -786,6 +758,8 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         ctx_stride_words,
         speed_code,
         target_port,
+        vid: dev_vid,
+        pid: dev_pid,
     })
     .await
     .is_ok()
@@ -1124,6 +1098,7 @@ async fn cleanup_disconnected<const N: usize>(
         } else if kind == DeviceKind::Mass {
             let _ = mass::unregister_runtime(slot_id);
         } else if kind == DeviceKind::Cdc {
+            esp32::unregister_slot(slot_id);
             let _ = cdc_acm::unregister_runtime(slot_id);
         }
         debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
@@ -1417,7 +1392,12 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}
-            None => {}
+            None => {
+                // A device may complete transfers during attach (while the enum path is still
+                // running) before `register_device()` marks the slot kind. Handle CDC events
+                // opportunistically so TX/RX doesn't stall.
+                let _ = cdc_acm::handle_transfer_event(&evt);
+            }
         }
     }
 }

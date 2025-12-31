@@ -27,24 +27,17 @@ impl PerCpu {
     }
 }
 
-/// Initialize per-CPU data for the BSP.
-///
-/// Must run after the heap is usable (allocates a `Box`).
 pub fn init_bsp() {
     let lapic_id = read_lapic_id_via_cpuid();
     init_with(lapic_id, 0, "bsp")
 }
 
-/// Initialize per-CPU data for an AP.
-///
-/// Must run after the heap is usable (allocates a `Box`).
 pub fn init_ap(lapic_id: u32, cpu_index: u32) {
     init_with(lapic_id, cpu_index, "ap")
 }
 
 #[inline(always)]
 fn init_with(lapic_id: u32, cpu_index: u32, tag: &str) {
-    // Allocate a per-cpu struct and leak it (lives forever).
     let mut percpu = Box::new(PerCpu {
         self_ptr: core::ptr::null_mut(),
         lapic_id,
@@ -60,8 +53,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, tag: &str) {
     unsafe { gs_base.write(ptr as u64) };
 
     debugconf!(
-        "percpu({}): gs_base=0x{:016X} lapic_id={} cpu_index={}\n",
-        tag,
+        "0x{:016X} lapic={} cpu={}\n",
         ptr as u64,
         lapic_id,
         cpu_index
