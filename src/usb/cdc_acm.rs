@@ -3,11 +3,9 @@ use super::xhci::{
 };
 use crate::debugconf;
 use crate::pci::dma;
-use crate::truelog::{self, BackendRole, SerialBackend};
 use core::cmp;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use heapless::{Deque, Vec};
 use spin::Mutex;
 
@@ -15,8 +13,13 @@ const USB_CLASS_COMM: u8 = 0x02;
 const USB_SUBCLASS_ACM: u8 = 0x02;
 const USB_CLASS_DATA: u8 = 0x0A;
 const MAX_CDC_DEVICES: usize = 2;
-const CDC_TX_QUEUE_CAP: usize = 2048;
-const CDC_RX_QUEUE_CAP: usize = 512;
+// Generic CDC-ACM transport buffering.
+// Keep this modest; policy-specific buffering (e.g. ESP32 log backend) should live
+// in the policy layer, not in the generic CDC driver.
+//
+// NOTE: This capacity is reserved per CDC runtime (static memory via `heapless`).
+const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
+const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
 
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +56,7 @@ pub struct AttachParams<'a> {
     pub ctx_stride_words: usize,
     pub speed_code: u32,
     pub target_port: u8,
+    pub desired_baud: u32,
 }
 
 struct CdcRuntime {
@@ -176,13 +180,12 @@ impl CdcRuntime {
 }
 
 static CDC_RUNTIMES: Mutex<Vec<CdcRuntime, MAX_CDC_DEVICES>> = Mutex::new(Vec::new());
-static BACKEND_REGISTERED: AtomicBool = AtomicBool::new(false);
-static USB_BACKEND: UsbCdcAcmBackend = UsbCdcAcmBackend::new();
 
-pub fn backend() -> &'static UsbCdcAcmBackend {
-    &USB_BACKEND
+static TX_COMPLETE_CALLBACK: Mutex<Option<fn(u32)>> = Mutex::new(None);
+
+pub fn set_tx_complete_callback(cb: Option<fn(u32)>) {
+    *TX_COMPLETE_CALLBACK.lock() = cb;
 }
-
 pub fn unregister_runtime(slot_id: u32) -> bool {
     let mut guard = CDC_RUNTIMES.lock();
     let mut idx = 0usize;
@@ -195,15 +198,7 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
             idx += 1;
         }
     }
-    let empty = guard.is_empty();
     drop(guard);
-
-    if removed {
-        backend().deactivate(slot_id);
-        if empty && truelog::unregister_backend(backend()) {
-            BACKEND_REGISTERED.store(false, Ordering::Release);
-        }
-    }
     removed
 }
 
@@ -224,7 +219,7 @@ where
     guard.iter_mut().find(|rt| rt.slot_id == slot_id).map(f)
 }
 
-fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
+pub fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
     with_runtime_mut_by_slot(slot_id, |runtime| {
         let mut written = 0usize;
         for &byte in data {
@@ -241,19 +236,8 @@ fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
     .unwrap_or(0)
 }
 
-fn pop_rx_byte(slot_id: u32) -> Option<u8> {
+pub fn pop_rx_byte(slot_id: u32) -> Option<u8> {
     with_runtime_mut_by_slot(slot_id, |runtime| runtime.rx_queue.pop_front()).flatten()
-}
-
-fn ensure_backend_registered() {
-    if BACKEND_REGISTERED.load(Ordering::Acquire) {
-        return;
-    }
-    if truelog::register_backend(backend(), BackendRole::Mirror).is_ok() {
-        BACKEND_REGISTERED.store(true, Ordering::Release);
-    } else {
-        debugconf!("serial: failed to register usb cdc backend\n");
-    }
 }
 
 pub fn handle_transfer_event(evt: &Trb) -> bool {
@@ -262,9 +246,11 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;
 
-    with_runtime_mut_by_slot(slot_id, |runtime| {
+    let mut tx_complete = false;
+    let handled = with_runtime_mut_by_slot(slot_id, |runtime| {
         if ep_target == runtime.ep_out_target {
             runtime.on_tx_complete(completion);
+            tx_complete = true;
             true
         } else if ep_target == runtime.ep_in_target {
             runtime.on_rx_complete(completion, residual);
@@ -273,7 +259,15 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
             false
         }
     })
-    .unwrap_or(false)
+    .unwrap_or(false);
+
+    if handled && tx_complete {
+        if let Some(cb) = *TX_COMPLETE_CALLBACK.lock() {
+            cb(slot_id);
+        }
+    }
+
+    handled
 }
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
@@ -287,6 +281,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ctx_stride_bytes,
         ctx_stride_words,
         target_port,
+        desired_baud,
         ..
     } = params;
 
@@ -459,19 +454,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         rx_queue: Deque::new(),
     };
 
-    let _ = runtime.post_rx_locked();
-    register_runtime(runtime);
-
-    ensure_backend_registered();
-    backend().activate(slot_id);
-
-    let baud = truelog::desired_baud();
     if program_line_coding(
         ctx,
         &mut ep0_ring,
         slot_id,
         interface.control_interface,
-        baud,
+        desired_baud,
     )
     .await
     .is_err()
@@ -490,6 +478,11 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     {
         debugconf!("usb: cdc set_control_line_state failed\n");
     }
+
+    // Important ordering: don't start bulk RX/TX while we're still using EP0 control
+    // transfers that wait on generic Transfer Events.
+    register_runtime(runtime);
+    let _ = with_runtime_mut_by_slot(slot_id, |rt| rt.post_rx_locked());
 
     debugconf!(
         "usb: cdc-acm attached slot={} ep_in=0x{:02X} ep_out=0x{:02X}\n",
@@ -653,53 +646,4 @@ fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
     }
 
     None
-}
-
-pub struct UsbCdcAcmBackend {
-    slot_id: AtomicU32,
-}
-
-impl UsbCdcAcmBackend {
-    const fn new() -> Self {
-        Self {
-            slot_id: AtomicU32::new(0),
-        }
-    }
-
-    pub fn activate(&self, slot_id: u32) {
-        self.slot_id.store(slot_id, Ordering::Release);
-    }
-
-    pub fn deactivate(&self, slot_id: u32) {
-        let _ = self
-            .slot_id
-            .compare_exchange(slot_id, 0, Ordering::AcqRel, Ordering::Relaxed);
-    }
-
-    fn active_slot(&self) -> Option<u32> {
-        match self.slot_id.load(Ordering::Acquire) {
-            0 => None,
-            slot => Some(slot),
-        }
-    }
-}
-
-impl SerialBackend for UsbCdcAcmBackend {
-    fn name(&self) -> &'static str {
-        "usb-cdc-acm"
-    }
-
-    fn try_write_byte(&self, byte: u8) -> bool {
-        self.try_write(&[byte]) == 1
-    }
-
-    fn try_write(&self, bytes: &[u8]) -> usize {
-        self.active_slot()
-            .map(|slot| queue_tx_bytes(slot, bytes))
-            .unwrap_or(0)
-    }
-
-    fn try_read_byte(&self) -> Option<u8> {
-        self.active_slot().and_then(pop_rx_byte)
-    }
 }

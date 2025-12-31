@@ -42,8 +42,6 @@ mod turbo;
 mod uefi;
 mod usb;
 mod vga;
-
-pub(crate) use debugcon::{debugcon_write_byte, debugcon_write_str};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 
 pub(crate) use crate::surface as std;
@@ -111,7 +109,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
-            debugcon_write_byte(b'!');
+            debugcon::debugcon_write_byte(b'!');
         }
     }
 }
@@ -156,6 +154,8 @@ pub extern "C" fn _start() -> ! {
             allocators::FALLBACK_HEAP_SIZE / 1024
         );
     }
+
+    // Bootlog buffering is active from early boot (fixed ring in `truelog`).
 
     percpu::init_bsp();
 
@@ -243,7 +243,7 @@ pub extern "C" fn _start() -> ! {
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
-            debugcon_write_byte(b'0');
+            debugcon::debugcon_write_byte(b'0');
             if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
@@ -274,7 +274,7 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            debugcon_write_byte(b'0' + cpu.lapic_id as u8);
+            debugcon::debugcon_write_byte(b'0' + cpu.lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
