@@ -3,7 +3,7 @@ use super::xhci::{
 };
 use crate::debugconf;
 use crate::pci::dma;
-use crate::serial::{self, BackendRole, SerialBackend};
+use crate::truelog::{self, BackendRole, SerialBackend};
 use core::cmp;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
@@ -195,8 +195,14 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
             idx += 1;
         }
     }
+    let empty = guard.is_empty();
+    drop(guard);
+
     if removed {
         backend().deactivate(slot_id);
+        if empty && truelog::unregister_backend(backend()) {
+            BACKEND_REGISTERED.store(false, Ordering::Release);
+        }
     }
     removed
 }
@@ -243,7 +249,7 @@ fn ensure_backend_registered() {
     if BACKEND_REGISTERED.load(Ordering::Acquire) {
         return;
     }
-    if serial::register_backend(backend(), BackendRole::Mirror).is_ok() {
+    if truelog::register_backend(backend(), BackendRole::Mirror).is_ok() {
         BACKEND_REGISTERED.store(true, Ordering::Release);
     } else {
         debugconf!("serial: failed to register usb cdc backend\n");
@@ -459,7 +465,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     ensure_backend_registered();
     backend().activate(slot_id);
 
-    let baud = serial::desired_baud();
+    let baud = truelog::desired_baud();
     if program_line_coding(
         ctx,
         &mut ep0_ring,
