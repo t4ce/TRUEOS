@@ -119,6 +119,7 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         enable_sse();
     }
+    truelog::init_log_shim();
     vga::init(limine::framebuffer_response());
 
     log_stack_ptrs("bsp:entry");
@@ -228,7 +229,7 @@ pub extern "C" fn _start() -> ! {
     let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
     vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
 
-    //disc::files::create_demo_file(); needs hardware qemu param i guess
+    disc::files::create_demo_file(); //needs hardware qemu param i guess
 
     let mut counter: u64 = 0;
     loop {
@@ -243,7 +244,7 @@ pub extern "C" fn _start() -> ! {
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte(b'0');
+            debugcon::debugcon_write_byte_raw(b'0');
             if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
@@ -274,7 +275,7 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte(b'0' + cpu.lapic_id as u8);
+            debugcon::debugcon_write_byte_raw(b'0' + cpu.lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
