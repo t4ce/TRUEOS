@@ -133,7 +133,11 @@ fn init_hpet() -> Option<Hpet> {
         hpet.info.base_address,
         hpet.frequency_hz,
         hpet.info.num_comparators,
-        if hpet.info.main_counter_is_64bits { 64 } else { 32 },
+        if hpet.info.main_counter_is_64bits {
+            64
+        } else {
+            32
+        },
         hpet.info.legacy_irq_capable,
     );
 

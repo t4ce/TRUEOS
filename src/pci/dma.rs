@@ -47,7 +47,10 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     }
 
     let Some(phys) = crate::phys::virt_to_phys_checked(ptr as *const u8) else {
-        debugconf!("dma: dealloc pointer outside known mappings virt=0x{:X}\n", ptr as usize);
+        debugconf!(
+            "dma: dealloc pointer outside known mappings virt=0x{:X}\n",
+            ptr as usize
+        );
         return;
     };
 

@@ -1,6 +1,8 @@
+use super::xhci::{
+    self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
+};
 use crate::debugconf;
 use crate::pci::dma;
-use super::xhci::{self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
@@ -37,10 +39,11 @@ static MASS_RUNTIMES: Mutex<Vec<MassRuntime, MAX_MASS_DEVICES>> = Mutex::new(Vec
 
 pub fn register_runtime(rt: MassRuntime) {
     let mut guard = MASS_RUNTIMES.lock();
-    if let Some(existing) = guard
-        .iter_mut()
-        .find(|r| r.slot_id == rt.slot_id && r.ep_in_target == rt.ep_in_target && r.ep_out_target == rt.ep_out_target)
-    {
+    if let Some(existing) = guard.iter_mut().find(|r| {
+        r.slot_id == rt.slot_id
+            && r.ep_in_target == rt.ep_in_target
+            && r.ep_out_target == rt.ep_out_target
+    }) {
         *existing = rt;
         return;
     }
@@ -70,7 +73,11 @@ pub fn with_runtime_by_slot<R, F>(slot_id: u32, f: F) -> Option<R>
 where
     F: FnOnce(&MassRuntime) -> R,
 {
-    MASS_RUNTIMES.lock().iter().find(|r| r.slot_id == slot_id).map(f)
+    MASS_RUNTIMES
+        .lock()
+        .iter()
+        .find(|r| r.slot_id == slot_id)
+        .map(f)
 }
 
 pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
@@ -218,7 +225,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             evt_slot == slot_id
         },
         400,
-        EmbassyDuration::from_millis(5)
+        EmbassyDuration::from_millis(5),
     )
     .await
     else {
@@ -305,7 +312,10 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
         // Bulk IN endpoint
         write_volatile(ep_in_ctx.add(0), 0);
-        write_volatile(ep_in_ctx.add(1), (mps_in << 16) | (EP_TYPE_BULK_IN << 3) | 3);
+        write_volatile(
+            ep_in_ctx.add(1),
+            (mps_in << 16) | (EP_TYPE_BULK_IN << 3) | 3,
+        );
         let dq_in = ring_in.dequeue_ptr();
         write_volatile(ep_in_ctx.add(2), lo(dq_in));
         write_volatile(ep_in_ctx.add(3), hi(dq_in));
@@ -313,7 +323,10 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
         // Bulk OUT endpoint
         write_volatile(ep_out_ctx.add(0), 0);
-        write_volatile(ep_out_ctx.add(1), (mps_out << 16) | (EP_TYPE_BULK_OUT << 3) | 3);
+        write_volatile(
+            ep_out_ctx.add(1),
+            (mps_out << 16) | (EP_TYPE_BULK_OUT << 3) | 3,
+        );
         let dq_out = ring_out.dequeue_ptr();
         write_volatile(ep_out_ctx.add(2), lo(dq_out));
         write_volatile(ep_out_ctx.add(3), hi(dq_out));
@@ -338,7 +351,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             evt_type == 33
         },
         400,
-        EmbassyDuration::from_millis(5)
+        EmbassyDuration::from_millis(5),
     )
     .await
     else {

@@ -23,7 +23,8 @@ pub static FRAMEBUFFER_REQUEST: request::FramebufferRequest = request::Framebuff
 
 #[used]
 #[link_section = ".limine_requests"]
-pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest = request::ExecutableAddressRequest::new();
+pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest =
+    request::ExecutableAddressRequest::new();
 
 #[used]
 #[link_section = ".limine_requests"]
@@ -53,7 +54,7 @@ pub fn hhdm_offset() -> Option<u64> {
 }
 
 pub fn memmap_entries() -> Option<&'static [&'static memory_map::Entry]> {
-    let resp =  MEMMAP_REQUEST.get_response()? ;
+    let resp = MEMMAP_REQUEST.get_response()?;
     Some(resp.entries())
 }
 
@@ -198,4 +199,3 @@ impl EfiSystemTableRequest {
         }
     }
 }
-

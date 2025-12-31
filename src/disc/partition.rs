@@ -1,7 +1,9 @@
 use alloc::{string::String, vec, vec::Vec};
 use core::{char::decode_utf16, cmp, convert::TryInto};
 
-use crate::disc::block::{self, BlockDevice, DeviceDescriptor, DeviceHandle, DeviceKind, DiscId, Error, Result};
+use crate::disc::block::{
+    self, BlockDevice, DeviceDescriptor, DeviceHandle, DeviceKind, DiscId, Error, Result,
+};
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
 const GPT_HEADER_LBA: u64 = 1;
@@ -302,7 +304,10 @@ pub fn register_gpt_partitions(device: DeviceHandle) -> Result<Vec<RegisteredPar
 
         let child = PartitionBlockDevice::new(device, part.range);
         let handle = block::register_device(descriptor, child);
-        registered.push(RegisteredPartition { id: handle.id(), info: part });
+        registered.push(RegisteredPartition {
+            id: handle.id(),
+            info: part,
+        });
     }
 
     Ok(registered)
