@@ -51,7 +51,7 @@ fn init_ecam_once() {
         };
 
         let Some(mcfg) = tables.find_table::<acpi::sdt::mcfg::Mcfg>() else {
-            crate::debugcon_write_str("pci: MCFG missing; using legacy cfg\n");
+            crate::debugconf!("pci: MCFG missing; using legacy cfg\n");
             return None;
         };
 
@@ -64,7 +64,7 @@ fn init_ecam_once() {
                 phys_base: entry.base_address,
             };
             if regions.push(region).is_err() {
-                crate::debugcon_write_str("pci: MCFG has too many regions; truncating\n");
+                crate::debugconf!("pci: MCFG has too many regions; truncating\n");
                 break;
             }
         }
@@ -159,7 +159,7 @@ fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32)
 }
 
 pub fn enumerate_once() {
-    crate::debugcon_write_str("pci: enumerate\n");
+    crate::debugconf!("pci: enumerate\n");
 
     DEVICES.lock().clear();
 
@@ -194,7 +194,7 @@ pub fn enumerate_once() {
         }
     }
 
-    crate::debugcon_write_str("pci: done\n");
+    crate::debugconf!("pci: done\n");
 }
 
 fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {

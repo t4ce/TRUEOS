@@ -1,11 +1,38 @@
-use acpi::address::GenericAddress;
+use acpi::address::{GenericAddress, MappedGas};
 use acpi::sdt::fadt::{Fadt, FixedFeatureFlags, IaPcBootArchFlags};
+use acpi::AcpiError;
 use core::ptr::{addr_of, read_unaligned};
 use spin::Once;
 
 use crate::debugconf;
 
-use super::ensure_tables;
+use super::{ensure_tables, AcpiIdentityHandler};
+
+#[allow(dead_code)]
+const PM1_SLEEP_TYP_SHIFT: u64 = 10;
+#[allow(dead_code)]
+const PM1_SLEEP_TYP_MASK: u64 = 0b111 << PM1_SLEEP_TYP_SHIFT;
+#[allow(dead_code)]
+const PM1_SLEEP_ENABLE_BIT: u64 = 1 << 13;
+
+#[allow(dead_code)]
+pub type FacpResult<T> = core::result::Result<T, FacpError>;
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum FacpError {
+    TablesMissing,
+    FadtMissing,
+    ResetUnsupported,
+    SleepUnsupported,
+    Acpi(AcpiError),
+}
+
+impl From<AcpiError> for FacpError {
+    fn from(value: AcpiError) -> Self {
+        FacpError::Acpi(value)
+    }
+}
 
 static LOG_ONCE: Once<()> = Once::new();
 
@@ -150,4 +177,71 @@ fn format_gas(gas: &GenericAddress) -> heapless::String<96> {
         gas.address_space, gas.address, gas.bit_width, gas.bit_offset, gas.access_size
     );
     s
+}
+
+#[allow(dead_code)]
+pub fn reset_system() -> FacpResult<()> {
+    with_fadt(|fadt| {
+        let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
+        if !flags.supports_system_reset_via_fadt() {
+            return Err(FacpError::ResetUnsupported);
+        }
+
+        let reg = fadt.reset_register()?;
+        if reg.address == 0 {
+            return Err(FacpError::ResetUnsupported);
+        }
+
+        write_gas_u64(&reg, u64::from(fadt.reset_value))
+    })
+}
+
+#[allow(dead_code)]
+pub fn enter_s5(pm1a_slp_typ: u8, pm1b_slp_typ: Option<u8>) -> FacpResult<()> {
+    with_fadt(|fadt| {
+        if fadt.pm1_control_length < 2 {
+            return Err(FacpError::SleepUnsupported);
+        }
+
+        let handler = AcpiIdentityHandler;
+        let pm1a = unsafe { MappedGas::map_gas(fadt.pm1a_control_block()?, &handler)? };
+        program_pm1_control(&pm1a, pm1a_slp_typ)?;
+
+        if let Some(pm1b_addr) = fadt.pm1b_control_block()? {
+            let slp_typ_b = pm1b_slp_typ.unwrap_or(pm1a_slp_typ);
+            let pm1b = unsafe { MappedGas::map_gas(pm1b_addr, &handler)? };
+            program_pm1_control(&pm1b, slp_typ_b)?;
+        }
+
+        Ok(())
+    })
+}
+
+#[allow(dead_code)]
+fn program_pm1_control(register: &MappedGas<AcpiIdentityHandler>, slp_typ: u8) -> FacpResult<()> {
+    let mut value = register.read()?;
+    value &= !(PM1_SLEEP_TYP_MASK | PM1_SLEEP_ENABLE_BIT);
+    value |= ((slp_typ as u64) << PM1_SLEEP_TYP_SHIFT) & PM1_SLEEP_TYP_MASK;
+    value |= PM1_SLEEP_ENABLE_BIT;
+    register.write(value)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn write_gas_u64(gas: &GenericAddress, value: u64) -> FacpResult<()> {
+    let handler = AcpiIdentityHandler;
+    let mapped = unsafe { MappedGas::map_gas(*gas, &handler)? };
+    mapped.write(value)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn with_fadt<T>(f: impl FnOnce(&Fadt) -> FacpResult<T>) -> FacpResult<T> {
+    let tables = ensure_tables().ok_or(FacpError::TablesMissing)?;
+    let mapping = tables
+        .find_table::<Fadt>()
+        .ok_or(FacpError::FadtMissing)?;
+    let fadt_ref = unsafe { mapping.virtual_start.as_ref() };
+    fadt_ref.validate()?;
+    f(fadt_ref)
 }
