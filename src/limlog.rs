@@ -1,9 +1,4 @@
-use crate::{
-    debugconf,
-    debugcon_write_str,
-    limine,
-    long_mode_active,
-};
+use crate::{debugcon_write_str, debugconf, limine, long_mode_active};
 
 pub fn log_limine_markers() {
     if long_mode_active() {
@@ -76,7 +71,7 @@ pub fn log_limine_markers() {
                 limine::memmap_type_name(entry.entry_type)
             );
         }
-    } 
+    }
 }
 
 fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
@@ -108,14 +103,7 @@ fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
         let len = month_lengths[month_idx] as u64;
         if days < len {
             let day = (days + 1) as u8;
-            return (
-                year,
-                (month_idx + 1) as u8,
-                day,
-                hour,
-                minute,
-                second,
-            );
+            return (year, (month_idx + 1) as u8, day, hour, minute, second);
         }
         days -= len;
         month_idx += 1;

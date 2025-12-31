@@ -24,7 +24,11 @@ pub fn smoke_test() {
     crate::debugconf!("&str='{}' len={}\n", ascii, ascii.len());
     match ensure_ascii(ascii) {
         Ok(()) => crate::debugconf!("ensure_ascii(ascii)=Ok\n"),
-        Err(e) => crate::debugconf!("ensure_ascii(ascii)=Err index={} byte=0x{:02X}\n", e.index, e.byte),
+        Err(e) => crate::debugconf!(
+            "ensure_ascii(ascii)=Err index={} byte=0x{:02X}\n",
+            e.index,
+            e.byte
+        ),
     }
 
     let non_ascii: &str = "Grüße";
@@ -97,7 +101,9 @@ pub fn sanitize_ascii(input: &str) -> String {
 
 /// Return true if the string is empty or contains only ASCII whitespace.
 pub fn is_blank(input: &str) -> bool {
-    input.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0C'))
+    input
+        .bytes()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'\x0C'))
 }
 
 /// Split `line` on the first `=` sign (common for bootloader key/value blobs).

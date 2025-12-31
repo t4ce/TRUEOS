@@ -1,5 +1,5 @@
-use acpi::sdt::fadt::{Fadt, FixedFeatureFlags, IaPcBootArchFlags};
 use acpi::address::GenericAddress;
+use acpi::sdt::fadt::{Fadt, FixedFeatureFlags, IaPcBootArchFlags};
 use core::ptr::{addr_of, read_unaligned};
 use spin::Once;
 
@@ -147,11 +147,7 @@ fn format_gas(gas: &GenericAddress) -> heapless::String<96> {
     let _ = write!(
         &mut s,
         "space={:?} addr=0x{:X} width={} offset={} access={}",
-        gas.address_space,
-        gas.address,
-        gas.bit_width,
-        gas.bit_offset,
-        gas.access_size
+        gas.address_space, gas.address, gas.bit_width, gas.bit_offset, gas.access_size
     );
     s
 }

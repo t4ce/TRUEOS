@@ -10,7 +10,9 @@ static LOG_ONCE: Once<()> = Once::new();
 
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
-        let Some(tables) = ensure_tables() else { return; };
+        let Some(tables) = ensure_tables() else {
+            return;
+        };
 
         let mut found = false;
         for (phys, hdr) in tables.table_headers() {
@@ -18,7 +20,8 @@ pub fn log_once() {
                 continue;
             }
             found = true;
-            let len = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
+            let len =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
             if let Ok(mapped) = mmio::map_mmio_region_exact(phys as u64, len) {
                 let base = mapped.as_ptr();
                 if len >= 60 {

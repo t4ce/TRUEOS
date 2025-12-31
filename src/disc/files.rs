@@ -80,17 +80,17 @@ impl Seek for RamDisk {
 }
 
 pub fn create_demo_file() {
-            debugconf!("fatfs demo: ");
+    debugconf!("fatfs demo: ");
     const RAMDISK_BYTES: usize = 1024 * 1024; // 1 MiB scratch volume
     let mut ramdisk = RamDisk::new(RAMDISK_BYTES);
 
-    if let Err(err) = format_volume(&mut ramdisk, FormatVolumeOptions::new()) {
+    if let Err(_) = format_volume(&mut ramdisk, FormatVolumeOptions::new()) {
         return;
     }
 
     let fs = match FileSystem::new(ramdisk, FsOptions::new()) {
         Ok(fs) => fs,
-        Err(err) => {
+        Err(_) => {
             return;
         }
     };
@@ -98,11 +98,11 @@ pub fn create_demo_file() {
     let root = fs.root_dir();
     match root.create_file("helloworld") {
         Ok(mut file) => {
-            if let Err(err) = file.write_all(b"hello from fatfs in-memory demo") {
+            if let Err(_) = file.write_all(b"hello from fatfs in-memory demo") {
                 return;
             }
         }
-        Err(err) => {
+        Err(_) => {
             return;
         }
     }

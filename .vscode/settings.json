@@ -17,5 +17,6 @@
         "86_64.json",
         "--bin",
         "falseos"
-    ]
+    ],
+    "cmake.ignoreCMakeListsMissing": true
 }

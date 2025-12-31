@@ -77,7 +77,11 @@ pub fn probe_once() {
             );
 
             // NVMe register set is small; bound mapping to a reasonable window.
-            let mut map_len = if size == 0 { 0x4000usize } else { size as usize };
+            let mut map_len = if size == 0 {
+                0x4000usize
+            } else {
+                size as usize
+            };
             if map_len < 0x4000 {
                 map_len = 0x4000;
             }

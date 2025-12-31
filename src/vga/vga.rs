@@ -2,8 +2,8 @@ use font8x8::{UnicodeFonts, BASIC_FONTS};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
-use core::fmt;
 use core::f32::consts::PI;
+use core::fmt;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Image<'a> {
@@ -113,10 +113,7 @@ pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
                 let x = LOG_CUR_X.load(Ordering::Relaxed).min(fb.width);
                 fb.blit_text(part, x, y, fg, bg, shadow);
 
-                let advance = part
-                    .chars()
-                    .count()
-                    .saturating_mul(FONT_W + CHAR_SPACING);
+                let advance = part.chars().count().saturating_mul(FONT_W + CHAR_SPACING);
                 LOG_CUR_X.store(x.saturating_add(advance).min(fb.width), Ordering::Relaxed);
             }
 
@@ -180,21 +177,13 @@ pub fn draw_header_square(total_slots: usize, slot: usize, color: u32, degree: u
             let angle = ((degree % 360) as f32) * (PI / 180.0);
             let (c, s) = (cosf(angle), sinf(angle));
 
-            let corners = [
-                (-half, -half),
-                (half, -half),
-                (half, half),
-                (-half, half),
-            ];
+            let corners = [(-half, -half), (half, -half), (half, half), (-half, half)];
 
             let mut pts = [(0_i32, 0_i32); 4];
             for (i, (dx, dy)) in corners.into_iter().enumerate() {
                 let rx = dx * c - dy * s;
                 let ry = dx * s + dy * c;
-                pts[i] = (
-                    roundf(cx + rx) as i32,
-                    roundf(cy + ry) as i32,
-                );
+                pts[i] = (roundf(cx + rx) as i32, roundf(cy + ry) as i32);
             }
 
             let white = DEFAULT_FG_COLOR;
@@ -261,7 +250,15 @@ impl FramebufferSurface {
         }
     }
 
-    fn blit_glyph(&self, ch: char, origin_x: usize, origin_y: usize, fg: u32, bg: u32, shadow: u32) {
+    fn blit_glyph(
+        &self,
+        ch: char,
+        origin_x: usize,
+        origin_y: usize,
+        fg: u32,
+        bg: u32,
+        shadow: u32,
+    ) {
         let glyph = BASIC_FONTS
             .get(ch)
             .or_else(|| BASIC_FONTS.get('?'))

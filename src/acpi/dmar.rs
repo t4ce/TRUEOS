@@ -10,7 +10,9 @@ static LOG_ONCE: Once<()> = Once::new();
 
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
-        let Some(tables) = ensure_tables() else { return; };
+        let Some(tables) = ensure_tables() else {
+            return;
+        };
 
         let mut found = false;
         for (phys, hdr) in tables.table_headers() {
@@ -18,7 +20,8 @@ pub fn log_once() {
                 continue;
             }
             found = true;
-            let len = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
+            let len =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) } as usize;
             if let Ok(mapped) = mmio::map_mmio_region_exact(phys as u64, len) {
                 let base = mapped.as_ptr();
                 // DMAR header fields after SDT header (36 bytes): host address width, flags, reserved2 (2), reserved3 (4).
@@ -37,7 +40,9 @@ pub fn log_once() {
                     let mut count = 0usize;
                     while off + 4 <= len {
                         let _t = unsafe { core::ptr::read_unaligned(base.add(off) as *const u16) };
-                        let l = unsafe { core::ptr::read_unaligned(base.add(off + 2) as *const u16) } as usize;
+                        let l =
+                            unsafe { core::ptr::read_unaligned(base.add(off + 2) as *const u16) }
+                                as usize;
                         if l < 4 || off + l > len {
                             break;
                         }
