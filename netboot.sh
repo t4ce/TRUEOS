@@ -18,7 +18,9 @@ sudo nmcli dev set enp5s0 managed yes
 sudo nmcli dev set wlo1 managed yes
 sudo ip addr flush dev enp5s0
 
-# evtl neuen code pullen: CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu cargo outdated
+# CARGO_BUILD_TARGET=/home/t4ce/Dokumente/TrueOS/86_64.json cargo outdated -R
+# cargo upgrade
+
 
 # full build from github
 # qemu-img create -f raw disk.img 1G
