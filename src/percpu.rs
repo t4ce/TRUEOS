@@ -5,7 +5,6 @@ use alloc::boxed::Box;
 use crate::debugconf;
 use x86_64::registers::model_specific::Msr;
 
-// MSR addresses from Intel SDM.
 const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
 
 #[repr(C)]
@@ -80,8 +79,6 @@ pub fn this_cpu_ptr() -> *mut PerCpu {
 
 #[inline(always)]
 fn read_lapic_id_via_cpuid() -> u32 {
-    // This is a pragmatic best-effort: CPUID.1 EBX[31:24] gives the initial APIC ID.
-    // It’s fine for bring-up/logging and per-CPU identity in a simple kernel.
     let cpuid = raw_cpuid::CpuId::new();
     cpuid
         .get_feature_info()
