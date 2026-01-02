@@ -50,6 +50,7 @@ use crate::pci::mmio;
 use crate::usb::usb_scout;
 use ::acpi::sdt::hpet;
 use ::limine::mp::Cpu as LimineCpu;
+use core::{cell::UnsafeCell, mem::MaybeUninit};
 use core::panic::PanicInfo;
 use embassy_executor::{raw::Executor, Spawner};
 use spin::Once;
@@ -59,33 +60,18 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
 
-const BSP_EXECUTOR_SIZE: usize = core::mem::size_of::<Executor>();
+#[repr(align(64))]
+struct ExecStorage(UnsafeCell<MaybeUninit<Executor>>);
 
-#[repr(C, align(64))]
-struct ExecutorStorage([u8; BSP_EXECUTOR_SIZE]);
+unsafe impl Sync for ExecStorage {}
 
-#[link_section = ".data"]
-static mut BSP_EXECUTOR_STORAGE: ExecutorStorage = ExecutorStorage([0xA5; BSP_EXECUTOR_SIZE]);
+static STORAGE: ExecStorage = ExecStorage(UnsafeCell::new(MaybeUninit::uninit()));
 
 #[inline(always)]
 unsafe fn init_bsp_executor() -> &'static Executor {
-    let storage_ptr = core::ptr::addr_of_mut!(BSP_EXECUTOR_STORAGE);
-    let bsp_executor_ptr = (*storage_ptr).0.as_mut_ptr() as *mut Executor;
-    core::ptr::write(bsp_executor_ptr, Executor::new(core::ptr::null_mut()));
+    let bsp_executor_ptr = (*STORAGE.0.get()).as_mut_ptr();
+    bsp_executor_ptr.write(Executor::new(core::ptr::null_mut()));
     &*bsp_executor_ptr
-}
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
-    backtrace::print(64);
-    let mut counter: u64 = 0;
-    loop {
-        counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte(b'!');
-        }
-    }
 }
 
 #[no_mangle]
@@ -170,8 +156,8 @@ pub extern "C" fn _start() -> ! {
         cpu.goto_address.write(ap_entry);
     }
 
-    let bsp_executor = unsafe { init_bsp_executor() };
-    let spawner = bsp_executor.spawner();
+    let executor = unsafe { init_bsp_executor() };
+    let spawner = executor.spawner();
 
     if tga::is_online() {
         let _ = spawner.spawn(tga::blink_task());
@@ -197,15 +183,15 @@ pub extern "C" fn _start() -> ! {
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
 
-    _loop(bsp_executor, spawner)
+    _loop(executor, spawner)
 }
 
-fn _loop(bsp_executor: &'static Executor, spawner: Spawner) -> ! {
+fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000 == 0 {
             time::poll();
-            unsafe { bsp_executor.poll() };
+            unsafe { executor.poll() };
         }
 
         if counter % 1_000_000 == 0 {
@@ -223,7 +209,6 @@ fn _loop(bsp_executor: &'static Executor, spawner: Spawner) -> ! {
         counter = counter.wrapping_add(1);
     }
 }
-
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     // floating-point math (SSE) needs per core enabling
@@ -249,6 +234,19 @@ unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
             debugcon::debugcon_write_byte_raw(b'0' + cpu.lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+    backtrace::print(64);
+    let mut counter: u64 = 0;
+    loop {
+        counter = counter.wrapping_add(1);
+        if counter % 100_000_000 == 0 {
+            debugcon::debugcon_write_byte(b'!');
+        }
     }
 }
 
