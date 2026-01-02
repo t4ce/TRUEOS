@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-embassy-executor = { path = "vendor/embassy-executor", default-features = false, features = ["executor-thread", "arch-x86_64"] }
+embassy-executor = { version = "0.9.1", default-features = false, features = ["executor-thread", "arch-spin"] }
 embassy-time = { version = "0.5.0", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.1", default-features = false }
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
