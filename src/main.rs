@@ -50,8 +50,8 @@ use crate::pci::mmio;
 use crate::usb::usb_scout;
 use ::acpi::sdt::hpet;
 use ::limine::mp::Cpu as LimineCpu;
-use core::{cell::UnsafeCell, mem::MaybeUninit};
 use core::panic::PanicInfo;
+use alloc::boxed::Box;
 use embassy_executor::{raw::Executor, Spawner};
 use spin::Once;
 pub use surface::pat as pattern;
@@ -59,20 +59,6 @@ pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
-
-#[repr(align(64))]
-struct ExecStorage(UnsafeCell<MaybeUninit<Executor>>);
-
-unsafe impl Sync for ExecStorage {}
-
-static STORAGE: ExecStorage = ExecStorage(UnsafeCell::new(MaybeUninit::uninit()));
-
-#[inline(always)]
-unsafe fn init_bsp_executor() -> &'static Executor {
-    let bsp_executor_ptr = (*STORAGE.0.get()).as_mut_ptr();
-    bsp_executor_ptr.write(Executor::new(core::ptr::null_mut()));
-    &*bsp_executor_ptr
-}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -122,12 +108,8 @@ pub extern "C" fn _start() -> ! {
     crate::path::smoke_test();
     crate::pattern::smoke_test();
 
-    let desired_turbo = turbo::desired_state();
-    let local_turbo = turbo::local_state();
     crate::debugconf!(
-        "turbo: desired={:?} local={:?}\n",
-        desired_turbo,
-        local_turbo
+        "turbo: {:?}\n", turbo::local_state()
     );
 
     pci::dma::init_from_limine();
@@ -156,7 +138,7 @@ pub extern "C" fn _start() -> ! {
         cpu.goto_address.write(ap_entry);
     }
 
-    let executor = unsafe { init_bsp_executor() };
+    let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
     if tga::is_online() {
