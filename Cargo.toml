@@ -18,12 +18,12 @@ rdrand = { version = "0.8", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
-hashbrown = { version = "0.14", default-features = false }
+hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2", default-features = false }
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
-smoltcp = { version = "0.11", default-features = false, features = ["alloc", "proto-ipv4", "socket-raw", "socket-udp", "socket-tcp", "medium-ethernet"] }
+smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "socket-raw", "socket-udp", "socket-tcp", "medium-ethernet"] }
 core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 
