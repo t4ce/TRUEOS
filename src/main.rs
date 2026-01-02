@@ -75,32 +75,6 @@ unsafe fn init_bsp_executor() -> &'static Executor {
     &*bsp_executor_ptr
 }
 
-#[inline(always)]
-fn log_stack_ptrs(tag: &str) {
-    let rsp: u64;
-    let rbp: u64;
-    unsafe {
-        core::arch::asm!(
-            "mov {}, rsp",
-            out(reg) rsp,
-            options(nomem, nostack, preserves_flags)
-        );
-        core::arch::asm!(
-            "mov {}, rbp",
-            out(reg) rbp,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-
-    crate::debugconf!(
-        "stack({}): rsp=0x{:016X} rbp=0x{:016X} (requested_size={} bytes)\n",
-        tag,
-        rsp,
-        rbp,
-        8 * 1024 * 1024
-    );
-}
-
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
@@ -116,15 +90,14 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    unsafe {
-        enable_sse();
-    }
+    unsafe {enable_sse();}
+
     truelog::init_log_shim();
+
     vga::init(limine::framebuffer_response());
 
-    log_stack_ptrs("bsp:entry");
-
     limlog::log_limine_markers(); //limlog::log_memmap_once();
+
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
@@ -155,8 +128,6 @@ pub extern "C" fn _start() -> ! {
             allocators::FALLBACK_HEAP_SIZE / 1024
         );
     }
-
-    // Bootlog buffering is active from early boot (fixed ring in `truelog`).
 
     percpu::init_bsp();
 
@@ -189,6 +160,7 @@ pub extern "C" fn _start() -> ! {
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
     acpi::hpet::ensure();
+
     rng::log_rng_caps();
 
     usb::xhci::init_once();
@@ -223,14 +195,12 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(usb::hid::input_logger());
 
-    vga::render_framebuffer_banner("FalseOS");
-
-    let white = 0x00_FF_FF_FF;
-    let (_, bg, shadow) = vga::current_colors().unwrap_or((white, 0, vga::DEFAULT_SHADOW_COLOR));
-    vga::logln("highlight", vga::PINK_FG_COLOR, bg, shadow);
-
     disc::files::create_demo_file(); //needs hardware qemu param i guess
 
+    _loop(bsp_executor, spawner)
+}
+
+fn _loop(bsp_executor: &'static Executor, spawner: Spawner) -> ! {
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000 == 0 {
@@ -253,6 +223,7 @@ pub extern "C" fn _start() -> ! {
         counter = counter.wrapping_add(1);
     }
 }
+
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
     // floating-point math (SSE) needs per core enabling
@@ -295,10 +266,8 @@ unsafe fn enable_sse() {
 #[inline(always)]
 pub(crate) fn long_mode_active() -> bool {
     use x86_64::registers::model_specific::Msr;
-
     const IA32_EFER: u32 = 0xC000_0080;
     const EFER_LMA_BIT: u64 = 1 << 10;
-
     let efer = unsafe { Msr::new(IA32_EFER).read() };
     (efer & EFER_LMA_BIT) != 0
 }
