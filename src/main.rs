@@ -24,10 +24,9 @@ pub extern crate alloc;
 mod acpi;
 mod allocators;
 mod backtrace;
-mod debugcon;
 mod disc;
 mod limine;
-mod limlog;
+mod limstats;
 mod pci;
 mod percpu;
 mod phys;
@@ -43,22 +42,17 @@ mod uefi;
 mod usb;
 mod vga;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-
-pub(crate) use crate::surface as std;
-
-use crate::pci::mmio;
 use crate::usb::usb_scout;
-use ::acpi::sdt::hpet;
 use ::limine::mp::Cpu as LimineCpu;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use embassy_executor::{raw::Executor, Spawner};
-use spin::Once;
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
-static SMP_RESP: Once<&'static ::limine::response::MpResponse> = Once::new();
+static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -68,7 +62,7 @@ pub extern "C" fn _start() -> ! {
 
     vga::init(limine::framebuffer_response());
 
-    limlog::log_limine_markers(); //limlog::log_memmap_once();
+    limstats::log_limine_markers(); //limstats::log_memmap_once();
 
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
@@ -76,37 +70,25 @@ pub extern "C" fn _start() -> ! {
     // If booted via UEFI, parse+log the EFI System Table once.
     // uefi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
-    const HEAP_CANDIDATES: [usize; 7] = [
-        1024 * 1024 * 1024,
-        512 * 1024 * 1024,
-        256 * 1024 * 1024,
-        128 * 1024 * 1024,
-        64 * 1024 * 1024,
-        32 * 1024 * 1024,
-        16 * 1024 * 1024,
-    ];
-    let mut heap_ready = false;
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    const GIB: usize = 1024 * MIB;
+    const HEAP_ALIGN: usize = 2 * MIB;
+    const HEAP_CANDIDATES: [usize; 7] = [GIB, 512 * MIB, 256 * MIB, 128 * MIB,64 * MIB, 32 * MIB, 16 * MIB];
     for &size in HEAP_CANDIDATES.iter() {
-        if let Some(arena) = phys::reserve_heap_arena(size, 2 * 1024 * 1024) {
+        if let Some(arena) = phys::reserve_heap_arena(size, HEAP_ALIGN) {
             if allocators::install_heap_arena(arena) {
-                heap_ready = true;
                 break;
             }
         }
     }
-    if !heap_ready {
-        crate::debugconf!(
-            "heap: fallback ({} KiB) active\n",
-            allocators::FALLBACK_HEAP_SIZE / 1024
-        );
-    }
 
     percpu::init_bsp();
 
-    crate::io::smoke_test();
-    crate::strings::smoke_test();
-    crate::path::smoke_test();
-    crate::pattern::smoke_test();
+    io::smoke_test();
+    strings::smoke_test();
+    path::smoke_test();
+    pattern::smoke_test();
 
     crate::debugconf!(
         "turbo: {:?}\n", turbo::local_state()
@@ -133,7 +115,9 @@ pub extern "C" fn _start() -> ! {
 
     usb::xhci::init_once();
 
-    let resp = *SMP_RESP.call_once(|| limine::smp_response().expect("LIMINE SMP MISSING"));
+    let resp = limine::smp_response().unwrap();
+
+    TOTAL_SLOTS.store(resp.cpus().len(), Ordering::Release);
     for cpu in resp.cpus() {
         cpu.goto_address.write(ap_entry);
     }
@@ -182,7 +166,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte_raw(b'0');
+            truelog::debugcon_write_byte_raw(b'0');
             if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
@@ -193,27 +177,26 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
 }
 
 unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
-    // floating-point math (SSE) needs per core enabling
     enable_sse();
-
-    let total_slots = SMP_RESP.get().expect("SMP response missing").cpus().len();
-
-    let slot = (cpu.lapic_id as usize) % total_slots;
-
+    let total = TOTAL_SLOTS.load(Ordering::Acquire);
+    let slot = (cpu.lapic_id as usize) % total;
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
+    ap_loop(cpu.lapic_id as u32, total, slot)
+}
 
+fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000_000 == 0 {
             vga::draw_header_square(
-                total_slots,
+                total,
                 slot,
                 vga::DEFAULT_SHADOW_COLOR,
                 (counter % 360) as u32,
             );
         }
         if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte_raw(b'0' + cpu.lapic_id as u8);
+            truelog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
@@ -227,7 +210,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
-            debugcon::debugcon_write_byte(b'!');
+            truelog::debugcon_write_byte_raw(b'!');
         }
     }
 }
