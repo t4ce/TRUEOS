@@ -20,7 +20,6 @@ impl Com1UartBackend {
         self.init.call_once(|| unsafe {
             crate::portio::outb(COM1_BASE + 1, 0x00);
             crate::portio::outb(COM1_BASE + 3, 0x80);
-            self.write_divisor(Self::divisor_for_baud(crate::truelog::desired_baud()));
             crate::portio::outb(COM1_BASE + 3, 0x03);
             crate::portio::outb(COM1_BASE + 2, 0xC7);
             crate::portio::outb(COM1_BASE + 4, 0x0B);
