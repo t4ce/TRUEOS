@@ -4,6 +4,7 @@ pub mod input;
 pub mod mass;
 pub mod pen;
 pub mod print;
+pub mod truekey;
 pub mod xhci;
 
 use self::xhci::{
@@ -133,6 +134,109 @@ fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -> Trb {
         d2: 8 | (2 << 16),          // 8-byte setup, TRT=IN
         d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
     }
+}
+
+fn setup_get_string_descriptor(desc_index: u8, langid: u16, length: u16) -> Trb {
+    // bmRequestType=0x80 (IN|Standard|Device), bRequest=0x06 (GET_DESCRIPTOR)
+    // wValue = (STRING << 8) | index, wIndex = langid
+    let w_value = ((3u16) << 8) | (desc_index as u16);
+    Trb {
+        d0: (0x80u32) | (0x06u32 << 8) | ((w_value as u32) << 16),
+        d1: (langid as u32) | ((length as u32) << 16),
+        d2: 8 | (2 << 16),          // 8-byte setup, TRT=IN
+        d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
+    }
+}
+
+async fn fetch_first_langid(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+) -> Option<u16> {
+    // String descriptor 0 returns supported LANGIDs.
+    let (buf_phys, buf_virt) = dma::alloc(256, 64)?;
+    unsafe { write_bytes(buf_virt, 0, 256) };
+    let res = control_in(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup_get_string_descriptor(0, 0, 255),
+        buf_phys,
+        255,
+        "get-str-langid",
+        400,
+    )
+    .await;
+
+    let lang = match res {
+        Ok((_cc, transferred)) => unsafe {
+            let n = (transferred as usize).min(256);
+            let desc = core::slice::from_raw_parts(buf_virt, n);
+            if desc.len() < 4 || desc[1] != 3 {
+                None
+            } else {
+                Some(u16::from_le_bytes([desc[2], desc[3]]))
+            }
+        },
+        Err(()) => None,
+    };
+
+    dma::dealloc(buf_virt, 256);
+    lang
+}
+
+async fn fetch_serial_string(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    serial_index: u8,
+) -> cdc_acm::UsbSerial {
+    if serial_index == 0 {
+        return cdc_acm::UsbSerial::none();
+    }
+
+    let langid = fetch_first_langid(ctx, ep0_ring, slot_id)
+        .await
+        .unwrap_or(0x0409);
+
+    let (buf_phys, buf_virt) = match dma::alloc(256, 64) {
+        Some(p) => p,
+        None => return cdc_acm::UsbSerial::none(),
+    };
+    unsafe { write_bytes(buf_virt, 0, 256) };
+
+    let res = control_in(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup_get_string_descriptor(serial_index, langid, 255),
+        buf_phys,
+        255,
+        "get-serial",
+        800,
+    )
+    .await;
+
+    let mut out: heapless::Vec<u8, 64> = heapless::Vec::new();
+    if let Ok((_cc, transferred)) = res {
+        unsafe {
+            let n = (transferred as usize).min(256);
+            let desc = core::slice::from_raw_parts(buf_virt, n);
+            if desc.len() >= 2 && desc[1] == 3 {
+                let total = (desc[0] as usize).min(desc.len());
+                let mut idx = 2usize;
+                while idx + 1 < total {
+                    let ch = u16::from_le_bytes([desc[idx], desc[idx + 1]]);
+                    let b = if ch <= 0x7F { ch as u8 } else { b'?' };
+                    let _ = out.push(b);
+                    idx += 2;
+                }
+            }
+        }
+    }
+
+    dma::dealloc(buf_virt, 256);
+    cdc_acm::UsbSerial::from_bytes(out.as_slice())
 }
 
 async fn control_in(
@@ -636,12 +740,14 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         slot_id
     );
 
-    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_num_cfg) = unsafe {
+    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_serial, dev_num_cfg) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
         let vid = u16::from_le_bytes([dd[8], dd[9]]);
         let pid = u16::from_le_bytes([dd[10], dd[11]]);
-        (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[17])
+        (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[16], dd[17])
     };
+
+    let dev_serial = fetch_serial_string(&ctx, &mut ep0_ring, slot_id, dev_i_serial).await;
 
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
         Some(pair) => pair,
@@ -784,6 +890,34 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
+        return;
+    }
+
+    if cdc_acm::attach_device(cdc_acm::AttachParams {
+        ctx: &ctx,
+        cmd_ring: &mut state.cmd_ring,
+        ep0_ring: &mut ep0_ring,
+        slot_id,
+        dev_vid,
+        dev_pid,
+        dev_serial,
+        cfg: cfg_slice,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+        desired_baud: 115_200,
+    })
+    .await
+    .is_ok()
+    {
+        usbv!(
+            "usb: enum port {} claimed CDC-ACM slot={}\n",
+            target_port,
+            slot_id
+        );
+        register_device(slot_id as u32, target_port, DeviceKind::Cdc);
         return;
     }
 

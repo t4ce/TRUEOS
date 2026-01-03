@@ -7,54 +7,12 @@ macro_rules! log {
     }};
 }
 
-/// Global log fan-out.
-///
-/// Order:
-/// A) QEMU debugcon (0xE9)
-/// B) VGA
-/// C) UART0 (COM1)
-/// D) Placeholder
 pub fn log(args: fmt::Arguments<'_>) {
-    cache::log(args);
+    crate::usb::truekey::push_fmt(args);
     debugcon::log(args);
     let _ = crate::vga::log_fmt(args);
     uart0::log(args);
     placeholder::log(args);
-}
-
-mod cache {
-    use core::fmt;
-
-    const ROWS: usize = 512;
-    const COLS: usize = 1024;
-    static mut BUF: [[u8; COLS]; ROWS] = [[0; COLS]; ROWS];
-    static mut ROW: usize = 0;
-    static mut COL: usize = 0;
-
-    struct Writer;
-    impl fmt::Write for Writer {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            unsafe {
-                for &b in s.as_bytes() {
-                    if b == b'\n' {
-                        ROW = (ROW + 1) % ROWS;
-                        COL = 0;
-                        continue;
-                    }
-                    if COL < COLS {
-                        BUF[ROW][COL] = b;
-                        COL += 1;
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
-    pub(super) fn log(args: fmt::Arguments<'_>) {
-        let _ = fmt::write(&mut Writer, args);
-    }
 }
 
 #[inline(always)]
@@ -94,7 +52,7 @@ mod uart0 {
     impl fmt::Write for Writer {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             for &b in s.as_bytes() {
-                let _ = crate::serial::COM1_BACKEND.try_write_byte(b);
+                // let _ = crate::serial::COM1_BACKEND.try_write_byte(b); its because.. what is UART0?
             }
             Ok(())
         }
