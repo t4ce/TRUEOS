@@ -25,3 +25,9 @@ sudo ip addr flush dev enp5s0
 # full build from github
 # qemu-img create -f raw disk.img 1G
 # git submodule init update
+
+
+___
+
+# echo 'kernel.dmesg_restrict = 0' | sudo tee /etc/sysctl.d/99-dmesg.conf
+# its when you cant pass in a usb dev

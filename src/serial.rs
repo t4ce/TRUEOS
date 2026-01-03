@@ -1,71 +1,55 @@
+use alloc::boxed::Box;
 use core::cmp;
-use spin::Once;
+use core::future::Future;
+use core::pin::Pin;
 
-const COM1_BASE: u16 = 0x3F8;
-const COM1_WAIT_SPINS: usize = 100_000;
-const COM1_CLOCK_HZ: u32 = 14_745_600;
-pub(crate) struct Com1UartBackend {
-    init: Once<()>,
+/// Maximum length for a device serial number (bytes).
+pub const SERIAL_NUMBER_MAX: usize = 64;
+
+/// Simple serial number container for identifying endpoints across buses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SerialNumber {
+    len: u8,
+    bytes: [u8; SERIAL_NUMBER_MAX],
 }
 
-pub(crate) static COM1_BACKEND: Com1UartBackend = Com1UartBackend::new();
-
-impl Com1UartBackend {
-    const fn new() -> Self {
-        Self { init: Once::new() }
-    }
-
-    fn ensure_init(&self) {
-        self.init.call_once(|| unsafe {
-            crate::portio::outb(COM1_BASE + 1, 0x00);
-            crate::portio::outb(COM1_BASE + 3, 0x80);
-            crate::portio::outb(COM1_BASE + 3, 0x03);
-            crate::portio::outb(COM1_BASE + 2, 0xC7);
-            crate::portio::outb(COM1_BASE + 4, 0x0B);
-        });
-    }
-
-    fn write_divisor(&self, divisor: u16) {
-        unsafe {
-            crate::portio::outb(COM1_BASE + 0, (divisor & 0x00FF) as u8);
-            crate::portio::outb(COM1_BASE + 1, (divisor >> 8) as u8);
+impl SerialNumber {
+    pub const fn none() -> Self {
+        Self {
+            len: 0,
+            bytes: [0; SERIAL_NUMBER_MAX],
         }
     }
 
-    fn divisor_for_baud(baud: u32) -> u16 {
-        let baud = baud.max(1);
-        let raw = COM1_CLOCK_HZ / (16 * baud);
-        cmp::max(1, cmp::min(raw, u16::MAX as u32)) as u16
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut out = Self::none();
+        let n = cmp::min(bytes.len(), SERIAL_NUMBER_MAX);
+        out.bytes[..n].copy_from_slice(&bytes[..n]);
+        out.len = n as u8;
+        out
     }
 
-    fn program_baud(&self, baud: u32) -> bool {
-        self.ensure_init();
-        let divisor = Self::divisor_for_baud(baud);
-        unsafe {
-            crate::portio::outb(COM1_BASE + 3, 0x80);
-            self.write_divisor(divisor);
-            crate::portio::outb(COM1_BASE + 3, 0x03);
-        }
-        true
+    pub fn from_str(s: &str) -> Self {
+        Self::from_bytes(s.as_bytes())
     }
 
-    fn lsr() -> u8 {
-        unsafe { crate::portio::inb(COM1_BASE + 5) }
+    pub fn is_some(&self) -> bool {
+        self.len != 0
     }
 
-    pub(crate) fn try_write_byte(&self, byte: u8) -> bool {
-        self.ensure_init();
-        for _ in 0..COM1_WAIT_SPINS {
-            if (Self::lsr() & 0x20) != 0 {
-                unsafe { crate::portio::outb(COM1_BASE + 0, byte) };
-                return true;
-            }
-            core::hint::spin_loop();
-        }
-        false
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..(self.len as usize)]
     }
+}
 
-    pub(crate) fn apply_baud(&self, baud: u32) -> bool {
-        self.program_baud(baud)
-    }
+/// Minimal async serial interface that can be shared across transports.
+pub trait SerialPort {
+    /// Best-effort immediate write; returns bytes accepted.
+    fn write(&self, data: &[u8]) -> usize;
+
+    /// Write the full buffer, waiting for backpressure to clear.
+    fn write_all<'a>(&'a self, data: &'a [u8]) -> Pin<Box<dyn Future<Output = usize> + 'a>>;
+
+    /// Optional stable serial number for the endpoint.
+    fn serial_number(&self) -> Option<SerialNumber>;
 }

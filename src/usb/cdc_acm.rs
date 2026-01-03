@@ -2,9 +2,14 @@ use super::xhci::{
     self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
 };
 use crate::pci::dma;
+use crate::serial::{SerialNumber, SerialPort};
+use alloc::boxed::Box;
 use core::cmp;
+use core::future::poll_fn;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::task::{Poll, Waker};
+use core::pin::Pin;
 use heapless::{Deque, Vec};
 use spin::Mutex;
 
@@ -20,6 +25,8 @@ const MAX_CDC_DEVICES: usize = 2;
 const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
 const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
+
+pub type UsbSerial = SerialNumber;
 
 #[derive(Clone, Copy, Debug)]
 struct EndpointInfo {
@@ -49,6 +56,9 @@ pub struct AttachParams<'a> {
     pub cmd_ring: &'a mut TrbRing,
     pub ep0_ring: &'a mut TrbRing,
     pub slot_id: u32,
+    pub dev_vid: u16,
+    pub dev_pid: u16,
+    pub dev_serial: UsbSerial,
     pub cfg: &'a [u8],
     pub dev_ctx_virt: *mut u8,
     pub ctx_stride_bytes: usize,
@@ -58,9 +68,32 @@ pub struct AttachParams<'a> {
     pub desired_baud: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CdcAttachEvent {
+    pub slot_id: u32,
+    pub vid: u16,
+    pub pid: u16,
+    pub serial: UsbSerial,
+}
+
+/// Serial port handle for CDC-ACM transports.
+#[derive(Clone, Copy, Debug)]
+pub struct CdcSerialPort {
+    slot_id: u32,
+}
+
+impl CdcSerialPort {
+    pub fn slot_id(&self) -> u32 {
+        self.slot_id
+    }
+}
+
 struct CdcRuntime {
     info: CdcInterface,
     slot_id: u32,
+    vid: u16,
+    pid: u16,
+    serial: UsbSerial,
     ctx: XhciContext,
     ep_in_target: u32,
     ep_out_target: u32,
@@ -70,6 +103,7 @@ struct CdcRuntime {
     tx_dma_virt: *mut u8,
     tx_dma_len: usize,
     tx_inflight: bool,
+    tx_waker_idx: usize,
     rx_dma_phys: u64,
     rx_dma_virt: *mut u8,
     rx_dma_len: usize,
@@ -180,17 +214,45 @@ impl CdcRuntime {
 
 static CDC_RUNTIMES: Mutex<Vec<CdcRuntime, MAX_CDC_DEVICES>> = Mutex::new(Vec::new());
 
+// Per-runtime TX waker slots for backpressure notification.
+static TX_WAKERS: [Mutex<Option<Waker>>; MAX_CDC_DEVICES] = [
+    Mutex::new(None),
+    Mutex::new(None),
+];
+static TX_WAKER_USED: Mutex<[bool; MAX_CDC_DEVICES]> = Mutex::new([false; MAX_CDC_DEVICES]);
+
 static TX_COMPLETE_CALLBACK: Mutex<Option<fn(u32)>> = Mutex::new(None);
+
+static ATTACH_CALLBACK: Mutex<Option<fn(CdcAttachEvent)>> = Mutex::new(None);
+static DETACH_CALLBACK: Mutex<Option<fn(CdcAttachEvent)>> = Mutex::new(None);
 
 pub fn set_tx_complete_callback(cb: Option<fn(u32)>) {
     *TX_COMPLETE_CALLBACK.lock() = cb;
 }
+
+pub fn set_attach_callback(cb: Option<fn(CdcAttachEvent)>) {
+    *ATTACH_CALLBACK.lock() = cb;
+}
+
+pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
+    *DETACH_CALLBACK.lock() = cb;
+}
+
 pub fn unregister_runtime(slot_id: u32) -> bool {
+    let mut detached: Option<CdcAttachEvent> = None;
+    let mut freed_signal: Option<usize> = None;
     let mut guard = CDC_RUNTIMES.lock();
     let mut idx = 0usize;
     let mut removed = false;
     while idx < guard.len() {
         if guard[idx].slot_id == slot_id {
+            freed_signal = Some(guard[idx].tx_waker_idx);
+            detached = Some(CdcAttachEvent {
+                slot_id,
+                vid: guard[idx].vid,
+                pid: guard[idx].pid,
+                serial: guard[idx].serial,
+            });
             let _ = guard.remove(idx);
             removed = true;
         } else {
@@ -198,12 +260,59 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
         }
     }
     drop(guard);
+
+    if let Some(sig_idx) = freed_signal {
+        let mut used = TX_WAKER_USED.lock();
+        used[sig_idx] = false;
+        // Wake any waiter so it can observe the detach.
+        let mut waker = TX_WAKERS[sig_idx].lock();
+        if let Some(w) = waker.take() {
+            w.wake();
+        }
+    }
+
+    if removed {
+        if let (Some(evt), Some(cb)) = (detached, *DETACH_CALLBACK.lock()) {
+            cb(evt);
+        }
+    }
     removed
 }
 
 fn register_runtime(runtime: CdcRuntime) {
+    let mut runtime = runtime;
+
+    // Allocate a TX waker slot.
+    let sig_idx = {
+        let mut used = TX_WAKER_USED.lock();
+        let mut found = None;
+        for (i, busy) in used.iter_mut().enumerate() {
+            if !*busy {
+                *busy = true;
+                found = Some(i);
+                break;
+            }
+        }
+        found
+    };
+
+    if let Some(idx) = sig_idx {
+        runtime.tx_waker_idx = idx;
+    } else {
+        crate::log!("usb: cdc register_runtime failed: no free TX signal slots\n");
+        return;
+    }
+
     let mut guard = CDC_RUNTIMES.lock();
     if let Some(existing) = guard.iter_mut().find(|rt| rt.slot_id == runtime.slot_id) {
+        // Free the previous slot index before replacing.
+        let prev_idx = existing.tx_waker_idx;
+        {
+            let mut used = TX_WAKER_USED.lock();
+            used[prev_idx] = false;
+            used[runtime.tx_waker_idx] = true;
+        }
+        *TX_WAKERS[prev_idx].lock() = None;
         *existing = runtime;
         return;
     }
@@ -216,6 +325,44 @@ where
 {
     let mut guard = CDC_RUNTIMES.lock();
     guard.iter_mut().find(|rt| rt.slot_id == slot_id).map(f)
+}
+
+fn with_runtime_by_slot<R, F>(slot_id: u32, f: F) -> Option<R>
+where
+    F: FnOnce(&CdcRuntime) -> R,
+{
+    let guard = CDC_RUNTIMES.lock();
+    guard.iter().find(|rt| rt.slot_id == slot_id).map(f)
+}
+
+fn tx_waker_slot(slot_id: u32) -> Option<usize> {
+    with_runtime_by_slot(slot_id, |rt| rt.tx_waker_idx)
+}
+
+fn register_tx_waker(slot_id: u32, waker: &Waker) {
+    if let Some(idx) = tx_waker_slot(slot_id) {
+        let mut slot = TX_WAKERS[idx].lock();
+        let should_replace = match slot.as_ref() {
+            Some(existing) => !existing.will_wake(waker),
+            None => true,
+        };
+        if should_replace {
+            *slot = Some(waker.clone());
+        }
+    }
+}
+
+fn wake_tx(slot_id: u32) {
+    if let Some(idx) = tx_waker_slot(slot_id) {
+        let mut slot = TX_WAKERS[idx].lock();
+        if let Some(waker) = slot.take() {
+            waker.wake();
+        }
+    }
+}
+
+fn tx_queue_has_room(slot_id: u32) -> bool {
+    with_runtime_by_slot(slot_id, |rt| rt.tx_queue.len() < CDC_TX_QUEUE_CAP).unwrap_or(false)
 }
 
 pub fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
@@ -237,6 +384,80 @@ pub fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
 
 pub fn pop_rx_byte(slot_id: u32) -> Option<u8> {
     with_runtime_mut_by_slot(slot_id, |runtime| runtime.rx_queue.pop_front()).flatten()
+}
+
+pub(crate) async fn write_all(slot_id: u32, mut data: &[u8]) -> usize {
+    if tx_waker_slot(slot_id).is_none() {
+        return 0;
+    }
+
+    let mut total = 0;
+    while !data.is_empty() {
+        let n = queue_tx_bytes(slot_id, data);
+        if n == 0 {
+            // If the runtime vanished (detach), stop to avoid waiting forever.
+            if !runtime_exists(slot_id) {
+                break;
+            }
+            poll_fn(|cx| {
+                // Fast-path if space became available between attempts.
+                if tx_queue_has_room(slot_id) {
+                    return Poll::Ready(());
+                }
+                register_tx_waker(slot_id, cx.waker());
+                // Re-check after registration to avoid missing a wake.
+                if tx_queue_has_room(slot_id) || !runtime_exists(slot_id) {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            continue;
+        }
+        total += n;
+        data = &data[n..];
+    }
+    total
+}
+
+pub fn device_ids(slot_id: u32) -> Option<(u16, u16)> {
+    let guard = CDC_RUNTIMES.lock();
+    guard
+        .iter()
+        .find(|rt| rt.slot_id == slot_id)
+        .map(|rt| (rt.vid, rt.pid))
+}
+
+pub fn device_serial(slot_id: u32) -> Option<UsbSerial> {
+    let guard = CDC_RUNTIMES.lock();
+    guard
+        .iter()
+        .find(|rt| rt.slot_id == slot_id)
+        .map(|rt| rt.serial)
+        .filter(|s| s.is_some())
+}
+
+pub fn serial_port(slot_id: u32) -> Option<CdcSerialPort> {
+    if runtime_exists(slot_id) {
+        Some(CdcSerialPort { slot_id })
+    } else {
+        None
+    }
+}
+
+impl SerialPort for CdcSerialPort {
+    fn write(&self, data: &[u8]) -> usize {
+        queue_tx_bytes(self.slot_id, data)
+    }
+
+    fn write_all<'a>(&'a self, data: &'a [u8]) -> Pin<Box<dyn core::future::Future<Output = usize> + 'a>> {
+        Box::pin(write_all(self.slot_id, data))
+    }
+
+    fn serial_number(&self) -> Option<SerialNumber> {
+        device_serial(self.slot_id)
+    }
 }
 
 pub fn handle_transfer_event(evt: &Trb) -> bool {
@@ -264,9 +485,15 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
         if let Some(cb) = *TX_COMPLETE_CALLBACK.lock() {
             cb(slot_id);
         }
+        wake_tx(slot_id);
     }
 
     handled
+}
+
+fn runtime_exists(slot_id: u32) -> bool {
+    let guard = CDC_RUNTIMES.lock();
+    guard.iter().any(|rt| rt.slot_id == slot_id)
 }
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
@@ -275,6 +502,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         mut cmd_ring,
         mut ep0_ring,
         slot_id,
+        dev_vid,
+        dev_pid,
+        dev_serial,
         cfg,
         dev_ctx_virt,
         ctx_stride_bytes,
@@ -289,7 +519,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     };
 
     crate::log!(
-        "usb: cdc-acm cfg={} ctrl_if={} data_if={}\n",
+        "usb: cdc-acm vid=0x{:04X} pid=0x{:04X} cfg={} ctrl_if={} data_if={}\n",
+        dev_vid,
+        dev_pid,
         interface.configuration,
         interface.control_interface,
         interface.data_interface
@@ -436,6 +668,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let mut runtime = CdcRuntime {
         info: interface,
         slot_id,
+        vid: dev_vid,
+        pid: dev_pid,
+        serial: dev_serial,
         ctx: *ctx,
         ep_in_target,
         ep_out_target,
@@ -445,6 +680,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         tx_dma_virt: tx_virt,
         tx_dma_len: CDC_DMA_CHUNK,
         tx_inflight: false,
+        tx_waker_idx: 0,
         rx_dma_phys: rx_phys,
         rx_dma_virt: rx_virt,
         rx_dma_len: CDC_DMA_CHUNK,
@@ -490,6 +726,15 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         interface.ep_out.address
     );
 
+    if let Some(cb) = *ATTACH_CALLBACK.lock() {
+        cb(CdcAttachEvent {
+            slot_id,
+            vid: dev_vid,
+            pid: dev_pid,
+            serial: dev_serial,
+        });
+    }
+
     Ok(())
 }
 
@@ -514,7 +759,10 @@ async fn program_line_coding(
     let setup = Trb {
         d0: 0x21 | (0x20 << 8),
         d1: (iface as u32) | ((7u32) << 16),
-        d2: 8 | (1 << 16),
+        // Setup Stage TRB transfer length must be 8 (one setup packet).
+        // We previously leaked a bit into the length field (0x10008), which
+        // makes the host issue an invalid control transfer and yields CC != 1.
+        d2: 8,
         d3: trb_type(2) | (1 << 6),
     };
     super::control_out(
