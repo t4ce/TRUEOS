@@ -35,7 +35,7 @@ fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
 
 pub fn probe_once() {
     if crate::limine::hhdm_offset().is_none() {
-        crate::debugconf!("nvme: no HHDM\n");
+        crate::log!("nvme: no HHDM\n");
         return;
     }
 
@@ -51,7 +51,7 @@ pub fn probe_once() {
 
             let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
             if (bar_lo & 0x1) != 0 {
-                crate::debugconf!(
+                crate::log!(
                     "nvme: {:02X}:{:02X}.{} BAR0 is IO space (unsupported)\n",
                     dev.bus,
                     dev.slot,
@@ -67,7 +67,7 @@ pub fn probe_once() {
             }
 
             let size = crate::pci::bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
-            crate::debugconf!(
+            crate::log!(
                 "nvme: {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X}\n",
                 dev.bus,
                 dev.slot,
@@ -92,7 +92,7 @@ pub fn probe_once() {
             let mmio_ptr = match mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {
-                    crate::debugconf!("nvme: failed to map MMIO: {:?}\n", err);
+                    crate::log!("nvme: failed to map MMIO: {:?}\n", err);
                     continue;
                 }
             };
@@ -106,7 +106,7 @@ pub fn probe_once() {
                 let cc = read_volatile(regs.add(0x14) as *const u32);
                 let csts = read_volatile(regs.add(0x1C) as *const u32);
 
-                crate::debugconf!(
+                crate::log!(
                     "nvme: CAP=0x{:016X} VS=0x{:08X} CC=0x{:08X} CSTS=0x{:08X}\n",
                     cap,
                     vs,
@@ -130,6 +130,6 @@ pub fn probe_once() {
     });
 
     if !did_any {
-        crate::debugconf!("nvme: none found\n");
+        crate::log!("nvme: none found\n");
     }
 }

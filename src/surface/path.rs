@@ -340,7 +340,7 @@ impl<'a> Iterator for Components<'a> {
 }
 
 pub fn smoke_test() {
-    crate::debugconf!("path: smoke_test begin\n");
+    crate::log!("path: smoke_test begin\n");
 
     smoke_test_basics();
     smoke_test_join_push_pop();
@@ -348,19 +348,19 @@ pub fn smoke_test() {
     smoke_test_components();
     smoke_test_bytes();
 
-    crate::debugconf!("path: smoke_test end\n");
+    crate::log!("path: smoke_test end\n");
 }
 
 #[inline(never)]
 fn smoke_test_basics() {
     let p = Path::new("/usr/bin/ls");
-    crate::debugconf!("path: p='{}' abs={}\n", p.as_str(), p.is_absolute());
+    crate::log!("path: p='{}' abs={}\n", p.as_str(), p.is_absolute());
     if let Some(parent) = p.parent() {
-        crate::debugconf!("path: parent='{}'\n", parent.as_str());
+        crate::log!("path: parent='{}'\n", parent.as_str());
     } else {
-        crate::debugconf!("path: parent=<none>\n");
+        crate::log!("path: parent=<none>\n");
     }
-    crate::debugconf!(
+    crate::log!(
         "path: file={:?} stem={:?} ext={:?}\n",
         p.file_name(),
         p.file_stem(),
@@ -368,53 +368,53 @@ fn smoke_test_basics() {
     );
 
     let p2 = p.with_extension("exe");
-    crate::debugconf!("path: with_extension => '{}'\n", p2.as_str());
+    crate::log!("path: with_extension => '{}'\n", p2.as_str());
 }
 
 #[inline(never)]
 fn smoke_test_join_push_pop() {
     let base = Path::new("/usr");
     let joined = base.join(Path::new("bin/ls"));
-    crate::debugconf!("path: join => '{}'\n", joined.as_str());
+    crate::log!("path: join => '{}'\n", joined.as_str());
 
     let mut buf = PathBuf::from("/a");
     buf.push(Path::new("b"));
     buf.push(Path::new("c/"));
-    crate::debugconf!("path: push => '{}'\n", buf.as_str());
+    crate::log!("path: push => '{}'\n", buf.as_str());
     let popped = buf.pop();
-    crate::debugconf!("path: pop => popped={} now='{}'\n", popped, buf.as_str());
+    crate::log!("path: pop => popped={} now='{}'\n", popped, buf.as_str());
 }
 
 #[inline(never)]
 fn smoke_test_prefix() {
     let sp_src = Path::new("/usr/bin/ls");
-    crate::debugconf!(
+    crate::log!(
         "path: starts_with('/usr')={}\n",
         sp_src.starts_with(Path::new("/usr")),
     );
     match sp_src.strip_prefix(Path::new("/usr")) {
-        Ok(rest) => crate::debugconf!("path: strip_prefix('/usr') => '{}'\n", rest.as_str()),
-        Err(_) => crate::debugconf!("path: strip_prefix('/usr') => ERR\n"),
+        Ok(rest) => crate::log!("path: strip_prefix('/usr') => '{}'\n", rest.as_str()),
+        Err(_) => crate::log!("path: strip_prefix('/usr') => ERR\n"),
     }
     match sp_src.strip_prefix(Path::new("/nope")) {
-        Ok(rest) => crate::debugconf!(
+        Ok(rest) => crate::log!(
             "path: strip_prefix('/nope') => '{}' (unexpected)\n",
             rest.as_str()
         ),
-        Err(_) => crate::debugconf!("path: strip_prefix('/nope') => ERR (expected)\n"),
+        Err(_) => crate::log!("path: strip_prefix('/nope') => ERR (expected)\n"),
     }
 }
 
 #[inline(never)]
 fn smoke_test_components() {
     let weird = Path::new("/a//b/./../c");
-    crate::debugconf!("path: components of '{}' =>\n", weird.as_str());
+    crate::log!("path: components of '{}' =>\n", weird.as_str());
     for c in weird.components() {
         match c {
-            Component::RootDir => crate::debugconf!("  - RootDir\n"),
-            Component::CurDir => crate::debugconf!("  - CurDir\n"),
-            Component::ParentDir => crate::debugconf!("  - ParentDir\n"),
-            Component::Normal(s) => crate::debugconf!("  - Normal('{}')\n", s),
+            Component::RootDir => crate::log!("  - RootDir\n"),
+            Component::CurDir => crate::log!("  - CurDir\n"),
+            Component::ParentDir => crate::log!("  - ParentDir\n"),
+            Component::Normal(s) => crate::log!("  - Normal('{}')\n", s),
         }
     }
 }
@@ -422,9 +422,9 @@ fn smoke_test_components() {
 #[inline(never)]
 fn smoke_test_bytes() {
     match PathBuf::from_bytes(b"/hello/world.txt") {
-        Ok(pb) => crate::debugconf!("path: from_bytes => '{}'\n", pb.as_str()),
-        Err(e) => crate::debugconf!("path: from_bytes => ERR {:?}\n", e),
+        Ok(pb) => crate::log!("path: from_bytes => '{}'\n", pb.as_str()),
+        Err(e) => crate::log!("path: from_bytes => ERR {:?}\n", e),
     }
     let lossy = PathBuf::from_bytes_lossy(b"/bad\xFFpath");
-    crate::debugconf!("path: from_bytes_lossy => '{}'\n", lossy.as_str());
+    crate::log!("path: from_bytes_lossy => '{}'\n", lossy.as_str());
 }

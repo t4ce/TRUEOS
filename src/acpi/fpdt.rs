@@ -1,7 +1,6 @@
 use acpi::sdt::SdtHeader;
 use spin::Once;
 
-use crate::debugconf;
 use crate::pci::mmio;
 
 use super::ensure_tables;
@@ -29,22 +28,22 @@ pub fn log_once() {
                     let rec_type = unsafe { core::ptr::read_unaligned(base.add(36) as *const u16) };
                     let rec_len =
                         unsafe { core::ptr::read_unaligned(base.add(38) as *const u16) } as usize;
-                    debugconf!(
+                    crate::log!(
                         "FPDT: len=0x{:X} first_record_type=0x{:04X} first_record_len=0x{:X}\n",
                         len,
                         rec_type,
                         rec_len
                     );
                 } else {
-                    debugconf!("FPDT: length too small (0x{:X})\n", len);
+                    crate::log!("FPDT: length too small (0x{:X})\n", len);
                 }
             } else {
-                debugconf!("FPDT: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
+                crate::log!("FPDT: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
             }
         }
 
         if !found {
-            debugconf!("FPDT: table not present\n");
+            crate::log!("FPDT: table not present\n");
         }
     });
 }

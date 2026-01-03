@@ -1,8 +1,6 @@
 use core::arch::asm;
 
 use alloc::boxed::Box;
-
-use crate::debugconf;
 use x86_64::registers::model_specific::Msr;
 
 const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
@@ -51,7 +49,7 @@ fn init_with(lapic_id: u32, cpu_index: u32, tag: &str) {
     let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
     unsafe { gs_base.write(ptr as u64) };
 
-    debugconf!(
+    crate::log!(
         "0x{:016X} lapic={} cpu={}\n",
         ptr as u64,
         lapic_id,

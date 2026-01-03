@@ -4,7 +4,6 @@ use acpi::sdt::hpet::HpetInfo;
 use spin::Once;
 
 use crate::{
-    debugconf,
     pci::mmio::{self, MapError as MmioMapError},
 };
 
@@ -90,7 +89,7 @@ fn init_hpet() -> Option<Hpet> {
     let info = match HpetInfo::new(tables) {
         Ok(info) => info,
         Err(err) => {
-            debugconf!("HPET table error: {:?}\n", err);
+            crate::log!("HPET table error: {:?}\n", err);
             return None;
         }
     };
@@ -98,7 +97,7 @@ fn init_hpet() -> Option<Hpet> {
     let regs = match map_hpet_regs(info.base_address) {
         Ok(regs) => regs,
         Err(err) => {
-            debugconf!("HPET map failed @0x{:X}: {:?}\n", info.base_address, err);
+            crate::log!("HPET map failed @0x{:X}: {:?}\n", info.base_address, err);
             return None;
         }
     };
@@ -113,7 +112,7 @@ fn init_hpet() -> Option<Hpet> {
     let cap = unsafe { hpet.read_reg64(CAPABILITIES_OFFSET) };
     let clk_period_fs = ((cap >> 32) & 0xFFFF_FFFF) as u32;
     if clk_period_fs == 0 {
-        debugconf!("HPET invalid period (cap=0x{:X})\n", cap);
+        crate::log!("HPET invalid period (cap=0x{:X})\n", cap);
         return None;
     }
 
@@ -128,7 +127,7 @@ fn init_hpet() -> Option<Hpet> {
         hpet.configure(true, false);
     }
 
-    debugconf!(
+    crate::log!(
         "HPET @0x{:X} freq={}Hz comps={} counter_{}bit legacy_capable={}\n",
         hpet.info.base_address,
         hpet.frequency_hz,

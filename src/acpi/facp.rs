@@ -4,8 +4,6 @@ use acpi::AcpiError;
 use core::ptr::{addr_of, read_unaligned};
 use spin::Once;
 
-use crate::debugconf;
-
 use super::{ensure_tables, AcpiIdentityHandler};
 
 #[allow(dead_code)]
@@ -43,14 +41,14 @@ pub fn log_once() {
         };
 
         let Some(fadt) = tables.find_table::<Fadt>() else {
-            debugconf!("FADT/FACP missing\n");
+            crate::log!("FADT/FACP missing\n");
             return;
         };
 
         let fadt = unsafe { fadt.virtual_start.as_ref() };
 
         if let Err(err) = fadt.validate() {
-            debugconf!("FADT invalid: {:?}\n", err);
+            crate::log!("FADT invalid: {:?}\n", err);
             return;
         }
 
@@ -62,16 +60,16 @@ pub fn log_once() {
 
 fn log_addresses(fadt: &Fadt) {
     match (fadt.dsdt_address(), fadt.facs_address()) {
-        (Ok(dsdt), Ok(facs)) => debugconf!("FADT: DSDT=0x{:X} FACS=0x{:X}\n", dsdt, facs),
-        (Ok(dsdt), Err(e)) => debugconf!("FADT: DSDT=0x{:X} FACS=<err:{:?}>\n", dsdt, e),
-        (Err(e), Ok(facs)) => debugconf!("FADT: DSDT=<err:{:?}> FACS=0x{:X}\n", e, facs),
-        (Err(ed), Err(ef)) => debugconf!("FADT: DSDT/FACS errors dsdt={:?} facs={:?}\n", ed, ef),
+        (Ok(dsdt), Ok(facs)) => crate::log!("FADT: DSDT=0x{:X} FACS=0x{:X}\n", dsdt, facs),
+        (Ok(dsdt), Err(e)) => crate::log!("FADT: DSDT=0x{:X} FACS=<err:{:?}>\n", dsdt, e),
+        (Err(e), Ok(facs)) => crate::log!("FADT: DSDT=<err:{:?}> FACS=0x{:X}\n", e, facs),
+        (Err(ed), Err(ef)) => crate::log!("FADT: DSDT/FACS errors dsdt={:?} facs={:?}\n", ed, ef),
     }
 
     let sci = unsafe { read_unaligned(addr_of!(fadt.sci_interrupt)) };
     let smi = unsafe { read_unaligned(addr_of!(fadt.smi_cmd_port)) };
 
-    debugconf!(
+    crate::log!(
         "FADT: profile={:?} sci_irq={} smi_cmd=0x{:X} pm_timer_len={} pm1_len={} pm1_ctrl_len={} pm2_ctrl_len={} gpe0_len={} gpe1_len={} gpe1_base={}\n",
         fadt.power_profile(),
         sci,
@@ -102,7 +100,7 @@ fn log_addresses(fadt: &Fadt) {
 
 fn log_flags(fadt: &Fadt) {
     let arch: IaPcBootArchFlags = unsafe { read_unaligned(addr_of!(fadt.iapc_boot_arch)) };
-    debugconf!(
+    crate::log!(
         "FADT: iAPC flags legacy={} 8042={} no_vga_probe={} no_msi={} no_aspm={} rtc_via_ns={}\n",
         arch.legacy_devices_are_accessible(),
         arch.motherboard_implements_8042(),
@@ -113,7 +111,7 @@ fn log_flags(fadt: &Fadt) {
     );
 
     let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
-    debugconf!(
+    crate::log!(
         "FADT: fixed-features wbinvd={} wbinvd_flushes={} c1={} c2_mp={} pwrbtn_cm={} slpbtn_cm={} pm_tmr_32={} reset_cap={} headless={} hw_reduced={} no_s3_benefit={} pciexp_wake={} pm/hpet={} rtc_s4={} gpe_s5={}\n",
         flags.supports_equivalent_to_wbinvd(),
         flags.wbinvd_flushes_all_caches(),
@@ -136,7 +134,7 @@ fn log_flags(fadt: &Fadt) {
 fn log_reset(fadt: &Fadt) {
     match fadt.reset_register() {
         Ok(reg) if reg.address != 0 => {
-            debugconf!(
+            crate::log!(
                 "FADT: reset_reg {} reset_value=0x{:02X}\n",
                 format_gas(&reg),
                 fadt.reset_value
@@ -145,7 +143,7 @@ fn log_reset(fadt: &Fadt) {
         Ok(_) => {
             // No reset register.
         }
-        Err(err) => debugconf!("FADT: reset_reg err {:?}\n", err),
+        Err(err) => crate::log!("FADT: reset_reg err {:?}\n", err),
     }
 
     if let Ok(Some(sleep_ctrl)) = fadt.sleep_control_register() {
@@ -157,7 +155,7 @@ fn log_reset(fadt: &Fadt) {
 }
 
 fn log_gas(label: &str, gas: &GenericAddress) {
-    debugconf!(
+    crate::log!(
         "FADT: {} space={:?} addr=0x{:X} width={} offset={} access={}\n",
         label,
         gas.address_space,

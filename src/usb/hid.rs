@@ -1,7 +1,6 @@
 use super::xhci::{
     self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
 };
-use crate::debugconf;
 use crate::pci::dma;
 use crate::usb::input;
 use core::mem::size_of;
@@ -18,7 +17,7 @@ pub(crate) const HID_LOGS: bool = false;
 macro_rules! hidlog {
     ($($arg:tt)*) => {{
         if HID_LOGS {
-            debugconf!($($arg)*);
+            crate::log!($($arg)*);
         }
     }};
 }
@@ -294,7 +293,7 @@ pub(crate) async fn input_logger() {
                                 '?'
                             }
                         };
-                        debugconf!(
+                        crate::log!(
                             "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
                             kbd.slot_id,
                             kbd.modifiers,
@@ -309,7 +308,7 @@ pub(crate) async fn input_logger() {
                 }
                 input::InputEvent::Mouse(mouse) => {
                     if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
-                        debugconf!(
+                        crate::log!(
                             "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
                             mouse.slot_id,
                             mouse.dx,

@@ -1,7 +1,7 @@
 use core::fmt;
 
 #[macro_export]
-macro_rules! debugconf {
+macro_rules! log {
     ($($tt:tt)*) => {{
         $crate::globalog::log(format_args!($($tt)*));
     }};
