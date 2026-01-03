@@ -6,7 +6,7 @@ use log::{LevelFilter, Log, Metadata, Record};
 use spin::{Mutex, RwLock};
 
 #[inline(always)]
-pub(crate) fn debugcon_write_byte_raw(b: u8) {
+fn debugcon_write_byte_raw(b: u8) {
     unsafe { crate::portio::outb(0xE9, b) };
 }
 
@@ -17,7 +17,7 @@ fn try_write_byte(b: u8) -> bool {
 }
 
 #[inline(always)]
-pub(crate) fn debugcon_write_str(s: &str) {
+fn debugcon_write_str(s: &str) {
     for &b in s.as_bytes() {
         let _ = try_write_byte(b);
     }
@@ -35,7 +35,7 @@ impl Write for DebugCon {
 #[macro_export]
 macro_rules! debugconf {
     ($($tt:tt)*) => {{
-        let _ = core::fmt::write(&mut $crate::truelog::DebugCon, format_args!($($tt)*));
+        let _ = core::fmt::write(&mut $crate::globalog::DebugCon, format_args!($($tt)*));
         let white = 0x00_FF_FF_FF;
         let (_, bg, shadow) = $crate::vga::current_colors().unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
         let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
@@ -112,7 +112,7 @@ pub enum BackendError {
 }
 
 #[inline(always)]
-pub(crate) fn write_str(s: &str) {
+fn write_str(s: &str) {
     for &b in s.as_bytes() {
         let _ = try_write_byte(b);
     }
@@ -122,8 +122,31 @@ struct TruelogFmtWriter;
 
 impl fmt::Write for TruelogFmtWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        crate::truelog::write_str(s);
+        write_str(s);
         Ok(())
+    }
+}
+
+pub(crate) struct Globalog;
+
+impl Globalog {
+    #[inline(always)]
+    pub(crate) fn debugcon_write_byte_raw(b: u8) {
+        debugcon_write_byte_raw(b)
+    }
+
+    #[inline(always)]
+    pub(crate) fn debugcon_write_str(s: &str) {
+        debugcon_write_str(s)
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_str(s: &str) {
+        write_str(s)
+    }
+
+    pub(crate) fn init_log_shim() {
+        init_log_shim()
     }
 }
 
@@ -156,7 +179,7 @@ static LOG: TrueLog = TrueLog;
 
 const DEFAULT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
 
-pub(crate) fn init_log_shim() {
+fn init_log_shim() {
     if log::set_logger(&LOG).is_ok() {
         log::set_max_level(DEFAULT_LOG_LEVEL);
     }

@@ -33,7 +33,7 @@ mod phys;
 mod portio;
 mod rng;
 mod serial;
-mod truelog;
+mod globalog;
 mod surface;
 mod tga;
 mod time;
@@ -58,7 +58,7 @@ static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 pub extern "C" fn _start() -> ! {
     unsafe {enable_sse();}
 
-    truelog::init_log_shim();
+    globalog::Globalog::init_log_shim();
 
     vga::init(limine::framebuffer_response());
 
@@ -166,7 +166,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
-            truelog::debugcon_write_byte_raw(b'0');
+            globalog::Globalog::debugcon_write_byte_raw(b'0');
             if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
@@ -196,7 +196,7 @@ fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            truelog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
+            globalog::Globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
@@ -210,7 +210,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
-            truelog::debugcon_write_byte_raw(b'!');
+            globalog::Globalog::debugcon_write_byte_raw(b'!');
         }
     }
 }
