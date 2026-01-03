@@ -1,5 +1,4 @@
 pub mod cdc_acm;
-pub mod esp32;
 pub mod hid;
 pub mod input;
 pub mod mass;
@@ -20,7 +19,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
-use self::esp32::AttachParams as Esp32AttachParams;
 use self::hid::BootAttachParams;
 use self::mass::AttachParams as MassAttachParams;
 
@@ -747,32 +745,6 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         return;
     }
 
-    if esp32::attach_device(Esp32AttachParams {
-        ctx: &ctx,
-        cmd_ring: &mut state.cmd_ring,
-        ep0_ring: &mut ep0_ring,
-        slot_id,
-        cfg: cfg_slice,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-        vid: dev_vid,
-        pid: dev_pid,
-    })
-    .await
-    .is_ok()
-    {
-        usbv!(
-            "usb: enum port {} claimed CDC slot={}\n",
-            target_port,
-            slot_id
-        );
-        register_device(slot_id as u32, target_port, DeviceKind::Cdc);
-        return;
-    }
-
     if mass::attach_mass_device(MassAttachParams {
         ctx: &ctx,
         cmd_ring: &mut state.cmd_ring,
@@ -1098,7 +1070,6 @@ async fn cleanup_disconnected<const N: usize>(
         } else if kind == DeviceKind::Mass {
             let _ = mass::unregister_runtime(slot_id);
         } else if kind == DeviceKind::Cdc {
-            esp32::unregister_slot(slot_id);
             let _ = cdc_acm::unregister_runtime(slot_id);
         }
         debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
@@ -1285,12 +1256,6 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
         }
-
-        // Handle delayed ESP32 promotion (flushes early bootlog when it happens).
-        esp32::poll_promotion();
-
-        // Continue draining any buffered bootlog bytes after promotion.
-        crate::truelog::poll_bootlog_flush();
 
         heartbeat = heartbeat.wrapping_add(1);
 
