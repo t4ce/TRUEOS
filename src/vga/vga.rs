@@ -130,7 +130,8 @@ pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
     .unwrap_or(false)
 }
 
-pub fn log_fmt(args: fmt::Arguments<'_>, fg: u32, bg: u32, shadow: u32) -> bool {
+pub fn log_fmt(args: fmt::Arguments<'_>) -> bool {
+    let (fg, bg, shadow) = current_colors().unwrap_or((DEFAULT_FG_COLOR, DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR));
     let mut w = VgaLogWriter {
         fg,
         bg,
