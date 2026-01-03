@@ -1,4 +1,3 @@
-use crate::globalog::SerialBackend;
 use core::cmp;
 use spin::Once;
 
@@ -53,14 +52,8 @@ impl Com1UartBackend {
     fn lsr() -> u8 {
         unsafe { crate::portio::inb(COM1_BASE + 5) }
     }
-}
 
-impl SerialBackend for Com1UartBackend {
-    fn name(&self) -> &'static str {
-        "com1-uart"
-    }
-
-    fn try_write_byte(&self, byte: u8) -> bool {
+    pub(crate) fn try_write_byte(&self, byte: u8) -> bool {
         self.ensure_init();
         for _ in 0..COM1_WAIT_SPINS {
             if (Self::lsr() & 0x20) != 0 {
@@ -72,7 +65,7 @@ impl SerialBackend for Com1UartBackend {
         false
     }
 
-    fn apply_baud(&self, baud: u32) -> bool {
+    pub(crate) fn apply_baud(&self, baud: u32) -> bool {
         self.program_baud(baud)
     }
 }

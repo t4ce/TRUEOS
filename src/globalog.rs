@@ -1,186 +1,112 @@
-use core::fmt::{self, Write};
-use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use heapless::Vec as HVec;
-use log::{LevelFilter, Log, Metadata, Record};
-use spin::{Mutex, RwLock};
-
-#[inline(always)]
-fn debugcon_write_byte_raw(b: u8) {
-    unsafe { crate::portio::outb(0xE9, b) };
-}
-
-#[inline(always)]
-fn try_write_byte(b: u8) -> bool {
-    debugcon_write_byte_raw(b);
-    true
-}
-
-#[inline(always)]
-fn debugcon_write_str(s: &str) {
-    for &b in s.as_bytes() {
-        let _ = try_write_byte(b);
-    }
-}
-
-pub(crate) struct DebugCon;
-
-impl Write for DebugCon {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        debugcon_write_str(s);
-        Ok(())
-    }
-}
+use core::fmt;
 
 #[macro_export]
 macro_rules! debugconf {
     ($($tt:tt)*) => {{
-        let _ = core::fmt::write(&mut $crate::globalog::DebugCon, format_args!($($tt)*));
-        let white = 0x00_FF_FF_FF;
-        let (_, bg, shadow) = $crate::vga::current_colors().unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
-        let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
+        $crate::globalog::log(format_args!($($tt)*));
     }};
 }
 
-const PREHEAP_BOOTLOG_CAP: usize = 1024 * 1024;
-static BOOTLOG: Mutex<BootLog> = Mutex::new(BootLog::new());
-
-struct BootLog {
-    preheap: [u8; PREHEAP_BOOTLOG_CAP],
-    cap: usize,
-    head: usize,
-    len: usize,
-    flushed: bool,
+/// Global log fan-out.
+///
+/// Order:
+/// A) QEMU debugcon (0xE9)
+/// B) VGA
+/// C) UART0 (COM1)
+/// D) Placeholder
+pub fn log(args: fmt::Arguments<'_>) {
+    cache::log(args);
+    debugcon::log(args);
+    let _ = crate::vga::log_fmt(args);
+    uart0::log(args);
+    placeholder::log(args);
 }
 
-impl BootLog {
-    const fn new() -> Self {
-        Self {
-            preheap: [0u8; PREHEAP_BOOTLOG_CAP],
-            cap: PREHEAP_BOOTLOG_CAP,
-            head: 0,
-            len: 0,
-            flushed: false,
-        }
-    }
-    fn record(&mut self, b: u8) {
-        if self.flushed {
-            return;
-        }
-        if self.cap == 0 {
-            return;
-        }
-        self.preheap[self.head] = b;
-        self.head += 1;
-        if self.head >= self.cap {
-            self.head = 0;
-        }
-        if self.len < self.cap {
-            self.len += 1;
-        }
-    }
-}
+mod cache {
+    use core::fmt;
 
-pub trait SerialBackend: Sync {
-    fn name(&self) -> &'static str;
-    fn try_write_byte(&self, byte: u8) -> bool;
+    const ROWS: usize = 512;
+    const COLS: usize = 1024;
+    static mut BUF: [[u8; COLS]; ROWS] = [[0; COLS]; ROWS];
+    static mut ROW: usize = 0;
+    static mut COL: usize = 0;
 
-    fn try_write(&self, bytes: &[u8]) -> usize {
-        let mut written = 0usize;
-        for &b in bytes {
-            if self.try_write_byte(b) {
-                written += 1;
-            } else {
-                break;
+    struct Writer;
+    impl fmt::Write for Writer {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            unsafe {
+                for &b in s.as_bytes() {
+                    if b == b'\n' {
+                        ROW = (ROW + 1) % ROWS;
+                        COL = 0;
+                        continue;
+                    }
+                    if COL < COLS {
+                        BUF[ROW][COL] = b;
+                        COL += 1;
+                    }
+                }
             }
+            Ok(())
         }
-        written
     }
 
-    fn try_read_byte(&self) -> Option<u8> {
-        None
+    #[inline(always)]
+    pub(super) fn log(args: fmt::Arguments<'_>) {
+        let _ = fmt::write(&mut Writer, args);
     }
-
-    fn apply_baud(&self, _baud: u32) -> bool {
-        false
-    }
-}
-
-#[derive(Debug)]
-pub enum BackendError {
-    TableFull,
 }
 
 #[inline(always)]
-fn write_str(s: &str) {
-    for &b in s.as_bytes() {
-        let _ = try_write_byte(b);
-    }
+pub(crate) fn debugcon_write_byte_raw(b: u8) {
+    debugcon::write_byte_raw(b)
 }
 
-struct TruelogFmtWriter;
-
-impl fmt::Write for TruelogFmtWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        write_str(s);
-        Ok(())
-    }
-}
-
-pub(crate) struct Globalog;
-
-impl Globalog {
-    #[inline(always)]
-    pub(crate) fn debugcon_write_byte_raw(b: u8) {
-        debugcon_write_byte_raw(b)
-    }
+mod debugcon {
+    use core::fmt;
 
     #[inline(always)]
-    pub(crate) fn debugcon_write_str(s: &str) {
-        debugcon_write_str(s)
+    pub(super) fn write_byte_raw(b: u8) {
+        unsafe { crate::portio::outb(0xE9, b) };
     }
 
-    #[inline(always)]
-    pub(crate) fn write_str(s: &str) {
-        write_str(s)
-    }
+    struct Writer;
 
-    pub(crate) fn init_log_shim() {
-        init_log_shim()
-    }
-}
-
-struct TrueLog;
-
-impl Log for TrueLog {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level().to_level_filter() <= log::max_level()
-    }
-
-    fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
-            return;
+    impl fmt::Write for Writer {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            for &b in s.as_bytes() {
+                write_byte_raw(b);
+            }
+            Ok(())
         }
-
-        let mut writer = TruelogFmtWriter;
-        if record.target().is_empty() {
-            let _ = write!(&mut writer, "[{}] ", record.level());
-        } else {
-            let _ = write!(&mut writer, "[{}:{}] ", record.level(), record.target());
-        }
-        let _ = writer.write_fmt(*record.args());
-        let _ = writer.write_str("\n");
     }
 
-    fn flush(&self) {}
+    pub(super) fn log(args: fmt::Arguments<'_>) {
+        let _ = fmt::write(&mut Writer, args);
+    }
 }
 
-static LOG: TrueLog = TrueLog;
+mod uart0 {
+    use core::fmt;
 
-const DEFAULT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+    struct Writer;
 
-fn init_log_shim() {
-    if log::set_logger(&LOG).is_ok() {
-        log::set_max_level(DEFAULT_LOG_LEVEL);
+    impl fmt::Write for Writer {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            for &b in s.as_bytes() {
+                let _ = crate::serial::COM1_BACKEND.try_write_byte(b);
+            }
+            Ok(())
+        }
     }
+
+    pub(super) fn log(args: fmt::Arguments<'_>) {
+        let _ = fmt::write(&mut Writer, args);
+    }
+}
+
+mod placeholder {
+    use core::fmt;
+
+    pub(super) fn log(_args: fmt::Arguments<'_>) {}
 }

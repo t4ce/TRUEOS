@@ -81,7 +81,7 @@ iso: $(LIMINE_STAMP)
 	cp $(ISO_PATH) /media/t4ce/Data20TB/
 
 run-gdb-paused-bg: iso
-	@($(QEMU) $(QEMU_COMMON_FLAGS) -d int -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
+	@($(QEMU) $(QEMU_COMMON_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
 
 clean:
 	$(CARGO) clean

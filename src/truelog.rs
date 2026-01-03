@@ -36,9 +36,7 @@ impl Write for DebugCon {
 macro_rules! debugconf {
     ($($tt:tt)*) => {{
         let _ = core::fmt::write(&mut $crate::truelog::DebugCon, format_args!($($tt)*));
-        let white = 0x00_FF_FF_FF;
-        let (_, bg, shadow) = $crate::vga::current_colors().unwrap_or((white, 0, $crate::vga::DEFAULT_SHADOW_COLOR));
-        let _ = $crate::vga::log_fmt(format_args!($($tt)*), white, bg, shadow);
+        let _ = $crate::vga::log_fmt(format_args!($($tt)*));
     }};
 }
 
