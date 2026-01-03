@@ -1,10 +1,10 @@
-use crate::truelog::SerialBackend;
+use crate::globalog::SerialBackend;
 use core::cmp;
 use spin::Once;
 
 const COM1_BASE: u16 = 0x3F8;
 const COM1_WAIT_SPINS: usize = 100_000;
-const COM1_CLOCK_HZ: u32 = 14_745_600; // VirtualBox passthrough clock for 921_600 baud
+const COM1_CLOCK_HZ: u32 = 14_745_600;
 pub(crate) struct Com1UartBackend {
     init: Once<()>,
 }
