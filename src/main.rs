@@ -113,6 +113,10 @@ pub extern "C" fn _start() -> ! {
 
     usb::xhci::init_once();
 
+    // Optional: initialize TrueKey (CDC-based ESP32 binding) before enumeration.
+    usb::truekey::configure_target_serial("9C:13:9E:E4:25:B8");
+    usb::truekey::init();
+
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len(), Ordering::Release);
 
@@ -141,10 +145,13 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(usb::hid::input_logger());
 
+    // Continuously drains the TrueKey log cache to the ESP32 when bound.
+    let _ = spawner.spawn(usb::truekey::log_drain_task());
+
     disc::files::create_demo_file(); //needs hardware qemu param i guess
     
     for cpu in resp.cpus() {
-        cpu.goto_address.write(ap_entry);
+        cpu.goto_address.write(ap_start);
     }
 
     _loop(executor, spawner)
@@ -174,7 +181,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
     }
 }
 
-unsafe extern "C" fn ap_entry(cpu: &LimineCpu) -> ! {
+unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
     let total = TOTAL_SLOTS.load(Ordering::Acquire);
     let slot = (cpu.lapic_id as usize) % total;
