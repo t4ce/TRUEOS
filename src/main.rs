@@ -58,8 +58,6 @@ static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 pub extern "C" fn _start() -> ! {
     unsafe {enable_sse();}
 
-    globalog::Globalog::init_log_shim();
-
     vga::init(limine::framebuffer_response());
 
     limstats::log_limine_markers(); //limstats::log_memmap_once();
@@ -116,11 +114,7 @@ pub extern "C" fn _start() -> ! {
     usb::xhci::init_once();
 
     let resp = limine::smp_response().unwrap();
-
     TOTAL_SLOTS.store(resp.cpus().len(), Ordering::Release);
-    for cpu in resp.cpus() {
-        cpu.goto_address.write(ap_entry);
-    }
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
@@ -148,6 +142,10 @@ pub extern "C" fn _start() -> ! {
     let _ = spawner.spawn(usb::hid::input_logger());
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
+    
+    for cpu in resp.cpus() {
+        cpu.goto_address.write(ap_entry);
+    }
 
     _loop(executor, spawner)
 }
@@ -166,7 +164,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
-            globalog::Globalog::debugcon_write_byte_raw(b'0');
+            globalog::debugcon_write_byte_raw(b'0');
             if let Some(info) = usb::xhci::xhc_info() {
                 let _ = spawner.spawn(usb_scout(info));
             }
@@ -196,7 +194,7 @@ fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            globalog::Globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
+            globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
@@ -210,7 +208,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {
         counter = counter.wrapping_add(1);
         if counter % 100_000_000 == 0 {
-            globalog::Globalog::debugcon_write_byte_raw(b'!');
+            globalog::debugcon_write_byte_raw(b'!');
         }
     }
 }
