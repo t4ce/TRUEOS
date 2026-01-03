@@ -10,7 +10,6 @@ use self::xhci::{
     decode_port_status, hi, lo, trb_type, write_reg64, ErstEntry, EventRing, Trb, TrbRing,
     XhciContext,
 };
-use crate::debugconf;
 use crate::pci::{dma, osal};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
@@ -76,7 +75,7 @@ const USB_LOG_VERBOSE: bool = false;
 macro_rules! usbv {
     ($($tt:tt)*) => {{
         if USB_LOG_VERBOSE {
-            crate::debugconf!($($tt)*);
+            crate::log!($($tt)*);
         }
     }};
 }
@@ -807,7 +806,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
 
     if should_log {
         if let Some((if_num, if_cls, if_sub, if_prot)) = first_if {
-            debugconf!(
+            crate::log!(
                 "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if{}={:02X}/{:02X}/{:02X} portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",
                 target_port,
                 dev_vid,
@@ -829,7 +828,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
                 count
             );
         } else {
-            debugconf!(
+            crate::log!(
                 "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if=none portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",
                 target_port,
                 dev_vid,
@@ -863,7 +862,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let ctx = unsafe { XhciContext::new(info) };
     let page_size_mask = unsafe { ctx.page_size_mask() };
     if (page_size_mask & 0x1) == 0 {
-        debugconf!(
+        crate::log!(
             "usb: xhci lacks 4K page support PAGESIZE=0x{:X}\n",
             page_size_mask
         );
@@ -877,7 +876,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc dcbaa\n");
+            crate::log!("usb: failed to alloc dcbaa\n");
             return Err(());
         }
     };
@@ -891,7 +890,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         let (sp_array_phys, sp_array_virt) = match dma::alloc(array_bytes, 64) {
             Some(pair) => pair,
             None => {
-                debugconf!(
+                crate::log!(
                     "usb: failed to alloc scratchpad array count={}\n",
                     scratchpad_count
                 );
@@ -904,7 +903,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
             let (buf_phys, buf_virt) = match dma::alloc(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE) {
                 Some(pair) => pair,
                 None => {
-                    debugconf!(
+                    crate::log!(
                         "usb: failed to alloc scratchpad buffer {}/{}\n",
                         idx + 1,
                         scratchpad_count
@@ -926,7 +925,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
 
         scratchpad_array_phys = sp_array_phys;
         scratchpad_array_virt = sp_array_virt;
-        debugconf!(
+        crate::log!(
             "usb: scratchpads={} array=0x{:X}\n",
             scratchpad_count,
             sp_array_phys
@@ -937,7 +936,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc cmd ring\n");
+            crate::log!("usb: failed to alloc cmd ring\n");
             return Err(());
         }
     };
@@ -948,7 +947,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc event ring\n");
+            crate::log!("usb: failed to alloc event ring\n");
             return Err(());
         }
     };
@@ -959,7 +958,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc ERST\n");
+            crate::log!("usb: failed to alloc ERST\n");
             return Err(());
         }
     };
@@ -1015,7 +1014,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         }
     }
 
-    debugconf!("usb: controller initialized; ready for rescans\n");
+    crate::log!("usb: controller initialized; ready for rescans\n");
 
     Ok(UsbControllerState {
         info,
@@ -1063,7 +1062,7 @@ async fn cleanup_disconnected<const N: usize>(
 
     for (slot_id, kind) in removed.into_iter() {
         if let Err(()) = disable_slot(state, slot_id).await {
-            debugconf!("usb: disable-slot for slot {} failed\n", slot_id);
+            crate::log!("usb: disable-slot for slot {} failed\n", slot_id);
         }
         if kind == DeviceKind::Hid {
             let _ = hid::unregister_runtime(slot_id);
@@ -1072,7 +1071,7 @@ async fn cleanup_disconnected<const N: usize>(
         } else if kind == DeviceKind::Cdc {
             let _ = cdc_acm::unregister_runtime(slot_id);
         }
-        debugconf!("usb: dropped device slot={} (disconnected)\n", slot_id);
+        crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
     }
 }
 
@@ -1150,11 +1149,11 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
         })
         .is_err()
     {
-        debugconf!("usb: device table full, dropping slot {}\n", slot_id);
+        crate::log!("usb: device table full, dropping slot {}\n", slot_id);
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY.store(true, Ordering::Release);
-    debugconf!(
+    crate::log!(
         "usb: device claimed slot={} port={} kind={:?}\n",
         slot_id,
         port,
@@ -1180,7 +1179,7 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        debugconf!("usb: scout already running; skipping\n");
+        crate::log!("usb: scout already running; skipping\n");
         return;
     }
 
@@ -1229,7 +1228,7 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
 
     // If we couldn't record all connected ports, don't treat missing entries as disconnects.
     if connected_overflowed {
-        debugconf!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
+        crate::log!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
     } else {
         cleanup_disconnected(&connected, &mut state).await;
     }
@@ -1311,11 +1310,11 @@ pub async fn poll_task(info: xhci::XhcInfo) {
 
                     let before = runtime.ep_ring.state_snapshot();
                     if !runtime.ep_ring.push(normal) {
-                        debugconf!("usb: failed to requeue HID interrupt IN transfer\n");
+                        crate::log!("usb: failed to requeue HID interrupt IN transfer\n");
                     } else {
                         let after = runtime.ep_ring.state_snapshot();
                         if hid::HID_LOGS {
-                            debugconf!(
+                            crate::log!(
                                 "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
                                 runtime.slot_id,
                                 runtime.ep_target,
@@ -1332,7 +1331,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                             );
                         }
                         if hid::HID_LOGS {
-                            debugconf!(
+                            crate::log!(
                                 "[hid] doorbell slot={} target={} rung\n",
                                 runtime.slot_id,
                                 runtime.ep_target

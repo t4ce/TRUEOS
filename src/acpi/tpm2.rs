@@ -1,7 +1,6 @@
 use acpi::sdt::SdtHeader;
 use spin::Once;
 
-use crate::debugconf;
 use crate::pci::mmio;
 
 use super::ensure_tables;
@@ -39,7 +38,7 @@ pub fn log_once() {
                     let platform_class = t.platform_class;
                     let control_area = t.control_area;
                     let start_method = t.start_method;
-                    debugconf!(
+                    crate::log!(
                         "TPM2: class={} control_area=0x{:X} start_method={} len=0x{:X}\n",
                         platform_class,
                         control_area,
@@ -47,15 +46,15 @@ pub fn log_once() {
                         len
                     );
                 } else {
-                    debugconf!("TPM2: length too small (0x{:X})\n", len);
+                    crate::log!("TPM2: length too small (0x{:X})\n", len);
                 }
             } else {
-                debugconf!("TPM2: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
+                crate::log!("TPM2: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
             }
         }
 
         if !found {
-            debugconf!("TPM2: table not present\n");
+            crate::log!("TPM2: table not present\n");
         }
     });
 }

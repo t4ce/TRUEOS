@@ -55,7 +55,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
     if (bar_lo & 0x1) != 0 {
-        crate::debugconf!("tga: BAR0 is IO; unsupported\n");
+        crate::log!("tga: BAR0 is IO; unsupported\n");
         return None;
     }
 
@@ -70,7 +70,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_REG_OFF;
 
-    crate::debugconf!("tga online: bar0=0x{:X}\n", bar_phys);
+    crate::log!("tga online: bar0=0x{:X}\n", bar_phys);
 
     let tga = Tga { led_reg };
     tga.write_led(TGA_LED_OFF);
@@ -104,6 +104,6 @@ pub(crate) async fn blink_task() {
         Timer::after(EmbassyDuration::from_millis(500)).await;
         tga_led_off();
         Timer::after(EmbassyDuration::from_millis(500)).await;
-        crate::debugconf!("tga heartbeat on/off once.");
+        crate::log!("tga heartbeat on/off once.");
     }
 }

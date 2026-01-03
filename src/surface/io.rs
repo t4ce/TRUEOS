@@ -567,10 +567,10 @@ pub const fn repeat(byte: u8) -> Repeat {
 }
 
 pub fn smoke_test() {
-    crate::debugconf!("io: smoke_test begin\n");
+    crate::log!("io: smoke_test begin\n");
 
     let manual_error = Error::new(ErrorKind::Other);
-    crate::debugconf!("io: manual error kind={:?}\n", manual_error.kind());
+    crate::log!("io: manual error kind={:?}\n", manual_error.kind());
 
     let mut cursor = Cursor::new(&b"FalseOS-io\nalpha-beta\nomega"[..]);
 
@@ -581,62 +581,62 @@ pub fn smoke_test() {
                 Ok(s) => s,
                 Err(_) => "<utf8 err>",
             };
-            crate::debugconf!("io: read_exact='{}'\n", snippet);
+            crate::log!("io: read_exact='{}'\n", snippet);
         }
-        Err(e) => crate::debugconf!("io: read_exact err={:?}\n", e.kind()),
+        Err(e) => crate::log!("io: read_exact err={:?}\n", e.kind()),
     }
 
     let mut tail = Vec::new();
     match cursor.read_to_end(&mut tail) {
-        Ok(n) => crate::debugconf!(
+        Ok(n) => crate::log!(
             "io: read_to_end bytes={} tail_last=0x{:02X}\n",
             n,
             tail.last().copied().unwrap_or(0)
         ),
-        Err(e) => crate::debugconf!("io: read_to_end err={:?}\n", e.kind()),
+        Err(e) => crate::log!("io: read_to_end err={:?}\n", e.kind()),
     }
 
     match cursor.rewind() {
-        Ok(()) => crate::debugconf!("io: rewind ok\n"),
-        Err(e) => crate::debugconf!("io: rewind err={:?}\n", e.kind()),
+        Ok(()) => crate::log!("io: rewind ok\n"),
+        Err(e) => crate::log!("io: rewind err={:?}\n", e.kind()),
     }
 
     match cursor.seek(SeekFrom::Current(4)) {
-        Ok(pos) => crate::debugconf!("io: seek current->{}\n", pos),
-        Err(e) => crate::debugconf!("io: seek current err={:?}\n", e.kind()),
+        Ok(pos) => crate::log!("io: seek current->{}\n", pos),
+        Err(e) => crate::log!("io: seek current err={:?}\n", e.kind()),
     }
 
     match cursor.seek(SeekFrom::End(-5)) {
-        Ok(pos) => crate::debugconf!("io: seek end-5->{}\n", pos),
-        Err(e) => crate::debugconf!("io: seek end err={:?}\n", e.kind()),
+        Ok(pos) => crate::log!("io: seek end-5->{}\n", pos),
+        Err(e) => crate::log!("io: seek end err={:?}\n", e.kind()),
     }
 
     match cursor.seek(SeekFrom::Start(0)) {
-        Ok(pos) => crate::debugconf!("io: seek start->{}\n", pos),
-        Err(e) => crate::debugconf!("io: seek start err={:?}\n", e.kind()),
+        Ok(pos) => crate::log!("io: seek start->{}\n", pos),
+        Err(e) => crate::log!("io: seek start err={:?}\n", e.kind()),
     }
 
     match cursor.stream_position() {
-        Ok(pos) => crate::debugconf!("io: stream_position={}\n", pos),
-        Err(e) => crate::debugconf!("io: stream_position err={:?}\n", e.kind()),
+        Ok(pos) => crate::log!("io: stream_position={}\n", pos),
+        Err(e) => crate::log!("io: stream_position err={:?}\n", e.kind()),
     }
 
     let mut reader =
         BufReader::with_capacity(4, Cursor::new(&b"first line\nsecond-line\nthird"[..]));
     let mut line = String::new();
     match reader.read_line(&mut line) {
-        Ok(n) => crate::debugconf!(
+        Ok(n) => crate::log!(
             "io: read_line bytes={} content='{}'\n",
             n,
             line.trim_end_matches('\n')
         ),
-        Err(e) => crate::debugconf!("io: read_line err={:?}\n", e.kind()),
+        Err(e) => crate::log!("io: read_line err={:?}\n", e.kind()),
     }
 
     let mut until_dash = Vec::new();
     match reader.read_until(b'-', &mut until_dash) {
-        Ok(n) => crate::debugconf!("io: read_until bytes={} data={:02X?}\n", n, until_dash),
-        Err(e) => crate::debugconf!("io: read_until err={:?}\n", e.kind()),
+        Ok(n) => crate::log!("io: read_until bytes={} data={:02X?}\n", n, until_dash),
+        Err(e) => crate::log!("io: read_until err={:?}\n", e.kind()),
     }
 
     let buf_cursor = {
@@ -647,7 +647,7 @@ pub fn smoke_test() {
         match writer.into_inner() {
             Ok(inner) => inner,
             Err(e) => {
-                crate::debugconf!("io: buf_writer into_inner err={:?}\n", e.kind());
+                crate::log!("io: buf_writer into_inner err={:?}\n", e.kind());
                 Cursor::new(Vec::new())
             }
         }
@@ -655,8 +655,8 @@ pub fn smoke_test() {
 
     let writer_view = buf_cursor.get_ref();
     match str::from_utf8(writer_view) {
-        Ok(text) => crate::debugconf!("io: buf_writer captured='{}'\n", text),
-        Err(_) => crate::debugconf!(
+        Ok(text) => crate::log!("io: buf_writer captured='{}'\n", text),
+        Err(_) => crate::log!(
             "io: buf_writer captured={} bytes (non-utf8)\n",
             writer_view.len()
         ),
@@ -670,15 +670,15 @@ pub fn smoke_test() {
         match line_writer.into_inner() {
             Ok(inner) => inner,
             Err(e) => {
-                crate::debugconf!("io: line_writer into_inner err={:?}\n", e.kind());
+                crate::log!("io: line_writer into_inner err={:?}\n", e.kind());
                 Cursor::new(Vec::new())
             }
         }
     };
 
     match str::from_utf8(line_cursor.get_ref()) {
-        Ok(text) => crate::debugconf!("io: line_writer captured='{}'\n", text),
-        Err(_) => crate::debugconf!(
+        Ok(text) => crate::log!("io: line_writer captured='{}'\n", text),
+        Err(_) => crate::log!(
             "io: line_writer captured={} bytes (non-utf8)\n",
             line_cursor.get_ref().len()
         ),
@@ -691,30 +691,30 @@ pub fn smoke_test() {
     let mut repeater = repeat(0xA5);
     let mut repeated = [0u8; 6];
     match repeater.read_exact(&mut repeated) {
-        Ok(()) => crate::debugconf!("io: repeat sample={:02X?}\n", repeated),
-        Err(e) => crate::debugconf!("io: repeat err={:?}\n", e.kind()),
+        Ok(()) => crate::log!("io: repeat sample={:02X?}\n", repeated),
+        Err(e) => crate::log!("io: repeat err={:?}\n", e.kind()),
     }
 
     let mut void_reader = empty();
     let mut single = [0u8; 1];
     match void_reader.read_exact(&mut single) {
-        Ok(()) => crate::debugconf!("io: empty unexpectedly produced data\n"),
-        Err(e) => crate::debugconf!("io: empty read_exact err={:?}\n", e.kind()),
+        Ok(()) => crate::log!("io: empty unexpectedly produced data\n"),
+        Err(e) => crate::log!("io: empty read_exact err={:?}\n", e.kind()),
     }
 
     let mut limited = Cursor::new(&b"take-limited"[..]).take(4);
     let mut limited_buf = Vec::new();
     match limited.read_to_end(&mut limited_buf) {
-        Ok(n) => crate::debugconf!(
+        Ok(n) => crate::log!(
             "io: take read {} bytes (remaining={})\n",
             n,
             limited.limit()
         ),
-        Err(e) => crate::debugconf!("io: take read err={:?}\n", e.kind()),
+        Err(e) => crate::log!("io: take read err={:?}\n", e.kind()),
     }
     let _ = limited.into_inner();
 
-    crate::debugconf!("io: smoke_test end\n");
+    crate::log!("io: smoke_test end\n");
 }
 
 pub mod core2 {

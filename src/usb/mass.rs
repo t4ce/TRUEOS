@@ -1,7 +1,6 @@
 use super::xhci::{
     self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
 };
-use crate::debugconf;
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
@@ -189,7 +188,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         return Err(());
     };
 
-    debugconf!(
+    crate::log!(
         "usb: mass storage iface={} cfg={} ep_in=0x{:02X} ep_out=0x{:02X}\n",
         pair.interface,
         pair.configuration,
@@ -211,7 +210,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        debugconf!("usb: ep0 ring overflow for set_configuration (mass)\n");
+        crate::log!("usb: ep0 ring overflow for set_configuration (mass)\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -229,7 +228,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await
     else {
-        debugconf!("usb: timeout waiting for set-configuration (mass)\n");
+        crate::log!("usb: timeout waiting for set-configuration (mass)\n");
         return Err(());
     };
 
@@ -242,7 +241,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     let (ring_in_phys, ring_in_virt) = match dma::alloc(64 * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc bulk IN ring\n");
+            crate::log!("usb: failed to alloc bulk IN ring\n");
             return Err(());
         }
     };
@@ -252,7 +251,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     let (ring_out_phys, ring_out_virt) = match dma::alloc(64 * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc bulk OUT ring\n");
+            crate::log!("usb: failed to alloc bulk OUT ring\n");
             return Err(());
         }
     };
@@ -262,7 +261,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
         Some(pair) => pair,
         None => {
-            debugconf!("usb: failed to alloc input ctx for mass endpoints\n");
+            crate::log!("usb: failed to alloc input ctx for mass endpoints\n");
             return Err(());
         }
     };
@@ -340,7 +339,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         d3: trb_type(12) | (slot_id << 24),
     };
     if !cmd_ring.push(cfg_ep_cmd) {
-        debugconf!("usb: cmd ring full before configure-endpoint (mass)\n");
+        crate::log!("usb: cmd ring full before configure-endpoint (mass)\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
@@ -355,7 +354,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await
     else {
-        debugconf!("usb: timeout waiting for configure-endpoint (mass)\n");
+        crate::log!("usb: timeout waiting for configure-endpoint (mass)\n");
         return Err(());
     };
 

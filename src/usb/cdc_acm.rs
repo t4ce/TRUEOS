@@ -1,7 +1,6 @@
 use super::xhci::{
     self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
 };
-use crate::debugconf;
 use crate::pci::dma;
 use core::cmp;
 use core::mem::size_of;
@@ -103,7 +102,7 @@ impl CdcRuntime {
             d3: trb_type(1) | (1 << 5),
         };
         if !self.ring_out.push(trb) {
-            debugconf!(
+            crate::log!(
                 "usb: cdc tx ring full slot={} chunk={}\n",
                 self.slot_id,
                 chunk
@@ -133,7 +132,7 @@ impl CdcRuntime {
             d3: trb_type(1) | (1 << 5),
         };
         if !self.ring_in.push(trb) {
-            debugconf!("usb: cdc rx ring full slot={}\n", self.slot_id);
+            crate::log!("usb: cdc rx ring full slot={}\n", self.slot_id);
             return false;
         }
         self.rx_posted = true;
@@ -149,7 +148,7 @@ impl CdcRuntime {
     fn on_tx_complete(&mut self, completion: u32) {
         self.tx_inflight = false;
         if completion != 1 {
-            debugconf!(
+            crate::log!(
                 "usb: cdc tx completion cc={} slot={}\n",
                 completion,
                 self.slot_id
@@ -161,7 +160,7 @@ impl CdcRuntime {
     fn on_rx_complete(&mut self, completion: u32, residual: u32) {
         self.rx_posted = false;
         if completion != 1 && completion != 13 {
-            debugconf!(
+            crate::log!(
                 "usb: cdc rx completion cc={} slot={}\n",
                 completion,
                 self.slot_id
@@ -289,7 +288,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         return Err(());
     };
 
-    debugconf!(
+    crate::log!(
         "usb: cdc-acm cfg={} ctrl_if={} data_if={}\n",
         interface.configuration,
         interface.control_interface,
@@ -310,7 +309,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        debugconf!("usb: cdc set_configuration overflow\n");
+        crate::log!("usb: cdc set_configuration overflow\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -321,7 +320,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await
     else {
-        debugconf!("usb: cdc set_configuration timeout\n");
+        crate::log!("usb: cdc set_configuration timeout\n");
         return Err(());
     };
     if (evt.d2 >> 24) & 0xFF != 1 {
@@ -409,7 +408,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         d3: trb_type(12) | (slot_id << 24),
     };
     if !cmd_ring.push(cfg_ep_cmd) {
-        debugconf!("usb: cdc configure-endpoint ring full\n");
+        crate::log!("usb: cdc configure-endpoint ring full\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
@@ -420,7 +419,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await
     else {
-        debugconf!("usb: cdc configure-endpoint timeout\n");
+        crate::log!("usb: cdc configure-endpoint timeout\n");
         return Err(());
     };
     if (cfg_evt.d2 >> 24) & 0xFF != 1 {
@@ -464,7 +463,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     .await
     .is_err()
     {
-        debugconf!("usb: cdc set_line_coding failed\n");
+        crate::log!("usb: cdc set_line_coding failed\n");
     }
     if set_control_line_state(
         ctx,
@@ -476,7 +475,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     .await
     .is_err()
     {
-        debugconf!("usb: cdc set_control_line_state failed\n");
+        crate::log!("usb: cdc set_control_line_state failed\n");
     }
 
     // Important ordering: don't start bulk RX/TX while we're still using EP0 control
@@ -484,7 +483,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     register_runtime(runtime);
     let _ = with_runtime_mut_by_slot(slot_id, |rt| rt.post_rx_locked());
 
-    debugconf!(
+    crate::log!(
         "usb: cdc-acm attached slot={} ep_in=0x{:02X} ep_out=0x{:02X}\n",
         slot_id,
         interface.ep_in.address,
