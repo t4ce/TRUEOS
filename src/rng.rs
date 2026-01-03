@@ -32,25 +32,25 @@ pub fn log_rng_caps() {
     let rdrand = has_rdrand();
     let rdseed = has_rdseed();
     match (rdrand, rdseed) {
-        (true, true) => crate::debugconf!("RNG: RDRAND and RDSEED available.\n"),
-        (true, false) => crate::debugconf!("RNG: RDRAND available, RDSEED unavailable.\n"),
-        (false, true) => crate::debugconf!("RNG: RDSEED available, RDRAND unavailable.\n"),
+        (true, true) => crate::log!("RNG: RDRAND and RDSEED available.\n"),
+        (true, false) => crate::log!("RNG: RDRAND available, RDSEED unavailable.\n"),
+        (false, true) => crate::log!("RNG: RDSEED available, RDRAND unavailable.\n"),
         (false, false) => {
-            crate::debugconf!("RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n")
+            crate::log!("RNG: no hardware entropy source (RDRAND/RDSEED unavailable).\n")
         }
     }
 
     if rdseed {
         match rdseed_u64() {
-            Some(val) => crate::debugconf!("RNG: RDSEED sample = 0x{:016X}\n", val),
-            None => crate::debugconf!("RNG: RDSEED sample failed (busy?).\n"),
+            Some(val) => crate::log!("RNG: RDSEED sample = 0x{:016X}\n", val),
+            None => crate::log!("RNG: RDSEED sample failed (busy?).\n"),
         }
     }
 
     if rdrand {
         match rdrand_u64() {
-            Some(val) => crate::debugconf!("RNG: RDRAND sample = 0x{:016X}\n", val),
-            None => crate::debugconf!("RNG: RDRAND sample failed.\n"),
+            Some(val) => crate::log!("RNG: RDRAND sample = 0x{:016X}\n", val),
+            None => crate::log!("RNG: RDRAND sample failed.\n"),
         }
     }
 }

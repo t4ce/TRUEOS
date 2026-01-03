@@ -6,7 +6,6 @@ use core::ptr::{addr_of, addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
 
 use crate::{
-    debugconf,
     phys::{self, HeapArena},
 };
 
@@ -319,7 +318,7 @@ pub fn heap_stats() -> HeapStats {
 
 pub fn install_heap_arena(arena: HeapArena) -> bool {
     if arena.length < minimum_block_size() {
-        debugconf!(
+        crate::log!(
             "heap: requested arena too small size={} bytes (need >= {})\n",
             arena.length,
             minimum_block_size()
@@ -329,13 +328,13 @@ pub fn install_heap_arena(arena: HeapArena) -> bool {
 
     let mut guard = ALLOCATOR.lock();
     if guard.initialized {
-        debugconf!("heap: allocator already initialized; cannot swap backing\n");
+        crate::log!("heap: allocator already initialized; cannot swap backing\n");
         return false;
     }
 
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
     phys::register_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-    debugconf!(
+    crate::log!(
         "heap: arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
         arena.virt_start,
         arena.phys_start,
@@ -368,12 +367,12 @@ fn aligned_payload(block_start: usize, layout: Layout) -> Option<usize> {
 #[alloc_error_handler]
 fn alloc_error(layout: Layout) -> ! {
     let stats = heap_stats();
-    debugconf!(
+    crate::log!(
         "OOM: alloc request size={} align={}\n",
         layout.size(),
         layout.align()
     );
-    debugconf!(
+    crate::log!(
         "OOM: heap virt=0x{:X}..0x{:X} phys=0x{:X} src={:?} usable_start=0x{:X} usable_total={} free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats.heap_start,
         stats.heap_end,

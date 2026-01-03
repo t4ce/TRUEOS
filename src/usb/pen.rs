@@ -1,11 +1,9 @@
-use crate::debugconf;
-
 const USB_DESC_TYPE_INTERFACE: u8 = 4;
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 
 pub fn try_handle(cfg: &[u8], port: u8) -> bool {
     if has_interface_class(cfg, USB_CLASS_MASS_STORAGE) {
-        debugconf!("usb: pen device detected on port {}\n", port);
+        crate::log!("usb: pen device detected on port {}\n", port);
         true
     } else {
         false

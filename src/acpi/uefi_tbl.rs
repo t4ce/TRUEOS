@@ -1,7 +1,6 @@
 use acpi::sdt::SdtHeader;
 use spin::Once;
 
-use crate::debugconf;
 use crate::pci::mmio;
 
 use super::ensure_tables;
@@ -27,22 +26,22 @@ pub fn log_once() {
                 if len >= 60 {
                     let guid = unsafe { core::slice::from_raw_parts(base.add(36), 16) };
                     let cfg_ptr = unsafe { core::ptr::read_unaligned(base.add(52) as *const u64) };
-                    debugconf!(
+                    crate::log!(
                         "UEFI: vendor_guid={:02X?} cfg_ptr=0x{:016X} len=0x{:X}\n",
                         guid,
                         cfg_ptr,
                         len
                     );
                 } else {
-                    debugconf!("UEFI: length too small (0x{:X})\n", len);
+                    crate::log!("UEFI: length too small (0x{:X})\n", len);
                 }
             } else {
-                debugconf!("UEFI: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
+                crate::log!("UEFI: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
             }
         }
 
         if !found {
-            debugconf!("UEFI: table not present\n");
+            crate::log!("UEFI: table not present\n");
         }
     });
 }

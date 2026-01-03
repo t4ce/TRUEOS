@@ -6,8 +6,6 @@ use heapless::Vec;
 use limine::memory_map::EntryType;
 use spin::Mutex;
 
-use crate::debugconf;
-
 extern "C" {
     static kernel_end: u8;
 }
@@ -75,13 +73,13 @@ pub fn register_memory_metadata() {
 
 pub fn init_pmm_from_limine() {
     let Some(entries) = crate::limine::memmap_entries() else {
-        debugconf!("pmm: no Limine memmap; PMM disabled\n");
+        crate::log!("pmm: no Limine memmap; PMM disabled\n");
         return;
     };
 
     let hhdm = HHDM_BASE.load(Ordering::Relaxed);
     if hhdm == 0 {
-        debugconf!("pmm: no HHDM registered; cannot hand out virtual heap arena\n");
+        crate::log!("pmm: no HHDM registered; cannot hand out virtual heap arena\n");
         return;
     }
 
@@ -100,7 +98,7 @@ pub fn init_pmm_from_limine() {
         }
 
         if state.add_region(start, end).is_err() {
-            debugconf!(
+            crate::log!(
                 "pmm: region table full dropping 0x{:X}..0x{:X}\n",
                 start,
                 end
@@ -114,12 +112,12 @@ pub fn init_pmm_from_limine() {
     let mut guard = PMM.lock();
     if region_count == 0 {
         *guard = None;
-        debugconf!("pmm: no usable regions available\n");
+        crate::log!("pmm: no usable regions available\n");
     } else {
         let first = state.regions.first().copied().unwrap();
         let last = state.regions.last().copied().unwrap();
         *guard = Some(state);
-        debugconf!(
+        crate::log!(
             "pmm: regions={} span=0x{:X}..0x{:X} total={} MiB\n",
             region_count,
             first.start,
@@ -135,7 +133,7 @@ pub fn reserve_heap_arena(size: usize, align: usize) -> Option<HeapArena> {
     }
 
     if HHDM_BASE.load(Ordering::Relaxed) == 0 {
-        debugconf!("pmm: cannot reserve heap arena without HHDM mapping\n");
+        crate::log!("pmm: cannot reserve heap arena without HHDM mapping\n");
         return None;
     }
 
@@ -183,7 +181,7 @@ pub fn phys_to_virt(phys: usize) -> usize {
     let hhdm = HHDM_BASE.load(Ordering::Relaxed);
     if hhdm != 0 {
         phys.checked_add(hhdm as usize).unwrap_or_else(|| {
-            crate::debugconf!(
+            crate::log!(
                 "phys_to_virt: overflow translating phys=0x{:X} with hhdm=0x{:X}\n",
                 phys,
                 hhdm

@@ -9,10 +9,10 @@ use crate::surface::{
 };
 
 pub fn smoke_test() {
-    crate::debugconf!("string smoke test begin\n");
+    crate::log!("string smoke test begin\n");
 
     let stats0 = crate::allocators::heap_stats();
-    crate::debugconf!(
+    crate::log!(
         "heap before: free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats0.free_bytes,
         stats0.largest_free_block,
@@ -21,10 +21,10 @@ pub fn smoke_test() {
     );
 
     let ascii: &str = "Hello, FalseOS!";
-    crate::debugconf!("&str='{}' len={}\n", ascii, ascii.len());
+    crate::log!("&str='{}' len={}\n", ascii, ascii.len());
     match ensure_ascii(ascii) {
-        Ok(()) => crate::debugconf!("ensure_ascii(ascii)=Ok\n"),
-        Err(e) => crate::debugconf!(
+        Ok(()) => crate::log!("ensure_ascii(ascii)=Ok\n"),
+        Err(e) => crate::log!(
             "ensure_ascii(ascii)=Err index={} byte=0x{:02X}\n",
             e.index,
             e.byte
@@ -33,8 +33,8 @@ pub fn smoke_test() {
 
     let non_ascii: &str = "Grüße";
     match ensure_ascii(non_ascii) {
-        Ok(()) => crate::debugconf!("ensure_ascii(non_ascii)=Ok (unexpected)\n"),
-        Err(e) => crate::debugconf!(
+        Ok(()) => crate::log!("ensure_ascii(non_ascii)=Ok (unexpected)\n"),
+        Err(e) => crate::log!(
             "ensure_ascii(non_ascii)=Err index={} byte=0x{:02X}\n",
             e.index,
             e.byte
@@ -42,7 +42,7 @@ pub fn smoke_test() {
     }
 
     let sanitized = sanitize_ascii("A\tB\nC\rD");
-    crate::debugconf!("sanitize_ascii='{}'\n", sanitized);
+    crate::log!("sanitize_ascii='{}'\n", sanitized);
 
     let mut heap_string = String::from("heap String");
     heap_string.push(' ');
@@ -52,13 +52,13 @@ pub fn smoke_test() {
         heap_string.len(),
         heap_string.capacity()
     ));
-    crate::debugconf!("String='{}'\n", heap_string);
+    crate::log!("String='{}'\n", heap_string);
 
     let dump = hex_dump(&[0x00, 0x01, 0x41, 0x7F, 0x80, 0xFF]);
-    crate::debugconf!("hex_dump:\n{}", dump);
+    crate::log!("hex_dump:\n{}", dump);
 
     let stats1 = crate::allocators::heap_stats();
-    crate::debugconf!(
+    crate::log!(
         "heap after:  free_bytes={} largest_free={} free_blocks={} init={}\n",
         stats1.free_bytes,
         stats1.largest_free_block,
@@ -66,7 +66,7 @@ pub fn smoke_test() {
         stats1.initialized
     );
 
-    crate::debugconf!("string smoke test end\n");
+    crate::log!("string smoke test end\n");
 }
 
 /// Error returned when non-ASCII data is encountered in an ASCII-only routine.

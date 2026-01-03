@@ -1,6 +1,6 @@
 use spin::Once;
 
-use crate::{debugconf, limine, pci::mmio, vga};
+use crate::{limine, pci::mmio, vga};
 
 use super::ensure_tables;
 
@@ -33,7 +33,7 @@ pub fn log_once() {
         let bmp = match bgrt.image_type() {
             acpi::sdt::bgrt::ImageType::Bitmap => {
                 if let Some(info) = parse_bmp_header(addr) {
-                    debugconf!(
+                    crate::log!(
                         "BGRT: addr=0x{:016X} off=({}, {}) size=0x{:X} fmt=bmp {}x{} {}bpp\n",
                         addr,
                         off_x,
@@ -45,7 +45,7 @@ pub fn log_once() {
                     );
                     Some(info)
                 } else {
-                    debugconf!(
+                    crate::log!(
                         "BGRT: addr=0x{:016X} off=({}, {}) size=? fmt=bmp\n",
                         addr,
                         off_x,
@@ -55,7 +55,7 @@ pub fn log_once() {
                 }
             }
             acpi::sdt::bgrt::ImageType::Reserved => {
-                debugconf!(
+                crate::log!(
                     "BGRT: addr=0x{:016X} off=({}, {}) size=? fmt=reserved\n",
                     addr,
                     off_x,

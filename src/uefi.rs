@@ -2,7 +2,7 @@ use core::{char, ptr};
 
 use spin::Once;
 
-use crate::{debugconf, limine};
+use crate::limine;
 
 static LOG_ONCE: Once<()> = Once::new();
 
@@ -45,7 +45,7 @@ pub fn log_system_table_once() {
         let table_ptr = match to_virt_ptr::<EfiSystemTable>(phys_or_virt) {
             Some(p) => p,
             None => {
-                debugconf!("UEFI: EFI system table at 0x{:016X} (no HHDM; not parsing)\n", phys_or_virt);
+                crate::log!("UEFI: EFI system table at 0x{:016X} (no HHDM; not parsing)\n", phys_or_virt);
                 return;
             }
         };
@@ -54,7 +54,7 @@ pub fn log_system_table_once() {
         // We still defensively do a minimal sanity check before reading further.
         let st = unsafe { &*table_ptr };
         if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
-            debugconf!(
+            crate::log!(
                 "UEFI: EFI system table at 0x{:016X} signature mismatch 0x{:016X}\n",
                 phys_or_virt,
                 st.hdr.signature
@@ -64,7 +64,7 @@ pub fn log_system_table_once() {
 
         let vendor = unsafe { read_utf16z_lossy(st.firmware_vendor, 96) };
         if let Some(vendor) = vendor {
-            debugconf!(
+            crate::log!(
                 "UEFI: SystemTable rev=0x{:08X} vendor='{}' fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
                 st.hdr.revision,
                 vendor,
@@ -75,7 +75,7 @@ pub fn log_system_table_once() {
                 st.configuration_table as u64,
             );
         } else {
-            debugconf!(
+            crate::log!(
                 "UEFI: SystemTable rev=0x{:08X} fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
                 st.hdr.revision,
                 st.firmware_revision,

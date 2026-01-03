@@ -1,7 +1,5 @@
 use alloc::vec::Vec;
 
-use crate::debugconf;
-
 use fatfs::{
     format_volume, FileSystem, FormatVolumeOptions, FsOptions, IoBase, Read, Seek, SeekFrom, Write,
 };
@@ -80,7 +78,7 @@ impl Seek for RamDisk {
 }
 
 pub fn create_demo_file() {
-    debugconf!("fatfs demo: ");
+    crate::log!("fatfs demo: ");
     const RAMDISK_BYTES: usize = 1024 * 1024; // 1 MiB scratch volume
     let mut ramdisk = RamDisk::new(RAMDISK_BYTES);
 
@@ -108,7 +106,7 @@ pub fn create_demo_file() {
     }
 
     if let Ok(stats) = fs.stats() {
-        debugconf!(
+        crate::log!(
             "fatfs demo: clusters total={} free={}",
             stats.total_clusters(),
             stats.free_clusters()

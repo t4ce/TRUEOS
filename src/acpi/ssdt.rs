@@ -1,7 +1,5 @@
 use spin::Once;
 
-use crate::debugconf;
-
 use super::ensure_tables;
 
 static LOG_ONCE: Once<()> = Once::new();
@@ -17,7 +15,7 @@ pub fn log_once() {
             if hdr.signature.as_str() == "SSDT" {
                 count += 1;
                 let len = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.length)) };
-                debugconf!(
+                crate::log!(
                     "SSDT: idx={} phys=0x{:X} len=0x{:X}\n",
                     count - 1,
                     phys,
@@ -27,7 +25,7 @@ pub fn log_once() {
         }
 
         if count == 0 {
-            debugconf!("SSDT: none present\n");
+            crate::log!("SSDT: none present\n");
         }
     });
 }

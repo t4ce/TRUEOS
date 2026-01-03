@@ -1,7 +1,6 @@
 use acpi::sdt::SdtHeader;
 use spin::Once;
 
-use crate::debugconf;
 use crate::pci::mmio;
 
 use super::ensure_tables;
@@ -28,7 +27,7 @@ pub fn log_once() {
                 if len >= 44 {
                     let host_aw = unsafe { core::ptr::read_unaligned(base.add(36) as *const u8) };
                     let flags = unsafe { core::ptr::read_unaligned(base.add(37) as *const u8) };
-                    debugconf!(
+                    crate::log!(
                         "DMAR: host_addr_width={} flags=0x{:02X} len=0x{:X}\n",
                         host_aw & 0x3F,
                         flags,
@@ -49,17 +48,17 @@ pub fn log_once() {
                         count += 1;
                         off += l;
                     }
-                    debugconf!("DMAR: remap_structs={}\n", count);
+                    crate::log!("DMAR: remap_structs={}\n", count);
                 } else {
-                    debugconf!("DMAR: length too small (0x{:X})\n", len);
+                    crate::log!("DMAR: length too small (0x{:X})\n", len);
                 }
             } else {
-                debugconf!("DMAR: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
+                crate::log!("DMAR: map failed phys=0x{:X} len=0x{:X}\n", phys, len);
             }
         }
 
         if !found {
-            debugconf!("DMAR: table not present\n");
+            crate::log!("DMAR: table not present\n");
         }
     });
 }

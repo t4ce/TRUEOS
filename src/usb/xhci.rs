@@ -95,7 +95,7 @@ pub fn xhc_info() -> Option<XhcInfo> {
 
 pub fn init_once() {
     if crate::limine::hhdm_offset().is_none() {
-        crate::debugconf!("xhci: no HHDM\n");
+        crate::log!("xhci: no HHDM\n");
         return;
     }
 
@@ -111,7 +111,7 @@ pub fn init_once() {
 
             let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
             if (bar_lo & 0x1) != 0 {
-                crate::debugconf!("xhci: IO BAR not supported\n");
+                crate::log!("xhci: IO BAR not supported\n");
                 break;
             }
 
@@ -122,7 +122,7 @@ pub fn init_once() {
             }
 
             let size = crate::pci::bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
-            crate::debugconf!(
+            crate::log!(
                 "xhci: {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X}\n",
                 dev.bus,
                 dev.slot,
@@ -147,7 +147,7 @@ pub fn init_once() {
             let mmio = match mmio::map_mmio_region(base, map_len) {
                 Ok(ptr) => ptr,
                 Err(err) => {
-                    crate::debugconf!("xhci: failed to map MMIO: {:?}\n", err);
+                    crate::log!("xhci: failed to map MMIO: {:?}\n", err);
                     break;
                 }
             };
@@ -161,7 +161,7 @@ pub fn init_once() {
                 let supports_64bit = (hccparams1 & 0x1) != 0;
                 let op = cap.add(caplength as usize) as *mut u32;
 
-                crate::debugconf!(
+                crate::log!(
                     "xhci: caplen=0x{:X} ver=0x{:04X} op=0x{:X} ac64={}\n",
                     caplength,
                     hci_version,
@@ -205,7 +205,7 @@ pub fn init_once() {
                     spin -= 1;
                 }
                 if (sts & USBSTS_HCH) == 0 {
-                    crate::debugconf!("xhci: halt timeout sts=0x{:X}\n", sts);
+                    crate::log!("xhci: halt timeout sts=0x{:X}\n", sts);
                     break;
                 }
 
@@ -217,7 +217,7 @@ pub fn init_once() {
                     spin -= 1;
                 }
                 if (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 {
-                    crate::debugconf!("xhci: reset bit stuck\n");
+                    crate::log!("xhci: reset bit stuck\n");
                     break;
                 }
 
@@ -229,11 +229,11 @@ pub fn init_once() {
                 }
 
                 if (sts & USBSTS_CNR) != 0 {
-                    crate::debugconf!("xhci: CNR stuck sts=0x{:X}\n", sts);
+                    crate::log!("xhci: CNR stuck sts=0x{:X}\n", sts);
                     break;
                 }
 
-                crate::debugconf!("xhci: reset ok sts=0x{:X}\n", sts);
+                crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
             }
 
             break;
@@ -241,7 +241,7 @@ pub fn init_once() {
     });
 
     if !did_any {
-        crate::debugconf!("xhci: not found\n");
+        crate::log!("xhci: not found\n");
     }
 }
 
@@ -615,7 +615,7 @@ impl EventRing {
         // when Port Status Change Events storm). Keep it off by default.
         const TRACE_EVENT_TRBS: bool = false;
         if TRACE_EVENT_TRBS {
-            crate::debugconf!(
+            crate::log!(
                 "xhci: evt dequeue={} cycle={} trb=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
                 self.dequeue,
                 self.cycle as u8,
@@ -724,7 +724,7 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
 
 #[embassy_executor::task]
 pub async fn poll_task(info: XhcInfo) {
-    crate::debugconf!(
+    crate::log!(
         "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
         info.bus,
         info.slot,
@@ -824,11 +824,11 @@ pub const fn trb_type(ty: u32) -> u32 {
 }
 
 pub fn log_ports_table(ctx: &XhciContext) {
-    crate::debugconf!(
+    crate::log!(
         "xhci: ports={} (PORTSC: ccs ped pr pp pls speed csc pec prc plc cec)\n",
         ctx.port_count
     );
-    crate::debugconf!("xhci: #  PORTSC       ccs ped pr pp pls spd   csc pec prc plc cec\n");
+    crate::log!("xhci: #  PORTSC       ccs ped pr pp pls spd   csc pec prc plc cec\n");
 
     for port in 0..ctx.port_count {
         let portsc = unsafe { ctx.portsc(port as usize) };
@@ -857,7 +857,7 @@ pub fn log_ports_table(ctx: &XhciContext) {
         let plc = (portsc & (1 << 22)) != 0;
         let cec = (portsc & (1 << 23)) != 0;
 
-        crate::debugconf!(
+        crate::log!(
             "xhci: {:>2}  0x{:08X}  {:>3} {:>3} {:>2} {:>2} 0x{:X}  {:>5}  {:>3} {:>3} {:>3} {:>3} {:>3}\n",
             port + 1,
             portsc,

@@ -23,7 +23,7 @@ static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {
     ACPI_TABLES.call_once(|| {
         let Some(rsdp) = limine::rsdp_address() else {
-            crate::debugconf!("ACPI RSDP MISSING\n");
+            crate::log!("ACPI RSDP MISSING\n");
             return None;
         };
 
@@ -35,18 +35,18 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     count += 1;
                     let table_len =
                         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(header.length)) };
-                    crate::debugconf!(
+                    crate::log!(
                         "ACPI TABLE {} @0x{:X} len=0x{:X}\n",
                         header.signature.as_str(),
                         phys,
                         table_len
                     );
                 }
-                crate::debugconf!("ACPI RSDP 0x{:X} tables={}\n", rsdp, count);
+                crate::log!("ACPI RSDP 0x{:X} tables={}\n", rsdp, count);
                 Some(tables)
             }
             Err(err) => {
-                crate::debugconf!("ACPI RSDP 0x{:X} ERROR {:?}\n", rsdp, err);
+                crate::log!("ACPI RSDP 0x{:X} ERROR {:?}\n", rsdp, err);
                 None
             }
         }

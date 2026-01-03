@@ -88,7 +88,7 @@ pub extern "C" fn _start() -> ! {
     path::smoke_test();
     pattern::smoke_test();
 
-    crate::debugconf!(
+    crate::log!(
         "turbo: {:?}\n", turbo::local_state()
     );
 

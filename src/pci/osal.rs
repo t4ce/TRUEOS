@@ -2,8 +2,6 @@ use core::ptr::NonNull;
 use dma_api::{Direction, Osal};
 use spin::Once;
 
-use crate::debugconf;
-
 static DMA_OSAL_ONCE: Once<()> = Once::new();
 static DMA_OSAL: DmaOsal = DmaOsal;
 
@@ -20,7 +18,7 @@ impl Osal for DmaOsal {
         match super::dma::virt_to_phys(addr.as_ptr()) {
             Some(phys) => phys,
             None => {
-                debugconf!(
+                crate::log!(
                     "usb: dma_osal map failed for virt=0x{:X}\n",
                     addr.as_ptr() as usize
                 );

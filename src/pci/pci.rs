@@ -51,7 +51,7 @@ fn init_ecam_once() {
         };
 
         let Some(mcfg) = tables.find_table::<acpi::sdt::mcfg::Mcfg>() else {
-            crate::debugconf!("pci: MCFG missing; using legacy cfg\n");
+            crate::log!("pci: MCFG missing; using legacy cfg\n");
             return None;
         };
 
@@ -64,7 +64,7 @@ fn init_ecam_once() {
                 phys_base: entry.base_address,
             };
             if regions.push(region).is_err() {
-                crate::debugconf!("pci: MCFG has too many regions; truncating\n");
+                crate::log!("pci: MCFG has too many regions; truncating\n");
                 break;
             }
         }
@@ -75,14 +75,14 @@ fn init_ecam_once() {
                 seg0_count += 1;
             }
         }
-        crate::debugconf!(
+        crate::log!(
             "pci: MCFG present (regions={}, seg0={})\n",
             regions.len(),
             seg0_count
         );
         for r in regions.iter() {
             if r.segment == 0 {
-                crate::debugconf!(
+                crate::log!(
                     "pci: ECAM seg0 base=0x{:X} bus={}-{}\n",
                     r.phys_base,
                     r.bus_start,
@@ -159,7 +159,7 @@ fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32)
 }
 
 pub fn enumerate_once() {
-    crate::debugconf!("pci: enumerate\n");
+    crate::log!("pci: enumerate\n");
 
     DEVICES.lock().clear();
 
@@ -194,7 +194,7 @@ pub fn enumerate_once() {
         }
     }
 
-    crate::debugconf!("pci: done\n");
+    crate::log!("pci: done\n");
 }
 
 fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
@@ -280,14 +280,14 @@ fn record_device(
 fn push_device(dev: PciDevice) {
     let mut lock = DEVICES.lock();
     if lock.push(dev).is_err() {
-        crate::debugconf!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+        crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
     }
 }
 
 pub fn log_devices_once() {
     with_devices(|list| {
         for dev in list {
-            crate::debugconf!(
+            crate::log!(
                 "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X}\n",
                 dev.bus,
                 dev.slot,
