@@ -131,7 +131,6 @@ pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
 }
 
 pub fn log_fmt(args: fmt::Arguments<'_>, fg: u32, bg: u32, shadow: u32) -> bool {
-    // Best-effort: ignore fmt errors (we never return Err in our writer).
     let mut w = VgaLogWriter {
         fg,
         bg,
