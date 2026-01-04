@@ -1,50 +1,30 @@
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
-
 use heapless::Deque;
 use spin::Mutex;
-
 use super::cdc_acm::{self, CdcAttachEvent, UsbSerial};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-// TrueKey sits on top of CDC-ACM.
-// We treat the ESP32 as "the" special CDC device, selected by USB iSerialNumber.
 static TRUEKEY_SLOT: AtomicU32 = AtomicU32::new(0);
 static SERIAL_SENT_FOR_SLOT: AtomicU32 = AtomicU32::new(0);
-
-// Log cache that is always on. Drop-oldest when full.
-// Sized to be large enough to buffer a full early-boot log burst.
 const LOG_CACHE_BYTES: usize = 1024 * 1024;
 static LOG_CACHE: Mutex<Deque<u8, LOG_CACHE_BYTES>> = Mutex::new(Deque::new());
-
 static TARGET_SERIAL: Mutex<UsbSerial> = Mutex::new(UsbSerial::none());
 
+// the serial needs to match the esp or it wont bind
 pub fn configure_target_serial(serial: &str) {
 	*TARGET_SERIAL.lock() = UsbSerial::from_str(serial);
 }
 
 pub fn init() {
-	// If you want TrueKey auto-binding, call `configure_target_serial()` first.
 	cdc_acm::set_attach_callback(Some(on_cdc_attach));
 	cdc_acm::set_detach_callback(Some(on_cdc_detach));
 }
 
 #[embassy_executor::task]
-
-pub async fn log_drain_task() {
-	drain_loop().await
-}
-
-// Backwards-compatible name for older spawner call sites.
-#[embassy_executor::task]
-pub async fn log_dump_task() {
-	drain_loop().await
-}
-
-async fn drain_loop() {
+pub async fn drain_loop() {
 	const CHUNK: usize = 1024;
-	const IDLE_SLEEP_MS: u64 = 10;
-	const DRAIN_SLEEP_MS: u64 = 1;
+	const IDLE_SLEEP_MS: u64 = 100;
 
 	let mut buf = [0u8; CHUNK];
 	loop {
@@ -68,15 +48,11 @@ async fn drain_loop() {
 			}
 			i
 		};
-
 		if n == 0 {
 			Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
 			continue;
 		}
-
-		// Uses CDC backpressure internally; never blocks producers.
 		let _ = cdc_acm::write_all(slot, &buf[..n]).await;
-		Timer::after(EmbassyDuration::from_millis(DRAIN_SLEEP_MS)).await;
 	}
 }
 

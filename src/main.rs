@@ -146,7 +146,7 @@ pub extern "C" fn _start() -> ! {
     let _ = spawner.spawn(usb::hid::input_logger());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
-    let _ = spawner.spawn(usb::truekey::log_drain_task());
+    let _ = spawner.spawn(usb::truekey::drain_loop());
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
     

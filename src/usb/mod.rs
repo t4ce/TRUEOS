@@ -1,3 +1,4 @@
+pub mod cdc;
 pub mod cdc_acm;
 pub mod hid;
 pub mod input;
