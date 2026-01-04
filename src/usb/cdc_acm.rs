@@ -1,3 +1,4 @@
+use super::cdc::{self, CdcInterface};
 use super::xhci::{
     self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
 };
@@ -13,9 +14,6 @@ use core::pin::Pin;
 use heapless::{Deque, Vec};
 use spin::Mutex;
 
-const USB_CLASS_COMM: u8 = 0x02;
-const USB_SUBCLASS_ACM: u8 = 0x02;
-const USB_CLASS_DATA: u8 = 0x0A;
 const MAX_CDC_DEVICES: usize = 2;
 // Generic CDC-ACM transport buffering.
 // Keep this modest; policy-specific buffering (e.g. ESP32 log backend) should live
@@ -27,21 +25,6 @@ const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
 
 pub type UsbSerial = SerialNumber;
-
-#[derive(Clone, Copy, Debug)]
-struct EndpointInfo {
-    address: u8,
-    max_packet: u16,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CdcInterface {
-    configuration: u8,
-    control_interface: u8,
-    data_interface: u8,
-    ep_in: EndpointInfo,
-    ep_out: EndpointInfo,
-}
 
 #[repr(C, packed)]
 struct LineCoding {
@@ -103,13 +86,13 @@ struct CdcRuntime {
     tx_dma_virt: *mut u8,
     tx_dma_len: usize,
     tx_inflight: bool,
-    tx_waker_idx: usize,
     rx_dma_phys: u64,
     rx_dma_virt: *mut u8,
     rx_dma_len: usize,
     rx_posted: bool,
     tx_queue: Deque<u8, CDC_TX_QUEUE_CAP>,
     rx_queue: Deque<u8, CDC_RX_QUEUE_CAP>,
+    tx_waker: Option<Waker>,
 }
 
 unsafe impl Send for CdcRuntime {}
@@ -214,13 +197,6 @@ impl CdcRuntime {
 
 static CDC_RUNTIMES: Mutex<Vec<CdcRuntime, MAX_CDC_DEVICES>> = Mutex::new(Vec::new());
 
-// Per-runtime TX waker slots for backpressure notification.
-static TX_WAKERS: [Mutex<Option<Waker>>; MAX_CDC_DEVICES] = [
-    Mutex::new(None),
-    Mutex::new(None),
-];
-static TX_WAKER_USED: Mutex<[bool; MAX_CDC_DEVICES]> = Mutex::new([false; MAX_CDC_DEVICES]);
-
 static TX_COMPLETE_CALLBACK: Mutex<Option<fn(u32)>> = Mutex::new(None);
 
 static ATTACH_CALLBACK: Mutex<Option<fn(CdcAttachEvent)>> = Mutex::new(None);
@@ -240,13 +216,13 @@ pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
 
 pub fn unregister_runtime(slot_id: u32) -> bool {
     let mut detached: Option<CdcAttachEvent> = None;
-    let mut freed_signal: Option<usize> = None;
     let mut guard = CDC_RUNTIMES.lock();
     let mut idx = 0usize;
     let mut removed = false;
+    let mut waker: Option<Waker> = None;
     while idx < guard.len() {
         if guard[idx].slot_id == slot_id {
-            freed_signal = Some(guard[idx].tx_waker_idx);
+            waker = guard[idx].tx_waker.take();
             detached = Some(CdcAttachEvent {
                 slot_id,
                 vid: guard[idx].vid,
@@ -261,14 +237,9 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
     }
     drop(guard);
 
-    if let Some(sig_idx) = freed_signal {
-        let mut used = TX_WAKER_USED.lock();
-        used[sig_idx] = false;
-        // Wake any waiter so it can observe the detach.
-        let mut waker = TX_WAKERS[sig_idx].lock();
-        if let Some(w) = waker.take() {
-            w.wake();
-        }
+    // Wake any waiter so it can observe the detach.
+    if let Some(w) = waker {
+        w.wake();
     }
 
     if removed {
@@ -282,37 +253,8 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
 fn register_runtime(runtime: CdcRuntime) {
     let mut runtime = runtime;
 
-    // Allocate a TX waker slot.
-    let sig_idx = {
-        let mut used = TX_WAKER_USED.lock();
-        let mut found = None;
-        for (i, busy) in used.iter_mut().enumerate() {
-            if !*busy {
-                *busy = true;
-                found = Some(i);
-                break;
-            }
-        }
-        found
-    };
-
-    if let Some(idx) = sig_idx {
-        runtime.tx_waker_idx = idx;
-    } else {
-        crate::log!("usb: cdc register_runtime failed: no free TX signal slots\n");
-        return;
-    }
-
     let mut guard = CDC_RUNTIMES.lock();
     if let Some(existing) = guard.iter_mut().find(|rt| rt.slot_id == runtime.slot_id) {
-        // Free the previous slot index before replacing.
-        let prev_idx = existing.tx_waker_idx;
-        {
-            let mut used = TX_WAKER_USED.lock();
-            used[prev_idx] = false;
-            used[runtime.tx_waker_idx] = true;
-        }
-        *TX_WAKERS[prev_idx].lock() = None;
         *existing = runtime;
         return;
     }
@@ -335,29 +277,22 @@ where
     guard.iter().find(|rt| rt.slot_id == slot_id).map(f)
 }
 
-fn tx_waker_slot(slot_id: u32) -> Option<usize> {
-    with_runtime_by_slot(slot_id, |rt| rt.tx_waker_idx)
-}
-
 fn register_tx_waker(slot_id: u32, waker: &Waker) {
-    if let Some(idx) = tx_waker_slot(slot_id) {
-        let mut slot = TX_WAKERS[idx].lock();
-        let should_replace = match slot.as_ref() {
+    let _ = with_runtime_mut_by_slot(slot_id, |rt| {
+        let should_replace = match rt.tx_waker.as_ref() {
             Some(existing) => !existing.will_wake(waker),
             None => true,
         };
         if should_replace {
-            *slot = Some(waker.clone());
+            rt.tx_waker = Some(waker.clone());
         }
-    }
+    });
 }
 
 fn wake_tx(slot_id: u32) {
-    if let Some(idx) = tx_waker_slot(slot_id) {
-        let mut slot = TX_WAKERS[idx].lock();
-        if let Some(waker) = slot.take() {
-            waker.wake();
-        }
+    let waker = with_runtime_mut_by_slot(slot_id, |rt| rt.tx_waker.take()).flatten();
+    if let Some(w) = waker {
+        w.wake();
     }
 }
 
@@ -387,7 +322,7 @@ pub fn pop_rx_byte(slot_id: u32) -> Option<u8> {
 }
 
 pub(crate) async fn write_all(slot_id: u32, mut data: &[u8]) -> usize {
-    if tx_waker_slot(slot_id).is_none() {
+    if !runtime_exists(slot_id) {
         return 0;
     }
 
@@ -514,7 +449,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ..
     } = params;
 
-    let Some(interface) = parse_cdc_interface(cfg) else {
+    let Some(interface) = cdc::parse_cdc_interface(cfg) else {
         return Err(());
     };
 
@@ -680,13 +615,13 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         tx_dma_virt: tx_virt,
         tx_dma_len: CDC_DMA_CHUNK,
         tx_inflight: false,
-        tx_waker_idx: 0,
         rx_dma_phys: rx_phys,
         rx_dma_virt: rx_virt,
         rx_dma_len: CDC_DMA_CHUNK,
         rx_posted: false,
         tx_queue: Deque::new(),
         rx_queue: Deque::new(),
+        tx_waker: None,
     };
 
     if program_line_coding(
@@ -802,95 +737,4 @@ async fn set_control_line_state(
         400,
     )
     .await
-}
-
-fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
-    let mut idx = 0usize;
-    let mut config_value: u8 = 1;
-    let mut current_iface: Option<u8> = None;
-    let mut current_class: u8 = 0;
-    let mut current_subclass: u8 = 0;
-    let mut data_iface: Option<u8> = None;
-    let mut data_alt: u8 = 0;
-    let mut control_iface: Option<u8> = None;
-    let mut ep_in: Option<EndpointInfo> = None;
-    let mut ep_out: Option<EndpointInfo> = None;
-
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        let ty = cfg[idx + 1];
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
-            }
-            4 => {
-                if len >= 9 {
-                    let iface = cfg[idx + 2];
-                    current_iface = Some(iface);
-                    current_class = cfg[idx + 5];
-                    current_subclass = cfg[idx + 6];
-                    let protocol = cfg[idx + 7];
-                    if current_class == USB_CLASS_COMM && current_subclass == USB_SUBCLASS_ACM {
-                        control_iface = Some(iface);
-                    } else if current_class == USB_CLASS_DATA {
-                        data_iface = Some(iface);
-                        data_alt = cfg[idx + 3];
-                        let _ = protocol;
-                        ep_in = None;
-                        ep_out = None;
-                    } else {
-                        data_iface = None;
-                    }
-                } else {
-                    current_iface = None;
-                }
-            }
-            5 => {
-                if let (Some(iface), Some(data_if)) = (current_iface, data_iface) {
-                    if iface == data_if && data_alt == 0 && current_class == USB_CLASS_DATA {
-                        if len >= 7 {
-                            let attrs = cfg[idx + 3];
-                            if (attrs & 0x3) == 0x2 {
-                                let ep_addr = cfg[idx + 2];
-                                let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                                if (ep_addr & 0x80) != 0 {
-                                    if ep_in.is_none() {
-                                        ep_in = Some(EndpointInfo {
-                                            address: ep_addr,
-                                            max_packet,
-                                        });
-                                    }
-                                } else if ep_out.is_none() {
-                                    ep_out = Some(EndpointInfo {
-                                        address: ep_addr,
-                                        max_packet,
-                                    });
-                                }
-                                if let (Some(ctrl), Some(in_ep), Some(out_ep)) =
-                                    (control_iface, ep_in, ep_out)
-                                {
-                                    return Some(CdcInterface {
-                                        configuration: config_value,
-                                        control_interface: ctrl,
-                                        data_interface: data_if,
-                                        ep_in: in_ep,
-                                        ep_out: out_ep,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        idx += len;
-    }
-
-    None
 }
