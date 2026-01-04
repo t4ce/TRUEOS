@@ -2,7 +2,8 @@ CARGO := cargo
 TARGET_JSON := 86_64.json
 TARGET_DIR := target/86_64
 BUILD_MODE := debug
-KERNEL_BIN := $(TARGET_DIR)/$(BUILD_MODE)/falseos
+# Use recursive expansion so target-specific BUILD_MODE (e.g. iso-release) affects path.
+KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/falseos
 
 QEMU ?= qemu-system-x86_64
 QEMU_MEM ?= 8000M
@@ -79,6 +80,33 @@ iso: $(LIMINE_STAMP)
 		-o $(ISO_PATH) $(ISO_DIR)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
 	cp $(ISO_PATH) /media/t4ce/Data20TB/
+
+# Release ISO builds the kernel with --release (LTO etc.) and packages that binary.
+iso-release: BUILD_MODE := release
+iso-release: $(LIMINE_STAMP)
+	$(CARGO) +nightly build --release -Z build-std=core,compiler_builtins,alloc --target $(TARGET_JSON)
+	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-bios.sys $(ISO_DIR)/limine-bios-cd.bin $(ISO_DIR)/limine-uefi-cd.bin
+	rm -f $(ISO_PATH)
+	mkdir -p $(ISO_DIR)/EFI/BOOT
+	cp $(KERNEL_BIN) $(ISO_DIR)/kernel.bin
+	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
+	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_DIR)/
+	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_DIR)/
+	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
+	xorriso -as mkisofs \
+		-iso-level 3 -full-iso9660-filenames \
+		-R \
+		-J -joliet-long \
+		-m limine-build \
+		-m limine-prefix \
+		-m falseos.iso \
+		-b limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		--efi-boot limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		-o $(ISO_PATH) $(ISO_DIR)
+	$(LIMINE_BIN) bios-install $(ISO_PATH)
 
 run-gdb-paused-bg: iso
 	@($(QEMU) $(QEMU_COMMON_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
