@@ -15,11 +15,6 @@ use heapless::{Deque, Vec};
 use spin::Mutex;
 
 const MAX_CDC_DEVICES: usize = 2;
-// Generic CDC-ACM transport buffering.
-// Keep this modest; policy-specific buffering (e.g. ESP32 log backend) should live
-// in the policy layer, not in the generic CDC driver.
-//
-// NOTE: This capacity is reserved per CDC runtime (static memory via `heapless`).
 const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
 const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;

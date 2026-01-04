@@ -50,6 +50,7 @@ use alloc::boxed::Box;
 use embassy_executor::{raw::Executor, Spawner};
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
+use trueos_audio_assets::demo;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
@@ -110,6 +111,14 @@ pub extern "C" fn _start() -> ! {
     acpi::hpet::ensure();
 
     rng::log_rng_caps();
+
+    crate::log!(
+        "audio demo: {} Hz, {} ch, {} frames ({} samples)\n",
+        demo::DEMO.sample_rate_hz,
+        demo::DEMO.channels,
+        demo::DEMO.frames(),
+        demo::DEMO.samples_interleaved_i16.len()
+    );
 
     usb::xhci::init_once();
 
