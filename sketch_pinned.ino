@@ -179,28 +179,39 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-static void sendWsLine(WiFiClient &client, const char *msg) {
+static void sendWsBinaryLine(WiFiClient &client, const char *msg) {
   size_t len = strlen(msg);
+  bool hasNewline = (len > 0 && msg[len - 1] == '\n');
+  size_t total = len + (hasNewline ? 0 : 1);
   const size_t maxLen = 65500; // safety cap
-  if (len > maxLen) {
-    len = maxLen;
+  if (total > maxLen) {
+    total = maxLen;
   }
 
   uint8_t header[4];
   size_t hlen = 0;
-  header[0] = 0x81; // FIN + text frame
-  if (len < 126) {
-    header[1] = static_cast<uint8_t>(len);
+  header[0] = 0x82; // FIN + binary frame
+  if (total < 126) {
+    header[1] = static_cast<uint8_t>(total);
     hlen = 2;
   } else {
     header[1] = 126;
-    header[2] = static_cast<uint8_t>((len >> 8) & 0xFF);
-    header[3] = static_cast<uint8_t>(len & 0xFF);
+    header[2] = static_cast<uint8_t>((total >> 8) & 0xFF);
+    header[3] = static_cast<uint8_t>(total & 0xFF);
     hlen = 4;
   }
 
   client.write(header, hlen);
-  client.write(reinterpret_cast<const uint8_t *>(msg), len);
+
+  // Write payload without copying: first part of msg, then optional newline if space remains.
+  size_t toSend = (len < total) ? len : total;
+  if (toSend) {
+    client.write(reinterpret_cast<const uint8_t *>(msg), toSend);
+  }
+  if (!hasNewline && toSend < total) {
+    uint8_t nl = '\n';
+    client.write(&nl, 1);
+  }
 }
 
 static bool computeWebSocketAccept(const char *key, char *out, size_t outLen) {
@@ -288,6 +299,10 @@ static bool popLineOrChunk(char *out, size_t outLen, uint32_t nowMs) {
 
   // No newline found. If we have data and it's been waiting, emit chunk.
   if (idx > 0 && (nowMs - lastEmitMs) > 50) {
+    // Emit a timed chunk and force newline termination to avoid smearing lines.
+    if (idx < outLen - 2) {
+      out[idx++] = '\n';
+    }
     out[idx] = '\0';
     lastEmitMs = nowMs;
     return true;
@@ -391,7 +406,7 @@ static void webTask(void *param) {
 
     if (wsActive && wsClient.connected()) {
       while (popLineOrChunk(g_lineBuf, sizeof(g_lineBuf), nowMs)) {
-        sendWsLine(wsClient, g_lineBuf);
+        sendWsBinaryLine(wsClient, g_lineBuf);
         nowMs = millis();
         if (!wsClient.connected()) {
           closeWebSocket();
