@@ -1,0 +1,14 @@
+[package]
+name = "trueos-audio-assets"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+trueos-audio = { path = "../trueos-audio" }
+
+[build-dependencies]
+minimp3 = "0.5"
+
+[features]
+default = []
