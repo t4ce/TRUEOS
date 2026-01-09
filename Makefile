@@ -79,7 +79,7 @@ iso: $(LIMINE_STAMP)
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_DIR)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
-	cp $(ISO_PATH) /media/t4ce/Data20TB/
+#	cp $(ISO_PATH) /media/t4ce/Data20TB/ #optional copy where u want
 
 # Release ISO builds the kernel with --release (LTO etc.) and packages that binary.
 iso-release: BUILD_MODE := release
