@@ -1,6 +1,8 @@
 use super::cdc::{self, CdcInterface};
 use super::xhci::{
-    self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
+    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
 use crate::serial::{SerialNumber, SerialPort};
@@ -533,33 +535,32 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
         write_volatile(slot_ctx.add(1), dw1);
 
-        const EP_TYPE_BULK_OUT: u32 = 2;
-        const EP_TYPE_BULK_IN: u32 = 6;
-
-        write_volatile(ep_in_ctx.add(0), 0);
-        write_volatile(
-            ep_in_ctx.add(1),
-            ((interface.ep_in.max_packet as u32) << 16) | (EP_TYPE_BULK_IN << 3) | 3,
-        );
+        write_volatile(ep_in_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
+        let mut ep_in_cfg = ep_cerr_bits(3);
+        ep_in_cfg |= ep_type_bits(EP_TYPE_BULK_IN);
+        ep_in_cfg |= ep_max_packet_bits(interface.ep_in.max_packet as u32);
+        write_volatile(ep_in_ctx.add(1), ep_in_cfg);
         let dq_in = ring_in.dequeue_ptr();
         write_volatile(ep_in_ctx.add(2), lo(dq_in));
         write_volatile(ep_in_ctx.add(3), hi(dq_in));
+        let ep_in_mps = interface.ep_in.max_packet as u32;
         write_volatile(
             ep_in_ctx.add(4),
-            (interface.ep_in.max_packet as u32) << 16 | (interface.ep_in.max_packet as u32),
+            ep_avg_trb_len_bits(ep_in_mps) | ep_max_esit_payload_lo_bits(ep_in_mps),
         );
 
-        write_volatile(ep_out_ctx.add(0), 0);
-        write_volatile(
-            ep_out_ctx.add(1),
-            ((interface.ep_out.max_packet as u32) << 16) | (EP_TYPE_BULK_OUT << 3) | 3,
-        );
+        write_volatile(ep_out_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
+        let mut ep_out_cfg = ep_cerr_bits(3);
+        ep_out_cfg |= ep_type_bits(EP_TYPE_BULK_OUT);
+        ep_out_cfg |= ep_max_packet_bits(interface.ep_out.max_packet as u32);
+        write_volatile(ep_out_ctx.add(1), ep_out_cfg);
         let dq_out = ring_out.dequeue_ptr();
         write_volatile(ep_out_ctx.add(2), lo(dq_out));
         write_volatile(ep_out_ctx.add(3), hi(dq_out));
+        let ep_out_mps = interface.ep_out.max_packet as u32;
         write_volatile(
             ep_out_ctx.add(4),
-            (interface.ep_out.max_packet as u32) << 16 | (interface.ep_out.max_packet as u32),
+            ep_avg_trb_len_bits(ep_out_mps) | ep_max_esit_payload_lo_bits(ep_out_mps),
         );
     }
 

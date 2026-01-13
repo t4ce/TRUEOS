@@ -1,5 +1,7 @@
 use super::xhci::{
-    self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
+    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -306,30 +308,33 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         let mps_in = (pair.max_packet_in as u32) & 0x7FF;
         let mps_out = (pair.max_packet_out as u32) & 0x7FF;
 
-        const EP_TYPE_BULK_OUT: u32 = 2;
-        const EP_TYPE_BULK_IN: u32 = 6;
-
         // Bulk IN endpoint
-        write_volatile(ep_in_ctx.add(0), 0);
-        write_volatile(
-            ep_in_ctx.add(1),
-            (mps_in << 16) | (EP_TYPE_BULK_IN << 3) | 3,
-        );
+        write_volatile(ep_in_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
+        let mut ep_in_cfg = ep_cerr_bits(3);
+        ep_in_cfg |= ep_type_bits(EP_TYPE_BULK_IN);
+        ep_in_cfg |= ep_max_packet_bits(mps_in);
+        write_volatile(ep_in_ctx.add(1), ep_in_cfg);
         let dq_in = ring_in.dequeue_ptr();
         write_volatile(ep_in_ctx.add(2), lo(dq_in));
         write_volatile(ep_in_ctx.add(3), hi(dq_in));
-        write_volatile(ep_in_ctx.add(4), (mps_in << 16) | mps_in);
+        write_volatile(
+            ep_in_ctx.add(4),
+            ep_avg_trb_len_bits(mps_in) | ep_max_esit_payload_lo_bits(mps_in),
+        );
 
         // Bulk OUT endpoint
-        write_volatile(ep_out_ctx.add(0), 0);
-        write_volatile(
-            ep_out_ctx.add(1),
-            (mps_out << 16) | (EP_TYPE_BULK_OUT << 3) | 3,
-        );
+        write_volatile(ep_out_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
+        let mut ep_out_cfg = ep_cerr_bits(3);
+        ep_out_cfg |= ep_type_bits(EP_TYPE_BULK_OUT);
+        ep_out_cfg |= ep_max_packet_bits(mps_out);
+        write_volatile(ep_out_ctx.add(1), ep_out_cfg);
         let dq_out = ring_out.dequeue_ptr();
         write_volatile(ep_out_ctx.add(2), lo(dq_out));
         write_volatile(ep_out_ctx.add(3), hi(dq_out));
-        write_volatile(ep_out_ctx.add(4), (mps_out << 16) | mps_out);
+        write_volatile(
+            ep_out_ctx.add(4),
+            ep_avg_trb_len_bits(mps_out) | ep_max_esit_payload_lo_bits(mps_out),
+        );
     }
 
     let cfg_ep_cmd = Trb {
