@@ -474,6 +474,68 @@ pub fn context_index(ep_addr: u8) -> u32 {
     endpoint_target(ep_addr) + 1
 }
 
+// Endpoint context bit helpers (xHCI Rev 1.2, section 6.2.3.6).
+pub const EP_STATE_DISABLED: u32 = 0;
+pub const EP_STATE_RUNNING: u32 = 1;
+
+pub const EP_TYPE_ISOCH_OUT: u32 = 1;
+pub const EP_TYPE_BULK_OUT: u32 = 2;
+pub const EP_TYPE_INT_OUT: u32 = 3;
+pub const EP_TYPE_CONTROL: u32 = 4;
+pub const EP_TYPE_ISOCH_IN: u32 = 5;
+pub const EP_TYPE_BULK_IN: u32 = 6;
+pub const EP_TYPE_INT_IN: u32 = 7;
+
+#[inline(always)]
+pub const fn ep_state_bits(state: u32) -> u32 {
+    state & 0x7
+}
+
+#[inline(always)]
+pub const fn ep_mult_bits(mult: u32) -> u32 {
+    (mult & 0x3) << 8
+}
+
+#[inline(always)]
+pub const fn ep_interval_bits(interval: u32) -> u32 {
+    (interval & 0xFF) << 16
+}
+
+#[inline(always)]
+pub const fn ep_type_bits(ep_type: u32) -> u32 {
+    (ep_type & 0x7) << 3
+}
+
+#[inline(always)]
+pub const fn ep_cerr_bits(count: u32) -> u32 {
+    (count & 0x3) << 1
+}
+
+#[inline(always)]
+pub const fn ep_max_burst_bits(burst: u32) -> u32 {
+    (burst & 0xFF) << 8
+}
+
+#[inline(always)]
+pub const fn ep_max_packet_bits(bytes: u32) -> u32 {
+    (bytes & 0xFFFF) << 16
+}
+
+#[inline(always)]
+pub const fn ep_avg_trb_len_bits(len: u32) -> u32 {
+    len & 0xFFFF
+}
+
+#[inline(always)]
+pub const fn ep_max_esit_payload_lo_bits(payload: u32) -> u32 {
+    (payload & 0xFFFF) << 16
+}
+
+#[inline(always)]
+pub const fn ep_max_esit_payload_hi_bits(payload: u32) -> u32 {
+    ((payload >> 16) & 0xFF) << 24
+}
+
 pub fn decode_port_status(status: u32) -> (bool, bool, &'static str) {
     const PORTSC_CCS: u32 = 1 << 0;
     const PORTSC_PED: u32 = 1 << 1;
@@ -839,10 +901,8 @@ pub fn log_ports_table(ctx: &XhciContext) {
         let pls = ((portsc >> 5) & 0xF) as u8;
         let pp = (portsc & (1 << 9)) != 0;
         let speed_code = ((portsc >> 10) & 0xF) as u8;
-        if speed_code == 0 {
-            continue;
-        }
         let speed = match speed_code {
+            0 => "none",
             1 => "full",
             2 => "low",
             3 => "high",
