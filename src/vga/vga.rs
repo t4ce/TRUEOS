@@ -70,7 +70,7 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
             .and_then(FramebufferSurface::from_limine)
     });
     let _ = with_framebuffer(|fb| fb.clear(DEFAULT_BG_COLOR));
-    render_framebuffer_banner("FalseOS");
+    render_framebuffer_banner("TRUE OS §"); // the one true operating system
 }
 
 pub fn current_colors() -> Option<(u32, u32, u32)> {

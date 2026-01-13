@@ -5,12 +5,15 @@ pub mod input;
 pub mod mass;
 pub mod pen;
 pub mod print;
+pub mod isoch;
+pub mod uac;
 pub mod truekey;
 pub mod xhci;
 
 use self::xhci::{
-    decode_port_status, hi, lo, trb_type, write_reg64, ErstEntry, EventRing, Trb, TrbRing,
-    XhciContext,
+    decode_port_status, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits,
+    ep_type_bits, hi, lo, trb_type, write_reg64, ErstEntry, EventRing, Trb, TrbRing,
+    XhciContext, EP_STATE_DISABLED, EP_TYPE_CONTROL,
 };
 use crate::pci::{dma, osal};
 use core::mem::size_of;
@@ -30,6 +33,7 @@ enum DeviceKind {
     Printer,
     Pen,
     Cdc,
+    Uac,
 }
 #[derive(Copy, Clone, Debug)]
 struct DeviceEntry {
@@ -585,20 +589,16 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         let root_port = (target_port as u32) << 16;
         write_volatile(slot_ctx.add(1), root_port);
 
-        const EP_TYPE_CONTROL: u32 = 4;
-        const CERR_MAX_RETRIES: u32 = 3;
-        write_volatile(ep0_ctx.add(0), 0);
-        let max_packet_field = ((max_packet as u32) & 0x7FF) << 16;
-        let ep_type_field = EP_TYPE_CONTROL << 3;
-        write_volatile(
-            ep0_ctx.add(1),
-            max_packet_field | ep_type_field | CERR_MAX_RETRIES,
-        );
+        write_volatile(ep0_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
+        let mut ep_cfg = ep_cerr_bits(3);
+        ep_cfg |= ep_type_bits(EP_TYPE_CONTROL);
+        ep_cfg |= ep_max_packet_bits(max_packet as u32);
+        write_volatile(ep0_ctx.add(1), ep_cfg);
         let dq = ep0_ring.dequeue_ptr();
         write_volatile(ep0_ctx.add(2), lo(dq));
         write_volatile(ep0_ctx.add(3), hi(dq));
         let avg_trb_len = core::cmp::max(8u32, max_packet as u32);
-        write_volatile(ep0_ctx.add(4), avg_trb_len << 16);
+        write_volatile(ep0_ctx.add(4), ep_avg_trb_len_bits(avg_trb_len));
     }
 
     let addr_evt = match submit_cmd_and_wait(
@@ -804,6 +804,19 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let cfg_slice_len = cfg_total_len.min(256) as usize;
     let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_slice_len) };
 
+    let (_ccs, _ped, speed_str) = decode_port_status(port_status);
+    let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
+    crate::log!(
+        "usb: enum port {} device vid=0x{:04X} pid=0x{:04X} slot={} speed={} cfg_len={} uac_out={}\n",
+        target_port,
+        dev_vid,
+        dev_pid,
+        slot_id,
+        speed_str,
+        cfg_slice_len,
+        has_uac_out
+    );
+
     let mut first_if: Option<(u8, u8, u8, u8)> = None;
     {
         let mut idx = 0usize;
@@ -825,6 +838,36 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         }
     }
 
+    let mut tried_uac = false;
+    if has_uac_out {
+        tried_uac = true;
+        if uac::attach_device(uac::AttachParams {
+            ctx: &ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring: &mut ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+        })
+        .await
+        .is_ok()
+        {
+            usbv!(
+                "usb: enum port {} claimed UAC slot={} vid=0x{:04X} pid=0x{:04X}\n",
+                target_port,
+                slot_id,
+                dev_vid,
+                dev_pid
+            );
+            register_device(slot_id as u32, target_port, DeviceKind::Uac);
+            return;
+        }
+    }
+
     let hid_count = hid::attach_boot_devices(BootAttachParams {
         ctx: &ctx,
         cmd_ring: &mut state.cmd_ring,
@@ -842,9 +885,11 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
 
     if hid_count > 0 {
         usbv!(
-            "usb: enum port {} claimed HID slot={} count={}\n",
+            "usb: enum port {} claimed HID slot={} vid=0x{:04X} pid=0x{:04X} count={}\n",
             target_port,
             slot_id,
+            dev_vid,
+            dev_pid,
             hid_count
         );
         register_device(slot_id as u32, target_port, DeviceKind::Hid);
@@ -891,6 +936,33 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
+        return;
+    }
+
+    if !tried_uac
+        && uac::attach_device(uac::AttachParams {
+            ctx: &ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring: &mut ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+        })
+        .await
+        .is_ok()
+    {
+        usbv!(
+            "usb: enum port {} claimed UAC slot={} vid=0x{:04X} pid=0x{:04X}\n",
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid
+        );
+        register_device(slot_id as u32, target_port, DeviceKind::Uac);
         return;
     }
 
@@ -1205,6 +1277,8 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = mass::unregister_runtime(slot_id);
         } else if kind == DeviceKind::Cdc {
             let _ = cdc_acm::unregister_runtime(slot_id);
+        } else if kind == DeviceKind::Uac {
+            let _ = uac::unregister_runtime(slot_id);
         }
         crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
     }
@@ -1494,6 +1568,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                         evt_slot
                     );
                 }
+            }
+            Some(DeviceKind::Uac) => {
+                let _ = uac::handle_transfer_event(&evt);
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}

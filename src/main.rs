@@ -1,4 +1,4 @@
-/*
+/* TRUE OS (§) ® 2026
 ██████████████████████████████████████████████████████████████████████
 ██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
 ██▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒██
@@ -11,7 +11,7 @@ A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at Intel and GOWIN
 Think of rust as the world’s quiet, slow-moving “entropy tax”:
 A constant drain of resources, money, and safety.
 
-Think of FalseOS as the world’s fast-moving “entropy dividend”:
+Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 */
 
@@ -23,6 +23,7 @@ pub extern crate alloc;
 
 mod acpi;
 mod allocators;
+mod audio;
 mod backtrace;
 mod disc;
 mod limine;
@@ -153,6 +154,9 @@ pub extern "C" fn _start() -> ! {
     }
 
     let _ = spawner.spawn(usb::hid::input_logger());
+
+    // Streams the built-in demo PCM to the first bound UAC sink (if any).
+    let _ = spawner.spawn(usb::uac::play_demo_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
     let _ = spawner.spawn(usb::truekey::drain_loop());

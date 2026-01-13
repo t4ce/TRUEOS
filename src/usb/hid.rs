@@ -1,5 +1,7 @@
 use super::xhci::{
-    self, context_index, endpoint_target, hi, lo, trb_type, Trb, TrbRing, XhciContext,
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
+    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
 use crate::pci::dma;
 use crate::usb::input;
@@ -706,7 +708,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
             write_volatile(slot_ctx.add(1), dw1);
 
-            const EP_TYPE_INT_IN: u32 = 7;
             let mps = (ep.max_packet as u32) & 0x7FF;
             let interval = if speed_code == 3 {
                 core::cmp::min(15u32, ep.interval.saturating_sub(1) as u32)
@@ -714,9 +715,14 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
                 ep.interval as u32
             };
 
-            write_volatile(ep_ctx.add(0), interval << 16);
-            // CErr is the low 2 bits of DW1.
-            write_volatile(ep_ctx.add(1), (mps << 16) | (EP_TYPE_INT_IN << 3) | 3);
+            write_volatile(
+                ep_ctx.add(0),
+                ep_state_bits(EP_STATE_DISABLED) | ep_interval_bits(interval),
+            );
+            let mut ep_cfg = ep_cerr_bits(3);
+            ep_cfg |= ep_type_bits(EP_TYPE_INT_IN);
+            ep_cfg |= ep_max_packet_bits(mps);
+            write_volatile(ep_ctx.add(1), ep_cfg);
             // Set dequeue pointer with the current ring cycle bit (DCS) set.
             // Using the raw phys address would leave DCS cleared and the host would
             // ignore our queued transfer ring.
@@ -727,7 +733,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             // Use the endpoint's packet size consistently for scheduling hints.
             let avg_trb_len = mps;
             let max_esit_payload = mps;
-            write_volatile(ep_ctx.add(4), (avg_trb_len << 16) | max_esit_payload);
+            write_volatile(
+                ep_ctx.add(4),
+                ep_avg_trb_len_bits(avg_trb_len) | ep_max_esit_payload_lo_bits(max_esit_payload),
+            );
         }
 
         let cfg_ep_cmd = Trb {

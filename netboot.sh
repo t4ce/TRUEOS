@@ -28,8 +28,9 @@ sudo ip addr flush dev enp5s0
 
 ___
 
-# echo 'kernel.dmesg_restrict = 0' | sudo tee /etc/sysctl.d/99-dmesg.conf
 # its when you cant pass in a usb dev
+sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger -s usb --action=add
 
 
 #Steps Fresh Sys
