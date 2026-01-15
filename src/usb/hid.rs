@@ -16,11 +16,6 @@ const MAX_REPORT_DESC: usize = 512;
 // Local switch to silence noisy HID debug output.
 pub(crate) const HID_LOGS: bool = false;
 
-const HID_KIND_GENERIC: u8 = 0;
-const HID_KIND_KEYBOARD: u8 = 1;
-const HID_KIND_MOUSE: u8 = 2;
-const HID_KIND_HEADSET: u8 = 3;
-
 macro_rules! hidlog {
     ($($arg:tt)*) => {{
         if HID_LOGS {
@@ -128,11 +123,7 @@ const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
     // Placeholder: higher-level input stack not wired in yet.
-    match protocol {
-        1 => HID_KIND_KEYBOARD,
-        2 => HID_KIND_MOUSE,
-        _ => HID_KIND_GENERIC,
-    }
+    protocol
 }
 
 pub fn register_runtime(runtime: HidRuntime) {
@@ -218,7 +209,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
         data
     );
 
-    if runtime.hid_kind == HID_KIND_MOUSE {
+    if runtime.hid_kind == 2 {
         // Boot mouse: buttons, dx, dy, wheel (optional).
         if data.len() >= 3 {
             let buttons = data[0];
@@ -245,7 +236,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 wheel,
             }));
         }
-    } else if runtime.hid_kind == HID_KIND_KEYBOARD {
+    } else if runtime.hid_kind == 1 {
         // Boot keyboard: modifiers + 6 keycodes
         if data.len() >= 8 {
             let modifiers = data[0];
@@ -283,28 +274,6 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 modifiers,
                 keys,
                 ascii,
-            }));
-        }
-    } else {
-        let mut any = false;
-        for &b in data {
-            if b != 0 {
-                any = true;
-                break;
-            }
-        }
-        if any {
-            runtime.last_nonzero_seq = runtime.seq;
-            let mut payload = [0u8; 64];
-            let copy_len = core::cmp::min(payload.len(), data.len());
-            payload[..copy_len].copy_from_slice(&data[..copy_len]);
-            input::push_event(input::InputEvent::Peripheral(input::PeripheralEvent {
-                slot_id: runtime.slot_id,
-                interface: runtime.ep.interface,
-                ep_addr: runtime.ep.address,
-                kind: runtime.hid_kind,
-                len: copy_len as u8,
-                data: payload,
             }));
         }
     }
@@ -351,19 +320,6 @@ pub(crate) async fn input_logger() {
                         );
                     }
                 }
-                input::InputEvent::Peripheral(evt) => {
-                    if evt.len > 0 {
-                        let len = evt.len as usize;
-                        crate::log!(
-                            "[hid] [{}] iface={} ep=0x{:02X} kind={} data={:02X?}\n",
-                            evt.slot_id,
-                            evt.interface,
-                            evt.ep_addr,
-                            evt.kind,
-                            &evt.data[..len]
-                        );
-                    }
-                }
             }
         } else {
             Timer::after(EmbassyDuration::from_millis(5)).await;
@@ -381,7 +337,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
     let mut current_proto: u8 = 0;
     let mut current_subclass: u8 = 0;
     let mut current_report_len: u16 = 0;
-    let mut current_class: u8 = 0;
     let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
 
     while idx + 2 <= cfg.len() {
@@ -400,7 +355,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                 if len >= 9 {
                     current_iface = Some(cfg[idx + 2]);
                     current_alt = cfg[idx + 3];
-                    current_class = cfg[idx + 5];
                     current_subclass = cfg[idx + 6];
                     current_proto = cfg[idx + 7];
                     current_report_len = 0;
@@ -416,10 +370,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
             }
             5 => {
                 if let Some(iface) = current_iface {
-                    if current_class != 0x03 {
-                        idx += len;
-                        continue;
-                    }
                     let subclass = current_subclass;
                     let proto = current_proto;
                     if current_alt == 0 && subclass == 0x01 && (proto == 0x01 || proto == 0x02) {
@@ -467,113 +417,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                                         proto
                                     );
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        idx += len;
-    }
-
-    endpoints
-}
-
-pub fn parse_hid_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
-    let mut idx = 0usize;
-    let mut config_value = 1u8;
-    let mut current_iface: Option<u8> = None;
-    let mut current_alt: u8 = 0;
-    let mut current_proto: u8 = 0;
-    let mut current_subclass: u8 = 0;
-    let mut current_report_len: u16 = 0;
-    let mut current_class: u8 = 0;
-    let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
-
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        let ty = cfg[idx + 1];
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
-            }
-            4 => {
-                if len >= 9 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_alt = cfg[idx + 3];
-                    current_class = cfg[idx + 5];
-                    current_subclass = cfg[idx + 6];
-                    current_proto = cfg[idx + 7];
-                    current_report_len = 0;
-                } else {
-                    current_iface = None;
-                }
-            }
-            0x21 => {
-                if len >= 9 {
-                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
-                }
-            }
-            5 => {
-                if let Some(iface) = current_iface {
-                    if current_class != 0x03 {
-                        idx += len;
-                        continue;
-                    }
-                    if current_subclass == 0x01 && (current_proto == 0x01 || current_proto == 0x02)
-                    {
-                        idx += len;
-                        continue;
-                    }
-                    if current_alt == 0 && len >= 7 {
-                        let ep_addr = cfg[idx + 2];
-                        let attrs = cfg[idx + 3];
-                        let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                        let interval = cfg[idx + 6];
-                        if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
-                            if endpoints
-                                .iter()
-                                .any(|e| e.interface == iface && e.address == ep_addr)
-                            {
-                                hidlog!(
-                                    "[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n",
-                                    iface,
-                                    ep_addr
-                                );
-                            } else if endpoints
-                                .push(HidEpInfo {
-                                    configuration: config_value,
-                                    interface: iface,
-                                    address: ep_addr,
-                                    max_packet,
-                                    interval,
-                                    protocol: current_proto,
-                                    report_desc_len: current_report_len,
-                                })
-                                .is_err()
-                            {
-                                hidlog!(
-                                    "[hid] HID endpoint list full, dropping iface={} addr=0x{:02X}\n",
-                                    iface,
-                                    ep_addr
-                                );
-                            } else {
-                                hidlog!(
-                                    "[hid] parse ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
-                                    iface,
-                                    ep_addr,
-                                    max_packet,
-                                    interval,
-                                    config_value,
-                                    current_subclass,
-                                    current_proto
-                                );
                             }
                         }
                     }
@@ -727,80 +570,80 @@ pub struct BootAttachParams<'a> {
     pub target_port: u8,
 }
 
-async fn attach_endpoints(
-    ctx: &XhciContext,
-    cmd_ring: &mut TrbRing,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES>,
-    dev_ctx_virt: *mut u8,
-    ctx_stride_bytes: usize,
-    ctx_stride_words: usize,
-    speed_code: u32,
-    target_port: u8,
-    do_set_config: bool,
-    use_boot_protocol: bool,
-    fetch_report_desc: bool,
-    default_kind: u8,
-    tag: &'static str,
-) -> Result<usize, ()> {
-    if endpoints.is_empty() {
+pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
+    let BootAttachParams {
+        ctx,
+        mut cmd_ring,
+        mut ep0_ring,
+        slot_id,
+        cfg,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+    } = params;
+
+    if cfg.is_empty() {
+        hidlog!("[hid] empty configuration descriptor\n");
         return Err(());
     }
 
-    if do_set_config {
-        let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
-        let setup_cfg = Trb {
-            d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
-            d1: 0,
-            // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
-            d2: 8,
-            d3: trb_type(2) | (1 << 6),
-        };
-        let status_cfg = Trb {
-            d0: 0,
-            d1: 0,
-            d2: 0,
-            // Status Stage TRB: DIR=1 (IN) for no-data control transfers
-            d3: trb_type(4) | (1 << 5) | (1 << 16),
-        };
-        if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-            hidlog!("usb: ep0 ring overflow for set_configuration\n");
-            return Err(());
-        }
-        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-        let Some(set_cfg_evt) = xhci::wait_for_event(
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type != 32 {
-                    return false;
-                }
-                let evt_slot = (evt.d3 >> 24) & 0xFF;
-                evt_slot == slot_id
-            },
-            400,
-            EmbassyDuration::from_millis(5),
-        )
-        .await
-        else {
-            hidlog!("usb: timeout waiting for set-configuration\n");
-            return Err(());
-        };
-
-        let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
-        if completion != 1 {
-            crate::log!("usb: {} set-configuration failed slot={} cc={}\n", tag, slot_id, completion);
-            return Err(());
-        }
+    let endpoints = parse_boot_endpoints(cfg);
+    if endpoints.is_empty() {
+        hidlog!("[hid] no HID boot interrupt IN endpoints found\n");
+        return Err(());
     }
 
-    if use_boot_protocol {
-        for ep in endpoints.iter() {
-            let _ =
-                class_request_nodata(ctx, ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-            let _ =
-                class_request_nodata(ctx, ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
-        }
+    let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
+
+    let setup_cfg = Trb {
+        d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
+        d1: 0,
+        // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
+        d2: 8,
+        d3: trb_type(2) | (1 << 6),
+    };
+    let status_cfg = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        // Status Stage TRB: DIR=1 (IN) for no-data control transfers
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
+    };
+    if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
+        hidlog!("usb: ep0 ring overflow for set_configuration\n");
+        return Err(());
+    }
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+    let Some(set_cfg_evt) = xhci::wait_for_event(
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
+        },
+        400,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    else {
+        hidlog!("usb: timeout waiting for set-configuration\n");
+        return Err(());
+    };
+
+    let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        return Err(());
+    }
+
+    for ep in endpoints.iter() {
+        let _ =
+            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+        let _ =
+            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
     }
 
     let mut attached = 0usize;
@@ -815,11 +658,7 @@ async fn attach_endpoints(
             ep.configuration,
             ep.protocol
         );
-        let hid_kind = if use_boot_protocol {
-            hid_kind_from_protocol(ep.protocol)
-        } else {
-            default_kind
-        };
+        let hid_kind = hid_kind_from_protocol(ep.protocol);
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
@@ -928,14 +767,6 @@ async fn attach_endpoints(
 
         let completion = (cfg_evt.d2 >> 24) & 0xFF;
         if completion != 1 {
-            crate::log!(
-                "usb: {} configure-endpoint failed slot={} iface={} ep=0x{:02X} cc={}\n",
-                tag,
-                slot_id,
-                ep.interface,
-                ep.address,
-                completion
-            );
             continue;
         }
 
@@ -951,10 +782,10 @@ async fn attach_endpoints(
 
         let report_len = ep.max_packet as u32;
 
-        if fetch_report_desc && hid_kind == HID_KIND_KEYBOARD && ep.report_desc_len > 0 {
+        if hid_kind == 1 && ep.report_desc_len > 0 {
             if let Some(desc) = fetch_report_descriptor(
                 ctx,
-                ep0_ring,
+                &mut ep0_ring,
                 slot_id,
                 ep.interface,
                 ep.report_desc_len as usize,
@@ -1014,112 +845,6 @@ async fn attach_endpoints(
     } else {
         Err(())
     }
-}
-
-pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
-    let BootAttachParams {
-        ctx,
-        cmd_ring,
-        ep0_ring,
-        slot_id,
-        cfg,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-    } = params;
-
-    if cfg.is_empty() {
-        hidlog!("[hid] empty configuration descriptor\n");
-        return Err(());
-    }
-
-    let endpoints = parse_boot_endpoints(cfg);
-    if endpoints.is_empty() {
-        hidlog!("[hid] no HID boot interrupt IN endpoints found\n");
-        return Err(());
-    }
-
-    attach_endpoints(
-        ctx,
-        cmd_ring,
-        ep0_ring,
-        slot_id,
-        endpoints,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-        true,
-        true,
-        true,
-        HID_KIND_GENERIC,
-        "hid-boot",
-    )
-    .await
-}
-
-pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
-    let BootAttachParams {
-        ctx,
-        cmd_ring,
-        ep0_ring,
-        slot_id,
-        cfg,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-    } = params;
-
-    if cfg.is_empty() {
-        hidlog!("[hid] empty configuration descriptor\n");
-        return Err(());
-    }
-
-    let endpoints = parse_hid_endpoints(cfg);
-    if endpoints.is_empty() {
-        crate::log!("usb: no HID interrupt IN endpoints found (non-boot)\n");
-        return Err(());
-    }
-
-    crate::log!(
-        "usb: hid non-boot endpoints slot={} count={}\n",
-        slot_id,
-        endpoints.len()
-    );
-    for ep in endpoints.iter() {
-        crate::log!(
-            "usb: hid iface={} ep=0x{:02X} mps={} interval={} proto={}\n",
-            ep.interface,
-            ep.address,
-            ep.max_packet,
-            ep.interval,
-            ep.protocol
-        );
-    }
-
-    attach_endpoints(
-        ctx,
-        cmd_ring,
-        ep0_ring,
-        slot_id,
-        endpoints,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-        false,
-        false,
-        false,
-        HID_KIND_HEADSET,
-        "hid-nonboot",
-    )
-    .await
 }
 
 pub async fn class_request_nodata(
