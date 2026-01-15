@@ -2,16 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "FalseOS (attach gdb to QEMU :1234)",
+      "name": "TRUEOS (attach gdb to QEMU :1234)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/target/86_64/debug/falseos",
+      "program": "${workspaceFolder}/target/86_64/debug/trueos",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "miDebuggerServerAddress": "localhost:1234",
       "stopAtEntry": true,
-      "preLaunchTask": "QEMU (gdbstub, paused)",
+      "preLaunchTask": "TRUEOS Debug",
       "externalConsole": false,
       "setupCommands": [
         {
