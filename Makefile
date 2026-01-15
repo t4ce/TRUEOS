@@ -2,7 +2,9 @@ CARGO := cargo
 TARGET_JSON := 86_64.json
 TARGET_DIR := target/86_64
 BUILD_MODE := debug
-KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/trueos
+# Cargo names the produced binary after the package name from Cargo.toml.
+KERNEL_NAME := $(shell awk -F' *= *' '/^name *=/ {gsub(/"/,"",$$2); print $$2; exit}' Cargo.toml)
+KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/$(KERNEL_NAME)
 QEMU ?= qemu-system-x86_64
 QEMU_MEM ?= 8000M
 QEMU_SMP ?= cores=4

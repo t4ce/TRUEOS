@@ -5,7 +5,7 @@
       "name": "TRUEOS (attach gdb to QEMU :1234)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/target/86_64/debug/trueos",
+      "program": "${workspaceFolder}/target/86_64/debug/TRUEOS",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",

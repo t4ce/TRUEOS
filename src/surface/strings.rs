@@ -20,7 +20,7 @@ pub fn smoke_test() {
         stats0.initialized
     );
 
-    let ascii: &str = "Hello, FalseOS!";
+    let ascii: &str = "TRUEOS!";
     crate::log!("&str='{}' len={}\n", ascii, ascii.len());
     match ensure_ascii(ascii) {
         Ok(()) => crate::log!("ensure_ascii(ascii)=Ok\n"),

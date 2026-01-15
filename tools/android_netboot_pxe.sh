@@ -101,7 +101,7 @@ start_pxe() {
     --dhcp-option=option:tftp-server,"$GW_ADDR" \
     --enable-tftp --tftp-root="$TFTP_ROOT" \
     --dhcp-boot=EFI/BOOT/BOOTX64.EFI \
-    --pxe-service=BC_EFI,"FalseOS UEFI PXE",EFI/BOOT/BOOTX64.EFI \
+    --pxe-service=BC_EFI,"TRUEOS UEFI PXE",EFI/BOOT/BOOTX64.EFI \
     --log-dhcp --dhcp-leasefile="$LEASE_FILE" \
     --pid-file="$PID_FILE" \
     &
