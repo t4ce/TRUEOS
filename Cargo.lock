@@ -3,6 +3,36 @@
 version = 4
 
 [[package]]
+name = "TRUEOS"
+version = "0.0.1"
+dependencies = [
+ "acpi",
+ "core2",
+ "dma-api",
+ "embassy-executor",
+ "embassy-time",
+ "embassy-time-driver",
+ "fatfs",
+ "font8x8",
+ "hashbrown",
+ "heapless 0.9.2",
+ "libm",
+ "limine",
+ "log",
+ "memchr",
+ "raw-cpuid",
+ "rdrand",
+ "smoltcp",
+ "spin",
+ "trueos-audio",
+ "trueos-audio-assets",
+ "twoway",
+ "unicode-normalization",
+ "unicode-segmentation",
+ "x86_64",
+]
+
+[[package]]
 name = "aarch64-cpu"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,36 +301,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c4c685bbef7fe13c3c6dd4da26841ed3980ef33e841cddfa15ce8a8fb3f1884"
 dependencies = [
  "embedded-hal 1.0.0",
-]
-
-[[package]]
-name = "falseos"
-version = "0.0.1"
-dependencies = [
- "acpi",
- "core2",
- "dma-api",
- "embassy-executor",
- "embassy-time",
- "embassy-time-driver",
- "fatfs",
- "font8x8",
- "hashbrown",
- "heapless 0.9.2",
- "libm",
- "limine",
- "log",
- "memchr",
- "raw-cpuid",
- "rdrand",
- "smoltcp",
- "spin",
- "trueos-audio",
- "trueos-audio-assets",
- "twoway",
- "unicode-normalization",
- "unicode-segmentation",
- "x86_64",
 ]
 
 [[package]]
