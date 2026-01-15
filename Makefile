@@ -2,9 +2,7 @@ CARGO := cargo
 TARGET_JSON := 86_64.json
 TARGET_DIR := target/86_64
 BUILD_MODE := debug
-# Use recursive expansion so target-specific BUILD_MODE (e.g. iso-release) affects path.
-KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/falseos
-
+KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/trueos
 QEMU ?= qemu-system-x86_64
 QEMU_MEM ?= 8000M
 QEMU_SMP ?= cores=4
@@ -21,7 +19,7 @@ QEMU_USB_FLAGS =  \
 
 
 ISO_DIR := bld
-ISO_PATH := bld/falseos.iso
+ISO_PATH := bld/trueos.iso
 LIMINE_CFG := limine.conf
 LIMINE_SRC := limine
 LIMINE_BUILD := bld/limine-build
@@ -74,7 +72,7 @@ iso: $(LIMINE_STAMP)
 		-J -joliet-long \
 		-m limine-build \
 		-m limine-prefix \
-		-m falseos.iso \
+		-m trueos.iso \
 		-b limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot limine-uefi-cd.bin \
@@ -102,7 +100,7 @@ iso-release: $(LIMINE_STAMP)
 		-J -joliet-long \
 		-m limine-build \
 		-m limine-prefix \
-		-m falseos.iso \
+		-m trueos.iso \
 		-b limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot limine-uefi-cd.bin \
@@ -110,7 +108,7 @@ iso-release: $(LIMINE_STAMP)
 		-o $(ISO_PATH) $(ISO_DIR)
 	$(LIMINE_BIN) bios-install $(ISO_PATH)
 
-run-gdb-paused-bg: iso
+run: iso
 	@($(QEMU) $(QEMU_COMMON_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
 
 clean:
