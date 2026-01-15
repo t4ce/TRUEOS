@@ -16,7 +16,7 @@ need_cmd() {
     exit 1
   fi
 }
-
+# sudo apt update && sudo apt install -y ripgrep coreutils sed gawk
 need_cmd rg
 need_cmd rustc
 need_cmd sort
