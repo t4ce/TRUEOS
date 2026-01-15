@@ -157,7 +157,7 @@ pub extern "C" fn _start() -> ! {
 
     // Streams the built-in demo PCM to the first bound UAC sink (if any).
     let _ = spawner.spawn(usb::uac::play_demo_task());
-    let _ = spawner.spawn(usb::uac::stats_task());
+    // let _ = spawner.spawn(usb::uac::stats_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
     let _ = spawner.spawn(usb::truekey::drain_loop());
