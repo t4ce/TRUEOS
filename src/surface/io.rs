@@ -572,7 +572,7 @@ pub fn smoke_test() {
     let manual_error = Error::new(ErrorKind::Other);
     crate::log!("io: manual error kind={:?}\n", manual_error.kind());
 
-    let mut cursor = Cursor::new(&b"FalseOS-io\nalpha-beta\nomega"[..]);
+    let mut cursor = Cursor::new(&b"TRUEOS-io\nalpha-beta\nomega"[..]);
 
     let mut exact = [0u8; 10];
     match cursor.read_exact(&mut exact) {
