@@ -20,9 +20,20 @@ pub struct MouseEvent {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub struct PeripheralEvent {
+    pub slot_id: u32,
+    pub interface: u8,
+    pub ep_addr: u8,
+    pub kind: u8,
+    pub len: u8,
+    pub data: [u8; 64],
+}
+
+#[derive(Copy, Clone, Debug)]
 pub enum InputEvent {
     Keyboard(KeyboardEvent),
     Mouse(MouseEvent),
+    Peripheral(PeripheralEvent),
 }
 
 const INPUT_QUEUE_CAP: usize = 64;
