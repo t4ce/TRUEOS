@@ -79,8 +79,8 @@ impl IsochOutPipe {
 
         // Allocate transfer ring.
         // Note: `TrbRing` does not currently do producer/consumer fullness tracking.
-        // Keeping this reasonably large helps avoid lapping the controller in steady-state.
-        const ISOCH_TRBS: usize = 1024;
+        // UAC keeps an explicit in-flight budget; this ring only needs to be "reasonably big".
+        const ISOCH_TRBS: usize = 256;
         let (ep_ring_phys, ep_ring_virt) =
             dma::alloc(ISOCH_TRBS * size_of::<Trb>(), 64).ok_or(())?;
         unsafe { write_bytes(ep_ring_virt, 0, ISOCH_TRBS * size_of::<Trb>()) };
@@ -135,12 +135,43 @@ impl IsochOutPipe {
                 0
             };
 
-            // Interval encoding differs by speed; HS encodes exponent-1.
-            let interval_field = if is_high_speed {
-                core::cmp::min(15u32, interval.saturating_sub(1) as u32)
-            } else {
-                interval as u32
+            // Interval encoding in xHCI endpoint contexts is in units of microframes,
+            // expressed as log2(period_in_microframes).
+            //
+            // - High-/SuperSpeed: USB `bInterval` is already the exponent for microframes,
+            //   so Interval = bInterval - 1.
+            // - Full-/LowSpeed: USB `bInterval` is in frames (1ms), so convert to
+            //   microframes first: period = 8 * bInterval, then take log2-ceil.
+            //
+            // Getting this wrong causes the controller to schedule at the wrong cadence
+            // (classic "audio bursts / gaps" symptom).
+            let interval_field = {
+                let raw = if speed_code == 1 || speed_code == 2 {
+                    // FS/LS: frames -> microframes -> log2-ceil.
+                    let mut period_uf = core::cmp::max(1u32, interval as u32).saturating_mul(8);
+                    let mut log2 = 0u32;
+                    let mut pow2 = 1u32;
+                    while pow2 < period_uf && log2 < 15 {
+                        pow2 <<= 1;
+                        log2 += 1;
+                    }
+                    log2
+                } else {
+                    // HS/SS: exponent already.
+                    interval.saturating_sub(1) as u32
+                };
+                core::cmp::min(15u32, raw)
             };
+
+            // One-time sanity log: interval programming is the #1 reason for
+            // "isoch runs at ~80Hz instead of 1kHz" failures.
+            crate::log!(
+                "usb: uac xhci interval speed_code={} bInterval={} interval_field={} period={}us\n",
+                speed_code,
+                interval,
+                interval_field,
+                125u32.saturating_mul(1u32 << interval_field)
+            );
 
             let mut esit_payload = core::cmp::max(packet_bytes, max_esit_payload as u32);
             if is_high_speed {
@@ -210,7 +241,10 @@ impl IsochOutPipe {
     }
 
     /// Queue a single isochronous OUT packet (caller provides DMA buffer phys address).
-    pub fn push_isoch_trb(&mut self, buf_phys: u64, len: u32, last: bool) -> bool {
+    ///
+    /// If `chain` is set, this TRB is part of a larger Transfer Descriptor (TD) and the
+    /// controller should continue to the next TRB in the TD.
+    pub fn push_isoch_trb(&mut self, buf_phys: u64, len: u32, chain: bool, ioc: bool) -> bool {
         let mut trb = Trb {
             d0: lo(buf_phys),
             d1: hi(buf_phys),
@@ -219,7 +253,10 @@ impl IsochOutPipe {
         };
         // Schedule Immediately (SIA) helps avoid frame-id related gaps.
         trb.d3 |= 1 << 31;
-        if last {
+        if chain {
+            trb.d3 |= 1 << 4; // CH (Chain bit)
+        }
+        if ioc {
             trb.d3 |= 1 << 5; // IOC for final packet of a frame batch
         }
         self.ring.push(trb)

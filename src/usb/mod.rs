@@ -7,6 +7,7 @@ pub mod pen;
 pub mod print;
 pub mod isoch;
 pub mod uac;
+pub mod resample_44k1_to_48k;
 pub mod truekey;
 pub mod xhci;
 
@@ -29,17 +30,63 @@ use self::mass::AttachParams as MassAttachParams;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum DeviceKind {
     Hid,
+    Headset,
     Mass,
     Printer,
     Pen,
     Cdc,
     Uac,
 }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct DeviceKinds(u32);
+
+impl DeviceKinds {
+    const HID: u32 = 1 << 0;
+    const HEADSET: u32 = 1 << 1;
+    const MASS: u32 = 1 << 2;
+    const PRINTER: u32 = 1 << 3;
+    const PEN: u32 = 1 << 4;
+    const CDC: u32 = 1 << 5;
+    const UAC: u32 = 1 << 6;
+
+    const fn empty() -> Self {
+        Self(0)
+    }
+
+    const fn mask(kind: DeviceKind) -> u32 {
+        match kind {
+            DeviceKind::Hid => Self::HID,
+            DeviceKind::Headset => Self::HEADSET,
+            DeviceKind::Mass => Self::MASS,
+            DeviceKind::Printer => Self::PRINTER,
+            DeviceKind::Pen => Self::PEN,
+            DeviceKind::Cdc => Self::CDC,
+            DeviceKind::Uac => Self::UAC,
+        }
+    }
+
+    fn insert(&mut self, kind: DeviceKind) {
+        self.0 |= Self::mask(kind);
+    }
+
+    fn contains(self, kind: DeviceKind) -> bool {
+        (self.0 & Self::mask(kind)) != 0
+    }
+
+    fn any_hidlike(self) -> bool {
+        (self.0 & (Self::HID | Self::HEADSET)) != 0
+    }
+
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
 #[derive(Copy, Clone, Debug)]
 struct DeviceEntry {
     slot_id: u32,
     port: u8,
-    kind: DeviceKind,
+    kinds: DeviceKinds,
 }
 
 const SCRATCHPAD_BUF_SIZE: usize = 4096;
@@ -244,7 +291,7 @@ async fn fetch_serial_string(
     cdc_acm::UsbSerial::from_bytes(out.as_slice())
 }
 
-async fn control_in(
+pub(super) async fn control_in_cc(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
@@ -296,6 +343,30 @@ async fn control_in(
     let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
     let requested = length as u32;
     let transferred = requested.saturating_sub(remaining).min(requested) as u16;
+    Ok((completion, transferred))
+}
+
+async fn control_in(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    setup: Trb,
+    buf_phys: u64,
+    length: u16,
+    what: &'static str,
+    timeout_iters: usize,
+) -> Result<(u32, u16), ()> {
+    let (completion, transferred) = control_in_cc(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup,
+        buf_phys,
+        length,
+        what,
+        timeout_iters,
+    )
+    .await?;
 
     // CC=13 is a normal short packet completion on control-IN reads.
     if completion == 1 || completion == 13 {
@@ -306,7 +377,7 @@ async fn control_in(
     }
 }
 
-pub(super) async fn control_out(
+pub(super) async fn control_out_cc(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
@@ -315,7 +386,7 @@ pub(super) async fn control_out(
     length: u16,
     what: &'static str,
     timeout_iters: usize,
-) -> Result<(), ()> {
+) -> Result<u32, ()> {
     if !ep0_ring.push(setup) {
         usbv!("usb: {}: ep0 ring full (setup)\n", what);
         return Err(());
@@ -366,6 +437,30 @@ pub(super) async fn control_out(
     })?;
 
     let completion = trb_cc(&evt);
+    Ok(completion)
+}
+
+pub(super) async fn control_out(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    setup: Trb,
+    buf_phys: Option<u64>,
+    length: u16,
+    what: &'static str,
+    timeout_iters: usize,
+) -> Result<(), ()> {
+    let completion = control_out_cc(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup,
+        buf_phys,
+        length,
+        what,
+        timeout_iters,
+    )
+    .await?;
     if completion == 1 {
         Ok(())
     } else {
@@ -839,6 +934,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     }
 
     let mut tried_uac = false;
+    let mut claimed_any = false;
     if has_uac_out {
         tried_uac = true;
         if uac::attach_device(uac::AttachParams {
@@ -864,7 +960,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
                 dev_pid
             );
             register_device(slot_id as u32, target_port, DeviceKind::Uac);
-            return;
+            claimed_any = true;
         }
     }
 
@@ -893,7 +989,35 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             hid_count
         );
         register_device(slot_id as u32, target_port, DeviceKind::Hid);
-        return;
+        claimed_any = true;
+    }
+
+    let headset_count = hid::attach_hid_devices(BootAttachParams {
+        ctx: &ctx,
+        cmd_ring: &mut state.cmd_ring,
+        ep0_ring: &mut ep0_ring,
+        slot_id,
+        cfg: cfg_slice,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+    })
+    .await
+    .unwrap_or(0);
+
+    if headset_count > 0 {
+        usbv!(
+            "usb: enum port {} claimed HID headset slot={} vid=0x{:04X} pid=0x{:04X} count={}\n",
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid,
+            headset_count
+        );
+        register_device(slot_id as u32, target_port, DeviceKind::Headset);
+        claimed_any = true;
     }
 
     if mass::attach_mass_device(MassAttachParams {
@@ -917,7 +1041,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Mass);
-        return;
+        claimed_any = true;
     }
 
     if pen::try_handle(cfg_slice, target_port) {
@@ -927,7 +1051,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Pen);
-        return;
+        claimed_any = true;
     }
     if print::try_handle(cfg_slice, target_port) {
         usbv!(
@@ -936,7 +1060,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
-        return;
+        claimed_any = true;
     }
 
     if !tried_uac
@@ -963,7 +1087,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             dev_pid
         );
         register_device(slot_id as u32, target_port, DeviceKind::Uac);
-        return;
+        claimed_any = true;
     }
 
     if cdc_acm::attach_device(cdc_acm::AttachParams {
@@ -991,6 +1115,10 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Cdc);
+        claimed_any = true;
+    }
+
+    if claimed_any {
         return;
     }
 
@@ -1251,7 +1379,7 @@ async fn cleanup_disconnected<const N: usize>(
     connected: &Vec<(u8, u32), N>,
     state: &mut UsbControllerState,
 ) {
-    let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
+    let mut removed: Vec<(u32, DeviceKinds), MAX_DEVICES> = Vec::new();
     {
         let mut guard = DEVICES.lock();
         let mut idx = 0usize;
@@ -1263,21 +1391,24 @@ async fn cleanup_disconnected<const N: usize>(
                 continue;
             }
             let entry = guard.remove(idx);
-            let _ = removed.push((entry.slot_id, entry.kind));
+            let _ = removed.push((entry.slot_id, entry.kinds));
         }
     }
 
-    for (slot_id, kind) in removed.into_iter() {
+    for (slot_id, kinds) in removed.into_iter() {
         if let Err(()) = disable_slot(state, slot_id).await {
             crate::log!("usb: disable-slot for slot {} failed\n", slot_id);
         }
-        if kind == DeviceKind::Hid {
+        if kinds.any_hidlike() {
             let _ = hid::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Mass {
+        }
+        if kinds.contains(DeviceKind::Mass) {
             let _ = mass::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Cdc {
+        }
+        if kinds.contains(DeviceKind::Cdc) {
             let _ = cdc_acm::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Uac {
+        }
+        if kinds.contains(DeviceKind::Uac) {
             let _ = uac::unregister_runtime(slot_id);
         }
         crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
@@ -1346,7 +1477,7 @@ impl Drop for EnumReadyGuard {
 fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     let mut guard = DEVICES.lock();
     if let Some(existing) = guard.iter_mut().find(|d| d.slot_id == slot_id) {
-        existing.kind = kind;
+        existing.kinds.insert(kind);
         existing.port = port;
         return;
     }
@@ -1354,7 +1485,11 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
         .push(DeviceEntry {
             slot_id,
             port,
-            kind,
+            kinds: {
+                let mut kinds = DeviceKinds::empty();
+                kinds.insert(kind);
+                kinds
+            },
         })
         .is_err()
     {
@@ -1363,23 +1498,30 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY.store(true, Ordering::Release);
     crate::log!(
-        "usb: device claimed slot={} port={} kind={:?}\n",
+        "usb: device claimed slot={} port={} kinds=0x{:02X}\n",
         slot_id,
         port,
-        kind
+        guard
+            .iter()
+            .find(|d| d.slot_id == slot_id)
+            .map(|d| d.kinds.0)
+            .unwrap_or(0)
     );
 }
 
-fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
+fn device_kinds_for_slot(slot_id: u32) -> Option<DeviceKinds> {
     DEVICES
         .lock()
         .iter()
         .find(|d| d.slot_id == slot_id)
-        .map(|d| d.kind)
+        .map(|d| d.kinds)
 }
 
 fn any_hid_registered() -> bool {
-    DEVICES.lock().iter().any(|d| d.kind == DeviceKind::Hid)
+    DEVICES
+        .lock()
+        .iter()
+        .any(|d| d.kinds.any_hidlike())
 }
 
 #[embassy_executor::task]
@@ -1467,6 +1609,8 @@ pub async fn poll_task(info: xhci::XhcInfo) {
 
         heartbeat = heartbeat.wrapping_add(1);
 
+        // Keep transfer-event dispatch reasonably responsive for periodic endpoints.
+        // (UAC batches IOC, so we don't need to poll at extreme rates here.)
         let evt_opt = xhci::wait_for_event(
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
@@ -1474,10 +1618,10 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     return false;
                 }
                 let evt_slot = (evt.d3 >> 24) as u32;
-                device_kind_for_slot(evt_slot).is_some()
+                device_kinds_for_slot(evt_slot).is_some()
             },
-            400,
-            EmbassyDuration::from_millis(5),
+            4_000,
+            EmbassyDuration::from_micros(250),
         )
         .await;
 
@@ -1490,24 +1634,23 @@ pub async fn poll_task(info: xhci::XhcInfo) {
 
         let evt_slot = (evt.d3 >> 24) as u32;
 
-        match device_kind_for_slot(evt_slot) {
-            Some(DeviceKind::Hid) => {
-                if !any_hid_registered() {
-                    continue;
-                }
+        let Some(kinds) = device_kinds_for_slot(evt_slot) else {
+            // A device may complete transfers during attach (while the enum path is still
+            // running) before `register_device()` marks the slot kind. Handle CDC events
+            // opportunistically so TX/RX doesn't stall.
+            let _ = cdc_acm::handle_transfer_event(&evt);
+            continue;
+        };
 
-                let ep_target = (evt.d3 >> 16) & 0x1F;
-                if ep_target == 0 {
-                    continue;
-                }
-
-                let handled = hid::with_runtime_mut_by_slot_and_target(evt_slot, ep_target, |runtime| {
+        let mut handled = false;
+        if kinds.any_hidlike() && any_hid_registered() {
+            let ep_target = (evt.d3 >> 16) & 0x1F;
+            if ep_target != 0 {
+                handled = hid::with_runtime_mut_by_slot_and_target(evt_slot, ep_target, |runtime| {
                     let completion = (evt.d2 >> 24) & 0xFF;
                     let residual = evt.d2 & 0x00FF_FFFF;
                     let data_len = runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
-                    let data = unsafe {
-                        core::slice::from_raw_parts(runtime.report_virt, data_len)
-                    };
+                    let data = unsafe { core::slice::from_raw_parts(runtime.report_virt, data_len) };
                     hid::handle_report(runtime, completion, data, residual);
 
                     let normal = Trb {
@@ -1558,28 +1701,28 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     );
                 }
             }
-            Some(DeviceKind::Mass) => {
-                // Mass storage transfers are driven by the mass driver; nothing to do here yet.
+        }
+
+        if handled {
+            continue;
+        }
+
+        if kinds.contains(DeviceKind::Mass) {
+            // Mass storage transfers are driven by the mass driver; nothing to do here yet.
+            continue;
+        }
+        if kinds.contains(DeviceKind::Cdc) {
+            if !cdc_acm::handle_transfer_event(&evt) {
+                usbv!(
+                    "usb: ignoring transfer event slot={} (no CDC runtime)\n",
+                    evt_slot
+                );
             }
-            Some(DeviceKind::Cdc) => {
-                if !cdc_acm::handle_transfer_event(&evt) {
-                    usbv!(
-                        "usb: ignoring transfer event slot={} (no CDC runtime)\n",
-                        evt_slot
-                    );
-                }
-            }
-            Some(DeviceKind::Uac) => {
-                let _ = uac::handle_transfer_event(&evt);
-            }
-            Some(DeviceKind::Printer) => {}
-            Some(DeviceKind::Pen) => {}
-            None => {
-                // A device may complete transfers during attach (while the enum path is still
-                // running) before `register_device()` marks the slot kind. Handle CDC events
-                // opportunistically so TX/RX doesn't stall.
-                let _ = cdc_acm::handle_transfer_event(&evt);
-            }
+            continue;
+        }
+        if kinds.contains(DeviceKind::Uac) {
+            let _ = uac::handle_transfer_event(&evt);
+            continue;
         }
     }
 }
