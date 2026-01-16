@@ -2,6 +2,9 @@
 
 pub mod demo_player;
 
+pub const DEMO_RATE_HZ: u32 = 48_000;
+pub const DEMO_CHANNELS: u16 = 2;
+
 /// Simple PCM format descriptor for sinks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PcmFormat {
