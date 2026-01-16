@@ -26,8 +26,6 @@ unicode-normalization = { version = "0.1", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "socket-raw", "socket-udp", "socket-tcp", "medium-ethernet"] }
 core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
-trueos-audio = { path = "crates/trueos-audio" }
-trueos-audio-assets = { path = "crates/trueos-audio-assets" }
 
 [profile.dev]
 panic = "abort"
