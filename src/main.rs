@@ -51,10 +51,14 @@ use alloc::boxed::Box;
 use embassy_executor::{raw::Executor, Spawner};
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
-use trueos_audio_assets::demo;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/*
+ConPink 	FF_55_FF 
+ConBlue 	08_18_30
+ConWhite 	FF_FF_FF
+*/
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -113,14 +117,6 @@ pub extern "C" fn _start() -> ! {
 
     rng::log_rng_caps();
 
-    crate::log!(
-        "audio demo: {} Hz, {} ch, {} frames ({} samples)\n",
-        demo::DEMO.sample_rate_hz,
-        demo::DEMO.channels,
-        demo::DEMO.frames(),
-        demo::DEMO.samples_interleaved_i16.len()
-    );
-
     usb::xhci::init_once();
 
     // Optional: initialize TrueKey (CDC-based ESP32 binding) before enumeration.
@@ -155,8 +151,6 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(usb::hid::input_logger());
 
-    // Streams the built-in demo PCM to the first bound UAC sink (if any).
-    let _ = spawner.spawn(usb::uac::play_demo_task());
     // let _ = spawner.spawn(usb::uac::stats_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
