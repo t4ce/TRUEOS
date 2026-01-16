@@ -374,8 +374,6 @@ pub(crate) fn has_as_out_endpoint(cfg: &[u8]) -> bool {
     parse_as_out_endpoint(cfg).is_some()
 }
 
-const DEMO_RATE_HZ: u32 = 48_000;
-const DEMO_CHANNELS: u16 = 2;
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let AttachParams {
