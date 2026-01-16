@@ -8,8 +8,9 @@ KERNEL_BIN = $(TARGET_DIR)/$(BUILD_MODE)/$(KERNEL_NAME)
 QEMU ?= qemu-system-x86_64
 QEMU_MEM ?= 8000M
 QEMU_SMP ?= cores=4
+QEMU_BIOS ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-QEMU_COMMON_FLAGS = -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
+QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
 QEMU_USB_FLAGS =  \
 	-drive file=disk.img,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=deadbeef \
@@ -49,8 +50,6 @@ $(LIMINE_STAMP):
 		OBJDUMP_FOR_TARGET=objdump \
 		READELF_FOR_TARGET=readelf \
 		--prefix=$(abspath $(LIMINE_PREFIX)) \
-		--enable-bios \
-		--enable-bios-cd \
 		--enable-uefi-x86-64 \
 		--enable-uefi-cd
 	$(MAKE) -C $(LIMINE_BUILD)
@@ -59,14 +58,12 @@ $(LIMINE_STAMP):
 
 iso: $(LIMINE_STAMP)
 	$(CARGO) +nightly build -Z build-std=core,compiler_builtins,alloc --target $(TARGET_JSON)
-	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-bios.sys $(ISO_DIR)/limine-bios-cd.bin $(ISO_DIR)/limine-uefi-cd.bin
+	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(KERNEL_BIN) $(ISO_DIR)/kernel.bin
 	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_DIR)/
-	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_DIR)/
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
@@ -75,26 +72,21 @@ iso: $(LIMINE_STAMP)
 		-m limine-build \
 		-m limine-prefix \
 		-m trueos.iso \
-		-b limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_DIR)
-	$(LIMINE_BIN) bios-install $(ISO_PATH)
 #	cp $(ISO_PATH) /media/t4ce/Data20TB/ #optional copy where u want
 
 # Release ISO builds the kernel with --release (LTO etc.) and packages that binary.
 iso-release: BUILD_MODE := release
 iso-release: $(LIMINE_STAMP)
 	$(CARGO) +nightly build --release -Z build-std=core,compiler_builtins,alloc --target $(TARGET_JSON)
-	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-bios.sys $(ISO_DIR)/limine-bios-cd.bin $(ISO_DIR)/limine-uefi-cd.bin
+	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(KERNEL_BIN) $(ISO_DIR)/kernel.bin
 	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_DIR)/
-	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_DIR)/
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
@@ -103,12 +95,9 @@ iso-release: $(LIMINE_STAMP)
 		-m limine-build \
 		-m limine-prefix \
 		-m trueos.iso \
-		-b limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_DIR)
-	$(LIMINE_BIN) bios-install $(ISO_PATH)
 
 run: iso
 	@($(QEMU) $(QEMU_COMMON_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)

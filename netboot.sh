@@ -7,10 +7,7 @@ sudo dnsmasq --no-daemon --port=0 --interface=enp5s0 --bind-interfaces \
   --dhcp-range=192.168.55.50,192.168.55.150,255.255.255.0,12h \
   --dhcp-authoritative \
   --dhcp-option=option:router,192.168.55.1 \
-  --dhcp-option=option:tftp-server,192.168.55.1 \
-  --enable-tftp --tftp-root=/home/t4ce/Dokumente/TrueOS/bld \
-  --dhcp-boot=EFI/BOOT/BOOTX64.EFI \
-  --pxe-service=BC_EFI,"TRUEOS UEFI PXE",EFI/BOOT/BOOTX64.EFI \
+  --dhcp-option=option:bootfile-name,"http://192.168.55.1/EFI/BOOT/BOOTX64.EFI" \
   --log-dhcp --dhcp-leasefile=/tmp/pxe.leases
 
 #wieder wie vorher:

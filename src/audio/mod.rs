@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod demo_player;
+
 /// Simple PCM format descriptor for sinks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PcmFormat {

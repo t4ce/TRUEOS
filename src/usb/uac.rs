@@ -4,19 +4,19 @@
 //! - Find an AudioStreaming OUT interface altsetting with an isoch OUT endpoint.
 //! - SET_CONFIGURATION and SET_INTERFACE.
 //! - Configure the xHCI isoch OUT endpoint.
-//! - Run a small Embassy task that streams the built-in demo PCM.
+//! - Provide a small API to feed isoch OUT packets (demo player lives elsewhere).
 
 use crate::audio::{PcmFormat, PcmSink};
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec;
 use spin::Mutex;
 use core::ptr::{write_bytes, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
+const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
 const USB_SUBCLASS_AUDIOSTREAMING: u8 = 0x02;
 
 #[derive(Copy, Clone, Debug)]
@@ -123,7 +123,6 @@ struct UacRuntime {
     pipe: IsochOutPipe,
     bufs: Vec<DmaBuf, 64>,
     buf_idx: usize,
-    sample_idx: usize,
     rate_hz: u32,
     channels: u16,
     bits_per_sample: u8,
@@ -137,6 +136,9 @@ unsafe impl Sync for UacRuntime {}
 
 static UAC_SLOT: AtomicU32 = AtomicU32::new(0);
 static UAC_RUNTIME: Mutex<Option<UacRuntime>> = Mutex::new(None);
+static UAC_XFER_OK: AtomicU32 = AtomicU32::new(0);
+static UAC_XFER_ERR: AtomicU32 = AtomicU32::new(0);
+static UAC_XFER_LAST_CC: AtomicU32 = AtomicU32::new(0);
 
 pub fn unregister_runtime(slot_id: u32) -> bool {
     let mut guard = UAC_RUNTIME.lock();
@@ -144,16 +146,51 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
         if rt.slot_id == slot_id {
             *guard = None;
             UAC_SLOT.store(0, Ordering::Release);
+            UAC_XFER_OK.store(0, Ordering::Release);
+            UAC_XFER_ERR.store(0, Ordering::Release);
+            UAC_XFER_LAST_CC.store(0, Ordering::Release);
             return true;
         }
     }
     false
 }
 
-pub fn handle_transfer_event(_evt: &Trb) -> bool {
-    // We currently rely on time-based pacing and a large isoch ring.
-    // Still consuming events in the global poll loop prevents event buffer buildup.
-    UAC_RUNTIME.lock().is_some()
+pub fn handle_transfer_event(evt: &Trb) -> bool {
+    // We rely on time-based pacing and a large isoch ring; events are used for observability.
+    let evt_type = (evt.d3 >> 10) & 0x3F;
+    if evt_type != 32 {
+        return false;
+    }
+
+    let evt_slot = (evt.d3 >> 24) & 0xFF;
+    let evt_ep_id = (evt.d3 >> 16) & 0x1F;
+    let cc = (evt.d2 >> 24) & 0xFF;
+
+    let mut guard = UAC_RUNTIME.lock();
+    let Some(rt) = guard.as_ref() else {
+        return false;
+    };
+    if rt.slot_id != evt_slot {
+        return false;
+    }
+    if rt.pipe_target != evt_ep_id {
+        return true;
+    }
+
+    if cc == 1 {
+        UAC_XFER_OK.fetch_add(1, Ordering::Relaxed);
+    } else {
+        UAC_XFER_ERR.fetch_add(1, Ordering::Relaxed);
+        UAC_XFER_LAST_CC.store(cc, Ordering::Relaxed);
+    }
+    true
+}
+
+pub fn take_xfer_event_counters() -> (u32, u32, u32) {
+    let ok = UAC_XFER_OK.swap(0, Ordering::AcqRel);
+    let err = UAC_XFER_ERR.swap(0, Ordering::AcqRel);
+    let last_cc = UAC_XFER_LAST_CC.load(Ordering::Acquire);
+    (ok, err, last_cc)
 }
 
 fn setup_std_nodata(bm_request_type: u8, request: u8, value: u16, index: u16) -> Trb {
@@ -275,9 +312,70 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
     candidate
 }
 
+#[derive(Copy, Clone, Debug)]
+struct Uac2ClockSource {
+    ac_interface: u8,
+    clock_id: u8,
+}
+
+fn parse_uac2_clock_source(cfg: &[u8]) -> Option<Uac2ClockSource> {
+    let mut idx = 0usize;
+    let mut current_ac_if: Option<u8> = None;
+    let mut in_ac = false;
+    let mut uac2 = false;
+
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        let ty = cfg[idx + 1];
+
+        match ty {
+            4 if len >= 9 => {
+                // Interface descriptor
+                let ifnum = cfg[idx + 2];
+                let alt = cfg[idx + 3];
+                let cls = cfg[idx + 5];
+                let sub = cfg[idx + 6];
+                in_ac = cls == USB_CLASS_AUDIO && sub == USB_SUBCLASS_AUDIOCONTROL && alt == 0;
+                current_ac_if = if in_ac { Some(ifnum) } else { None };
+                uac2 = false;
+            }
+            0x24 if in_ac && len >= 3 => {
+                // Class-specific AC interface descriptor.
+                let subtype = cfg[idx + 2];
+                match subtype {
+                    0x01 if len >= 5 => {
+                        // HEADER. For UAC2 this includes bcdADC = 0x0200.
+                        let bcdadc = u16::from_le_bytes([cfg[idx + 3], cfg[idx + 4]]);
+                        uac2 = bcdadc >= 0x0200;
+                    }
+                    0x0A if uac2 && len >= 4 => {
+                        // CLOCK_SOURCE (UAC2): bClockID at offset 3.
+                        let clock_id = cfg[idx + 3];
+                        if let Some(ac_if) = current_ac_if {
+                            return Some(Uac2ClockSource { ac_interface: ac_if, clock_id });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        idx += len;
+    }
+
+    None
+}
+
 pub(crate) fn has_as_out_endpoint(cfg: &[u8]) -> bool {
     parse_as_out_endpoint(cfg).is_some()
 }
+
+const DEMO_RATE_HZ: u32 = 48_000;
+const DEMO_CHANNELS: u16 = 2;
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let AttachParams {
@@ -297,6 +395,41 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         crate::log!("usb: uac: no AudioStreaming isoch OUT endpoint found\n");
         return Err(());
     };
+
+    if let Some(cs) = parse_uac2_clock_source(cfg) {
+        crate::log!(
+            "usb: uac: uac2 clock source id={} ac_if={}\n",
+            cs.clock_id,
+            cs.ac_interface
+        );
+
+        // Best-effort: UAC2 clock source Sampling Frequency control.
+        // Devices that don't support this will STALL; ignore errors.
+        let (phys, virt) = dma::alloc(8, 8).ok_or(())?;
+        unsafe {
+            let b = core::slice::from_raw_parts_mut(virt, 8);
+            b[..4].copy_from_slice(&DEMO_RATE_HZ.to_le_bytes());
+        }
+        let setup = Trb {
+            // bmRequestType=0x21 (Class, Interface, Host->Device), bRequest=SET_CUR(0x01)
+            // wValue=(CS=0x01 SamFreq) << 8, wIndex=(EntityID<<8)|Interface, wLength=4
+            d0: 0x21 | (0x01 << 8) | (0x0100u32 << 16),
+            d1: ((cs.clock_id as u32) << 8) | (cs.ac_interface as u32) | (4u32 << 16),
+            d2: 8,
+            d3: xhci::trb_type(2) | (1 << 6),
+        };
+        let _ = super::control_out(
+            ctx,
+            ep0_ring,
+            slot_id,
+            setup,
+            Some(phys),
+            4,
+            "uac2-set-sample-rate",
+            200,
+        )
+        .await;
+    }
 
     // SET_CONFIGURATION
     super::control_out(
@@ -326,8 +459,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     // Configure isoch endpoint.
     let mut sink = UacSink::new(PcmFormat {
-        rate_hz: 48_000,
-        channels: 2,
+        rate_hz: DEMO_RATE_HZ,
+        channels: DEMO_CHANNELS as u8,
         bits_per_sample: 16,
     });
     sink.configure_isoch(
@@ -367,7 +500,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         pipe,
         bufs,
         buf_idx: 0,
-        sample_idx: 0,
         rate_hz: sink.fmt.rate_hz,
         channels: sink.fmt.channels as u16,
         bits_per_sample: sink.fmt.bits_per_sample,
@@ -387,133 +519,140 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         as_out.interval
     );
 
+    // Best-effort: try to program sampling frequency via the UAC1 endpoint control.
+    // Many UAC2 devices will STALL this; ignore errors and continue streaming.
+    {
+        let (phys, virt) = dma::alloc(8, 8).ok_or(())?;
+        let sr = DEMO_RATE_HZ;
+        unsafe {
+            // 24-bit little-endian sampling frequency.
+            let b = core::slice::from_raw_parts_mut(virt, 8);
+            b[0] = (sr & 0xFF) as u8;
+            b[1] = ((sr >> 8) & 0xFF) as u8;
+            b[2] = ((sr >> 16) & 0xFF) as u8;
+        }
+
+        let setup = Trb {
+            // bmRequestType=0x22 (Class, Endpoint, Host->Device), bRequest=SET_CUR(0x01)
+            // wValue=(CS=0x01 Sampling Freq) << 8, wIndex=ep_addr, wLength=3
+            d0: 0x22 | (0x01 << 8) | (0x0100u32 << 16),
+            d1: (as_out.ep_addr as u32) | (3u32 << 16),
+            d2: 8,
+            d3: xhci::trb_type(2) | (1 << 6),
+        };
+        let _ = super::control_out(
+            ctx,
+            ep0_ring,
+            slot_id,
+            setup,
+            Some(phys),
+            3,
+            "uac-set-sample-rate",
+            200,
+        )
+        .await;
+    }
+
     Ok(())
 }
 
-#[embassy_executor::task]
-pub async fn play_demo_task() {
-    let pcm = trueos_audio_assets::demo::DEMO;
-    let samples = pcm.samples_interleaved_i16;
-    if samples.is_empty() {
-        loop {
-            Timer::after(EmbassyDuration::from_millis(1000)).await;
-        }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DemoQueueError {
+    NoDevice,
+    NoRuntime,
+    FormatMismatch,
+    NoPacket,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct DemoPacketReservation {
+    pub slot_id: u32,
+    pub buf_phys: u64,
+    pub buf_virt: *mut u8,
+    pub packet_bytes: usize,
+    pub payload_bytes: usize,
+    pub max_packet_bytes: usize,
+    pub tick_us: u64,
+}
+
+pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
+    if UAC_SLOT.load(Ordering::Acquire) == 0 {
+        return Err(DemoQueueError::NoDevice);
     }
 
-    let mut last_log = Instant::now();
-    let mut queued: u64 = 0;
-    let mut missed: u64 = 0;
-    let mut fmt_mismatch: u64 = 0;
-    let mut no_runtime: u64 = 0;
+    let mut guard = UAC_RUNTIME.lock();
+    let rt = guard.as_mut().ok_or(DemoQueueError::NoRuntime)?;
 
-    loop {
-        if UAC_SLOT.load(Ordering::Acquire) == 0 {
-            Timer::after(EmbassyDuration::from_millis(50)).await;
-            continue;
-        }
-
-        // Stream one packet per endpoint interval.
-        // Intentionally minimal: no feedback endpoints, no format negotiation.
-        let (did_queue, tick_us) = {
-            let mut guard = UAC_RUNTIME.lock();
-            match guard.as_mut() {
-                None => {
-                    no_runtime = no_runtime.saturating_add(1);
-                    (false, 10_000u64)
-                }
-                Some(rt) => {
-                    let max_packet_bytes = rt.pipe.max_packet as usize;
-                    if rt.bits_per_sample != 16 {
-                        // Current demo stream is S16LE only.
-                        fmt_mismatch = fmt_mismatch.saturating_add(1);
-                        (false, 10_000u64)
-                    } else {
-                        let tick_us: u64 = if rt.speed_code == 1 {
-                            // Full-speed: bInterval is in 1ms frames.
-                            core::cmp::max(1, rt.interval as u64) * 1000
-                        } else {
-                            // High-/Super-speed: bInterval is 125us microframes as 2^(bInterval-1).
-                            125u64 * (1u64 << (rt.interval.saturating_sub(1) as u64))
-                        };
-
-                        // Target PCM frames to send this tick.
-                        rt.phase_accum = rt.phase_accum.saturating_add(rt.rate_hz as u64 * tick_us);
-                        let frames = rt.phase_accum / 1_000_000u64;
-                        rt.phase_accum %= 1_000_000u64;
-
-                        let channels = core::cmp::max(1, rt.channels as usize);
-                        let mut samples_needed = (frames as usize).saturating_mul(channels);
-                        let max_samples = max_packet_bytes / 2;
-                        if max_samples == 0 {
-                            (false, tick_us)
-                        } else {
-                            // Keep sample count aligned to whole frames.
-                            if samples_needed > max_samples {
-                                samples_needed = max_samples - (max_samples % channels);
-                            }
-                            let packet_bytes = core::cmp::min(max_packet_bytes, samples_needed * 2);
-                            if packet_bytes == 0 {
-                                (false, tick_us)
-                            } else {
-                                let buf = rt.bufs[rt.buf_idx];
-                                rt.buf_idx = (rt.buf_idx + 1) % rt.bufs.len();
-
-                                // Fill packet with interleaved i16 PCM, little-endian.
-                                let mut written = 0usize;
-                                unsafe {
-                                    let out = core::slice::from_raw_parts_mut(buf.virt, packet_bytes);
-                                    while written + 1 < packet_bytes {
-                                        let s = samples[rt.sample_idx];
-                                        rt.sample_idx += 1;
-                                        if rt.sample_idx >= samples.len() {
-                                            rt.sample_idx = 0;
-                                        }
-                                        let le = s.to_le_bytes();
-                                        out[written] = le[0];
-                                        out[written + 1] = le[1];
-                                        written += 2;
-                                    }
-                                }
-
-                                if !rt.pipe.push_isoch_trb(buf.phys, packet_bytes as u32, true, true) {
-                                    missed = missed.saturating_add(1);
-                                    (false, tick_us)
-                                } else {
-                                    unsafe {
-                                        write_volatile(
-                                            rt.ctx.doorbell.add(rt.slot_id as usize),
-                                            rt.pipe_target,
-                                        )
-                                    };
-                                    queued = queued.saturating_add(1);
-                                    (true, tick_us)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-        if Instant::now().duration_since(last_log) >= EmbassyDuration::from_secs(1) {
-            crate::log!(
-                "usb: uac demo stats queued={} missed={} fmt_mismatch={} no_runtime={}\n",
-                queued,
-                missed,
-                fmt_mismatch,
-                no_runtime
-            );
-            last_log = Instant::now();
-            queued = 0;
-            missed = 0;
-            fmt_mismatch = 0;
-            no_runtime = 0;
-        }
-
-        if !did_queue {
-            Timer::after(EmbassyDuration::from_millis(10)).await;
-        } else {
-            Timer::after(EmbassyDuration::from_micros(tick_us)).await;
-        }
+    if rt.bits_per_sample != 16 {
+        // Current demo stream is S16LE only.
+        return Err(DemoQueueError::FormatMismatch);
     }
+
+    let max_packet_bytes = rt.pipe.max_packet as usize;
+    let max_samples = max_packet_bytes / 2;
+    if max_samples == 0 {
+        return Err(DemoQueueError::NoPacket);
+    }
+
+    let tick_us: u64 = if rt.speed_code == 1 {
+        // Full-speed: bInterval is in 1ms frames.
+        core::cmp::max(1, rt.interval as u64) * 1000
+    } else {
+        // High-/Super-speed: bInterval is 125us microframes as 2^(bInterval-1).
+        125u64 * (1u64 << (rt.interval.saturating_sub(1) as u64))
+    };
+
+    // Target PCM frames to send this tick.
+    rt.phase_accum = rt.phase_accum.saturating_add(rt.rate_hz as u64 * tick_us);
+    let frames = rt.phase_accum / 1_000_000u64;
+    rt.phase_accum %= 1_000_000u64;
+
+    let channels = core::cmp::max(1, rt.channels as usize);
+    let mut samples_needed = (frames as usize).saturating_mul(channels);
+
+    // Keep sample count aligned to whole frames.
+    if samples_needed > max_samples {
+        samples_needed = max_samples - (max_samples % channels);
+    }
+
+    if samples_needed == 0 {
+        return Err(DemoQueueError::NoPacket);
+    }
+
+    let payload_bytes = samples_needed * 2;
+    let packet_bytes = max_packet_bytes;
+    let buf = rt.bufs[rt.buf_idx];
+    rt.buf_idx = (rt.buf_idx + 1) % rt.bufs.len();
+
+    Ok(DemoPacketReservation {
+        slot_id: rt.slot_id,
+        buf_phys: buf.phys,
+        buf_virt: buf.virt,
+        packet_bytes,
+        payload_bytes,
+        max_packet_bytes,
+        tick_us,
+    })
+}
+
+pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueError> {
+    if UAC_SLOT.load(Ordering::Acquire) == 0 {
+        return Err(DemoQueueError::NoDevice);
+    }
+
+    let mut guard = UAC_RUNTIME.lock();
+    let rt = guard.as_mut().ok_or(DemoQueueError::NoRuntime)?;
+    if rt.slot_id != res.slot_id {
+        return Err(DemoQueueError::NoRuntime);
+    }
+
+    if !rt
+        .pipe
+        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, true, true)
+    {
+        return Ok(false);
+    }
+
+    unsafe { write_volatile(rt.ctx.doorbell.add(rt.slot_id as usize), rt.pipe_target) };
+    Ok(true)
 }
