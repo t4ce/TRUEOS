@@ -244,15 +244,27 @@ impl IsochOutPipe {
     ///
     /// If `chain` is set, this TRB is part of a larger Transfer Descriptor (TD) and the
     /// controller should continue to the next TRB in the TD.
-    pub fn push_isoch_trb(&mut self, buf_phys: u64, len: u32, chain: bool, ioc: bool) -> bool {
+    pub fn push_isoch_trb(
+        &mut self,
+        buf_phys: u64,
+        len: u32,
+        chain: bool,
+        ioc: bool,
+        frame_id: Option<u16>,
+    ) -> bool {
         let mut trb = Trb {
             d0: lo(buf_phys),
             d1: hi(buf_phys),
             d2: len & 0x1FFFF, // 17-bit length field
             d3: trb_type(5),   // Isoch TRB
         };
-        // Schedule Immediately (SIA) helps avoid frame-id related gaps.
-        trb.d3 |= 1 << 31;
+        if let Some(fid) = frame_id {
+            // Schedule for a future frame; SIA=0.
+            trb.d3 |= ((fid as u32) & 0x7FF) << 20;
+        } else {
+            // Schedule Immediately (SIA) when no frame-id is provided.
+            trb.d3 |= 1 << 31;
+        }
         if chain {
             trb.d3 |= 1 << 4; // CH (Chain bit)
         }
