@@ -64,7 +64,9 @@ pub fn render_mandelbrot(buffer: &mut [u8], width: usize, height: usize, max_ite
     }
 
     let expected = width.saturating_mul(height);
-    assert!(buffer.len() == expected, "buffer does not match width * height");
+    if buffer.len() != expected {
+        return;
+    }
 
     let real_span = 2.0; // from -1.0 to 1.0
     let imag_span = 2.0;
@@ -87,6 +89,51 @@ pub fn render_mandelbrot(buffer: &mut [u8], width: usize, height: usize, max_ite
             let depth = mandelbrot_escape_depth(c, max_iter);
             let idx = y * width + x;
             buffer[idx] = if depth >= max_iter { 0 } else { 0xFF };
+        }
+    }
+}
+
+/// Renders a grayscale Mandelbrot image into an RGB32 buffer (`0x00RRGGBB`).
+///
+/// No allocation; safe for early kernel use.
+pub fn render_mandelbrot_rgb32(buffer: &mut [u32], width: usize, height: usize, max_iter: u32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let expected = width.saturating_mul(height);
+    if buffer.len() != expected {
+        return;
+    }
+
+    let real_span = 2.0; // from -1.0 to 1.0
+    let imag_span = 2.0;
+    let width_scale = if width > 1 {
+        real_span / (width as f64 - 1.0)
+    } else {
+        0.0
+    };
+    let height_scale = if height > 1 {
+        imag_span / (height as f64 - 1.0)
+    } else {
+        0.0
+    };
+
+    let denom = max_iter.max(1);
+    for y in 0..height {
+        let imag = -1.0 + height_scale * y as f64;
+        for x in 0..width {
+            let real = -1.0 + width_scale * x as f64;
+            let c = Complex::new(real, imag);
+            let depth = mandelbrot_escape_depth(c, max_iter);
+            let idx = y * width + x;
+
+            let luma: u32 = if depth >= max_iter {
+                0
+            } else {
+                (depth.saturating_mul(255) / denom) as u32
+            };
+
+            buffer[idx] = (luma << 16) | (luma << 8) | luma;
         }
     }
 }

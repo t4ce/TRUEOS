@@ -1,4 +1,4 @@
-use font8x8::{UnicodeFonts, BASIC_FONTS};
+use noto_sans_mono_bitmap::{get_raster, get_raster_width, FontWeight, RasterHeight};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
@@ -12,8 +12,10 @@ pub struct Image<'a> {
     pub pixels: &'a [u32],
 }
 
-const FONT_W: usize = 8;
-const FONT_H: usize = 8;
+const FONT_WEIGHT: FontWeight = FontWeight::Regular;
+const FONT_HEIGHT: RasterHeight = RasterHeight::Size16;
+const FONT_W: usize = get_raster_width(FONT_WEIGHT, FONT_HEIGHT);
+const FONT_H: usize = FONT_HEIGHT.val();
 const CHAR_SPACING: usize = 1;
 const DEFAULT_FG_COLOR: u32 = 0x00_FF_FF_FF;
 const DEFAULT_BG_COLOR: u32 = 0x00_08_18_30;
@@ -160,19 +162,20 @@ pub fn header_height() -> usize {
 }
 
 pub fn draw_header_square(total_slots: usize, slot: usize, color: u32, degree: u32) -> bool {
+    let square_side_length: usize = 25;
     with_framebuffer(|fb| {
         let slot = slot % total_slots;
-        let total_width = TOP_MARGIN.saturating_mul(total_slots);
+        let total_width = square_side_length.saturating_mul(total_slots);
         let left = (fb.width as isize / 2) - (total_width as isize / 2);
-        let origin_x = left + (TOP_MARGIN as isize * slot as isize);
+        let origin_x = left + (square_side_length as isize * slot as isize);
         let origin_x = origin_x as usize;
 
-        fb.clear_rect(origin_x, 0, TOP_MARGIN, TOP_MARGIN, color);
+        fb.clear_rect(origin_x, 0, square_side_length, square_side_length, color);
 
-        let side = TOP_MARGIN / 2 - 10;
+        let side = square_side_length - 10;
         if side > 0 {
-            let cx = origin_x as f32 + (TOP_MARGIN as f32) * 0.5;
-            let cy = (TOP_MARGIN as f32) * 0.5;
+            let cx = origin_x as f32 + (square_side_length as f32) * 0.5;
+            let cy = (square_side_length as f32) * 0.5;
             let half = (side as f32) * 0.5;
 
             let angle = ((degree % 360) as f32) * (PI / 180.0);
@@ -260,29 +263,32 @@ impl FramebufferSurface {
         bg: u32,
         shadow: u32,
     ) {
-        let glyph = BASIC_FONTS
-            .get(ch)
-            .or_else(|| BASIC_FONTS.get('?'))
-            .unwrap_or([0; 8]);
-        for row in 0..FONT_H {
+        let raster = get_raster(ch, FONT_WEIGHT, FONT_HEIGHT)
+            .or_else(|| get_raster('?', FONT_WEIGHT, FONT_HEIGHT))
+            .or_else(|| get_raster(' ', FONT_WEIGHT, FONT_HEIGHT));
+
+        let Some(raster) = raster else {
+            return;
+        };
+
+        for (row, pixels) in raster.raster().iter().enumerate() {
             let pixel_y = origin_y + row;
             if pixel_y >= self.height {
                 continue;
             }
-            let bits = glyph[row];
-            for col in 0..FONT_W {
+            for (col, alpha) in pixels.iter().enumerate() {
                 let pixel_x = origin_x + col;
                 if pixel_x >= self.width {
                     continue;
                 }
-                let bit_set = (bits >> col) & 1 == 1;
-                let color = if bit_set { fg } else { bg };
+                let color = Self::blend_color(bg, fg, *alpha);
                 self.write_pixel(pixel_x, pixel_y, color);
-                if bit_set {
+                if *alpha > 0 {
                     let shadow_x = pixel_x + 1;
                     let shadow_y = pixel_y + 1;
                     if shadow_x < self.width && shadow_y < self.height {
-                        self.write_pixel(shadow_x, shadow_y, shadow);
+                        let shadow_color = Self::blend_color(bg, shadow, *alpha);
+                        self.write_pixel(shadow_x, shadow_y, shadow_color);
                     }
                 }
             }
@@ -308,7 +314,31 @@ impl FramebufferSurface {
         }
         self.write_pixel(xu, yu, color);
     }
+    #[inline]
+    fn blend_color(bg: u32, fg: u32, alpha: u8) -> u32 {
+        if alpha == 0 {
+            return bg;
+        }
+        if alpha == 0xFF {
+            return fg;
+        }
+        let a = alpha as u32;
+        let inv = 0xFFu32.saturating_sub(a);
 
+        let br = (bg >> 16) & 0xFF;
+        let bgc = (bg >> 8) & 0xFF;
+        let bb = bg & 0xFF;
+
+        let fr = (fg >> 16) & 0xFF;
+        let fg_c = (fg >> 8) & 0xFF;
+        let fb = fg & 0xFF;
+
+        let r = (fr * a + br * inv) / 0xFF;
+        let g = (fg_c * a + bgc * inv) / 0xFF;
+        let b = (fb * a + bb * inv) / 0xFF;
+
+        (r << 16) | (g << 8) | b
+    }
     pub(super) fn draw_line(&self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u32) {
         let dx = (x1 - x0).abs();
         let sx = if x0 < x1 { 1 } else { -1 };
