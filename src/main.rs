@@ -151,8 +151,6 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(usb::hid::input_logger());
 
-    // Streams a minimal square-wave demo PCM to the first bound UAC sink (if any).
-    let _ = spawner.spawn(audio::demo_player::uac_demo_task());
     // let _ = spawner.spawn(usb::uac::stats_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
