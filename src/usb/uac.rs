@@ -123,6 +123,7 @@ struct UacRuntime {
     pipe: IsochOutPipe,
     bufs: Vec<DmaBuf, 64>,
     buf_idx: usize,
+    in_flight: usize,
     rate_hz: u32,
     channels: u16,
     bits_per_sample: u8,
@@ -167,7 +168,7 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     let cc = (evt.d2 >> 24) & 0xFF;
 
     let mut guard = UAC_RUNTIME.lock();
-    let Some(rt) = guard.as_ref() else {
+    let Some(rt) = guard.as_mut() else {
         return false;
     };
     if rt.slot_id != evt_slot {
@@ -183,6 +184,9 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
         UAC_XFER_ERR.fetch_add(1, Ordering::Relaxed);
         UAC_XFER_LAST_CC.store(cc, Ordering::Relaxed);
     }
+    if rt.in_flight > 0 {
+        rt.in_flight -= 1;
+    }
     true
 }
 
@@ -193,6 +197,20 @@ pub fn take_xfer_event_counters() -> (u32, u32, u32) {
     (ok, err, last_cc)
 }
 
+pub fn current_format() -> Option<PcmFormat> {
+    let guard = UAC_RUNTIME.lock();
+    guard.as_ref().map(|rt| PcmFormat {
+        rate_hz: rt.rate_hz,
+        channels: rt.channels as u8,
+        bits_per_sample: rt.bits_per_sample,
+    })
+}
+
+pub fn demo_queue_depth() -> Option<(usize, usize)> {
+    let guard = UAC_RUNTIME.lock();
+    guard.as_ref().map(|rt| (rt.in_flight, rt.bufs.len()))
+}
+
 fn setup_std_nodata(bm_request_type: u8, request: u8, value: u16, index: u16) -> Trb {
     Trb {
         d0: (bm_request_type as u32) | ((request as u32) << 8) | ((value as u32) << 16),
@@ -201,6 +219,186 @@ fn setup_std_nodata(bm_request_type: u8, request: u8, value: u16, index: u16) ->
         d2: 8,
         d3: xhci::trb_type(2) | (1 << 6),
     }
+}
+
+fn parse_uac2(cfg: &[u8]) -> bool {
+    let mut idx = 0usize;
+    let mut in_ac = false;
+
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        let ty = cfg[idx + 1];
+
+        match ty {
+            4 if len >= 9 => {
+                let alt = cfg[idx + 3];
+                let cls = cfg[idx + 5];
+                let sub = cfg[idx + 6];
+                in_ac = cls == USB_CLASS_AUDIO && sub == USB_SUBCLASS_AUDIOCONTROL && alt == 0;
+            }
+            0x24 if in_ac && len >= 5 => {
+                let subtype = cfg[idx + 2];
+                if subtype == 0x01 {
+                    let bcdadc = u16::from_le_bytes([cfg[idx + 3], cfg[idx + 4]]);
+                    return bcdadc >= 0x0200;
+                }
+            }
+            _ => {}
+        }
+
+        idx += len;
+    }
+
+    false
+}
+
+#[derive(Default)]
+struct UacRateInfo {
+    rates: Vec<u32, 16>,
+    range: Option<(u32, u32)>,
+}
+
+fn parse_as_sample_rates(cfg: &[u8], ifnum: u8, alt: u8, uac2: bool) -> UacRateInfo {
+    let mut info = UacRateInfo::default();
+    let mut idx = 0usize;
+    let mut in_as = false;
+
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        let ty = cfg[idx + 1];
+
+        match ty {
+            4 if len >= 9 => {
+                let this_if = cfg[idx + 2];
+                let this_alt = cfg[idx + 3];
+                let cls = cfg[idx + 5];
+                let sub = cfg[idx + 6];
+                in_as = cls == USB_CLASS_AUDIO
+                    && sub == USB_SUBCLASS_AUDIOSTREAMING
+                    && this_if == ifnum
+                    && this_alt == alt;
+            }
+            0x24 if in_as && len >= 8 => {
+                let subtype = cfg[idx + 2];
+                if subtype != 0x02 {
+                    idx += len;
+                    continue;
+                }
+                let format_type = cfg[idx + 3];
+                if format_type != 0x01 {
+                    idx += len;
+                    continue;
+                }
+
+                if uac2 {
+                    let sam_freq_type = cfg[idx + 6] as usize;
+                    let data_off = idx + 7;
+                    if sam_freq_type == 0 {
+                        if data_off + 8 <= idx + len {
+                            let min = u32::from_le_bytes([
+                                cfg[data_off],
+                                cfg[data_off + 1],
+                                cfg[data_off + 2],
+                                cfg[data_off + 3],
+                            ]);
+                            let max = u32::from_le_bytes([
+                                cfg[data_off + 4],
+                                cfg[data_off + 5],
+                                cfg[data_off + 6],
+                                cfg[data_off + 7],
+                            ]);
+                            info.range = Some((min, max));
+                        }
+                    } else {
+                        let mut off = data_off;
+                        for _ in 0..sam_freq_type {
+                            if off + 4 > idx + len {
+                                break;
+                            }
+                            let rate = u32::from_le_bytes([
+                                cfg[off],
+                                cfg[off + 1],
+                                cfg[off + 2],
+                                cfg[off + 3],
+                            ]);
+                            if info.rates.iter().all(|r| *r != rate) {
+                                let _ = info.rates.push(rate);
+                            }
+                            off += 4;
+                        }
+                    }
+                } else {
+                    let sam_freq_type = cfg[idx + 7] as usize;
+                    let data_off = idx + 8;
+                    if sam_freq_type == 0 {
+                        if data_off + 6 <= idx + len {
+                            let min = (cfg[data_off] as u32)
+                                | ((cfg[data_off + 1] as u32) << 8)
+                                | ((cfg[data_off + 2] as u32) << 16);
+                            let max = (cfg[data_off + 3] as u32)
+                                | ((cfg[data_off + 4] as u32) << 8)
+                                | ((cfg[data_off + 5] as u32) << 16);
+                            info.range = Some((min, max));
+                        }
+                    } else {
+                        let mut off = data_off;
+                        for _ in 0..sam_freq_type {
+                            if off + 3 > idx + len {
+                                break;
+                            }
+                            let rate = (cfg[off] as u32)
+                                | ((cfg[off + 1] as u32) << 8)
+                                | ((cfg[off + 2] as u32) << 16);
+                            if info.rates.iter().all(|r| *r != rate) {
+                                let _ = info.rates.push(rate);
+                            }
+                            off += 3;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        idx += len;
+    }
+
+    info
+}
+
+fn select_sample_rate(info: &UacRateInfo) -> u32 {
+    let preferred = crate::audio::DEMO_RATE_HZ;
+    if !info.rates.is_empty() {
+        if info.rates.iter().any(|r| *r == preferred) {
+            return preferred;
+        }
+        if preferred != 44_100 && info.rates.iter().any(|r| *r == 44_100) {
+            return 44_100;
+        }
+        if preferred != 48_000 && info.rates.iter().any(|r| *r == 48_000) {
+            return 48_000;
+        }
+        return info.rates[0];
+    }
+    if let Some((min, max)) = info.range {
+        if min <= preferred && preferred <= max {
+            return preferred;
+        }
+        if preferred != 44_100 && min <= 44_100 && 44_100 <= max {
+            return 44_100;
+        }
+        if preferred != 48_000 && min <= 48_000 && 48_000 <= max {
+            return 48_000;
+        }
+        return min;
+    }
+    crate::audio::DEMO_RATE_HZ
 }
 
 fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
@@ -394,6 +592,32 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         return Err(());
     };
 
+    let is_uac2 = parse_uac2(cfg);
+    let rate_info = parse_as_sample_rates(cfg, as_out.interface, as_out.alt_setting, is_uac2);
+    let selected_rate = select_sample_rate(&rate_info);
+    if !rate_info.rates.is_empty() {
+        crate::log!(
+            "usb: uac: supported rates={:?} selected={} uac2={}\n",
+            rate_info.rates,
+            selected_rate,
+            is_uac2
+        );
+    } else if let Some((min, max)) = rate_info.range {
+        crate::log!(
+            "usb: uac: rate range {}..{} selected={} uac2={}\n",
+            min,
+            max,
+            selected_rate,
+            is_uac2
+        );
+    } else {
+        crate::log!(
+            "usb: uac: no rate info; defaulting to {} Hz uac2={}\n",
+            selected_rate,
+            is_uac2
+        );
+    }
+
     if let Some(cs) = parse_uac2_clock_source(cfg) {
         crate::log!(
             "usb: uac: uac2 clock source id={} ac_if={}\n",
@@ -406,7 +630,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         let (phys, virt) = dma::alloc(8, 8).ok_or(())?;
         unsafe {
             let b = core::slice::from_raw_parts_mut(virt, 8);
-            b[..4].copy_from_slice(&DEMO_RATE_HZ.to_le_bytes());
+            b[..4].copy_from_slice(&selected_rate.to_le_bytes());
         }
         let setup = Trb {
             // bmRequestType=0x21 (Class, Interface, Host->Device), bRequest=SET_CUR(0x01)
@@ -457,8 +681,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     // Configure isoch endpoint.
     let mut sink = UacSink::new(PcmFormat {
-        rate_hz: DEMO_RATE_HZ,
-        channels: DEMO_CHANNELS as u8,
+        rate_hz: selected_rate,
+        channels: crate::audio::DEMO_CHANNELS as u8,
         bits_per_sample: 16,
     });
     sink.configure_isoch(
@@ -498,6 +722,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         pipe,
         bufs,
         buf_idx: 0,
+        in_flight: 0,
         rate_hz: sink.fmt.rate_hz,
         channels: sink.fmt.channels as u16,
         bits_per_sample: sink.fmt.bits_per_sample,
@@ -521,7 +746,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     // Many UAC2 devices will STALL this; ignore errors and continue streaming.
     {
         let (phys, virt) = dma::alloc(8, 8).ok_or(())?;
-        let sr = DEMO_RATE_HZ;
+        let sr = selected_rate;
         unsafe {
             // 24-bit little-endian sampling frequency.
             let b = core::slice::from_raw_parts_mut(virt, 8);
@@ -580,6 +805,10 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
 
     let mut guard = UAC_RUNTIME.lock();
     let rt = guard.as_mut().ok_or(DemoQueueError::NoRuntime)?;
+
+    if rt.in_flight >= rt.bufs.len() {
+        return Err(DemoQueueError::NoPacket);
+    }
 
     if rt.bits_per_sample != 16 {
         // Current demo stream is S16LE only.
@@ -644,13 +873,22 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
         return Err(DemoQueueError::NoRuntime);
     }
 
+    let frame_id = if rt.speed_code <= 2 {
+        let mfindex = unsafe { core::ptr::read_volatile(rt.ctx.runtime.add(0)) } & 0x3FFF;
+        let frame = (mfindex >> 3) as u16;
+        Some(frame.wrapping_add(2) & 0x7FF)
+    } else {
+        None
+    };
+
     if !rt
         .pipe
-        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, true, true)
+        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, false, true, frame_id)
     {
         return Ok(false);
     }
 
     unsafe { write_volatile(rt.ctx.doorbell.add(rt.slot_id as usize), rt.pipe_target) };
+    rt.in_flight = rt.in_flight.saturating_add(1);
     Ok(true)
 }
