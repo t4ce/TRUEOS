@@ -183,6 +183,8 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    vga::init_font_cache();
+
     percpu::init_bsp();
 
     io::smoke_test();
