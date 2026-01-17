@@ -58,10 +58,10 @@ $(LIMINE_STAMP):
 
 iso: $(LIMINE_STAMP)
 	$(CARGO) +nightly build -Z build-std=core,compiler_builtins,alloc --target $(TARGET_JSON)
-	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
+	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/TRUEOS.elf $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_DIR)/EFI/BOOT
-	cp $(KERNEL_BIN) $(ISO_DIR)/kernel.bin
+	cp $(KERNEL_BIN) $(ISO_DIR)/TRUEOS.elf
 	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
@@ -81,10 +81,10 @@ iso: $(LIMINE_STAMP)
 iso-release: BUILD_MODE := release
 iso-release: $(LIMINE_STAMP)
 	$(CARGO) +nightly build --release -Z build-std=core,compiler_builtins,alloc --target $(TARGET_JSON)
-	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/kernel.bin $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
+	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/TRUEOS.elf $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_DIR)/EFI/BOOT
-	cp $(KERNEL_BIN) $(ISO_DIR)/kernel.bin
+	cp $(KERNEL_BIN) $(ISO_DIR)/TRUEOS.elf
 	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/

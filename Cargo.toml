@@ -27,6 +27,9 @@ smoltcp = { version = "0.12", default-features = false, features = ["alloc", "pr
 core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 
+[build-dependencies]
+minimp3 = "0.5"
+
 [profile.dev]
 panic = "abort"
 
