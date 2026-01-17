@@ -1,10 +1,15 @@
 use spin::Once;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{limine, pci::mmio, vga};
 
 use super::ensure_tables;
 
 static LOG_ONCE: Once<()> = Once::new();
+
+// Packed (valid|x|y|w|h) so BSP code can place other overlays relative to it.
+// Bits: [63]=valid, [0..15]=x, [16..31]=y, [32..47]=w, [48..62]=h
+static LAST_LOGO_RECT: AtomicU64 = AtomicU64::new(0);
 
 const MAX_W: usize = 256;
 const MAX_H: usize = 256;
@@ -17,6 +22,8 @@ static mut PALETTE: [u32; MAX_PALETTE] = [0; MAX_PALETTE];
 
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
+        LAST_LOGO_RECT.store(0, Ordering::Relaxed);
+
         let Some(tables) = ensure_tables() else {
             return;
         };
@@ -67,12 +74,68 @@ pub fn log_once() {
 
         // If it is a BMP we understand, blit (cropped to 256x256) into the framebuffer.
         if let Some(bmp) = bmp {
-            let (dst_x, dst_y) = vga::framebuffer_dimensions()
+            let Some((fb_w, fb_h)) = vga::framebuffer_dimensions()
                 .map(|(w, h)| (w as usize, h as usize))
-                .unwrap_or((0, 0));
-            let _ = blit_bmp_to_vga(addr, dst_x, dst_y, &bmp);
+            else {
+                return;
+            };
+
+            let src_w = bmp.width as usize;
+            let src_h = bmp.height as usize;
+            if src_w == 0 || src_h == 0 {
+                return;
+            }
+
+            let copy_w = src_w.min(MAX_W);
+            let copy_h = src_h.min(MAX_H);
+            let (ox, oy) = clamp_origin_for_image(fb_w, fb_h, copy_w, copy_h);
+
+            let ok = blit_bmp_to_vga(addr, ox, oy, &bmp);
+            if ok {
+                set_last_logo_rect(ox, oy, copy_w, copy_h);
+            }
         }
     });
+}
+
+pub fn last_logo_rect() -> Option<(usize, usize, usize, usize)> {
+    let packed = LAST_LOGO_RECT.load(Ordering::Relaxed);
+    if (packed >> 63) == 0 {
+        return None;
+    }
+    let x = (packed & 0xFFFF) as usize;
+    let y = ((packed >> 16) & 0xFFFF) as usize;
+    let w = ((packed >> 32) & 0xFFFF) as usize;
+    let h = ((packed >> 48) & 0x7FFF) as usize;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((x, y, w, h))
+}
+
+fn set_last_logo_rect(x: usize, y: usize, w: usize, h: usize) {
+    let x = (x.min(0xFFFF)) as u64;
+    let y = (y.min(0xFFFF)) as u64;
+    let w = (w.min(0xFFFF)) as u64;
+    let h = (h.min(0x7FFF)) as u64;
+    let packed = (1u64 << 63) | x | (y << 16) | (w << 32) | (h << 48);
+    LAST_LOGO_RECT.store(packed, Ordering::Relaxed);
+}
+
+fn clamp_origin_for_image(fb_w: usize, fb_h: usize, img_w: usize, img_h: usize) -> (usize, usize) {
+    // Prefer bottom-right (by calling with origin at fb_w/fb_h) but ensure we still draw
+    // something if the image is larger than the framebuffer.
+    let ox = if img_w <= fb_w {
+        fb_w.saturating_sub(img_w)
+    } else {
+        0
+    };
+    let oy = if img_h <= fb_h {
+        fb_h.saturating_sub(img_h)
+    } else {
+        0
+    };
+    (ox, oy)
 }
 
 struct BmpInfo {
@@ -182,6 +245,12 @@ fn blit_bmp_to_vga(phys_addr: u64, origin_x: usize, origin_y: usize, bmp: &BmpIn
     }
 }
 
+fn center_crop_offsets(src_w: usize, src_h: usize, copy_w: usize, copy_h: usize) -> (usize, usize) {
+    let x0 = src_w.saturating_sub(copy_w) / 2;
+    let y0 = src_h.saturating_sub(copy_h) / 2;
+    (x0, y0)
+}
+
 fn read_masks(phys_addr: u64, _bmp: &BmpInfo) -> Option<(u32, u32, u32)> {
     // For BI_BITFIELDS, masks immediately follow the BITMAPINFOHEADER.
     let masks_off = phys_addr.checked_add(14 + 40)?;
@@ -232,17 +301,19 @@ fn blit_bmp24(
         return false;
     }
 
+    let (src_x0, src_y0) = center_crop_offsets(width, height, copy_w, copy_h);
+
     unsafe {
         for y in 0..copy_h {
             let src_row = if bmp.top_down {
-                y
+                src_y0.saturating_add(y)
             } else {
-                (height - 1).saturating_sub(y)
+                (height - 1).saturating_sub(src_y0.saturating_add(y))
             };
             let src_row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             for x in 0..copy_w {
-                let px = src_row_ptr.add(x.saturating_mul(3));
+                let px = src_row_ptr.add(src_x0.saturating_add(x).saturating_mul(3));
                 let b = core::ptr::read_volatile(px.add(0));
                 let g = core::ptr::read_volatile(px.add(1));
                 let r = core::ptr::read_volatile(px.add(2));
@@ -295,18 +366,20 @@ fn blit_bmp32(
     let gshift = gm.trailing_zeros();
     let bshift = bm.trailing_zeros();
 
+    let (src_x0, src_y0) = center_crop_offsets(width, height, copy_w, copy_h);
+
     unsafe {
         for y in 0..copy_h {
             let src_row = if bmp.top_down {
-                y
+                src_y0.saturating_add(y)
             } else {
-                (height - 1).saturating_sub(y)
+                (height - 1).saturating_sub(src_y0.saturating_add(y))
             };
             let src_row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             for x in 0..copy_w {
                 let px =
-                    core::ptr::read_volatile(src_row_ptr.add(x.saturating_mul(4)) as *const u32);
+                    core::ptr::read_volatile(src_row_ptr.add(src_x0.saturating_add(x).saturating_mul(4)) as *const u32);
                 let r = ((px & rm) >> rshift) as u32;
                 let g = ((px & gm) >> gshift) as u32;
                 let b = ((px & bm) >> bshift) as u32;
@@ -376,26 +449,29 @@ fn blit_bmp_indexed(
         return false;
     }
 
+    let (src_x0, src_y0) = center_crop_offsets(width, height, copy_w, copy_h);
+
     unsafe {
         for y in 0..copy_h {
             let src_row = if bmp.top_down {
-                y
+                src_y0.saturating_add(y)
             } else {
-                (height - 1).saturating_sub(y)
+                (height - 1).saturating_sub(src_y0.saturating_add(y))
             };
             let row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             match bpp {
                 8 => {
                     for x in 0..copy_w {
-                        let idx = core::ptr::read_volatile(row_ptr.add(x)) as usize;
+                        let idx = core::ptr::read_volatile(row_ptr.add(src_x0.saturating_add(x))) as usize;
                         BGRT_PIXELS[dst_row_off.saturating_add(x)] = PALETTE[idx % MAX_PALETTE];
                     }
                 }
                 4 => {
                     for x in 0..copy_w {
-                        let byte = core::ptr::read_volatile(row_ptr.add(x / 2));
-                        let idx = if x % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
+                        let px_i = src_x0.saturating_add(x);
+                        let byte = core::ptr::read_volatile(row_ptr.add(px_i / 2));
+                        let idx = if px_i % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
                         BGRT_PIXELS[dst_row_off.saturating_add(x)] = PALETTE[idx % MAX_PALETTE];
                     }
                 }

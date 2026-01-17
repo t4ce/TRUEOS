@@ -45,15 +45,111 @@ mod vga;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::usb::usb_scout;
 use ::limine::mp::Cpu as LimineCpu;
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::__cpuid_count;
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use embassy_executor::{raw::Executor, Spawner};
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+use spin::Once;
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
+static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
+static CPU_SLOT_LEN: AtomicUsize = AtomicUsize::new(0);
+
+static DRAW_MANDELBROT_ONCE: Once<()> = Once::new();
+static LOG_CPU_TOPOLOGY_ONCE: Once<()> = Once::new();
+
+const MANDELBROT_W: usize = 256;
+const MANDELBROT_H: usize = 256;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CpuSlot {
+    lapic_id: u32,
+    slot: u32,
+}
+
+#[inline]
+fn cpu_slot_table() -> &'static [CpuSlot] {
+    let len = CPU_SLOT_LEN.load(Ordering::Acquire);
+    let ptr = CPU_SLOT_TABLE.load(Ordering::Acquire);
+    if ptr.is_null() || len == 0 {
+        return &[];
+    }
+    unsafe { core::slice::from_raw_parts(ptr, len) }
+}
+
+#[inline]
+fn slot_for_lapic_id(lapic_id: u32, total: usize) -> usize {
+    let slots = cpu_slot_table();
+    if !slots.is_empty() {
+        for entry in slots {
+            if entry.lapic_id == lapic_id {
+                return entry.slot as usize;
+            }
+        }
+    }
+    if total == 0 {
+        0
+    } else {
+        (lapic_id as usize) % total
+    }
+}
+
+fn slot_for_lapic_id_in_slots(lapic_id: u32, slots: &[CpuSlot]) -> u32 {
+    for entry in slots {
+        if entry.lapic_id == lapic_id {
+            return entry.slot;
+        }
+    }
+    0
+}
+
+fn install_cpu_slot_table_owned(slots: Vec<CpuSlot>) {
+    let len = slots.len();
+    let mut boxed = slots.into_boxed_slice();
+    let ptr = boxed.as_mut_ptr();
+    core::mem::forget(boxed);
+    CPU_SLOT_TABLE.store(ptr, Ordering::Release);
+    CPU_SLOT_LEN.store(len, Ordering::Release);
+    TOTAL_SLOTS.store(len, Ordering::Release);
+}
+
+fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) -> Vec<CpuSlot> {
+    let mut items: Vec<(u32, (u32, u32, u32))> = Vec::new();
+    let bsp_lapic_id = percpu::this_cpu().lapic_id();
+    items.push((bsp_lapic_id, topo.decode(bsp_lapic_id)));
+
+    for cpu in resp.cpus() {
+        let lapic_id = cpu.lapic_id as u32;
+        items.push((lapic_id, topo.decode(lapic_id)));
+    }
+
+    items.sort_by(|a, b| {
+        let (a_id, (a_pkg, a_core, a_smt)) = *a;
+        let (b_id, (b_pkg, b_core, b_smt)) = *b;
+        (a_pkg, a_core, a_smt, a_id).cmp(&(b_pkg, b_core, b_smt, b_id))
+    });
+
+    let mut slots: Vec<CpuSlot> = Vec::with_capacity(items.len());
+    for (lapic_id, _) in items {
+        if slots.iter().any(|s| s.lapic_id == lapic_id) {
+            continue;
+        }
+        let slot = slots.len() as u32;
+        slots.push(CpuSlot { lapic_id, slot });
+    }
+
+    slots
+}
+
+#[link_section = ".bss"]
+static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] = [0; MANDELBROT_W * MANDELBROT_H];
 /*
 ConPink 	FF_55_FF 
 ConBlue 	08_18_30
@@ -113,6 +209,7 @@ pub extern "C" fn _start() -> ! {
     acpi::uefi_tbl::log_once();
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
+    draw_mandelbrot_after_vendor_logo();
     acpi::hpet::ensure();
 
     rng::log_rng_caps();
@@ -124,7 +221,8 @@ pub extern "C" fn _start() -> ! {
     usb::truekey::init();
 
     let resp = limine::smp_response().unwrap();
-    TOTAL_SLOTS.store(resp.cpus().len(), Ordering::Release);
+    TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
+    log_cpu_topology_once(&resp);
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
@@ -151,6 +249,7 @@ pub extern "C" fn _start() -> ! {
 
     let _ = spawner.spawn(usb::hid::input_logger());
 
+    let _ = spawner.spawn(usb::uac::sine_task());
     // let _ = spawner.spawn(usb::uac::stats_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
@@ -158,11 +257,171 @@ pub extern "C" fn _start() -> ! {
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
     
+    let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
+        if cpu.lapic_id as u32 == bsp_lapic_id {
+            continue;
+        }
         cpu.goto_address.write(ap_start);
     }
 
     _loop(executor, spawner)
+}
+
+fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
+    LOG_CPU_TOPOLOGY_ONCE.call_once(|| {
+        let topo = detect_x2apic_topology();
+        let slots = build_cpu_slots(resp, topo);
+
+        crate::log!(
+            "cpu-topology: total={} bsp_lapic_id={} leaf={} smt_bits={} core_bits={}\n",
+            TOTAL_SLOTS.load(Ordering::Acquire),
+            percpu::this_cpu().lapic_id(),
+            topo.leaf,
+            topo.smt_bits,
+            topo.core_bits
+        );
+        crate::log!(
+            "cpu-topology: role  lapic_id  pkg  core  smt  slot\n"
+        );
+
+        let bsp_lapic_id = percpu::this_cpu().lapic_id();
+        let (pkg, core, smt) = topo.decode(bsp_lapic_id);
+        let bsp_slot = slot_for_lapic_id_in_slots(bsp_lapic_id, &slots);
+        crate::log!(
+            "cpu-topology: {:<4} {:>8} {:>4} {:>5} {:>4} {:>5}\n",
+            "bsp", bsp_lapic_id, pkg, core, smt, bsp_slot
+        );
+
+        for cpu in resp.cpus() {
+            let lapic_id = cpu.lapic_id as u32;
+            let (pkg, core, smt) = topo.decode(lapic_id);
+            let slot = slot_for_lapic_id_in_slots(lapic_id, &slots);
+            crate::log!(
+                "cpu-topology: {:<4} {:>8} {:>4} {:>5} {:>4} {:>5}\n",
+                "ap", lapic_id, pkg, core, smt, slot
+            );
+        }
+
+        install_cpu_slot_table_owned(slots);
+    });
+}
+
+#[derive(Copy, Clone)]
+struct X2ApicTopology {
+    leaf: u32,
+    smt_bits: u32,
+    core_bits: u32,
+}
+
+impl X2ApicTopology {
+    #[inline]
+    fn decode(&self, apic_id: u32) -> (u32, u32, u32) {
+        let smt_bits = self.smt_bits.min(31);
+        let core_bits = self.core_bits.min(31).max(smt_bits);
+
+        let smt_mask = if smt_bits == 0 {
+            0
+        } else {
+            (1u32 << smt_bits) - 1
+        };
+        let core_mask_bits = core_bits.saturating_sub(smt_bits);
+        let core_mask = if core_mask_bits == 0 {
+            0
+        } else {
+            (1u32 << core_mask_bits) - 1
+        };
+
+        let smt = apic_id & smt_mask;
+        let core = (apic_id >> smt_bits) & core_mask;
+        let pkg = apic_id >> core_bits;
+        (pkg, core, smt)
+    }
+}
+
+fn detect_x2apic_topology() -> X2ApicTopology {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if let Some(t) = detect_x2apic_topology_leaf(0x1F) {
+            return t;
+        }
+        if let Some(t) = detect_x2apic_topology_leaf(0x0B) {
+            return t;
+        }
+    }
+    X2ApicTopology {
+        leaf: 0,
+        smt_bits: 0,
+        core_bits: 0,
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn detect_x2apic_topology_leaf(leaf: u32) -> Option<X2ApicTopology> {
+    let mut smt_bits: u32 = 0;
+    let mut core_bits: u32 = 0;
+
+    for subleaf in 0..32u32 {
+        let r = unsafe { __cpuid_count(leaf, subleaf) };
+        if r.ebx == 0 {
+            break;
+        }
+        let level_type = (r.ecx >> 8) & 0xFF;
+        let shift = r.eax & 0x1F;
+
+        // level_type: 1 = SMT, 2 = Core
+        if level_type == 1 {
+            smt_bits = shift;
+        } else if level_type == 2 {
+            core_bits = shift;
+        }
+    }
+
+    if smt_bits == 0 && core_bits == 0 {
+        None
+    } else {
+        if core_bits < smt_bits {
+            core_bits = smt_bits;
+        }
+        Some(X2ApicTopology {
+            leaf,
+            smt_bits,
+            core_bits,
+        })
+    }
+}
+
+fn draw_mandelbrot_after_vendor_logo() {
+    DRAW_MANDELBROT_ONCE.call_once(|| {
+        let Some((fb_w, fb_h)) = vga::framebuffer_dimensions() else {
+            return;
+        };
+
+        let fb_w = fb_w as usize;
+        let fb_h = fb_h as usize;
+        let w = MANDELBROT_W;
+        let h = MANDELBROT_H;
+        let expected = w * h;
+
+        unsafe {
+            trueos_math::render_mandelbrot_rgb32(&mut MANDELBROT_PIXELS[..expected], w, h, 64);
+            let img = vga::Image {
+                width: w,
+                height: h,
+                pixels: &MANDELBROT_PIXELS[..expected],
+            };
+
+            let (origin_x, origin_y) = match acpi::bgrt::last_logo_rect() {
+                Some((logo_x, logo_y, logo_w, _logo_h)) => {
+                    let x = logo_x.saturating_add(logo_w).saturating_sub(w);
+                    let y = logo_y.saturating_sub(h);
+                    (x, y)
+                }
+                None => (fb_w, fb_h),
+            };
+            let _ = vga::blit_image(origin_x, origin_y, &img);
+        }
+    });
 }
 
 fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
@@ -192,7 +451,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
 unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
     let total = TOTAL_SLOTS.load(Ordering::Acquire);
-    let slot = (cpu.lapic_id as usize) % total;
+    let slot = slot_for_lapic_id(cpu.lapic_id as u32, total);
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
     ap_loop(cpu.lapic_id as u32, total, slot)
 }

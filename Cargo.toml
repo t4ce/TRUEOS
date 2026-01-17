@@ -13,10 +13,11 @@ heapless = { version = "0.9", default-features = false }
 dma-api = { version = "0.5.2", default-features = false, features = ["alloc"] }
 limine = { version = "0.5", default-features = false }
 acpi = { version = "6", default-features = false }
-font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["regular", "size_16", "unicode-basic-latin", "unicode-latin-1-supplement"] }
 rdrand = { version = "0.8", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
+trueos-math = { path = "crates/trueos-math" }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
 hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2", default-features = false }

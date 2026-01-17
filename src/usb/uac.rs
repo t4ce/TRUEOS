@@ -4,16 +4,22 @@
 //! - Find an AudioStreaming OUT interface altsetting with an isoch OUT endpoint.
 //! - SET_CONFIGURATION and SET_INTERFACE.
 //! - Configure the xHCI isoch OUT endpoint.
-//! - Provide a small API to feed isoch OUT packets (demo player todo).
+//! - Provide a small API to feed isoch OUT packets.
 
 use crate::audio::{PcmFormat, PcmSink};
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec;
+use libm::sinf;
 use spin::Mutex;
+use core::future::poll_fn;
 use core::ptr::{write_bytes, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
+use core::task::{Poll, Waker};
+
+const UAC_SINE_HEARTBEAT_LOG: bool = false;
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
@@ -130,6 +136,7 @@ struct UacRuntime {
     interval: u8,
     speed_code: u32,
     phase_accum: u64,
+    fill_waker: Option<Waker>,
 }
 
 unsafe impl Send for UacRuntime {}
@@ -145,6 +152,9 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
     let mut guard = UAC_RUNTIME.lock();
     if let Some(rt) = guard.as_ref() {
         if rt.slot_id == slot_id {
+            if let Some(w) = rt.fill_waker.as_ref() {
+                w.wake_by_ref();
+            }
             *guard = None;
             UAC_SLOT.store(0, Ordering::Release);
             UAC_XFER_OK.store(0, Ordering::Release);
@@ -186,6 +196,9 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     }
     if rt.in_flight > 0 {
         rt.in_flight -= 1;
+    }
+    if let Some(w) = rt.fill_waker.take() {
+        w.wake();
     }
     true
 }
@@ -729,6 +742,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         interval: as_out.interval,
         speed_code,
         phase_accum: 0,
+        fill_waker: None,
     });
     UAC_SLOT.store(slot_id, Ordering::Release);
 
@@ -796,6 +810,8 @@ pub struct DemoPacketReservation {
     pub payload_bytes: usize,
     pub max_packet_bytes: usize,
     pub tick_us: u64,
+    pub rate_hz: u32,
+    pub channels: u8,
 }
 
 pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
@@ -859,6 +875,8 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
         payload_bytes,
         max_packet_bytes,
         tick_us,
+        rate_hz: rt.rate_hz,
+        channels: rt.channels as u8,
     })
 }
 
@@ -873,17 +891,12 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
         return Err(DemoQueueError::NoRuntime);
     }
 
-    let frame_id = if rt.speed_code <= 2 {
-        let mfindex = unsafe { core::ptr::read_volatile(rt.ctx.runtime.add(0)) } & 0x3FFF;
-        let frame = (mfindex >> 3) as u16;
-        Some(frame.wrapping_add(2) & 0x7FF)
-    } else {
-        None
-    };
-
     if !rt
         .pipe
-        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, false, true, frame_id)
+        // Always schedule immediately (SIA=1) and let the controller place TRBs into
+        // successive service intervals. Using a constant frame_id for burst-queued TRBs
+        // causes audible burst/gap artifacts (classic crackle/click).
+        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, false, true, None)
     {
         return Ok(false);
     }
@@ -891,4 +904,158 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
     unsafe { write_volatile(rt.ctx.doorbell.add(rt.slot_id as usize), rt.pipe_target) };
     rt.in_flight = rt.in_flight.saturating_add(1);
     Ok(true)
+}
+
+#[embassy_executor::task]
+pub async fn sine_task() {
+    const FREQ_HZ: f32 = 440.0;
+    const AMP: f32 = (i16::MAX as f32) * 0.20;
+    const TWO_PI: f32 = core::f32::consts::PI * 2.0;
+    const PREFILL_TARGET: usize = 48;
+    const PREFILL_BURST: usize = 24;
+
+    let mut phase: f32 = 0.0;
+    let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
+    let mut channels: usize = crate::audio::DEFAULT_CHANNELS as usize;
+    let mut phase_step: f32 = if rate_hz == 0 {
+        0.0
+    } else {
+        TWO_PI * FREQ_HZ / (rate_hz as f32)
+    };
+
+    let mut last_status = Instant::now();
+    let mut no_device: u64 = 0;
+    let mut no_runtime: u64 = 0;
+    let mut no_packet: u64 = 0;
+    let mut fmt_mismatch: u64 = 0;
+
+    loop {
+        // If we have a UAC runtime, keep the isoch ring fed ahead of time.
+        // This is intentionally Timer-free for pacing: the controller schedules packets
+        // at the correct microframe cadence; we just avoid letting the ring run dry.
+        let mut in_flight = 0usize;
+        let mut cap = 0usize;
+        {
+            let guard = UAC_RUNTIME.lock();
+            if let Some(rt) = guard.as_ref() {
+                in_flight = rt.in_flight;
+                cap = rt.bufs.len();
+            }
+        }
+
+        if UAC_SLOT.load(Ordering::Acquire) == 0 {
+            no_device = no_device.saturating_add(1);
+            Timer::after(EmbassyDuration::from_millis(50)).await;
+            continue;
+        }
+        if cap == 0 {
+            no_runtime = no_runtime.saturating_add(1);
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+            continue;
+        }
+
+        let target = core::cmp::min(PREFILL_TARGET, cap);
+        if in_flight < target {
+            let budget = core::cmp::min(PREFILL_BURST, target - in_flight);
+            for _ in 0..budget {
+                let res = match reserve_demo_packet() {
+                    Ok(res) => res,
+                    Err(DemoQueueError::NoDevice) => {
+                        no_device = no_device.saturating_add(1);
+                        break;
+                    }
+                    Err(DemoQueueError::NoRuntime) => {
+                        no_runtime = no_runtime.saturating_add(1);
+                        break;
+                    }
+                    Err(DemoQueueError::FormatMismatch) => {
+                        fmt_mismatch = fmt_mismatch.saturating_add(1);
+                        break;
+                    }
+                    Err(DemoQueueError::NoPacket) => {
+                        no_packet = no_packet.saturating_add(1);
+                        break;
+                    }
+                };
+
+                if res.rate_hz != 0 && res.rate_hz != rate_hz {
+                    rate_hz = res.rate_hz;
+                    phase_step = TWO_PI * FREQ_HZ / (rate_hz as f32);
+                }
+                channels = core::cmp::max(1, res.channels as usize);
+
+                unsafe {
+                    let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
+                    let (payload, pad) = out.split_at_mut(res.payload_bytes);
+                    let frame_bytes = channels * 2;
+                    for frame in payload.chunks_exact_mut(frame_bytes) {
+                        let sample = (sinf(phase) * AMP) as i16;
+                        phase += phase_step;
+                        if phase >= TWO_PI {
+                            phase -= TWO_PI;
+                        }
+                        for ch in 0..channels {
+                            let off = ch * 2;
+                            frame[off..off + 2].copy_from_slice(&sample.to_le_bytes());
+                        }
+                    }
+                    pad.fill(0);
+                }
+
+                let _ = submit_demo_packet(res);
+            }
+        } else {
+            // Wait until transfer events free up budget (no Timer-based pacing).
+            poll_fn(|cx| {
+                if UAC_SLOT.load(Ordering::Acquire) == 0 {
+                    return Poll::Ready(());
+                }
+                let mut guard = UAC_RUNTIME.lock();
+                let Some(rt) = guard.as_mut() else {
+                    return Poll::Ready(());
+                };
+                let cap = rt.bufs.len();
+                let target = core::cmp::min(PREFILL_TARGET, cap);
+                if rt.in_flight < target {
+                    Poll::Ready(())
+                } else {
+                    rt.fill_waker = Some(cx.waker().clone());
+                    // Re-check after registration to avoid missing a wake.
+                    if rt.in_flight < target || UAC_SLOT.load(Ordering::Acquire) == 0 {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                }
+            })
+            .await;
+        }
+
+        if UAC_SINE_HEARTBEAT_LOG
+            && Instant::now().duration_since(last_status) >= EmbassyDuration::from_secs(2)
+        {
+            let (evt_ok, evt_err, last_cc) = take_xfer_event_counters();
+            let in_flight_now = demo_queue_depth().map(|(cur, _cap)| cur).unwrap_or(0);
+            crate::log!(
+                "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
+                rate_hz,
+                channels,
+                in_flight_now,
+                evt_ok,
+                evt_err,
+                last_cc,
+                no_device,
+                no_runtime,
+                no_packet,
+                fmt_mismatch
+            );
+            last_status = Instant::now();
+            no_device = 0;
+            no_runtime = 0;
+            no_packet = 0;
+            fmt_mismatch = 0;
+        }
+
+        // No Timer-based microframe pacing here on purpose.
+    }
 }
