@@ -1,7 +1,7 @@
 use crate::pci::mmio;
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{AtomicBool, fence, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -80,6 +80,11 @@ unsafe impl Send for XhcInfo {}
 unsafe impl Sync for XhcInfo {}
 
 static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
+static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(true);
+
+pub fn set_log_ports_on_init(enable: bool) {
+    LOG_PORTS_ON_INIT.store(enable, Ordering::Release);
+}
 
 fn set_first_xhc(info: XhcInfo) {
     let mut guard = FIRST_CONTROLLER.lock();
@@ -172,7 +177,7 @@ pub fn init_once() {
                 // Real hardware may require BIOS/OS ownership handoff.
                 bios_handoff_if_present(cap, hccparams1);
 
-                set_first_xhc(XhcInfo {
+                let info = XhcInfo {
                     bus: dev.bus,
                     slot: dev.slot,
                     function: dev.function,
@@ -180,7 +185,9 @@ pub fn init_once() {
                     bar_size: size as u64,
                     mmio_base: mmio,
                     supports_64bit,
-                });
+                };
+
+                set_first_xhc(info);
 
                 const USBCMD: usize = 0x00 / 4;
                 const USBSTS: usize = 0x04 / 4;
@@ -234,6 +241,11 @@ pub fn init_once() {
                 }
 
                 crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
+
+                if LOG_PORTS_ON_INIT.load(Ordering::Acquire) {
+                    let ctx = XhciContext::new(info);
+                    log_ports_table(&ctx);
+                }
             }
 
             break;
