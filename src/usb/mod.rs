@@ -10,23 +10,24 @@ pub mod isoch;
 pub mod uac;
 pub mod truekey;
 pub mod xhci;
+mod scout;
+
+pub use scout::usb_scout;
 
 use self::xhci::{
     decode_port_status, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits,
-    ep_type_bits, hi, lo, trb_type, write_reg64, ErstEntry, EventRing, Trb, TrbRing,
-    XhciContext, EP_STATE_DISABLED, EP_TYPE_CONTROL,
+    ep_type_bits, hi, lo, trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_CONTROL,
 };
-use crate::pci::{dma, osal};
-use core::mem::size_of;
+use crate::pci::dma;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
+use self::hub::{HubWork, LOG_PORTS_MAX, MAX_DEVICES};
 
 use self::hid::BootAttachParams;
 use self::mass::AttachParams as MassAttachParams;
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum DeviceKind {
     Hid,
@@ -44,13 +45,8 @@ struct DeviceEntry {
     kind: DeviceKind,
 }
 
-const SCRATCHPAD_BUF_SIZE: usize = 4096;
-const MAX_DEVICES: usize = 8;
 static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
 static ENUM_READY: AtomicBool = AtomicBool::new(false);
-static SCOUT_RUNNING: AtomicBool = AtomicBool::new(false);
-
-const LOG_PORTS_MAX: usize = 32;
 static NOT_CLAIMED_KEY: [AtomicU32; LOG_PORTS_MAX] = [const { AtomicU32::new(0) }; LOG_PORTS_MAX];
 static NOT_CLAIMED_COUNT: [AtomicU32; LOG_PORTS_MAX] = [const { AtomicU32::new(0) }; LOG_PORTS_MAX];
 
@@ -76,8 +72,6 @@ struct UsbControllerState {
 unsafe impl Send for UsbControllerState {}
 unsafe impl Sync for UsbControllerState {}
 
-static USB_CTRL: Mutex<Option<UsbControllerState>> = Mutex::new(None);
-
 const USB_LOG_VERBOSE: bool = false;
 
 macro_rules! usbv {
@@ -91,6 +85,7 @@ macro_rules! usbv {
 fn trb_cc(evt: &Trb) -> u32 {
     (evt.d2 >> 24) & 0xFF
 }
+
 
 async fn submit_cmd_and_wait(
     ctx: &XhciContext,
@@ -441,7 +436,11 @@ async fn update_ep0_max_packet(
     Ok(())
 }
 
-async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
+async fn enumerate_port(
+    state: &mut UsbControllerState,
+    target_port: u8,
+    hub_queue: &mut heapless::Vec<HubWork, 16>,
+) {
     let ctx = state.ctx;
     let dcbaa_virt = state.dcbaa_virt;
     let ctx_stride_bytes = state.ctx_stride_bytes;
@@ -495,48 +494,59 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         xhci::clear_port_change_bits(&ctx, target_port);
     }
 
-    let enable_evt = match submit_cmd_and_wait(
-        &ctx,
-        &mut state.cmd_ring,
-        Trb {
-            d0: 0,
-            d1: 0,
-            d2: 0,
-            d3: trb_type(9),
-        },
-        None,
-        "enable-slot",
-        400,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    {
-        Ok(evt) => evt,
-        Err(()) => {
-            usbv!("usb: enum port {} enable-slot failed\n", target_port);
-            return;
-        }
+    let Some(slot_id) = enable_slot(state, target_port).await else {
+        return;
     };
-
-    if trb_cc(&enable_evt) != 1 {
-        usbv!("usb: enable-slot failed cc={}\n", trb_cc(&enable_evt));
-        return;
-    }
-
-    let slot_id = (enable_evt.d3 >> 24) & 0xFF;
-    if slot_id == 0 {
-        return;
-    }
-
-    usbv!(
-        "usb: enum port {} enable-slot-ok slot={}\n",
-        target_port,
-        slot_id
-    );
 
     // From here on: always disable the slot on failure.
 
     let speed_code = (port_status >> 10) & 0xF;
+
+    enumerate_with_params(
+        state,
+        target_port,
+        slot_id,
+        target_port,
+        0,
+        0,
+        speed_code,
+        Some(port_status),
+        None,
+        None,
+        hub_queue,
+    )
+    .await;
+}
+
+fn speed_code_to_str(speed_code: u32) -> &'static str {
+    match speed_code {
+        1 => "full",
+        2 => "low",
+        3 => "high",
+        4 => "super",
+        5 => "super+",
+        _ => "unk",
+    }
+}
+
+async fn enumerate_with_params(
+    state: &mut UsbControllerState,
+    target_port: u8,
+    slot_id: u32,
+    root_port: u8,
+    route_string: u32,
+    depth: u8,
+    speed_code: u32,
+    portsc: Option<u32>,
+    tree_parent: Option<(u32, u8)>,
+    tt_info: Option<(u32, u8)>,
+    hub_queue: &mut heapless::Vec<HubWork, 16>,
+) {
+    let ctx = state.ctx;
+    let dcbaa_virt = state.dcbaa_virt;
+    let ctx_stride_bytes = state.ctx_stride_bytes;
+    let ctx_stride_words = state.ctx_stride_words;
+
     let max_packet = match speed_code {
         2 | 1 => 8,
         3 => 64,
@@ -586,10 +596,14 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         let slot_ctx = input_ctx_virt.add(ctx_stride_bytes) as *mut u32;
         let ep0_ctx = input_ctx_virt.add(ctx_stride_bytes * 2) as *mut u32;
 
-        let route_speed_ctx_entries = (speed_code << 20) | (1 << 27);
+        let route_speed_ctx_entries = (route_string & 0xFFFFF) | (speed_code << 20) | (1 << 27);
         write_volatile(slot_ctx.add(0), route_speed_ctx_entries);
-        let root_port = (target_port as u32) << 16;
+        let root_port = (root_port as u32) << 16;
         write_volatile(slot_ctx.add(1), root_port);
+        if let Some((tt_hub_slot, tt_port)) = tt_info {
+            let tt = (tt_hub_slot & 0xFF) | ((tt_port as u32) << 8);
+            write_volatile(slot_ctx.add(2), tt);
+        }
 
         write_volatile(ep0_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
         let mut ep_cfg = ep_cerr_bits(3);
@@ -806,7 +820,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let cfg_slice_len = cfg_total_len.min(256) as usize;
     let cfg_slice = unsafe { core::slice::from_raw_parts(cfg_virt, cfg_slice_len) };
 
-    let (_ccs, _ped, speed_str) = decode_port_status(port_status);
+    let speed_str = speed_code_to_str(speed_code);
     let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
     crate::log!(
         "usb: enum port {} device vid=0x{:04X} pid=0x{:04X} slot={} speed={} cfg_len={} uac_out={}\n",
@@ -818,6 +832,29 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         cfg_slice_len,
         has_uac_out
     );
+
+    if let Some((hub_slot_id, hub_port)) = tree_parent {
+        hub::record_hub_child(
+            hub_slot_id,
+            hub_port,
+            slot_id,
+            dev_vid,
+            dev_pid,
+            dev_cls,
+            dev_sub,
+            dev_prot,
+        );
+    } else {
+        hub::record_root_device(
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid,
+            dev_cls,
+            dev_sub,
+            dev_prot,
+        );
+    }
 
     let mut first_if: Option<(u8, u8, u8, u8)> = None;
     {
@@ -871,7 +908,7 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     }
 
     if hub::is_hub_device(dev_cls, dev_sub, dev_prot, cfg_slice) {
-        if hub::attach_device(hub::AttachParams {
+        if let Ok(desc) = hub::attach_device(hub::AttachParams {
             ctx: &ctx,
             ep0_ring: &mut ep0_ring,
             slot_id,
@@ -879,7 +916,6 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             target_port,
         })
         .await
-        .is_ok()
         {
             usbv!(
                 "usb: enum port {} claimed HUB slot={} vid=0x{:04X} pid=0x{:04X}\n",
@@ -889,6 +925,15 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
                 dev_pid
             );
             register_device(slot_id as u32, target_port, DeviceKind::Hub);
+            hub::record_hub_ports(slot_id, desc.port_count);
+            let _ = hub_queue.push(HubWork {
+                hub_slot_id: slot_id,
+                root_port,
+                route_string,
+                depth,
+                hub_speed_code: speed_code,
+                port_count: desc.port_count,
+            });
             return;
         }
     }
@@ -993,8 +1038,12 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     }
 
     // Not claimed: rate-limited log + free the slot so we don't leak up to MaxSlots.
-    let portsc = unsafe { ctx.portsc((target_port - 1) as usize) };
-    let (ccs, ped, speed) = decode_port_status(portsc);
+    let portsc = portsc.unwrap_or(0);
+    let (ccs, ped, speed) = if portsc != 0 {
+        decode_port_status(portsc)
+    } else {
+        (false, false, speed_code_to_str(speed_code))
+    };
     let pls = (portsc >> 5) & 0xF;
 
     let port_log_idx = (target_port as usize)
@@ -1061,226 +1110,48 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     );
 }
 
-fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
-    osal::ensure_dma_api_initialized();
-
-    let ctx = unsafe { XhciContext::new(info) };
-    let page_size_mask = unsafe { ctx.page_size_mask() };
-    if (page_size_mask & 0x1) == 0 {
-        crate::log!(
-            "usb: xhci lacks 4K page support PAGESIZE=0x{:X}\n",
-            page_size_mask
-        );
-        return Err(());
-    }
-    let csz_64 = (ctx.hccparams1 & (1 << 2)) != 0;
-    let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
-    let ctx_stride_words: usize = ctx_stride_bytes / 4;
-
-    let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
-    let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
-        Some(pair) => pair,
-        None => {
-            crate::log!("usb: failed to alloc dcbaa\n");
-            return Err(());
-        }
-    };
-    unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
-
-    let scratchpad_count = ctx.max_scratchpad_buffers() as usize;
-    let mut scratchpad_array_phys: u64 = 0;
-    let mut scratchpad_array_virt: *mut u8 = core::ptr::null_mut();
-    if scratchpad_count > 0 {
-        let array_bytes = scratchpad_count * core::mem::size_of::<u64>();
-        let (sp_array_phys, sp_array_virt) = match dma::alloc(array_bytes, 64) {
-            Some(pair) => pair,
-            None => {
-                crate::log!(
-                    "usb: failed to alloc scratchpad array count={}\n",
-                    scratchpad_count
-                );
-                return Err(());
-            }
-        };
-        unsafe { write_bytes(sp_array_virt, 0, array_bytes) };
-
-        for idx in 0..scratchpad_count {
-            let (buf_phys, buf_virt) = match dma::alloc(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE) {
-                Some(pair) => pair,
-                None => {
-                    crate::log!(
-                        "usb: failed to alloc scratchpad buffer {}/{}\n",
-                        idx + 1,
-                        scratchpad_count
-                    );
-                    return Err(());
-                }
-            };
-            unsafe {
-                write_bytes(buf_virt, 0, SCRATCHPAD_BUF_SIZE);
-                let arr_ptr = sp_array_virt as *mut u64;
-                write_volatile(arr_ptr.add(idx), buf_phys);
-            }
-        }
-
-        unsafe {
-            let dcbaa = dcbaa_virt as *mut u64;
-            write_volatile(dcbaa, sp_array_phys);
-        }
-
-        scratchpad_array_phys = sp_array_phys;
-        scratchpad_array_virt = sp_array_virt;
-        crate::log!(
-            "usb: scratchpads={} array=0x{:X}\n",
-            scratchpad_count,
-            sp_array_phys
-        );
-    }
-
-    const CMD_RING_TRBS: usize = 64;
-    let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
-        Some(pair) => pair,
-        None => {
-            crate::log!("usb: failed to alloc cmd ring\n");
-            return Err(());
-        }
-    };
-    unsafe { write_bytes(cmd_virt_raw, 0, CMD_RING_TRBS * size_of::<Trb>()) };
-    let mut cmd_ring = unsafe { TrbRing::new(cmd_phys, cmd_virt_raw as *mut Trb, CMD_RING_TRBS) };
-
-    const EVENT_RING_TRBS: usize = 64;
-    let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
-        Some(pair) => pair,
-        None => {
-            crate::log!("usb: failed to alloc event ring\n");
-            return Err(());
-        }
-    };
-    unsafe { write_bytes(evt_virt_raw, 0, EVENT_RING_TRBS * size_of::<Trb>()) };
-    let
-     event_ring =
-        unsafe { EventRing::new(evt_phys, evt_virt_raw as *mut Trb, EVENT_RING_TRBS) };
-
-    let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
-        Some(pair) => pair,
-        None => {
-            crate::log!("usb: failed to alloc ERST\n");
-            return Err(());
-        }
-    };
-    unsafe {
-        write_bytes(erst_virt, 0, size_of::<ErstEntry>());
-        let entry = &mut *(erst_virt as *mut ErstEntry);
-        entry.seg_base_lo = lo(evt_phys);
-        entry.seg_base_hi = hi(evt_phys);
-        entry.seg_size = EVENT_RING_TRBS as u32;
-    }
-
-    unsafe {
-        write_reg64(ctx.op_base, 0x30, dcbaa_phys);
-        // CONFIG.MaxSlotsEn: must be >= number of slots we intend to use.
-        // Real hardware is much less forgiving than QEMU if this is too small.
-        let slots_en = core::cmp::max(1, core::cmp::min(255, max_slots)) as u32;
-        write_volatile(ctx.op_base.add(0x38 / 4), slots_en);
-
-        const ERSTSZ: usize = 0x08 / 4;
-        const ERSTBA: usize = 0x10 / 4;
-        let intr0 = ctx.runtime.add(0x20 / 4);
-        write_volatile(intr0.add(ERSTSZ), 1);
-        write_volatile(intr0.add(ERSTBA), lo(erst_phys));
-        write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
-        event_ring.update_erdp(intr0);
-        xhci::install_event_ring(event_ring, intr0);
-
-        write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
-
-        const USBCMD: usize = 0x00 / 4;
-        const USBSTS: usize = 0x04 / 4;
-        const USBCMD_RS: u32 = 1 << 0;
-        const USBSTS_HCH: u32 = 1 << 0;
-
-        // Clear sticky status bits that are RW1C. On some real machines these can be
-        // left set by firmware (notably SRE) and the controller may refuse to run.
-        // Bits: HSE(2), EINT(3), PCD(4), SRE(10)
-        const USBSTS_RW1C_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 10);
-        let sts0 = read_volatile(ctx.op_base.add(USBSTS));
-        let clear = sts0 & USBSTS_RW1C_MASK;
-        if clear != 0 {
-            write_volatile(ctx.op_base.add(USBSTS), clear);
-        }
-
-        write_volatile(ctx.op_base.add(USBCMD), USBCMD_RS);
-        let mut spin: u32 = 1_000_000;
-        while spin > 0 {
-            let sts = read_volatile(ctx.op_base.add(USBSTS));
-            if (sts & USBSTS_HCH) == 0 {
-                break;
-            }
-            spin -= 1;
-        }
-    }
-
-    crate::log!("usb: controller initialized; ready for rescans\n");
-
-    Ok(UsbControllerState {
-        info,
-        ctx,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        dcbaa_phys,
-        dcbaa_virt,
-        scratchpad_array_phys,
-        scratchpad_array_virt,
-        scratchpad_count: scratchpad_count as u32,
-        cmd_ring,
-        _cmd_phys: cmd_phys,
-        _cmd_virt: cmd_virt_raw,
-        _evt_phys: evt_phys,
-        _evt_virt: evt_virt_raw,
-        _erst_phys: erst_phys,
-        _erst_virt: erst_virt,
-    })
-}
-
-fn has_device_on_port(port: u8) -> bool {
-    DEVICES.lock().iter().any(|d| d.port == port)
-}
-
-async fn cleanup_disconnected<const N: usize>(
-    connected: &Vec<(u8, u32), N>,
-    state: &mut UsbControllerState,
-) {
-    let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
+async fn enable_slot(state: &mut UsbControllerState, target_port: u8) -> Option<u32> {
+    let ctx = state.ctx;
+    let enable_evt = match submit_cmd_and_wait(
+        &ctx,
+        &mut state.cmd_ring,
+        Trb {
+            d0: 0,
+            d1: 0,
+            d2: 0,
+            d3: trb_type(9),
+        },
+        None,
+        "enable-slot",
+        400,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
     {
-        let mut guard = DEVICES.lock();
-        let mut idx = 0usize;
-        while idx < guard.len() {
-            let port = guard[idx].port;
-            let still_connected = connected.iter().any(|(p, _)| *p == port);
-            if still_connected {
-                idx += 1;
-                continue;
-            }
-            let entry = guard.remove(idx);
-            let _ = removed.push((entry.slot_id, entry.kind));
+        Ok(evt) => evt,
+        Err(()) => {
+            usbv!("usb: enum port {} enable-slot failed\n", target_port);
+            return None;
         }
+    };
+
+    if trb_cc(&enable_evt) != 1 {
+        usbv!("usb: enable-slot failed cc={}\n", trb_cc(&enable_evt));
+        return None;
     }
 
-    for (slot_id, kind) in removed.into_iter() {
-        if let Err(()) = disable_slot(state, slot_id).await {
-            crate::log!("usb: disable-slot for slot {} failed\n", slot_id);
-        }
-        if kind == DeviceKind::Hid {
-            let _ = hid::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Mass {
-            let _ = mass::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Cdc {
-            let _ = cdc_acm::unregister_runtime(slot_id);
-        } else if kind == DeviceKind::Uac {
-            let _ = uac::unregister_runtime(slot_id);
-        }
-        crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
+    let slot_id = (enable_evt.d3 >> 24) & 0xFF;
+    if slot_id == 0 {
+        return None;
     }
+
+    usbv!(
+        "usb: enum port {} enable-slot-ok slot={}\n",
+        target_port,
+        slot_id
+    );
+
+    Some(slot_id)
 }
 
 async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -> Result<(), ()> {
@@ -1334,14 +1205,6 @@ async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -> Result<()
     Ok(())
 }
 
-struct EnumReadyGuard;
-
-impl Drop for EnumReadyGuard {
-    fn drop(&mut self) {
-        ENUM_READY.store(true, Ordering::Release);
-    }
-}
-
 fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     let mut guard = DEVICES.lock();
     if let Some(existing) = guard.iter_mut().find(|d| d.slot_id == slot_id) {
@@ -1379,77 +1242,6 @@ fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
 
 fn any_hid_registered() -> bool {
     DEVICES.lock().iter().any(|d| d.kind == DeviceKind::Hid)
-}
-
-#[embassy_executor::task]
-pub async fn usb_scout(info: xhci::XhcInfo) {
-    if SCOUT_RUNNING
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("usb: scout already running; skipping\n");
-        return;
-    }
-
-    struct ScoutRunGuard;
-    impl Drop for ScoutRunGuard {
-        fn drop(&mut self) {
-            SCOUT_RUNNING.store(false, Ordering::Release);
-        }
-    }
-
-    let _scout_guard = ScoutRunGuard;
-
-    // Take controller state out of the mutex so we don't hold a spinlock across `.await`.
-    let state = USB_CTRL.lock().take();
-    let mut state = match state {
-        Some(existing) => existing,
-        None => {
-            // First run: do controller init. Keep ENUM_READY false until the first scan completes.
-            ENUM_READY.store(false, Ordering::Release);
-            let _guard = EnumReadyGuard;
-            match init_controller(info) {
-                Ok(s) => s,
-                Err(()) => {
-                    return;
-                }
-            }
-        }
-    };
-
-    // Always rescan ports; enumerate newly connected devices.
-    if USB_LOG_VERBOSE {
-        xhci::log_ports_table(&state.ctx);
-    }
-
-    let mut connected: Vec<(u8, u32), 64> = Vec::new();
-    let mut connected_overflowed = false;
-    for port in 0..state.ctx.port_count {
-        let status = unsafe { state.ctx.portsc(port as usize) };
-        let (connected_flag, _, _) = decode_port_status(status);
-        if connected_flag {
-            if connected.push(((port + 1) as u8, status)).is_err() {
-                connected_overflowed = true;
-            }
-        }
-    }
-
-    // If we couldn't record all connected ports, don't treat missing entries as disconnects.
-    if connected_overflowed {
-        crate::log!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
-    } else {
-        cleanup_disconnected(&connected, &mut state).await;
-    }
-
-    for (target_port, _port_status) in connected.iter().copied() {
-        if has_device_on_port(target_port) {
-            continue;
-        }
-
-        enumerate_port(&mut state, target_port).await;
-    }
-
-    *USB_CTRL.lock() = Some(state);
 }
 
 #[embassy_executor::task]
