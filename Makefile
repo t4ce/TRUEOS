@@ -32,7 +32,7 @@ LIMINE_STAMP := $(LIMINE_BUILD)/.installed
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 LIMINE_BIN := $(LIMINE_PREFIX)/bin/limine
 
-.PHONY: iso run clean
+.PHONY: iso run run-debug clean
 
 $(LIMINE_STAMP):
 	mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
@@ -104,7 +104,23 @@ iso-release: $(LIMINE_STAMP)
 	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 
 run: iso
+	@echo "QEMU starting..."
+	@($(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_SERIAL_FLAGS) $(QEMU_USB_FLAGS) & \
+	  echo "QEMU ready"; \
+	  sleep 1; \
+	  konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 127.0.0.1 5555; stty sane'; \
+	  wait)
+
+run-debug: iso
+	@echo "QEMU starting (gdb on :1234)..."
 	@($(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_SERIAL_FLAGS) -S -s $(QEMU_USB_FLAGS) & \
+	  for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    if nc -z 127.0.0.1 1234 >/dev/null 2>&1; then \
+	      echo "QEMU ready"; \
+	      break; \
+	    fi; \
+	    sleep 0.2; \
+	  done; \
 	  sleep 1; \
 	  konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 127.0.0.1 5555; stty sane'; \
 	  wait)
