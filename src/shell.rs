@@ -2,7 +2,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
-const PROMPT: &str = "\x1b[38;2;255;85;255m§\x1b[0m ";
 static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
 static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
 static GO_MODE: AtomicBool = AtomicBool::new(false);
@@ -19,7 +18,7 @@ pub async fn task() {
     uart1_com1::init();
 
     uart1_com1::write_str("TRUE OS\n");
-    uart1_com1::write_str(PROMPT);
+    uart1_com1::write_str(crate::term::PROMPT);
 
     let mut line: String<128> = String::new();
     let mut go_idx: usize = 0;
@@ -36,14 +35,14 @@ pub async fn task() {
                         GO_MODE.store(false, Ordering::Release);
                         line.clear();
                         uart1_com1::write_str("\r\n");
-                        uart1_com1::write_str(PROMPT);
+                        uart1_com1::write_str(crate::term::PROMPT);
                         continue;
                     }
                     if !line.is_empty() {
                         uart1_com1::write_str("\r\n");
                         let action = handle_line(&line);
                         line.clear();
-                        uart1_com1::write_str(PROMPT);
+                        uart1_com1::write_str(crate::term::PROMPT);
                         if let Some(action) = action {
                             pending_action = Some(action);
                             pending_deadline = Some(Instant::now() + EmbassyDuration::from_secs(5));
@@ -60,7 +59,7 @@ pub async fn task() {
                 0x03 => {
                     line.clear();
                     uart1_com1::write_str("^C\r\n");
-                    uart1_com1::write_str(PROMPT);
+                    uart1_com1::write_str(crate::term::PROMPT);
                 }
                 _ => {
                     if b >= 0x20 {
@@ -81,13 +80,13 @@ pub async fn task() {
                             if let Err(err) = crate::acpi::facp::reset_system() {
                                 uart1_com1::write_str("\r\n");
                                 log_reset_error(err);
-                                uart1_com1::write_str(PROMPT);
+                                uart1_com1::write_str(crate::term::PROMPT);
                             }
                         }
                         PendingAction::S5 => {
                             if crate::acpi::facp::enter_s5(0, None).is_err() {
                                 uart1_com1::write_str("\r\ns5 failed\r\n");
-                                uart1_com1::write_str(PROMPT);
+                                uart1_com1::write_str(crate::term::PROMPT);
                             }
                         }
                     }
@@ -98,7 +97,7 @@ pub async fn task() {
                 let ch = GO_CHARS[go_idx];
                 go_idx = (go_idx + 1) % GO_CHARS.len();
                 uart1_com1::write_str("\r");
-                uart1_com1::write_str(PROMPT);
+                uart1_com1::write_str(crate::term::PROMPT);
                 uart1_com1::write_char(ch);
                 Timer::after(EmbassyDuration::from_millis(160)).await;
             } else {
@@ -136,6 +135,12 @@ fn handle_line(line: &str) -> Option<PendingAction> {
 
     if cmd.eq_ignore_ascii_case("go") {
         GO_MODE.store(true, Ordering::Release);
+        return None;
+    }
+
+    if cmd.eq_ignore_ascii_case("mandel") {
+        crate::draw_mandelbrot();
+        uart1_com1::write_str("mandel ok\r\n");
         return None;
     }
 
@@ -195,7 +200,7 @@ fn draw_corners(cols: usize, rows: usize) {
     if cols == 0 || rows == 0 {
         return;
     }
-    uart1_com1::write_str("\x1b[s");
+    uart1_com1::write_str(crate::term::SAVE_CURSOR);
     // top-right
     write_csi_pos(1, cols);
     uart1_com1::write_byte(b'O');
@@ -205,11 +210,11 @@ fn draw_corners(cols: usize, rows: usize) {
     // bottom-right
     write_csi_pos(rows, cols);
     uart1_com1::write_byte(b'O');
-    uart1_com1::write_str("\x1b[u");
+    uart1_com1::write_str(crate::term::RESTORE_CURSOR);
 }
 
 fn write_csi_pos(row: usize, col: usize) {
-    uart1_com1::write_str("\x1b[");
+    uart1_com1::write_str(crate::term::CSI);
     write_usize(row.max(1));
     uart1_com1::write_str(";");
     write_usize(col.max(1));

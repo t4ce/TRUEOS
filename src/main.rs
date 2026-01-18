@@ -36,6 +36,7 @@ mod rng;
 mod serial;
 mod globalog;
 mod shell;
+mod term;
 mod surface;
 mod tga;
 mod time;
@@ -62,7 +63,7 @@ static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
 static CPU_SLOT_LEN: AtomicUsize = AtomicUsize::new(0);
 
-static DRAW_MANDELBROT_ONCE: Once<()> = Once::new();
+static RENDER_MANDELBROT_ONCE: Once<()> = Once::new();
 static LOG_CPU_TOPOLOGY_ONCE: Once<()> = Once::new();
 
 const MANDELBROT_W: usize = 256;
@@ -212,7 +213,6 @@ pub extern "C" fn _start() -> ! {
     acpi::uefi_tbl::log_once();
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
-    draw_mandelbrot_after_vendor_logo();
     acpi::hpet::ensure();
 
     rng::log_rng_caps();
@@ -312,37 +312,39 @@ fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
     });
 }
 
-fn draw_mandelbrot_after_vendor_logo() {
-    DRAW_MANDELBROT_ONCE.call_once(|| {
-        let Some((fb_w, fb_h)) = vga::framebuffer_dimensions() else {
-            return;
+pub(crate) fn draw_mandelbrot() {
+    let Some((fb_w, fb_h)) = vga::framebuffer_dimensions() else {
+        return;
+    };
+
+    let fb_w = fb_w as usize;
+    let fb_h = fb_h as usize;
+    let w = MANDELBROT_W;
+    let h = MANDELBROT_H;
+    let expected = w * h;
+
+    // Rendering is the expensive part; do it once.
+    RENDER_MANDELBROT_ONCE.call_once(|| unsafe {
+        trueos_math::render_mandelbrot_rgb32(&mut MANDELBROT_PIXELS[..expected], w, h, 64);
+    });
+
+    unsafe {
+        let img = vga::Image {
+            width: w,
+            height: h,
+            pixels: &MANDELBROT_PIXELS[..expected],
         };
 
-        let fb_w = fb_w as usize;
-        let fb_h = fb_h as usize;
-        let w = MANDELBROT_W;
-        let h = MANDELBROT_H;
-        let expected = w * h;
-
-        unsafe {
-            trueos_math::render_mandelbrot_rgb32(&mut MANDELBROT_PIXELS[..expected], w, h, 64);
-            let img = vga::Image {
-                width: w,
-                height: h,
-                pixels: &MANDELBROT_PIXELS[..expected],
-            };
-
-            let (origin_x, origin_y) = match acpi::bgrt::last_logo_rect() {
-                Some((logo_x, logo_y, logo_w, _logo_h)) => {
-                    let x = logo_x.saturating_add(logo_w).saturating_sub(w);
-                    let y = logo_y.saturating_sub(h);
-                    (x, y)
-                }
-                None => (fb_w, fb_h),
-            };
-            let _ = vga::blit_image(origin_x, origin_y, &img);
-        }
-    });
+        let (origin_x, origin_y) = match acpi::bgrt::last_logo_rect() {
+            Some((logo_x, logo_y, logo_w, _logo_h)) => {
+                let x = logo_x.saturating_add(logo_w).saturating_sub(w);
+                let y = logo_y.saturating_sub(h);
+                (x, y)
+            }
+            None => (fb_w, fb_h),
+        };
+        let _ = vga::blit_image(origin_x, origin_y, &img);
+    }
 }
 
 fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
