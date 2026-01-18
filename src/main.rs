@@ -367,7 +367,7 @@ fn detect_x2apic_topology_leaf(leaf: u32) -> Option<X2ApicTopology> {
     let mut core_bits: u32 = 0;
 
     for subleaf in 0..32u32 {
-        let r = unsafe { __cpuid_count(leaf, subleaf) };
+        let r = __cpuid_count(leaf, subleaf);
         if r.ebx == 0 {
             break;
         }

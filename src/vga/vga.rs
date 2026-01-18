@@ -678,7 +678,6 @@ fn build_font_cache_large() -> FontCacheLarge {
         width = width.clamp(1, BANNER_CELL_W as i32);
         let width = width as u8;
 
-        let cell_w = BANNER_CELL_W as i32;
         let cell_h = BANNER_CELL_H as i32;
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
