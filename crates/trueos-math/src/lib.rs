@@ -1,8 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod tree;
-
-pub use tree::{NodeId, Tree};
+pub use tree::{Children, NodeId, Tree};
 
 /// Minimal complex number utilities tailored for kernel-side math use.
 #[derive(Clone, Copy, Debug, PartialEq)]
