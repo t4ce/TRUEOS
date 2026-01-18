@@ -32,7 +32,7 @@ LIMINE_STAMP := $(LIMINE_BUILD)/.installed
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 LIMINE_BIN := $(LIMINE_PREFIX)/bin/limine
 
-.PHONY: iso run run-debug run-gdb-paused run-gdb-paused-bg clean
+.PHONY: iso run clean
 
 $(LIMINE_STAMP):
 	mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
@@ -75,8 +75,8 @@ iso: $(LIMINE_STAMP)
 		-m trueos.iso \
 		--efi-boot limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		-o $(ISO_PATH) $(ISO_DIR)
-#	cp $(ISO_PATH) /media/t4ce/Data20TB/ #optional copy where u want
+		-o $(ISO_PATH) $(ISO_DIR) 
+
 
 # Release ISO builds the kernel with --release (LTO etc.) and packages that binary.
 iso-release: BUILD_MODE := release
@@ -99,9 +99,12 @@ iso-release: $(LIMINE_STAMP)
 		--efi-boot limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_DIR)
+	7z a -t7z -mx=9 -m0=lzma2 $(ISO_DIR)/TrueOS.7z $(ISO_PATH)
+	gio mount smb://t4ce@pdjb/home-share || true
+	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 
 run: iso
-	@($(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_SERIAL_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS) & \
+	@($(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_SERIAL_FLAGS) -S -s $(QEMU_USB_FLAGS) & \
 	  sleep 1; \
 	  konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 127.0.0.1 5555; stty sane'; \
 	  wait)

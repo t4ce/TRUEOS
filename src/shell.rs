@@ -1,5 +1,5 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
 const PROMPT: &str = "\x1b[38;2;255;85;255m§\x1b[0m ";
@@ -7,6 +7,12 @@ static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
 static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
 static GO_MODE: AtomicBool = AtomicBool::new(false);
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+
+#[derive(Copy, Clone)]
+enum PendingAction {
+    Reset,
+    S5,
+}
 
 #[embassy_executor::task]
 pub async fn task() {
@@ -17,12 +23,16 @@ pub async fn task() {
 
     let mut line: String<128> = String::new();
     let mut go_idx: usize = 0;
+    let mut pending_action: Option<PendingAction> = None;
+    let mut pending_deadline: Option<Instant> = None;
 
     loop {
         if let Some(b) = uart1_com1::read_byte() {
             match b {
                 b'\r' | b'\n' => {
-                    if GO_MODE.load(Ordering::Acquire) {
+                    if pending_action.is_some() {
+                        pending_action = None;
+                        pending_deadline = None;
                         GO_MODE.store(false, Ordering::Release);
                         line.clear();
                         uart1_com1::write_str("\r\n");
@@ -31,9 +41,14 @@ pub async fn task() {
                     }
                     if !line.is_empty() {
                         uart1_com1::write_str("\r\n");
-                        handle_line(&line);
+                        let action = handle_line(&line);
                         line.clear();
                         uart1_com1::write_str(PROMPT);
+                        if let Some(action) = action {
+                            pending_action = Some(action);
+                            pending_deadline = Some(Instant::now() + EmbassyDuration::from_secs(5));
+                            GO_MODE.store(true, Ordering::Release);
+                        }
                     }
                 }
                 0x08 | 0x7F => {
@@ -56,6 +71,29 @@ pub async fn task() {
                 }
             }
         } else {
+            if let (Some(action), Some(deadline)) = (pending_action, pending_deadline) {
+                if Instant::now() >= deadline {
+                    GO_MODE.store(false, Ordering::Release);
+                    pending_action = None;
+                    pending_deadline = None;
+                    match action {
+                        PendingAction::Reset => {
+                            if let Err(err) = crate::acpi::facp::reset_system() {
+                                uart1_com1::write_str("\r\n");
+                                log_reset_error(err);
+                                uart1_com1::write_str(PROMPT);
+                            }
+                        }
+                        PendingAction::S5 => {
+                            if crate::acpi::facp::enter_s5(0, None).is_err() {
+                                uart1_com1::write_str("\r\ns5 failed\r\n");
+                                uart1_com1::write_str(PROMPT);
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             if GO_MODE.load(Ordering::Acquire) {
                 let ch = GO_CHARS[go_idx];
                 go_idx = (go_idx + 1) % GO_CHARS.len();
@@ -70,10 +108,10 @@ pub async fn task() {
     }
 }
 
-fn handle_line(line: &str) {
+fn handle_line(line: &str) -> Option<PendingAction> {
     let cmd = line.trim();
     if cmd.is_empty() {
-        return;
+        return None;
     }
 
     if let Some((cols, rows)) = parse_set_dims(cmd) {
@@ -85,22 +123,44 @@ fn handle_line(line: &str) {
         write_usize(rows);
         uart1_com1::write_str("\r\n");
         draw_corners(cols, rows);
-        return;
+        return None;
+    }
+
+    if cmd.eq_ignore_ascii_case("reset") {
+        return Some(PendingAction::Reset);
+    }
+
+    if cmd.eq_ignore_ascii_case("s5") {
+        return Some(PendingAction::S5);
     }
 
     if cmd.eq_ignore_ascii_case("go") {
         GO_MODE.store(true, Ordering::Release);
-        return;
+        return None;
     }
 
     if let Some(rest) = cmd.strip_prefix("echo ") {
         uart1_com1::write_str(rest);
         uart1_com1::write_str("\r\n");
-        return;
+        return None;
     }
 
     uart1_com1::write_str("unknown: ");
     uart1_com1::write_str(cmd);
+    uart1_com1::write_str("\r\n");
+    None
+}
+
+fn log_reset_error(err: crate::acpi::facp::FacpError) {
+    use crate::acpi::facp::FacpError;
+    uart1_com1::write_str("reset failed: ");
+    match err {
+        FacpError::TablesMissing => uart1_com1::write_str("tables missing"),
+        FacpError::FadtMissing => uart1_com1::write_str("fadt missing"),
+        FacpError::ResetUnsupported => uart1_com1::write_str("reset unsupported"),
+        FacpError::SleepUnsupported => uart1_com1::write_str("sleep unsupported"),
+        FacpError::Acpi(_) => uart1_com1::write_str("acpi error"),
+    }
     uart1_com1::write_str("\r\n");
 }
 

@@ -1159,7 +1159,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         }
     };
     unsafe { write_bytes(evt_virt_raw, 0, EVENT_RING_TRBS * size_of::<Trb>()) };
-    let mut event_ring =
+    let
+     event_ring =
         unsafe { EventRing::new(evt_phys, evt_virt_raw as *mut Trb, EVENT_RING_TRBS) };
 
     let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
