@@ -16,11 +16,12 @@ QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 800
 QEMU_USB_FLAGS =  \
 	-drive file=disk.img,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=deadbeef \
-	-device nec-usb-xhci,id=xhci \
+	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost0 \
-	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0
+	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0 \
+	-device usb-host,hostbus=1,hostaddr=13,bus=xhci.0,port=5,id=usbdock0 
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
 $(LIMINE_STAMP):

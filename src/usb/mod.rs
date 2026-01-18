@@ -1,6 +1,7 @@
 pub mod cdc;
 pub mod cdc_acm;
 pub mod hid;
+pub mod hub;
 pub mod input;
 pub mod mass;
 pub mod pen;
@@ -29,6 +30,7 @@ use self::mass::AttachParams as MassAttachParams;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum DeviceKind {
     Hid,
+    Hub,
     Mass,
     Printer,
     Pen,
@@ -868,6 +870,29 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
         }
     }
 
+    if hub::is_hub_device(dev_cls, dev_sub, dev_prot, cfg_slice) {
+        if hub::attach_device(hub::AttachParams {
+            ctx: &ctx,
+            ep0_ring: &mut ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            target_port,
+        })
+        .await
+        .is_ok()
+        {
+            usbv!(
+                "usb: enum port {} claimed HUB slot={} vid=0x{:04X} pid=0x{:04X}\n",
+                target_port,
+                slot_id,
+                dev_vid,
+                dev_pid
+            );
+            register_device(slot_id as u32, target_port, DeviceKind::Hub);
+            return;
+        }
+    }
+
     let hid_count = hid::attach_boot_devices(BootAttachParams {
         ctx: &ctx,
         cmd_ring: &mut state.cmd_ring,
@@ -936,33 +961,6 @@ async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
             slot_id
         );
         register_device(slot_id as u32, target_port, DeviceKind::Printer);
-        return;
-    }
-
-    if !tried_uac
-        && uac::attach_device(uac::AttachParams {
-            ctx: &ctx,
-            cmd_ring: &mut state.cmd_ring,
-            ep0_ring: &mut ep0_ring,
-            slot_id,
-            cfg: cfg_slice,
-            dev_ctx_virt,
-            ctx_stride_bytes,
-            ctx_stride_words,
-            speed_code,
-            target_port,
-        })
-        .await
-        .is_ok()
-    {
-        usbv!(
-            "usb: enum port {} claimed UAC slot={} vid=0x{:04X} pid=0x{:04X}\n",
-            target_port,
-            slot_id,
-            dev_vid,
-            dev_pid
-        );
-        register_device(slot_id as u32, target_port, DeviceKind::Uac);
         return;
     }
 
@@ -1572,6 +1570,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             }
             Some(DeviceKind::Uac) => {
                 let _ = uac::handle_transfer_event(&evt);
+            }
+            Some(DeviceKind::Hub) => {
+                // Hub class driver not implemented yet.
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}
