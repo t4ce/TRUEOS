@@ -23,7 +23,6 @@ const CHAR_SPACING: usize = 1;
 const DEFAULT_FG_COLOR: u32 = 0x00_FF_FF_FF;
 const DEFAULT_BG_COLOR: u32 = 0x00_08_18_30;
 pub const DEFAULT_SHADOW_COLOR: u32 = 0x00_00_00_00;
-pub const PINK_FG_COLOR: u32 = 0x00_FF_55_FF;
 const BANNER_TEXT: &str = "TRUE OS §";
 const DEFAULT_TOP_MARGIN: usize = 50;
 const LOG_LINE_HEIGHT: usize = FONT_H + 1;
@@ -161,15 +160,6 @@ pub fn log_fmt(args: fmt::Arguments<'_>) -> bool {
         ended_with_newline: false,
     };
     let _ = fmt::write(&mut w, args);
-    true
-}
-
-pub fn logln(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
-    LOG_CUR_X.store(0, Ordering::Relaxed);
-    let _ = log(text, fg, bg, shadow);
-    if !text.ends_with('\n') {
-        let _ = log("\n", fg, bg, shadow);
-    }
     true
 }
 

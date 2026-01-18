@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use alloc::{
     borrow::{Cow, ToOwned},
     string::String,

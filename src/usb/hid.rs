@@ -153,10 +153,6 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
     removed
 }
 
-pub fn has_runtime() -> bool {
-    !HID_RUNTIMES.lock().is_empty()
-}
-
 pub fn with_runtime_mut_by_slot_and_target<F, R>(slot_id: u32, ep_target: u32, f: F) -> Option<R>
 where
     F: FnOnce(&mut HidRuntime) -> R,
@@ -166,31 +162,6 @@ where
         .iter_mut()
         .find(|r| r.slot_id == slot_id && r.ep_target == ep_target)
         .map(f)
-}
-
-pub fn debug_dump_hid_state() {
-    let guard = HID_RUNTIMES.lock();
-    if guard.is_empty() {
-        hidlog!("[hid] runtimes: none\n");
-        return;
-    }
-
-    hidlog!("[hid] runtimes: {}\n", guard.len());
-    for r in guard.iter() {
-        let (enq, cyc) = r.ep_ring.state_snapshot();
-        hidlog!(
-            "[hid] slot={} iface={} ep=0x{:02X} target={} proto={} seq={} last_nonzero={} ring_enq={} ring_cyc={}\n",
-            r.slot_id,
-            r.ep.interface,
-            r.ep.address,
-            r.ep_target,
-            r.hid_kind,
-            r.seq,
-            r.last_nonzero_seq,
-            enq,
-            cyc as u8
-        );
-    }
 }
 
 pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], residual: u32) {

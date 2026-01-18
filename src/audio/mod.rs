@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub const DEFAULT_RATE_HZ: u32 = 48_000;
 pub const DEFAULT_CHANNELS: u16 = 2;
 

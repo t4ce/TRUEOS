@@ -6,17 +6,12 @@ use spin::Once;
 
 use super::{ensure_tables, AcpiIdentityHandler};
 
-#[allow(dead_code)]
 const PM1_SLEEP_TYP_SHIFT: u64 = 10;
-#[allow(dead_code)]
 const PM1_SLEEP_TYP_MASK: u64 = 0b111 << PM1_SLEEP_TYP_SHIFT;
-#[allow(dead_code)]
 const PM1_SLEEP_ENABLE_BIT: u64 = 1 << 13;
 
-#[allow(dead_code)]
 pub type FacpResult<T> = core::result::Result<T, FacpError>;
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum FacpError {
     TablesMissing,
