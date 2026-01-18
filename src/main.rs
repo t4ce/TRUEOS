@@ -35,6 +35,7 @@ mod portio;
 mod rng;
 mod serial;
 mod globalog;
+mod shell;
 mod surface;
 mod tga;
 mod time;
@@ -258,6 +259,8 @@ pub extern "C" fn _start() -> ! {
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
+
+    let _ = spawner.spawn(shell::task());
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
