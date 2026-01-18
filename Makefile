@@ -11,6 +11,7 @@ QEMU_SMP ?= cores=4
 QEMU_BIOS ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m $(QEMU_MEM) -smp $(QEMU_SMP)
+QEMU_SERIAL_FLAGS = -serial tcp:127.0.0.1:5555,server,nowait
 QEMU_USB_FLAGS =  \
 	-drive file=disk.img,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=deadbeef \
@@ -100,7 +101,10 @@ iso-release: $(LIMINE_STAMP)
 		-o $(ISO_PATH) $(ISO_DIR)
 
 run: iso
-	@($(QEMU) $(QEMU_COMMON_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS); wait $$!)
+	@($(QEMU) $(QEMU_COMMON_FLAGS) $(QEMU_SERIAL_FLAGS) -no-reboot -S -s $(QEMU_USB_FLAGS) & \
+	  sleep 1; \
+	  konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 127.0.0.1 5555; stty sane'; \
+	  wait)
 
 clean:
 	$(CARGO) clean
