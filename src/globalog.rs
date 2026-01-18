@@ -11,7 +11,6 @@ pub fn log(args: fmt::Arguments<'_>) {
     crate::usb::truekey::push_fmt(args);
     debugcon::log(args);
     let _ = crate::vga::log_fmt(args);
-    uart0::log(args);
     placeholder::log(args);
 }
 
@@ -34,25 +33,6 @@ mod debugcon {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             for &b in s.as_bytes() {
                 write_byte_raw(b);
-            }
-            Ok(())
-        }
-    }
-
-    pub(super) fn log(args: fmt::Arguments<'_>) {
-        let _ = fmt::write(&mut Writer, args);
-    }
-}
-
-mod uart0 {
-    use core::fmt;
-
-    struct Writer;
-
-    impl fmt::Write for Writer {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            for &b in s.as_bytes() {
-                // let _ = crate::serial::COM1_BACKEND.try_write_byte(b); its because.. what is UART0?
             }
             Ok(())
         }
