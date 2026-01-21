@@ -6,6 +6,7 @@ use super::cdc_acm::{self, CdcAttachEvent, UsbSerial};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static TRUEKEY_SLOT: AtomicU32 = AtomicU32::new(0);
+static TRUEKEY_CONTROLLER: AtomicU32 = AtomicU32::new(0);
 static SERIAL_SENT_FOR_SLOT: AtomicU32 = AtomicU32::new(0);
 const LOG_CACHE_BYTES: usize = 1024 * 1024;
 static LOG_CACHE: Mutex<Deque<u8, LOG_CACHE_BYTES>> = Mutex::new(Deque::new());
@@ -29,6 +30,7 @@ pub async fn drain_loop() {
 	let mut buf = [0u8; CHUNK];
 	loop {
 		let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
+		let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire);
 		if slot == 0 {
 			Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
 			continue;
@@ -52,7 +54,7 @@ pub async fn drain_loop() {
 			Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
 			continue;
 		}
-		let _ = cdc_acm::write_all(slot, &buf[..n]).await;
+		let _ = cdc_acm::write_all(controller_id as usize, slot, &buf[..n]).await;
 	}
 }
 
@@ -86,7 +88,8 @@ pub fn write(data: &[u8]) -> usize {
 	let Some(slot) = slot_id() else {
 		return 0;
 	};
-	cdc_acm::queue_tx_bytes(slot, data)
+	let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire) as usize;
+	cdc_acm::queue_tx_bytes(controller_id, slot, data)
 }
 
 pub fn read_byte() -> Option<u8> {
@@ -94,7 +97,8 @@ pub fn read_byte() -> Option<u8> {
 	if slot == 0 {
 		return None;
 	}
-	cdc_acm::pop_rx_byte(slot)
+	let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire) as usize;
+	cdc_acm::pop_rx_byte(controller_id, slot)
 }
 
 fn on_cdc_attach(evt: CdcAttachEvent) {
@@ -110,6 +114,7 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
 	let prev = TRUEKEY_SLOT.load(Ordering::Acquire);
 	if prev == 0 {
 		TRUEKEY_SLOT.store(evt.slot_id, Ordering::Release);
+		TRUEKEY_CONTROLLER.store(evt.controller_id as u32, Ordering::Release);
 		SERIAL_SENT_FOR_SLOT.store(0, Ordering::Release);
 		crate::log!(
 			"truekey: bound to cdc slot={} vid=0x{:04X} pid=0x{:04X}\n",
@@ -120,7 +125,7 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
 
 		// Emit the device serial once, raw bytes (no framing).
 		if SERIAL_SENT_FOR_SLOT.load(Ordering::Acquire) != evt.slot_id {
-			let _ = cdc_acm::queue_tx_bytes(evt.slot_id, evt.serial.as_bytes());
+			let _ = cdc_acm::queue_tx_bytes(evt.controller_id, evt.slot_id, evt.serial.as_bytes());
 			SERIAL_SENT_FOR_SLOT.store(evt.slot_id, Ordering::Release);
 		}
 	}
@@ -128,8 +133,10 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
 
 fn on_cdc_detach(evt: CdcAttachEvent) {
 	let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
-	if slot != 0 && slot == evt.slot_id {
+	let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire) as usize;
+	if slot != 0 && slot == evt.slot_id && controller_id == evt.controller_id {
 		TRUEKEY_SLOT.store(0, Ordering::Release);
+		TRUEKEY_CONTROLLER.store(0, Ordering::Release);
 		SERIAL_SENT_FOR_SLOT.store(0, Ordering::Release);
 		crate::log!(
 			"truekey: unbound (cdc disconnected) slot={} vid=0x{:04X} pid=0x{:04X}\n",

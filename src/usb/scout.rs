@@ -1,6 +1,7 @@
 use super::hub::{HubChild, HubWork, MAX_DEVICES};
 use super::xhci::{
     self, decode_port_status, hi, lo, write_reg64, ErstEntry, EventRing, Trb, TrbRing, XhciContext,
+    MAX_XHCI_CONTROLLERS,
 };
 use super::{
     cdc_acm, disable_slot, enable_slot, enumerate_port, enumerate_with_params, hid, hub, mass,
@@ -13,21 +14,25 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use heapless::Vec;
 use spin::Mutex;
 
-static USB_CTRL: Mutex<Option<UsbControllerState>> = Mutex::new(None);
-static SCOUT_RUNNING: AtomicBool = AtomicBool::new(false);
+static USB_CTRL: [Mutex<Option<UsbControllerState>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+static SCOUT_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 
 const SCRATCHPAD_BUF_SIZE: usize = 4096;
 
-struct EnumReadyGuard;
+struct EnumReadyGuard {
+    controller_id: usize,
+}
 
 impl Drop for EnumReadyGuard {
     fn drop(&mut self) {
-        ENUM_READY.store(true, Ordering::Release);
+        ENUM_READY[self.controller_id].store(true, Ordering::Release);
     }
 }
 
-fn has_device_on_port(port: u8) -> bool {
-    DEVICES.lock().iter().any(|d| d.port == port)
+fn has_device_on_port(controller_id: usize, port: u8) -> bool {
+    DEVICES[controller_id].lock().iter().any(|d| d.port == port)
 }
 
 async fn cleanup_disconnected<const N: usize>(
@@ -35,8 +40,9 @@ async fn cleanup_disconnected<const N: usize>(
     state: &mut UsbControllerState,
 ) {
     let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
+    let controller_id = state.info.controller_id;
     {
-        let mut guard = DEVICES.lock();
+        let mut guard = DEVICES[controller_id].lock();
         let mut idx = 0usize;
         while idx < guard.len() {
             let port = guard[idx].port;
@@ -55,13 +61,13 @@ async fn cleanup_disconnected<const N: usize>(
             crate::log!("usb: disable-slot for slot {} failed\n", slot_id);
         }
         if kind == DeviceKind::Hid {
-            let _ = hid::unregister_runtime(slot_id);
+            let _ = hid::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Mass {
-            let _ = mass::unregister_runtime(slot_id);
+            let _ = mass::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Cdc {
-            let _ = cdc_acm::unregister_runtime(slot_id);
+            let _ = cdc_acm::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Uac {
-            let _ = uac::unregister_runtime(slot_id);
+            let _ = uac::unregister_runtime(controller_id, slot_id);
         }
         crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
     }
@@ -86,7 +92,10 @@ async fn enumerate_hub_ports(
         work.route_string,
         work.depth,
         work.hub_speed_code,
+        work.multi_tt,
         work.port_count,
+        work.power_on_good_ms,
+        work.tt_think_time,
     )
     .await;
 
@@ -96,11 +105,31 @@ async fn enumerate_hub_ports(
         depth,
         speed_code,
         tt_info,
+        tt_think_time,
     } in children.iter().copied()
     {
+        crate::log!(
+            "usb: hub child enumerate hub_slot={} port={} route=0x{:X} depth={} speed_code={}\n",
+            work.hub_slot_id,
+            port,
+            route,
+            depth,
+            speed_code,
+        );
         let Some(slot_id) = enable_slot(state, port).await else {
+            crate::log!(
+                "usb: hub child enable-slot failed hub_slot={} port={}\n",
+                work.hub_slot_id,
+                port
+            );
             continue;
         };
+        crate::log!(
+            "usb: hub child enable-slot ok hub_slot={} port={} slot={}\n",
+            work.hub_slot_id,
+            port,
+            slot_id
+        );
 
         enumerate_with_params(
             state,
@@ -113,6 +142,7 @@ async fn enumerate_hub_ports(
             None,
             Some((work.hub_slot_id, port)),
             tt_info,
+            tt_think_time,
             hub_queue,
         )
         .await;
@@ -135,7 +165,14 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let ctx_stride_bytes: usize = if csz_64 { 0x40 } else { 0x20 };
     let ctx_stride_words: usize = ctx_stride_bytes / 4;
 
-    hub::init_topology(ctx.port_count);
+    crate::log!(
+        "usb: xhci hccparams1=0x{:08X} csz_64={} ctx_stride_bytes={}\n",
+        ctx.hccparams1,
+        csz_64,
+        ctx_stride_bytes
+    );
+
+    hub::init_topology(&ctx);
 
     let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
     let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
@@ -248,7 +285,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         write_volatile(intr0.add(ERSTBA), lo(erst_phys));
         write_volatile(intr0.add(ERSTBA + 1), hi(erst_phys));
         event_ring.update_erdp(intr0);
-        xhci::install_event_ring(event_ring, intr0);
+        xhci::install_event_ring(&ctx, event_ring, intr0);
 
         write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
 
@@ -300,9 +337,10 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     })
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn usb_scout(info: xhci::XhcInfo) {
-    if SCOUT_RUNNING
+    let controller_id = info.controller_id;
+    if SCOUT_RUNNING[controller_id]
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
@@ -310,23 +348,25 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
         return;
     }
 
-    struct ScoutRunGuard;
+    struct ScoutRunGuard {
+        controller_id: usize,
+    }
     impl Drop for ScoutRunGuard {
         fn drop(&mut self) {
-            SCOUT_RUNNING.store(false, Ordering::Release);
+            SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
         }
     }
 
-    let _scout_guard = ScoutRunGuard;
+    let _scout_guard = ScoutRunGuard { controller_id };
 
     // Take controller state out of the mutex so we don't hold a spinlock across `.await`.
-    let state = USB_CTRL.lock().take();
+    let state = USB_CTRL[controller_id].lock().take();
     let mut state = match state {
         Some(existing) => existing,
         None => {
             // First run: do controller init. Keep ENUM_READY false until the first scan completes.
-            ENUM_READY.store(false, Ordering::Release);
-            let _guard = EnumReadyGuard;
+            ENUM_READY[controller_id].store(false, Ordering::Release);
+            let _guard = EnumReadyGuard { controller_id };
             match init_controller(info) {
                 Ok(s) => s,
                 Err(()) => {
@@ -363,7 +403,7 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
     let mut hub_queue: heapless::Vec<HubWork, 16> = heapless::Vec::new();
 
     for (target_port, _port_status) in connected.iter().copied() {
-        if has_device_on_port(target_port) {
+        if has_device_on_port(controller_id, target_port) {
             continue;
         }
 
@@ -377,5 +417,5 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
         enumerate_hub_ports(&mut state, &work, &mut hub_queue).await;
     }
 
-    *USB_CTRL.lock() = Some(state);
+    *USB_CTRL[controller_id].lock() = Some(state);
 }
