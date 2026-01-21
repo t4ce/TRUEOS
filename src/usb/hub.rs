@@ -453,14 +453,13 @@ pub async fn configure_hub_context(params: HubConfigParams<'_>) -> Result<(), ()
         in_add_flags = read_volatile(add_flags_ptr.add(1));
 
         copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
+        let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
 
         let mut dw0 = read_volatile(slot_ctx.add(0));
         dw0 |= 1 << 26; // Hub bit
         if multi_tt {
             dw0 |= 1 << 25; // MTT bit
         }
-        // Ensure Context Entries covers EP0 (DCI=1).
-        dw0 = (dw0 & !(0x1F << 27)) | (1 << 27);
         write_volatile(slot_ctx.add(0), dw0);
 
         let mut dw1 = read_volatile(slot_ctx.add(1));
