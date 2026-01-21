@@ -207,30 +207,16 @@ impl IsochOutPipe {
             d2: 0,
             d3: trb_type(12) | (slot_id << 24),
         };
-        if !cmd_ring.push(cfg_ep_cmd) {
-            return Err(());
-        }
-        unsafe { core::ptr::write_volatile(ctx.doorbell.add(0), 0) };
-
-        let cfg_evt = xhci::wait_for_event(
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type != 33 {
-                    return false;
-                }
-                let cc = (evt.d2 >> 24) & 0xFF;
-                cc == 1
-            },
+        xhci::submit_cmd_and_wait(
+            ctx,
+            cmd_ring,
+            cfg_ep_cmd,
+            Some(slot_id),
+            "isoch-config-ep",
             400,
             EmbassyDuration::from_millis(5),
         )
-        .await
-        .ok_or(())?;
-
-        let completion = (cfg_evt.d2 >> 24) & 0xFF;
-        if completion != 1 {
-            return Err(());
-        }
+        .await?;
 
         Ok(IsochOutPipe {
             ep_target,

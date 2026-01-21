@@ -9,7 +9,7 @@
 use crate::audio::{PcmFormat, PcmSink};
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
-use crate::usb::xhci::{self, Trb, TrbRing, XhciContext};
+use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec;
 use libm::sinf;
@@ -123,6 +123,7 @@ pub struct AttachParams<'a> {
 }
 
 struct UacRuntime {
+    controller_id: usize,
     ctx: XhciContext,
     slot_id: u32,
     pipe_target: u32,
@@ -142,31 +143,45 @@ struct UacRuntime {
 unsafe impl Send for UacRuntime {}
 unsafe impl Sync for UacRuntime {}
 
-static UAC_SLOT: AtomicU32 = AtomicU32::new(0);
-static UAC_RUNTIME: Mutex<Option<UacRuntime>> = Mutex::new(None);
-static UAC_XFER_OK: AtomicU32 = AtomicU32::new(0);
-static UAC_XFER_ERR: AtomicU32 = AtomicU32::new(0);
-static UAC_XFER_LAST_CC: AtomicU32 = AtomicU32::new(0);
+static UAC_SLOT: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static UAC_RUNTIME: [Mutex<Option<UacRuntime>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+static UAC_XFER_OK: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static UAC_XFER_ERR: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
+static UAC_XFER_LAST_CC: [AtomicU32; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU32::new(0) }; MAX_XHCI_CONTROLLERS];
 
-pub fn unregister_runtime(slot_id: u32) -> bool {
-    let mut guard = UAC_RUNTIME.lock();
+fn first_active_controller() -> Option<usize> {
+    for id in 0..MAX_XHCI_CONTROLLERS {
+        if UAC_SLOT[id].load(Ordering::Acquire) != 0 {
+            return Some(id);
+        }
+    }
+    None
+}
+
+pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
+    let mut guard = UAC_RUNTIME[controller_id].lock();
     if let Some(rt) = guard.as_ref() {
         if rt.slot_id == slot_id {
             if let Some(w) = rt.fill_waker.as_ref() {
                 w.wake_by_ref();
             }
             *guard = None;
-            UAC_SLOT.store(0, Ordering::Release);
-            UAC_XFER_OK.store(0, Ordering::Release);
-            UAC_XFER_ERR.store(0, Ordering::Release);
-            UAC_XFER_LAST_CC.store(0, Ordering::Release);
+            UAC_SLOT[controller_id].store(0, Ordering::Release);
+            UAC_XFER_OK[controller_id].store(0, Ordering::Release);
+            UAC_XFER_ERR[controller_id].store(0, Ordering::Release);
+            UAC_XFER_LAST_CC[controller_id].store(0, Ordering::Release);
             return true;
         }
     }
     false
 }
 
-pub fn handle_transfer_event(evt: &Trb) -> bool {
+pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     // We rely on time-based pacing and a large isoch ring; events are used for observability.
     let evt_type = (evt.d3 >> 10) & 0x3F;
     if evt_type != 32 {
@@ -177,7 +192,7 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     let evt_ep_id = (evt.d3 >> 16) & 0x1F;
     let cc = (evt.d2 >> 24) & 0xFF;
 
-    let mut guard = UAC_RUNTIME.lock();
+    let mut guard = UAC_RUNTIME[controller_id].lock();
     let Some(rt) = guard.as_mut() else {
         return false;
     };
@@ -189,10 +204,10 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     }
 
     if cc == 1 {
-        UAC_XFER_OK.fetch_add(1, Ordering::Relaxed);
+        UAC_XFER_OK[controller_id].fetch_add(1, Ordering::Relaxed);
     } else {
-        UAC_XFER_ERR.fetch_add(1, Ordering::Relaxed);
-        UAC_XFER_LAST_CC.store(cc, Ordering::Relaxed);
+        UAC_XFER_ERR[controller_id].fetch_add(1, Ordering::Relaxed);
+        UAC_XFER_LAST_CC[controller_id].store(cc, Ordering::Relaxed);
     }
     if rt.in_flight > 0 {
         rt.in_flight -= 1;
@@ -203,15 +218,15 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
     true
 }
 
-pub fn take_xfer_event_counters() -> (u32, u32, u32) {
-    let ok = UAC_XFER_OK.swap(0, Ordering::AcqRel);
-    let err = UAC_XFER_ERR.swap(0, Ordering::AcqRel);
-    let last_cc = UAC_XFER_LAST_CC.load(Ordering::Acquire);
+pub fn take_xfer_event_counters(controller_id: usize) -> (u32, u32, u32) {
+    let ok = UAC_XFER_OK[controller_id].swap(0, Ordering::AcqRel);
+    let err = UAC_XFER_ERR[controller_id].swap(0, Ordering::AcqRel);
+    let last_cc = UAC_XFER_LAST_CC[controller_id].load(Ordering::Acquire);
     (ok, err, last_cc)
 }
 
-pub fn current_format() -> Option<PcmFormat> {
-    let guard = UAC_RUNTIME.lock();
+pub fn current_format(controller_id: usize) -> Option<PcmFormat> {
+    let guard = UAC_RUNTIME[controller_id].lock();
     guard.as_ref().map(|rt| PcmFormat {
         rate_hz: rt.rate_hz,
         channels: rt.channels as u8,
@@ -219,8 +234,8 @@ pub fn current_format() -> Option<PcmFormat> {
     })
 }
 
-pub fn demo_queue_depth() -> Option<(usize, usize)> {
-    let guard = UAC_RUNTIME.lock();
+pub fn demo_queue_depth(controller_id: usize) -> Option<(usize, usize)> {
+    let guard = UAC_RUNTIME[controller_id].lock();
     guard.as_ref().map(|rt| (rt.in_flight, rt.bufs.len()))
 }
 
@@ -728,7 +743,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     let pipe_target = pipe.ep_target;
 
-    *UAC_RUNTIME.lock() = Some(UacRuntime {
+    let controller_id = ctx.controller_id;
+    *UAC_RUNTIME[controller_id].lock() = Some(UacRuntime {
+        controller_id,
         ctx: *ctx,
         slot_id,
         pipe_target,
@@ -744,7 +761,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         phase_accum: 0,
         fill_waker: None,
     });
-    UAC_SLOT.store(slot_id, Ordering::Release);
+    UAC_SLOT[controller_id].store(slot_id, Ordering::Release);
 
     crate::log!(
         "usb: uac attached slot={} if={} alt={} ep=0x{:02X} mps={} interval={}\n",
@@ -803,6 +820,7 @@ pub enum DemoQueueError {
 
 #[derive(Copy, Clone, Debug)]
 pub struct DemoPacketReservation {
+    pub controller_id: usize,
     pub slot_id: u32,
     pub buf_phys: u64,
     pub buf_virt: *mut u8,
@@ -815,11 +833,8 @@ pub struct DemoPacketReservation {
 }
 
 pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
-    if UAC_SLOT.load(Ordering::Acquire) == 0 {
-        return Err(DemoQueueError::NoDevice);
-    }
-
-    let mut guard = UAC_RUNTIME.lock();
+    let controller_id = first_active_controller().ok_or(DemoQueueError::NoDevice)?;
+    let mut guard = UAC_RUNTIME[controller_id].lock();
     let rt = guard.as_mut().ok_or(DemoQueueError::NoRuntime)?;
 
     if rt.in_flight >= rt.bufs.len() {
@@ -868,6 +883,7 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
     rt.buf_idx = (rt.buf_idx + 1) % rt.bufs.len();
 
     Ok(DemoPacketReservation {
+        controller_id,
         slot_id: rt.slot_id,
         buf_phys: buf.phys,
         buf_virt: buf.virt,
@@ -881,11 +897,7 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
 }
 
 pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueError> {
-    if UAC_SLOT.load(Ordering::Acquire) == 0 {
-        return Err(DemoQueueError::NoDevice);
-    }
-
-    let mut guard = UAC_RUNTIME.lock();
+    let mut guard = UAC_RUNTIME[res.controller_id].lock();
     let rt = guard.as_mut().ok_or(DemoQueueError::NoRuntime)?;
     if rt.slot_id != res.slot_id {
         return Err(DemoQueueError::NoRuntime);
@@ -935,15 +947,23 @@ pub async fn sine_task() {
         // at the correct microframe cadence; we just avoid letting the ring run dry.
         let mut in_flight = 0usize;
         let mut cap = 0usize;
+        let controller_id = match first_active_controller() {
+            Some(id) => id,
+            None => {
+                no_device = no_device.saturating_add(1);
+                Timer::after(EmbassyDuration::from_millis(50)).await;
+                continue;
+            }
+        };
         {
-            let guard = UAC_RUNTIME.lock();
+            let guard = UAC_RUNTIME[controller_id].lock();
             if let Some(rt) = guard.as_ref() {
                 in_flight = rt.in_flight;
                 cap = rt.bufs.len();
             }
         }
 
-        if UAC_SLOT.load(Ordering::Acquire) == 0 {
+        if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
             no_device = no_device.saturating_add(1);
             Timer::after(EmbassyDuration::from_millis(50)).await;
             continue;
@@ -1007,10 +1027,10 @@ pub async fn sine_task() {
         } else {
             // Wait until transfer events free up budget (no Timer-based pacing).
             poll_fn(|cx| {
-                if UAC_SLOT.load(Ordering::Acquire) == 0 {
+                if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
                     return Poll::Ready(());
                 }
-                let mut guard = UAC_RUNTIME.lock();
+                let mut guard = UAC_RUNTIME[controller_id].lock();
                 let Some(rt) = guard.as_mut() else {
                     return Poll::Ready(());
                 };
@@ -1021,7 +1041,9 @@ pub async fn sine_task() {
                 } else {
                     rt.fill_waker = Some(cx.waker().clone());
                     // Re-check after registration to avoid missing a wake.
-                    if rt.in_flight < target || UAC_SLOT.load(Ordering::Acquire) == 0 {
+                    if rt.in_flight < target
+                        || UAC_SLOT[controller_id].load(Ordering::Acquire) == 0
+                    {
                         Poll::Ready(())
                     } else {
                         Poll::Pending
@@ -1034,8 +1056,8 @@ pub async fn sine_task() {
         if UAC_SINE_HEARTBEAT_LOG
             && Instant::now().duration_since(last_status) >= EmbassyDuration::from_secs(2)
         {
-            let (evt_ok, evt_err, last_cc) = take_xfer_event_counters();
-            let in_flight_now = demo_queue_depth().map(|(cur, _cap)| cur).unwrap_or(0);
+            let (evt_ok, evt_err, last_cc) = take_xfer_event_counters(controller_id);
+            let in_flight_now = demo_queue_depth(controller_id).map(|(cur, _cap)| cur).unwrap_or(0);
             crate::log!(
                 "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
                 rate_hz,

@@ -32,6 +32,11 @@ pub(crate) async fn try_attach_device(
     depth: u8,
     hub_queue: &mut heapless::Vec<HubWork, 16>,
 ) -> Option<DeviceKind> {
+    // Device tracking / disconnect cleanup is currently keyed by root-port.
+    // For hub children, `target_port` is the downstream hub port (not a root port),
+    // so use `root_port` when it is known.
+    let registry_port = if root_port != 0 { root_port } else { target_port };
+
     let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
     if has_uac_out {
         if uac::attach_device(uac::AttachParams {
@@ -56,7 +61,7 @@ pub(crate) async fn try_attach_device(
                 dev_vid,
                 dev_pid
             );
-            super::register_device(slot_id as u32, target_port, DeviceKind::Uac);
+            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Uac);
             return Some(DeviceKind::Uac);
         }
     }
@@ -71,6 +76,79 @@ pub(crate) async fn try_attach_device(
         })
         .await
         {
+            let multi_tt = dev_prot == 2;
+            let _ = hub::configure_hub_interrupt(hub::HubInterruptParams {
+                ctx,
+                cmd_ring: &mut state.cmd_ring,
+                slot_id,
+                dev_ctx_virt,
+                ctx_stride_bytes,
+                ctx_stride_words,
+                target_port,
+                port_count: desc.port_count,
+                tt_think_time: desc.tt_think_time,
+                multi_tt,
+                speed_code,
+                cfg: cfg_slice,
+            })
+            .await;
+            // Always program the hub's slot-context fields (Hub bit / ports / TT think time)
+            // before enumerating children. Interrupt endpoint config may succeed/fail
+            // independently, but the xHC must know this slot represents a hub.
+            if hub::configure_hub_context(hub::HubConfigParams {
+                ctx,
+                cmd_ring: &mut state.cmd_ring,
+                slot_id,
+                dev_ctx_virt,
+                ctx_stride_bytes,
+                ctx_stride_words,
+                target_port,
+                port_count: desc.port_count,
+                tt_think_time: desc.tt_think_time,
+                multi_tt,
+            })
+            .await
+            .is_err()
+            {
+                crate::log!("usb: hub slot {} hub slot-context update failed\n", slot_id);
+            }
+
+            // High-signal: confirm the hub bit / ports / think-time are actually
+            // present in the hub's *output* Slot Context before enumerating children.
+            if super::USB_LOG_VERBOSE {
+                unsafe {
+                    let slot_ctx = dev_ctx_virt as *const u32;
+                    let dw0 = core::ptr::read_volatile(slot_ctx.add(0));
+                    let dw1 = core::ptr::read_volatile(slot_ctx.add(1));
+                    let dw2 = core::ptr::read_volatile(slot_ctx.add(2));
+                    let dw3 = core::ptr::read_volatile(slot_ctx.add(3));
+                    let dw4 = core::ptr::read_volatile(slot_ctx.add(4));
+                    let dw5 = core::ptr::read_volatile(slot_ctx.add(5));
+                    let dw6 = core::ptr::read_volatile(slot_ctx.add(6));
+                    let dw7 = core::ptr::read_volatile(slot_ctx.add(7));
+                    crate::log!(
+                        "usb: hub slot {} slotctx dw0..7=[{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}] (hub_bit={} mtt={} ctx_entries={} rh_port={} ports_dw1={} ports_dw2={} tt_think_dw2={})\n",
+                        slot_id,
+                        dw0,
+                        dw1,
+                        dw2,
+                        dw3,
+                        dw4,
+                        dw5,
+                        dw6,
+                        dw7,
+                        ((dw0 >> 26) & 1),
+                        ((dw0 >> 25) & 1),
+                        ((dw0 >> 27) & 0x1F),
+                        ((dw1 >> 16) & 0xFF),
+                        ((dw1 >> 24) & 0xFF),
+                        ((dw2 >> 24) & 0xFF),
+                        ((dw2 >> 16) & 0x3),
+                    );
+                }
+            }
+
+            hub::register_ep0_ring(ctx, slot_id, ep0_ring);
             usbv!(
                 "usb: enum port {} claimed HUB slot={} vid=0x{:04X} pid=0x{:04X}\n",
                 target_port,
@@ -78,15 +156,18 @@ pub(crate) async fn try_attach_device(
                 dev_vid,
                 dev_pid
             );
-            super::register_device(slot_id as u32, target_port, DeviceKind::Hub);
-            hub::record_hub_ports(slot_id, desc.port_count);
+            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Hub);
+            hub::record_hub_ports(ctx, slot_id, desc.port_count);
             let _ = hub_queue.push(HubWork {
                 hub_slot_id: slot_id,
                 root_port,
                 route_string,
                 depth,
                 hub_speed_code: speed_code,
+                multi_tt,
                 port_count: desc.port_count,
+                power_on_good_ms: desc.power_on_good_ms,
+                tt_think_time: desc.tt_think_time,
             });
             return Some(DeviceKind::Hub);
         }
@@ -116,7 +197,7 @@ pub(crate) async fn try_attach_device(
             dev_pid,
             hid_count
         );
-        super::register_device(slot_id as u32, target_port, DeviceKind::Hid);
+        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Hid);
         return Some(DeviceKind::Hid);
     }
 
@@ -140,7 +221,7 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(slot_id as u32, target_port, DeviceKind::Mass);
+        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Mass);
         return Some(DeviceKind::Mass);
     }
 
@@ -150,7 +231,7 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(slot_id as u32, target_port, DeviceKind::Pen);
+        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Pen);
         return Some(DeviceKind::Pen);
     }
     if print::try_handle(cfg_slice, target_port) {
@@ -159,7 +240,7 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(slot_id as u32, target_port, DeviceKind::Printer);
+        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Printer);
         return Some(DeviceKind::Printer);
     }
 
@@ -187,7 +268,7 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(slot_id as u32, target_port, DeviceKind::Cdc);
+        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Cdc);
         return Some(DeviceKind::Cdc);
     }
 
