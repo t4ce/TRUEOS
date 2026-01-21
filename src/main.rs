@@ -234,19 +234,15 @@ pub extern "C" fn _start() -> ! {
         let _ = spawner.spawn(tga::blink_task());
     }
 
-    // reads from hardware into dma buffs
-    if let Some(info) = usb::xhci::xhc_info() {
+    for info in usb::xhci::xhc_list().iter().copied() {
+        // reads from hardware into dma buffs
         let _ = spawner.spawn(usb::xhci::poll_task(info));
-    }
 
-    // reads from our dma buffs into usb rings
-    if let Some(info) = usb::xhci::xhc_info() {
+        // reads from our dma buffs into usb rings
         let _ = spawner.spawn(usb::poll_task(info));
-    }
 
-    // Enumerate USB devices once. Re-running this while poll tasks are active
-    // reprograms the controller and can disrupt in-flight transfers.
-    if let Some(info) = usb::xhci::xhc_info() {
+        // Enumerate USB devices once. Re-running this while poll tasks are active
+        // reprograms the controller and can disrupt in-flight transfers.
         let _ = spawner.spawn(usb_scout(info));
     }
 
@@ -259,6 +255,7 @@ pub extern "C" fn _start() -> ! {
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
     disc::files::create_demo_file(); //needs hardware qemu param i guess
+    crate::log!("main: after create_demo_file\n");
 
     let _ = spawner.spawn(shell::task());
     
@@ -269,6 +266,8 @@ pub extern "C" fn _start() -> ! {
         }
         cpu.goto_address.write(ap_start);
     }
+
+    crate::log!("main: entering executor loop\n");
 
     _loop(executor, spawner)
 }
@@ -362,7 +361,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 100_000_000 == 0 {
             globalog::debugcon_write_byte_raw(b'0');
-            if let Some(info) = usb::xhci::xhc_info() {
+            for info in usb::xhci::xhc_list().iter().copied() {
                 let _ = spawner.spawn(usb_scout(info));
             }
         }

@@ -50,6 +50,7 @@ pub struct AttachParams<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct CdcAttachEvent {
+    pub controller_id: usize,
     pub slot_id: u32,
     pub vid: u16,
     pub pid: u16,
@@ -59,6 +60,7 @@ pub struct CdcAttachEvent {
 /// Serial port handle for CDC-ACM transports.
 #[derive(Clone, Copy, Debug)]
 pub struct CdcSerialPort {
+    controller_id: usize,
     slot_id: u32,
 }
 
@@ -66,9 +68,14 @@ impl CdcSerialPort {
     pub fn slot_id(&self) -> u32 {
         self.slot_id
     }
+
+    pub fn controller_id(&self) -> usize {
+        self.controller_id
+    }
 }
 
 struct CdcRuntime {
+    controller_id: usize,
     info: CdcInterface,
     slot_id: u32,
     vid: u16,
@@ -211,16 +218,17 @@ pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
     *DETACH_CALLBACK.lock() = cb;
 }
 
-pub fn unregister_runtime(slot_id: u32) -> bool {
+pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let mut detached: Option<CdcAttachEvent> = None;
     let mut guard = CDC_RUNTIMES.lock();
     let mut idx = 0usize;
     let mut removed = false;
     let mut waker: Option<Waker> = None;
     while idx < guard.len() {
-        if guard[idx].slot_id == slot_id {
+        if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
             waker = guard[idx].tx_waker.take();
             detached = Some(CdcAttachEvent {
+                controller_id,
                 slot_id,
                 vid: guard[idx].vid,
                 pid: guard[idx].pid,
@@ -251,31 +259,40 @@ fn register_runtime(runtime: CdcRuntime) {
     let mut runtime = runtime;
 
     let mut guard = CDC_RUNTIMES.lock();
-    if let Some(existing) = guard.iter_mut().find(|rt| rt.slot_id == runtime.slot_id) {
+    if let Some(existing) = guard
+        .iter_mut()
+        .find(|rt| rt.controller_id == runtime.controller_id && rt.slot_id == runtime.slot_id)
+    {
         *existing = runtime;
         return;
     }
     let _ = guard.push(runtime);
 }
 
-fn with_runtime_mut_by_slot<R, F>(slot_id: u32, f: F) -> Option<R>
+fn with_runtime_mut_by_slot<R, F>(controller_id: usize, slot_id: u32, f: F) -> Option<R>
 where
     F: FnOnce(&mut CdcRuntime) -> R,
 {
     let mut guard = CDC_RUNTIMES.lock();
-    guard.iter_mut().find(|rt| rt.slot_id == slot_id).map(f)
+    guard
+        .iter_mut()
+        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
+        .map(f)
 }
 
-fn with_runtime_by_slot<R, F>(slot_id: u32, f: F) -> Option<R>
+fn with_runtime_by_slot<R, F>(controller_id: usize, slot_id: u32, f: F) -> Option<R>
 where
     F: FnOnce(&CdcRuntime) -> R,
 {
     let guard = CDC_RUNTIMES.lock();
-    guard.iter().find(|rt| rt.slot_id == slot_id).map(f)
+    guard
+        .iter()
+        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
+        .map(f)
 }
 
-fn register_tx_waker(slot_id: u32, waker: &Waker) {
-    let _ = with_runtime_mut_by_slot(slot_id, |rt| {
+fn register_tx_waker(controller_id: usize, slot_id: u32, waker: &Waker) {
+    let _ = with_runtime_mut_by_slot(controller_id, slot_id, |rt| {
         let should_replace = match rt.tx_waker.as_ref() {
             Some(existing) => !existing.will_wake(waker),
             None => true,
@@ -286,19 +303,20 @@ fn register_tx_waker(slot_id: u32, waker: &Waker) {
     });
 }
 
-fn wake_tx(slot_id: u32) {
-    let waker = with_runtime_mut_by_slot(slot_id, |rt| rt.tx_waker.take()).flatten();
+fn wake_tx(controller_id: usize, slot_id: u32) {
+    let waker = with_runtime_mut_by_slot(controller_id, slot_id, |rt| rt.tx_waker.take()).flatten();
     if let Some(w) = waker {
         w.wake();
     }
 }
 
-fn tx_queue_has_room(slot_id: u32) -> bool {
-    with_runtime_by_slot(slot_id, |rt| rt.tx_queue.len() < CDC_TX_QUEUE_CAP).unwrap_or(false)
+fn tx_queue_has_room(controller_id: usize, slot_id: u32) -> bool {
+    with_runtime_by_slot(controller_id, slot_id, |rt| rt.tx_queue.len() < CDC_TX_QUEUE_CAP)
+        .unwrap_or(false)
 }
 
-pub fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
-    with_runtime_mut_by_slot(slot_id, |runtime| {
+pub fn queue_tx_bytes(controller_id: usize, slot_id: u32, data: &[u8]) -> usize {
+    with_runtime_mut_by_slot(controller_id, slot_id, |runtime| {
         let mut written = 0usize;
         for &byte in data {
             if runtime.tx_queue.push_back(byte).is_err() {
@@ -314,31 +332,33 @@ pub fn queue_tx_bytes(slot_id: u32, data: &[u8]) -> usize {
     .unwrap_or(0)
 }
 
-pub fn pop_rx_byte(slot_id: u32) -> Option<u8> {
-    with_runtime_mut_by_slot(slot_id, |runtime| runtime.rx_queue.pop_front()).flatten()
+pub fn pop_rx_byte(controller_id: usize, slot_id: u32) -> Option<u8> {
+    with_runtime_mut_by_slot(controller_id, slot_id, |runtime| runtime.rx_queue.pop_front()).flatten()
 }
 
-pub(crate) async fn write_all(slot_id: u32, mut data: &[u8]) -> usize {
-    if !runtime_exists(slot_id) {
+pub(crate) async fn write_all(controller_id: usize, slot_id: u32, mut data: &[u8]) -> usize {
+    if !runtime_exists(controller_id, slot_id) {
         return 0;
     }
 
     let mut total = 0;
     while !data.is_empty() {
-        let n = queue_tx_bytes(slot_id, data);
+        let n = queue_tx_bytes(controller_id, slot_id, data);
         if n == 0 {
             // If the runtime vanished (detach), stop to avoid waiting forever.
-            if !runtime_exists(slot_id) {
+            if !runtime_exists(controller_id, slot_id) {
                 break;
             }
             poll_fn(|cx| {
                 // Fast-path if space became available between attempts.
-                if tx_queue_has_room(slot_id) {
+                if tx_queue_has_room(controller_id, slot_id) {
                     return Poll::Ready(());
                 }
-                register_tx_waker(slot_id, cx.waker());
+                register_tx_waker(controller_id, slot_id, cx.waker());
                 // Re-check after registration to avoid missing a wake.
-                if tx_queue_has_room(slot_id) || !runtime_exists(slot_id) {
+                if tx_queue_has_room(controller_id, slot_id)
+                    || !runtime_exists(controller_id, slot_id)
+                {
                     Poll::Ready(())
                 } else {
                     Poll::Pending
@@ -353,26 +373,29 @@ pub(crate) async fn write_all(slot_id: u32, mut data: &[u8]) -> usize {
     total
 }
 
-pub fn device_ids(slot_id: u32) -> Option<(u16, u16)> {
+pub fn device_ids(controller_id: usize, slot_id: u32) -> Option<(u16, u16)> {
     let guard = CDC_RUNTIMES.lock();
     guard
         .iter()
-        .find(|rt| rt.slot_id == slot_id)
+        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
         .map(|rt| (rt.vid, rt.pid))
 }
 
-pub fn device_serial(slot_id: u32) -> Option<UsbSerial> {
+pub fn device_serial(controller_id: usize, slot_id: u32) -> Option<UsbSerial> {
     let guard = CDC_RUNTIMES.lock();
     guard
         .iter()
-        .find(|rt| rt.slot_id == slot_id)
+        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
         .map(|rt| rt.serial)
         .filter(|s| s.is_some())
 }
 
-pub fn serial_port(slot_id: u32) -> Option<CdcSerialPort> {
-    if runtime_exists(slot_id) {
-        Some(CdcSerialPort { slot_id })
+pub fn serial_port(controller_id: usize, slot_id: u32) -> Option<CdcSerialPort> {
+    if runtime_exists(controller_id, slot_id) {
+        Some(CdcSerialPort {
+            controller_id,
+            slot_id,
+        })
     } else {
         None
     }
@@ -380,26 +403,26 @@ pub fn serial_port(slot_id: u32) -> Option<CdcSerialPort> {
 
 impl SerialPort for CdcSerialPort {
     fn write(&self, data: &[u8]) -> usize {
-        queue_tx_bytes(self.slot_id, data)
+        queue_tx_bytes(self.controller_id, self.slot_id, data)
     }
 
     fn write_all<'a>(&'a self, data: &'a [u8]) -> Pin<Box<dyn core::future::Future<Output = usize> + 'a>> {
-        Box::pin(write_all(self.slot_id, data))
+        Box::pin(write_all(self.controller_id, self.slot_id, data))
     }
 
     fn serial_number(&self) -> Option<SerialNumber> {
-        device_serial(self.slot_id)
+        device_serial(self.controller_id, self.slot_id)
     }
 }
 
-pub fn handle_transfer_event(evt: &Trb) -> bool {
+pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     let slot_id = ((evt.d3 >> 24) & 0xFF) as u32;
     let ep_target = (evt.d3 >> 16) & 0x1F;
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;
 
     let mut tx_complete = false;
-    let handled = with_runtime_mut_by_slot(slot_id, |runtime| {
+    let handled = with_runtime_mut_by_slot(controller_id, slot_id, |runtime| {
         if ep_target == runtime.ep_out_target {
             runtime.on_tx_complete(completion);
             tx_complete = true;
@@ -417,15 +440,17 @@ pub fn handle_transfer_event(evt: &Trb) -> bool {
         if let Some(cb) = *TX_COMPLETE_CALLBACK.lock() {
             cb(slot_id);
         }
-        wake_tx(slot_id);
+        wake_tx(controller_id, slot_id);
     }
 
     handled
 }
 
-fn runtime_exists(slot_id: u32) -> bool {
+fn runtime_exists(controller_id: usize, slot_id: u32) -> bool {
     let guard = CDC_RUNTIMES.lock();
-    guard.iter().any(|rt| rt.slot_id == slot_id)
+    guard
+        .iter()
+        .any(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
 }
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
@@ -478,6 +503,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
     let Some(evt) = xhci::wait_for_event(
+        ctx,
         |evt| ((evt.d3 >> 10) & 0x3F) == 32 && ((evt.d3 >> 24) & 0xFF) as u32 == slot_id,
         400,
         embassy_time::Duration::from_millis(5),
@@ -576,6 +602,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
     unsafe { write_volatile(ctx.doorbell.add(0), 0) };
     let Some(cfg_evt) = xhci::wait_for_event(
+        ctx,
         |evt| ((evt.d3 >> 10) & 0x3F) == 33,
         400,
         embassy_time::Duration::from_millis(5),
@@ -597,6 +624,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
 
     let mut runtime = CdcRuntime {
+        controller_id: ctx.controller_id,
         info: interface,
         slot_id,
         vid: dev_vid,
@@ -648,7 +676,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     // Important ordering: don't start bulk RX/TX while we're still using EP0 control
     // transfers that wait on generic Transfer Events.
     register_runtime(runtime);
-    let _ = with_runtime_mut_by_slot(slot_id, |rt| rt.post_rx_locked());
+    let _: Option<bool> =
+        with_runtime_mut_by_slot(ctx.controller_id, slot_id, |rt| rt.post_rx_locked());
 
     crate::log!(
         "usb: cdc-acm attached slot={} ep_in=0x{:02X} ep_out=0x{:02X}\n",
@@ -659,6 +688,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     if let Some(cb) = *ATTACH_CALLBACK.lock() {
         cb(CdcAttachEvent {
+            controller_id: ctx.controller_id,
             slot_id,
             vid: dev_vid,
             pid: dev_pid,

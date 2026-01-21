@@ -103,6 +103,7 @@ pub struct HidEpInfo {
 }
 
 pub struct HidRuntime {
+    pub controller_id: usize,
     pub ep: HidEpInfo,
     pub report_phys: u64,
     pub report_virt: *mut u8,
@@ -130,7 +131,11 @@ pub fn register_runtime(runtime: HidRuntime) {
     let mut guard = HID_RUNTIMES.lock();
     if let Some(existing) = guard
         .iter_mut()
-        .find(|r| r.slot_id == runtime.slot_id && r.ep_target == runtime.ep_target)
+        .find(|r| {
+            r.controller_id == runtime.controller_id
+                && r.slot_id == runtime.slot_id
+                && r.ep_target == runtime.ep_target
+        })
     {
         *existing = runtime;
         return;
@@ -138,12 +143,12 @@ pub fn register_runtime(runtime: HidRuntime) {
     let _ = guard.push(runtime);
 }
 
-pub fn unregister_runtime(slot_id: u32) -> bool {
+pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let mut guard = HID_RUNTIMES.lock();
     let mut removed = false;
     let mut idx = 0usize;
     while idx < guard.len() {
-        if guard[idx].slot_id == slot_id {
+        if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
             let _ = guard.remove(idx);
             removed = true;
         } else {
@@ -153,14 +158,21 @@ pub fn unregister_runtime(slot_id: u32) -> bool {
     removed
 }
 
-pub fn with_runtime_mut_by_slot_and_target<F, R>(slot_id: u32, ep_target: u32, f: F) -> Option<R>
+pub fn with_runtime_mut_by_slot_and_target<F, R>(
+    controller_id: usize,
+    slot_id: u32,
+    ep_target: u32,
+    f: F,
+) -> Option<R>
 where
     F: FnOnce(&mut HidRuntime) -> R,
 {
     let mut guard = HID_RUNTIMES.lock();
     guard
         .iter_mut()
-        .find(|r| r.slot_id == slot_id && r.ep_target == ep_target)
+        .find(|r| {
+            r.controller_id == controller_id && r.slot_id == slot_id && r.ep_target == ep_target
+        })
         .map(f)
 }
 
@@ -442,6 +454,7 @@ async fn fetch_report_descriptor(
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
     let Some(evt) = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {
@@ -588,6 +601,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
     let Some(set_cfg_evt) = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {
@@ -716,28 +730,18 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             d2: 0,
             d3: trb_type(12) | (slot_id << 24),
         };
-        if !cmd_ring.push(cfg_ep_cmd) {
-            hidlog!("usb: cmd ring full before configure-endpoint\n");
-            continue;
-        }
-        unsafe { write_volatile(ctx.doorbell.add(0), 0) };
-
-        let Some(cfg_evt) = xhci::wait_for_event(
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                evt_type == 33
-            },
+        if xhci::submit_cmd_and_wait(
+            ctx,
+            cmd_ring,
+            cfg_ep_cmd,
+            Some(slot_id),
+            "hid-config-ep",
             400,
             EmbassyDuration::from_millis(5),
         )
         .await
-        else {
-            hidlog!("usb: timeout waiting for configure-endpoint\n");
-            continue;
-        };
-
-        let completion = (cfg_evt.d2 >> 24) & 0xFF;
-        if completion != 1 {
+        .is_err()
+        {
             continue;
         }
 
@@ -796,6 +800,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
 
         register_runtime(HidRuntime {
+            controller_id: ctx.controller_id,
             ep,
             report_phys: rep_phys,
             report_virt: rep_virt,
@@ -847,6 +852,7 @@ pub async fn class_request_nodata(
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
     let Some(evt) = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {

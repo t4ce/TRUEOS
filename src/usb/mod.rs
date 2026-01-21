@@ -19,7 +19,7 @@ pub use scout::usb_scout;
 pub(crate) use self::control::{control_in, control_out};
 pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
 
-use self::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext};
+use self::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -43,10 +43,14 @@ struct DeviceEntry {
     kind: DeviceKind,
 }
 
-static DEVICES: Mutex<Vec<DeviceEntry, MAX_DEVICES>> = Mutex::new(Vec::new());
-static ENUM_READY: AtomicBool = AtomicBool::new(false);
-static NOT_CLAIMED_KEY: [AtomicU32; LOG_PORTS_MAX] = [const { AtomicU32::new(0) }; LOG_PORTS_MAX];
-static NOT_CLAIMED_COUNT: [AtomicU32; LOG_PORTS_MAX] = [const { AtomicU32::new(0) }; LOG_PORTS_MAX];
+static DEVICES: [Mutex<Vec<DeviceEntry, MAX_DEVICES>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
+static ENUM_READY: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static NOT_CLAIMED_KEY: [[AtomicU32; LOG_PORTS_MAX]; MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX] }; MAX_XHCI_CONTROLLERS];
+static NOT_CLAIMED_COUNT: [[AtomicU32; LOG_PORTS_MAX]; MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX] }; MAX_XHCI_CONTROLLERS];
 
 struct UsbControllerState {
     info: xhci::XhcInfo,
@@ -70,7 +74,7 @@ struct UsbControllerState {
 unsafe impl Send for UsbControllerState {}
 unsafe impl Sync for UsbControllerState {}
 
-const USB_LOG_VERBOSE: bool = false;
+pub(crate) const USB_LOG_VERBOSE: bool = false;
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -81,8 +85,8 @@ macro_rules! usbv {
 }
 
 
-fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
-    let mut guard = DEVICES.lock();
+fn register_device(controller_id: usize, slot_id: u32, port: u8, kind: DeviceKind) {
+    let mut guard = DEVICES[controller_id].lock();
     if let Some(existing) = guard.iter_mut().find(|d| d.slot_id == slot_id) {
         existing.kind = kind;
         existing.port = port;
@@ -99,7 +103,7 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
         crate::log!("usb: device table full, dropping slot {}\n", slot_id);
     }
     // Signal that at least one device is enumerated so poll_task can start.
-    ENUM_READY.store(true, Ordering::Release);
+    ENUM_READY[controller_id].store(true, Ordering::Release);
     crate::log!(
         "usb: device claimed slot={} port={} kind={:?}\n",
         slot_id,
@@ -108,26 +112,30 @@ fn register_device(slot_id: u32, port: u8, kind: DeviceKind) {
     );
 }
 
-fn device_kind_for_slot(slot_id: u32) -> Option<DeviceKind> {
-    DEVICES
+fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceKind> {
+    DEVICES[controller_id]
         .lock()
         .iter()
         .find(|d| d.slot_id == slot_id)
         .map(|d| d.kind)
 }
 
-fn any_hid_registered() -> bool {
-    DEVICES.lock().iter().any(|d| d.kind == DeviceKind::Hid)
+fn any_hid_registered(controller_id: usize) -> bool {
+    DEVICES[controller_id]
+        .lock()
+        .iter()
+        .any(|d| d.kind == DeviceKind::Hid)
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: xhci::XhcInfo) {
     let ctx = unsafe { XhciContext::new(info) };
+    let controller_id = ctx.controller_id;
     let mut heartbeat: u32 = 0;
     let mut idle_timeouts: u32 = 0;
 
     loop {
-        if !ENUM_READY.load(Ordering::Acquire) {
+        if !ENUM_READY[controller_id].load(Ordering::Acquire) {
             Timer::after(EmbassyDuration::from_millis(5)).await;
             continue;
         }
@@ -135,13 +143,18 @@ pub async fn poll_task(info: xhci::XhcInfo) {
         heartbeat = heartbeat.wrapping_add(1);
 
         let evt_opt = xhci::wait_for_event(
+            &ctx,
             |evt| {
                 let evt_type = (evt.d3 >> 10) & 0x3F;
                 if evt_type != 32 {
                     return false;
                 }
+                let ep_target = (evt.d3 >> 16) & 0x1F;
+                if ep_target == 0 {
+                    return false;
+                }
                 let evt_slot = (evt.d3 >> 24) as u32;
-                device_kind_for_slot(evt_slot).is_some()
+                device_kind_for_slot(controller_id, evt_slot).is_some()
             },
             400,
             EmbassyDuration::from_millis(5),
@@ -157,9 +170,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
 
         let evt_slot = (evt.d3 >> 24) as u32;
 
-        match device_kind_for_slot(evt_slot) {
+        match device_kind_for_slot(controller_id, evt_slot) {
             Some(DeviceKind::Hid) => {
-                if !any_hid_registered() {
+                if !any_hid_registered(controller_id) {
                     continue;
                 }
 
@@ -168,54 +181,62 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     continue;
                 }
 
-                let handled = hid::with_runtime_mut_by_slot_and_target(evt_slot, ep_target, |runtime| {
-                    let completion = (evt.d2 >> 24) & 0xFF;
-                    let residual = evt.d2 & 0x00FF_FFFF;
-                    let data_len = runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
-                    let data = unsafe {
-                        core::slice::from_raw_parts(runtime.report_virt, data_len)
-                    };
-                    hid::handle_report(runtime, completion, data, residual);
+                let handled = hid::with_runtime_mut_by_slot_and_target(
+                    controller_id,
+                    evt_slot,
+                    ep_target,
+                    |runtime| {
+                        let completion = (evt.d2 >> 24) & 0xFF;
+                        let residual = evt.d2 & 0x00FF_FFFF;
+                        let data_len =
+                            runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
+                        let data = unsafe {
+                            core::slice::from_raw_parts(runtime.report_virt, data_len)
+                        };
+                        hid::handle_report(runtime, completion, data, residual);
 
-                    let normal = Trb {
-                        d0: lo(runtime.report_phys),
-                        d1: hi(runtime.report_phys),
-                        d2: runtime.report_len,
-                        d3: trb_type(1) | (1 << 5),
-                    };
+                        let normal = Trb {
+                            d0: lo(runtime.report_phys),
+                            d1: hi(runtime.report_phys),
+                            d2: runtime.report_len,
+                            d3: trb_type(1) | (1 << 5),
+                        };
 
-                    let before = runtime.ep_ring.state_snapshot();
-                    if !runtime.ep_ring.push(normal) {
-                        crate::log!("usb: failed to requeue HID interrupt IN transfer\n");
-                    } else {
-                        let after = runtime.ep_ring.state_snapshot();
-                        if hid::HID_LOGS {
+                        let before = runtime.ep_ring.state_snapshot();
+                        if !runtime.ep_ring.push(normal) {
                             crate::log!(
-                                "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
-                                runtime.slot_id,
-                                runtime.ep_target,
-                                before.0,
-                                before.1 as u8,
-                                after.0,
-                                after.1 as u8
+                                "usb: failed to requeue HID interrupt IN transfer\n"
                             );
+                        } else {
+                            let after = runtime.ep_ring.state_snapshot();
+                            if hid::HID_LOGS {
+                                crate::log!(
+                                    "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
+                                    runtime.slot_id,
+                                    runtime.ep_target,
+                                    before.0,
+                                    before.1 as u8,
+                                    after.0,
+                                    after.1 as u8
+                                );
+                            }
+                            unsafe {
+                                write_volatile(
+                                    ctx.doorbell.add(runtime.slot_id as usize),
+                                    runtime.ep_target
+                                );
+                            }
+                            if hid::HID_LOGS {
+                                crate::log!(
+                                    "[hid] doorbell slot={} target={} rung\n",
+                                    runtime.slot_id,
+                                    runtime.ep_target
+                                );
+                            }
                         }
-                        unsafe {
-                            write_volatile(
-                                ctx.doorbell.add(runtime.slot_id as usize),
-                                runtime.ep_target
-                            );
-                        }
-                        if hid::HID_LOGS {
-                            crate::log!(
-                                "[hid] doorbell slot={} target={} rung\n",
-                                runtime.slot_id,
-                                runtime.ep_target
-                            );
-                        }
-                    }
-                    true
-                })
+                        true
+                    },
+                )
                 .unwrap_or(false);
 
                 if !handled {
@@ -229,7 +250,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 // Mass storage transfers are driven by the mass driver; nothing to do here yet.
             }
             Some(DeviceKind::Cdc) => {
-                if !cdc_acm::handle_transfer_event(&evt) {
+                if !cdc_acm::handle_transfer_event(controller_id, &evt) {
                     usbv!(
                         "usb: ignoring transfer event slot={} (no CDC runtime)\n",
                         evt_slot
@@ -237,7 +258,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 }
             }
             Some(DeviceKind::Uac) => {
-                let _ = uac::handle_transfer_event(&evt);
+                let _ = uac::handle_transfer_event(controller_id, &evt);
             }
             Some(DeviceKind::Hub) => {
                 // Hub class driver not implemented yet.
@@ -248,7 +269,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 // A device may complete transfers during attach (while the enum path is still
                 // running) before `register_device()` marks the slot kind. Handle CDC events
                 // opportunistically so TX/RX doesn't stall.
-                let _ = cdc_acm::handle_transfer_event(&evt);
+                let _ = cdc_acm::handle_transfer_event(controller_id, &evt);
             }
         }
     }

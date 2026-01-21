@@ -1,5 +1,11 @@
 use super::{Trb, TrbRing, XhciContext};
-use super::xhci::trb_type;
+use super::xhci::{
+    endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, trb_type,
+    TrbRingState, EP_STATE_DISABLED, EP_TYPE_INT_IN,
+};
+use super::xhci::MAX_XHCI_CONTROLLERS;
+use core::ptr::{read_volatile, write_volatile};
 use crate::pci::dma;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
@@ -32,13 +38,32 @@ struct UsbNode {
     protocol: u8,
 }
 
-static USB_TREE: Mutex<Option<Tree<UsbNode, USB_TREE_CAPACITY>>> = Mutex::new(None);
-static ROOT_PORT_NODE_IDS: Mutex<Vec<NodeId, LOG_PORTS_MAX>> = Mutex::new(Vec::new());
-static SLOT_NODE_IDS: Mutex<Vec<(u32, NodeId), MAX_DEVICES>> = Mutex::new(Vec::new());
-static HUB_PORT_NODE_IDS: Mutex<Vec<(u32, u8, NodeId), 64>> = Mutex::new(Vec::new());
+struct HubTopology {
+    tree: Option<Tree<UsbNode, USB_TREE_CAPACITY>>,
+    root_port_node_ids: Vec<NodeId, LOG_PORTS_MAX>,
+    slot_node_ids: Vec<(u32, NodeId), MAX_DEVICES>,
+    hub_port_node_ids: Vec<(u32, u8, NodeId), 64>,
+    hub_ep0_rings: Vec<(u32, TrbRingState), MAX_DEVICES>,
+}
 
-pub fn init_topology(port_count: u8) {
-    let mut tree_guard = USB_TREE.lock();
+impl HubTopology {
+    const fn new() -> Self {
+        Self {
+            tree: None,
+            root_port_node_ids: Vec::new(),
+            slot_node_ids: Vec::new(),
+            hub_port_node_ids: Vec::new(),
+            hub_ep0_rings: Vec::new(),
+        }
+    }
+}
+
+static HUB_TOPOLOGIES: [Mutex<HubTopology>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(HubTopology::new()) }; MAX_XHCI_CONTROLLERS];
+
+pub fn init_topology(ctx: &XhciContext) {
+    let controller_id = ctx.controller_id;
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
     let mut tree = Tree::new();
     let root = match tree.add_root(UsbNode {
         kind: UsbNodeKind::Root,
@@ -52,17 +77,17 @@ pub fn init_topology(port_count: u8) {
     }) {
         Some(id) => id,
         None => {
-            *tree_guard = Some(tree);
+            topo.tree = Some(tree);
             return;
         }
     };
 
-    let mut ports = ROOT_PORT_NODE_IDS.lock();
-    ports.clear();
-    SLOT_NODE_IDS.lock().clear();
-    HUB_PORT_NODE_IDS.lock().clear();
+    topo.root_port_node_ids.clear();
+    topo.slot_node_ids.clear();
+    topo.hub_port_node_ids.clear();
+    topo.hub_ep0_rings.clear();
 
-    let limit = core::cmp::min(port_count as usize, LOG_PORTS_MAX);
+    let limit = core::cmp::min(ctx.port_count as usize, LOG_PORTS_MAX);
     for port in 1..=limit {
         let Some(node) = tree.add_child(
             root,
@@ -79,13 +104,14 @@ pub fn init_topology(port_count: u8) {
         ) else {
             break;
         };
-        let _ = ports.push(node);
+        let _ = topo.root_port_node_ids.push(node);
     }
 
-    *tree_guard = Some(tree);
+    topo.tree = Some(tree);
 }
 
 pub fn record_root_device(
+    ctx: &XhciContext,
     target_port: u8,
     slot_id: u32,
     dev_vid: u16,
@@ -94,75 +120,85 @@ pub fn record_root_device(
     dev_sub: u8,
     dev_prot: u8,
 ) {
-    let mut tree_guard = USB_TREE.lock();
-    let Some(tree) = tree_guard.as_mut() else {
-        return;
-    };
-
-    let ports = ROOT_PORT_NODE_IDS.lock();
+    let controller_id = ctx.controller_id;
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
     let idx = (target_port as usize).saturating_sub(1);
-    let Some(port_node) = ports.get(idx).copied() else {
+    let Some(port_node) = topo.root_port_node_ids.get(idx).copied() else {
         return;
     };
 
-    let Some(node) = tree.add_child(
-        port_node,
-        UsbNode {
-            kind: UsbNodeKind::Device,
-            port: target_port,
-            slot_id,
-            vid: dev_vid,
-            pid: dev_pid,
-            class: dev_cls,
-            subclass: dev_sub,
-            protocol: dev_prot,
-        },
-    ) else {
-        return;
+    let node = {
+        let Some(tree) = topo.tree.as_mut() else {
+            return;
+        };
+
+        let Some(node) = tree.add_child(
+            port_node,
+            UsbNode {
+                kind: UsbNodeKind::Device,
+                port: target_port,
+                slot_id,
+                vid: dev_vid,
+                pid: dev_pid,
+                class: dev_cls,
+                subclass: dev_sub,
+                protocol: dev_prot,
+            },
+        ) else {
+            return;
+        };
+        node
     };
 
-    let _ = SLOT_NODE_IDS.lock().push((slot_id, node));
+    let _ = topo.slot_node_ids.push((slot_id, node));
 }
 
-pub fn record_hub_ports(hub_slot_id: u32, port_count: u8) {
-    let mut tree_guard = USB_TREE.lock();
-    let Some(tree) = tree_guard.as_mut() else {
-        return;
-    };
-
-    let hub_node = {
-        let slots = SLOT_NODE_IDS.lock();
-        slots.iter().find(|(slot, _)| *slot == hub_slot_id).map(|(_, id)| *id)
-    };
+pub fn record_hub_ports(ctx: &XhciContext, hub_slot_id: u32, port_count: u8) {
+    let controller_id = ctx.controller_id;
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
+    let hub_node = topo
+        .slot_node_ids
+        .iter()
+        .find(|(slot, _)| *slot == hub_slot_id)
+        .map(|(_, id)| *id);
 
     let Some(hub_node) = hub_node else {
         return;
     };
 
-    let mut hub_ports = HUB_PORT_NODE_IDS.lock();
-    for port in 1..=port_count {
-        if hub_ports.iter().any(|(slot, p, _)| *slot == hub_slot_id && *p == port) {
-            continue;
-        }
-        if let Some(node) = tree.add_child(
-            hub_node,
-            UsbNode {
-                kind: UsbNodeKind::Port,
-                port,
-                slot_id: 0,
-                vid: 0,
-                pid: 0,
-                class: 0,
-                subclass: 0,
-                protocol: 0,
-            },
-        ) {
-            let _ = hub_ports.push((hub_slot_id, port, node));
+    let mut hub_ports = core::mem::take(&mut topo.hub_port_node_ids);
+    {
+        let Some(tree) = topo.tree.as_mut() else {
+            topo.hub_port_node_ids = hub_ports;
+            return;
+        };
+
+        for port in 1..=port_count {
+            if hub_ports.iter().any(|(slot, p, _)| *slot == hub_slot_id && *p == port) {
+                continue;
+            }
+            if let Some(node) = tree.add_child(
+                hub_node,
+                UsbNode {
+                    kind: UsbNodeKind::Port,
+                    port,
+                    slot_id: 0,
+                    vid: 0,
+                    pid: 0,
+                    class: 0,
+                    subclass: 0,
+                    protocol: 0,
+                },
+            ) {
+                let _ = hub_ports.push((hub_slot_id, port, node));
+            }
         }
     }
+    topo.hub_port_node_ids = hub_ports;
 }
 
 pub fn record_hub_child(
+    ctx: &XhciContext,
     hub_slot_id: u32,
     hub_port: u8,
     slot_id: u32,
@@ -172,40 +208,74 @@ pub fn record_hub_child(
     dev_sub: u8,
     dev_prot: u8,
 ) {
-    let mut tree_guard = USB_TREE.lock();
-    let Some(tree) = tree_guard.as_mut() else {
-        return;
-    };
-
-    let port_node = {
-        let ports = HUB_PORT_NODE_IDS.lock();
-        ports
-            .iter()
-            .find(|(slot, port, _)| *slot == hub_slot_id && *port == hub_port)
-            .map(|(_, _, id)| *id)
-    };
+    let controller_id = ctx.controller_id;
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
+    let port_node = topo
+        .hub_port_node_ids
+        .iter()
+        .find(|(slot, port, _)| *slot == hub_slot_id && *port == hub_port)
+        .map(|(_, _, id)| *id);
 
     let Some(port_node) = port_node else {
         return;
     };
 
-    let Some(node) = tree.add_child(
-        port_node,
-        UsbNode {
-            kind: UsbNodeKind::Device,
-            port: hub_port,
-            slot_id,
-            vid: dev_vid,
-            pid: dev_pid,
-            class: dev_cls,
-            subclass: dev_sub,
-            protocol: dev_prot,
-        },
-    ) else {
-        return;
+    let node = {
+        let Some(tree) = topo.tree.as_mut() else {
+            return;
+        };
+
+        let Some(node) = tree.add_child(
+            port_node,
+            UsbNode {
+                kind: UsbNodeKind::Device,
+                port: hub_port,
+                slot_id,
+                vid: dev_vid,
+                pid: dev_pid,
+                class: dev_cls,
+                subclass: dev_sub,
+                protocol: dev_prot,
+            },
+        ) else {
+            return;
+        };
+        node
     };
 
-    let _ = SLOT_NODE_IDS.lock().push((slot_id, node));
+    let _ = topo.slot_node_ids.push((slot_id, node));
+}
+
+pub fn register_ep0_ring(ctx: &XhciContext, slot_id: u32, ep0_ring: &TrbRing) {
+    let controller_id = ctx.controller_id;
+    let state = ep0_ring.snapshot();
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
+    let rings = &mut topo.hub_ep0_rings;
+    if let Some(entry) = rings.iter_mut().find(|(slot, _)| *slot == slot_id) {
+        entry.1 = state;
+        return;
+    }
+    let _ = rings.push((slot_id, state));
+}
+
+fn take_ep0_state(ctx: &XhciContext, slot_id: u32) -> Option<TrbRingState> {
+    let controller_id = ctx.controller_id;
+    let topo = HUB_TOPOLOGIES[controller_id].lock();
+    topo.hub_ep0_rings
+        .iter()
+        .find(|(slot, _)| *slot == slot_id)
+        .map(|(_, s)| *s)
+}
+
+fn store_ep0_state(ctx: &XhciContext, slot_id: u32, state: TrbRingState) {
+    let controller_id = ctx.controller_id;
+    let mut topo = HUB_TOPOLOGIES[controller_id].lock();
+    let rings = &mut topo.hub_ep0_rings;
+    if let Some(entry) = rings.iter_mut().find(|(slot, _)| *slot == slot_id) {
+        entry.1 = state;
+        return;
+    }
+    let _ = rings.push((slot_id, state));
 }
 
 pub struct AttachParams<'a> {
@@ -223,7 +293,10 @@ pub struct HubWork {
     pub route_string: u32,
     pub depth: u8,
     pub hub_speed_code: u32,
+    pub multi_tt: bool,
     pub port_count: u8,
+    pub power_on_good_ms: u16,
+    pub tt_think_time: u8,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -233,6 +306,7 @@ pub struct HubChild {
     pub depth: u8,
     pub speed_code: u32,
     pub tt_info: Option<(u32, u8)>,
+    pub tt_think_time: u8,
 }
 
 pub fn is_hub_device(dev_cls: u8, dev_sub: u8, _dev_prot: u8, cfg: &[u8]) -> bool {
@@ -266,9 +340,36 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<HubDescriptorInfo
         ctx,
         ep0_ring,
         slot_id,
-        cfg: _,
+        cfg,
         target_port,
     } = params;
+
+    let config_value = parse_first_config_value(cfg).unwrap_or(1);
+    if super::control_out(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup_set_configuration(config_value),
+        None,
+        0,
+        "hub-set-configuration",
+        800,
+    )
+    .await
+    .is_err()
+    {
+        crate::log!(
+            "usb: hub claimed slot={} port={} (set configuration failed)\n",
+            slot_id,
+            target_port
+        );
+        return Err(());
+    }
+
+    const HUB_CONFIG_SETTLE_MS: u64 = 10;
+    if HUB_CONFIG_SETTLE_MS > 0 {
+        Timer::after(EmbassyDuration::from_millis(HUB_CONFIG_SETTLE_MS)).await;
+    }
 
     let Some(desc) = read_hub_descriptor(ctx, ep0_ring, slot_id).await else {
         crate::log!(
@@ -287,15 +388,350 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<HubDescriptorInfo
         desc.port_count
     );
 
-    log_hub_ports(ctx, ep0_ring, slot_id, desc.port_count).await;
-
     Ok(desc)
 }
+
+pub struct HubConfigParams<'a> {
+    pub ctx: &'a XhciContext,
+    pub cmd_ring: &'a mut TrbRing,
+    pub slot_id: u32,
+    pub dev_ctx_virt: *mut u8,
+    pub ctx_stride_bytes: usize,
+    pub ctx_stride_words: usize,
+    pub target_port: u8,
+    pub port_count: u8,
+    pub tt_think_time: u8,
+    pub multi_tt: bool,
+}
+
+unsafe fn copy_slot_ep0_contexts(
+    dev_ctx_virt: *mut u8,
+    input_cfg_virt: *mut u8,
+    ctx_stride_bytes: usize,
+    ctx_stride_words: usize,
+) {
+    let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
+    let dev_slot_ctx = dev_ctx_virt as *const u32;
+    for i in 0..ctx_stride_words {
+        write_volatile(slot_ctx.add(i), read_volatile(dev_slot_ctx.add(i)));
+    }
+
+    let ep0_src = dev_ctx_virt.add(ctx_stride_bytes) as *const u32;
+    let ep0_dst = input_cfg_virt.add(ctx_stride_bytes * 2) as *mut u32;
+    for i in 0..ctx_stride_words {
+        write_volatile(ep0_dst.add(i), read_volatile(ep0_src.add(i)));
+    }
+}
+
+pub async fn configure_hub_context(params: HubConfigParams<'_>) -> Result<(), ()> {
+    let HubConfigParams {
+        ctx,
+        cmd_ring,
+        slot_id,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        target_port,
+        port_count,
+        tt_think_time,
+        multi_tt,
+    } = params;
+
+    let (input_cfg_phys, input_cfg_virt) = dma::alloc(4096, 64).ok_or(())?;
+    unsafe { core::ptr::write_bytes(input_cfg_virt, 0, 4096) };
+
+    let mut in_add_flags: u32 = 0;
+    let mut in_dw0: u32 = 0;
+    let mut in_dw1: u32 = 0;
+    let mut in_dw2: u32 = 0;
+
+    unsafe {
+        let add_flags_ptr = input_cfg_virt as *mut u32;
+        // For Evaluate Context, include Slot + EP0. Some controllers fail to
+        // latch hub fields unless EP0 is present in the input context.
+        write_volatile(add_flags_ptr.add(1), 0x3);
+        in_add_flags = read_volatile(add_flags_ptr.add(1));
+
+        copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
+
+        let mut dw0 = read_volatile(slot_ctx.add(0));
+        dw0 |= 1 << 26; // Hub bit
+        if multi_tt {
+            dw0 |= 1 << 25; // MTT bit
+        }
+        // Ensure Context Entries covers EP0 (DCI=1).
+        dw0 = (dw0 & !(0x1F << 27)) | (1 << 27);
+        write_volatile(slot_ctx.add(0), dw0);
+
+        let mut dw1 = read_volatile(slot_ctx.add(1));
+        dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
+        dw1 = (dw1 & !(0xFF << 24)) | ((port_count as u32) << 24);
+        write_volatile(slot_ctx.add(1), dw1);
+
+        if tt_think_time != 0 {
+            let mut dw2 = read_volatile(slot_ctx.add(2));
+            dw2 = (dw2 & !(0x3 << 16)) | (((tt_think_time as u32) & 0x3) << 16);
+            write_volatile(slot_ctx.add(2), dw2);
+        }
+
+        in_dw0 = read_volatile(slot_ctx.add(0));
+        in_dw1 = read_volatile(slot_ctx.add(1));
+        in_dw2 = read_volatile(slot_ctx.add(2));
+    }
+
+    if super::USB_LOG_VERBOSE {
+        crate::log!(
+            "usb: hub eval-ctx input slot={} add=0x{:08X} slot_dw0=0x{:08X} slot_dw1=0x{:08X} slot_dw2=0x{:08X} (hub_bit={} mtt={} ports={} tt_think={})\n",
+            slot_id,
+            in_add_flags,
+            in_dw0,
+            in_dw1,
+            in_dw2,
+            (in_dw0 >> 26) & 1,
+            (in_dw0 >> 25) & 1,
+            (in_dw1 >> 24) & 0xFF,
+            (in_dw2 >> 16) & 0x3,
+        );
+    }
+
+    // Evaluate Context is the intended mechanism for updating slot-context fields
+    // (Hub bit, MTT, number of ports, TT think time) after a device is addressed.
+    let eval_ctx_cmd = Trb {
+        d0: super::xhci::lo(input_cfg_phys),
+        d1: super::xhci::hi(input_cfg_phys),
+        d2: 0,
+        d3: trb_type(13) | (slot_id << 24),
+    };
+    let _ = super::xhci::submit_cmd_and_wait(
+        ctx,
+        cmd_ring,
+        eval_ctx_cmd,
+        Some(slot_id),
+        "hub-eval-ctx",
+        600,
+        EmbassyDuration::from_millis(5),
+    )
+    .await?;
+
+    // If the controller doesn't reflect the hub fields in the output Slot Context
+    // after a successful Evaluate Context, attempt to "latch" the slot context via
+    // Address Device with BSR=1 (no SET_ADDRESS on the bus). Some emulations/controllers
+    // appear picky about when hub slot fields become effective.
+    unsafe {
+        let out_slot = dev_ctx_virt as *const u32;
+        let out_dw0 = read_volatile(out_slot.add(0));
+        let out_dw1 = read_volatile(out_slot.add(1));
+        let out_hub_bit = (out_dw0 >> 26) & 1;
+        let out_ports = (out_dw1 >> 24) & 0xFF;
+        if out_hub_bit == 0 || out_ports == 0 {
+            crate::log!(
+                "usb: hub slot {} eval-ctx did not reflect hub fields (hub_bit={} ports={}); trying addr-dev BSR=1\n",
+                slot_id,
+                out_hub_bit,
+                out_ports
+            );
+
+            // Reuse the same DMA buffer: rebuild it as a slot+EP0 input context.
+            write_volatile((input_cfg_virt as *mut u32).add(1), 0x3);
+
+            // Slot + EP0 contexts already prepared above.
+
+            let addr_dev_cmd = Trb {
+                d0: super::xhci::lo(input_cfg_phys),
+                d1: super::xhci::hi(input_cfg_phys),
+                d2: 0,
+                d3: trb_type(11) | (1 << 9) | (slot_id << 24),
+            };
+
+            let _ = super::xhci::submit_cmd_and_wait(
+                ctx,
+                cmd_ring,
+                addr_dev_cmd,
+                Some(slot_id),
+                "hub-addrdev-bsr",
+                800,
+                EmbassyDuration::from_millis(5),
+            )
+            .await?;
+        }
+    }
+
+    dma::dealloc(input_cfg_virt, 4096);
+    Ok(())
+}
+
+fn find_hub_interrupt_ep(cfg: &[u8]) -> Option<(u8, u16, u8)> {
+    let mut idx = 0usize;
+    let mut in_hub_if = false;
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        let ty = cfg[idx + 1];
+        match ty {
+            4 if len >= 9 => {
+                let if_cls = cfg[idx + 5];
+                let if_sub = cfg[idx + 6];
+                in_hub_if = if_cls == USB_CLASS_HUB && if_sub == USB_SUBCLASS_HUB;
+            }
+            5 if in_hub_if && len >= 7 => {
+                let ep_addr = cfg[idx + 2];
+                let attrs = cfg[idx + 3];
+                let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                let interval = cfg[idx + 6];
+                let ep_type = attrs & 0x3;
+                let ep_in = (ep_addr & 0x80) != 0;
+                if ep_type == 3 && ep_in {
+                    return Some((ep_addr, max_packet, interval));
+                }
+            }
+            _ => {}
+        }
+        idx += len;
+    }
+    None
+}
+
+pub struct HubInterruptParams<'a> {
+    pub ctx: &'a XhciContext,
+    pub cmd_ring: &'a mut TrbRing,
+    pub slot_id: u32,
+    pub dev_ctx_virt: *mut u8,
+    pub ctx_stride_bytes: usize,
+    pub ctx_stride_words: usize,
+    pub target_port: u8,
+    pub port_count: u8,
+    pub tt_think_time: u8,
+    pub multi_tt: bool,
+    pub speed_code: u32,
+    pub cfg: &'a [u8],
+}
+
+pub async fn configure_hub_interrupt(params: HubInterruptParams<'_>) -> Result<(), ()> {
+    let HubInterruptParams {
+        ctx,
+        cmd_ring,
+        slot_id,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        target_port,
+        port_count,
+        tt_think_time,
+        multi_tt,
+        speed_code,
+        cfg,
+    } = params;
+
+    let Some((ep_addr, max_packet, interval)) = find_hub_interrupt_ep(cfg) else {
+        return Err(());
+    };
+
+    const HUB_INT_TRBS: usize = 32;
+    let (ep_ring_phys, ep_ring_virt) = dma::alloc(HUB_INT_TRBS * core::mem::size_of::<Trb>(), 64)
+        .ok_or(())?;
+    unsafe { core::ptr::write_bytes(ep_ring_virt, 0, HUB_INT_TRBS * core::mem::size_of::<Trb>()) };
+    let ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, HUB_INT_TRBS) };
+
+    let (input_cfg_phys, input_cfg_virt) = dma::alloc(4096, 64).ok_or(())?;
+    unsafe { core::ptr::write_bytes(input_cfg_virt, 0, 4096) };
+
+    let dci = endpoint_target(ep_addr);
+    // In the xHCI Input Context, index 0 is the Input Control Context,
+    // index 1 is the Slot Context, and EP0 is DCI=1 at index 2.
+    let ep_ctx_index = dci + 1;
+    // Add Context flags are indexed by Device Context Index (DCI):
+    // bit0=slot, bit1=EP0 (DCI=1), bit2=EP1 OUT (DCI=2), bit3=EP1 IN (DCI=3), ...
+    let ep_add_bit = dci;
+
+    unsafe {
+        let add_flags_ptr = input_cfg_virt as *mut u32;
+        // Match the proven HID Configure Endpoint path: add Slot + the target endpoint.
+        write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_add_bit));
+
+        let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
+        // Slot context is at index 1; endpoint context for DCI=N is at index (1 + N).
+        let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
+        let ep_ctx = input_cfg_virt.add(ep_ctx_off) as *mut u32;
+
+        copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
+
+        let mut dw0 = read_volatile(slot_ctx.add(0));
+        dw0 |= 1 << 26;
+        if multi_tt {
+            dw0 |= 1 << 25;
+        }
+        // Context Entries is the highest valid DCI.
+        dw0 = (dw0 & !(0x1F << 27)) | ((dci as u32) << 27);
+        write_volatile(slot_ctx.add(0), dw0);
+
+        let mut dw1 = read_volatile(slot_ctx.add(1));
+        dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
+        dw1 = (dw1 & !(0xFF << 24)) | ((port_count as u32) << 24);
+        write_volatile(slot_ctx.add(1), dw1);
+
+        if tt_think_time != 0 {
+            let mut dw2 = read_volatile(slot_ctx.add(2));
+            dw2 = (dw2 & !(0x3 << 16)) | (((tt_think_time as u32) & 0x3) << 16);
+            write_volatile(slot_ctx.add(2), dw2);
+        }
+
+        let interval_field = if speed_code == 3 {
+            core::cmp::min(15u32, interval.saturating_sub(1) as u32)
+        } else {
+            interval as u32
+        };
+
+        write_volatile(
+            ep_ctx.add(0),
+            ep_state_bits(EP_STATE_DISABLED) | ep_interval_bits(interval_field),
+        );
+        let mut ep_cfg = ep_cerr_bits(3);
+        ep_cfg |= ep_type_bits(EP_TYPE_INT_IN);
+        ep_cfg |= ep_max_packet_bits((max_packet as u32) & 0x7FF);
+        write_volatile(ep_ctx.add(1), ep_cfg);
+        let dq = ep_ring.dequeue_ptr();
+        write_volatile(ep_ctx.add(2), super::xhci::lo(dq));
+        write_volatile(ep_ctx.add(3), super::xhci::hi(dq));
+
+        let mps = (max_packet as u32) & 0x7FF;
+        write_volatile(
+            ep_ctx.add(4),
+            ep_avg_trb_len_bits(mps) | ep_max_esit_payload_lo_bits(mps),
+        );
+    }
+
+    let cfg_ep_cmd = Trb {
+        d0: super::xhci::lo(input_cfg_phys),
+        d1: super::xhci::hi(input_cfg_phys),
+        d2: 0,
+        d3: trb_type(12) | (slot_id << 24),
+    };
+    let _ = super::xhci::submit_cmd_and_wait(
+        ctx,
+        cmd_ring,
+        cfg_ep_cmd,
+        Some(slot_id),
+        "hub-config-ep",
+        600,
+        EmbassyDuration::from_millis(5),
+    )
+    .await?;
+    dma::dealloc(input_cfg_virt, 4096);
+    // Keep the ring memory alive by not deallocating; no runtime use yet.
+    let _ = dci;
+
+    Ok(())
+}
+
 
 #[derive(Copy, Clone, Debug)]
 pub struct HubDescriptorInfo {
     pub desc_type: u8,
     pub port_count: u8,
+    pub power_on_good_ms: u16,
+    pub tt_think_time: u8,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -348,9 +784,22 @@ async fn read_hub_descriptor(
         unsafe {
             let b = core::slice::from_raw_parts(buf_virt, 9);
             if b.len() >= 3 {
+                let w_hub_chars = if b.len() >= 5 {
+                    u16::from_le_bytes([b[3], b[4]])
+                } else {
+                    0
+                };
+                let tt_think_time = ((w_hub_chars >> 5) & 0x3) as u8;
+                let raw_delay = if b.len() >= 6 { b[5] } else { 0 };
+                let mut power_on_good_ms = (raw_delay as u16) * 2;
+                if power_on_good_ms == 0 {
+                    power_on_good_ms = 20;
+                }
                 Some(HubDescriptorInfo {
                     desc_type,
                     port_count: b[2],
+                    power_on_good_ms,
+                    tt_think_time,
                 })
             } else {
                 None
@@ -369,6 +818,7 @@ pub async fn scan_ports(
     ep0_ring: &mut TrbRing,
     slot_id: u32,
     port_count: u8,
+    power_on_good_ms: u16,
 ) -> Vec<HubPortState, 32> {
     let mut out: Vec<HubPortState, 32> = Vec::new();
     let (buf_phys, buf_virt) = match dma::alloc(8, 8) {
@@ -377,8 +827,37 @@ pub async fn scan_ports(
     };
 
     for port in 1..=port_count {
-        if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+        let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
+    }
+    let delay_ms = core::cmp::max(20, power_on_good_ms as u64);
+    Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+
+    let mut failed: Vec<u8, 32> = Vec::new();
+    for port in 1..=port_count {
+        let mut attempt = 0u8;
+        let mut state_opt = None;
+        while attempt < 3 {
+            attempt += 1;
+            if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+                state_opt = Some(state);
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+
+        if let Some(state) = state_opt {
+            let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, state.change).await;
             let _ = out.push(state);
+        } else {
+            crate::log!("usb: hub port {} status read failed\n", port);
+            let _ = failed.push(port);
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+
+    if !failed.is_empty() {
+        for port in failed.iter().copied() {
+            crate::log!("usb: hub port {} status read failed (skipped)\n", port);
         }
     }
 
@@ -391,21 +870,115 @@ pub async fn ensure_port_enabled(
     ep0_ring: &mut TrbRing,
     slot_id: u32,
     port: u8,
+    power_on_good_ms: u16,
 ) -> Option<HubPortState> {
     let (buf_phys, buf_virt) = dma::alloc(8, 8)?;
 
     let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
-    let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
+    let delay_ms = core::cmp::max(20, power_on_good_ms as u64);
+    Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
 
     let mut last = None;
-    for _ in 0..50u32 {
+    let mut attempts = 0u32;
+    while attempts < 4 {
+        attempts += 1;
+
+        if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+            if state.connected {
+                crate::log!(
+                    "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={}\n",
+                    port,
+                    state.status,
+                    state.change,
+                    state.enabled as u8,
+                );
+            }
+
+            if (state.status & (1 << 8)) == 0 {
+                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
+                Timer::after(EmbassyDuration::from_millis(20)).await;
+            }
+
+            let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, state.change).await;
+
+            if state.connected && !state.enabled {
+                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
+                let mut wait = 0u32;
+                while wait < 12 {
+                    Timer::after(EmbassyDuration::from_millis(20)).await;
+                    wait += 1;
+                    if let Some(after_reset) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+                        let reset_active = (after_reset.status & (1 << 4)) != 0;
+                        let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_reset.change).await;
+                        if after_reset.connected && after_reset.enabled && !reset_active {
+                            crate::log!(
+                                "usb: hub port {} reset ok status=0x{:04X} change=0x{:04X}\n",
+                                port,
+                                after_reset.status,
+                                after_reset.change,
+                            );
+                            let settle_ms = match after_reset.speed_code {
+                                1 | 2 => 50,
+                                3 => 10,
+                                _ => 20,
+                            };
+                            Timer::after(EmbassyDuration::from_millis(settle_ms)).await;
+                            last = Some(after_reset);
+                            break;
+                        }
+                    }
+                }
+                if let Some(last_state) = last {
+                    if last_state.connected && last_state.enabled {
+                        break;
+                    }
+                }
+
+                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
+                Timer::after(EmbassyDuration::from_millis(20)).await;
+                if let Some(after_enable) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+                    crate::log!(
+                        "usb: hub port {} enable status=0x{:04X} change=0x{:04X} ped={}\n",
+                        port,
+                        after_enable.status,
+                        after_enable.change,
+                        after_enable.enabled as u8,
+                    );
+                    let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change).await;
+                    if after_enable.connected && after_enable.enabled {
+                        last = Some(after_enable);
+                        break;
+                    }
+                }
+            }
+        }
+
         if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
             last = Some(state);
             if state.connected && state.enabled {
                 break;
             }
+        } else {
+            crate::log!("usb: hub port {} status read failed during enable\n", port);
         }
-        Timer::after(EmbassyDuration::from_millis(10)).await;
+
+        Timer::after(EmbassyDuration::from_millis(20)).await;
+    }
+
+    if let Some(state) = last {
+        if !(state.connected && state.enabled) {
+            crate::log!(
+                "usb: hub port {} enable give-up status=0x{:04X} change=0x{:04X} ccs={} ped={} speed_code={}\n",
+                port,
+                state.status,
+                state.change,
+                state.connected as u8,
+                state.enabled as u8,
+                state.speed_code,
+            );
+        }
+    } else {
+        crate::log!("usb: hub port {} enable give-up (no status)\n", port);
     }
 
     dma::dealloc(buf_virt, 8);
@@ -418,39 +991,86 @@ pub async fn collect_children(
     parent_route: u32,
     depth: u8,
     hub_speed_code: u32,
+    multi_tt: bool,
     port_count: u8,
+    power_on_good_ms: u16,
+    hub_tt_think_time: u8,
 ) -> Vec<HubChild, 32> {
     let mut out: Vec<HubChild, 32> = Vec::new();
     if depth >= 5 {
         return out;
     }
 
-    let (ep0_phys, ep0_virt_raw, mut ep0_ring) = match dma::alloc(32 * core::mem::size_of::<Trb>(), 64) {
-        Some((phys, virt)) => (phys, virt, unsafe { TrbRing::new(phys, virt as *mut Trb, 32) }),
-        None => return out,
+    let Some(ep0_state) = take_ep0_state(ctx, hub_slot_id) else {
+        crate::log!("usb: hub slot {} missing ep0 ring; cannot scan ports\n", hub_slot_id);
+        return out;
     };
+    let mut ep0_ring = unsafe { TrbRing::from_state(ep0_state) };
 
-    let ports = scan_ports(ctx, &mut ep0_ring, hub_slot_id, port_count).await;
+    let ports = scan_ports(ctx, &mut ep0_ring, hub_slot_id, port_count, power_on_good_ms).await;
     for port_state in ports.iter() {
+        crate::log!(
+            "usb: hub child scan slot={} port={} status=0x{:04X} change=0x{:04X} ccs={} ped={} speed_code={}\n",
+            hub_slot_id,
+            port_state.port,
+            port_state.status,
+            port_state.change,
+            port_state.connected as u8,
+            port_state.enabled as u8,
+            port_state.speed_code,
+        );
         if !port_state.connected {
             continue;
         }
 
-        let Some(enabled) = ensure_port_enabled(ctx, &mut ep0_ring, hub_slot_id, port_state.port).await else {
+        let Some(enabled) = ensure_port_enabled(
+            ctx,
+            &mut ep0_ring,
+            hub_slot_id,
+            port_state.port,
+            power_on_good_ms,
+        )
+        .await
+        else {
+            crate::log!(
+                "usb: hub child enable failed hub_slot={} port={}\n",
+                hub_slot_id,
+                port_state.port
+            );
             continue;
         };
 
+        crate::log!(
+            "usb: hub child enabled hub_slot={} port={} status=0x{:04X} change=0x{:04X} ped={} speed_code={}\n",
+            hub_slot_id,
+            port_state.port,
+            enabled.status,
+            enabled.change,
+            enabled.enabled as u8,
+            enabled.speed_code,
+        );
+
         if !enabled.connected {
+            crate::log!(
+                "usb: hub child not connected after enable hub_slot={} port={}\n",
+                hub_slot_id,
+                port_state.port
+            );
             continue;
         }
 
-        let route = parent_route | ((port_state.port as u32) << (depth * 4));
+        // xHCI Route String is a 20-bit value made of up to 5 4-bit hub port nibbles.
+        // The first tier behind the root hub occupies bits 3:0, then 7:4, etc.
+        let shift = (depth as u32) * 4;
+        let route = (parent_route & !(0xFu32 << shift))
+            | (((port_state.port as u32) & 0xF) << shift);
         let speed_code = enabled.speed_code;
         let tt_info = if speed_code <= 2 && hub_speed_code == 3 {
             Some((hub_slot_id, port_state.port))
         } else {
             None
         };
+        let tt_think_time = if tt_info.is_some() { hub_tt_think_time } else { 0 };
 
         let _ = out.push(HubChild {
             port: port_state.port,
@@ -458,15 +1078,21 @@ pub async fn collect_children(
             depth: depth.saturating_add(1),
             speed_code,
             tt_info,
+            tt_think_time,
         });
     }
 
-    dma::dealloc(ep0_virt_raw, 32 * core::mem::size_of::<Trb>());
+    store_ep0_state(ctx, hub_slot_id, ep0_ring.snapshot());
     out
 }
 
+const HUB_FEATURE_PORT_ENABLE: u16 = 1;
 const HUB_FEATURE_PORT_RESET: u16 = 4;
 const HUB_FEATURE_PORT_POWER: u16 = 8;
+const HUB_FEATURE_C_PORT_CONNECTION: u16 = 16;
+const HUB_FEATURE_C_PORT_ENABLE: u16 = 17;
+const HUB_FEATURE_C_PORT_OVER_CURRENT: u16 = 19;
+const HUB_FEATURE_C_PORT_RESET: u16 = 20;
 
 async fn set_port_feature(
     ctx: &XhciContext,
@@ -489,6 +1115,49 @@ async fn set_port_feature(
     .map(|_| ())
 }
 
+async fn clear_port_feature(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    port: u8,
+    feature: u16,
+) -> Result<(), ()> {
+    super::control_out(
+        ctx,
+        ep0_ring,
+        slot_id,
+        setup_clear_port_feature(port, feature),
+        None,
+        0,
+        "hub-clear-port-feature",
+        200,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn clear_port_change_bits(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    port: u8,
+    change: u16,
+) -> Result<(), ()> {
+    if (change & (1 << 0)) != 0 {
+        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_CONNECTION).await;
+    }
+    if (change & (1 << 1)) != 0 {
+        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_ENABLE).await;
+    }
+    if (change & (1 << 3)) != 0 {
+        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_OVER_CURRENT).await;
+    }
+    if (change & (1 << 4)) != 0 {
+        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_RESET).await;
+    }
+    Ok(())
+}
+
 async fn read_port_state(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
@@ -497,21 +1166,31 @@ async fn read_port_state(
     buf_phys: u64,
     buf_virt: *mut u8,
 ) -> Option<HubPortState> {
-    unsafe { core::ptr::write_bytes(buf_virt, 0, 8) };
-    if super::control_in(
-        ctx,
-        ep0_ring,
-        slot_id,
-        setup_get_port_status(port, 4),
-        buf_phys,
-        4,
-        "hub-port-status",
-        400,
-    )
-    .await
-    .is_err()
-    {
-        return None;
+    let mut attempt = 0u8;
+    while attempt < 3 {
+        attempt += 1;
+        unsafe { core::ptr::write_bytes(buf_virt, 0, 8) };
+        if super::control_in(
+            ctx,
+            ep0_ring,
+            slot_id,
+            setup_get_port_status(port, 4),
+            buf_phys,
+            4,
+            "hub-port-status",
+            200,
+        )
+        .await
+        .is_ok()
+        {
+            break;
+        }
+
+        if attempt < 3 {
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        } else {
+            return None;
+        }
     }
 
     let (status, change) = unsafe {
@@ -537,83 +1216,6 @@ async fn read_port_state(
     })
 }
 
-async fn log_hub_ports(
-    ctx: &XhciContext,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    port_count: u8,
-) {
-    crate::log!(
-        "usb: hub slot={} ports={} (status: ccs ped pp spd csc pec prc oc)\n",
-        slot_id,
-        port_count
-    );
-    crate::log!("usb: hub #  status  change ccs ped pp spd csc pec prc oc\n");
-
-    let (buf_phys, buf_virt) = match dma::alloc(8, 8) {
-        Some(pair) => pair,
-        None => return,
-    };
-
-    for port in 1..=port_count {
-        unsafe { core::ptr::write_bytes(buf_virt, 0, 8) };
-        let res = super::control_in(
-            ctx,
-            ep0_ring,
-            slot_id,
-            setup_get_port_status(port, 4),
-            buf_phys,
-            4,
-            "hub-port-status",
-            400,
-        )
-        .await;
-
-        if res.is_err() {
-            crate::log!(
-                "usb: hub {:>2} status=ERR\n",
-                port
-            );
-            continue;
-        }
-
-        let (status, change) = unsafe {
-            let b = core::slice::from_raw_parts(buf_virt, 4);
-            let st = u16::from_le_bytes([b[0], b[1]]);
-            let ch = u16::from_le_bytes([b[2], b[3]]);
-            (st, ch)
-        };
-
-        let ccs = (status & (1 << 0)) != 0;
-        let ped = (status & (1 << 1)) != 0;
-        let pp = (status & (1 << 8)) != 0;
-        let low = (status & (1 << 9)) != 0;
-        let high = (status & (1 << 10)) != 0;
-        let speed = if high { "high" } else if low { "low" } else { "full" };
-
-        let csc = (change & (1 << 0)) != 0;
-        let pec = (change & (1 << 1)) != 0;
-        let prc = (change & (1 << 4)) != 0;
-        let oc = (change & (1 << 3)) != 0;
-
-        crate::log!(
-            "usb: hub {:>2} 0x{:04X} 0x{:04X} {:>3} {:>3} {:>2} {:>4} {:>3} {:>3} {:>3} {:>2}\n",
-            port,
-            status,
-            change,
-            ccs as u8,
-            ped as u8,
-            pp as u8,
-            speed,
-            csc as u8,
-            pec as u8,
-            prc as u8,
-            oc as u8,
-        );
-    }
-
-    dma::dealloc(buf_virt, 8);
-}
 
 fn setup_get_hub_descriptor(desc_type: u8, length: u16) -> Trb {
     // bmRequestType=0xA0 (IN|Class|Device), bRequest=0x06 (GET_DESCRIPTOR)
@@ -626,12 +1228,48 @@ fn setup_get_hub_descriptor(desc_type: u8, length: u16) -> Trb {
     }
 }
 
+fn setup_set_configuration(value: u8) -> Trb {
+    // bmRequestType=0x00 (OUT|Standard|Device), bRequest=0x09 (SET_CONFIGURATION)
+    Trb {
+        d0: (0x00u32) | (0x09u32 << 8) | ((value as u32) << 16),
+        d1: 0,
+        d2: 8,
+        d3: trb_type(2) | (1 << 6),
+    }
+}
+
+fn parse_first_config_value(cfg: &[u8]) -> Option<u8> {
+    let mut idx = 0usize;
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        let ty = cfg[idx + 1];
+        if ty == 2 && len >= 6 {
+            return Some(cfg[idx + 5]);
+        }
+        idx += len;
+    }
+    None
+}
+
 fn setup_get_port_status(port: u8, length: u16) -> Trb {
     // bmRequestType=0xA3 (IN|Class|Other), bRequest=0x00 (GET_STATUS)
     Trb {
         d0: (0xA3u32) | (0x00u32 << 8),
         d1: (port as u32) | ((length as u32) << 16),
         d2: 8 | (2 << 16),
+        d3: trb_type(2) | (1 << 6),
+    }
+}
+
+fn setup_clear_port_feature(port: u8, feature: u16) -> Trb {
+    // bmRequestType=0x23 (OUT|Class|Other), bRequest=0x01 (CLEAR_FEATURE)
+    Trb {
+        d0: (0x23u32) | (0x01u32 << 8) | ((feature as u32) << 16),
+        d1: (port as u32),
+        d2: 8,
         d3: trb_type(2) | (1 << 6),
     }
 }

@@ -25,6 +25,7 @@ pub struct BulkPair {
 }
 
 pub struct MassRuntime {
+    pub controller_id: usize,
     pub info: BulkPair,
     pub slot_id: u32,
     pub ep_in_target: u32,
@@ -41,7 +42,8 @@ static MASS_RUNTIMES: Mutex<Vec<MassRuntime, MAX_MASS_DEVICES>> = Mutex::new(Vec
 pub fn register_runtime(rt: MassRuntime) {
     let mut guard = MASS_RUNTIMES.lock();
     if let Some(existing) = guard.iter_mut().find(|r| {
-        r.slot_id == rt.slot_id
+        r.controller_id == rt.controller_id
+            && r.slot_id == rt.slot_id
             && r.ep_in_target == rt.ep_in_target
             && r.ep_out_target == rt.ep_out_target
     }) {
@@ -51,12 +53,12 @@ pub fn register_runtime(rt: MassRuntime) {
     let _ = guard.push(rt);
 }
 
-pub fn unregister_runtime(slot_id: u32) -> bool {
+pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let mut guard = MASS_RUNTIMES.lock();
     let mut removed = false;
     let mut idx = 0usize;
     while idx < guard.len() {
-        if guard[idx].slot_id == slot_id {
+        if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
             let _ = guard.remove(idx);
             removed = true;
         } else {
@@ -70,14 +72,14 @@ pub fn has_runtime() -> bool {
     !MASS_RUNTIMES.lock().is_empty()
 }
 
-pub fn with_runtime_by_slot<R, F>(slot_id: u32, f: F) -> Option<R>
+pub fn with_runtime_by_slot<R, F>(controller_id: usize, slot_id: u32, f: F) -> Option<R>
 where
     F: FnOnce(&MassRuntime) -> R,
 {
     MASS_RUNTIMES
         .lock()
         .iter()
-        .find(|r| r.slot_id == slot_id)
+        .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
         .map(f)
 }
 
@@ -217,6 +219,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
     let Some(set_cfg_evt) = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {
@@ -343,32 +346,19 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         d2: 0,
         d3: trb_type(12) | (slot_id << 24),
     };
-    if !cmd_ring.push(cfg_ep_cmd) {
-        crate::log!("usb: cmd ring full before configure-endpoint (mass)\n");
-        return Err(());
-    }
-    unsafe { write_volatile(ctx.doorbell.add(0), 0) };
-
-    let Some(cfg_evt) = xhci::wait_for_event(
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            evt_type == 33
-        },
+    xhci::submit_cmd_and_wait(
+        ctx,
+        cmd_ring,
+        cfg_ep_cmd,
+        Some(slot_id),
+        "mass-config-ep",
         400,
         EmbassyDuration::from_millis(5),
     )
-    .await
-    else {
-        crate::log!("usb: timeout waiting for configure-endpoint (mass)\n");
-        return Err(());
-    };
-
-    let completion_cfg = (cfg_evt.d2 >> 24) & 0xFF;
-    if completion_cfg != 1 {
-        return Err(());
-    }
+    .await?;
 
     register_runtime(MassRuntime {
+        controller_id: ctx.controller_id,
         info: pair,
         slot_id,
         ep_in_target,

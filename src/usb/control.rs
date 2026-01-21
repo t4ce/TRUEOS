@@ -28,6 +28,16 @@ pub(crate) fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -
     }
 }
 
+pub(crate) fn setup_set_address(address: u8) -> Trb {
+    // bmRequestType=0x00 (OUT|Standard|Device), bRequest=0x05 (SET_ADDRESS)
+    Trb {
+        d0: (0x00u32) | (0x05u32 << 8) | ((address as u32) << 16),
+        d1: 0,
+        d2: 8,
+        d3: trb_type(2) | (1 << 6),
+    }
+}
+
 fn setup_get_string_descriptor(desc_index: u8, langid: u16, length: u16) -> Trb {
     // bmRequestType=0x80 (IN|Standard|Device), bRequest=0x06 (GET_DESCRIPTOR)
     // wValue = (STRING << 8) | index, wIndex = langid
@@ -64,20 +74,33 @@ pub(crate) async fn control_in(
         d3: trb_type(4) | (1 << 5), // Status Stage, IOC, DIR=OUT
     };
 
-    if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
+    if !ep0_ring.push(setup) || !ep0_ring.push(data) {
         usbv!("usb: {}: ep0 ring full\n", what);
         return Err(());
     }
+
+    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
+        usbv!("usb: {}: ep0 ring full\n", what);
+        return Err(());
+    };
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
     let evt = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {
                 return false;
             }
             let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
+            if evt_slot != slot_id {
+                return false;
+            }
+
+            // Match the specific status-stage TRB we rang the doorbell for.
+            // Transfer Event TRB Pointer is 16-byte aligned; ignore low 4 bits.
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
         EmbassyDuration::from_millis(5),
@@ -136,21 +159,28 @@ pub(crate) async fn control_out(
         d2: 0,
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
-    if !ep0_ring.push(status) {
+
+    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
         usbv!("usb: {}: ep0 ring full (status)\n", what);
         return Err(());
-    }
+    };
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
     let evt = xhci::wait_for_event(
+        ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
             if evt_type != 32 {
                 return false;
             }
             let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
+            if evt_slot != slot_id {
+                return false;
+            }
+
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
         EmbassyDuration::from_millis(5),

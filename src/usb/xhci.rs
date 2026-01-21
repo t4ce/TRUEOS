@@ -16,6 +16,7 @@ pub struct XhcInfo {
     pub bar_size: u64,
     pub mmio_base: NonNull<u8>,
     pub supports_64bit: bool,
+    pub controller_id: usize,
 }
 
 /// Attempt xHCI legacy BIOS/OS ownership handoff.
@@ -79,18 +80,37 @@ unsafe fn bios_handoff_if_present(cap: *mut u8, hccparams1: u32) {
 unsafe impl Send for XhcInfo {}
 unsafe impl Sync for XhcInfo {}
 
+pub const MAX_XHCI_CONTROLLERS: usize = 8;
+
 static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
+static CONTROLLERS: Mutex<Vec<XhcInfo, MAX_XHCI_CONTROLLERS>> = Mutex::new(Vec::new());
 static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(true);
 
 pub fn set_log_ports_on_init(enable: bool) {
     LOG_PORTS_ON_INIT.store(enable, Ordering::Release);
 }
 
-fn set_first_xhc(info: XhcInfo) {
-    let mut guard = FIRST_CONTROLLER.lock();
-    if guard.is_none() {
-        *guard = Some(info);
+fn register_xhc(mut info: XhcInfo) {
+    let mut list = CONTROLLERS.lock();
+    let id = list.len();
+    if id >= MAX_XHCI_CONTROLLERS {
+        crate::log!(
+            "xhci: controller list full; dropping {:02X}:{:02X}.{}\n",
+            info.bus,
+            info.slot,
+            info.function
+        );
+        return;
     }
+
+    info.controller_id = id;
+
+    let mut first = FIRST_CONTROLLER.lock();
+    if first.is_none() {
+        *first = Some(info);
+    }
+
+    let _ = list.push(info);
 }
 
 /// Returns cached information about the first detected xHC hardware block.
@@ -98,11 +118,19 @@ pub fn xhc_info() -> Option<XhcInfo> {
     FIRST_CONTROLLER.lock().clone()
 }
 
+/// Returns cached information about all detected xHC controllers.
+pub fn xhc_list() -> Vec<XhcInfo, MAX_XHCI_CONTROLLERS> {
+    CONTROLLERS.lock().clone()
+}
+
 pub fn init_once() {
     if crate::limine::hhdm_offset().is_none() {
         crate::log!("xhci: no HHDM\n");
         return;
     }
+
+    FIRST_CONTROLLER.lock().take();
+    CONTROLLERS.lock().clear();
 
     let mut did_any = false;
     crate::pci::with_devices(|list| {
@@ -117,7 +145,7 @@ pub fn init_once() {
             let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
             if (bar_lo & 0x1) != 0 {
                 crate::log!("xhci: IO BAR not supported\n");
-                break;
+                continue;
             }
 
             let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
@@ -153,7 +181,7 @@ pub fn init_once() {
                 Ok(ptr) => ptr,
                 Err(err) => {
                     crate::log!("xhci: failed to map MMIO: {:?}\n", err);
-                    break;
+                    continue;
                 }
             };
 
@@ -185,9 +213,10 @@ pub fn init_once() {
                     bar_size: size as u64,
                     mmio_base: mmio,
                     supports_64bit,
+                    controller_id: 0,
                 };
 
-                set_first_xhc(info);
+                register_xhc(info);
 
                 const USBCMD: usize = 0x00 / 4;
                 const USBSTS: usize = 0x04 / 4;
@@ -213,7 +242,7 @@ pub fn init_once() {
                 }
                 if (sts & USBSTS_HCH) == 0 {
                     crate::log!("xhci: halt timeout sts=0x{:X}\n", sts);
-                    break;
+                    continue;
                 }
 
                 cmd = read_volatile(op.add(USBCMD));
@@ -225,7 +254,7 @@ pub fn init_once() {
                 }
                 if (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 {
                     crate::log!("xhci: reset bit stuck\n");
-                    break;
+                    continue;
                 }
 
                 spin = 10_000_000;
@@ -237,7 +266,7 @@ pub fn init_once() {
 
                 if (sts & USBSTS_CNR) != 0 {
                     crate::log!("xhci: CNR stuck sts=0x{:X}\n", sts);
-                    break;
+                    continue;
                 }
 
                 crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
@@ -248,7 +277,6 @@ pub fn init_once() {
                 }
             }
 
-            break;
         }
     });
 
@@ -282,6 +310,19 @@ pub struct TrbRing {
     enqueue: usize,
     cycle: bool,
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct TrbRingState {
+    pub phys: u64,
+    pub trbs: *mut Trb,
+    pub len: usize,
+    pub enqueue: usize,
+    pub cycle: bool,
+}
+
+// Safe because access is synchronized and the ring memory is DMA-mapped and stable.
+unsafe impl Send for TrbRingState {}
+unsafe impl Sync for TrbRingState {}
 
 unsafe impl Send for TrbRing {}
 unsafe impl Sync for TrbRing {}
@@ -333,7 +374,8 @@ impl EventBuffer {
     }
 }
 
-static EVENT_BUFFER: Mutex<EventBuffer> = Mutex::new(EventBuffer::new());
+static EVENT_BUFFERS: [Mutex<EventBuffer>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(EventBuffer::new()) }; MAX_XHCI_CONTROLLERS];
 
 struct EventRingState {
     ring: Option<EventRing>,
@@ -355,7 +397,8 @@ impl EventRingState {
     }
 }
 
-static EVENT_RING_STATE: Mutex<EventRingState> = Mutex::new(EventRingState::new());
+static EVENT_RING_STATES: [Mutex<EventRingState>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(EventRingState::new()) }; MAX_XHCI_CONTROLLERS];
 
 /// Software-side state for the xHCI (driver) view of the controller.
 #[derive(Copy, Clone, Debug)]
@@ -369,6 +412,7 @@ pub struct XhciContext {
     pub doorbell: *mut u32,
     pub runtime: *mut u32,
     pub port_count: u8,
+    pub controller_id: usize,
 }
 
 impl XhciContext {
@@ -398,6 +442,7 @@ impl XhciContext {
             doorbell,
             runtime,
             port_count,
+            controller_id: info.controller_id,
         }
     }
 
@@ -586,6 +631,28 @@ impl TrbRing {
         ring
     }
 
+    pub fn snapshot(&self) -> TrbRingState {
+        TrbRingState {
+            phys: self.phys,
+            trbs: self.trbs,
+            len: self.len,
+            enqueue: self.enqueue,
+            cycle: self.cycle,
+        }
+    }
+
+    /// # Safety
+    /// Caller must ensure the TRB ring memory is valid and still DMA-mapped.
+    pub unsafe fn from_state(state: TrbRingState) -> Self {
+        TrbRing {
+            phys: state.phys,
+            trbs: state.trbs,
+            len: state.len,
+            enqueue: state.enqueue,
+            cycle: state.cycle,
+        }
+    }
+
     unsafe fn init_link_trb(&self) {
         const TRB_TYPE_LINK: u32 = 6;
         if self.len < 2 {
@@ -639,6 +706,30 @@ impl TrbRing {
             self.cycle = !self.cycle;
         }
         true
+    }
+
+    pub fn push_with_phys(&mut self, mut trb: Trb) -> Option<u64> {
+        if self.len < 2 {
+            return None;
+        }
+
+        let usable = self.len - 1;
+        if self.enqueue >= usable {
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        let idx = self.enqueue;
+        trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
+        unsafe { write_volatile(self.trbs.add(idx), trb) };
+        self.enqueue += 1;
+        if self.enqueue >= usable {
+            unsafe { self.set_link_cycle_bit(self.cycle) };
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        Some(self.phys + (idx as u64) * size_of::<Trb>() as u64)
     }
 
     pub fn crcr_value(&self) -> u64 {
@@ -796,7 +887,7 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     write_volatile(port_ptr, writeback);
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: XhcInfo) {
     crate::log!(
         "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
@@ -806,10 +897,11 @@ pub async fn poll_task(info: XhcInfo) {
     );
 
     let ctx = unsafe { XhciContext::new(info) };
+    let controller_id = ctx.controller_id;
 
     loop {
         let evt_opt = {
-            let mut state = EVENT_RING_STATE.lock();
+            let mut state = EVENT_RING_STATES[controller_id].lock();
             let intr0 = state.intr0;
             if let Some(ring) = state.ring.as_mut() {
                 if !intr0.is_null() {
@@ -835,36 +927,37 @@ pub async fn poll_task(info: XhcInfo) {
                 continue;
             }
 
-            enqueue_event(evt);
+            enqueue_event(controller_id, evt);
         } else {
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
 }
 
-fn enqueue_event(evt: Trb) {
-    let mut buf = EVENT_BUFFER.lock();
+fn enqueue_event(controller_id: usize, evt: Trb) {
+    let mut buf = EVENT_BUFFERS[controller_id].lock();
     buf.push(evt);
 }
 
-fn try_take_matching_event<F>(predicate: &mut F) -> Option<Trb>
+fn try_take_matching_event<F>(controller_id: usize, predicate: &mut F) -> Option<Trb>
 where
     F: FnMut(&Trb) -> bool,
 {
-    let mut buf = EVENT_BUFFER.lock();
+    let mut buf = EVENT_BUFFERS[controller_id].lock();
     buf.take_matching(predicate)
 }
 
-pub fn install_event_ring(ring: EventRing, intr0: *mut u32) {
+pub fn install_event_ring(ctx: &XhciContext, ring: EventRing, intr0: *mut u32) {
     {
-        let mut state = EVENT_RING_STATE.lock();
+        let mut state = EVENT_RING_STATES[ctx.controller_id].lock();
         state.ring = Some(ring);
         state.intr0 = intr0;
     }
-    EVENT_BUFFER.lock().clear();
+    EVENT_BUFFERS[ctx.controller_id].lock().clear();
 }
 
 pub async fn wait_for_event<F>(
+    ctx: &XhciContext,
     mut predicate: F,
     timeout_iters: usize,
     delay: EmbassyDuration,
@@ -874,7 +967,7 @@ where
 {
     let mut polls = 0usize;
     loop {
-        if let Some(evt) = try_take_matching_event(&mut predicate) {
+        if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
             return Some(evt);
         }
         polls += 1;
@@ -883,6 +976,70 @@ where
         }
         Timer::after(delay).await;
     }
+}
+
+pub async fn submit_cmd_and_wait(
+    ctx: &XhciContext,
+    cmd_ring: &mut TrbRing,
+    cmd: Trb,
+    slot_filter: Option<u32>,
+    what: &'static str,
+    timeout_iters: usize,
+    delay: EmbassyDuration,
+) -> Result<Trb, ()> {
+    let cmd_phys = match cmd_ring.push_with_phys(cmd) {
+        Some(phys) => phys,
+        None => {
+            crate::log!("xhci: {}: cmd ring full\n", what);
+            return Err(());
+        }
+    };
+    unsafe { core::ptr::write_volatile(ctx.doorbell.add(0), 0) };
+
+    let evt = wait_for_event(
+        ctx,
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 33 {
+                return false;
+            }
+            let evt_cmd_ptr = ((evt.d1 as u64) << 32) | (evt.d0 as u64);
+            if (evt_cmd_ptr & !0xF) != (cmd_phys & !0xF) {
+                return false;
+            }
+            if let Some(slot) = slot_filter {
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                evt_slot == slot
+            } else {
+                true
+            }
+        },
+        timeout_iters,
+        delay,
+    )
+    .await
+    .ok_or(())
+    .map_err(|_| {
+        crate::log!("xhci: {}: timeout waiting for command completion\n", what);
+    })?;
+
+    let completion = (evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        let evt_slot = (evt.d3 >> 24) & 0xFF;
+        crate::log!(
+            "xhci: {} failed cc={} slot={} evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            what,
+            completion,
+            evt_slot,
+            evt.d0,
+            evt.d1,
+            evt.d2,
+            evt.d3,
+        );
+        return Err(());
+    }
+
+    Ok(evt)
 }
 
 pub const fn lo(val: u64) -> u32 {
