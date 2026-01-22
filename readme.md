@@ -70,3 +70,12 @@ sudo update-initramfs -u
 # After reboot, verify:
 #   lspci -k -s 06:00.0   (should say: Kernel driver in use: vfio-pci)
 #   ls -l /dev/vfio       (should contain the group node e.g. /dev/vfio/21)
+
+
+## help
+# unbind all
+sudo modprobe vfio-pci
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+# 
