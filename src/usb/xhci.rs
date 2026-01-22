@@ -978,6 +978,23 @@ where
     }
 }
 
+pub fn wait_for_event_spin<F>(ctx: &XhciContext, mut predicate: F, spin_iters: usize) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let mut polls = 0usize;
+    loop {
+        if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
+            return Some(evt);
+        }
+        polls += 1;
+        if polls > spin_iters {
+            return None;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 pub async fn submit_cmd_and_wait(
     ctx: &XhciContext,
     cmd_ring: &mut TrbRing,

@@ -4,6 +4,8 @@ pub mod hid;
 pub mod hub;
 pub mod input;
 pub mod mass;
+pub mod bot;
+pub mod scsi;
 pub mod pen;
 pub mod print;
 pub mod isoch;

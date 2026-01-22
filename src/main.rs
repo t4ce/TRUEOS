@@ -255,8 +255,8 @@ pub extern "C" fn _start() -> ! {
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
-    disc::files::create_demo_file(); //needs hardware qemu param i guess
-    crate::log!("main: after create_demo_file\n");
+    // FATFS demo on the first detected USB mass-storage device.
+    let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
     let _ = spawner.spawn(shell::task());
     

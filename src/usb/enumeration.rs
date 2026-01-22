@@ -6,7 +6,7 @@ use super::xhci::{
     EP_STATE_RUNNING, EP_TYPE_CONTROL,
 };
 use super::{
-    attach, control, hub, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
+    attach, control, hub, mass, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -766,6 +766,19 @@ pub(crate) async fn enumerate_with_params(
             }
             idx += len;
         }
+    }
+
+    if let Some(pair) = mass::parse_mass_interface(cfg_slice) {
+        crate::log!(
+            "usb: enum port {} mass-candidate (SCSI/BOT) iface={} cfg={} ep_in=0x{:02X} ep_out=0x{:02X} mps_in={} mps_out={}\n",
+            target_port,
+            pair.interface,
+            pair.configuration,
+            pair.ep_in,
+            pair.ep_out,
+            pair.max_packet_in,
+            pair.max_packet_out,
+        );
     }
 
     if attach::try_attach_device(

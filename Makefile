@@ -13,16 +13,19 @@ LIMINE_BIN 		:= $(LIMINE_PREFIX)/bin/limine
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait 
+
 QEMU_USB_FLAGS =  \
-	-drive file=disk.img,if=none,format=raw,id=nvme0 \
-	-device nvme,drive=nvme0,serial=deadbeef \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
 	-device vfio-pci,host=0000:06:00.0 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost0 \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0 \
-	
+	-drive file=disk.img,if=none,format=raw,id=usbdisk0 \
+	-device usb-storage,drive=usbdisk0,bus=xhci.0,port=5,id=usbms0 \
+# -drive file=disk.img,if=none,format=raw,id=nvme0 \	
+# -device nvme,drive=nvme0,serial=deadbeef \
+
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
 $(LIMINE_STAMP):
