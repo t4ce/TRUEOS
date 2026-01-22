@@ -3,12 +3,19 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
 use crate::shellcube::{CubeState, CUBE_COLS, CUBE_ROWS};
+use crate::ecma48;
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 
 #[inline]
 fn write_prompt() {
     uart1_com1::write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
+}
+
+#[inline]
+fn write_banner() {
+    uart1_com1::write_str("TRUE OS\n");
+    write_prompt();
 }
 
 static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
@@ -32,8 +39,7 @@ enum CommandAction {
 pub async fn task() {
     uart1_com1::init();
 
-    uart1_com1::write_str("TRUE OS\n");
-    write_prompt();
+    write_banner();
 
     let mut line: String<128> = String::new();
     let mut go_idx: usize = 0;
@@ -50,8 +56,9 @@ pub async fn task() {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
                     GO_MODE.store(false, Ordering::Release);
-                    uart1_com1::write_str("\r\n");
-                    write_prompt();
+                    uart1_com1::write_str(ecma48::CLEAR_SCREEN);
+                    uart1_com1::write_str(ecma48::HOME);
+                    write_banner();
                 }
                 continue;
             }
