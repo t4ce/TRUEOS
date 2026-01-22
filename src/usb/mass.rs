@@ -3,7 +3,9 @@ use super::xhci::{
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
+use super::bot;
 use crate::pci::dma;
+use crate::disc::block as disc_block;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
@@ -26,12 +28,17 @@ pub struct BulkPair {
 
 pub struct MassRuntime {
     pub controller_id: usize,
+    pub ctx: XhciContext,
     pub info: BulkPair,
     pub slot_id: u32,
     pub ep_in_target: u32,
     pub ep_out_target: u32,
     pub ring_in: TrbRing,
     pub ring_out: TrbRing,
+    pub bot_tag: u32,
+    pub disc: Option<disc_block::DeviceHandle>,
+    pub block_size: u32,
+    pub block_count: u64,
 }
 
 unsafe impl Send for MassRuntime {}
@@ -359,13 +366,277 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     register_runtime(MassRuntime {
         controller_id: ctx.controller_id,
+        ctx: *ctx,
         info: pair,
         slot_id,
         ep_in_target,
         ep_out_target,
         ring_in,
         ring_out,
+        bot_tag: 1,
+        disc: None,
+        block_size: 512,
+        block_count: 0,
     });
 
+    // Prove the SCSI/BOT path early: attempt a basic INQUIRY + READ CAPACITY.
+    // This is best-effort for now; failures should not prevent device registration.
+
+    // NOTE: We intentionally do this *before* upper block-device integration.
+    // If it fails, we still keep the runtime so future iterations can retry.
+    {
+        let mut guard = MASS_RUNTIMES.lock();
+        if let Some(rt) = guard
+            .iter_mut()
+            .find(|r| r.controller_id == ctx.controller_id && r.slot_id == slot_id)
+        {
+            let tag0 = rt.bot_tag;
+            if let Ok(inq) = bot::scsi_inquiry_basic(
+                ctx,
+                &mut rt.ring_out,
+                &mut rt.ring_in,
+                slot_id,
+                rt.ep_out_target,
+                rt.ep_in_target,
+                tag0,
+            )
+            .await
+            {
+                rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                crate::log!(
+                    "usb: mass inquiry pdt={} removable={} vendor={:?} product={:?} rev={:?}\n",
+                    inq.peripheral_type,
+                    inq.removable,
+                    &inq.vendor,
+                    &inq.product,
+                    &inq.revision
+                );
+            }
+
+            let tag1 = rt.bot_tag;
+            if let Ok(cap) = bot::scsi_read_capacity_10(
+                ctx,
+                &mut rt.ring_out,
+                &mut rt.ring_in,
+                slot_id,
+                rt.ep_out_target,
+                rt.ep_in_target,
+                tag1,
+            )
+            .await
+            {
+                rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                rt.block_size = cap.block_size.max(1);
+                rt.block_count = (cap.last_lba as u64).saturating_add(1);
+                crate::log!(
+                    "usb: mass capacity last_lba={} block_size={} bytes\n",
+                    cap.last_lba,
+                    cap.block_size
+                );
+
+                if rt.disc.is_none() && rt.block_count > 0 {
+                    let descriptor = disc_block::DeviceDescriptor::new(disc_block::DeviceKind::Unknown)
+                        .with_label("usbms");
+
+                    let dev = UsbMassBlockDevice {
+                        controller_id: rt.controller_id,
+                        slot_id: rt.slot_id,
+                        block_size: rt.block_size,
+                        block_count: rt.block_count,
+                    };
+                    let handle = disc_block::register_device(descriptor, dev);
+                    rt.disc = Some(handle);
+                    crate::log!(
+                        "usb: mass registered block device id={} blocks={} block_size={}\n",
+                        handle.id().raw(),
+                        rt.block_count,
+                        rt.block_size
+                    );
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+struct UsbMassBlockDevice {
+    controller_id: usize,
+    slot_id: u32,
+    block_size: u32,
+    block_count: u64,
+}
+
+impl disc_block::BlockDevice for UsbMassBlockDevice {
+    fn block_size_bytes(&self) -> u32 {
+        self.block_size
+    }
+
+    fn block_count(&self) -> u64 {
+        self.block_count
+    }
+
+    fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> disc_block::Result<()> {
+        let block_size = self.block_size_bytes() as usize;
+        if block_size == 0 || buf.len() % block_size != 0 {
+            return Err(disc_block::Error::InvalidParam);
+        }
+
+        let blocks_total = (buf.len() / block_size) as u64;
+        if blocks_total == 0 {
+            return Ok(());
+        }
+
+        // Bounds check.
+        let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+        if end > self.block_count {
+            return Err(disc_block::Error::OutOfBounds);
+        }
+
+        // Copy-based DMA IO: xHCI requires DMA-safe buffers.
+        const MAX_IO_BYTES: usize = 64 * 1024;
+        let mut remaining = buf;
+        let mut cur_lba = lba;
+
+        while !remaining.is_empty() {
+            let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+            let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
+            let bytes_here = blocks_here * block_size;
+
+            let (dma_phys, dma_virt) = dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
+            unsafe { write_bytes(dma_virt, 0, bytes_here) };
+
+            let ok = {
+                let mut guard = MASS_RUNTIMES.lock();
+                let Some(rt) = guard
+                    .iter_mut()
+                    .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
+                else {
+                    dma::dealloc(dma_virt, bytes_here);
+                    return Err(disc_block::Error::NotReady);
+                };
+
+                let tag = rt.bot_tag;
+                let ctx = rt.ctx;
+
+                let c = bot::scsi_read_10_sync(
+                    &ctx,
+                    &mut rt.ring_out,
+                    &mut rt.ring_in,
+                    self.slot_id,
+                    rt.ep_out_target,
+                    rt.ep_in_target,
+                    tag,
+                    cur_lba as u32,
+                    blocks_here as u16,
+                    unsafe { core::slice::from_raw_parts_mut(dma_virt, bytes_here) },
+                );
+                if c.is_ok() {
+                    rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if !ok {
+                dma::dealloc(dma_virt, bytes_here);
+                return Err(disc_block::Error::Io);
+            }
+
+            unsafe {
+                let src = core::slice::from_raw_parts(dma_virt, bytes_here);
+                remaining[..bytes_here].copy_from_slice(src);
+            }
+            dma::dealloc(dma_virt, bytes_here);
+
+            remaining = &mut remaining[bytes_here..];
+            cur_lba += blocks_here as u64;
+        }
+
+        Ok(())
+    }
+
+    fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> disc_block::Result<()> {
+        let block_size = self.block_size_bytes() as usize;
+        if block_size == 0 || buf.len() % block_size != 0 {
+            return Err(disc_block::Error::InvalidParam);
+        }
+
+        let blocks_total = (buf.len() / block_size) as u64;
+        if blocks_total == 0 {
+            return Ok(());
+        }
+
+        let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+        if end > self.block_count {
+            return Err(disc_block::Error::OutOfBounds);
+        }
+
+        const MAX_IO_BYTES: usize = 64 * 1024;
+        let mut remaining = buf;
+        let mut cur_lba = lba;
+
+        while !remaining.is_empty() {
+            let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+            let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
+            let bytes_here = blocks_here * block_size;
+
+            let (dma_phys, dma_virt) =
+                dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
+            }
+
+            let ok = {
+                let mut guard = MASS_RUNTIMES.lock();
+                let Some(rt) = guard
+                    .iter_mut()
+                    .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
+                else {
+                    dma::dealloc(dma_virt, bytes_here);
+                    return Err(disc_block::Error::NotReady);
+                };
+
+                let tag = rt.bot_tag;
+                let ctx = rt.ctx;
+                let c = bot::scsi_write_10_sync(
+                    &ctx,
+                    &mut rt.ring_out,
+                    &mut rt.ring_in,
+                    self.slot_id,
+                    rt.ep_out_target,
+                    rt.ep_in_target,
+                    tag,
+                    cur_lba as u32,
+                    blocks_here as u16,
+                    unsafe { core::slice::from_raw_parts(dma_virt, bytes_here) },
+                );
+                if c.is_ok() {
+                    rt.bot_tag = rt.bot_tag.wrapping_add(1);
+                    true
+                } else {
+                    false
+                }
+            };
+
+            dma::dealloc(dma_virt, bytes_here);
+            if !ok {
+                return Err(disc_block::Error::Io);
+            }
+
+            remaining = &remaining[bytes_here..];
+            cur_lba += blocks_here as u64;
+        }
+
+        Ok(())
+    }
+
+    fn dma_alignment_bytes(&self) -> u32 {
+        64
+    }
+
+    fn supports_write(&self) -> bool {
+        true
+    }
 }
