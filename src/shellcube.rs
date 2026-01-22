@@ -8,8 +8,6 @@ const CUBE_SCALE: i32 = 700;
 const CUBE_DIST: i32 = CUBE_SCALE * 3 as i32;
 const CUBE_PINK: (u8, u8, u8) = (255, 55, 255);
 const BORDER_INSET: usize = 0;
-const BORDER_MAX_ROW: usize = CUBE_ROWS - 2;
-const BORDER_MAX_COL: usize = CUBE_COLS - 2;
 const DRAW_SIZE: usize = 65;
 const DRAW_Y_SHIFT: isize = -(DRAW_SIZE as isize / 2);
 const CENTER_Y_OFFSET: i32 = 10; // because i cant math
@@ -48,7 +46,6 @@ impl CubeState {
 pub fn enter_mode() {
     uart1_com1::write_str(ecma48::CLEAR_SCREEN);
     uart1_com1::write_str(ecma48::HOME);
-    draw_border();
 }
 
 fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; CUBE_SIZE]) {
@@ -96,12 +93,6 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
         if now != prev[idx] || (now == b'#' && color_now != prev_color[idx]) {
             let row = idx / CUBE_COLS;
             let col = idx % CUBE_COLS;
-            if row == 0 || row == BORDER_MAX_ROW || col == 0 || col == BORDER_MAX_COL {
-                continue;
-            }
-            if row >= CUBE_ROWS - 1 || col >= CUBE_COLS - 1 {
-                continue;
-            }
             write_pos(row + 1, col + 1);
             if now == b'#' {
                 let (r, g, b) = line_rgb(color_now);
@@ -192,27 +183,12 @@ fn write_pos(row: usize, col: usize) {
     uart1_com1::write_fmt(format_args!("{}", ecma48::pos(row, col)));
 }
 
-fn draw_border() {
-    for col in 0..=BORDER_MAX_COL {
-        write_pos(1, col + 1);
-        uart1_com1::write_byte(b'.');
-        write_pos(BORDER_MAX_ROW + 1, col + 1);
-        uart1_com1::write_byte(b'.');
-    }
-    for row in 0..=BORDER_MAX_ROW {
-        write_pos(row + 1, 1);
-        uart1_com1::write_byte(b'.');
-        write_pos(row + 1, BORDER_MAX_COL + 1);
-        uart1_com1::write_byte(b'.');
-    }
-}
-
 #[inline]
 fn draw_bounds() -> (usize, usize, usize, usize) {
-    let safe_min_x = BORDER_INSET + 1;
-    let safe_min_y = BORDER_INSET + 1;
-    let safe_max_x = BORDER_MAX_COL - BORDER_INSET - 1;
-    let safe_max_y = BORDER_MAX_ROW - BORDER_INSET - 1;
+    let safe_min_x = BORDER_INSET;
+    let safe_min_y = BORDER_INSET;
+    let safe_max_x = CUBE_COLS - BORDER_INSET - 1;
+    let safe_max_y = CUBE_ROWS - BORDER_INSET - 1;
     let safe_w = safe_max_x.saturating_sub(safe_min_x) + 1;
     let safe_h = safe_max_y.saturating_sub(safe_min_y) + 1;
 
