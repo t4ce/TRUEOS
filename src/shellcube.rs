@@ -1,85 +1,47 @@
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use heapless::String;
+use crate::ecma48;
+use crate::shell::uart1_com1;
 
-const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
+pub const CUBE_COLS: usize = 100;
+pub const CUBE_ROWS: usize = 100;
+const CUBE_SIZE: usize = CUBE_COLS * CUBE_ROWS;
+const CUBE_SCALE: i32 = 1024;
+const CUBE_DIST: i32 = CUBE_SCALE;
+const CUBE_PINK: (u8, u8, u8) = (255, 55, 255);
 
-#[inline]
-fn write_prompt() {
-    uart1_com1::write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
+pub struct CubeState {
+    phase: u8,
+    prev: [u8; CUBE_SIZE],
+    prev_color: [u8; CUBE_SIZE],
 }
 
-static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
-static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
-static GO_MODE: AtomicBool = AtomicBool::new(false);
-const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
-//['⢈⡈⡐⡠⣀⢄⢂⢁⡁
-
-const CUBE_COLS: usize = 100;
-use crate::shellcube::{CubeState, CUBE_COLS, CUBE_ROWS};
-#[derive(Copy, Clone)]
-enum PendingAction {
-    Reset,
-    S5,
-}
-
-enum CommandAction {
-    None,
-    Pending(PendingAction),
-    EnterCube,
-}
-
-#[embassy_executor::task]
-        crate::shellcube::enter_mode();
-    Some((cols, rows))
-}
-
-fn write_usize(value: usize) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    let mut v = value;
-    if v == 0 {
-        uart1_com1::write_byte(b'0');
-        return;
+impl CubeState {
+    pub fn new() -> Self {
+        Self {
+            phase: 0,
+            prev: [b' '; CUBE_SIZE],
+            prev_color: [0u8; CUBE_SIZE],
+        }
     }
-    while v > 0 {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
+
+    pub fn reset(&mut self) {
+        self.phase = 0;
+        for b in self.prev.iter_mut() {
+            *b = b' ';
+        }
+        for c in self.prev_color.iter_mut() {
+            *c = 0;
+        }
     }
-    for b in &buf[i..] {
-        uart1_com1::write_byte(*b);
+
+    pub fn draw_frame(&mut self) {
+        draw_cube_frame(self.phase, &mut self.prev, &mut self.prev_color);
+        self.phase = self.phase.wrapping_add(2);
     }
 }
 
-fn draw_corners(cols: usize, rows: usize) {
-    if cols == 0 || rows == 0 {
-        return;
-    }
-    uart1_com1::write_str(crate::ecma48::SAVE_CURSOR);
-    // top-right
-    write_pos(1, cols);
-    uart1_com1::write_byte(b'O');
-    // bottom-left
-    write_pos(rows, 1);
-    uart1_com1::write_byte(b'O');
-    // bottom-right
-    write_pos(rows, cols);
-    uart1_com1::write_byte(b'O');
-    uart1_com1::write_str(crate::ecma48::RESTORE_CURSOR);
-}
-
-#[inline]
-fn write_pos(row: usize, col: usize) {
-    uart1_com1::write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
-}
-
-fn enter_cube_mode() {
-    TERM_COLS.store(CUBE_COLS, Ordering::Release);
-    TERM_ROWS.store(CUBE_ROWS, Ordering::Release);
-    draw_corners(CUBE_COLS, CUBE_ROWS);
-    uart1_com1::write_str(crate::ecma48::CLEAR_SCREEN);
-    uart1_com1::write_str(crate::ecma48::HOME);
+pub fn enter_mode() {
+    uart1_com1::write_str(ecma48::CLEAR_SCREEN);
+    uart1_com1::write_str(ecma48::HOME);
 }
 
 fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; CUBE_SIZE]) {
@@ -137,10 +99,7 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
             write_pos(row + 1, col + 1);
             if now == b'#' {
                 let (r, g, b) = line_rgb(color_now);
-                uart1_com1::write_fmt(format_args!(
-                    "{}",
-                    crate::ecma48::color("§", (r, g, b))
-                ));
+                uart1_com1::write_fmt(format_args!("{}", ecma48::color("§", (r, g, b))));
             } else if now == b'.' {
                 uart1_com1::write_byte(b'.');
             } else {
@@ -154,7 +113,7 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
 
 #[inline]
 fn line_rgb(t: u8) -> (u8, u8, u8) {
-    let g = 255u16 - ((255u16 - PROMPT_RGB.1 as u16) * t as u16 / 255u16);
+    let g = 255u16 - ((255u16 - CUBE_PINK.1 as u16) * t as u16 / 255u16);
     (255, g as u8, 255)
 }
 
@@ -208,6 +167,11 @@ fn plot(buf: &mut [u8; CUBE_SIZE], colors: &mut [u8; CUBE_SIZE], x: i32, y: i32,
     colors[idx] = color;
 }
 
+#[inline]
+fn write_pos(row: usize, col: usize) {
+    uart1_com1::write_fmt(format_args!("{}", ecma48::pos(row, col)));
+}
+
 const CUBE_VERTS: [(i32, i32, i32); 8] = [
     (-1, -1, -1),
     (1, -1, -1),
@@ -255,91 +219,3 @@ const COS_LUT: [i32; 64] = [
     0, 100, 200, 297, 392, 483, 569, 650,
     724, 792, 851, 904, 946, 979, 1004, 1019,
 ];
-
-pub(crate) mod uart1_com1 {
-    use core::fmt;
-    use core::sync::atomic::{AtomicBool, Ordering};
-
-    const COM1: u16 = 0x3F8;
-    static INIT: AtomicBool = AtomicBool::new(false);
-
-    pub(super) fn init() {
-        if INIT.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        unsafe {
-            crate::portio::outb(COM1 + 1, 0x00); // disable IRQs
-            crate::portio::outb(COM1 + 3, 0x80); // DLAB on
-            crate::portio::outb(COM1 + 0, 0x01); // divisor low (115200)
-            crate::portio::outb(COM1 + 1, 0x00); // divisor high
-            crate::portio::outb(COM1 + 3, 0x03); // 8N1
-            crate::portio::outb(COM1 + 2, 0xC7); // FIFO enable
-            crate::portio::outb(COM1 + 4, 0x0B); // IRQs, RTS/DSR
-        }
-    }
-
-    #[inline]
-    pub(super) fn write_byte(b: u8) {
-        if !INIT.load(Ordering::Acquire) {
-            init();
-        }
-        unsafe {
-            while (crate::portio::inb(COM1 + 5) & 0x20) == 0 {}
-            crate::portio::outb(COM1, b);
-        }
-    }
-
-    pub(super) fn write_str(s: &str) {
-        for &b in s.as_bytes() {
-            if b == b'\n' {
-                write_byte(b'\r');
-            }
-            write_byte(b);
-        }
-    }
-
-    pub(super) fn write_bytes(bytes: &[u8]) {
-        for &b in bytes {
-            write_byte(b);
-        }
-    }
-
-    pub(super) fn write_fmt(args: fmt::Arguments<'_>) {
-        use core::fmt::Write;
-
-        struct Writer;
-
-        impl fmt::Write for Writer {
-            fn write_str(&mut self, s: &str) -> fmt::Result {
-                for &b in s.as_bytes() {
-                    if b == b'\n' {
-                        write_byte(b'\r');
-                    }
-                    write_byte(b);
-                }
-                Ok(())
-            }
-        }
-
-        let _ = Writer.write_fmt(args);
-    }
-
-    pub(super) fn write_char(ch: char) {
-        let mut buf = [0u8; 4];
-        let s = ch.encode_utf8(&mut buf);
-        write_str(s);
-    }
-
-    pub(super) fn read_byte() -> Option<u8> {
-        if !INIT.load(Ordering::Acquire) {
-            init();
-        }
-        unsafe {
-            if (crate::portio::inb(COM1 + 5) & 0x01) != 0 {
-                Some(crate::portio::inb(COM1))
-            } else {
-                None
-            }
-        }
-    }
-}
