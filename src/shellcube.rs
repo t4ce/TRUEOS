@@ -1,12 +1,18 @@
 use crate::ecma48;
 use crate::shell::uart1_com1;
 
-pub const CUBE_COLS: usize = 100;
-pub const CUBE_ROWS: usize = 100;
+pub const CUBE_COLS: usize = 75;
+pub const CUBE_ROWS: usize = 75;
 const CUBE_SIZE: usize = CUBE_COLS * CUBE_ROWS;
-const CUBE_SCALE: i32 = 1024;
-const CUBE_DIST: i32 = CUBE_SCALE;
+const CUBE_SCALE: i32 = 700;
+const CUBE_DIST: i32 = CUBE_SCALE * 3 as i32;
 const CUBE_PINK: (u8, u8, u8) = (255, 55, 255);
+const BORDER_INSET: usize = 0;
+const BORDER_MAX_ROW: usize = CUBE_ROWS - 2;
+const BORDER_MAX_COL: usize = CUBE_COLS - 2;
+const DRAW_SIZE: usize = 65;
+const DRAW_Y_SHIFT: isize = -(DRAW_SIZE as isize / 2);
+const CENTER_Y_OFFSET: i32 = 10; // because i cant math
 
 pub struct CubeState {
     phase: u8,
@@ -42,20 +48,23 @@ impl CubeState {
 pub fn enter_mode() {
     uart1_com1::write_str(ecma48::CLEAR_SCREEN);
     uart1_com1::write_str(ecma48::HOME);
+    draw_border();
 }
 
 fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; CUBE_SIZE]) {
     let mut curr = [b' '; CUBE_SIZE];
     let mut curr_color = [0u8; CUBE_SIZE];
 
+    let (draw_min_x, draw_min_y, draw_max_x, draw_max_y) = draw_bounds();
     let angle = (phase & 63) as usize;
     let angle2 = ((phase >> 1) & 63) as usize;
     let (sin_y, cos_y) = (SIN_LUT[angle], COS_LUT[angle]);
     let (sin_x, cos_x) = (SIN_LUT[angle2], COS_LUT[angle2]);
 
     let mut verts2d = [(0i32, 0i32); 8];
-    let center_x = (CUBE_COLS as i32 - 1) / 2;
-    let center_y = (CUBE_ROWS as i32 - 1) / 2 - (CUBE_ROWS as i32 / 4);
+    let center_x = (draw_min_x + draw_max_x) as i32 / 2;
+    let center_y = (draw_min_y + draw_max_y) as i32 / 2 - CENTER_Y_OFFSET;
+    let proj_scale = (DRAW_SIZE as i32 / 2).saturating_sub(1).max(1);
     for (i, (x, y, z)) in CUBE_VERTS.iter().copied().enumerate() {
         let x = x * CUBE_SCALE / 2;
         let y = y * CUBE_SCALE / 2;
@@ -67,8 +76,8 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
         let z2 = (y * sin_x + z1 * cos_x) / CUBE_SCALE;
 
         let denom = (z2 + CUBE_DIST).max(CUBE_SCALE / 2);
-        let px = (x1 * 40 / denom) + center_x;
-        let py = (y1 * 40 / denom) + center_y;
+        let px = (x1 * proj_scale / denom) + center_x;
+        let py = (y1 * proj_scale / denom) + center_y;
         verts2d[i] = (px, py);
     }
 
@@ -81,21 +90,18 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
         draw_line(&mut curr, &mut curr_color, x0, y0, x1, y1, b'#', t);
     }
 
-    for col in 0..CUBE_COLS {
-        curr[col] = b'.';
-        curr[(CUBE_ROWS - 1) * CUBE_COLS + col] = b'.';
-    }
-    for row in 0..CUBE_ROWS {
-        curr[row * CUBE_COLS] = b'.';
-        curr[row * CUBE_COLS + (CUBE_COLS - 1)] = b'.';
-    }
-
     for idx in 0..CUBE_SIZE {
         let now = curr[idx];
         let color_now = curr_color[idx];
         if now != prev[idx] || (now == b'#' && color_now != prev_color[idx]) {
             let row = idx / CUBE_COLS;
             let col = idx % CUBE_COLS;
+            if row == 0 || row == BORDER_MAX_ROW || col == 0 || col == BORDER_MAX_COL {
+                continue;
+            }
+            if row >= CUBE_ROWS - 1 || col >= CUBE_COLS - 1 {
+                continue;
+            }
             write_pos(row + 1, col + 1);
             if now == b'#' {
                 let (r, g, b) = line_rgb(color_now);
@@ -153,13 +159,27 @@ fn draw_line(
 }
 
 #[inline]
-fn plot(buf: &mut [u8; CUBE_SIZE], colors: &mut [u8; CUBE_SIZE], x: i32, y: i32, ch: u8, color: u8) {
+fn plot(
+    buf: &mut [u8; CUBE_SIZE],
+    colors: &mut [u8; CUBE_SIZE],
+    x: i32,
+    y: i32,
+    ch: u8,
+    color: u8,
+) {
     if x < 0 || y < 0 {
         return;
     }
     let x = x as usize;
     let y = y as usize;
-    if x >= CUBE_COLS || y >= CUBE_ROWS {
+    if x < BORDER_INSET || y < BORDER_INSET {
+        return;
+    }
+    if x >= CUBE_COLS - BORDER_INSET || y >= CUBE_ROWS - BORDER_INSET {
+        return;
+    }
+    let (draw_min_x, draw_min_y, draw_max_x, draw_max_y) = draw_bounds();
+    if x < draw_min_x || x > draw_max_x || y < draw_min_y || y > draw_max_y {
         return;
     }
     let idx = y * CUBE_COLS + x;
@@ -170,6 +190,48 @@ fn plot(buf: &mut [u8; CUBE_SIZE], colors: &mut [u8; CUBE_SIZE], x: i32, y: i32,
 #[inline]
 fn write_pos(row: usize, col: usize) {
     uart1_com1::write_fmt(format_args!("{}", ecma48::pos(row, col)));
+}
+
+fn draw_border() {
+    for col in 0..=BORDER_MAX_COL {
+        write_pos(1, col + 1);
+        uart1_com1::write_byte(b'.');
+        write_pos(BORDER_MAX_ROW + 1, col + 1);
+        uart1_com1::write_byte(b'.');
+    }
+    for row in 0..=BORDER_MAX_ROW {
+        write_pos(row + 1, 1);
+        uart1_com1::write_byte(b'.');
+        write_pos(row + 1, BORDER_MAX_COL + 1);
+        uart1_com1::write_byte(b'.');
+    }
+}
+
+#[inline]
+fn draw_bounds() -> (usize, usize, usize, usize) {
+    let safe_min_x = BORDER_INSET + 1;
+    let safe_min_y = BORDER_INSET + 1;
+    let safe_max_x = BORDER_MAX_COL - BORDER_INSET - 1;
+    let safe_max_y = BORDER_MAX_ROW - BORDER_INSET - 1;
+    let safe_w = safe_max_x.saturating_sub(safe_min_x) + 1;
+    let safe_h = safe_max_y.saturating_sub(safe_min_y) + 1;
+
+    let base_x = safe_min_x + safe_w.saturating_sub(DRAW_SIZE) / 2;
+    let base_y = safe_min_y + safe_h.saturating_sub(DRAW_SIZE) / 2;
+    let mut y = base_y as isize + DRAW_Y_SHIFT;
+    let min_y = safe_min_y as isize;
+    let max_y = (safe_max_y + 1).saturating_sub(DRAW_SIZE) as isize;
+    if y < min_y {
+        y = min_y;
+    }
+    if y > max_y {
+        y = max_y;
+    }
+    let draw_min_x = base_x;
+    let draw_min_y = y as usize;
+    let draw_max_x = draw_min_x + DRAW_SIZE - 1;
+    let draw_max_y = draw_min_y + DRAW_SIZE - 1;
+    (draw_min_x, draw_min_y, draw_max_x, draw_max_y)
 }
 
 const CUBE_VERTS: [(i32, i32, i32); 8] = [
@@ -219,3 +281,4 @@ const COS_LUT: [i32; 64] = [
     0, 100, 200, 297, 392, 483, 569, 650,
     724, 792, 851, 904, 946, 979, 1004, 1019,
 ];
+
