@@ -11,19 +11,58 @@ const BORDER_INSET: usize = 0;
 const DRAW_SIZE: usize = 65;
 const DRAW_Y_SHIFT: isize = -(DRAW_SIZE as isize / 2);
 const CENTER_Y_OFFSET: i32 = 10; // because i cant math
+const MAX_VERTS: usize = 30;
+const MAX_EDGES: usize = 60;
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub enum WireShape {
+    Cube,
+    Icosidodecahedron,
+}
 
 pub struct CubeState {
     phase: u8,
     prev: [u8; CUBE_SIZE],
     prev_color: [u8; CUBE_SIZE],
+    shape: WireShape,
+    verts: [(i32, i32, i32); MAX_VERTS],
+    vert_count: usize,
+    edges: [(u8, u8); MAX_EDGES],
+    edge_count: usize,
 }
 
 impl CubeState {
     pub fn new() -> Self {
-        Self {
+        let mut state = Self {
             phase: 0,
             prev: [b' '; CUBE_SIZE],
             prev_color: [0u8; CUBE_SIZE],
+            shape: WireShape::Cube,
+            verts: [(0, 0, 0); MAX_VERTS],
+            vert_count: 0,
+            edges: [(0, 0); MAX_EDGES],
+            edge_count: 0,
+        };
+        state.set_shape(WireShape::Cube);
+        state
+    }
+
+    pub fn set_shape(&mut self, shape: WireShape) {
+        self.shape = shape;
+        match shape {
+            WireShape::Cube => {
+                for (i, v) in CUBE_VERTS.iter().copied().enumerate() {
+                    self.verts[i] = v;
+                }
+                self.vert_count = CUBE_VERTS.len();
+                for (i, e) in CUBE_EDGES.iter().copied().enumerate() {
+                    self.edges[i] = e;
+                }
+                self.edge_count = CUBE_EDGES.len();
+            }
+            WireShape::Icosidodecahedron => {
+                build_icosidodecahedron(&mut self.verts, &mut self.vert_count, &mut self.edges, &mut self.edge_count);
+            }
         }
     }
 
@@ -38,7 +77,15 @@ impl CubeState {
     }
 
     pub fn draw_frame(&mut self) {
-        draw_cube_frame(self.phase, &mut self.prev, &mut self.prev_color);
+        draw_poly_frame(
+            self.phase,
+            &self.verts,
+            self.vert_count,
+            &self.edges,
+            self.edge_count,
+            &mut self.prev,
+            &mut self.prev_color,
+        );
         self.phase = self.phase.wrapping_add(2);
     }
 }
@@ -48,9 +95,21 @@ pub fn enter_mode() {
     uart1_com1::write_str(ecma48::HOME);
 }
 
-fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; CUBE_SIZE]) {
+fn draw_poly_frame(
+    phase: u8,
+    verts: &[(i32, i32, i32); MAX_VERTS],
+    vert_count: usize,
+    edges: &[(u8, u8); MAX_EDGES],
+    edge_count: usize,
+    prev: &mut [u8; CUBE_SIZE],
+    prev_color: &mut [u8; CUBE_SIZE],
+) {
     let mut curr = [b' '; CUBE_SIZE];
     let mut curr_color = [0u8; CUBE_SIZE];
+
+    if vert_count == 0 || edge_count == 0 {
+        return;
+    }
 
     let (draw_min_x, draw_min_y, draw_max_x, draw_max_y) = draw_bounds();
     let angle = (phase & 63) as usize;
@@ -58,14 +117,24 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
     let (sin_y, cos_y) = (SIN_LUT[angle], COS_LUT[angle]);
     let (sin_x, cos_x) = (SIN_LUT[angle2], COS_LUT[angle2]);
 
-    let mut verts2d = [(0i32, 0i32); 8];
+    let mut verts2d = [(0i32, 0i32); MAX_VERTS];
     let center_x = (draw_min_x + draw_max_x) as i32 / 2;
     let center_y = (draw_min_y + draw_max_y) as i32 / 2 - CENTER_Y_OFFSET;
     let proj_scale = (DRAW_SIZE as i32 / 2).saturating_sub(1).max(1);
-    for (i, (x, y, z)) in CUBE_VERTS.iter().copied().enumerate() {
-        let x = x * CUBE_SCALE / 2;
-        let y = y * CUBE_SCALE / 2;
-        let z = z * CUBE_SCALE / 2;
+    let mut max_abs = 0i32;
+    for &(x, y, z) in verts.iter().take(vert_count) {
+        max_abs = max_abs.max(x.abs()).max(y.abs()).max(z.abs());
+    }
+    if max_abs == 0 {
+        return;
+    }
+    for (i, (x, y, z)) in verts.iter().copied().take(vert_count).enumerate() {
+        let x = (x as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let y = (y as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let z = (z as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let x = x as i32;
+        let y = y as i32;
+        let z = z as i32;
 
         let x1 = (x * cos_y + z * sin_y) / CUBE_SCALE;
         let z1 = (-x * sin_y + z * cos_y) / CUBE_SCALE;
@@ -78,9 +147,9 @@ fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; 
         verts2d[i] = (px, py);
     }
 
-    let edge_count = CUBE_EDGES.len().max(1) as u8;
+    let edge_count = edge_count as u8;
     let edge_denom = if edge_count > 1 { edge_count as u16 - 1 } else { 1 };
-    for (i, &(a, b)) in CUBE_EDGES.iter().enumerate() {
+    for (i, &(a, b)) in edges.iter().take(edge_count as usize).enumerate() {
         let (x0, y0) = verts2d[a as usize];
         let (x1, y1) = verts2d[b as usize];
         let t = (i as u16 * 255 / edge_denom).min(255) as u8;
@@ -235,6 +304,118 @@ const CUBE_EDGES: [(u8, u8); 12] = [
     (2, 6),
     (3, 7),
 ];
+
+fn build_icosidodecahedron(
+    verts: &mut [(i32, i32, i32); MAX_VERTS],
+    vert_count: &mut usize,
+    edges: &mut [(u8, u8); MAX_EDGES],
+    edge_count: &mut usize,
+) {
+    let mut count = 0usize;
+
+    // Even permutations of (±1, 0, 0)
+    let axis = 1024i32;
+    verts[count] = (axis, 0, 0);
+    count += 1;
+    verts[count] = (-axis, 0, 0);
+    count += 1;
+    verts[count] = (0, axis, 0);
+    count += 1;
+    verts[count] = (0, -axis, 0);
+    count += 1;
+    verts[count] = (0, 0, axis);
+    count += 1;
+    verts[count] = (0, 0, -axis);
+    count += 1;
+
+    // Even permutations of (±φ/2, ±1/φ/2, ±1/2)
+    // φ ≈ 1.618034, 1/φ ≈ 0.618034
+    let half_phi = 829i32; // 0.809017 * 1024
+    let half_invphi = 316i32; // 0.309017 * 1024
+    let half_one = 512i32; // 0.5 * 1024
+    let signs = [
+        (1i32, 1i32, 1i32),
+        (1, 1, -1),
+        (1, -1, 1),
+        (1, -1, -1),
+        (-1, 1, 1),
+        (-1, 1, -1),
+        (-1, -1, 1),
+        (-1, -1, -1),
+    ];
+    let base = (half_phi, half_invphi, half_one);
+    for (sx, sy, sz) in signs.iter().copied() {
+        let (x, y, z) = (base.0 * sx, base.1 * sy, base.2 * sz);
+        // Even permutations: (x,y,z), (y,z,x), (z,x,y)
+        verts[count] = (x, y, z);
+        count += 1;
+        verts[count] = (y, z, x);
+        count += 1;
+        verts[count] = (z, x, y);
+        count += 1;
+    }
+
+    *vert_count = count.min(MAX_VERTS);
+
+    build_edges_by_distance(verts, *vert_count, edges, edge_count);
+}
+
+fn build_edges_by_distance(
+    verts: &[(i32, i32, i32)],
+    vert_count: usize,
+    edges: &mut [(u8, u8)],
+    edge_count: &mut usize,
+) {
+    let mut min_d2 = i64::MAX;
+    let mut second_d2 = i64::MAX;
+    for i in 0..vert_count {
+        let (x0, y0, z0) = verts[i];
+        for j in (i + 1)..vert_count {
+            let (x1, y1, z1) = verts[j];
+            let dx = (x1 - x0) as i64;
+            let dy = (y1 - y0) as i64;
+            let dz = (z1 - z0) as i64;
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 == 0 {
+                continue;
+            }
+            if d2 < min_d2 {
+                second_d2 = min_d2;
+                min_d2 = d2;
+            } else if d2 > min_d2 && d2 < second_d2 {
+                second_d2 = d2;
+            }
+        }
+    }
+    if min_d2 == i64::MAX {
+        *edge_count = 0;
+        return;
+    }
+    let threshold = if second_d2 == i64::MAX {
+        min_d2
+    } else {
+        (min_d2 + second_d2) / 2
+    };
+
+    let mut count = 0usize;
+    for i in 0..vert_count {
+        let (x0, y0, z0) = verts[i];
+        for j in (i + 1)..vert_count {
+            let (x1, y1, z1) = verts[j];
+            let dx = (x1 - x0) as i64;
+            let dy = (y1 - y0) as i64;
+            let dz = (z1 - z0) as i64;
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 <= threshold {
+                if count < edges.len() {
+                    edges[count] = (i as u8, j as u8);
+                    count += 1;
+                }
+            }
+        }
+    }
+    *edge_count = count;
+}
 
 const SIN_LUT: [i32; 64] = [
     0, 100, 200, 297, 392, 483, 569, 650,

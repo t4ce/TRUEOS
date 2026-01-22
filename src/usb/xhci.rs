@@ -939,6 +939,39 @@ fn enqueue_event(controller_id: usize, evt: Trb) {
     buf.push(evt);
 }
 
+fn pump_one_event(ctx: &XhciContext) -> bool {
+    let controller_id = ctx.controller_id;
+    let evt_opt = {
+        let mut state = EVENT_RING_STATES[controller_id].lock();
+        let intr0 = state.intr0;
+        if let Some(ring) = state.ring.as_mut() {
+            if !intr0.is_null() {
+                unsafe { ring.pop(intr0) }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    let Some(evt) = evt_opt else {
+        return false;
+    };
+
+    let evt_type = (evt.d3 >> 10) & 0x3F;
+    if evt_type == 34 {
+        // Port Status Change Event: must be acked by clearing PORTSC change bits,
+        // otherwise the controller can keep generating the same event forever.
+        let port_id = (evt.d0 >> 24) as u8;
+        unsafe { clear_port_change_bits(ctx, port_id) };
+        return true;
+    }
+
+    enqueue_event(controller_id, evt);
+    true
+}
+
 fn try_take_matching_event<F>(controller_id: usize, predicate: &mut F) -> Option<Trb>
 where
     F: FnMut(&Trb) -> bool,
@@ -987,6 +1020,11 @@ where
         if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
             return Some(evt);
         }
+
+        // If we're in a synchronous/blocking context, the async controller poll task may not be
+        // getting scheduled. Actively drain the event ring so transfers can still complete.
+        let _ = pump_one_event(ctx);
+
         polls += 1;
         if polls > spin_iters {
             return None;
