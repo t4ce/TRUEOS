@@ -265,8 +265,43 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
         info.block_count,
         info.block_size
     );
+    
+    // Prove the block path is functional before we do anything destructive.
+    // A successful read of LBA0 (even if it returns zeros) demonstrates end-to-end BOT READ(10).
+    let align = info.dma_alignment.max(1) as usize;
+    if let Some(mut probe) = AlignedBuf::new(info.block_size as usize, align) {
+        match handle.read_blocks(0, probe.as_mut_slice()) {
+            Ok(()) => {
+                let b = probe.as_mut_slice();
+                crate::log!(
+                    "fatfs demo: read lba0 ok bytes[0..16]=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}]\n",
+                    b[0],
+                    b[1],
+                    b[2],
+                    b[3],
+                    b[4],
+                    b[5],
+                    b[6],
+                    b[7],
+                    b[8],
+                    b[9],
+                    b[10],
+                    b[11],
+                    b[12],
+                    b[13],
+                    b[14],
+                    b[15]
+                );
+            }
+            Err(e) => {
+                crate::log!("fatfs demo: read lba0 FAILED err={:?}\n", e);
+            }
+        }
+    } else {
+        crate::log!("fatfs demo: read lba0 SKIPPED (no aligned DMA buffer)\n");
+    }
 
-    let mut io = match BlockDeviceIo::new(handle) {
+    let io = match BlockDeviceIo::new(handle) {
         Ok(io) => io,
         Err(e) => {
             crate::log!("fatfs demo: failed to init device io: {:?}\n", e);
@@ -274,15 +309,33 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
         }
     };
 
-    crate::log!("fatfs demo: formatting usbms (destructive)\n");
-    if format_volume(&mut io, FormatVolumeOptions::new()).is_err() {
-        crate::log!("fatfs demo: format failed\n");
-        return;
-    }
+    // Prefer non-destructive behavior: attempt to mount first.
+    let fs = match FileSystem::new(io, FsOptions::new()) {
+        Ok(fs) => fs,
+        Err(e) => {
+            crate::log!("fatfs demo: mount failed ({:?}); formatting usbms (destructive)\n", e);
 
-    let Ok(fs) = FileSystem::new(io, FsOptions::new()) else {
-        crate::log!("fatfs demo: mount failed\n");
-        return;
+            let mut io = match BlockDeviceIo::new(handle) {
+                Ok(io) => io,
+                Err(e) => {
+                    crate::log!("fatfs demo: failed to init device io for format: {:?}\n", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = format_volume(&mut io, FormatVolumeOptions::new()) {
+                crate::log!("fatfs demo: format failed ({:?})\n", e);
+                return;
+            }
+
+            match FileSystem::new(io, FsOptions::new()) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    crate::log!("fatfs demo: mount after format failed ({:?})\n", e);
+                    return;
+                }
+            }
+        }
     };
 
     let root = fs.root_dir();
