@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
-use crate::shellcube::{CubeState, CUBE_COLS, CUBE_ROWS};
+use crate::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 use crate::ecma48;
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
@@ -33,6 +33,7 @@ enum CommandAction {
     None,
     Pending(PendingAction),
     EnterCube,
+    EnterIco,
 }
 
 #[embassy_executor::task]
@@ -47,6 +48,7 @@ pub async fn task() {
     let mut pending_deadline: Option<Instant> = None;
     let mut cube_mode = true;
     let mut cube = CubeState::new();
+    cube.set_shape(WireShape::Cube);
     cube.reset();
     enter_cube_mode();
 
@@ -88,6 +90,14 @@ pub async fn task() {
                             CommandAction::EnterCube => {
                                 cube_mode = true;
                                 GO_MODE.store(false, Ordering::Release);
+                                cube.set_shape(WireShape::Cube);
+                                cube.reset();
+                                enter_cube_mode();
+                            }
+                            CommandAction::EnterIco => {
+                                cube_mode = true;
+                                GO_MODE.store(false, Ordering::Release);
+                                cube.set_shape(WireShape::Icosidodecahedron);
                                 cube.reset();
                                 enter_cube_mode();
                             }
@@ -201,6 +211,10 @@ fn handle_line(line: &str) -> CommandAction {
 
     if cmd.eq_ignore_ascii_case("cube") {
         return CommandAction::EnterCube;
+    }
+
+    if cmd.eq_ignore_ascii_case("ico") {
+        return CommandAction::EnterIco;
     }
 
     uart1_com1::write_str("unknown: ");
