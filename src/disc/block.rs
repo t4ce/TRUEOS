@@ -22,6 +22,20 @@ pub enum Error {
     Corrupted,
 }
 
+impl fatfs::IoError for Error {
+    fn is_interrupted(&self) -> bool {
+        false
+    }
+
+    fn new_unexpected_eof_error() -> Self {
+        Error::OutOfBounds
+    }
+
+    fn new_write_zero_error() -> Self {
+        Error::Io
+    }
+}
+
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// Minimal synchronous block-device interface expected by the kernel and upper layers.
