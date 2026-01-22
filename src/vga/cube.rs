@@ -11,6 +11,21 @@ const EDGE_COLOR: u32 = 0x00_60_FF_D0;
 
 static ANGLE_DEG: AtomicU32 = AtomicU32::new(0);
 
+pub const CUBE_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 0),
+    (4, 5),
+    (5, 6),
+    (6, 7),
+    (7, 4),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+
 pub fn tick() {
     let angle = ANGLE_DEG.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     render(angle as f32);
@@ -47,6 +62,29 @@ fn render(angle_deg: f32) {
         bg,
     );
 
+    let mut projected = [(0_i32, 0_i32); 8];
+    if !project_cube_points(angle_deg, area_size as i32, center_x, center_y, &mut projected) {
+        return;
+    }
+
+    for &(a, b) in CUBE_EDGES.iter() {
+        let (x0, y0) = projected[a];
+        let (x1, y1) = projected[b];
+        vga::draw_line(x0, y0, x1, y1, EDGE_COLOR);
+    }
+}
+
+pub fn project_cube_points(
+    angle_deg: f32,
+    area_size: i32,
+    center_x: i32,
+    center_y: i32,
+    out: &mut [(i32, i32); 8],
+) -> bool {
+    if area_size <= 0 {
+        return false;
+    }
+
     let yaw = angle_deg * PI / 180.0;
     let pitch = angle_deg * 0.6 * PI / 180.0;
 
@@ -61,7 +99,6 @@ fn render(angle_deg: f32) {
         [-0.5, 0.5, 0.5],
     ];
 
-    let mut projected = [(0_i32, 0_i32); 8];
     let (cy, sy) = (cosf(yaw), sinf(yaw));
     let (cp, sp) = (cosf(pitch), sinf(pitch));
     let mut rotated = [(0.0_f32, 0.0_f32); 8];
@@ -75,7 +112,7 @@ fn render(angle_deg: f32) {
     }
 
     if max_extent <= f32::EPSILON {
-        return;
+        return false;
     }
     let half = (area_size as f32) * 0.5;
     let usable = (half - INNER_PAD_PX).max(1.0);
@@ -84,27 +121,8 @@ fn render(angle_deg: f32) {
     for (idx, (x1, y2)) in rotated.iter().copied().enumerate() {
         let x2d = center_x + roundf(x1 * cube_scale) as i32;
         let y2d = center_y + roundf(y2 * cube_scale) as i32;
-        projected[idx] = (x2d, y2d);
+        out[idx] = (x2d, y2d);
     }
 
-    const EDGES: [(usize, usize); 12] = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (3, 0),
-        (4, 5),
-        (5, 6),
-        (6, 7),
-        (7, 4),
-        (0, 4),
-        (1, 5),
-        (2, 6),
-        (3, 7),
-    ];
-
-    for &(a, b) in EDGES.iter() {
-        let (x0, y0) = projected[a];
-        let (x1, y1) = projected[b];
-        vga::draw_line(x0, y0, x1, y1, EDGE_COLOR);
-    }
+    true
 }

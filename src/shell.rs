@@ -2,6 +2,8 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
+use crate::shellcube::{CubeState, CUBE_COLS, CUBE_ROWS};
+
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 
 #[inline]
@@ -13,10 +15,7 @@ static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
 static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
 static GO_MODE: AtomicBool = AtomicBool::new(false);
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
-//['⢈⡈⡐⡠⣀⢄⢂⢁⡁
 
-const CUBE_COLS: usize = 100;
-use crate::shellcube::{CubeState, CUBE_COLS, CUBE_ROWS};
 #[derive(Copy, Clone)]
 enum PendingAction {
     Reset,
@@ -30,7 +29,185 @@ enum CommandAction {
 }
 
 #[embassy_executor::task]
-        crate::shellcube::enter_mode();
+pub async fn task() {
+    uart1_com1::init();
+
+    uart1_com1::write_str("TRUE OS\n");
+    write_prompt();
+
+    let mut line: String<128> = String::new();
+    let mut go_idx: usize = 0;
+    let mut pending_action: Option<PendingAction> = None;
+    let mut pending_deadline: Option<Instant> = None;
+    let mut cube_mode = true;
+    let mut cube = CubeState::new();
+    cube.reset();
+    enter_cube_mode();
+
+    loop {
+        if let Some(b) = uart1_com1::read_byte() {
+            if cube_mode {
+                if b == b'\r' || b == b'\n' {
+                    cube_mode = false;
+                    GO_MODE.store(false, Ordering::Release);
+                    uart1_com1::write_str("\r\n");
+                    write_prompt();
+                }
+                continue;
+            }
+            match b {
+                b'\r' | b'\n' => {
+                    if pending_action.is_some() {
+                        pending_action = None;
+                        pending_deadline = None;
+                        GO_MODE.store(false, Ordering::Release);
+                        line.clear();
+                        uart1_com1::write_str("\r\n");
+                        write_prompt();
+                        continue;
+                    }
+                    if !line.is_empty() {
+                        uart1_com1::write_str("\r\n");
+                        let action = handle_line(&line);
+                        line.clear();
+                        write_prompt();
+                        match action {
+                            CommandAction::Pending(action) => {
+                                pending_action = Some(action);
+                                pending_deadline =
+                                    Some(Instant::now() + EmbassyDuration::from_secs(5));
+                                GO_MODE.store(true, Ordering::Release);
+                            }
+                            CommandAction::EnterCube => {
+                                cube_mode = true;
+                                GO_MODE.store(false, Ordering::Release);
+                                cube.reset();
+                                enter_cube_mode();
+                            }
+                            CommandAction::None => {}
+                        }
+                    }
+                }
+                0x08 | 0x7F => {
+                    if !line.is_empty() {
+                        line.pop();
+                        uart1_com1::write_str("\x08 \x08");
+                    }
+                }
+                0x03 => {
+                    line.clear();
+                    uart1_com1::write_str("^C\r\n");
+                    write_prompt();
+                }
+                _ => {
+                    if b >= 0x20 {
+                        if line.push(b as char).is_ok() {
+                            uart1_com1::write_byte(b);
+                        }
+                    }
+                }
+            }
+        } else {
+            if cube_mode {
+                cube.draw_frame();
+                Timer::after(EmbassyDuration::from_millis(200)).await;
+                continue;
+            }
+            if let (Some(action), Some(deadline)) = (pending_action, pending_deadline) {
+                if Instant::now() >= deadline {
+                    GO_MODE.store(false, Ordering::Release);
+                    pending_action = None;
+                    pending_deadline = None;
+                    match action {
+                        PendingAction::Reset => {
+                            if let Err(err) = crate::acpi::facp::reset_system() {
+                                uart1_com1::write_str("tlb miss warn\r\n");
+                                write_prompt();
+                            }
+                        }
+                        PendingAction::S5 => {
+                            if crate::acpi::facp::enter_s5(0, None).is_err() {
+                                uart1_com1::write_str("\r\ns5 failed\r\n");
+                                write_prompt();
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            if GO_MODE.load(Ordering::Acquire) {
+                let ch = GO_CHARS[go_idx];
+                go_idx = (go_idx + 1) % GO_CHARS.len();
+                uart1_com1::write_str("\r");
+                write_prompt();
+                uart1_com1::write_char(ch);
+                Timer::after(EmbassyDuration::from_millis(160)).await;
+            } else {
+                Timer::after(EmbassyDuration::from_millis(2)).await;
+            }
+        }
+    }
+}
+
+fn handle_line(line: &str) -> CommandAction {
+    let cmd = line.trim();
+    if cmd.is_empty() {
+        return CommandAction::None;
+    }
+
+    if let Some((cols, rows)) = parse_set_dims(cmd) {
+        TERM_COLS.store(cols, Ordering::Release);
+        TERM_ROWS.store(rows, Ordering::Release);
+        uart1_com1::write_str("term set: ");
+        write_usize(cols);
+        uart1_com1::write_str("x");
+        write_usize(rows);
+        uart1_com1::write_str("\r\n");
+        draw_corners(cols, rows);
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("reset") {
+        return CommandAction::Pending(PendingAction::Reset);
+    }
+
+    if cmd.eq_ignore_ascii_case("s5") {
+        return CommandAction::Pending(PendingAction::S5);
+    }
+
+    if cmd.eq_ignore_ascii_case("go") {
+        GO_MODE.store(true, Ordering::Release);
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("mandel") {
+        crate::draw_mandelbrot();
+        uart1_com1::write_str("mandel ok\r\n");
+        return CommandAction::None;
+    }
+
+    if let Some(rest) = cmd.strip_prefix("echo ") {
+        uart1_com1::write_str(rest);
+        uart1_com1::write_str("\r\n");
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("cube") {
+        return CommandAction::EnterCube;
+    }
+
+    uart1_com1::write_str("unknown: ");
+    uart1_com1::write_str(cmd);
+    uart1_com1::write_str("\r\n");
+    CommandAction::None
+}
+
+fn parse_set_dims(cmd: &str) -> Option<(usize, usize)> {
+    let cmd = cmd.trim();
+    let inner = cmd.strip_prefix("set(")?.strip_suffix(')')?;
+    let (a, b) = inner.split_once(',')?;
+    let cols = a.trim().parse::<usize>().ok()?;
+    let rows = b.trim().parse::<usize>().ok()?;
     Some((cols, rows))
 }
 
@@ -78,183 +255,8 @@ fn enter_cube_mode() {
     TERM_COLS.store(CUBE_COLS, Ordering::Release);
     TERM_ROWS.store(CUBE_ROWS, Ordering::Release);
     draw_corners(CUBE_COLS, CUBE_ROWS);
-    uart1_com1::write_str(crate::ecma48::CLEAR_SCREEN);
-    uart1_com1::write_str(crate::ecma48::HOME);
+    crate::shellcube::enter_mode();
 }
-
-fn draw_cube_frame(phase: u8, prev: &mut [u8; CUBE_SIZE], prev_color: &mut [u8; CUBE_SIZE]) {
-    let mut curr = [b' '; CUBE_SIZE];
-    let mut curr_color = [0u8; CUBE_SIZE];
-
-    let angle = (phase & 63) as usize;
-    let angle2 = ((phase >> 1) & 63) as usize;
-    let (sin_y, cos_y) = (SIN_LUT[angle], COS_LUT[angle]);
-    let (sin_x, cos_x) = (SIN_LUT[angle2], COS_LUT[angle2]);
-
-    let mut verts2d = [(0i32, 0i32); 8];
-    let center_x = (CUBE_COLS as i32 - 1) / 2;
-    let center_y = (CUBE_ROWS as i32 - 1) / 2 - (CUBE_ROWS as i32 / 4);
-    for (i, (x, y, z)) in CUBE_VERTS.iter().copied().enumerate() {
-        let x = x * CUBE_SCALE / 2;
-        let y = y * CUBE_SCALE / 2;
-        let z = z * CUBE_SCALE / 2;
-
-        let x1 = (x * cos_y + z * sin_y) / CUBE_SCALE;
-        let z1 = (-x * sin_y + z * cos_y) / CUBE_SCALE;
-        let y1 = (y * cos_x - z1 * sin_x) / CUBE_SCALE;
-        let z2 = (y * sin_x + z1 * cos_x) / CUBE_SCALE;
-
-        let denom = (z2 + CUBE_DIST).max(CUBE_SCALE / 2);
-        let px = (x1 * 40 / denom) + center_x;
-        let py = (y1 * 40 / denom) + center_y;
-        verts2d[i] = (px, py);
-    }
-
-    let edge_count = CUBE_EDGES.len().max(1) as u8;
-    let edge_denom = if edge_count > 1 { edge_count as u16 - 1 } else { 1 };
-    for (i, &(a, b)) in CUBE_EDGES.iter().enumerate() {
-        let (x0, y0) = verts2d[a as usize];
-        let (x1, y1) = verts2d[b as usize];
-        let t = (i as u16 * 255 / edge_denom).min(255) as u8;
-        draw_line(&mut curr, &mut curr_color, x0, y0, x1, y1, b'#', t);
-    }
-
-    for col in 0..CUBE_COLS {
-        curr[col] = b'.';
-        curr[(CUBE_ROWS - 1) * CUBE_COLS + col] = b'.';
-    }
-    for row in 0..CUBE_ROWS {
-        curr[row * CUBE_COLS] = b'.';
-        curr[row * CUBE_COLS + (CUBE_COLS - 1)] = b'.';
-    }
-
-    for idx in 0..CUBE_SIZE {
-        let now = curr[idx];
-        let color_now = curr_color[idx];
-        if now != prev[idx] || (now == b'#' && color_now != prev_color[idx]) {
-            let row = idx / CUBE_COLS;
-            let col = idx % CUBE_COLS;
-            write_pos(row + 1, col + 1);
-            if now == b'#' {
-                let (r, g, b) = line_rgb(color_now);
-                uart1_com1::write_fmt(format_args!(
-                    "{}",
-                    crate::ecma48::color("§", (r, g, b))
-                ));
-            } else if now == b'.' {
-                uart1_com1::write_byte(b'.');
-            } else {
-                uart1_com1::write_byte(b' ');
-            }
-            prev[idx] = now;
-            prev_color[idx] = color_now;
-        }
-    }
-}
-
-#[inline]
-fn line_rgb(t: u8) -> (u8, u8, u8) {
-    let g = 255u16 - ((255u16 - PROMPT_RGB.1 as u16) * t as u16 / 255u16);
-    (255, g as u8, 255)
-}
-
-fn draw_line(
-    buf: &mut [u8; CUBE_SIZE],
-    colors: &mut [u8; CUBE_SIZE],
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    ch: u8,
-    color: u8,
-) {
-    let mut x0 = x0;
-    let mut y0 = y0;
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    loop {
-        plot(buf, colors, x0, y0, ch, color);
-        if x0 == x1 && y0 == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
-        }
-    }
-}
-
-#[inline]
-fn plot(buf: &mut [u8; CUBE_SIZE], colors: &mut [u8; CUBE_SIZE], x: i32, y: i32, ch: u8, color: u8) {
-    if x < 0 || y < 0 {
-        return;
-    }
-    let x = x as usize;
-    let y = y as usize;
-    if x >= CUBE_COLS || y >= CUBE_ROWS {
-        return;
-    }
-    let idx = y * CUBE_COLS + x;
-    buf[idx] = ch;
-    colors[idx] = color;
-}
-
-const CUBE_VERTS: [(i32, i32, i32); 8] = [
-    (-1, -1, -1),
-    (1, -1, -1),
-    (1, 1, -1),
-    (-1, 1, -1),
-    (-1, -1, 1),
-    (1, -1, 1),
-    (1, 1, 1),
-    (-1, 1, 1),
-];
-
-const CUBE_EDGES: [(u8, u8); 12] = [
-    (0, 1),
-    (1, 2),
-    (2, 3),
-    (3, 0),
-    (4, 5),
-    (5, 6),
-    (6, 7),
-    (7, 4),
-    (0, 4),
-    (1, 5),
-    (2, 6),
-    (3, 7),
-];
-
-const SIN_LUT: [i32; 64] = [
-    0, 100, 200, 297, 392, 483, 569, 650,
-    724, 792, 851, 904, 946, 979, 1004, 1019,
-    1024, 1019, 1004, 979, 946, 904, 851, 792,
-    724, 650, 569, 483, 392, 297, 200, 100,
-    0, -100, -200, -297, -392, -483, -569, -650,
-    -724, -792, -851, -904, -946, -979, -1004, -1019,
-    -1024, -1019, -1004, -979, -946, -904, -851, -792,
-    -724, -650, -569, -483, -392, -297, -200, -100,
-];
-
-const COS_LUT: [i32; 64] = [
-    1024, 1019, 1004, 979, 946, 904, 851, 792,
-    724, 650, 569, 483, 392, 297, 200, 100,
-    0, -100, -200, -297, -392, -483, -569, -650,
-    -724, -792, -851, -904, -946, -979, -1004, -1019,
-    -1024, -1019, -1004, -979, -946, -904, -851, -792,
-    -724, -650, -569, -483, -392, -297, -200, -100,
-    0, 100, 200, 297, 392, 483, 569, 650,
-    724, 792, 851, 904, 946, 979, 1004, 1019,
-];
 
 pub(crate) mod uart1_com1 {
     use core::fmt;
@@ -263,7 +265,7 @@ pub(crate) mod uart1_com1 {
     const COM1: u16 = 0x3F8;
     static INIT: AtomicBool = AtomicBool::new(false);
 
-    pub(super) fn init() {
+    pub(crate) fn init() {
         if INIT.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -279,7 +281,7 @@ pub(crate) mod uart1_com1 {
     }
 
     #[inline]
-    pub(super) fn write_byte(b: u8) {
+    pub(crate) fn write_byte(b: u8) {
         if !INIT.load(Ordering::Acquire) {
             init();
         }
@@ -289,7 +291,7 @@ pub(crate) mod uart1_com1 {
         }
     }
 
-    pub(super) fn write_str(s: &str) {
+    pub(crate) fn write_str(s: &str) {
         for &b in s.as_bytes() {
             if b == b'\n' {
                 write_byte(b'\r');
@@ -298,13 +300,13 @@ pub(crate) mod uart1_com1 {
         }
     }
 
-    pub(super) fn write_bytes(bytes: &[u8]) {
+    pub(crate) fn write_bytes(bytes: &[u8]) {
         for &b in bytes {
             write_byte(b);
         }
     }
 
-    pub(super) fn write_fmt(args: fmt::Arguments<'_>) {
+    pub(crate) fn write_fmt(args: fmt::Arguments<'_>) {
         use core::fmt::Write;
 
         struct Writer;
@@ -324,13 +326,13 @@ pub(crate) mod uart1_com1 {
         let _ = Writer.write_fmt(args);
     }
 
-    pub(super) fn write_char(ch: char) {
+    pub(crate) fn write_char(ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         write_str(s);
     }
 
-    pub(super) fn read_byte() -> Option<u8> {
+    pub(crate) fn read_byte() -> Option<u8> {
         if !INIT.load(Ordering::Acquire) {
             init();
         }
