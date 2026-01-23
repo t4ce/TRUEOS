@@ -14,7 +14,12 @@ LIMINE_CONFIG_ARGS := --prefix=$(abspath $(LIMINE_PREFIX)) --enable-bios --enabl
 
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
-QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait 
+
+QEMU_NET_FLAGS = -netdev user,id=net0 -device e1000,netdev=net0 \
+	-netdev user,id=net1 -device rtl8139,netdev=net1 \
+	-netdev user,id=net2 -device virtio-net-pci,netdev=net2
+
+QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS)
 
 QEMU_USB_FLAGS =  \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
