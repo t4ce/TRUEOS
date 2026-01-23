@@ -1,0 +1,11 @@
+10
+begin
+  dup 2 mod 0 =
+  if 0x45 else 0x4f end emit
+  0x3a emit 0x20 emit
+  dup .
+  1 -
+  dup 0 =
+until
+drop
+0x0a emit

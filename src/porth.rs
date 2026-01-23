@@ -47,7 +47,7 @@ const MAX_PROGRAM_BYTES: usize = 256 * 1024;
 const PORTH_COMPILE_MAX_SRC_BYTES: usize = 16 * 1024;
 
 struct PorthCompileSession {
-    name: heapless::String<48>,
+    name: heapless::String<96>,
     src: AString,
 }
 
@@ -513,19 +513,88 @@ impl Vm {
 
 static VM: Mutex<Vm> = Mutex::new(Vm::new());
 
-fn sanitize_porth_name(name: &str) -> Option<heapless::String<48>> {
-    let name = name.trim();
-    if name.is_empty() {
+/// Sanitize a *relative* path used under `/porth/`.
+///
+/// Accepts `name` or `sub/dir/name` with characters `[A-Za-z0-9_.-/]`.
+/// Disallows absolute paths, empty segments, `.` and `..` segments.
+fn sanitize_porth_relpath(path: &str) -> Option<heapless::String<96>> {
+    let mut path = path.trim();
+    if path.is_empty() {
         return None;
     }
-    let mut out: heapless::String<48> = heapless::String::new();
-    for ch in name.chars() {
+
+    // Allow users to optionally include the prefix.
+    if let Some(rest) = path.strip_prefix("/porth/") {
+        path = rest;
+    } else if path.starts_with('/') {
+        // Enforce that pc/pr always operate within /porth.
+        return None;
+    }
+
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut out: heapless::String<96> = heapless::String::new();
+    let mut seg_len: usize = 0;
+    let mut seg_dot_count: u8 = 0;
+
+    for ch in path.chars() {
+        if ch == '/' {
+            // Finish segment
+            if seg_len == 0 {
+                return None;
+            }
+            if (seg_len == 1 && seg_dot_count == 1) || (seg_len == 2 && seg_dot_count == 2) {
+                return None;
+            }
+            if out.push('/').is_err() {
+                return None;
+            }
+            seg_len = 0;
+            seg_dot_count = 0;
+            continue;
+        }
+
         let ok = ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.');
-        if ok {
-            let _ = out.push(ch);
+        if !ok {
+            return None;
+        }
+        if ch == '.' {
+            seg_dot_count = seg_dot_count.saturating_add(1);
+        } else {
+            seg_dot_count = 0;
+        }
+        if out.push(ch).is_err() {
+            return None;
+        }
+        seg_len += 1;
+    }
+
+    if seg_len == 0 {
+        return None;
+    }
+    if (seg_len == 1 && seg_dot_count == 1) || (seg_len == 2 && seg_dot_count == 2) {
+        return None;
+    }
+
+    Some(out)
+}
+
+fn porth_tpbc_path_from_user(input: &str) -> Option<heapless::String<128>> {
+    let rel = sanitize_porth_relpath(input)?;
+
+    let mut out: heapless::String<128> = heapless::String::new();
+    let _ = out.push_str("/porth/");
+    if out.push_str(rel.as_str()).is_err() {
+        return None;
+    }
+    if !out.as_str().ends_with(".tpbc") {
+        if out.push_str(".tpbc").is_err() {
+            return None;
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    Some(out)
 }
 
 pub fn shell_handle_ctrl_c() -> bool {
@@ -544,6 +613,11 @@ pub fn shell_handle_ctrl_c() -> bool {
     }
 
     false
+}
+
+/// Used by the shell UI to adjust prompting while Porth owns multiline input.
+pub fn shell_is_capturing_multiline() -> bool {
+    PORTH_COMPILE.lock().is_some()
 }
 
 /// Handles Porth-related shell input.
@@ -583,12 +657,11 @@ pub fn shell_handle_line(line: &str) -> bool {
 
             // Finish capture on '.' or 'END' (case-insensitive)
             if cmd == "." || cmd.eq_ignore_ascii_case("end") {
-                let mut out_path: heapless::String<96> = heapless::String::new();
-                let _ = out_path.push_str("/porth/");
-                let _ = out_path.push_str(sess.name.as_str());
-                if !sess.name.ends_with(".tpbc") {
-                    let _ = out_path.push_str(".tpbc");
-                }
+                let Some(out_path) = porth_tpbc_path_from_user(sess.name.as_str()) else {
+                    crate::shell::uart1_com1::write_str("porth: bad output path\r\n");
+                    let _ = sess_guard.take();
+                    return true;
+                };
 
                 let src = core::mem::take(&mut sess.src);
                 let _ = sess_guard.take();
@@ -639,38 +712,44 @@ pub fn shell_handle_line(line: &str) -> bool {
     }
 
     if let Some(rest) = cmd.strip_prefix("pr ") {
-        let path = rest.trim();
-        if path.is_empty() {
-            crate::shell::uart1_com1::write_str("usage: pr <path>\r\n");
+        let name = rest.trim();
+        let Some(path) = porth_tpbc_path_from_user(name) else {
+            crate::shell::uart1_com1::write_str("usage: pr <name|sub/name>\r\n");
+            crate::shell::uart1_com1::write_str("example: pr countdown\r\n");
+            crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
             return true;
-        }
-        match crate::disc::files::read_usbms_file(path) {
+        };
+        match crate::disc::files::read_usbms_file(path.as_str()) {
             Ok(bytes) => crate::porth::run_program_bytes(&bytes),
             Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("pr: {:?}\r\n", e)),
         }
         return true;
     }
     if cmd.eq_ignore_ascii_case("pr") {
-        crate::shell::uart1_com1::write_str("usage: pr <path>\r\n");
-        crate::shell::uart1_com1::write_str("note: expects TPBC (compiled bytecode)\r\n");
+        crate::shell::uart1_com1::write_str("usage: pr <name|sub/name>\r\n");
+        crate::shell::uart1_com1::write_str("example: pr countdown\r\n");
+        crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("porth-run ") {
-        let path = rest.trim();
-        if path.is_empty() {
-            crate::shell::uart1_com1::write_str("usage: porth-run <path>\r\n");
+        let name = rest.trim();
+        let Some(path) = porth_tpbc_path_from_user(name) else {
+            crate::shell::uart1_com1::write_str("usage: porth-run <name|sub/name>\r\n");
+            crate::shell::uart1_com1::write_str("example: porth-run countdown\r\n");
+            crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
             return true;
-        }
-        match crate::disc::files::read_usbms_file(path) {
+        };
+        match crate::disc::files::read_usbms_file(path.as_str()) {
             Ok(bytes) => crate::porth::run_program_bytes(&bytes),
             Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("porth-run: {:?}\r\n", e)),
         }
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth-run") {
-        crate::shell::uart1_com1::write_str("usage: porth-run <path>\r\n");
-        crate::shell::uart1_com1::write_str("note: expects TPBC (compiled bytecode)\r\n");
+        crate::shell::uart1_com1::write_str("usage: porth-run <name|sub/name>\r\n");
+        crate::shell::uart1_com1::write_str("example: porth-run countdown\r\n");
+        crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
         return true;
     }
 
@@ -692,9 +771,9 @@ pub fn shell_handle_line(line: &str) -> bool {
 
     if let Some(rest) = cmd.strip_prefix("pc ") {
         let name = rest.trim();
-        let Some(name) = sanitize_porth_name(name) else {
-            crate::shell::uart1_com1::write_str("usage: pc <name>\r\n");
-            crate::shell::uart1_com1::write_str("example: pc hello\r\n");
+        let Some(name) = sanitize_porth_relpath(name) else {
+            crate::shell::uart1_com1::write_str("usage: pc <name|sub/name>\r\n");
+            crate::shell::uart1_com1::write_str("example: pc countdown\r\n");
             return true;
         };
 
@@ -709,16 +788,16 @@ pub fn shell_handle_line(line: &str) -> bool {
         return true;
     }
     if cmd.eq_ignore_ascii_case("pc") {
-        crate::shell::uart1_com1::write_str("usage: pc <name>\r\n");
+        crate::shell::uart1_com1::write_str("usage: pc <name|sub/name>\r\n");
         crate::shell::uart1_com1::write_str("then type lines; finish with '.' or 'END'\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("porth-compile ") {
         let name = rest.trim();
-        let Some(name) = sanitize_porth_name(name) else {
-            crate::shell::uart1_com1::write_str("usage: porth-compile <name>\r\n");
-            crate::shell::uart1_com1::write_str("example: porth-compile hello\r\n");
+        let Some(name) = sanitize_porth_relpath(name) else {
+            crate::shell::uart1_com1::write_str("usage: porth-compile <name|sub/name>\r\n");
+            crate::shell::uart1_com1::write_str("example: porth-compile demos/hello\r\n");
             return true;
         };
 
@@ -733,7 +812,7 @@ pub fn shell_handle_line(line: &str) -> bool {
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth-compile") {
-        crate::shell::uart1_com1::write_str("usage: porth-compile <name>\r\n");
+        crate::shell::uart1_com1::write_str("usage: porth-compile <name|sub/name>\r\n");
         crate::shell::uart1_com1::write_str("then type lines; finish with '.'\r\n");
         return true;
     }

@@ -1,0 +1,25 @@
+1
+begin
+  dup 3 mod 0 = over 5 mod 0 = 2 * +
+  dup 3 = if
+    drop
+    0x46 emit 0x42 emit 0x20 emit
+  else
+    dup 1 = if
+      drop
+      0x46 emit 0x20 emit
+    else
+      dup 2 = if
+        drop
+        0x42 emit 0x20 emit
+      else
+        drop
+        dup .
+      end
+    end
+  end
+  1 +
+  dup 16 =
+until
+drop
+0x0a emit
