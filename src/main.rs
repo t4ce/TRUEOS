@@ -36,6 +36,7 @@ mod rng;
 mod serial;
 mod globalog;
 mod shell;
+mod porth;
 mod shellcube;
 mod ecma48;
 mod surface;

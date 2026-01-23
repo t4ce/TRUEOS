@@ -8,6 +8,143 @@ use fatfs::{
 use crate::disc::block;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbFsReadError {
+    UsbmsNotFound,
+    DeviceIo(block::Error),
+    MountFailed,
+    OpenFailed,
+    ReadFailed,
+    TooLarge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbFsWriteError {
+    UsbmsNotFound,
+    DeviceIo(block::Error),
+    MountFailed,
+    BadPath,
+    DirFailed,
+    OpenFailed,
+    WriteFailed,
+    TooLarge,
+}
+
+const MAX_READ_BYTES: usize = 256 * 1024;
+const MAX_WRITE_BYTES: usize = 256 * 1024;
+
+pub fn read_usbms_file(path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsReadError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsReadError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsReadError::MountFailed)?;
+
+    let path = path.trim();
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        let _ = fs.unmount();
+        return Err(UsbFsReadError::OpenFailed);
+    }
+
+    let res = {
+        let root = fs.root_dir();
+        let mut file = root.open_file(path).map_err(|_| UsbFsReadError::OpenFailed)?;
+
+        let mut out = alloc::vec::Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = file.read(&mut buf).map_err(|_| UsbFsReadError::ReadFailed)?;
+            if n == 0 {
+                break;
+            }
+            if out.len().saturating_add(n) > MAX_READ_BYTES {
+                return Err(UsbFsReadError::TooLarge);
+            }
+            out.extend_from_slice(&buf[..n]);
+        }
+        Ok(out)
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
+    if bytes.len() > MAX_WRITE_BYTES {
+        return Err(UsbFsWriteError::TooLarge);
+    }
+
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsWriteError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsWriteError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsWriteError::MountFailed)?;
+
+    let path = path.trim();
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        let _ = fs.unmount();
+        return Err(UsbFsWriteError::BadPath);
+    }
+
+    let res = {
+        let root = fs.root_dir();
+
+        // Split into parent dirs and file name.
+        let mut parts = path.split('/').filter(|p| !p.is_empty());
+        let mut comps: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
+        for p in parts.by_ref() {
+            comps.push(p);
+        }
+        if comps.is_empty() {
+            return Err(UsbFsWriteError::BadPath);
+        }
+        let file_name = comps.pop().ok_or(UsbFsWriteError::BadPath)?;
+        if file_name.is_empty() {
+            return Err(UsbFsWriteError::BadPath);
+        }
+
+        // Walk/create directories.
+        let mut dir = root;
+        for seg in comps.into_iter() {
+            if seg.is_empty() {
+                continue;
+            }
+            match dir.open_dir(seg) {
+                Ok(next) => dir = next,
+                Err(fatfs::Error::NotFound) => {
+                    match dir.create_dir(seg) {
+                        Ok(_) => {}
+                        Err(fatfs::Error::AlreadyExists) => {}
+                        Err(_) => return Err(UsbFsWriteError::DirFailed),
+                    }
+                    dir = dir.open_dir(seg).map_err(|_| UsbFsWriteError::DirFailed)?;
+                }
+                Err(_) => return Err(UsbFsWriteError::DirFailed),
+            }
+        }
+
+        // Open existing or create new.
+        let mut file = match dir.open_file(file_name) {
+            Ok(f) => f,
+            Err(fatfs::Error::NotFound) => dir.create_file(file_name).map_err(|_| UsbFsWriteError::OpenFailed)?,
+            Err(_) => return Err(UsbFsWriteError::OpenFailed),
+        };
+
+        file.seek(SeekFrom::Start(0)).map_err(|_| UsbFsWriteError::WriteFailed)?;
+        let _ = file.truncate();
+        file.write_all(bytes).map_err(|_| UsbFsWriteError::WriteFailed)?;
+        file.flush().map_err(|_| UsbFsWriteError::WriteFailed)?;
+        Ok(())
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
 #[derive(Debug)]
 struct RamDisk {
     data: Vec<u8>,

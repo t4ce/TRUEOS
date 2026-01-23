@@ -4,6 +4,7 @@ use heapless::String;
 
 use crate::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 use crate::ecma48;
+use crate::disc::{block, install};
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 
@@ -27,6 +28,10 @@ const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '�
 enum PendingAction {
     Reset,
     S5,
+    Install {
+        raw_id: u32,
+        migrate: bool,
+    },
 }
 
 enum CommandAction {
@@ -65,16 +70,42 @@ pub async fn task() {
                 continue;
             }
             match b {
-                b'\r' | b'\n' => {
-                    if pending_action.is_some() {
-                        pending_action = None;
-                        pending_deadline = None;
-                        GO_MODE.store(false, Ordering::Release);
-                        line.clear();
-                        uart1_com1::write_str("\r\n");
-                        write_prompt();
+                b'\r' | b'\n' | b' ' if pending_action.is_some() => {
+                    // Pending install confirmation: Enter = proceed, Space = abort.
+                    if let Some(PendingAction::Install { raw_id, migrate }) = pending_action {
+                        match b {
+                            b'\r' | b'\n' => {
+                                pending_action = None;
+                                pending_deadline = None;
+                                GO_MODE.store(false, Ordering::Release);
+                                line.clear();
+                                uart1_com1::write_str("\r\n");
+                                do_install(raw_id, migrate);
+                                write_prompt();
+                            }
+                            b' ' => {
+                                pending_action = None;
+                                pending_deadline = None;
+                                GO_MODE.store(false, Ordering::Release);
+                                line.clear();
+                                uart1_com1::write_str("\r\ninstall: aborted\r\n");
+                                write_prompt();
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
+
+                    // Other pending actions: Enter/Space cancels.
+                    pending_action = None;
+                    pending_deadline = None;
+                    GO_MODE.store(false, Ordering::Release);
+                    line.clear();
+                    uart1_com1::write_str("\r\n");
+                    write_prompt();
+                    continue;
+                }
+                b'\r' | b'\n' => {
                     if !line.is_empty() {
                         uart1_com1::write_str("\r\n");
                         let action = handle_line(&line);
@@ -83,9 +114,13 @@ pub async fn task() {
                         match action {
                             CommandAction::Pending(action) => {
                                 pending_action = Some(action);
-                                pending_deadline =
-                                    Some(Instant::now() + EmbassyDuration::from_secs(5));
-                                GO_MODE.store(true, Ordering::Release);
+                                pending_deadline = match action {
+                                    PendingAction::Reset | PendingAction::S5 => {
+                                        Some(Instant::now() + EmbassyDuration::from_secs(5))
+                                    }
+                                    PendingAction::Install { .. } => None,
+                                };
+                                GO_MODE.store(matches!(action, PendingAction::Reset | PendingAction::S5), Ordering::Release);
                             }
                             CommandAction::EnterCube => {
                                 cube_mode = true;
@@ -113,7 +148,10 @@ pub async fn task() {
                 }
                 0x03 => {
                     line.clear();
-                    uart1_com1::write_str("^C\r\n");
+                    // Delegate Ctrl-C handling to Porth (compile abort / repl exit) if active.
+                    if !crate::porth::shell_handle_ctrl_c() {
+                        uart1_com1::write_str("^C\r\n");
+                    }
                     write_prompt();
                 }
                 _ => {
@@ -148,6 +186,7 @@ pub async fn task() {
                                 write_prompt();
                             }
                         }
+                        PendingAction::Install { .. } => {}
                     }
                     continue;
                 }
@@ -170,6 +209,19 @@ fn handle_line(line: &str) -> CommandAction {
     let cmd = line.trim();
     if cmd.is_empty() {
         return CommandAction::None;
+    }
+
+    // Delegate Porth-related commands + modes to the Porth module.
+    if crate::porth::shell_handle_line(cmd) {
+        return CommandAction::None;
+    }
+
+    if let Some((verb, rest)) = cmd.split_once(' ') {
+        if verb.eq_ignore_ascii_case("install") {
+            return handle_install(rest);
+        }
+    } else if cmd.eq_ignore_ascii_case("install") {
+        return handle_install("");
     }
 
     if let Some((cols, rows)) = parse_set_dims(cmd) {
@@ -221,6 +273,156 @@ fn handle_line(line: &str) -> CommandAction {
     uart1_com1::write_str(cmd);
     uart1_com1::write_str("\r\n");
     CommandAction::None
+}
+
+fn handle_install(args: &str) -> CommandAction {
+    let args = args.trim();
+
+    if args.is_empty() {
+        uart1_com1::write_str("install: BIOS/MBR install (DESTRUCTIVE)\r\n");
+        uart1_com1::write_str("usage: install <disc_id>\r\n");
+        uart1_com1::write_str("       install <disc_id> migrate\r\n");
+        uart1_com1::write_str("example: install 1\r\n");
+        uart1_com1::write_str("example: install 1 migrate\r\n");
+        uart1_com1::write_str("available disks:\r\n");
+        for h in block::device_handles().into_iter() {
+            let info = h.info();
+            uart1_com1::write_fmt(format_args!(
+                "  id={} ({}) kind={:?} blocks={} bs={} writable={} label={:?}\r\n",
+                info.id.raw(),
+                info.id,
+                info.kind,
+                info.block_count,
+                info.block_size,
+                info.writable,
+                info.label
+            ));
+        }
+        return CommandAction::None;
+    }
+
+    let mut parts = args.split_whitespace();
+    let first = match parts.next() {
+        Some(s) => s,
+        None => {
+            uart1_com1::write_str("install: missing args\r\n");
+            return CommandAction::None;
+        }
+    };
+
+    // Supported forms:
+    //   install <id>
+    //   install <id> migrate
+    //   install migrate <id>
+    let (mode_migrate, id_str) = if first.eq_ignore_ascii_case("migrate") {
+        let id_str = match parts.next() {
+            Some(s) => s,
+            None => {
+                uart1_com1::write_str("install: missing id\r\n");
+                return CommandAction::None;
+            }
+        };
+        (true, id_str)
+    } else {
+        let second = parts.next();
+        match second {
+            Some(s2) if s2.eq_ignore_ascii_case("migrate") => (true, first),
+            Some(_) => (false, first),
+            None => (false, first),
+        }
+    };
+
+    let raw_id = match parse_disc_id_raw(id_str) {
+        Some(v) => v,
+        None => {
+            uart1_com1::write_str("install: invalid id (use decimal like '1' or 'disc001')\r\n");
+            return CommandAction::None;
+        }
+    };
+
+    let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
+    let Some(handle) = target else {
+        uart1_com1::write_str("install: no such device\r\n");
+        return CommandAction::None;
+    };
+
+    let info = handle.info();
+    uart1_com1::write_fmt(format_args!(
+        "install: target id={} ({}) label={:?} blocks={} bs={}\r\n",
+        info.id.raw(),
+        info.id,
+        info.label,
+        info.block_count,
+        info.block_size
+    ));
+    if mode_migrate {
+        uart1_com1::write_str(
+            "install: migrate shifts a FAT superfloppy (FAT-at-LBA0) forward by 1MiB into a partition.\r\n",
+        );
+        uart1_com1::write_str(
+            "install: it validates the last 1MiB is free; otherwise it aborts to avoid data loss.\r\n",
+        );
+        uart1_com1::write_str("install: still destructive; always back up.\r\n");
+    } else {
+        uart1_com1::write_str("install: this will ERASE the disk.\r\n");
+    }
+    uart1_com1::write_str("install: press Enter to proceed, Space to abort\r\n");
+
+    CommandAction::Pending(PendingAction::Install {
+        raw_id: info.id.raw(),
+        migrate: mode_migrate,
+    })
+}
+
+fn do_install(raw_id: u32, mode_migrate: bool) {
+    let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
+    let Some(handle) = target else {
+        uart1_com1::write_str("install: no such device\r\n");
+        return;
+    };
+
+    let info = handle.info();
+    uart1_com1::write_fmt(format_args!(
+        "install: installing Limine BIOS + TRUEOS to id={} ({})...\r\n",
+        info.id.raw(),
+        info.id
+    ));
+
+    GO_MODE.store(true, Ordering::Release);
+    let mut go_idx: usize = 0;
+    let mut tick = || {
+        let ch = GO_CHARS[go_idx];
+        go_idx = (go_idx + 1) % GO_CHARS.len();
+        uart1_com1::write_str("\r");
+        write_prompt();
+        uart1_com1::write_char(ch);
+    };
+
+    let mut status = |args: core::fmt::Arguments<'_>| {
+        // Print a user-visible status line without fighting the spinner.
+        uart1_com1::write_str("\r\n");
+        uart1_com1::write_fmt(args);
+        uart1_com1::write_str("\r\n");
+    };
+
+    let res = if mode_migrate {
+        install::install_bios_mbr_migrate_superfloppy_with_progress_and_status(handle, &mut tick, &mut status)
+    } else {
+        install::install_bios_mbr_with_progress(handle, &mut tick)
+    };
+    GO_MODE.store(false, Ordering::Release);
+    uart1_com1::write_str("\r\n");
+
+    match res {
+        Ok(()) => uart1_com1::write_str("install: ok\r\n"),
+        Err(e) => uart1_com1::write_fmt(format_args!("install: failed: {:?}\r\n", e)),
+    }
+}
+
+fn parse_disc_id_raw(s: &str) -> Option<u32> {
+    let s = s.trim();
+    let s = s.strip_prefix("disc").unwrap_or(s);
+    s.parse::<u32>().ok()
 }
 
 fn parse_set_dims(cmd: &str) -> Option<(usize, usize)> {
