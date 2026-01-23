@@ -44,24 +44,21 @@ pub fn log_system_table_once() {
             _ => return,
         };
 
-        let mapped = match mmio::map_limine_addr_exact(phys_or_virt, core::mem::size_of::<EfiSystemTable>()) {
-            Ok(m) => m,
-            Err(mmio::MapError::NotPhysical) => {
-                crate::log!(
-                    "UEFI: EFI system table at 0x{:016X} (not a mappable physical/HHDM address; not parsing)\n",
-                    phys_or_virt
-                );
-                return;
-            }
-            Err(err) => {
-                crate::log!(
-                    "UEFI: EFI system table map failed addr=0x{:016X} size=0x{:X} err={:?}\n",
-                    phys_or_virt,
-                    core::mem::size_of::<EfiSystemTable>(),
-                    err
-                );
-                return;
-            }
+        let Some(st_phys) = limine::try_as_phys_addr(phys_or_virt) else {
+            crate::log!(
+                "UEFI: EFI system table at 0x{:016X} (not a mappable physical/HHDM address; not parsing)\n",
+                phys_or_virt
+            );
+            return;
+        };
+
+        let Ok(mapped) = mmio::map_mmio_region_exact(st_phys, core::mem::size_of::<EfiSystemTable>()) else {
+            crate::log!(
+                "UEFI: EFI system table map failed phys=0x{:016X} size=0x{:X}\n",
+                st_phys,
+                core::mem::size_of::<EfiSystemTable>()
+            );
+            return;
         };
 
         // Safety: The region is explicitly mapped and sized for EfiSystemTable.
@@ -78,13 +75,14 @@ pub fn log_system_table_once() {
 
         let vendor = (|| {
             let vendor_addr = st.firmware_vendor as u64;
+            let vendor_phys = limine::try_as_phys_addr(vendor_addr)?;
             let bytes = 2usize
                 .checked_mul(96usize.checked_add(1)?)
                 .unwrap_or(0);
             if bytes == 0 {
                 return None;
             }
-            let mapped = mmio::map_limine_addr_exact(vendor_addr, bytes).ok()?;
+            let mapped = mmio::map_mmio_region_exact(vendor_phys, bytes).ok()?;
             let vendor_ptr = mapped.as_ptr() as *const u16;
             unsafe { read_utf16z_lossy(vendor_ptr, 96) }
         })();
