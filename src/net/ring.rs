@@ -10,6 +10,9 @@ pub struct DmaRegion {
     len: usize,
 }
 
+// Safety: physical memory backing these pointers is stable for the OS lifetime.
+unsafe impl Send for DmaRegion {}
+
 impl DmaRegion {
     pub fn alloc(size: usize, align: usize) -> Option<Self> {
         let (phys, virt) = crate::pci::dma::alloc(size, align)?;
@@ -27,9 +30,17 @@ impl DmaRegion {
     pub fn len(&self) -> usize {
         self.len
     }
+}
 
-    pub fn free(self) {
+impl Drop for DmaRegion {
+    fn drop(&mut self) {
+        if self.len == 0 || self.virt.is_null() {
+            return;
+        }
         crate::pci::dma::dealloc(self.virt, self.len);
+        self.len = 0;
+        self.virt = core::ptr::null_mut();
+        self.phys = 0;
     }
 }
 
@@ -67,7 +78,7 @@ impl RxRing {
         let mut slots = Vec::with_capacity(desc_count.max(1));
         for _ in 0..desc_count.max(1) {
             slots.push(RxSlot {
-                buf: vec![0u8; buf_size],
+                buf: alloc::vec![0u8; buf_size],
                 len: 0,
                 owned_by_hw: true,
             });
@@ -146,7 +157,7 @@ impl TxRing {
         let mut slots = Vec::with_capacity(desc_count.max(1));
         for _ in 0..desc_count.max(1) {
             slots.push(TxSlot {
-                buf: vec![0u8; buf_size],
+                buf: alloc::vec![0u8; buf_size],
                 len: 0,
                 owned_by_hw: false,
             });

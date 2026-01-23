@@ -28,6 +28,7 @@ mod backtrace;
 mod disc;
 mod limine;
 mod limstats;
+mod net;
 mod pci;
 mod percpu;
 mod phys;
@@ -233,6 +234,9 @@ pub extern "C" fn _start() -> ! {
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
+
+    net::init();
+    let _ = spawner.spawn(net::adapter::net_service_task());
 
     if tga::is_online() {
         let _ = spawner.spawn(tga::blink_task());

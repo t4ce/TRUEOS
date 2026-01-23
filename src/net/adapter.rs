@@ -5,17 +5,19 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
-use smoltcp::socket::{tcp, udp};
+use smoltcp::phy::ChecksumCapabilities;
+use smoltcp::socket::{icmp, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr,
+    Icmpv4Packet, Icmpv4Repr,
 };
 
-use crate::{app::app_manager, isr, log_warn};
+use crate::log;
 
 const MAX_SOCKETS: usize = 8;
 const MAX_DRAIN_PER_LOOP: usize = 32;
-const SERVICE_APP_NAME: &str = "[SYS] net-adapter";
+const ICMP_IDENT: u16 = 0x1234;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NetHandle(pub u32);
@@ -208,11 +210,11 @@ struct AdapterRxToken {
 }
 
 impl RxToken for AdapterRxToken {
-    fn consume<R, F>(mut self, f: F) -> R
+    fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        f(&mut self.buffer[..])
+        f(&self.buffer[..])
     }
 
     fn meta(&self) -> PacketMeta {
@@ -230,7 +232,7 @@ impl TxToken for AdapterTxToken {
         let mut buf = vec![0u8; len];
         let result = f(&mut buf[..]);
         if crate::net::transmit_packet(&buf[..]).is_err() {
-            log_warn!("net: TX busy, dropping {}-byte frame.", len);
+            log!("net: TX busy, dropping {}-byte frame.\n", len);
         }
         result
     }
@@ -251,6 +253,7 @@ struct NetService {
     sockets: SocketSet<'static>,
     records: Vec<SocketRecord>,
     next_handle: AtomicU32,
+    icmp: SocketHandle,
 }
 
 impl NetService {
@@ -259,7 +262,7 @@ impl NetService {
         let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
 
         let mut cfg = IfaceConfig::new(hw_addr);
-        cfg.random_seed = crate::rng::random_u64().unwrap_or(0x9E37_79B9);
+        cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
         let mut device = AdapterDevice;
         let mut iface = Interface::new(cfg, &mut device, now());
         iface.update_ip_addrs(|addrs| {
@@ -271,11 +274,24 @@ impl NetService {
         let routes = iface.routes_mut();
         let _ = routes.add_default_ipv4_route(Ipv4Address::new(10, 0, 2, 2));
 
+        let rx_meta = vec![icmp::PacketMetadata::EMPTY; 8];
+        let rx_buf = vec![0u8; 2048];
+        let tx_meta = vec![icmp::PacketMetadata::EMPTY; 8];
+        let tx_buf = vec![0u8; 2048];
+        let rx = icmp::PacketBuffer::new(rx_meta, rx_buf);
+        let tx = icmp::PacketBuffer::new(tx_meta, tx_buf);
+        let mut icmp_socket = icmp::Socket::new(rx, tx);
+        let _ = icmp_socket.bind(icmp::Endpoint::Ident(ICMP_IDENT));
+
+        let mut sockets = SocketSet::new(Vec::new());
+        let icmp = sockets.add(icmp_socket);
+
         Self {
             iface,
-            sockets: SocketSet::new(Vec::new()),
+            sockets,
             records: Vec::new(),
             next_handle: AtomicU32::new(1),
+            icmp,
         }
     }
 
@@ -379,7 +395,7 @@ impl NetService {
                             }
                             let socket_handle = rec.socket;
                             let endpoint = IpEndpoint::new(
-                                IpAddress::Ipv4(Ipv4Address::from_bytes(&remote.addr)),
+                                IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
                                 remote.port,
                             );
                             let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
@@ -446,7 +462,7 @@ impl NetService {
         while let Ok((len, meta)) = socket.recv_slice(&mut bounce) {
             let endpoint = meta.endpoint;
             let IpAddress::Ipv4(addr) = endpoint.addr;
-            let addr = addr.0;
+            let addr = addr.octets();
             let ep = NetEndpoint {
                 addr,
                 port: endpoint.port,
@@ -518,16 +534,45 @@ impl NetService {
         let _ = self
             .iface
             .poll(timestamp, &mut AdapterDevice, &mut self.sockets);
+
+        self.poll_icmp();
+    }
+
+    fn poll_icmp(&mut self) {
+        let mut buf = [0u8; 2048];
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        while socket.can_recv() {
+            let Ok((len, from)) = socket.recv_slice(&mut buf) else { break };
+            let Ok(pkt) = Icmpv4Packet::new_checked(&buf[..len]) else { continue };
+            let Ok(repr) = Icmpv4Repr::parse(&pkt, &ChecksumCapabilities::ignored()) else { continue };
+
+            if let Icmpv4Repr::EchoRequest { ident, seq_no, data } = repr {
+                // Only reply to our bound ident; smoltcp already filters, but keep it explicit.
+                if ident != ICMP_IDENT {
+                    continue;
+                }
+
+                let reply = Icmpv4Repr::EchoReply { ident, seq_no, data };
+                let mut out = vec![0u8; reply.buffer_len()];
+                reply.emit(
+                    &mut Icmpv4Packet::new_unchecked(&mut out),
+                    &ChecksumCapabilities::default(),
+                );
+                let _ = socket.send_slice(&out, from);
+            }
+        }
     }
 }
 
 fn now() -> Instant {
-    Instant::from_millis(isr::ticks() as i64)
+    use embassy_time_driver::TICK_HZ;
+    let ticks = embassy_time_driver::now();
+    let ms = (ticks as u128 * 1000u128 / (TICK_HZ as u128)) as i64;
+    Instant::from_millis(ms)
 }
 
 #[task]
 pub async fn net_service_task() {
-    app_manager::register_app(SERVICE_APP_NAME, app_manager::AppRole::Service);
     let mut svc = NetService::new();
 
     loop {
@@ -540,7 +585,6 @@ pub async fn net_service_task() {
         }
 
         svc.poll_sockets();
-        app_manager::heartbeat(SERVICE_APP_NAME);
         Timer::after(EmbassyDuration::from_millis(5)).await;
     }
 }

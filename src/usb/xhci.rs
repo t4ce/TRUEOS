@@ -504,9 +504,12 @@ impl XhciContext {
     }
 
     pub fn max_scratchpad_buffers(&self) -> u32 {
-        // Max Scratchpad Buffers field spans bits [26:21] (low) and [31:27] (high).
-        let low = (self.hcsparams2 >> 21) & 0x1F;
-        let high = (self.hcsparams2 >> 27) & 0x1F;
+        // xHCI HCSPARAMS2: Max Scratchpad Buffers
+        // - Max Scratchpad Buffers Lo: bits [20:16]
+        // - Max Scratchpad Buffers Hi: bits [26:21]
+        // Count = (Hi << 5) | Lo
+        let low = (self.hcsparams2 >> 16) & 0x1F;
+        let high = (self.hcsparams2 >> 21) & 0x1F;
         (high << 5) | low
     }
 
