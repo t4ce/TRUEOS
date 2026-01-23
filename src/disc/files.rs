@@ -145,6 +145,8 @@ struct BlockDeviceIo {
     pos: u64,
     block_size: usize,
     scratch: AlignedBuf,
+    read_count: u64,
+    last_logged_lba: u64,
 }
 
 impl BlockDeviceIo {
@@ -164,10 +166,18 @@ impl BlockDeviceIo {
             pos: 0,
             block_size,
             scratch,
+            read_count: 0,
+            last_logged_lba: u64::MAX,
         })
     }
 
     fn io_read_block(&mut self, lba: u64) -> Result<(), block::Error> {
+        self.read_count = self.read_count.wrapping_add(1);
+        // Keep this intentionally low-noise: FAT mount may read lots of LBAs.
+        if self.read_count <= 8 {
+            crate::log!("fatfs demo: io_read_block #{} lba={}\n", self.read_count, lba);
+            self.last_logged_lba = lba;
+        }
         self.dev.read_blocks(lba, self.scratch.as_mut_slice())
     }
 }
@@ -182,17 +192,23 @@ impl Read for BlockDeviceIo {
             return Ok(0);
         }
 
-        let mut written = 0usize;
-        while written < buf.len() {
+        let mut total = 0usize;
+        while total < buf.len() {
             let lba = self.pos / (self.block_size as u64);
-            let off = (self.pos % (self.block_size as u64)) as usize;
+            let block_off = (self.pos % (self.block_size as u64)) as usize;
+
             self.io_read_block(lba)?;
-            let n = (buf.len() - written).min(self.block_size - off);
-            buf[written..written + n].copy_from_slice(&self.scratch.as_mut_slice()[off..off + n]);
-            self.pos += n as u64;
-            written += n;
+
+            let avail = self.block_size - block_off;
+            let want = core::cmp::min(avail, buf.len() - total);
+            buf[total..total + want]
+                .copy_from_slice(&self.scratch.as_mut_slice()[block_off..block_off + want]);
+
+            total += want;
+            self.pos = self.pos.wrapping_add(want as u64);
         }
-        Ok(written)
+
+        Ok(total)
     }
 }
 
@@ -201,19 +217,30 @@ impl Write for BlockDeviceIo {
         if buf.is_empty() {
             return Ok(0);
         }
-
-        let mut consumed = 0usize;
-        while consumed < buf.len() {
-            let lba = self.pos / (self.block_size as u64);
-            let off = (self.pos % (self.block_size as u64)) as usize;
-            self.io_read_block(lba)?;
-            let n = (buf.len() - consumed).min(self.block_size - off);
-            self.scratch.as_mut_slice()[off..off + n].copy_from_slice(&buf[consumed..consumed + n]);
-            self.dev.write_blocks(lba, self.scratch.as_mut_slice())?;
-            self.pos += n as u64;
-            consumed += n;
+        if !self.dev.supports_write() {
+            return Err(block::Error::NotSupported);
         }
-        Ok(consumed)
+
+        let mut total = 0usize;
+        while total < buf.len() {
+            let lba = self.pos / (self.block_size as u64);
+            let block_off = (self.pos % (self.block_size as u64)) as usize;
+            let avail = self.block_size - block_off;
+            let want = core::cmp::min(avail, buf.len() - total);
+
+            if want != self.block_size {
+                self.io_read_block(lba)?;
+            }
+
+            self.scratch.as_mut_slice()[block_off..block_off + want]
+                .copy_from_slice(&buf[total..total + want]);
+            self.dev.write_blocks(lba, self.scratch.as_mut_slice())?;
+
+            total += want;
+            self.pos = self.pos.wrapping_add(want as u64);
+        }
+
+        Ok(total)
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
@@ -310,6 +337,7 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
     };
 
     // Prefer non-destructive behavior: attempt to mount first.
+    crate::log!("fatfs demo: mount begin\n");
     let fs = match FileSystem::new(io, FsOptions::new()) {
         Ok(fs) => fs,
         Err(e) => {
@@ -338,17 +366,83 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
         }
     };
 
-    let root = fs.root_dir();
-    if let Ok(mut file) = root.create_file("helloworld.txt") {
-        let _ = file.write_all(b"hello from fatfs on usb mass storage\n");
-    }
+    crate::log!("fatfs demo: mount ok\n");
 
-    if let Ok(stats) = fs.stats() {
-        crate::log!(
-            "fatfs demo: clusters total={} free={}\n",
-            stats.total_clusters(),
-            stats.free_clusters()
-        );
+    // Keep this 8.3-safe (<=8.3) to avoid short-name alias confusion.
+    const DEMO_FILE_NAME: &str = "trueos.txt";
+    crate::log!("fatfs demo: demo file name={}\n", DEMO_FILE_NAME);
+
+    {
+        let root = fs.root_dir();
+
+        crate::log!("fatfs demo: dir list begin\n");
+        let mut listed = 0u32;
+        for entry in root.iter() {
+            match entry {
+                Ok(entry) => {
+                    crate::log!("fatfs demo: dir entry: {}\n", entry.file_name());
+                    listed = listed.wrapping_add(1);
+                    if listed >= 16 {
+                        crate::log!("fatfs demo: dir list truncated\n");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    crate::log!("fatfs demo: dir list entry failed ({:?})\n", e);
+                    break;
+                }
+            }
+        }
+        crate::log!("fatfs demo: dir list end (count={})\n", listed);
+
+        fn log_read<T: Read>(label: &str, file: &mut T)
+        where
+            T::Error: core::fmt::Debug,
+        {
+            let mut buf = [0u8; 256];
+            match file.read(&mut buf) {
+                Ok(n) => {
+                    let shown = core::cmp::min(n, 128);
+                    crate::log!("fatfs demo: {} read ok n={} shown={} [", label, n, shown);
+                    for i in 0..shown {
+                        crate::log!("{:02X}", buf[i]);
+                        if i + 1 != shown {
+                            crate::log!(" ");
+                        }
+                    }
+                    if n > shown {
+                        crate::log!(" ...");
+                    }
+                    crate::log!("]\n");
+                }
+                Err(e) => crate::log!("fatfs demo: {} read failed ({:?})\n", label, e),
+            }
+        }
+
+        crate::log!("fatfs demo: open existing begin\n");
+        match root.open_file(DEMO_FILE_NAME) {
+            Ok(mut file) => {
+                crate::log!("fatfs demo: open existing ok\n");
+                log_read("existing", &mut file);
+            }
+            Err(fatfs::Error::NotFound) => {
+                crate::log!("fatfs demo: existing file missing; create begin\n");
+                match root.create_file(DEMO_FILE_NAME) {
+                    Ok(mut file) => {
+                        crate::log!("fatfs demo: create ok; write_all begin\n");
+                        if let Err(e) = file.write_all("TRUEOS§".as_bytes()) {
+                            crate::log!("fatfs demo: write_all failed ({:?})\n", e);
+                        }
+                        let _ = file.flush();
+
+                        let _ = file.seek(SeekFrom::Start(0));
+                        log_read("after_create", &mut file);
+                    }
+                    Err(e) => crate::log!("fatfs demo: create_file failed ({:?})\n", e),
+                }
+            }
+            Err(e) => crate::log!("fatfs demo: open existing failed ({:?})\n", e),
+        };
     }
 }
 

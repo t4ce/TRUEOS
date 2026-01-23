@@ -79,3 +79,24 @@ echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
 echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 # 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## FIREWALL netboot auf interface alles erlauben ##
+t4ce@PCJB:~/Repos/IoT/SSLTerminator$ sudo ufw allow in on enx047bcb669593
+Regel hinzugefügt
+Regel hinzugefügt (v6)
+t4ce@PCJB:~/Repos/IoT/SSLTerminator$ sudo ufw allow out on enx047bcb669593
+Regel hinzugefügt
+Regel hinzugefügt (v6)
