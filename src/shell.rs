@@ -274,6 +274,69 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
         return CommandAction::None;
     }
 
+    if let Some(rest) = cmd.strip_prefix("idle") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            uart1_com1::write_fmt(format_args!(
+                "idle: {}\r\n",
+                crate::power::idle_policy().as_str()
+            ));
+            return CommandAction::None;
+        }
+        let policy = match rest {
+            "spin" => crate::power::IdlePolicy::Spin,
+            "hlt" => crate::power::IdlePolicy::Halt,
+            _ => {
+                uart1_com1::write_str("idle: usage idle [spin|hlt]\r\n");
+                return CommandAction::None;
+            }
+        };
+        let prev = crate::power::set_idle_policy(policy);
+        uart1_com1::write_fmt(format_args!(
+            "idle: {} -> {}\r\n",
+            prev.as_str(),
+            policy.as_str()
+        ));
+        return CommandAction::None;
+    }
+
+    if let Some(rest) = cmd.strip_prefix("pstate") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            let cur = crate::power::current_ratio();
+            let caps = crate::power::caps().copied();
+            match (cur, caps) {
+                (Some(cur), Some(caps)) => {
+                    uart1_com1::write_fmt(format_args!(
+                        "pstate: current={} min={} max={}\r\n",
+                        cur,
+                        caps.min_ratio.unwrap_or(0),
+                        caps.max_ratio.unwrap_or(0)
+                    ));
+                }
+                _ => uart1_com1::write_str("pstate: unsupported\r\n"),
+            }
+            return CommandAction::None;
+        }
+
+        let Some(req) = rest.parse::<u8>().ok() else {
+            uart1_com1::write_str("pstate: usage pstate <ratio>\r\n");
+            return CommandAction::None;
+        };
+
+        match crate::power::set_pstate_ratio(req) {
+            Ok(applied) => uart1_com1::write_fmt(format_args!(
+                "pstate: applied {}\r\n",
+                applied
+            )),
+            Err(err) => uart1_com1::write_fmt(format_args!(
+                "pstate: failed: {}\r\n",
+                err
+            )),
+        }
+        return CommandAction::None;
+    }
+
     if let Some(rest) = cmd.strip_prefix("echo ") {
         uart1_com1::write_str(rest);
         uart1_com1::write_str("\r\n");

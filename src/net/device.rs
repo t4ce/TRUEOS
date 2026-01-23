@@ -11,41 +11,51 @@ pub trait NetDevice {
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
 }
 
-pub struct E1000Device;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OffloadFlags {
+    pub checksum: bool,
+    pub tso: bool,
+    pub lro: bool,
+    pub vlan: bool,
+}
 
-impl NetDevice for E1000Device {
-    fn mac(&self) -> [u8; 6] {
-        crate::net::e1000::mac_address().unwrap_or([0; 6])
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkState {
+    pub up: bool,
+    pub speed_mbps: u32,
+    pub full_duplex: bool,
+}
+
+impl LinkState {
+    pub fn down() -> Self {
+        Self::default()
     }
 
-    fn poll_rx(&mut self) {
-        crate::net::e1000::poll();
-    }
-
-    fn pop_rx(&mut self) -> Option<Vec<u8>> {
-        crate::net::e1000::pop_rx_packet()
-    }
-
-    fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
-        crate::net::e1000::transmit_packet(frame)
+    pub fn up(speed_mbps: u32, full_duplex: bool) -> Self {
+        Self {
+            up: true,
+            speed_mbps,
+            full_duplex,
+        }
     }
 }
 
-pub struct Intel8254xHalDevice;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DescFormat {
+    pub desc_len: usize,
+    pub align: usize,
+    pub writable: bool,
+}
 
-impl NetDevice for Intel8254xHalDevice {
-    fn mac(&self) -> [u8; 6] {
-        [0; 6]
-    }
-
-    fn poll_rx(&mut self) {
-    }
-
-    fn pop_rx(&mut self) -> Option<Vec<u8>> {
-        None
-    }
-
-    fn transmit(&mut self, _frame: &[u8]) -> Result<(), ()> {
-        Err(())
-    }
+pub trait VendorNetAdapter {
+    fn init_hw(&mut self) -> Result<(), ()>;
+    fn reset(&mut self);
+    fn read_link(&mut self) -> LinkState;
+    fn write_regs(&mut self);
+    fn kick_tx(&mut self);
+    fn ack_irq(&mut self);
+    fn enable_irq(&mut self);
+    fn disable_irq(&mut self);
+    fn rx_desc_format(&self) -> DescFormat;
+    fn tx_desc_format(&self) -> DescFormat;
 }
