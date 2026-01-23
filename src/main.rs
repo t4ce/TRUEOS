@@ -34,6 +34,7 @@ mod phys;
 mod portio;
 mod rng;
 mod serial;
+mod power;
 mod globalog;
 mod shell;
 mod porth;
@@ -218,6 +219,7 @@ pub extern "C" fn _start() -> ! {
     acpi::hpet::ensure();
 
     rng::log_rng_caps();
+    power::init();
 
     usb::xhci::init_once();
 
@@ -369,6 +371,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
         }
 
         counter = counter.wrapping_add(1);
+        power::idle_hint();
     }
 }
 

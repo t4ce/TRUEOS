@@ -1,43 +1,62 @@
 pub mod adapter;
+pub mod core;
 pub mod device;
 pub mod e1000;
-pub mod intel8254x_hal;
-use spin::Mutex;
-use device::NetDevice;
-use device::{E1000Device, Intel8254xHalDevice};
-enum ActiveDevice {
-    E1000(E1000Device),
-    Intel8254x(Intel8254xHalDevice),
-}
+pub mod ring;
+pub mod r8169;
+pub mod vio;
 
-enum ActiveDevice {}
+use spin::Mutex;
+
+use crate::net::core::NetCore;
+use crate::net::device::NetDevice;
+use crate::net::e1000::E1000Adapter;
+use crate::net::ring::NetRing;
+use crate::net::r8169::R8169Adapter;
+use crate::net::vio::VirtioNetAdapter;
+
+const RX_DESC_COUNT: usize = 64;
+const TX_DESC_COUNT: usize = 64;
+const RX_BUF_SIZE: usize = 2048;
+const TX_BUF_SIZE: usize = 2048;
+const POLL_BUDGET: usize = 32;
+
+enum ActiveDevice {
+    E1000(NetCore<E1000Adapter>),
+    R8169(NetCore<R8169Adapter>),
+    Virtio(NetCore<VirtioNetAdapter>),
+}
 
 impl NetDevice for ActiveDevice {
     fn mac(&self) -> [u8; 6] {
         match self {
             ActiveDevice::E1000(dev) => dev.mac(),
-            ActiveDevice::Intel8254x(dev) => dev.mac(),
+            ActiveDevice::R8169(dev) => dev.mac(),
+            ActiveDevice::Virtio(dev) => dev.mac(),
         }
     }
 
     fn poll_rx(&mut self) {
         match self {
             ActiveDevice::E1000(dev) => dev.poll_rx(),
-            ActiveDevice::Intel8254x(dev) => dev.poll_rx(),
+            ActiveDevice::R8169(dev) => dev.poll_rx(),
+            ActiveDevice::Virtio(dev) => dev.poll_rx(),
         }
     }
 
     fn pop_rx(&mut self) -> Option<alloc::vec::Vec<u8>> {
         match self {
             ActiveDevice::E1000(dev) => dev.pop_rx(),
-            ActiveDevice::Intel8254x(dev) => dev.pop_rx(),
+            ActiveDevice::R8169(dev) => dev.pop_rx(),
+            ActiveDevice::Virtio(dev) => dev.pop_rx(),
         }
     }
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         match self {
             ActiveDevice::E1000(dev) => dev.transmit(frame),
-            ActiveDevice::Intel8254x(dev) => dev.transmit(frame),
+            ActiveDevice::R8169(dev) => dev.transmit(frame),
+            ActiveDevice::Virtio(dev) => dev.transmit(frame),
         }
     }
 }
@@ -45,55 +64,47 @@ impl NetDevice for ActiveDevice {
 static DEVICE: Mutex<Option<ActiveDevice>> = Mutex::new(None);
 
 pub fn init() {
-    if intel8254x_hal::init().is_ok() {
+    if let Ok(adapter) = E1000Adapter::init() {
         let mut guard = DEVICE.lock();
-        *guard = Some(ActiveDevice::Intel8254x(Intel8254xHalDevice));
-        crate::log_info!("net: using intel8254x-hal driver.");
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, TX_DESC_COUNT, TX_BUF_SIZE, POLL_BUDGET);
+        *guard = Some(ActiveDevice::E1000(NetCore::new(adapter, ring)));
+        crate::log_info!("net: using e1000 adapter.");
         return;
     }
-    crate::log_warn!("intel8254x-hal: init failed; falling back to e1000.");
 
-    if e1000::init().is_ok() {
+    if let Ok(adapter) = R8169Adapter::init() {
         let mut guard = DEVICE.lock();
-        *guard = Some(ActiveDevice::E1000(E1000Device));
-        crate::log_info!("net: using e1000 driver.");
-    } else {
-        crate::log_warn!("e1000 NIC not detected.");
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, TX_DESC_COUNT, TX_BUF_SIZE, POLL_BUDGET);
+        *guard = Some(ActiveDevice::R8169(NetCore::new(adapter, ring)));
+        crate::log_info!("net: using r8169 adapter.");
+        return;
     }
-}
 
-pub fn init() {
-    crate::log_info!("net: disabled (feature \"net-go\" not enabled).");
+    if let Ok(adapter) = VirtioNetAdapter::init() {
+        let mut guard = DEVICE.lock();
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, TX_DESC_COUNT, TX_BUF_SIZE, POLL_BUDGET);
+        *guard = Some(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
+        crate::log_info!("net: using virtio-net adapter.");
+        return;
+    }
+
+    crate::log_warn!("net: no supported NIC detected.");
 }
 
 pub fn poll() {
     with_device(|dev| dev.poll_rx());
 }
 
-pub fn poll() {}
-
 pub fn pop_rx_packet() -> Option<alloc::vec::Vec<u8>> {
     with_device(|dev| dev.pop_rx()).flatten()
-}
-
-pub fn pop_rx_packet() -> Option<alloc::vec::Vec<u8>> {
-    None
 }
 
 pub fn transmit_packet(data: &[u8]) -> Result<(), ()> {
     with_device(|dev| dev.transmit(data)).unwrap_or(Err(()))
 }
 
-pub fn transmit_packet(_data: &[u8]) -> Result<(), ()> {
-    Err(())
-}
-
 pub fn mac_address() -> Option<[u8; 6]> {
     with_device(|dev| Some(dev.mac())).flatten()
-}
-
-pub fn mac_address() -> Option<[u8; 6]> {
-    None
 }
 
 fn with_device<R>(f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
@@ -103,8 +114,4 @@ fn with_device<R>(f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
     } else {
         None
     }
-}
-
-fn with_device<R>(_f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
-    None
 }
