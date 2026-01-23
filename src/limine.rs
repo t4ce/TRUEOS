@@ -28,6 +28,11 @@ pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest =
 
 #[used]
 #[link_section = ".limine_requests"]
+pub static EXECUTABLE_FILE_REQUEST: request::ExecutableFileRequest =
+    request::ExecutableFileRequest::new();
+
+#[used]
+#[link_section = ".limine_requests"]
 pub static STACK_SIZE_REQUEST: request::StackSizeRequest =
     request::StackSizeRequest::new().with_size(16 * 1024 * 1024);
 
@@ -65,6 +70,17 @@ pub fn framebuffer_response() -> Option<&'static response::FramebufferResponse> 
 pub fn executable_address_bases() -> Option<(u64, u64)> {
     let resp = EXECUTABLE_ADDRESS_REQUEST.get_response()?;
     Some((resp.virtual_base(), resp.physical_base()))
+}
+
+pub fn executable_file_bytes() -> Option<&'static [u8]> {
+    let resp = EXECUTABLE_FILE_REQUEST.get_response()?;
+    let file = resp.file();
+    let addr = file.addr();
+    let size = file.size() as usize;
+    if addr.is_null() || size == 0 {
+        return None;
+    }
+    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, size) })
 }
 
 pub fn smp_response() -> Option<&'static response::MpResponse> {

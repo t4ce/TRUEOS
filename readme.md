@@ -84,8 +84,8 @@ echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 
 
 
-
-
+check disc files after install
+// mdir -i disk.img@@$((2048*512)) ::
 
 
 

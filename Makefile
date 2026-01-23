@@ -10,6 +10,8 @@ LIMINE_STAMP 	:= $(LIMINE_BUILD)/.installed
 LIMINE_SHARE 	:= $(LIMINE_PREFIX)/share/limine
 LIMINE_BIN 		:= $(LIMINE_PREFIX)/bin/limine
 
+LIMINE_CONFIG_ARGS := --prefix=$(abspath $(LIMINE_PREFIX)) --enable-bios --enable-uefi-x86-64 --enable-uefi-cd
+
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait 
@@ -29,7 +31,17 @@ QEMU_USB_FLAGS =  \
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
 $(LIMINE_STAMP):
-	mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
+	@# Reconfigure/rebuild Limine if configure flags changed.
+	@mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
+	@echo '$(LIMINE_CONFIG_ARGS)' > $(LIMINE_BUILD)/.config_args.new
+	@if [ -f $(LIMINE_BUILD)/.config_args ]; then \
+		if ! cmp -s $(LIMINE_BUILD)/.config_args $(LIMINE_BUILD)/.config_args.new; then \
+			echo "Limine config changed; rebuilding..."; \
+			rm -rf $(LIMINE_BUILD) $(LIMINE_PREFIX); \
+			mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX); \
+		fi; \
+	fi
+	@mv -f $(LIMINE_BUILD)/.config_args.new $(LIMINE_BUILD)/.config_args
 	@if [ ! -f $(LIMINE_SRC)/configure ]; then \
 		if ! command -v autoreconf >/dev/null 2>&1; then \
 			echo "error: Limine bootstrap requires 'autoreconf' (autoconf)."; \
@@ -44,11 +56,13 @@ $(LIMINE_STAMP):
 		OBJCOPY_FOR_TARGET=objcopy \
 		OBJDUMP_FOR_TARGET=objdump \
 		READELF_FOR_TARGET=readelf \
-		--prefix=$(abspath $(LIMINE_PREFIX)) \
-		--enable-uefi-x86-64 \
-		--enable-uefi-cd
+		$(LIMINE_CONFIG_ARGS)
 	$(MAKE) -C $(LIMINE_BUILD)
 	$(MAKE) -C $(LIMINE_BUILD) install
+	@if [ -f $(LIMINE_BUILD)/bin/limine-bios-hdd.bin ]; then \
+		mkdir -p $(LIMINE_SHARE); \
+		cp $(LIMINE_BUILD)/bin/limine-bios-hdd.bin $(LIMINE_SHARE)/; \
+	fi
 	touch $(LIMINE_STAMP)
 
 iso: $(LIMINE_STAMP)
