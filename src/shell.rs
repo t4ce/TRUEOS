@@ -1,4 +1,5 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
@@ -7,6 +8,8 @@ use crate::ecma48;
 use crate::disc::{block, install};
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
+
+static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[inline]
 fn write_prompt() {
@@ -42,7 +45,7 @@ enum CommandAction {
 }
 
 #[embassy_executor::task]
-pub async fn task() {
+pub async fn task(spawner: Spawner) {
     uart1_com1::init();
 
     write_banner();
@@ -108,9 +111,12 @@ pub async fn task() {
                 b'\r' | b'\n' => {
                     if !line.is_empty() {
                         uart1_com1::write_str("\r\n");
-                        let action = handle_line(&line);
+                        let action = handle_line(&line, &spawner);
                         line.clear();
-                        write_prompt();
+                        // During multiline Porth capture, avoid spamming the prompt each line.
+                        if !crate::porth::shell_is_capturing_multiline() {
+                            write_prompt();
+                        }
                         match action {
                             CommandAction::Pending(action) => {
                                 pending_action = Some(action);
@@ -205,9 +211,22 @@ pub async fn task() {
     }
 }
 
-fn handle_line(line: &str) -> CommandAction {
+fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
     let cmd = line.trim();
     if cmd.is_empty() {
+        return CommandAction::None;
+    }
+
+    // Background job operator: `§ <command...>`
+    // Runs the command asynchronously and prints a completion marker when done.
+    if let Some(rest) = cmd.strip_prefix('§') {
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            uart1_com1::write_str("usage: § <command...>\r\n");
+            uart1_com1::write_str("note: currently supports Porth commands\r\n");
+            return CommandAction::None;
+        }
+        spawn_background_job(spawner, rest);
         return CommandAction::None;
     }
 
@@ -273,6 +292,31 @@ fn handle_line(line: &str) -> CommandAction {
     uart1_com1::write_str(cmd);
     uart1_com1::write_str("\r\n");
     CommandAction::None
+}
+
+fn spawn_background_job(spawner: &Spawner, cmd: &str) {
+    let mut buf: heapless::String<256> = heapless::String::new();
+    if buf.push_str(cmd).is_err() {
+        uart1_com1::write_str("§: command too long\r\n");
+        return;
+    }
+
+    let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+    if spawner.spawn(shell_bg_job(id, buf)).is_err() {
+        uart1_com1::write_str("§: spawn failed\r\n");
+    }
+}
+
+#[embassy_executor::task(pool_size = 4)]
+async fn shell_bg_job(id: usize, cmd: heapless::String<256>) {
+    uart1_com1::write_fmt(format_args!("\r\n§{} start: {}\r\n", id, cmd.as_str()));
+
+    // For now, only Porth commands are supported in the background.
+    if !crate::porth::shell_handle_line(cmd.as_str()) {
+        uart1_com1::write_fmt(format_args!("§{}: unsupported command\r\n", id));
+    }
+
+    uart1_com1::write_fmt(format_args!("§{} done\r\n", id));
 }
 
 fn handle_install(args: &str) -> CommandAction {

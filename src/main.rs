@@ -259,7 +259,7 @@ pub extern "C" fn _start() -> ! {
     // FATFS demo on the first detected USB mass-storage device.
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
-    let _ = spawner.spawn(shell::task());
+    let _ = spawner.spawn(shell::task(spawner));
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
