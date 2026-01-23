@@ -11,7 +11,6 @@ sudo ip addr flush dev enx047bcb669593
 #Steps Fresh Sys
 # CARGO_BUILD_TARGET=/home/t4ce/Dokumente/TrueOS/86_64.json cargo outdated -R
 # cargo upgrade
-
 # clone repo , then
 git submodule init 
 git submodule update

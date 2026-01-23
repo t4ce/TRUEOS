@@ -106,6 +106,46 @@ pub fn efi_system_table_address() -> Option<u64> {
     Some(resp.address)
 }
 
+/// Returns true if `phys` lies within any Limine-reported memory map range.
+///
+/// Note: This is a containment check only. It does not imply the region is safe to keep
+/// borrowing forever; treat BOOTLOADER_RECLAIMABLE etc as reclaimable.
+pub fn memmap_contains_phys(phys: u64) -> bool {
+    let Some(entries) = memmap_entries() else {
+        return false;
+    };
+    for entry in entries {
+        let base = entry.base;
+        let end = entry.base.saturating_add(entry.length);
+        if phys >= base && phys < end {
+            return true;
+        }
+    }
+    false
+}
+
+/// Try to interpret an address as something that can be treated as physical memory.
+///
+/// Accepts:
+/// - A raw physical address present in the Limine memory map
+/// - An HHDM address (HHDM+phys) where `phys` is present in the Limine memory map
+///
+/// This is intended as a practical kernel-side contract for consuming Limine/firmware pointers:
+/// turn them into a physical address first, then map explicitly before dereferencing.
+pub fn try_as_phys_addr(addr: u64) -> Option<u64> {
+    if memmap_contains_phys(addr) {
+        return Some(addr);
+    }
+
+    let hhdm = hhdm_offset()?;
+    let phys = addr.checked_sub(hhdm)?;
+    if memmap_contains_phys(phys) {
+        Some(phys)
+    } else {
+        None
+    }
+}
+
 pub fn memmap_type_name(entry_type: memory_map::EntryType) -> &'static str {
     use memory_map::EntryType as T;
     match entry_type {
