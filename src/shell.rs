@@ -1,3 +1,4 @@
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -18,7 +19,7 @@ fn write_prompt() {
 
 #[inline]
 fn write_banner() {
-    uart1_com1::write_str("TRUE OS\n");
+    uart1_com1::write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
     write_prompt();
 }
 
@@ -26,6 +27,16 @@ static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
 static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
 static GO_MODE: AtomicBool = AtomicBool::new(false);
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+
+#[inline]
+fn set_go_mode(enable: bool) {
+    let prev = GO_MODE.swap(enable, Ordering::Release);
+    if enable && !prev {
+        uart1_com1::write_str(ecma48::HIDE_CURSOR);
+    } else if !enable && prev {
+        uart1_com1::write_str(ecma48::SHOW_CURSOR);
+    }
+}
 
 #[derive(Copy, Clone)]
 enum PendingAction {
@@ -65,7 +76,7 @@ pub async fn task(spawner: Spawner) {
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
-                    GO_MODE.store(false, Ordering::Release);
+                    set_go_mode(false);
                     uart1_com1::write_str(ecma48::CLEAR_SCREEN);
                     uart1_com1::write_str(ecma48::HOME);
                     write_banner();
@@ -80,7 +91,7 @@ pub async fn task(spawner: Spawner) {
                             b'\r' | b'\n' => {
                                 pending_action = None;
                                 pending_deadline = None;
-                                GO_MODE.store(false, Ordering::Release);
+                                set_go_mode(false);
                                 line.clear();
                                 uart1_com1::write_str("\r\n");
                                 do_install(raw_id, migrate);
@@ -89,7 +100,7 @@ pub async fn task(spawner: Spawner) {
                             b' ' => {
                                 pending_action = None;
                                 pending_deadline = None;
-                                GO_MODE.store(false, Ordering::Release);
+                                set_go_mode(false);
                                 line.clear();
                                 uart1_com1::write_str("\r\ninstall: aborted\r\n");
                                 write_prompt();
@@ -102,13 +113,19 @@ pub async fn task(spawner: Spawner) {
                     // Other pending actions: Enter/Space cancels.
                     pending_action = None;
                     pending_deadline = None;
-                    GO_MODE.store(false, Ordering::Release);
+                    set_go_mode(false);
                     line.clear();
                     uart1_com1::write_str("\r\n");
                     write_prompt();
                     continue;
                 }
                 b'\r' | b'\n' => {
+                    if line.is_empty() && pending_action.is_none() && GO_MODE.load(Ordering::Acquire) {
+                        set_go_mode(false);
+                        uart1_com1::write_str("\r\n");
+                        write_prompt();
+                        continue;
+                    }
                     if !line.is_empty() {
                         uart1_com1::write_str("\r\n");
                         let action = handle_line(&line, &spawner);
@@ -126,18 +143,18 @@ pub async fn task(spawner: Spawner) {
                                     }
                                     PendingAction::Install { .. } => None,
                                 };
-                                GO_MODE.store(matches!(action, PendingAction::Reset | PendingAction::S5), Ordering::Release);
+                                set_go_mode(matches!(action, PendingAction::Reset | PendingAction::S5));
                             }
                             CommandAction::EnterCube => {
                                 cube_mode = true;
-                                GO_MODE.store(false, Ordering::Release);
+                                set_go_mode(false);
                                 cube.set_shape(WireShape::Cube);
                                 cube.reset();
                                 enter_cube_mode();
                             }
                             CommandAction::EnterIco => {
                                 cube_mode = true;
-                                GO_MODE.store(false, Ordering::Release);
+                                set_go_mode(false);
                                 cube.set_shape(WireShape::Icosidodecahedron);
                                 cube.reset();
                                 enter_cube_mode();
@@ -176,7 +193,7 @@ pub async fn task(spawner: Spawner) {
             }
             if let (Some(action), Some(deadline)) = (pending_action, pending_deadline) {
                 if Instant::now() >= deadline {
-                    GO_MODE.store(false, Ordering::Release);
+                    set_go_mode(false);
                     pending_action = None;
                     pending_deadline = None;
                     match action {
@@ -264,13 +281,45 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
     }
 
     if cmd.eq_ignore_ascii_case("go") {
-        GO_MODE.store(true, Ordering::Release);
+        set_go_mode(true);
         return CommandAction::None;
     }
 
     if cmd.eq_ignore_ascii_case("mandel") {
         crate::draw_mandelbrot();
         uart1_com1::write_str("mandel ok\r\n");
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("time") {
+        let Some(boot_ts) = crate::limine::boot_timestamp_secs() else {
+            uart1_com1::write_str("time: boot timestamp unavailable\r\n");
+            return CommandAction::None;
+        };
+        let now_ticks = embassy_time_driver::now();
+        let elapsed_secs = now_ticks / (embassy_time_driver::TICK_HZ as u64);
+        let ts = boot_ts.saturating_add(elapsed_secs);
+        let (year, month, day, hour, minute, second) = unix_timestamp_to_ymdhms(ts);
+
+        let mut buf: String<64> = String::new();
+        let _ = write!(
+            &mut buf,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second
+        );
+        uart1_com1::write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("up") {
+        uart1_com1::write_str("line1\r\nline2\r\n");
+        uart1_com1::write_fmt(format_args!("{}", crate::ecma48::up(1)));
+        uart1_com1::write_str("↑\r\n");
         return CommandAction::None;
     }
 
@@ -495,7 +544,7 @@ fn do_install(raw_id: u32, mode_migrate: bool) {
         info.id
     ));
 
-    GO_MODE.store(true, Ordering::Release);
+    set_go_mode(true);
     let mut go_idx: usize = 0;
     let mut tick = || {
         let ch = GO_CHARS[go_idx];
@@ -517,7 +566,7 @@ fn do_install(raw_id: u32, mode_migrate: bool) {
     } else {
         install::install_bios_mbr_with_progress(handle, &mut tick)
     };
-    GO_MODE.store(false, Ordering::Release);
+    set_go_mode(false);
     uart1_com1::write_str("\r\n");
 
     match res {
@@ -557,6 +606,56 @@ fn write_usize(value: usize) {
     for b in &buf[i..] {
         uart1_com1::write_byte(*b);
     }
+}
+
+fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
+    const SECS_PER_MIN: u64 = 60;
+    const SECS_PER_HOUR: u64 = 60 * SECS_PER_MIN;
+    const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
+
+    let mut days = ts / SECS_PER_DAY;
+    let mut rem = ts % SECS_PER_DAY;
+
+    let hour = (rem / SECS_PER_HOUR) as u8;
+    rem %= SECS_PER_HOUR;
+    let minute = (rem / SECS_PER_MIN) as u8;
+    let second = (rem % SECS_PER_MIN) as u8;
+
+    let mut year: u32 = 1970;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366u64 } else { 365u64 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let month_lengths = month_lengths(year);
+    let mut month_idx = 0;
+    while month_idx < month_lengths.len() {
+        let len = month_lengths[month_idx] as u64;
+        if days < len {
+            let day = (days + 1) as u8;
+            return (year, (month_idx + 1) as u8, day, hour, minute, second);
+        }
+        days -= len;
+        month_idx += 1;
+    }
+
+    (year, 12, 31, hour, minute, second)
+}
+
+fn month_lengths(year: u32) -> [u8; 12] {
+    if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 fn draw_corners(cols: usize, rows: usize) {
