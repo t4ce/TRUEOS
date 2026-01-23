@@ -1,4 +1,5 @@
 use crate::isr;
+use crate::net::core::VendorAdapter;
 use crate::{frame, mmio::MmioRegion, pci};
 use alloc::{collections::VecDeque, vec::Vec};
 use core::cmp::min;
@@ -50,6 +51,33 @@ const RX_BUF_SIZE: usize = 2048;
 const TX_RING_SIZE: usize = 64;
 const TX_BUF_SIZE: usize = 2048;
 const RX_QUEUE_DEPTH: usize = 32;
+
+pub struct E1000Adapter;
+
+impl E1000Adapter {
+    pub fn init() -> Result<Self, ()> {
+        init_device()?;
+        Ok(Self)
+    }
+}
+
+impl VendorAdapter for E1000Adapter {
+    fn mac(&self) -> [u8; 6] {
+        mac_address().unwrap_or([0; 6])
+    }
+
+    fn poll_rx(&mut self) {
+        poll();
+    }
+
+    fn pop_rx(&mut self) -> Option<Vec<u8>> {
+        pop_rx_packet()
+    }
+
+    fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
+        transmit_packet(frame)
+    }
+}
 
 #[repr(C, packed)]
 struct RxDesc {
@@ -287,7 +315,7 @@ static IRQ_LINE: AtomicU8 = AtomicU8::new(0xFF);
 static RX_QUEUE: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
 
 #[allow(clippy::result_unit_err)]
-pub fn init() -> Result<(), ()> {
+fn init_device() -> Result<(), ()> {
     let device = match pci::find_device(E1000_VENDOR_ID, E1000_DEVICE_ID) {
         Some(dev) => dev,
         None => return Err(()),
@@ -370,19 +398,19 @@ fn configure_command_register(device: &pci::PciDevice) {
 }
 
 /// Poll the NIC for received packets.
-pub fn poll() {
+fn poll() {
     if let Some(ref mut nic) = *DEV.lock() {
         nic.poll_rx();
     }
 }
 
-pub fn pop_rx_packet() -> Option<Vec<u8>> {
+fn pop_rx_packet() -> Option<Vec<u8>> {
     let mut q = RX_QUEUE.lock();
     q.pop_front()
 }
 
 #[allow(clippy::result_unit_err)]
-pub fn transmit_packet(data: &[u8]) -> Result<(), ()> {
+fn transmit_packet(data: &[u8]) -> Result<(), ()> {
     let mut guard = DEV.lock();
     if let Some(ref mut nic) = *guard {
         nic.transmit(data)
@@ -391,7 +419,7 @@ pub fn transmit_packet(data: &[u8]) -> Result<(), ()> {
     }
 }
 
-pub fn mac_address() -> Option<[u8; 6]> {
+fn mac_address() -> Option<[u8; 6]> {
     let guard = DEV.lock();
     guard.as_ref().map(|nic| nic.mac())
 }
