@@ -173,8 +173,6 @@ pub extern "C" fn _start() -> ! {
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
-    // If booted via UEFI, parse+log the EFI System Table once.
-    // uefi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
     const KIB: usize = 1024;
     const MIB: usize = 1024 * KIB;
@@ -197,6 +195,9 @@ pub extern "C" fn _start() -> ! {
     strings::smoke_test();
     path::smoke_test();
     pattern::smoke_test();
+    
+    // If booted via UEFI, parse+log the EFI System Table once.
+    uefi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
     crate::log!(
         "turbo: {:?}\n", turbo::local_state()

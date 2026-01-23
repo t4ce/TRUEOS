@@ -4,6 +4,7 @@ use super::xhci::{
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use super::bot;
+use super::scsi;
 use crate::pci::dma;
 use crate::disc::block as disc_block;
 use core::mem::size_of;
@@ -390,6 +391,22 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             .iter_mut()
             .find(|r| r.controller_id == ctx.controller_id && r.slot_id == slot_id)
         {
+            let tag_tur = rt.bot_tag;
+            if bot::scsi_test_unit_ready(
+                ctx,
+                &mut rt.ring_out,
+                &mut rt.ring_in,
+                slot_id,
+                rt.ep_out_target,
+                rt.ep_in_target,
+                tag_tur,
+            )
+            .await
+            .is_ok()
+            {
+                rt.bot_tag = rt.bot_tag.wrapping_add(1);
+            }
+
             let tag0 = rt.bot_tag;
             if let Ok(inq) = bot::scsi_inquiry_basic(
                 ctx,
@@ -516,27 +533,64 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                     return Err(disc_block::Error::NotReady);
                 };
 
-                let tag = rt.bot_tag;
+                let mut tag = rt.bot_tag;
                 let ctx = rt.ctx;
 
-                let c = bot::scsi_read_10_sync(
-                    &ctx,
-                    &mut rt.ring_out,
-                    &mut rt.ring_in,
-                    self.slot_id,
-                    rt.ep_out_target,
-                    rt.ep_in_target,
-                    tag,
-                    cur_lba as u32,
-                    blocks_here as u16,
-                    unsafe { core::slice::from_raw_parts_mut(dma_virt, bytes_here) },
-                );
-                if c.is_ok() {
-                    rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                    true
-                } else {
-                    false
+                let mut ok = false;
+                let mut attempts = 0u8;
+                while attempts < 3 {
+                    let c = bot::scsi_read_10_sync(
+                        &ctx,
+                        &mut rt.ring_out,
+                        &mut rt.ring_in,
+                        self.slot_id,
+                        rt.ep_out_target,
+                        rt.ep_in_target,
+                        tag,
+                        cur_lba as u32,
+                        blocks_here as u16,
+                        unsafe { core::slice::from_raw_parts_mut(dma_virt, bytes_here) },
+                    );
+                    tag = tag.wrapping_add(1);
+                    match c {
+                        Ok(csw) if csw.status == bot::BotStatus::Passed => {
+                            ok = true;
+                            break;
+                        }
+                        Ok(csw) => {
+                            if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                                &ctx,
+                                &mut rt.ring_out,
+                                &mut rt.ring_in,
+                                self.slot_id,
+                                rt.ep_out_target,
+                                rt.ep_in_target,
+                                tag,
+                            ) {
+                                tag = tag.wrapping_add(1);
+                                crate::log!(
+                                    "usb: mass read csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
+                                    csw.status,
+                                    sense.response_code,
+                                    sense.sense_key,
+                                    sense.asc,
+                                    sense.ascq
+                                );
+                                if sense.sense_key == scsi::SenseKey::NotReady {
+                                    attempts = attempts.wrapping_add(1);
+                                    continue;
+                                }
+                            } else {
+                                crate::log!("usb: mass read csw={:?} request-sense failed\n", csw.status);
+                            }
+                            break;
+                        }
+                        Err(()) => break,
+                    }
                 }
+
+                rt.bot_tag = tag;
+                ok
             };
 
             if !ok {
@@ -598,26 +652,64 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                     return Err(disc_block::Error::NotReady);
                 };
 
-                let tag = rt.bot_tag;
+                let mut tag = rt.bot_tag;
                 let ctx = rt.ctx;
-                let c = bot::scsi_write_10_sync(
-                    &ctx,
-                    &mut rt.ring_out,
-                    &mut rt.ring_in,
-                    self.slot_id,
-                    rt.ep_out_target,
-                    rt.ep_in_target,
-                    tag,
-                    cur_lba as u32,
-                    blocks_here as u16,
-                    unsafe { core::slice::from_raw_parts(dma_virt, bytes_here) },
-                );
-                if c.is_ok() {
-                    rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                    true
-                } else {
-                    false
+
+                let mut ok = false;
+                let mut attempts = 0u8;
+                while attempts < 3 {
+                    let c = bot::scsi_write_10_sync(
+                        &ctx,
+                        &mut rt.ring_out,
+                        &mut rt.ring_in,
+                        self.slot_id,
+                        rt.ep_out_target,
+                        rt.ep_in_target,
+                        tag,
+                        cur_lba as u32,
+                        blocks_here as u16,
+                        unsafe { core::slice::from_raw_parts(dma_virt, bytes_here) },
+                    );
+                    tag = tag.wrapping_add(1);
+                    match c {
+                        Ok(csw) if csw.status == bot::BotStatus::Passed => {
+                            ok = true;
+                            break;
+                        }
+                        Ok(csw) => {
+                            if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                                &ctx,
+                                &mut rt.ring_out,
+                                &mut rt.ring_in,
+                                self.slot_id,
+                                rt.ep_out_target,
+                                rt.ep_in_target,
+                                tag,
+                            ) {
+                                tag = tag.wrapping_add(1);
+                                crate::log!(
+                                    "usb: mass write csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
+                                    csw.status,
+                                    sense.response_code,
+                                    sense.sense_key,
+                                    sense.asc,
+                                    sense.ascq
+                                );
+                                if sense.sense_key == scsi::SenseKey::NotReady {
+                                    attempts = attempts.wrapping_add(1);
+                                    continue;
+                                }
+                            } else {
+                                crate::log!("usb: mass write csw={:?} request-sense failed\n", csw.status);
+                            }
+                            break;
+                        }
+                        Err(()) => break,
+                    }
                 }
+
+                rt.bot_tag = tag;
+                ok
             };
 
             dma::dealloc(dma_virt, bytes_here);

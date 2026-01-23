@@ -558,6 +558,89 @@ fn goto_cleanup(cbw_virt: *mut u8, csw_virt: *mut u8, data_virt: *mut u8, data_l
     dma::dealloc(cbw_virt, CBW_LEN);
 }
 
+fn log_request_sense(prefix: &str, sense: &scsi::SenseFixed) {
+    crate::log!(
+        "usb: bot: {} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
+        prefix,
+        sense.response_code,
+        sense.sense_key,
+        sense.asc,
+        sense.ascq
+    );
+}
+
+async fn scsi_request_sense_fixed(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+) -> Option<scsi::SenseFixed> {
+    let cdb = scsi::cdb_request_sense(18);
+    let mut data = [0u8; 18];
+
+    let csw = bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
+        .await
+        .ok()?;
+
+    if csw.status != BotStatus::Passed {
+        return None;
+    }
+
+    scsi::parse_request_sense_fixed(&data)
+}
+
+pub fn scsi_request_sense_fixed_sync(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+) -> Option<scsi::SenseFixed> {
+    let cdb = scsi::cdb_request_sense(18);
+    let mut data = [0u8; 18];
+
+    let csw = bot_command_sync(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
+        .ok()?;
+
+    if csw.status != BotStatus::Passed {
+        return None;
+    }
+
+    scsi::parse_request_sense_fixed(&data)
+}
+
+pub async fn scsi_test_unit_ready(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+) -> Result<(), ()> {
+    let cdb = scsi::cdb_test_unit_ready();
+    let csw = bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, None).await?;
+
+    if csw.status != BotStatus::Passed {
+        if let Some(sense) =
+            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
+                .await
+        {
+            log_request_sense("test-unit-ready", &sense);
+        } else {
+            crate::log!("usb: bot: test-unit-ready request-sense failed\n");
+        }
+        return Err(());
+    }
+
+    Ok(())
+}
+
 pub async fn scsi_inquiry_basic(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
@@ -576,6 +659,14 @@ pub async fn scsi_inquiry_basic(
 
     if csw.status != BotStatus::Passed {
         crate::log!("usb: bot: inquiry failed status={:?} residue={}\n", csw.status, csw.residue);
+        if let Some(sense) =
+            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
+                .await
+        {
+            log_request_sense("inquiry", &sense);
+        } else {
+            crate::log!("usb: bot: inquiry request-sense failed\n");
+        }
         return Err(());
     }
 
@@ -607,6 +698,17 @@ pub fn scsi_inquiry_basic_sync(
     )?;
 
     if csw.status != BotStatus::Passed {
+        if let Some(sense) = scsi_request_sense_fixed_sync(
+            ctx,
+            ring_out,
+            ring_in,
+            slot_id,
+            ep_out_target,
+            ep_in_target,
+            tag.wrapping_add(1),
+        ) {
+            log_request_sense("inquiry", &sense);
+        }
         return Err(());
     }
 
@@ -631,6 +733,14 @@ pub async fn scsi_read_capacity_10(
 
     if csw.status != BotStatus::Passed {
         crate::log!("usb: bot: read-capacity failed status={:?} residue={}\n", csw.status, csw.residue);
+        if let Some(sense) =
+            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
+                .await
+        {
+            log_request_sense("read-capacity", &sense);
+        } else {
+            crate::log!("usb: bot: read-capacity request-sense failed\n");
+        }
         return Err(());
     }
 
@@ -662,6 +772,17 @@ pub fn scsi_read_capacity_10_sync(
     )?;
 
     if csw.status != BotStatus::Passed {
+        if let Some(sense) = scsi_request_sense_fixed_sync(
+            ctx,
+            ring_out,
+            ring_in,
+            slot_id,
+            ep_out_target,
+            ep_in_target,
+            tag.wrapping_add(1),
+        ) {
+            log_request_sense("read-capacity", &sense);
+        }
         return Err(());
     }
 
