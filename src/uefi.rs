@@ -1,5 +1,7 @@
 use core::{char, ptr};
 
+use crate::pci::mmio;
+
 use spin::Once;
 
 use crate::limine;
@@ -42,17 +44,29 @@ pub fn log_system_table_once() {
             _ => return,
         };
 
-        let table_ptr = match to_virt_ptr::<EfiSystemTable>(phys_or_virt) {
-            Some(p) => p,
-            None => {
-                crate::log!("UEFI: EFI system table at 0x{:016X} (no HHDM; not parsing)\n", phys_or_virt);
+        let mapped = match mmio::map_limine_addr_exact(phys_or_virt, core::mem::size_of::<EfiSystemTable>()) {
+            Ok(m) => m,
+            Err(mmio::MapError::NotPhysical) => {
+                crate::log!(
+                    "UEFI: EFI system table at 0x{:016X} (not a mappable physical/HHDM address; not parsing)\n",
+                    phys_or_virt
+                );
+                return;
+            }
+            Err(err) => {
+                crate::log!(
+                    "UEFI: EFI system table map failed addr=0x{:016X} size=0x{:X} err={:?}\n",
+                    phys_or_virt,
+                    core::mem::size_of::<EfiSystemTable>(),
+                    err
+                );
                 return;
             }
         };
 
-        // Safety: Limine says the system table exists iff response is present.
-        // We still defensively do a minimal sanity check before reading further.
-        let st = unsafe { &*table_ptr };
+        // Safety: The region is explicitly mapped and sized for EfiSystemTable.
+        // We still do a minimal sanity check before reading further.
+        let st = unsafe { &*(mapped.as_ptr() as *const EfiSystemTable) };
         if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
             crate::log!(
                 "UEFI: EFI system table at 0x{:016X} signature mismatch 0x{:016X}\n",
@@ -62,11 +76,18 @@ pub fn log_system_table_once() {
             return;
         }
 
-        let vendor_ptr = match to_virt_ptr::<u16>(st.firmware_vendor as u64) {
-            Some(p) => p,
-            None => core::ptr::null(),
-        };
-        let vendor = unsafe { read_utf16z_lossy(vendor_ptr, 96) };
+        let vendor = (|| {
+            let vendor_addr = st.firmware_vendor as u64;
+            let bytes = 2usize
+                .checked_mul(96usize.checked_add(1)?)
+                .unwrap_or(0);
+            if bytes == 0 {
+                return None;
+            }
+            let mapped = mmio::map_limine_addr_exact(vendor_addr, bytes).ok()?;
+            let vendor_ptr = mapped.as_ptr() as *const u16;
+            unsafe { read_utf16z_lossy(vendor_ptr, 96) }
+        })();
         if let Some(vendor) = vendor {
             crate::log!(
                 "UEFI: SystemTable rev=0x{:08X} vendor='{}' fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
@@ -90,20 +111,6 @@ pub fn log_system_table_once() {
             );
         }
     });
-}
-
-fn to_virt_ptr<T>(addr: u64) -> Option<*const T> {
-    // Limine base rev >=3 may return a physical address.
-    // If it "looks" like a low physical address, prefer HHDM+phys.
-    let is_likely_phys = addr < 0x0000_8000_0000_0000;
-
-    if is_likely_phys {
-        let hhdm = limine::hhdm_offset()?;
-        let virt = addr.wrapping_add(hhdm);
-        Some(virt as *const T)
-    } else {
-        Some(addr as *const T)
-    }
 }
 
 unsafe fn read_utf16z_lossy(ptr16: *const u16, max_units: usize) -> Option<alloc::string::String> {

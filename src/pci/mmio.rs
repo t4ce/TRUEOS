@@ -23,9 +23,20 @@ static PAGING_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Debug)]
 pub enum MapError {
     NoHhdm,
+    NotPhysical,
     InvalidArgs,
     InvalidPointer,
     FrameAllocationFailed,
+}
+
+/// Map an address that may be a physical address or an HHDM address.
+///
+/// This follows the kernel-side contract:
+/// 1) Translate the address into a physical address via Limine metadata.
+/// 2) Explicitly map the physical range before dereferencing.
+pub fn map_limine_addr_exact(addr: u64, size: usize) -> Result<NonNull<u8>, MapError> {
+    let phys = limine::try_as_phys_addr(addr).ok_or(MapError::NotPhysical)?;
+    map_mmio_region_exact(phys, size)
 }
 
 pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
