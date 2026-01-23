@@ -20,7 +20,10 @@ static KERNEL_LEN: AtomicU64 = AtomicU64::new(0);
 
 const PAGE_SIZE: u64 = 4096;
 const MIN_USABLE_BASE: u64 = 0x0010_0000; // keep lower memory for firmware/BIOS data
-const MAX_PMM_REGIONS: usize = 256;
+// NOTE: Some subsystems (virtio-net, USB/xHCI) currently allocate many small
+// DMA-backed buffers. A small region table can fill up during allocate/free
+// churn, causing frees to fail and eventually starving later DMA users.
+const MAX_PMM_REGIONS: usize = 4096;
 
 #[derive(Copy, Clone, Debug)]
 pub struct HeapArena {

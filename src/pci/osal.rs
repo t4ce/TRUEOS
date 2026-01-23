@@ -29,7 +29,7 @@ impl Osal for DmaOsal {
 
     unsafe fn alloc(&self, _dma_mask: u64, layout: core::alloc::Layout) -> *mut u8 {
         let align = layout.align().max(64);
-        match super::dma::alloc(layout.size(), align) {
+        match super::dma::alloc_with_mask(layout.size(), align, _dma_mask) {
             Some((_phys, virt)) => virt,
             None => core::ptr::null_mut(),
         }

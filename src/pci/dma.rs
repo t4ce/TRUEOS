@@ -29,14 +29,37 @@ fn ensure_ready() -> bool {
 }
 
 pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
+    alloc_with_max(size, align, Some(DMA_MAX_PHYS))
+}
+
+/// Allocate a DMA buffer with an explicit upper physical limit.
+///
+/// `max_phys_exclusive` matches `phys::alloc_phys_range` semantics (end address must be `< max`).
+/// Pass `None` to allow allocating anywhere in physical memory.
+pub fn alloc_with_max(
+    size: usize,
+    align: usize,
+    max_phys_exclusive: Option<u64>,
+) -> Option<(u64, *mut u8)> {
     if size == 0 || !ensure_ready() {
         return None;
     }
 
     let align = align.max(1);
-    let phys = crate::phys::alloc_phys_range(size, align, MIN_DMA_BASE, Some(DMA_MAX_PHYS))?;
+    let phys = crate::phys::alloc_phys_range(size, align, MIN_DMA_BASE, max_phys_exclusive)?;
     let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
     Some((phys, virt))
+}
+
+/// Allocate respecting a conventional DMA mask (e.g. `0xFFFF_FFFF` for 32-bit).
+pub fn alloc_with_mask(size: usize, align: usize, dma_mask: u64) -> Option<(u64, *mut u8)> {
+    // Convert inclusive mask to exclusive upper bound.
+    let max_exclusive = if dma_mask == u64::MAX {
+        None
+    } else {
+        dma_mask.checked_add(1)
+    };
+    alloc_with_max(size, align, max_exclusive)
 }
 
 pub fn dealloc(ptr: *mut u8, size: usize) {

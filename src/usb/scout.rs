@@ -175,7 +175,10 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     hub::init_topology(&ctx);
 
     let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
-    let (dcbaa_phys, dcbaa_virt) = match dma::alloc((max_slots + 1) * 8, 64) {
+    let supports_64bit = (ctx.hccparams1 & 0x1) != 0;
+    let dma_max_exclusive = if supports_64bit { None } else { Some(0x1_0000_0000) };
+
+    let (dcbaa_phys, dcbaa_virt) = match dma::alloc_with_max((max_slots + 1) * 8, 64, dma_max_exclusive) {
         Some(pair) => pair,
         None => {
             crate::log!("usb: failed to alloc dcbaa\n");
@@ -189,7 +192,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let mut scratchpad_array_virt: *mut u8 = core::ptr::null_mut();
     if scratchpad_count > 0 {
         let array_bytes = scratchpad_count * core::mem::size_of::<u64>();
-        let (sp_array_phys, sp_array_virt) = match dma::alloc(array_bytes, 64) {
+        let (sp_array_phys, sp_array_virt) = match dma::alloc_with_max(array_bytes, 64, dma_max_exclusive) {
             Some(pair) => pair,
             None => {
                 crate::log!(
@@ -202,7 +205,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         unsafe { write_bytes(sp_array_virt, 0, array_bytes) };
 
         for idx in 0..scratchpad_count {
-            let (buf_phys, buf_virt) = match dma::alloc(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE) {
+            let (buf_phys, buf_virt) = match dma::alloc_with_max(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE, dma_max_exclusive) {
                 Some(pair) => pair,
                 None => {
                     crate::log!(
