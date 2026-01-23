@@ -64,6 +64,9 @@ struct VirtQueue {
     last_used_idx: u16,
 }
 
+// Safety: this queue is only accessed under the net device mutex / single-threaded net task.
+unsafe impl Send for VirtQueue {}
+
 impl VirtQueue {
     fn new(size: u16, mem: DmaRegion, desc: *mut VirtqDesc, avail: *mut u8, used: *mut u8) -> Self {
         Self {
@@ -113,6 +116,9 @@ pub struct VirtioNetAdapter {
     tx_free: Vec<u16>,
 }
 
+// Safety: this adapter is driven by the net task and protected by the global net mutex.
+unsafe impl Send for VirtioNetAdapter {}
+
 impl VirtioNetAdapter {
     pub fn init() -> Result<Self, ()> {
         let dev = find_virtio_net_device().ok_or(())?;
@@ -130,7 +136,7 @@ impl VirtioNetAdapter {
         write_guest_features(io_base, guest);
 
         let rxq = setup_queue(io_base, QUEUE_RX)?;
-        let txq = setup_queue(io_base, QUEUE_TX)?;
+        let mut txq = setup_queue(io_base, QUEUE_TX)?;
 
         let mac = if guest & VIRTIO_NET_F_MAC != 0 {
             read_mac(io_base)
@@ -139,7 +145,7 @@ impl VirtioNetAdapter {
         };
 
         let (rx_bufs, rxq) = init_rx_buffers(io_base, rxq)?;
-        let (tx_bufs, tx_free) = init_tx_buffers(txq)?;
+        let (tx_bufs, tx_free) = init_tx_buffers(&mut txq)?;
 
         set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
 
@@ -171,14 +177,6 @@ impl VendorAdapter for VirtioNetAdapter {
     }
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
-        if let Some(ring) = self.ring {
-            // Safety: ring pointer is owned and kept alive by NetCore.
-            let ring = unsafe { &mut *ring };
-            if ring.tx_submit(frame).is_err() {
-                return Err(());
-            }
-        }
-
         self.tx_submit_hw(frame)
     }
 
@@ -350,7 +348,7 @@ fn init_rx_buffers(io_base: u16, mut rxq: VirtQueue) -> Result<(Vec<DmaRegion>, 
     Ok((buffers, rxq))
 }
 
-fn init_tx_buffers(txq: VirtQueue) -> Result<(Vec<DmaRegion>, Vec<u16>), ()> {
+fn init_tx_buffers(txq: &mut VirtQueue) -> Result<(Vec<DmaRegion>, Vec<u16>), ()> {
     let mut buffers = Vec::with_capacity(txq.size as usize);
     let mut free = Vec::with_capacity(txq.size as usize);
     for i in 0..txq.size {
