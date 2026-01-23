@@ -18,7 +18,7 @@ rdrand = { version = "0.8", default-features = false }
 raw-cpuid = { version = "11", default-features = false }
 libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math" }
-fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc"] }
+fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "lfn"] }
 hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2", default-features = false }
 twoway = { version = "0.2", default-features = false }
