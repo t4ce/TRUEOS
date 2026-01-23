@@ -123,6 +123,10 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
 			evt.pid
 		);
 
+		if let Some(bound_slot) = slot_id() {
+			crate::log!("truekey: serial={:?}-slot{}\n", evt.serial.as_bytes(), bound_slot);
+		}
+
 		// Emit the device serial once, raw bytes (no framing).
 		if SERIAL_SENT_FOR_SLOT.load(Ordering::Acquire) != evt.slot_id {
 			let _ = cdc_acm::queue_tx_bytes(evt.controller_id, evt.slot_id, evt.serial.as_bytes());

@@ -62,7 +62,11 @@ pub fn log_system_table_once() {
             return;
         }
 
-        let vendor = unsafe { read_utf16z_lossy(st.firmware_vendor, 96) };
+        let vendor_ptr = match to_virt_ptr::<u16>(st.firmware_vendor as u64) {
+            Some(p) => p,
+            None => core::ptr::null(),
+        };
+        let vendor = unsafe { read_utf16z_lossy(vendor_ptr, 96) };
         if let Some(vendor) = vendor {
             crate::log!(
                 "UEFI: SystemTable rev=0x{:08X} vendor='{}' fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
