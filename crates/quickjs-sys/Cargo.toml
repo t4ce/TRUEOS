@@ -1,0 +1,13 @@
+[package]
+name = "quickjs-sys"
+version = "0.1.0"
+edition = "2021"
+links = "quickjs"
+build = "build.rs"
+
+[lib]
+name = "quickjs_sys"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1.0"

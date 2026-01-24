@@ -1,7 +1,0 @@
-clear
-1 2 3 .s
-rot .s
-swap .s
-over .s
-drop drop drop
-.s
