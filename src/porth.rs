@@ -6,6 +6,7 @@ use alloc::string::String as AString;
 use alloc::vec::Vec as AVec;
 use heapless::Vec;
 use spin::Mutex;
+use crate::shell::ShellIo;
 
 const MAX_STACK: usize = 64;
 const MAX_TOKENS: usize = 64;
@@ -212,18 +213,18 @@ impl Vm {
         self.stack.last().copied().ok_or(EvalError::StackUnderflow)
     }
 
-    fn dump_stack(&self) {
-        crate::shell::uart1_com1::write_str("<");
+    fn dump_stack(&self, io: &dyn ShellIo) {
+        io.write_str("<");
         for (idx, v) in self.stack.iter().enumerate() {
             if idx != 0 {
-                crate::shell::uart1_com1::write_str(" ");
+                io.write_str(" ");
             }
-            crate::shell::uart1_com1::write_fmt(format_args!("{}", v));
+            io.write_fmt(format_args!("{}", v));
         }
-        crate::shell::uart1_com1::write_str(">\r\n");
+        io.write_str(">\r\n");
     }
 
-    fn eval(&mut self, code: &str) -> Result<(), EvalError> {
+    fn eval(&mut self, code: &str, io: &dyn ShellIo) -> Result<(), EvalError> {
         let mut tokens: Vec<&str, MAX_TOKENS> = Vec::new();
         for t in code.split_whitespace() {
             tokens.push(t).map_err(|_| EvalError::TokenOverflow)?;
@@ -328,15 +329,15 @@ impl Vm {
                 // I/O
                 "." => {
                     let v = self.pop()?;
-                    crate::shell::uart1_com1::write_fmt(format_args!("{} ", v));
+                    io.write_fmt(format_args!("{} ", v));
                 }
                 ".s" => {
-                    self.dump_stack();
+                    self.dump_stack(io);
                 }
                 "emit" => {
                     let v = self.pop()?;
                     let ch = (v as u8) as char;
-                    crate::shell::uart1_com1::write_char(ch);
+                    io.write_char(ch);
                 }
 
                 // Control flow: if/else/end
@@ -373,7 +374,7 @@ impl Vm {
                     self.clear();
                 }
                 "help" => {
-                    write_help();
+                    write_help(io);
                 }
 
                 _ => return Err(EvalError::UnknownWord),
@@ -385,7 +386,7 @@ impl Vm {
         Ok(())
     }
 
-    fn exec_bytecode(&mut self, program: &[u8]) -> Result<(), EvalError> {
+    fn exec_bytecode(&mut self, program: &[u8], io: &dyn ShellIo) -> Result<(), EvalError> {
         let Some(code) = parse_program_bytes(program) else {
             return Err(EvalError::InvalidBytecode);
         };
@@ -479,15 +480,15 @@ impl Vm {
                 }
                 15 => {
                     let v = self.pop()?;
-                    crate::shell::uart1_com1::write_fmt(format_args!("{} ", v));
+                    io.write_fmt(format_args!("{} ", v));
                 }
                 16 => {
-                    self.dump_stack();
+                    self.dump_stack(io);
                 }
                 17 => {
                     let v = self.pop()?;
                     let ch = (v as u8) as char;
-                    crate::shell::uart1_com1::write_char(ch);
+                    io.write_char(ch);
                 }
                 18 => {
                     self.clear();
@@ -597,10 +598,10 @@ fn porth_tpbc_path_from_user(input: &str) -> Option<heapless::String<128>> {
     Some(out)
 }
 
-pub fn shell_handle_ctrl_c() -> bool {
+pub fn shell_handle_ctrl_c(io: &dyn ShellIo) -> bool {
     // Compile capture abort
     if PORTH_COMPILE.lock().take().is_some() {
-        crate::shell::uart1_com1::write_str("^C\r\nporth: compile aborted\r\n");
+        io.write_str("^C\r\nporth: compile aborted\r\n");
         return true;
     }
 
@@ -608,7 +609,7 @@ pub fn shell_handle_ctrl_c() -> bool {
     let mut repl = PORTH_REPL.lock();
     if *repl {
         *repl = false;
-        crate::shell::uart1_com1::write_str("^C\r\nporth: repl exit\r\n");
+        io.write_str("^C\r\nporth: repl exit\r\n");
         return true;
     }
 
@@ -622,7 +623,7 @@ pub fn shell_is_capturing_multiline() -> bool {
 
 /// Handles Porth-related shell input.
 /// Returns `true` when the line was consumed (no further shell dispatch needed).
-pub fn shell_handle_line(line: &str) -> bool {
+pub fn shell_handle_line(line: &str, io: &dyn ShellIo) -> bool {
     let cmd = line.trim();
     if cmd.is_empty() {
         return true;
@@ -637,9 +638,9 @@ pub fn shell_handle_line(line: &str) -> bool {
                 || cmd.eq_ignore_ascii_case("quit")
             {
                 *repl = false;
-                crate::shell::uart1_com1::write_str("porth: repl exit\r\n");
+                io.write_str("porth: repl exit\r\n");
             } else {
-                crate::porth::eval_line(cmd);
+                crate::porth::eval_line(cmd, io);
             }
             return true;
         }
@@ -651,14 +652,14 @@ pub fn shell_handle_line(line: &str) -> bool {
         if let Some(sess) = sess_guard.as_mut() {
             if cmd.eq_ignore_ascii_case("porth-compile-abort") || cmd.eq_ignore_ascii_case("pc-abort") {
                 let _ = sess_guard.take();
-                crate::shell::uart1_com1::write_str("porth: compile aborted\r\n");
+                io.write_str("porth: compile aborted\r\n");
                 return true;
             }
 
             // Finish capture on '.' or 'END' (case-insensitive)
             if cmd == "." || cmd.eq_ignore_ascii_case("end") {
                 let Some(out_path) = porth_tpbc_path_from_user(sess.name.as_str()) else {
-                    crate::shell::uart1_com1::write_str("porth: bad output path\r\n");
+                    io.write_str("porth: bad output path\r\n");
                     let _ = sess_guard.take();
                     return true;
                 };
@@ -668,14 +669,14 @@ pub fn shell_handle_line(line: &str) -> bool {
 
                 match crate::porth::compile_source_to_tpbc(&src) {
                     Ok(tpbc) => match crate::disc::files::write_usbms_file(out_path.as_str(), &tpbc) {
-                        Ok(()) => crate::shell::uart1_com1::write_fmt(format_args!(
+                        Ok(()) => io.write_fmt(format_args!(
                             "porth: wrote {} ({} bytes)\r\n",
                             out_path.as_str(),
                             tpbc.len()
                         )),
-                        Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("porth: write failed: {:?}\r\n", e)),
+                        Err(e) => io.write_fmt(format_args!("porth: write failed: {:?}\r\n", e)),
                     },
-                    Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("porth: compile failed: {:?}\r\n", e)),
+                    Err(e) => io.write_fmt(format_args!("porth: compile failed: {:?}\r\n", e)),
                 }
             } else {
                 if cmd.starts_with("porth")
@@ -683,14 +684,14 @@ pub fn shell_handle_line(line: &str) -> bool {
                     || cmd.starts_with("pr")
                     || cmd.eq_ignore_ascii_case("install")
                 {
-                    crate::shell::uart1_com1::write_str(
+                    io.write_str(
                         "porth: still capturing; finish with '.' or 'END' (or abort)\r\n",
                     );
                 }
 
                 // Append line (keep newlines so error locations remain sensible later).
                 if sess.src.len().saturating_add(cmd.len()).saturating_add(1) > PORTH_COMPILE_MAX_SRC_BYTES {
-                    crate::shell::uart1_com1::write_str("porth: compile buffer full; aborting\r\n");
+                    io.write_str("porth: compile buffer full; aborting\r\n");
                     let _ = sess_guard.take();
                 } else {
                     sess.src.push_str(cmd);
@@ -702,78 +703,78 @@ pub fn shell_handle_line(line: &str) -> bool {
     }
 
     if let Some(rest) = cmd.strip_prefix("porth ") {
-        crate::porth::eval_line(rest);
+        crate::porth::eval_line(rest, io);
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth") {
-        crate::shell::uart1_com1::write_str("usage: porth <code...>\r\n");
-        crate::shell::uart1_com1::write_str("example: porth 2 3 + .\r\n");
+        io.write_str("usage: porth <code...>\r\n");
+        io.write_str("example: porth 2 3 + .\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("pr ") {
         let name = rest.trim();
         let Some(path) = porth_tpbc_path_from_user(name) else {
-            crate::shell::uart1_com1::write_str("usage: pr <name|sub/name>\r\n");
-            crate::shell::uart1_com1::write_str("example: pr countdown\r\n");
-            crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
+            io.write_str("usage: pr <name|sub/name>\r\n");
+            io.write_str("example: pr countdown\r\n");
+            io.write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
             return true;
         };
         match crate::disc::files::read_usbms_file(path.as_str()) {
-            Ok(bytes) => crate::porth::run_program_bytes(&bytes),
-            Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("pr: {:?}\r\n", e)),
+            Ok(bytes) => crate::porth::run_program_bytes(&bytes, io),
+            Err(e) => io.write_fmt(format_args!("pr: {:?}\r\n", e)),
         }
         return true;
     }
     if cmd.eq_ignore_ascii_case("pr") {
-        crate::shell::uart1_com1::write_str("usage: pr <name|sub/name>\r\n");
-        crate::shell::uart1_com1::write_str("example: pr countdown\r\n");
-        crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
+        io.write_str("usage: pr <name|sub/name>\r\n");
+        io.write_str("example: pr countdown\r\n");
+        io.write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("porth-run ") {
         let name = rest.trim();
         let Some(path) = porth_tpbc_path_from_user(name) else {
-            crate::shell::uart1_com1::write_str("usage: porth-run <name|sub/name>\r\n");
-            crate::shell::uart1_com1::write_str("example: porth-run countdown\r\n");
-            crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
+            io.write_str("usage: porth-run <name|sub/name>\r\n");
+            io.write_str("example: porth-run countdown\r\n");
+            io.write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
             return true;
         };
         match crate::disc::files::read_usbms_file(path.as_str()) {
-            Ok(bytes) => crate::porth::run_program_bytes(&bytes),
-            Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("porth-run: {:?}\r\n", e)),
+            Ok(bytes) => crate::porth::run_program_bytes(&bytes, io),
+            Err(e) => io.write_fmt(format_args!("porth-run: {:?}\r\n", e)),
         }
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth-run") {
-        crate::shell::uart1_com1::write_str("usage: porth-run <name|sub/name>\r\n");
-        crate::shell::uart1_com1::write_str("example: porth-run countdown\r\n");
-        crate::shell::uart1_com1::write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
+        io.write_str("usage: porth-run <name|sub/name>\r\n");
+        io.write_str("example: porth-run countdown\r\n");
+        io.write_str("note: runs /porth/<name>.tpbc from usbms\r\n");
         return true;
     }
 
     if cmd.eq_ignore_ascii_case("porth-reset") {
         crate::porth::reset();
-        crate::shell::uart1_com1::write_str("porth: ok\r\n");
+        io.write_str("porth: ok\r\n");
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth-help") {
-        crate::porth::eval_line("help");
+        crate::porth::eval_line("help", io);
         return true;
     }
 
     if cmd.eq_ignore_ascii_case("prepl") || cmd.eq_ignore_ascii_case("porth-repl") {
         *PORTH_REPL.lock() = true;
-        crate::shell::uart1_com1::write_str("porth: repl mode (type code; 'exit' to return)\r\n");
+        io.write_str("porth: repl mode (type code; 'exit' to return)\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("pc ") {
         let name = rest.trim();
         let Some(name) = sanitize_porth_relpath(name) else {
-            crate::shell::uart1_com1::write_str("usage: pc <name|sub/name>\r\n");
-            crate::shell::uart1_com1::write_str("example: pc countdown\r\n");
+            io.write_str("usage: pc <name|sub/name>\r\n");
+            io.write_str("example: pc countdown\r\n");
             return true;
         };
 
@@ -781,23 +782,23 @@ pub fn shell_handle_line(line: &str) -> bool {
             name,
             src: AString::new(),
         });
-        crate::shell::uart1_com1::write_str("porth: enter source, end with '.' on its own line\r\n");
-        crate::shell::uart1_com1::write_str("porth: or finish with 'END'\r\n");
-        crate::shell::uart1_com1::write_str("porth: abort with ^C or 'pc-abort'\r\n");
-        crate::shell::uart1_com1::write_str("porth: output -> /porth/<name>.tpbc on usbms\r\n");
+        io.write_str("porth: enter source, end with '.' on its own line\r\n");
+        io.write_str("porth: or finish with 'END'\r\n");
+        io.write_str("porth: abort with ^C or 'pc-abort'\r\n");
+        io.write_str("porth: output -> /porth/<name>.tpbc on usbms\r\n");
         return true;
     }
     if cmd.eq_ignore_ascii_case("pc") {
-        crate::shell::uart1_com1::write_str("usage: pc <name|sub/name>\r\n");
-        crate::shell::uart1_com1::write_str("then type lines; finish with '.' or 'END'\r\n");
+        io.write_str("usage: pc <name|sub/name>\r\n");
+        io.write_str("then type lines; finish with '.' or 'END'\r\n");
         return true;
     }
 
     if let Some(rest) = cmd.strip_prefix("porth-compile ") {
         let name = rest.trim();
         let Some(name) = sanitize_porth_relpath(name) else {
-            crate::shell::uart1_com1::write_str("usage: porth-compile <name|sub/name>\r\n");
-            crate::shell::uart1_com1::write_str("example: porth-compile demos/hello\r\n");
+            io.write_str("usage: porth-compile <name|sub/name>\r\n");
+            io.write_str("example: porth-compile demos/hello\r\n");
             return true;
         };
 
@@ -805,29 +806,29 @@ pub fn shell_handle_line(line: &str) -> bool {
             name,
             src: AString::new(),
         });
-        crate::shell::uart1_com1::write_str("porth: enter source, end with '.' on its own line\r\n");
-        crate::shell::uart1_com1::write_str("porth: or finish with 'END'\r\n");
-        crate::shell::uart1_com1::write_str("porth: abort with ^C or 'pc-abort'\r\n");
-        crate::shell::uart1_com1::write_str("porth: output -> /porth/<name>.tpbc on usbms\r\n");
+        io.write_str("porth: enter source, end with '.' on its own line\r\n");
+        io.write_str("porth: or finish with 'END'\r\n");
+        io.write_str("porth: abort with ^C or 'pc-abort'\r\n");
+        io.write_str("porth: output -> /porth/<name>.tpbc on usbms\r\n");
         return true;
     }
     if cmd.eq_ignore_ascii_case("porth-compile") {
-        crate::shell::uart1_com1::write_str("usage: porth-compile <name|sub/name>\r\n");
-        crate::shell::uart1_com1::write_str("then type lines; finish with '.'\r\n");
+        io.write_str("usage: porth-compile <name|sub/name>\r\n");
+        io.write_str("then type lines; finish with '.'\r\n");
         return true;
     }
 
     false
 }
 
-pub fn eval_line(code: &str) {
+pub fn eval_line(code: &str, io: &dyn ShellIo) {
     let mut vm = VM.lock();
-    match vm.eval(code) {
+    match vm.eval(code, io) {
         Ok(()) => {
-            vm.dump_stack();
+            vm.dump_stack(io);
         }
         Err(e) => {
-            crate::shell::uart1_com1::write_fmt(format_args!("porth: error: {:?}\r\n", e));
+            io.write_fmt(format_args!("porth: error: {:?}\r\n", e));
         }
     }
 }
@@ -836,17 +837,17 @@ pub fn reset() {
     VM.lock().clear();
 }
 
-pub fn run_program_bytes(program: &[u8]) {
+pub fn run_program_bytes(program: &[u8], io: &dyn ShellIo) {
     let mut vm = VM.lock();
     vm.clear();
-    match vm.exec_bytecode(program) {
-        Ok(()) => vm.dump_stack(),
-        Err(e) => crate::shell::uart1_com1::write_fmt(format_args!("porth: error: {:?}\r\n", e)),
+    match vm.exec_bytecode(program, io) {
+        Ok(()) => vm.dump_stack(io),
+        Err(e) => io.write_fmt(format_args!("porth: error: {:?}\r\n", e)),
     }
 }
 
-fn write_help() {
-    crate::shell::uart1_com1::write_str(
+fn write_help(io: &dyn ShellIo) {
+    io.write_str(
         "words: dup drop swap over rot  + - * / mod  = < >  . .s emit  if else end  begin until  clear help\r\n",
     );
 }

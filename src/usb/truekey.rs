@@ -18,8 +18,8 @@ pub fn configure_target_serial(serial: &str) {
 }
 
 pub fn init() {
-	cdc_acm::set_attach_callback(Some(on_cdc_attach));
-	cdc_acm::set_detach_callback(Some(on_cdc_detach));
+	let _ = cdc_acm::register_attach_callback(on_cdc_attach);
+	let _ = cdc_acm::register_detach_callback(on_cdc_detach);
 }
 
 #[embassy_executor::task]

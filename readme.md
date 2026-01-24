@@ -46,12 +46,16 @@ echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 check disc files after install
 // mdir -i disk.img@@$((2048*512)) ::
 
-## FIREWALL netboot auf interface alles erlauben ##
+## FIREWALL netboot auf interface alles erlauben ## enx047bcb669593
 sudo ufw allow in on enx047bcb669593
 sudo ufw allow out on enx047bcb669593
-
-sudo ufw allow in on enx047bcb669593 to any port 80 proto tcp
-# sudo ufw allow in on enx047bcb669593 to any port 67 proto udp
-# sudo ufw allow in on enx047bcb669593 to any port 80 proto tcp
-sudo ip addr add 192.168.55.1/24 dev enx047bcb669593
+# go netboot
+sysctl net.ipv4.ip_nonlocal_bind 2>/dev/null || true
+sudo nmcli dev disconnect enx047bcb669593 || true
+sudo nmcli dev set enx047bcb669593 managed no || true
+sudo ip link set enx047bcb669593 up
 sudo ip addr flush dev enx047bcb669593
+sudo ip addr add 192.168.55.1/24 dev enx047bcb669593
+sudo ip addr replace 192.168.55.1/24 dev enx047bcb669593
+ip -4 -br addr show dev enx047bcb669593
+sudo node pxe.js 

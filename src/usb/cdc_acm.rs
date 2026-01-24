@@ -17,6 +17,7 @@ use heapless::{Deque, Vec};
 use spin::Mutex;
 
 const MAX_CDC_DEVICES: usize = 2;
+const MAX_CDC_CALLBACKS: usize = 4;
 const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
 const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
@@ -203,19 +204,43 @@ static CDC_RUNTIMES: Mutex<Vec<CdcRuntime, MAX_CDC_DEVICES>> = Mutex::new(Vec::n
 
 static TX_COMPLETE_CALLBACK: Mutex<Option<fn(u32)>> = Mutex::new(None);
 
-static ATTACH_CALLBACK: Mutex<Option<fn(CdcAttachEvent)>> = Mutex::new(None);
-static DETACH_CALLBACK: Mutex<Option<fn(CdcAttachEvent)>> = Mutex::new(None);
+static ATTACH_CALLBACKS: Mutex<Vec<fn(CdcAttachEvent), MAX_CDC_CALLBACKS>> = Mutex::new(Vec::new());
+static DETACH_CALLBACKS: Mutex<Vec<fn(CdcAttachEvent), MAX_CDC_CALLBACKS>> = Mutex::new(Vec::new());
 
 pub fn set_tx_complete_callback(cb: Option<fn(u32)>) {
     *TX_COMPLETE_CALLBACK.lock() = cb;
 }
 
 pub fn set_attach_callback(cb: Option<fn(CdcAttachEvent)>) {
-    *ATTACH_CALLBACK.lock() = cb;
+    let mut guard = ATTACH_CALLBACKS.lock();
+    guard.clear();
+    if let Some(cb) = cb {
+        let _ = guard.push(cb);
+    }
 }
 
 pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
-    *DETACH_CALLBACK.lock() = cb;
+    let mut guard = DETACH_CALLBACKS.lock();
+    guard.clear();
+    if let Some(cb) = cb {
+        let _ = guard.push(cb);
+    }
+}
+
+pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
+    let mut guard = ATTACH_CALLBACKS.lock();
+    if guard.iter().any(|existing| *existing == cb) {
+        return true;
+    }
+    guard.push(cb).is_ok()
+}
+
+pub fn register_detach_callback(cb: fn(CdcAttachEvent)) -> bool {
+    let mut guard = DETACH_CALLBACKS.lock();
+    if guard.iter().any(|existing| *existing == cb) {
+        return true;
+    }
+    guard.push(cb).is_ok()
 }
 
 pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
@@ -248,8 +273,11 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     }
 
     if removed {
-        if let (Some(evt), Some(cb)) = (detached, *DETACH_CALLBACK.lock()) {
-            cb(evt);
+        if let Some(evt) = detached {
+            let guard = DETACH_CALLBACKS.lock();
+            for cb in guard.iter() {
+                cb(evt);
+            }
         }
     }
     removed
@@ -686,14 +714,16 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         interface.ep_out.address
     );
 
-    if let Some(cb) = *ATTACH_CALLBACK.lock() {
-        cb(CdcAttachEvent {
-            controller_id: ctx.controller_id,
-            slot_id,
-            vid: dev_vid,
-            pid: dev_pid,
-            serial: dev_serial,
-        });
+    let evt = CdcAttachEvent {
+        controller_id: ctx.controller_id,
+        slot_id,
+        vid: dev_vid,
+        pid: dev_pid,
+        serial: dev_serial,
+    };
+    let guard = ATTACH_CALLBACKS.lock();
+    for cb in guard.iter() {
+        cb(evt);
     }
 
     Ok(())
