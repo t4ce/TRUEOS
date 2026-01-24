@@ -1,5 +1,4 @@
 use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
@@ -103,8 +102,6 @@ impl ShellBackend for UsbCdcShellBackend {
     }
 }
 
-static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
-
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
     io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
@@ -147,7 +144,7 @@ enum CommandAction {
 }
 
 #[embassy_executor::task]
-pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
+pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend) {
     io.init();
 
     write_banner(io);
@@ -224,17 +221,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         io.write_str("\r\n");
                         let action = handle_line(
                             &line,
-                            &spawner,
                             io,
                             &mut term_cols,
                             &mut term_rows,
                             &mut go_mode,
                         );
                         line.clear();
-                        // During multiline Porth capture, avoid spamming the prompt each line.
-                        if !crate::porth::shell_is_capturing_multiline() {
-                            write_prompt(io);
-                        }
+                        write_prompt(io);
                         match action {
                             CommandAction::Pending(action) => {
                                 pending_action = Some(action);
@@ -276,10 +269,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 }
                 0x03 => {
                     line.clear();
-                    // Delegate Ctrl-C handling to Porth (compile abort / repl exit) if active.
-                    if !crate::porth::shell_handle_ctrl_c(io) {
-                        io.write_str("^C\r\n");
-                    }
+                    io.write_str("^C\r\n");
                     write_prompt(io);
                 }
                 _ => {
@@ -335,7 +325,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
 fn handle_line(
     line: &str,
-    spawner: &Spawner,
     io: &'static dyn ShellBackend,
     term_cols: &mut usize,
     term_rows: &mut usize,
@@ -343,24 +332,6 @@ fn handle_line(
 ) -> CommandAction {
     let cmd = line.trim();
     if cmd.is_empty() {
-        return CommandAction::None;
-    }
-
-    // Background job operator: `§ <command...>`
-    // Runs the command asynchronously and prints a completion marker when done.
-    if let Some(rest) = cmd.strip_prefix('§') {
-        let rest = rest.trim_start();
-        if rest.is_empty() {
-            io.write_str("usage: § <command...>\r\n");
-            io.write_str("note: currently supports Porth commands\r\n");
-            return CommandAction::None;
-        }
-        spawn_background_job(spawner, rest, io);
-        return CommandAction::None;
-    }
-
-    // Delegate Porth-related commands + modes to the Porth module.
-    if crate::porth::shell_handle_line(cmd, io) {
         return CommandAction::None;
     }
 
@@ -518,31 +489,6 @@ fn handle_line(
     io.write_str(cmd);
     io.write_str("\r\n");
     CommandAction::None
-}
-
-fn spawn_background_job(spawner: &Spawner, cmd: &str, io: &'static dyn ShellBackend) {
-    let mut buf: heapless::String<256> = heapless::String::new();
-    if buf.push_str(cmd).is_err() {
-        io.write_str("§: command too long\r\n");
-        return;
-    }
-
-    let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    if spawner.spawn(shell_bg_job(id, buf, io)).is_err() {
-        io.write_str("§: spawn failed\r\n");
-    }
-}
-
-#[embassy_executor::task(pool_size = 4)]
-async fn shell_bg_job(id: usize, cmd: heapless::String<256>, io: &'static dyn ShellBackend) {
-    io.write_fmt(format_args!("\r\n§{} start: {}\r\n", id, cmd.as_str()));
-
-    // For now, only Porth commands are supported in the background.
-    if !crate::porth::shell_handle_line(cmd.as_str(), io) {
-        io.write_fmt(format_args!("§{}: unsupported command\r\n", id));
-    }
-
-    io.write_fmt(format_args!("§{} done\r\n", id));
 }
 
 fn handle_install(io: &dyn ShellIo, args: &str) -> CommandAction {
