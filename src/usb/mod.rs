@@ -17,7 +17,7 @@ mod enumeration;
 mod control;
 mod attach;
 
-pub use scout::usb_scout;
+pub use scout::{usb_scout, usb_scout_service};
 pub(crate) use self::control::{control_in, control_out};
 pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
 

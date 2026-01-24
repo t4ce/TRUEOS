@@ -11,12 +11,15 @@ use crate::pci::{dma, osal};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
 static USB_CTRL: [Mutex<Option<UsbControllerState>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
 static SCOUT_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+static SCOUT_SERVICE_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 
 const SCRATCHPAD_BUF_SIZE: usize = 4096;
@@ -340,27 +343,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     })
 }
 
-#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
-pub async fn usb_scout(info: xhci::XhcInfo) {
+async fn scout_pass(info: xhci::XhcInfo) {
     let controller_id = info.controller_id;
-    if SCOUT_RUNNING[controller_id]
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("usb: scout already running; skipping\n");
-        return;
-    }
-
-    struct ScoutRunGuard {
-        controller_id: usize,
-    }
-    impl Drop for ScoutRunGuard {
-        fn drop(&mut self) {
-            SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
-        }
-    }
-
-    let _scout_guard = ScoutRunGuard { controller_id };
 
     // Take controller state out of the mutex so we don't hold a spinlock across `.await`.
     let state = USB_CTRL[controller_id].lock().take();
@@ -398,7 +382,9 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
 
     // If we couldn't record all connected ports, don't treat missing entries as disconnects.
     if connected_overflowed {
-        crate::log!("usb: connected port list overflow; skipping disconnect cleanup this pass\n");
+        crate::log!(
+            "usb: connected port list overflow; skipping disconnect cleanup this pass\n"
+        );
     } else {
         cleanup_disconnected(&connected, &mut state).await;
     }
@@ -421,4 +407,97 @@ pub async fn usb_scout(info: xhci::XhcInfo) {
     }
 
     *USB_CTRL[controller_id].lock() = Some(state);
+}
+
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
+pub async fn usb_scout(info: xhci::XhcInfo) {
+    let controller_id = info.controller_id;
+    if SCOUT_RUNNING[controller_id]
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("usb: scout already running; skipping\n");
+        return;
+    }
+
+    struct ScoutRunGuard {
+        controller_id: usize,
+    }
+    impl Drop for ScoutRunGuard {
+        fn drop(&mut self) {
+            SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
+        }
+    }
+
+    let _scout_guard = ScoutRunGuard { controller_id };
+
+    scout_pass(info).await;
+}
+
+#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
+pub async fn usb_scout_service(info: xhci::XhcInfo) {
+    let controller_id = info.controller_id;
+    if SCOUT_SERVICE_RUNNING[controller_id]
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("usb: scout service already running; skipping\n");
+        return;
+    }
+
+    struct ScoutServiceGuard {
+        controller_id: usize,
+    }
+    impl Drop for ScoutServiceGuard {
+        fn drop(&mut self) {
+            SCOUT_SERVICE_RUNNING[self.controller_id].store(false, Ordering::Release);
+        }
+    }
+    let _guard = ScoutServiceGuard { controller_id };
+
+    // First scan immediately.
+    if SCOUT_RUNNING[controller_id]
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        struct ScoutRunGuard {
+            controller_id: usize,
+        }
+        impl Drop for ScoutRunGuard {
+            fn drop(&mut self) {
+                SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
+            }
+        }
+        let _scout_guard = ScoutRunGuard { controller_id };
+        scout_pass(info).await;
+    }
+
+    // Thereafter, rescan periodically (and also when explicitly requested).
+    const RESCAN_PERIOD_MS: u64 = 2_000;
+    const POLL_MS: u64 = 250;
+    let mut elapsed_ms: u64 = 0;
+    loop {
+        Timer::after(EmbassyDuration::from_millis(POLL_MS)).await;
+        elapsed_ms = elapsed_ms.saturating_add(POLL_MS);
+
+        if elapsed_ms >= RESCAN_PERIOD_MS {
+            if SCOUT_RUNNING[controller_id]
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                struct ScoutRunGuard {
+                    controller_id: usize,
+                }
+                impl Drop for ScoutRunGuard {
+                    fn drop(&mut self) {
+                        SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
+                    }
+                }
+                let _scout_guard = ScoutRunGuard { controller_id };
+                scout_pass(info).await;
+            }
+
+            elapsed_ms = 0;
+        }
+    }
 }
