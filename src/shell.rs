@@ -188,7 +188,7 @@ pub async fn task(spawner: Spawner) {
         } else {
             if cube_mode {
                 cube.draw_frame();
-                Timer::after(EmbassyDuration::from_millis(200)).await;
+                Timer::after(EmbassyDuration::from_millis(333)).await;
                 continue;
             }
             if let (Some(action), Some(deadline)) = (pending_action, pending_deadline) {

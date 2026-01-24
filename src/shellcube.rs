@@ -5,7 +5,7 @@ pub const CUBE_COLS: usize = 75;
 pub const CUBE_ROWS: usize = 75;
 const CUBE_SIZE: usize = CUBE_COLS * CUBE_ROWS;
 const CUBE_SCALE: i32 = 700;
-const CUBE_DIST: i32 = CUBE_SCALE * 3 as i32;
+const CUBE_DIST: i32 = CUBE_SCALE * 1.8 as i32;
 const CUBE_PINK: (u8, u8, u8) = (255, 55, 255);
 const BORDER_INSET: usize = 0;
 const DRAW_SIZE: usize = 65;
@@ -84,6 +84,7 @@ impl CubeState {
     pub fn draw_frame(&mut self) {
         draw_poly_frame(
             self.phase,
+            self.shape,
             &self.verts,
             self.vert_count,
             &self.edges,
@@ -102,6 +103,7 @@ pub fn enter_mode() {
 
 fn draw_poly_frame(
     phase: u8,
+    shape: WireShape,
     verts: &[(i32, i32, i32); MAX_VERTS],
     vert_count: usize,
     edges: &[(u8, u8); MAX_EDGES],
@@ -133,10 +135,17 @@ fn draw_poly_frame(
     if max_abs == 0 {
         return;
     }
+    let (shape_scale_num, shape_scale_den) = match shape {
+        WireShape::Cube => (1i64, 4i64),
+        WireShape::Icosidodecahedron => (1i64, 1i64),
+    };
     for (i, (x, y, z)) in verts.iter().copied().take(vert_count).enumerate() {
-        let x = (x as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
-        let y = (y as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
-        let z = (z as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let mut x = (x as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let mut y = (y as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        let mut z = (z as i64 * (CUBE_SCALE as i64 / 2)) / max_abs as i64;
+        x = x * shape_scale_num / shape_scale_den;
+        y = y * shape_scale_num / shape_scale_den;
+        z = z * shape_scale_num / shape_scale_den;
         let x = x as i32;
         let y = y as i32;
         let z = z as i32;
@@ -144,9 +153,8 @@ fn draw_poly_frame(
         let x1 = (x * cos_y + z * sin_y) / CUBE_SCALE;
         let z1 = (-x * sin_y + z * cos_y) / CUBE_SCALE;
         let y1 = (y * cos_x - z1 * sin_x) / CUBE_SCALE;
-        let z2 = (y * sin_x + z1 * cos_x) / CUBE_SCALE;
-
-        let denom = (z2 + CUBE_DIST).max(CUBE_SCALE / 2);
+        // Fixed-scale (no perspective): rotate only, no z-based "zoom".
+        let denom = CUBE_DIST.max(CUBE_SCALE / 2);
         let px = (x1 * proj_scale / denom) + center_x;
         let py = (y1 * proj_scale / denom) + center_y;
         verts2d[i] = (px, py);
