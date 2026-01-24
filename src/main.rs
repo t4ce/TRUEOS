@@ -198,7 +198,7 @@ pub extern "C" fn _start() -> ! {
     pattern::smoke_test();
     
     // If booted via UEFI, parse+log the EFI System Table once.
-    efi::log_system_table_once(); // its crashreboots on our baremetal testrig
+    let dumped_uefi_system_table = efi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
     crate::log!(
         "turbo: {:?}\n", turbo::local_state()
@@ -216,7 +216,9 @@ pub extern "C" fn _start() -> ! {
     acpi::tpm2::log_once();
     acpi::dmar::log_once();
     acpi::fpdt::log_once();
-    efi::tbl::log_once();
+    if !dumped_uefi_system_table {
+        efi::tbl::log_once();
+    }
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
     acpi::hpet::ensure();
@@ -229,6 +231,7 @@ pub extern "C" fn _start() -> ! {
     // Optional: initialize TrueKey (CDC-based ESP32 binding) before enumeration.
     usb::truekey::configure_target_serial("9C:13:9E:E4:25:B8");
     usb::truekey::init();
+    usb::cdc_shell::init();
 
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
@@ -258,7 +261,6 @@ pub extern "C" fn _start() -> ! {
     let _ = spawner.spawn(usb::hid::input_logger());
 
     let _ = spawner.spawn(usb::uac::sine_task());
-    // let _ = spawner.spawn(usb::uac::stats_task());
 
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
     let _ = spawner.spawn(usb::truekey::drain_loop());
@@ -266,7 +268,8 @@ pub extern "C" fn _start() -> ! {
     // FATFS demo on the first detected USB mass-storage device.
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
-    let _ = spawner.spawn(shell::task(spawner));
+    let _ = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND));
+    let _ = spawner.spawn(shell::task(spawner, &shell::USB_CDC_SHELL_BACKEND));
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
@@ -363,7 +366,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
             unsafe { executor.poll() };
         }
 
-        if counter % 1_000_000 == 0 {
+        if counter % 500_000 == 0 {
             vga::cube::tick();
         }
 

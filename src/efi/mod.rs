@@ -10,6 +10,8 @@ pub mod acpi;
 pub mod tbl;
 
 static LOG_ONCE: Once<()> = Once::new();
+static DID_DUMP_SYSTEM_TABLE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
 
@@ -42,7 +44,7 @@ struct EfiSystemTable {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct EfiGuid {
+pub(crate) struct EfiGuid {
     data1: u32,
     data2: u16,
     data3: u16,
@@ -57,6 +59,40 @@ impl EfiGuid {
             data3,
             data4,
         }
+    }
+
+    pub(crate) fn from_uefi_bytes(bytes: [u8; 16]) -> Self {
+        // UEFI GUIDs are laid out as {u32,u16,u16,[u8;8]} in little-endian for the first
+        // three fields.
+        let data1 = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let data2 = u16::from_le_bytes([bytes[4], bytes[5]]);
+        let data3 = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let mut data4 = [0u8; 8];
+        data4.copy_from_slice(&bytes[8..16]);
+        Self {
+            data1,
+            data2,
+            data3,
+            data4,
+        }
+    }
+
+    pub(crate) fn fmt_canonical(&self) -> alloc::string::String {
+        use alloc::format;
+        format!(
+            "{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+            self.data1,
+            self.data2,
+            self.data3,
+            self.data4[0],
+            self.data4[1],
+            self.data4[2],
+            self.data4[3],
+            self.data4[4],
+            self.data4[5],
+            self.data4[6],
+            self.data4[7]
+        )
     }
 }
 
@@ -266,19 +302,53 @@ fn guid_short(guid: &EfiGuid) -> (u16, u16) {
     (first4, last4)
 }
 
-pub fn log_system_table_once() {
+pub fn log_system_table_once() -> bool {
+    use core::sync::atomic::Ordering;
+
+    if DID_DUMP_SYSTEM_TABLE.load(Ordering::Acquire) {
+        return true;
+    }
+
     LOG_ONCE.call_once(|| {
         let phys_or_virt = match limine::efi_system_table_address() {
             Some(addr) if addr != 0 => addr,
-            _ => return,
+            Some(_) => {
+                crate::log!("UEFI: EFI system table address is 0 (Limine)\n");
+                return;
+            }
+            None => {
+                crate::log!("UEFI: no EFI system table address (Limine)\n");
+                return;
+            }
         };
 
-        let mapped = match mmio::map_limine_struct::<EfiSystemTable>(phys_or_virt) {
+        // Limine may provide either a physical address or an address already HHDM-mapped.
+        // Only attempt to map if we can translate it to a physical address within the Limine
+        // memmap contract; otherwise, probing it risks mapping nonsense and faulting/rebooting.
+        let phys = match limine::try_as_phys_addr(phys_or_virt) {
+            Some(phys) => {
+                crate::log!(
+                    "UEFI: EFI system table addr=0x{:016X} (phys=0x{:016X})\n",
+                    phys_or_virt,
+                    phys
+                );
+                phys
+            }
+            None => {
+                crate::log!(
+                    "UEFI: EFI system table addr=0x{:016X} not mappable via Limine memmap/HHDM; skipping full SystemTable dump\n",
+                    phys_or_virt
+                );
+                return;
+            }
+        };
+
+        let mapped = match mmio::map_limine_struct::<EfiSystemTable>(phys) {
             Ok(m) => m,
             Err(err) => {
                 crate::log!(
                     "UEFI: EFI system table map failed addr=0x{:016X} size=0x{:X} err={:?}\n",
-                    phys_or_virt,
+                    phys,
                     core::mem::size_of::<EfiSystemTable>(),
                     err
                 );
@@ -292,7 +362,7 @@ pub fn log_system_table_once() {
         if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
             crate::log!(
                 "UEFI: EFI system table at 0x{:016X} signature mismatch 0x{:016X}\n",
-                phys_or_virt,
+                phys,
                 st.hdr.signature
             );
             return;
@@ -329,8 +399,22 @@ pub fn log_system_table_once() {
         }
 
         // Dump configuration table entries (GUID -> vendor_table pointer).
-        let cfg_addr = st.configuration_table as u64;
+        // The pointers inside the System Table are typically physical in early boot; still,
+        // guard with Limine translation to avoid mis-mapping on odd firmware.
+        let cfg_addr_raw = st.configuration_table as u64;
         let cfg_entries = st.number_of_table_entries;
+        let cfg_addr = match (cfg_addr_raw, limine::try_as_phys_addr(cfg_addr_raw)) {
+            (0, _) => 0,
+            (_, Some(phys)) => phys,
+            (_, None) => {
+                crate::log!(
+                    "UEFI: cfg table ptr=0x{:016X} not mappable via Limine; skipping cfg dump\n",
+                    cfg_addr_raw
+                );
+                0
+            }
+        };
+
         if cfg_addr != 0 && cfg_entries != 0 {
             const MAX_CFG_DUMP: usize = 64;
             let dump_count = core::cmp::min(cfg_entries, MAX_CFG_DUMP);
@@ -368,7 +452,11 @@ pub fn log_system_table_once() {
                 }
             }
         }
+
+        DID_DUMP_SYSTEM_TABLE.store(true, Ordering::Release);
     });
+
+    DID_DUMP_SYSTEM_TABLE.load(Ordering::Acquire)
 }
 
 unsafe fn read_utf16z_lossy(ptr16: *const u16, max_units: usize) -> Option<alloc::string::String> {

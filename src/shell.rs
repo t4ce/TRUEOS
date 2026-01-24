@@ -1,5 +1,5 @@
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
@@ -10,32 +10,123 @@ use crate::disc::{block, install};
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 
+pub(crate) trait ShellIo {
+    fn write_str(&self, s: &str);
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
+    fn write_char(&self, ch: char);
+    fn write_byte(&self, b: u8);
+}
+
+pub(crate) trait ShellBackend: ShellIo {
+    fn init(&self) {}
+    fn read_byte(&self) -> Option<u8>;
+}
+
+pub(crate) struct Uart1Com1Backend;
+
+pub(crate) static UART1_COM1_BACKEND: Uart1Com1Backend = Uart1Com1Backend;
+
+impl ShellIo for Uart1Com1Backend {
+    #[inline]
+    fn write_str(&self, s: &str) {
+        uart1_com1::write_str(s);
+    }
+
+    #[inline]
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+        uart1_com1::write_fmt(args);
+    }
+
+    #[inline]
+    fn write_char(&self, ch: char) {
+        uart1_com1::write_char(ch);
+    }
+
+    #[inline]
+    fn write_byte(&self, b: u8) {
+        uart1_com1::write_byte(b);
+    }
+}
+
+impl ShellBackend for Uart1Com1Backend {
+    #[inline]
+    fn init(&self) {
+        uart1_com1::init();
+    }
+
+    #[inline]
+    fn read_byte(&self) -> Option<u8> {
+        uart1_com1::read_byte()
+    }
+}
+
+pub(crate) struct UsbCdcShellBackend;
+
+pub(crate) static USB_CDC_SHELL_BACKEND: UsbCdcShellBackend = UsbCdcShellBackend;
+
+impl ShellIo for UsbCdcShellBackend {
+    #[inline]
+    fn write_str(&self, s: &str) {
+        let _ = crate::usb::cdc_shell::write(s.as_bytes());
+    }
+
+    #[inline]
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
+        use core::fmt::Write;
+        struct Writer;
+        impl Write for Writer {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                let _ = crate::usb::cdc_shell::write(s.as_bytes());
+                Ok(())
+            }
+        }
+        let _ = Writer.write_fmt(args);
+    }
+
+    #[inline]
+    fn write_char(&self, ch: char) {
+        let mut buf = [0u8; 4];
+        let s = ch.encode_utf8(&mut buf);
+        let _ = crate::usb::cdc_shell::write(s.as_bytes());
+    }
+
+    #[inline]
+    fn write_byte(&self, b: u8) {
+        let _ = crate::usb::cdc_shell::write(&[b]);
+    }
+}
+
+impl ShellBackend for UsbCdcShellBackend {
+    #[inline]
+    fn read_byte(&self) -> Option<u8> {
+        crate::usb::cdc_shell::read_byte()
+    }
+}
+
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[inline]
-fn write_prompt() {
-    uart1_com1::write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
+fn write_prompt(io: &dyn ShellIo) {
+    io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
 }
 
 #[inline]
-fn write_banner() {
-    uart1_com1::write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
-    write_prompt();
+fn write_banner(io: &dyn ShellIo) {
+    io.write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
+    write_prompt(io);
 }
 
-static TERM_COLS: AtomicUsize = AtomicUsize::new(80);
-static TERM_ROWS: AtomicUsize = AtomicUsize::new(24);
-static GO_MODE: AtomicBool = AtomicBool::new(false);
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 
 #[inline]
-fn set_go_mode(enable: bool) {
-    let prev = GO_MODE.swap(enable, Ordering::Release);
+fn set_go_mode(io: &dyn ShellIo, go_mode: &mut bool, enable: bool) {
+    let prev = *go_mode;
     if enable && !prev {
-        uart1_com1::write_str(ecma48::HIDE_CURSOR);
+        io.write_str(ecma48::HIDE_CURSOR);
     } else if !enable && prev {
-        uart1_com1::write_str(ecma48::SHOW_CURSOR);
+        io.write_str(ecma48::SHOW_CURSOR);
     }
+    *go_mode = enable;
 }
 
 #[derive(Copy, Clone)]
@@ -56,30 +147,33 @@ enum CommandAction {
 }
 
 #[embassy_executor::task]
-pub async fn task(spawner: Spawner) {
-    uart1_com1::init();
+pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
+    io.init();
 
-    write_banner();
+    write_banner(io);
 
     let mut line: String<128> = String::new();
     let mut go_idx: usize = 0;
     let mut pending_action: Option<PendingAction> = None;
     let mut pending_deadline: Option<Instant> = None;
+    let mut term_cols: usize = 80;
+    let mut term_rows: usize = 24;
+    let mut go_mode: bool = false;
     let mut cube_mode = true;
     let mut cube = CubeState::new();
     cube.set_shape(WireShape::Cube);
     cube.reset();
-    enter_cube_mode();
+    enter_cube_mode(io, &mut term_cols, &mut term_rows);
 
     loop {
-        if let Some(b) = uart1_com1::read_byte() {
+        if let Some(b) = io.read_byte() {
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
-                    set_go_mode(false);
-                    uart1_com1::write_str(ecma48::CLEAR_SCREEN);
-                    uart1_com1::write_str(ecma48::HOME);
-                    write_banner();
+                    set_go_mode(io, &mut go_mode, false);
+                    io.write_str(ecma48::CLEAR_SCREEN);
+                    io.write_str(ecma48::HOME);
+                    write_banner(io);
                 }
                 continue;
             }
@@ -91,19 +185,19 @@ pub async fn task(spawner: Spawner) {
                             b'\r' | b'\n' => {
                                 pending_action = None;
                                 pending_deadline = None;
-                                set_go_mode(false);
+                                set_go_mode(io, &mut go_mode, false);
                                 line.clear();
-                                uart1_com1::write_str("\r\n");
-                                do_install(raw_id, migrate);
-                                write_prompt();
+                                io.write_str("\r\n");
+                                do_install(io, &mut go_mode, raw_id, migrate);
+                                write_prompt(io);
                             }
                             b' ' => {
                                 pending_action = None;
                                 pending_deadline = None;
-                                set_go_mode(false);
+                                set_go_mode(io, &mut go_mode, false);
                                 line.clear();
-                                uart1_com1::write_str("\r\ninstall: aborted\r\n");
-                                write_prompt();
+                                io.write_str("\r\ninstall: aborted\r\n");
+                                write_prompt(io);
                             }
                             _ => {}
                         }
@@ -113,26 +207,33 @@ pub async fn task(spawner: Spawner) {
                     // Other pending actions: Enter/Space cancels.
                     pending_action = None;
                     pending_deadline = None;
-                    set_go_mode(false);
+                    set_go_mode(io, &mut go_mode, false);
                     line.clear();
-                    uart1_com1::write_str("\r\n");
-                    write_prompt();
+                    io.write_str("\r\n");
+                    write_prompt(io);
                     continue;
                 }
                 b'\r' | b'\n' => {
-                    if line.is_empty() && pending_action.is_none() && GO_MODE.load(Ordering::Acquire) {
-                        set_go_mode(false);
-                        uart1_com1::write_str("\r\n");
-                        write_prompt();
+                    if line.is_empty() && pending_action.is_none() && go_mode {
+                        set_go_mode(io, &mut go_mode, false);
+                        io.write_str("\r\n");
+                        write_prompt(io);
                         continue;
                     }
                     if !line.is_empty() {
-                        uart1_com1::write_str("\r\n");
-                        let action = handle_line(&line, &spawner);
+                        io.write_str("\r\n");
+                        let action = handle_line(
+                            &line,
+                            &spawner,
+                            io,
+                            &mut term_cols,
+                            &mut term_rows,
+                            &mut go_mode,
+                        );
                         line.clear();
                         // During multiline Porth capture, avoid spamming the prompt each line.
                         if !crate::porth::shell_is_capturing_multiline() {
-                            write_prompt();
+                            write_prompt(io);
                         }
                         match action {
                             CommandAction::Pending(action) => {
@@ -143,21 +244,25 @@ pub async fn task(spawner: Spawner) {
                                     }
                                     PendingAction::Install { .. } => None,
                                 };
-                                set_go_mode(matches!(action, PendingAction::Reset | PendingAction::S5));
+                                set_go_mode(
+                                    io,
+                                    &mut go_mode,
+                                    matches!(action, PendingAction::Reset | PendingAction::S5),
+                                );
                             }
                             CommandAction::EnterCube => {
                                 cube_mode = true;
-                                set_go_mode(false);
+                                set_go_mode(io, &mut go_mode, false);
                                 cube.set_shape(WireShape::Cube);
                                 cube.reset();
-                                enter_cube_mode();
+                                enter_cube_mode(io, &mut term_cols, &mut term_rows);
                             }
                             CommandAction::EnterIco => {
                                 cube_mode = true;
-                                set_go_mode(false);
+                                set_go_mode(io, &mut go_mode, false);
                                 cube.set_shape(WireShape::Icosidodecahedron);
                                 cube.reset();
-                                enter_cube_mode();
+                                enter_cube_mode(io, &mut term_cols, &mut term_rows);
                             }
                             CommandAction::None => {}
                         }
@@ -166,21 +271,21 @@ pub async fn task(spawner: Spawner) {
                 0x08 | 0x7F => {
                     if !line.is_empty() {
                         line.pop();
-                        uart1_com1::write_str("\x08 \x08");
+                        io.write_str("\x08 \x08");
                     }
                 }
                 0x03 => {
                     line.clear();
                     // Delegate Ctrl-C handling to Porth (compile abort / repl exit) if active.
-                    if !crate::porth::shell_handle_ctrl_c() {
-                        uart1_com1::write_str("^C\r\n");
+                    if !crate::porth::shell_handle_ctrl_c(io) {
+                        io.write_str("^C\r\n");
                     }
-                    write_prompt();
+                    write_prompt(io);
                 }
                 _ => {
                     if b >= 0x20 {
                         if line.push(b as char).is_ok() {
-                            uart1_com1::write_byte(b);
+                            io.write_byte(b);
                         }
                     }
                 }
@@ -193,20 +298,20 @@ pub async fn task(spawner: Spawner) {
             }
             if let (Some(action), Some(deadline)) = (pending_action, pending_deadline) {
                 if Instant::now() >= deadline {
-                    set_go_mode(false);
+                    set_go_mode(io, &mut go_mode, false);
                     pending_action = None;
                     pending_deadline = None;
                     match action {
                         PendingAction::Reset => {
                             if let Err(err) = crate::acpi::facp::reset_system() {
-                                uart1_com1::write_str("tlb miss warn\r\n");
-                                write_prompt();
+                                io.write_str("tlb miss warn\r\n");
+                                write_prompt(io);
                             }
                         }
                         PendingAction::S5 => {
                             if crate::acpi::facp::enter_s5(0, None).is_err() {
-                                uart1_com1::write_str("\r\ns5 failed\r\n");
-                                write_prompt();
+                                io.write_str("\r\ns5 failed\r\n");
+                                write_prompt(io);
                             }
                         }
                         PendingAction::Install { .. } => {}
@@ -214,12 +319,12 @@ pub async fn task(spawner: Spawner) {
                     continue;
                 }
             }
-            if GO_MODE.load(Ordering::Acquire) {
+            if go_mode {
                 let ch = GO_CHARS[go_idx];
                 go_idx = (go_idx + 1) % GO_CHARS.len();
-                uart1_com1::write_str("\r");
-                write_prompt();
-                uart1_com1::write_char(ch);
+                io.write_str("\r");
+                write_prompt(io);
+                io.write_char(ch);
                 Timer::after(EmbassyDuration::from_millis(160)).await;
             } else {
                 Timer::after(EmbassyDuration::from_millis(2)).await;
@@ -228,7 +333,14 @@ pub async fn task(spawner: Spawner) {
     }
 }
 
-fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
+fn handle_line(
+    line: &str,
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend,
+    term_cols: &mut usize,
+    term_rows: &mut usize,
+    go_mode: &mut bool,
+) -> CommandAction {
     let cmd = line.trim();
     if cmd.is_empty() {
         return CommandAction::None;
@@ -239,36 +351,36 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
     if let Some(rest) = cmd.strip_prefix('§') {
         let rest = rest.trim_start();
         if rest.is_empty() {
-            uart1_com1::write_str("usage: § <command...>\r\n");
-            uart1_com1::write_str("note: currently supports Porth commands\r\n");
+            io.write_str("usage: § <command...>\r\n");
+            io.write_str("note: currently supports Porth commands\r\n");
             return CommandAction::None;
         }
-        spawn_background_job(spawner, rest);
+        spawn_background_job(spawner, rest, io);
         return CommandAction::None;
     }
 
     // Delegate Porth-related commands + modes to the Porth module.
-    if crate::porth::shell_handle_line(cmd) {
+    if crate::porth::shell_handle_line(cmd, io) {
         return CommandAction::None;
     }
 
     if let Some((verb, rest)) = cmd.split_once(' ') {
         if verb.eq_ignore_ascii_case("install") {
-            return handle_install(rest);
+            return handle_install(io, rest);
         }
     } else if cmd.eq_ignore_ascii_case("install") {
-        return handle_install("");
+        return handle_install(io, "");
     }
 
     if let Some((cols, rows)) = parse_set_dims(cmd) {
-        TERM_COLS.store(cols, Ordering::Release);
-        TERM_ROWS.store(rows, Ordering::Release);
-        uart1_com1::write_str("term set: ");
-        write_usize(cols);
-        uart1_com1::write_str("x");
-        write_usize(rows);
-        uart1_com1::write_str("\r\n");
-        draw_corners(cols, rows);
+        *term_cols = cols;
+        *term_rows = rows;
+        io.write_str("term set: ");
+        write_usize(io, cols);
+        io.write_str("x");
+        write_usize(io, rows);
+        io.write_str("\r\n");
+        draw_corners(io, cols, rows);
         return CommandAction::None;
     }
 
@@ -281,19 +393,19 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
     }
 
     if cmd.eq_ignore_ascii_case("go") {
-        set_go_mode(true);
+        set_go_mode(io, go_mode, true);
         return CommandAction::None;
     }
 
     if cmd.eq_ignore_ascii_case("mandel") {
         crate::draw_mandelbrot();
-        uart1_com1::write_str("mandel ok\r\n");
+        io.write_str("mandel ok\r\n");
         return CommandAction::None;
     }
 
     if cmd.eq_ignore_ascii_case("time") {
         let Some(boot_ts) = crate::limine::boot_timestamp_secs() else {
-            uart1_com1::write_str("time: boot timestamp unavailable\r\n");
+            io.write_str("time: boot timestamp unavailable\r\n");
             return CommandAction::None;
         };
         let now_ticks = embassy_time_driver::now();
@@ -312,21 +424,21 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
             minute,
             second
         );
-        uart1_com1::write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
+        io.write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
         return CommandAction::None;
     }
 
     if cmd.eq_ignore_ascii_case("up") {
-        uart1_com1::write_str("line1\r\nline2\r\n");
-        uart1_com1::write_fmt(format_args!("{}", crate::ecma48::up(1)));
-        uart1_com1::write_str("↑\r\n");
+        io.write_str("line1\r\nline2\r\n");
+        io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
+        io.write_str("↑\r\n");
         return CommandAction::None;
     }
 
     if let Some(rest) = cmd.strip_prefix("idle") {
         let rest = rest.trim();
         if rest.is_empty() {
-            uart1_com1::write_fmt(format_args!(
+            io.write_fmt(format_args!(
                 "idle: {}\r\n",
                 crate::power::idle_policy().as_str()
             ));
@@ -336,12 +448,12 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
             "spin" => crate::power::IdlePolicy::Spin,
             "hlt" => crate::power::IdlePolicy::Halt,
             _ => {
-                uart1_com1::write_str("idle: usage idle [spin|hlt]\r\n");
+                io.write_str("idle: usage idle [spin|hlt]\r\n");
                 return CommandAction::None;
             }
         };
         let prev = crate::power::set_idle_policy(policy);
-        uart1_com1::write_fmt(format_args!(
+        io.write_fmt(format_args!(
             "idle: {} -> {}\r\n",
             prev.as_str(),
             policy.as_str()
@@ -353,32 +465,34 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
         let rest = rest.trim();
         if rest.is_empty() {
             let cur = crate::power::current_ratio();
-            let caps = crate::power::caps().copied();
-            match (cur, caps) {
-                (Some(cur), Some(caps)) => {
-                    uart1_com1::write_fmt(format_args!(
-                        "pstate: current={} min={} max={}\r\n",
-                        cur,
-                        caps.min_ratio.unwrap_or(0),
-                        caps.max_ratio.unwrap_or(0)
-                    ));
-                }
-                _ => uart1_com1::write_str("pstate: unsupported\r\n"),
+            let armed = crate::power::msr_armed();
+            let details = crate::power::msr_details().copied();
+
+            match (cur, armed, details) {
+                (Some(cur), true, Some(d)) => io.write_fmt(format_args!(
+                    "pstate: current={} min={} max={}\r\n",
+                    cur,
+                    d.min_ratio.unwrap_or(0),
+                    d.max_ratio.unwrap_or(0)
+                )),
+                (_, false, _) => io.write_str("pstate: msr disarmed\r\n"),
+                (_, true, None) => io.write_str("pstate: msr details not probed\r\n"),
+                _ => io.write_str("pstate: unsupported\r\n"),
             }
             return CommandAction::None;
         }
 
         let Some(req) = rest.parse::<u8>().ok() else {
-            uart1_com1::write_str("pstate: usage pstate <ratio>\r\n");
+            io.write_str("pstate: usage pstate <ratio>\r\n");
             return CommandAction::None;
         };
 
         match crate::power::set_pstate_ratio(req) {
-            Ok(applied) => uart1_com1::write_fmt(format_args!(
+            Ok(applied) => io.write_fmt(format_args!(
                 "pstate: applied {}\r\n",
                 applied
             )),
-            Err(err) => uart1_com1::write_fmt(format_args!(
+            Err(err) => io.write_fmt(format_args!(
                 "pstate: failed: {}\r\n",
                 err
             )),
@@ -387,8 +501,8 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
     }
 
     if let Some(rest) = cmd.strip_prefix("echo ") {
-        uart1_com1::write_str(rest);
-        uart1_com1::write_str("\r\n");
+        io.write_str(rest);
+        io.write_str("\r\n");
         return CommandAction::None;
     }
 
@@ -400,50 +514,50 @@ fn handle_line(line: &str, spawner: &Spawner) -> CommandAction {
         return CommandAction::EnterIco;
     }
 
-    uart1_com1::write_str("unknown: ");
-    uart1_com1::write_str(cmd);
-    uart1_com1::write_str("\r\n");
+    io.write_str("unknown: ");
+    io.write_str(cmd);
+    io.write_str("\r\n");
     CommandAction::None
 }
 
-fn spawn_background_job(spawner: &Spawner, cmd: &str) {
+fn spawn_background_job(spawner: &Spawner, cmd: &str, io: &'static dyn ShellBackend) {
     let mut buf: heapless::String<256> = heapless::String::new();
     if buf.push_str(cmd).is_err() {
-        uart1_com1::write_str("§: command too long\r\n");
+        io.write_str("§: command too long\r\n");
         return;
     }
 
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    if spawner.spawn(shell_bg_job(id, buf)).is_err() {
-        uart1_com1::write_str("§: spawn failed\r\n");
+    if spawner.spawn(shell_bg_job(id, buf, io)).is_err() {
+        io.write_str("§: spawn failed\r\n");
     }
 }
 
 #[embassy_executor::task(pool_size = 4)]
-async fn shell_bg_job(id: usize, cmd: heapless::String<256>) {
-    uart1_com1::write_fmt(format_args!("\r\n§{} start: {}\r\n", id, cmd.as_str()));
+async fn shell_bg_job(id: usize, cmd: heapless::String<256>, io: &'static dyn ShellBackend) {
+    io.write_fmt(format_args!("\r\n§{} start: {}\r\n", id, cmd.as_str()));
 
     // For now, only Porth commands are supported in the background.
-    if !crate::porth::shell_handle_line(cmd.as_str()) {
-        uart1_com1::write_fmt(format_args!("§{}: unsupported command\r\n", id));
+    if !crate::porth::shell_handle_line(cmd.as_str(), io) {
+        io.write_fmt(format_args!("§{}: unsupported command\r\n", id));
     }
 
-    uart1_com1::write_fmt(format_args!("§{} done\r\n", id));
+    io.write_fmt(format_args!("§{} done\r\n", id));
 }
 
-fn handle_install(args: &str) -> CommandAction {
+fn handle_install(io: &dyn ShellIo, args: &str) -> CommandAction {
     let args = args.trim();
 
     if args.is_empty() {
-        uart1_com1::write_str("install: BIOS/MBR install (DESTRUCTIVE)\r\n");
-        uart1_com1::write_str("usage: install <disc_id>\r\n");
-        uart1_com1::write_str("       install <disc_id> migrate\r\n");
-        uart1_com1::write_str("example: install 1\r\n");
-        uart1_com1::write_str("example: install 1 migrate\r\n");
-        uart1_com1::write_str("available disks:\r\n");
+        io.write_str("install: BIOS/MBR install (DESTRUCTIVE)\r\n");
+        io.write_str("usage: install <disc_id>\r\n");
+        io.write_str("       install <disc_id> migrate\r\n");
+        io.write_str("example: install 1\r\n");
+        io.write_str("example: install 1 migrate\r\n");
+        io.write_str("available disks:\r\n");
         for h in block::device_handles().into_iter() {
             let info = h.info();
-            uart1_com1::write_fmt(format_args!(
+            io.write_fmt(format_args!(
                 "  id={} ({}) kind={:?} blocks={} bs={} writable={} label={:?}\r\n",
                 info.id.raw(),
                 info.id,
@@ -461,7 +575,7 @@ fn handle_install(args: &str) -> CommandAction {
     let first = match parts.next() {
         Some(s) => s,
         None => {
-            uart1_com1::write_str("install: missing args\r\n");
+            io.write_str("install: missing args\r\n");
             return CommandAction::None;
         }
     };
@@ -474,7 +588,7 @@ fn handle_install(args: &str) -> CommandAction {
         let id_str = match parts.next() {
             Some(s) => s,
             None => {
-                uart1_com1::write_str("install: missing id\r\n");
+                io.write_str("install: missing id\r\n");
                 return CommandAction::None;
             }
         };
@@ -491,19 +605,19 @@ fn handle_install(args: &str) -> CommandAction {
     let raw_id = match parse_disc_id_raw(id_str) {
         Some(v) => v,
         None => {
-            uart1_com1::write_str("install: invalid id (use decimal like '1' or 'disc001')\r\n");
+            io.write_str("install: invalid id (use decimal like '1' or 'disc001')\r\n");
             return CommandAction::None;
         }
     };
 
     let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
     let Some(handle) = target else {
-        uart1_com1::write_str("install: no such device\r\n");
+        io.write_str("install: no such device\r\n");
         return CommandAction::None;
     };
 
     let info = handle.info();
-    uart1_com1::write_fmt(format_args!(
+    io.write_fmt(format_args!(
         "install: target id={} ({}) label={:?} blocks={} bs={}\r\n",
         info.id.raw(),
         info.id,
@@ -512,17 +626,17 @@ fn handle_install(args: &str) -> CommandAction {
         info.block_size
     ));
     if mode_migrate {
-        uart1_com1::write_str(
+        io.write_str(
             "install: migrate shifts a FAT superfloppy (FAT-at-LBA0) forward by 1MiB into a partition.\r\n",
         );
-        uart1_com1::write_str(
+        io.write_str(
             "install: it validates the last 1MiB is free; otherwise it aborts to avoid data loss.\r\n",
         );
-        uart1_com1::write_str("install: still destructive; always back up.\r\n");
+        io.write_str("install: still destructive; always back up.\r\n");
     } else {
-        uart1_com1::write_str("install: this will ERASE the disk.\r\n");
+        io.write_str("install: this will ERASE the disk.\r\n");
     }
-    uart1_com1::write_str("install: press Enter to proceed, Space to abort\r\n");
+    io.write_str("install: press Enter to proceed, Space to abort\r\n");
 
     CommandAction::Pending(PendingAction::Install {
         raw_id: info.id.raw(),
@@ -530,35 +644,35 @@ fn handle_install(args: &str) -> CommandAction {
     })
 }
 
-fn do_install(raw_id: u32, mode_migrate: bool) {
+fn do_install(io: &dyn ShellIo, go_mode: &mut bool, raw_id: u32, mode_migrate: bool) {
     let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
     let Some(handle) = target else {
-        uart1_com1::write_str("install: no such device\r\n");
+        io.write_str("install: no such device\r\n");
         return;
     };
 
     let info = handle.info();
-    uart1_com1::write_fmt(format_args!(
+    io.write_fmt(format_args!(
         "install: installing Limine BIOS + TRUEOS to id={} ({})...\r\n",
         info.id.raw(),
         info.id
     ));
 
-    set_go_mode(true);
+    set_go_mode(io, go_mode, true);
     let mut go_idx: usize = 0;
     let mut tick = || {
         let ch = GO_CHARS[go_idx];
         go_idx = (go_idx + 1) % GO_CHARS.len();
-        uart1_com1::write_str("\r");
-        write_prompt();
-        uart1_com1::write_char(ch);
+        io.write_str("\r");
+        write_prompt(io);
+        io.write_char(ch);
     };
 
     let mut status = |args: core::fmt::Arguments<'_>| {
         // Print a user-visible status line without fighting the spinner.
-        uart1_com1::write_str("\r\n");
-        uart1_com1::write_fmt(args);
-        uart1_com1::write_str("\r\n");
+        io.write_str("\r\n");
+        io.write_fmt(args);
+        io.write_str("\r\n");
     };
 
     let res = if mode_migrate {
@@ -566,12 +680,12 @@ fn do_install(raw_id: u32, mode_migrate: bool) {
     } else {
         install::install_bios_mbr_with_progress(handle, &mut tick)
     };
-    set_go_mode(false);
-    uart1_com1::write_str("\r\n");
+    set_go_mode(io, go_mode, false);
+    io.write_str("\r\n");
 
     match res {
-        Ok(()) => uart1_com1::write_str("install: ok\r\n"),
-        Err(e) => uart1_com1::write_fmt(format_args!("install: failed: {:?}\r\n", e)),
+        Ok(()) => io.write_str("install: ok\r\n"),
+        Err(e) => io.write_fmt(format_args!("install: failed: {:?}\r\n", e)),
     }
 }
 
@@ -590,12 +704,12 @@ fn parse_set_dims(cmd: &str) -> Option<(usize, usize)> {
     Some((cols, rows))
 }
 
-fn write_usize(value: usize) {
+fn write_usize(io: &dyn ShellIo, value: usize) {
     let mut buf = [0u8; 20];
     let mut i = buf.len();
     let mut v = value;
     if v == 0 {
-        uart1_com1::write_byte(b'0');
+        io.write_byte(b'0');
         return;
     }
     while v > 0 {
@@ -604,7 +718,7 @@ fn write_usize(value: usize) {
         v /= 10;
     }
     for b in &buf[i..] {
-        uart1_com1::write_byte(*b);
+        io.write_byte(*b);
     }
 }
 
@@ -658,32 +772,32 @@ fn is_leap_year(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
-fn draw_corners(cols: usize, rows: usize) {
+fn draw_corners(io: &dyn ShellIo, cols: usize, rows: usize) {
     if cols == 0 || rows == 0 {
         return;
     }
-    uart1_com1::write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_str(crate::ecma48::SAVE_CURSOR);
     // top-right
-    write_pos(1, cols);
-    uart1_com1::write_byte(b'O');
+    write_pos(io, 1, cols);
+    io.write_byte(b'O');
     // bottom-left
-    write_pos(rows, 1);
-    uart1_com1::write_byte(b'O');
+    write_pos(io, rows, 1);
+    io.write_byte(b'O');
     // bottom-right
-    write_pos(rows, cols);
-    uart1_com1::write_byte(b'O');
-    uart1_com1::write_str(crate::ecma48::RESTORE_CURSOR);
+    write_pos(io, rows, cols);
+    io.write_byte(b'O');
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 
 #[inline]
-fn write_pos(row: usize, col: usize) {
-    uart1_com1::write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
+fn write_pos(io: &dyn ShellIo, row: usize, col: usize) {
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
 }
 
-fn enter_cube_mode() {
-    TERM_COLS.store(CUBE_COLS, Ordering::Release);
-    TERM_ROWS.store(CUBE_ROWS, Ordering::Release);
-    draw_corners(CUBE_COLS, CUBE_ROWS);
+fn enter_cube_mode(io: &dyn ShellIo, term_cols: &mut usize, term_rows: &mut usize) {
+    *term_cols = CUBE_COLS;
+    *term_rows = CUBE_ROWS;
+    draw_corners(io, CUBE_COLS, CUBE_ROWS);
     crate::shellcube::enter_mode();
 }
 

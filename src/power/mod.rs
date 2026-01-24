@@ -2,11 +2,17 @@ use core::arch::x86_64::__cpuid;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Once;
+
+#[cfg(feature = "power-msr")]
 use x86_64::registers::model_specific::Msr;
 
+#[cfg(feature = "power-msr")]
 const IA32_MSR_PLATFORM_INFO: u32 = 0xCE;
+#[cfg(feature = "power-msr")]
 const IA32_MSR_PERF_STATUS: u32 = 0x198;
+#[cfg(feature = "power-msr")]
 const IA32_MSR_PERF_CTL: u32 = 0x199;
+#[cfg(feature = "power-msr")]
 const IA32_MSR_HWP_CAPABILITIES: u32 = 0x771;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,36 +39,60 @@ impl IdlePolicy {
 
 static IDLE_POLICY: AtomicU8 = AtomicU8::new(IdlePolicy::Spin as u8);
 
+#[cfg(feature = "power-msr")]
+static MSR_ARMED: AtomicU8 = AtomicU8::new(0);
+
 #[derive(Clone, Copy, Debug)]
 pub struct PowerCaps {
     pub vendor_intel: bool,
     pub has_msr: bool,
     pub has_eist: bool,
     pub has_hwp: bool,
+}
+
+static CAPS: Once<Option<PowerCaps>> = Once::new();
+
+#[derive(Clone, Copy, Debug)]
+pub struct PowerMsrDetails {
     pub min_ratio: Option<u8>,
     pub max_ratio: Option<u8>,
     pub hwp_lowest: Option<u8>,
     pub hwp_highest: Option<u8>,
 }
 
-static CAPS: Once<Option<PowerCaps>> = Once::new();
+#[cfg(feature = "power-msr")]
+static MSR_DETAILS: Once<Option<PowerMsrDetails>> = Once::new();
 
 pub fn init() {
-    CAPS.call_once(|| detect_caps());
+    // Safety note:
+    // Even if CPUID reports that the RDMSR/WRMSR instructions exist, reading a
+    // *specific* MSR that isn't implemented will #GP. On many bare-metal setups
+    // (especially early boot, before robust exception handling), that can become
+    // a triple-fault and immediate reboot.
+    //
+    // Therefore init() is CPUID-only: it will never touch MSRs.
+    CAPS.call_once(|| detect_caps_cpuid_only());
 
     if let Some(caps) = caps() {
         crate::log!(
-            "POWER: intel={} msr={} eist={} hwp={} min={} max={} hwp_lowest={} hwp_highest={} idle={}\n",
+            "POWER: intel={} msr={} eist={} hwp={} msr_armed={} idle={}\n",
             caps.vendor_intel,
             caps.has_msr,
             caps.has_eist,
             caps.has_hwp,
-            opt_u8(caps.min_ratio),
-            opt_u8(caps.max_ratio),
-            opt_u8(caps.hwp_lowest),
-            opt_u8(caps.hwp_highest),
+            msr_armed(),
             idle_policy().as_str(),
         );
+
+        if let Some(d) = msr_details() {
+            crate::log!(
+                "POWER: msr_details min={} max={} hwp_lowest={} hwp_highest={}\n",
+                opt_u8(d.min_ratio),
+                opt_u8(d.max_ratio),
+                opt_u8(d.hwp_lowest),
+                opt_u8(d.hwp_highest),
+            );
+        }
     } else {
         crate::log!("POWER: caps unavailable\n");
     }
@@ -70,6 +100,72 @@ pub fn init() {
 
 pub fn caps() -> Option<&'static PowerCaps> {
     CAPS.get().and_then(|caps| caps.as_ref())
+}
+
+pub fn msr_armed() -> bool {
+    #[cfg(feature = "power-msr")]
+    {
+        MSR_ARMED.load(Ordering::Acquire) != 0
+    }
+
+    #[cfg(not(feature = "power-msr"))]
+    {
+        false
+    }
+}
+
+/// Arms MSR usage for this boot.
+///
+/// This does not read or write any MSR; it only flips an internal guard that
+/// higher-level functions check before doing MSR I/O.
+///
+/// Recommended usage: call only after you have solid exception handling (IDT +
+/// #GP handler) and you *want* frequency/p-state features.
+pub fn arm_msr() -> bool {
+    #[cfg(not(feature = "power-msr"))]
+    {
+        return false;
+    }
+
+    #[cfg(feature = "power-msr")]
+    {
+    let Some(c) = caps() else {
+        return false;
+    };
+    if !c.has_msr {
+        return false;
+    }
+    MSR_ARMED.store(1, Ordering::Release);
+    true
+    }
+}
+
+pub fn msr_details() -> Option<&'static PowerMsrDetails> {
+    #[cfg(feature = "power-msr")]
+    {
+        MSR_DETAILS.get().and_then(|d| d.as_ref())
+    }
+
+    #[cfg(not(feature = "power-msr"))]
+    {
+        None
+    }
+}
+
+/// Probes Intel MSR-only detail fields (platform ratios, HWP caps).
+///
+/// # Safety
+/// If the MSRs being probed are not implemented by the CPU/firmware, the reads
+/// will raise #GP. If your exception path is not safe, this can reboot the
+/// machine. Keep this opt-in and only call when you're prepared.
+#[cfg(feature = "power-msr")]
+pub unsafe fn probe_msr_details() -> Option<&'static PowerMsrDetails> {
+    if !msr_armed() {
+        return None;
+    }
+
+    MSR_DETAILS.call_once(|| detect_msr_details());
+    msr_details()
 }
 
 pub fn idle_policy() -> IdlePolicy {
@@ -90,41 +186,77 @@ pub fn idle_hint() {
 }
 
 pub fn current_ratio() -> Option<u8> {
+    #[cfg(not(feature = "power-msr"))]
+    {
+        let _ = caps()?;
+        return None;
+    }
+
+    #[cfg(feature = "power-msr")]
+    {
     let caps = caps()?;
-    if !caps.has_msr || !caps.has_eist {
+    if !msr_armed() || !caps.has_msr || !caps.has_eist {
         return None;
     }
     let value = unsafe { Msr::new(IA32_MSR_PERF_STATUS).read() };
     Some(((value >> 8) & 0xff) as u8)
+    }
 }
 
 pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
+    #[cfg(not(feature = "power-msr"))]
+    {
+        let _ = requested;
+        return Err("MSR support disabled at build time");
+    }
+
+    #[cfg(feature = "power-msr")]
+    {
     let caps = caps().ok_or("no power caps")?;
-    if !caps.has_msr || !caps.has_eist {
+    if !msr_armed() || !caps.has_msr || !caps.has_eist {
         return Err("EIST/MSR unsupported");
     }
-    let min = caps.min_ratio.ok_or("min ratio unknown")?;
-    let max = caps.max_ratio.ok_or("max ratio unknown")?;
+    let details = msr_details().ok_or("msr details not probed")?;
+    let min = details.min_ratio.ok_or("min ratio unknown")?;
+    let max = details.max_ratio.ok_or("max ratio unknown")?;
     let ratio = requested.clamp(min, max);
 
     let value = (ratio as u64) << 8;
     unsafe { Msr::new(IA32_MSR_PERF_CTL).write(value) };
     Ok(ratio)
+    }
 }
 
-fn detect_caps() -> Option<PowerCaps> {
+fn detect_caps_cpuid_only() -> Option<PowerCaps> {
     let r0 = unsafe { __cpuid(0x0) };
     let max_leaf = r0.eax;
     let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
 
     let r1 = unsafe { __cpuid(0x1) };
     let has_msr = (r1.edx & (1 << 5)) != 0;
-    let has_eist = (r1.ecx & (1 << 7)) != 0;
+    // EIST/HWP probing is Intel-specific. On other vendors, treating these bits as
+    // authoritative can lead to invalid MSR reads and a #GP (which currently reboots).
+    let has_eist = vendor_intel && (r1.ecx & (1 << 7)) != 0;
 
     let mut has_hwp = false;
-    if max_leaf >= 0x6 {
+    if vendor_intel && max_leaf >= 0x6 {
         let r6 = unsafe { __cpuid(0x6) };
         has_hwp = (r6.eax & (1 << 7)) != 0;
+    }
+
+    Some(PowerCaps {
+        vendor_intel,
+        has_msr,
+        has_eist,
+        has_hwp,
+    })
+}
+
+#[cfg(feature = "power-msr")]
+fn detect_msr_details() -> Option<PowerMsrDetails> {
+    let caps = caps()?;
+    if !caps.vendor_intel || !caps.has_msr {
+        return None;
     }
 
     let mut min_ratio = None;
@@ -132,7 +264,7 @@ fn detect_caps() -> Option<PowerCaps> {
     let mut hwp_lowest = None;
     let mut hwp_highest = None;
 
-    if has_msr && has_eist {
+    if caps.has_eist {
         let value = unsafe { Msr::new(IA32_MSR_PLATFORM_INFO).read() };
         let min = ((value >> 40) & 0xff) as u8;
         let max = ((value >> 8) & 0xff) as u8;
@@ -144,7 +276,7 @@ fn detect_caps() -> Option<PowerCaps> {
         }
     }
 
-    if has_msr && has_hwp {
+    if caps.has_hwp {
         let caps = unsafe { Msr::new(IA32_MSR_HWP_CAPABILITIES).read() };
         let lowest = (caps & 0xff) as u8;
         let highest = ((caps >> 24) & 0xff) as u8;
@@ -156,11 +288,7 @@ fn detect_caps() -> Option<PowerCaps> {
         }
     }
 
-    Some(PowerCaps {
-        vendor_intel,
-        has_msr,
-        has_eist,
-        has_hwp,
+    Some(PowerMsrDetails {
         min_ratio,
         max_ratio,
         hwp_lowest,
