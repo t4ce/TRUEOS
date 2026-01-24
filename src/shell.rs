@@ -8,6 +8,24 @@ use crate::ecma48;
 use crate::disc::{block, install};
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
+const DEFAULT_TERM_COLS: usize = 80;
+const DEFAULT_TERM_ROWS: usize = 24;
+
+const SHELL_COMMANDS: [&str; 13] = [
+    "echo",
+    "s5",
+    "reset",
+    "install",
+    "set",
+    "go",
+    "mandel",
+    "time",
+    "up",
+    "idle",
+    "pstate",
+    "cube",
+    "ico",
+];
 
 pub(crate) trait ShellIo {
     fn write_str(&self, s: &str);
@@ -108,9 +126,27 @@ fn write_prompt(io: &dyn ShellIo) {
 }
 
 #[inline]
-fn write_banner(io: &dyn ShellIo) {
+fn write_right_aligned(io: &dyn ShellIo, row: usize, term_cols: usize, text: &str) {
+    if term_cols == 0 || text.is_empty() {
+        return;
+    }
+    let len = text.chars().count();
+    let col = term_cols.saturating_sub(len).saturating_add(1);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
+    io.write_str(text);
+}
+
+#[inline]
+fn write_banner(io: &dyn ShellIo, term_cols: usize) {
     io.write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
     write_prompt(io);
+
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    for (idx, cmd) in SHELL_COMMANDS.iter().enumerate() {
+        let row = idx + 1;
+        write_right_aligned(io, row, term_cols, cmd);
+    }
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 
 const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
@@ -147,14 +183,15 @@ enum CommandAction {
 pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend) {
     io.init();
 
-    write_banner(io);
+    let mut term_cols: usize = DEFAULT_TERM_COLS;
+    let mut term_rows: usize = DEFAULT_TERM_ROWS;
+
+    write_banner(io, term_cols);
 
     let mut line: String<128> = String::new();
     let mut go_idx: usize = 0;
     let mut pending_action: Option<PendingAction> = None;
     let mut pending_deadline: Option<Instant> = None;
-    let mut term_cols: usize = 80;
-    let mut term_rows: usize = 24;
     let mut go_mode: bool = false;
     let mut cube_mode = true;
     let mut cube = CubeState::new();
@@ -170,7 +207,7 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend) {
                     set_go_mode(io, &mut go_mode, false);
                     io.write_str(ecma48::CLEAR_SCREEN);
                     io.write_str(ecma48::HOME);
-                    write_banner(io);
+                    write_banner(io, term_cols);
                 }
                 continue;
             }

@@ -5,6 +5,9 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let quickjs_dir = manifest_dir.join("..").join("..").join("quickjs");
 
+    // Local freestanding C stubs for printf/vsnprintf/etc.
+    let trueos_stdio = manifest_dir.join("trueos_stdio.c");
+
     let sources = [
         "quickjs.c",
         "libregexp.c",
@@ -16,6 +19,7 @@ fn main() {
     for src in &sources {
         println!("cargo:rerun-if-changed={}", quickjs_dir.join(src).display());
     }
+    println!("cargo:rerun-if-changed={}", trueos_stdio.display());
     println!("cargo:rerun-if-changed={}", quickjs_dir.join("quickjs.h").display());
     println!("cargo:rerun-if-changed={}", quickjs_dir.join("libregexp.h").display());
     println!("cargo:rerun-if-changed={}", quickjs_dir.join("libunicode.h").display());
@@ -26,6 +30,7 @@ fn main() {
     for src in &sources {
         build.file(quickjs_dir.join(src));
     }
+    build.file(&trueos_stdio);
 
     if !target.contains('-') {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
@@ -43,6 +48,8 @@ fn main() {
         .flag("-mno-red-zone")
         .flag("-msse2")
         .flag("-mcmodel=kernel")
+        // Prevent QuickJS from enabling pthread-backed Atomics and stack checking.
+        .define("EMSCRIPTEN", None)
         .define("CONFIG_VERSION", Some("\"TRUEOS\""))
         .compile("quickjs");
 }
