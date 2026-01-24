@@ -1,9 +1,8 @@
-use acpi::sdt::SdtHeader;
 use spin::Once;
 
 use crate::pci::mmio;
 
-use super::ensure_tables;
+use crate::efi::acpi::ensure_tables;
 
 static LOG_ONCE: Once<()> = Once::new();
 
