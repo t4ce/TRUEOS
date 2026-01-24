@@ -42,7 +42,7 @@ async fn cleanup_disconnected<const N: usize>(
     connected: &Vec<(u8, u32), N>,
     state: &mut UsbControllerState,
 ) {
-    let mut removed: Vec<(u32, DeviceKind), MAX_DEVICES> = Vec::new();
+    let mut removed: Vec<(u32, DeviceKind, Option<super::DeviceResources>), MAX_DEVICES> = Vec::new();
     let controller_id = state.info.controller_id;
     {
         let mut guard = DEVICES[controller_id].lock();
@@ -55,13 +55,22 @@ async fn cleanup_disconnected<const N: usize>(
                 continue;
             }
             let entry = guard.remove(idx);
-            let _ = removed.push((entry.slot_id, entry.kind));
+            let _ = removed.push((entry.slot_id, entry.kind, entry.resources));
         }
     }
 
-    for (slot_id, kind) in removed.into_iter() {
+    for (slot_id, kind, resources) in removed.into_iter() {
         if let Err(()) = disable_slot(state, slot_id).await {
-            crate::log!("usb: disable-slot for slot {} failed\n", slot_id);
+            crate::log!(
+                "usb[xHCI {}]: disable-slot for slot {} failed\n",
+                controller_id,
+                slot_id
+            );
+        }
+        if let Some(res) = resources {
+            dma::dealloc(res.ep0_virt_raw as *mut u8, res.ep0_bytes);
+            dma::dealloc(res.input_ctx_virt as *mut u8, 4096);
+            dma::dealloc(res.dev_ctx_virt as *mut u8, 4096);
         }
         if kind == DeviceKind::Hid {
             let _ = hid::unregister_runtime(controller_id, slot_id);
@@ -72,7 +81,11 @@ async fn cleanup_disconnected<const N: usize>(
         } else if kind == DeviceKind::Uac {
             let _ = uac::unregister_runtime(controller_id, slot_id);
         }
-        crate::log!("usb: dropped device slot={} (disconnected)\n", slot_id);
+        crate::log!(
+            "usb[xHCI {}]: dropped device slot={} (disconnected)\n",
+            controller_id,
+            slot_id
+        );
     }
 }
 
@@ -89,6 +102,7 @@ async fn enumerate_hub_ports(
     work: &HubWork,
     hub_queue: &mut heapless::Vec<HubWork, 16>,
 ) {
+    let controller_id = state.info.controller_id;
     let children = hub::collect_children(
         &state.ctx,
         work.hub_slot_id,
@@ -112,7 +126,8 @@ async fn enumerate_hub_ports(
     } in children.iter().copied()
     {
         crate::log!(
-            "usb: hub child enumerate hub_slot={} port={} route=0x{:X} depth={} speed_code={}\n",
+            "usb[xHCI {}]: hub child enumerate hub_slot={} port={} route=0x{:X} depth={} speed_code={}\n",
+            controller_id,
             work.hub_slot_id,
             port,
             route,
@@ -121,14 +136,16 @@ async fn enumerate_hub_ports(
         );
         let Some(slot_id) = enable_slot(state, port).await else {
             crate::log!(
-                "usb: hub child enable-slot failed hub_slot={} port={}\n",
+                "usb[xHCI {}]: hub child enable-slot failed hub_slot={} port={}\n",
+                controller_id,
                 work.hub_slot_id,
                 port
             );
             continue;
         };
         crate::log!(
-            "usb: hub child enable-slot ok hub_slot={} port={} slot={}\n",
+            "usb[xHCI {}]: hub child enable-slot ok hub_slot={} port={} slot={}\n",
+            controller_id,
             work.hub_slot_id,
             port,
             slot_id
@@ -144,6 +161,7 @@ async fn enumerate_hub_ports(
             speed_code,
             None,
             Some((work.hub_slot_id, port)),
+            Some((work.hub_speed_code, work.power_on_good_ms)),
             tt_info,
             tt_think_time,
             hub_queue,
@@ -153,13 +171,15 @@ async fn enumerate_hub_ports(
 }
 
 fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
+    let controller_id = info.controller_id;
     osal::ensure_dma_api_initialized();
 
     let ctx = unsafe { XhciContext::new(info) };
     let page_size_mask = unsafe { ctx.page_size_mask() };
     if (page_size_mask & 0x1) == 0 {
         crate::log!(
-            "usb: xhci lacks 4K page support PAGESIZE=0x{:X}\n",
+            "usb[xHCI {}]: xhci lacks 4K page support PAGESIZE=0x{:X}\n",
+            controller_id,
             page_size_mask
         );
         return Err(());
@@ -169,7 +189,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let ctx_stride_words: usize = ctx_stride_bytes / 4;
 
     crate::log!(
-        "usb: xhci hccparams1=0x{:08X} csz_64={} ctx_stride_bytes={}\n",
+        "usb[xHCI {}]: xhci hccparams1=0x{:08X} csz_64={} ctx_stride_bytes={}\n",
+        controller_id,
         ctx.hccparams1,
         csz_64,
         ctx_stride_bytes
@@ -184,7 +205,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (dcbaa_phys, dcbaa_virt) = match dma::alloc_with_max((max_slots + 1) * 8, 64, dma_max_exclusive) {
         Some(pair) => pair,
         None => {
-            crate::log!("usb: failed to alloc dcbaa\n");
+            crate::log!("usb[xHCI {}]: failed to alloc dcbaa\n", controller_id);
             return Err(());
         }
     };
@@ -199,7 +220,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
             Some(pair) => pair,
             None => {
                 crate::log!(
-                    "usb: failed to alloc scratchpad array count={}\n",
+                    "usb[xHCI {}]: failed to alloc scratchpad array count={}\n",
+                    controller_id,
                     scratchpad_count
                 );
                 return Err(());
@@ -212,7 +234,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
                 Some(pair) => pair,
                 None => {
                     crate::log!(
-                        "usb: failed to alloc scratchpad buffer {}/{}\n",
+                        "usb[xHCI {}]: failed to alloc scratchpad buffer {}/{}\n",
+                        controller_id,
                         idx + 1,
                         scratchpad_count
                     );
@@ -234,7 +257,8 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         scratchpad_array_phys = sp_array_phys;
         scratchpad_array_virt = sp_array_virt;
         crate::log!(
-            "usb: scratchpads={} array=0x{:X}\n",
+            "usb[xHCI {}]: scratchpads={} array=0x{:X}\n",
+            controller_id,
             scratchpad_count,
             sp_array_phys
         );
@@ -244,7 +268,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            crate::log!("usb: failed to alloc cmd ring\n");
+            crate::log!("usb[xHCI {}]: failed to alloc cmd ring\n", controller_id);
             return Err(());
         }
     };
@@ -255,7 +279,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
-            crate::log!("usb: failed to alloc event ring\n");
+            crate::log!("usb[xHCI {}]: failed to alloc event ring\n", controller_id);
             return Err(());
         }
     };
@@ -265,7 +289,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let (erst_phys, erst_virt) = match dma::alloc(size_of::<ErstEntry>(), 64) {
         Some(pair) => pair,
         None => {
-            crate::log!("usb: failed to alloc ERST\n");
+            crate::log!("usb[xHCI {}]: failed to alloc ERST\n", controller_id);
             return Err(());
         }
     };
@@ -321,7 +345,10 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         }
     }
 
-    crate::log!("usb: controller initialized; ready for rescans\n");
+    crate::log!(
+        "usb[xHCI {}]: controller initialized; ready for rescans\n",
+        controller_id
+    );
 
     Ok(UsbControllerState {
         info,
@@ -383,7 +410,8 @@ async fn scout_pass(info: xhci::XhcInfo) {
     // If we couldn't record all connected ports, don't treat missing entries as disconnects.
     if connected_overflowed {
         crate::log!(
-            "usb: connected port list overflow; skipping disconnect cleanup this pass\n"
+            "usb[xHCI {}]: connected port list overflow; skipping disconnect cleanup this pass\n",
+            controller_id
         );
     } else {
         cleanup_disconnected(&connected, &mut state).await;
@@ -410,38 +438,16 @@ async fn scout_pass(info: xhci::XhcInfo) {
 }
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
-pub async fn usb_scout(info: xhci::XhcInfo) {
-    let controller_id = info.controller_id;
-    if SCOUT_RUNNING[controller_id]
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("usb: scout already running; skipping\n");
-        return;
-    }
-
-    struct ScoutRunGuard {
-        controller_id: usize,
-    }
-    impl Drop for ScoutRunGuard {
-        fn drop(&mut self) {
-            SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
-        }
-    }
-
-    let _scout_guard = ScoutRunGuard { controller_id };
-
-    scout_pass(info).await;
-}
-
-#[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn usb_scout_service(info: xhci::XhcInfo) {
     let controller_id = info.controller_id;
     if SCOUT_SERVICE_RUNNING[controller_id]
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        crate::log!("usb: scout service already running; skipping\n");
+        crate::log!(
+            "usb[xHCI {}]: scout service already running; skipping\n",
+            controller_id
+        );
         return;
     }
 
@@ -472,7 +478,7 @@ pub async fn usb_scout_service(info: xhci::XhcInfo) {
         scout_pass(info).await;
     }
 
-    // Thereafter, rescan periodically (and also when explicitly requested).
+    // Thereafter, rescan periodically.
     const RESCAN_PERIOD_MS: u64 = 2_000;
     const POLL_MS: u64 = 250;
     let mut elapsed_ms: u64 = 0;

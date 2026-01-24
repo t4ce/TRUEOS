@@ -1,5 +1,6 @@
 pub mod cdc;
 pub mod cdc_acm;
+pub mod cdc_shell;
 pub mod hid;
 pub mod hub;
 pub mod input;
@@ -17,7 +18,7 @@ mod enumeration;
 mod control;
 mod attach;
 
-pub use scout::{usb_scout, usb_scout_service};
+pub use scout::usb_scout_service;
 pub(crate) use self::control::{control_in, control_out};
 pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
 
@@ -37,12 +38,22 @@ enum DeviceKind {
     Pen,
     Cdc,
     Uac,
+    Unknown,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DeviceResources {
+    dev_ctx_virt: usize,
+    input_ctx_virt: usize,
+    ep0_virt_raw: usize,
+    ep0_bytes: usize,
 }
 #[derive(Copy, Clone, Debug)]
 struct DeviceEntry {
     slot_id: u32,
     port: u8,
     kind: DeviceKind,
+    resources: Option<DeviceResources>,
 }
 
 static DEVICES: [Mutex<Vec<DeviceEntry, MAX_DEVICES>>; MAX_XHCI_CONTROLLERS] =
@@ -87,11 +98,23 @@ macro_rules! usbv {
 }
 
 
-fn register_device(controller_id: usize, slot_id: u32, port: u8, kind: DeviceKind) {
+fn register_device_inner(
+    controller_id: usize,
+    slot_id: u32,
+    port: u8,
+    kind: DeviceKind,
+    resources: Option<DeviceResources>,
+) {
     let mut guard = DEVICES[controller_id].lock();
     if let Some(existing) = guard.iter_mut().find(|d| d.slot_id == slot_id) {
         existing.kind = kind;
         existing.port = port;
+        // If a device becomes claimed later, its resources become driver-owned.
+        existing.resources = if kind == DeviceKind::Unknown {
+            resources.or(existing.resources)
+        } else {
+            None
+        };
         return;
     }
     if guard
@@ -99,6 +122,7 @@ fn register_device(controller_id: usize, slot_id: u32, port: u8, kind: DeviceKin
             slot_id,
             port,
             kind,
+            resources: if kind == DeviceKind::Unknown { resources } else { None },
         })
         .is_err()
     {
@@ -106,12 +130,33 @@ fn register_device(controller_id: usize, slot_id: u32, port: u8, kind: DeviceKin
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY[controller_id].store(true, Ordering::Release);
-    crate::log!(
-        "usb: device claimed slot={} port={} kind={:?}\n",
-        slot_id,
-        port,
-        kind
-    );
+    if kind == DeviceKind::Unknown {
+        crate::log!(
+            "usb: device present (unclaimed) slot={} port={}\n",
+            slot_id,
+            port,
+        );
+    } else {
+        crate::log!(
+            "usb: device claimed slot={} port={} kind={:?}\n",
+            slot_id,
+            port,
+            kind
+        );
+    }
+}
+
+fn register_device(controller_id: usize, slot_id: u32, port: u8, kind: DeviceKind) {
+    register_device_inner(controller_id, slot_id, port, kind, None);
+}
+
+fn register_unclaimed_device(
+    controller_id: usize,
+    slot_id: u32,
+    port: u8,
+    resources: DeviceResources,
+) {
+    register_device_inner(controller_id, slot_id, port, DeviceKind::Unknown, Some(resources));
 }
 
 fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceKind> {
@@ -267,6 +312,10 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}
+            Some(DeviceKind::Unknown) => {
+                // Unclaimed devices keep a slot assigned so we don't thrash.
+                // No transfers should complete for them because no endpoints are configured.
+            }
             None => {
                 // A device may complete transfers during attach (while the enum path is still
                 // running) before `register_device()` marks the slot kind. Handle CDC events

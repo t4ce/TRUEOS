@@ -267,6 +267,135 @@ fn take_ep0_state(ctx: &XhciContext, slot_id: u32) -> Option<TrbRingState> {
         .map(|(_, s)| *s)
 }
 
+pub async fn ensure_hub_port_enabled_via_saved_ep0(
+    ctx: &XhciContext,
+    hub_slot_id: u32,
+    hub_port: u8,
+    power_on_good_ms: u16,
+    hub_speed_code: u32,
+) -> Option<HubPortState> {
+    let state = take_ep0_state(ctx, hub_slot_id)?;
+    let mut ring = unsafe { TrbRing::from_state(state) };
+    let out = ensure_port_enabled(
+        ctx,
+        &mut ring,
+        hub_slot_id,
+        hub_port,
+        power_on_good_ms,
+        hub_speed_code,
+    )
+    .await;
+    store_ep0_state(ctx, hub_slot_id, ring.snapshot());
+    out
+}
+
+pub async fn force_hub_port_reset_via_saved_ep0(
+    ctx: &XhciContext,
+    hub_slot_id: u32,
+    hub_port: u8,
+    power_on_good_ms: u16,
+    hub_speed_code: u32,
+) -> Option<HubPortState> {
+    let Some(state) = take_ep0_state(ctx, hub_slot_id) else {
+        crate::log!(
+            "usb: hub slot {} missing ep0 ring; cannot port-reset port={}\n",
+            hub_slot_id,
+            hub_port
+        );
+        return None;
+    };
+    let mut ring = unsafe { TrbRing::from_state(state) };
+    let out = force_port_reset(
+        ctx,
+        &mut ring,
+        hub_slot_id,
+        hub_port,
+        power_on_good_ms,
+        hub_speed_code,
+    )
+    .await;
+    store_ep0_state(ctx, hub_slot_id, ring.snapshot());
+    out
+}
+
+pub async fn read_hub_port_state_via_saved_ep0(
+    ctx: &XhciContext,
+    hub_slot_id: u32,
+    hub_port: u8,
+    hub_speed_code: u32,
+) -> Option<HubPortState> {
+    let Some(state) = take_ep0_state(ctx, hub_slot_id) else {
+        crate::log!(
+            "usb: hub slot {} missing ep0 ring; cannot read port status port={}\n",
+            hub_slot_id,
+            hub_port
+        );
+        return None;
+    };
+
+    let mut ring = unsafe { TrbRing::from_state(state) };
+    let (buf_phys, buf_virt) = dma::alloc(8, 8)?;
+    let out = read_port_state(
+        ctx,
+        &mut ring,
+        hub_slot_id,
+        hub_port,
+        buf_phys,
+        buf_virt,
+        hub_speed_code,
+    )
+    .await;
+    dma::dealloc(buf_virt, 8);
+    store_ep0_state(ctx, hub_slot_id, ring.snapshot());
+    out
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct HubIdentity {
+    pub slot_id: u32,
+    pub vid: u16,
+    pub pid: u16,
+    pub protocol: u8,
+}
+
+pub fn list_hubs_with_saved_ep0(ctx: &XhciContext) -> Vec<HubIdentity, MAX_DEVICES> {
+    let controller_id = ctx.controller_id;
+    let topo = HUB_TOPOLOGIES[controller_id].lock();
+    let Some(tree) = topo.tree.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<HubIdentity, MAX_DEVICES> = Vec::new();
+
+    for (slot_id, _state) in topo.hub_ep0_rings.iter() {
+        let node_id = topo
+            .slot_node_ids
+            .iter()
+            .find(|(slot, _)| *slot == *slot_id)
+            .map(|(_, id)| *id);
+        let Some(node_id) = node_id else {
+            continue;
+        };
+        let Some(node) = tree.get(node_id) else {
+            continue;
+        };
+        if node.kind != UsbNodeKind::Device {
+            continue;
+        }
+        if node.class != USB_CLASS_HUB {
+            continue;
+        }
+        let _ = out.push(HubIdentity {
+            slot_id: *slot_id,
+            vid: node.vid,
+            pid: node.pid,
+            protocol: node.protocol,
+        });
+    }
+
+    out
+}
+
 fn store_ep0_state(ctx: &XhciContext, slot_id: u32, state: TrbRingState) {
     let controller_id = ctx.controller_id;
     let mut topo = HUB_TOPOLOGIES[controller_id].lock();
@@ -1076,6 +1205,105 @@ pub async fn ensure_port_enabled(
         }
     } else {
         crate::log!("usb: hub port {} enable give-up (no status)\n", port);
+    }
+
+    dma::dealloc(buf_virt, 8);
+    last
+}
+
+async fn force_port_reset(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    port: u8,
+    power_on_good_ms: u16,
+    hub_speed_code: u32,
+) -> Option<HubPortState> {
+    let (buf_phys, buf_virt) = dma::alloc(8, 8)?;
+
+    let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
+    let delay_ms = core::cmp::max(20, power_on_good_ms as u64);
+    Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+
+    let mut last = None;
+
+    let Some(state) =
+        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+    else {
+        dma::dealloc(buf_virt, 8);
+        return None;
+    };
+    last = Some(state);
+    if state.connected {
+        if hub_speed_code >= 4 {
+            crate::log!(
+                "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={} pls={}\n",
+                port,
+                state.status,
+                state.change,
+                state.enabled as u8,
+                ss_link_state(state.status),
+            );
+        } else {
+            crate::log!(
+                "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={}\n",
+                port,
+                state.status,
+                state.change,
+                state.enabled as u8,
+            );
+        }
+    }
+
+    if !state.connected {
+        dma::dealloc(buf_virt, 8);
+        return last;
+    }
+
+    let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
+    let mut wait = 0u32;
+    while wait < 12 {
+        Timer::after(EmbassyDuration::from_millis(20)).await;
+        wait += 1;
+        if let Some(after_reset) =
+            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        {
+            last = Some(after_reset);
+            let reset_active = (after_reset.status & (1 << 4)) != 0;
+            let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_reset.change).await;
+            let ss_pls_ok = if hub_speed_code >= 4 {
+                matches!(ss_link_state(after_reset.status), 0 | 1 | 2)
+            } else {
+                true
+            };
+
+            if after_reset.connected && after_reset.enabled && !reset_active && ss_pls_ok {
+                crate::log!(
+                    "usb: hub port {} reset ok status=0x{:04X} change=0x{:04X}\n",
+                    port,
+                    after_reset.status,
+                    after_reset.change,
+                );
+                let settle_ms = match after_reset.speed_code {
+                    1 | 2 => 50,
+                    3 => 10,
+                    _ => 250,
+                };
+                Timer::after(EmbassyDuration::from_millis(settle_ms)).await;
+                dma::dealloc(buf_virt, 8);
+                return Some(after_reset);
+            }
+        }
+    }
+
+    // If reset didn't converge, try a final PORT_ENABLE poke.
+    let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
+    Timer::after(EmbassyDuration::from_millis(20)).await;
+    if let Some(after_enable) =
+        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+    {
+        last = Some(after_enable);
+        let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change).await;
     }
 
     dma::dealloc(buf_virt, 8);

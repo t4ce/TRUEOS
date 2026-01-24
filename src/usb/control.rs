@@ -74,10 +74,14 @@ pub(crate) async fn control_in(
         d3: trb_type(4) | (1 << 5), // Status Stage, IOC, DIR=OUT
     };
 
-    if !ep0_ring.push(setup) || !ep0_ring.push(data) {
+    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
         usbv!("usb: {}: ep0 ring full\n", what);
         return Err(());
-    }
+    };
+    let Some(data_trb_phys) = ep0_ring.push_with_phys(data) else {
+        usbv!("usb: {}: ep0 ring full\n", what);
+        return Err(());
+    };
 
     let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
         usbv!("usb: {}: ep0 ring full\n", what);
@@ -97,10 +101,18 @@ pub(crate) async fn control_in(
                 return false;
             }
 
-            // Match the specific status-stage TRB we rang the doorbell for.
-            // Transfer Event TRB Pointer is 16-byte aligned; ignore low 4 bits.
+            let evt_target = (evt.d3 >> 16) & 0x1F;
+            if evt_target != 1 {
+                return false;
+            }
+
+            // On success, the controller usually reports the status-stage TRB.
+            // On error, some controllers report the TRB that faulted (setup/data).
             let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
+            let evt_ptr = evt_ptr & !0xFu64;
+            evt_ptr == (setup_trb_phys & !0xFu64)
+                || evt_ptr == (data_trb_phys & !0xFu64)
+                || evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
         EmbassyDuration::from_millis(5),
@@ -135,10 +147,12 @@ pub(crate) async fn control_out(
     what: &'static str,
     timeout_iters: usize,
 ) -> Result<(), ()> {
-    if !ep0_ring.push(setup) {
+    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
         usbv!("usb: {}: ep0 ring full (setup)\n", what);
         return Err(());
-    }
+    };
+
+    let mut data_trb_phys: Option<u64> = None;
 
     if let Some(phys) = buf_phys {
         let data = Trb {
@@ -147,10 +161,11 @@ pub(crate) async fn control_out(
             d2: length as u32,
             d3: trb_type(3),
         };
-        if !ep0_ring.push(data) {
+        let Some(data_phys) = ep0_ring.push_with_phys(data) else {
             usbv!("usb: {}: ep0 ring full (data)\n", what);
             return Err(());
-        }
+        };
+        data_trb_phys = Some(data_phys);
     }
 
     let status = Trb {
@@ -179,8 +194,22 @@ pub(crate) async fn control_out(
                 return false;
             }
 
+            let evt_target = (evt.d3 >> 16) & 0x1F;
+            if evt_target != 1 {
+                return false;
+            }
+
             let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
+            let evt_ptr = evt_ptr & !0xFu64;
+            if evt_ptr == (setup_trb_phys & !0xFu64) {
+                return true;
+            }
+            if let Some(data_phys) = data_trb_phys {
+                if evt_ptr == (data_phys & !0xFu64) {
+                    return true;
+                }
+            }
+            evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
         EmbassyDuration::from_millis(5),
@@ -210,10 +239,12 @@ pub(crate) async fn control_out_cc(
     what: &'static str,
     timeout_iters: usize,
 ) -> Result<u32, ()> {
-    if !ep0_ring.push(setup) {
+    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
         usbv!("usb: {}: ep0 ring full (setup)\n", what);
         return Err(());
-    }
+    };
+
+    let mut data_trb_phys: Option<u64> = None;
 
     if let Some(phys) = buf_phys {
         let data = Trb {
@@ -222,10 +253,11 @@ pub(crate) async fn control_out_cc(
             d2: length as u32,
             d3: trb_type(3),
         };
-        if !ep0_ring.push(data) {
+        let Some(data_phys) = ep0_ring.push_with_phys(data) else {
             usbv!("usb: {}: ep0 ring full (data)\n", what);
             return Err(());
-        }
+        };
+        data_trb_phys = Some(data_phys);
     }
 
     let status = Trb {
@@ -254,8 +286,22 @@ pub(crate) async fn control_out_cc(
                 return false;
             }
 
+            let evt_target = (evt.d3 >> 16) & 0x1F;
+            if evt_target != 1 {
+                return false;
+            }
+
             let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
+            let evt_ptr = evt_ptr & !0xFu64;
+            if evt_ptr == (setup_trb_phys & !0xFu64) {
+                return true;
+            }
+            if let Some(data_phys) = data_trb_phys {
+                if evt_ptr == (data_phys & !0xFu64) {
+                    return true;
+                }
+            }
+            evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
         EmbassyDuration::from_millis(5),
