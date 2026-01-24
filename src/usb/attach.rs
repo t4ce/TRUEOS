@@ -73,6 +73,7 @@ pub(crate) async fn try_attach_device(
             slot_id,
             cfg: cfg_slice,
             target_port,
+            dev_prot,
         })
         .await
         {
@@ -115,7 +116,7 @@ pub(crate) async fn try_attach_device(
 
             // High-signal: confirm the hub bit / ports / think-time are actually
             // present in the hub's *output* Slot Context before enumerating children.
-            if super::USB_LOG_VERBOSE {
+            if super::USB_LOG_VERBOSE || dev_prot == 3 {
                 unsafe {
                     let slot_ctx = dev_ctx_virt as *const u32;
                     let dw0 = core::ptr::read_volatile(slot_ctx.add(0));

@@ -233,6 +233,50 @@ fn is_superspeed(speed_code: u32) -> bool {
     speed_code == 4 || speed_code == 5
 }
 
+async fn set_address_with_retries(
+    ctx: &super::xhci::XhciContext,
+    ep0_ring: &mut super::xhci::TrbRing,
+    slot_id: u32,
+    tries: u8,
+) -> Result<(), ()> {
+    let mut attempt = 0u8;
+    while attempt < tries {
+        attempt += 1;
+        let cc = match control::control_out_cc(
+            ctx,
+            ep0_ring,
+            slot_id,
+            control::setup_set_address(slot_id as u8),
+            None,
+            0,
+            "set-address",
+            800,
+        )
+        .await
+        {
+            Ok(cc) => cc,
+            Err(()) => {
+                crate::log!("usb: set-address attempt {} timeout/err slot={}\n", attempt, slot_id);
+                Timer::after(EmbassyDuration::from_millis(30)).await;
+                continue;
+            }
+        };
+
+        if cc == 1 {
+            return Ok(());
+        }
+
+        crate::log!(
+            "usb: set-address attempt {} failed cc={} slot={}\n",
+            attempt,
+            cc,
+            slot_id
+        );
+        Timer::after(EmbassyDuration::from_millis(20)).await;
+    }
+    Err(())
+}
+
 fn slot_ctx_dw0(route_string: u32, speed_code: u32) -> u32 {
     // xHCI Slot Context DW0
     // - Route String: hub topology routing (20-bit route string). For devices
@@ -271,7 +315,8 @@ fn hub_child_settle_delay_ms(speed_code: u32) -> u64 {
     match speed_code {
         1 | 2 => 50,
         3 => 10,
-        _ => 20,
+        // SS hub children are often timing-sensitive; be conservative here.
+        _ => 80,
     }
 }
 
@@ -428,10 +473,11 @@ pub(crate) async fn enumerate_with_params(
         Timer::after(EmbassyDuration::from_millis(hub_child_settle_delay_ms(speed_code))).await;
     }
 
-    // High-signal experiment: keep Address Device semantics identical for root
-    // and hub-child devices by not using BSR.
-    let use_bsr = false;
-    let addr_evt = match submit_cmd_and_wait(
+    // Default path: Address Device with BSR=0 (xHC issues SET_ADDRESS).
+    // Some SS hub-child paths are timing-sensitive; if we get a USB transaction
+    // error (cc=4), fall back to BSR=1 + manual SET_ADDRESS.
+    let mut use_bsr = false;
+    let mut addr_evt = match submit_cmd_and_wait(
         &ctx,
         &mut state.cmd_ring,
         Trb {
@@ -468,6 +514,167 @@ pub(crate) async fn enumerate_with_params(
     };
 
     if control::trb_cc(&addr_evt) != 1 {
+        let cc = control::trb_cc(&addr_evt);
+        let is_ss_hub_child_cc4 = tree_parent.is_some() && is_superspeed(speed_code) && cc == 4;
+
+        if is_ss_hub_child_cc4 {
+            if let Some((hub_slot, hub_port)) = tree_parent {
+                crate::log!(
+                    "usb: hub child address-device cc=4; retrying (BSR=0) hub_slot={} port={} slot={}\n",
+                    hub_slot,
+                    hub_port,
+                    slot_id
+                );
+                crate::log!(
+                    "usb: hub child addr-dev cc=4 ctx slot_dw0=0x{:08X} slot_dw1=0x{:08X} slot_dw2=0x{:08X} ep0_dw0=0x{:08X} ep0_dw1=0x{:08X}\n",
+                    slot_dw0,
+                    slot_dw1,
+                    slot_dw2,
+                    ep0_dw0,
+                    ep0_dw1,
+                );
+            }
+
+            // First try a few conservative BSR=0 retries with backoff.
+            let mut backoff_ms = 120u64;
+            for attempt in 1..=3u8 {
+                Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
+                backoff_ms = core::cmp::min(backoff_ms + 120, 600);
+
+                match submit_cmd_and_wait(
+                    &ctx,
+                    &mut state.cmd_ring,
+                    Trb {
+                        d0: lo(input_ctx_phys),
+                        d1: hi(input_ctx_phys),
+                        d2: 0,
+                        d3: trb_type(11) | (slot_id << 24),
+                    },
+                    Some(slot_id),
+                    "address-device-retry",
+                    2500,
+                    EmbassyDuration::from_millis(5),
+                )
+                .await
+                {
+                    Ok(evt) => {
+                        let retry_cc = control::trb_cc(&evt);
+                        addr_evt = evt;
+                        if retry_cc == 1 {
+                            break;
+                        }
+                        if let Some((hub_slot, hub_port)) = tree_parent {
+                            crate::log!(
+                                "usb: hub child address-device retry {} cc={} hub_slot={} port={} slot={}\n",
+                                attempt,
+                                retry_cc,
+                                hub_slot,
+                                hub_port,
+                                slot_id
+                            );
+                        }
+                    }
+                    Err(()) => {
+                        if let Some((hub_slot, hub_port)) = tree_parent {
+                            crate::log!(
+                                "usb: hub child address-device retry {} timed out hub_slot={} port={} slot={}\n",
+                                attempt,
+                                hub_slot,
+                                hub_port,
+                                slot_id
+                            );
+                        }
+                    }
+                }
+
+                if control::trb_cc(&addr_evt) == 1 {
+                    break;
+                }
+            }
+
+            // If retries still aren't good, fall back to BSR=1 + manual SET_ADDRESS.
+            if control::trb_cc(&addr_evt) != 1 {
+                if let Some((hub_slot, hub_port)) = tree_parent {
+                    crate::log!(
+                        "usb: hub child address-device still failing; trying BSR=1 hub_slot={} port={} slot={}\n",
+                        hub_slot,
+                        hub_port,
+                        slot_id
+                    );
+                }
+
+                Timer::after(EmbassyDuration::from_millis(120)).await;
+                use_bsr = true;
+                match submit_cmd_and_wait(
+                    &ctx,
+                    &mut state.cmd_ring,
+                    Trb {
+                        d0: lo(input_ctx_phys),
+                        d1: hi(input_ctx_phys),
+                        d2: 0,
+                        d3: trb_type(11) | (1 << 9) | (slot_id << 24),
+                    },
+                    Some(slot_id),
+                    "address-device-bsr",
+                    2500,
+                    EmbassyDuration::from_millis(5),
+                )
+                .await
+                {
+                    Ok(evt) => {
+                        addr_evt = evt;
+                        if control::trb_cc(&addr_evt) == 1 {
+                            if set_address_with_retries(&ctx, &mut ep0_ring, slot_id, 3)
+                                .await
+                                .is_err()
+                            {
+                                if let Some((hub_slot, hub_port)) = tree_parent {
+                                    crate::log!(
+                                        "usb: hub child set-address failed after BSR hub_slot={} port={} slot={}\n",
+                                        hub_slot,
+                                        hub_port,
+                                        slot_id
+                                    );
+                                }
+                                disable_slot_and_free(
+                                    state,
+                                    slot_id,
+                                    dev_ctx_virt,
+                                    input_ctx_virt,
+                                    ep0_virt_raw,
+                                    ep0_bytes,
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                    Err(()) => {
+                        if let Some((hub_slot, hub_port)) = tree_parent {
+                            crate::log!(
+                                "usb: hub child address-device BSR retry timed out hub_slot={} port={} slot={}\n",
+                                hub_slot,
+                                hub_port,
+                                slot_id
+                            );
+                        }
+                        disable_slot_and_free(
+                            state,
+                            slot_id,
+                            dev_ctx_virt,
+                            input_ctx_virt,
+                            ep0_virt_raw,
+                            ep0_bytes,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    if control::trb_cc(&addr_evt) != 1 {
         usbv!(
             "usb: enum port {} address-device cc={} slot={}\n",
             target_port,
@@ -500,30 +707,8 @@ pub(crate) async fn enumerate_with_params(
     }
 
     if use_bsr {
-        if control::control_out(
-            &ctx,
-            &mut ep0_ring,
-            slot_id,
-            control::setup_set_address(slot_id as u8),
-            None,
-            0,
-            "set-address",
-            800,
-        )
-        .await
-        .is_err()
-        {
-            if let Some((hub_slot, hub_port)) = tree_parent {
-                crate::log!(
-                    "usb: hub child set-address failed hub_slot={} port={} slot={}\n",
-                    hub_slot,
-                    hub_port,
-                    slot_id
-                );
-            }
-            disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
-            return;
-        }
+        // If we got here, we already issued SET_ADDRESS in the fallback path.
+        // Keep this as a no-op for now.
     }
 
     if let Some((hub_slot, hub_port)) = tree_parent {
