@@ -51,7 +51,7 @@ mod vga;
 mod x2apic;
 
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-use crate::usb::usb_scout;
+use crate::usb::usb_scout_service;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use ::limine::mp::Cpu as LimineCpu;
 use core::panic::PanicInfo;
@@ -251,9 +251,8 @@ pub extern "C" fn _start() -> ! {
         // reads from our dma buffs into usb rings
         let _ = spawner.spawn(usb::poll_task(info));
 
-        // Enumerate USB devices once. Re-running this while poll tasks are active
-        // reprograms the controller and can disrupt in-flight transfers.
-        let _ = spawner.spawn(usb_scout(info));
+        // Single long-lived scout per controller. Rescans are triggered via a flag.
+        let _ = spawner.spawn(usb_scout_service(info));
     }
 
     let _ = spawner.spawn(usb::hid::input_logger());
@@ -368,12 +367,8 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
             vga::cube::tick();
         }
 
-        // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
         if counter % 10_000_000 == 0 {
             globalog::debugcon_write_byte_raw(b'0');
-            for info in usb::xhci::xhc_list().iter().copied() {
-                let _ = spawner.spawn(usb_scout(info));
-            }
         }
 
         counter = counter.wrapping_add(1);
