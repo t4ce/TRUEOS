@@ -35,8 +35,44 @@ pub enum MapError {
 /// 1) Translate the address into a physical address via Limine metadata.
 /// 2) Explicitly map the physical range before dereferencing.
 pub fn map_limine_addr_exact(addr: u64, size: usize) -> Result<NonNull<u8>, MapError> {
+    if size == 0 {
+        return Err(MapError::InvalidArgs);
+    }
     let phys = limine::try_as_phys_addr(addr).ok_or(MapError::NotPhysical)?;
     map_mmio_region_exact(phys, size)
+}
+
+pub fn map_limine_struct<T>(addr: u64) -> Result<NonNull<T>, MapError> {
+    let size = core::mem::size_of::<T>();
+    if size == 0 {
+        return Err(MapError::InvalidArgs);
+    }
+    let align = core::mem::align_of::<T>();
+    if align != 0 && (addr as usize) % align != 0 {
+        return Err(MapError::InvalidArgs);
+    }
+    let mapped = map_limine_addr_exact(addr, size)?;
+    NonNull::new(mapped.as_ptr() as *mut T).ok_or(MapError::InvalidPointer)
+}
+
+pub fn map_limine_slice<T>(addr: u64, count: usize) -> Result<(NonNull<T>, usize), MapError> {
+    if count == 0 {
+        return Err(MapError::InvalidArgs);
+    }
+    let elem_size = core::mem::size_of::<T>();
+    if elem_size == 0 {
+        return Err(MapError::InvalidArgs);
+    }
+    let align = core::mem::align_of::<T>();
+    if align != 0 && (addr as usize) % align != 0 {
+        return Err(MapError::InvalidArgs);
+    }
+    let byte_len = elem_size
+        .checked_mul(count)
+        .ok_or(MapError::InvalidArgs)?;
+    let mapped = map_limine_addr_exact(addr, byte_len)?;
+    let ptr = NonNull::new(mapped.as_ptr() as *mut T).ok_or(MapError::InvalidPointer)?;
+    Ok((ptr, count))
 }
 
 pub fn map_mmio_region(phys_base: u64, size: usize) -> Result<NonNull<u8>, MapError> {
