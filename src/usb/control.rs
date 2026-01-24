@@ -200,6 +200,75 @@ pub(crate) async fn control_out(
     }
 }
 
+pub(crate) async fn control_out_cc(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    setup: Trb,
+    buf_phys: Option<u64>,
+    length: u16,
+    what: &'static str,
+    timeout_iters: usize,
+) -> Result<u32, ()> {
+    if !ep0_ring.push(setup) {
+        usbv!("usb: {}: ep0 ring full (setup)\n", what);
+        return Err(());
+    }
+
+    if let Some(phys) = buf_phys {
+        let data = Trb {
+            d0: lo(phys),
+            d1: hi(phys),
+            d2: length as u32,
+            d3: trb_type(3),
+        };
+        if !ep0_ring.push(data) {
+            usbv!("usb: {}: ep0 ring full (data)\n", what);
+            return Err(());
+        }
+    }
+
+    let status = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
+    };
+
+    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
+        usbv!("usb: {}: ep0 ring full (status)\n", what);
+        return Err(());
+    };
+
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+
+    let evt = xhci::wait_for_event(
+        ctx,
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            if evt_slot != slot_id {
+                return false;
+            }
+
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            (evt_ptr & !0xFu64) == (status_trb_phys & !0xFu64)
+        },
+        timeout_iters,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    .ok_or(())
+    .map_err(|_| {
+        usbv!("usb: {}: timeout waiting for transfer event\n", what);
+    })?;
+
+    Ok(trb_cc(&evt))
+}
+
 async fn fetch_first_langid(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,

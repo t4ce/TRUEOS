@@ -369,7 +369,7 @@ fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
         }
 
         // Periodic rescan for hotplug. Safe because `usb_scout` is now init-once + rescan.
-        if counter % 100_000_000 == 0 {
+        if counter % 10_000_000 == 0 {
             globalog::debugcon_write_byte_raw(b'0');
             for info in usb::xhci::xhc_list().iter().copied() {
                 let _ = spawner.spawn(usb_scout(info));
@@ -401,7 +401,7 @@ fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
+            //globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
