@@ -239,6 +239,8 @@ pub extern "C" fn _start() -> ! {
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
+    time::init(spawner);
+
     net::init();
     let _ = spawner.spawn(net::adapter::net_service_task());
 
