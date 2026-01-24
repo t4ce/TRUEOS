@@ -45,10 +45,11 @@ mod surface;
 mod tga;
 mod time;
 mod turbo;
-mod uefi;
+mod efi;
 mod usb;
 mod vga;
 mod x2apic;
+
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::usb::usb_scout;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
@@ -197,7 +198,7 @@ pub extern "C" fn _start() -> ! {
     pattern::smoke_test();
     
     // If booted via UEFI, parse+log the EFI System Table once.
-    uefi::log_system_table_once(); // its crashreboots on our baremetal testrig
+    efi::log_system_table_once(); // its crashreboots on our baremetal testrig
 
     crate::log!(
         "turbo: {:?}\n", turbo::local_state()
@@ -215,7 +216,7 @@ pub extern "C" fn _start() -> ! {
     acpi::tpm2::log_once();
     acpi::dmar::log_once();
     acpi::fpdt::log_once();
-    acpi::uefi_tbl::log_once();
+    efi::tbl::log_once();
     acpi::ssdt::log_once();
     acpi::bgrt::log_once();
     acpi::hpet::ensure();
