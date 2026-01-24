@@ -1,9 +1,10 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use core::task::Waker;
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use embassy_executor::raw::Executor as RawExecutor;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_time_driver::{Driver, TICK_HZ};
@@ -26,7 +27,7 @@ static TSC_HZ: AtomicU64 = AtomicU64::new(0);
 static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
-static TIMER_SPAWNER: Mutex<Option<Spawner>> = Mutex::new(None);
+static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
 static NEXT_TIMER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct TimerEntry {
@@ -37,10 +38,17 @@ struct TimerEntry {
 static TIMERS: Mutex<Vec<TimerEntry, MAX_TIMERS>> = Mutex::new(Vec::new());
 
 #[inline]
-pub fn init(spawner: Spawner) {
-    let mut guard = TIMER_SPAWNER.lock();
-    if guard.is_none() {
-        *guard = Some(spawner);
+pub fn init(executor: &'static RawExecutor) {
+    EXECUTOR_PTR.store(executor as *const _ as *mut RawExecutor, Ordering::Release);
+}
+
+#[inline]
+fn get_spawner() -> Option<Spawner> {
+    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { (&*ptr).spawner() })
     }
 }
 
@@ -133,9 +141,8 @@ pub fn setTimeout<F>(delay_ms: u64, callback: F) -> TimerId
 where
     F: FnMut() + Send + 'static,
 {
-    let spawner = match *TIMER_SPAWNER.lock() {
-        Some(spawner) => spawner,
-        None => return INVALID_TIMER_ID,
+    let Some(spawner) = get_spawner() else {
+        return INVALID_TIMER_ID;
     };
 
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -161,9 +168,8 @@ pub fn setInterval<F>(period_ms: u64, callback: F) -> TimerId
 where
     F: FnMut() + Send + 'static,
 {
-    let spawner = match *TIMER_SPAWNER.lock() {
-        Some(spawner) => spawner,
-        None => return INVALID_TIMER_ID,
+    let Some(spawner) = get_spawner() else {
+        return INVALID_TIMER_ID;
     };
 
     let cancelled = Arc::new(AtomicBool::new(false));
