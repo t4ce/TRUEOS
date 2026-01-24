@@ -17,7 +17,7 @@ A constant influx of resources, money, and safety.
 
 #![no_std]
 #![no_main]
-#![feature(alloc_error_handler, f16, f128)]
+#![feature(abi_x86_interrupt, alloc_error_handler, f16, f128)]
 
 pub extern crate alloc;
 
@@ -26,6 +26,7 @@ mod allocators;
 mod audio;
 mod backtrace;
 mod disc;
+mod exceptions;
 mod limine;
 mod limstats;
 mod net;
@@ -37,6 +38,7 @@ mod rng;
 mod serial;
 mod power;
 mod globalog;
+mod quickjs_shims;
 mod shell;
 mod shellcube;
 mod ecma48;
@@ -58,6 +60,7 @@ use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use embassy_executor::{raw::Executor, Spawner};
+use quickjs_sys as qjs;
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
@@ -156,6 +159,17 @@ fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) 
 
 #[link_section = ".bss"]
 static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] = [0; MANDELBROT_W * MANDELBROT_H];
+
+// Bootloader-provided stacks can be very small; debug builds can need a lot more
+// stack than expected very early (before heap/logging is fully online).
+// Provide a known-good BSP stack and switch to it immediately in `_start`.
+const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+#[repr(align(16))]
+struct BootStack([u8; BSP_BOOT_STACK_BYTES]);
+
+#[link_section = ".bss"]
+static mut BSP_BOOT_STACK: BootStack = BootStack([0; BSP_BOOT_STACK_BYTES]);
 /*
 ConPink 	FF_55_FF 
 ConBlue 	08_18_30
@@ -163,8 +177,27 @@ ConWhite 	FF_FF_FF
 */
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+#[unsafe(naked)]
+pub unsafe extern "C" fn _start() -> ! {
+    core::arch::naked_asm!(
+        "lea rsp, [rip + {stack} + {stack_size}]",
+        // 16-byte align RSP for SysV ABI.
+        "and rsp, -16",
+        // Use `call` (not `jmp`) so the callee sees the expected stack
+        // alignment (RSP % 16 == 8 at function entry). Some Rust/C code
+        // assumes this and will fault on unaligned `movaps` spills.
+        "call {kmain}",
+        "ud2",
+        stack = sym BSP_BOOT_STACK,
+        stack_size = const BSP_BOOT_STACK_BYTES,
+        kmain = sym kmain,
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn kmain() -> ! {
     unsafe {enable_sse();}
+    exceptions::init();
 
     vga::init(limine::framebuffer_response());
 
@@ -239,7 +272,9 @@ pub extern "C" fn _start() -> ! {
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
-    time::init(spawner);
+    time::init(executor);
+
+    quickjs_smoke_test();
 
     net::init();
     let _ = spawner.spawn(net::adapter::net_service_task());
@@ -283,6 +318,25 @@ pub extern "C" fn _start() -> ! {
     crate::log!("main: entering executor loop\n");
 
     _loop(executor, spawner)
+}
+
+fn quickjs_smoke_test() {
+    unsafe {
+        let rt = qjs::JS_NewRuntime();
+        if rt.is_null() {
+            crate::log!("quickjs: JS_NewRuntime failed\n");
+            return;
+        }
+        let ctx = qjs::JS_NewContext(rt);
+        if ctx.is_null() {
+            crate::log!("quickjs: JS_NewContext failed\n");
+            qjs::JS_FreeRuntime(rt);
+            return;
+        }
+        crate::log!("quickjs: runtime/context ok\n");
+        qjs::JS_FreeContext(ctx);
+        qjs::JS_FreeRuntime(rt);
+    }
 }
 
 fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
