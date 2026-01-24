@@ -284,6 +284,7 @@ pub struct AttachParams<'a> {
     pub slot_id: u32,
     pub cfg: &'a [u8],
     pub target_port: u8,
+    pub dev_prot: u8,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -342,6 +343,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<HubDescriptorInfo
         slot_id,
         cfg,
         target_port,
+        dev_prot,
     } = params;
 
     let config_value = parse_first_config_value(cfg).unwrap_or(1);
@@ -371,7 +373,10 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<HubDescriptorInfo
         Timer::after(EmbassyDuration::from_millis(HUB_CONFIG_SETTLE_MS)).await;
     }
 
-    let Some(desc) = read_hub_descriptor(ctx, ep0_ring, slot_id).await else {
+    // For USB3 hubs (bDeviceProtocol=3), ask for the SuperSpeed Hub Descriptor first.
+    // Many SS hubs will STALL if we probe the USB2 hub descriptor type (0x29) first.
+    let prefer_ss = dev_prot == 3;
+    let Some(desc) = read_hub_descriptor(ctx, ep0_ring, slot_id, prefer_ss).await else {
         crate::log!(
             "usb: hub claimed slot={} port={} (hub descriptor read failed)\n",
             slot_id,
@@ -743,52 +748,79 @@ pub struct HubPortState {
     pub speed_code: u32,
 }
 
+fn ss_link_state(status: u16) -> u8 {
+    ((status >> 5) & 0xF) as u8
+}
+
 async fn read_hub_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
+    prefer_ss: bool,
 ) -> Option<HubDescriptorInfo> {
+    // TODO(usb): ~86% accuracy / robustness note
+    // Strategy: for USB3 hubs (bDeviceProtocol==3) we probe the SS hub descriptor first
+    // (type 0x2A, 12 bytes) and fall back to the USB2 hub descriptor (0x29, 9 bytes).
+    // Reason: many SS hubs will STALL if we probe 0x29 first; without EP0 STALL recovery
+    // (CLEAR_FEATURE(ENDPOINT_HALT) on EP0, then retry), a single wrong-first probe can
+    // poison the subsequent control transfers and cause repeated re-enumeration.
     let (buf_phys, buf_virt) = dma::alloc(64, 64)?;
     unsafe { core::ptr::write_bytes(buf_virt, 0, 64) };
 
-    let mut desc_type = 0x29u8;
-    let mut res = super::control_in(
-        ctx,
-        ep0_ring,
-        slot_id,
-        setup_get_hub_descriptor(desc_type, 9),
-        buf_phys,
-        9,
-        "hub-desc",
-        800,
-    )
-    .await;
+    // USB2 hub descriptor (HUB): 0x29, SS hub descriptor (SS_HUB): 0x2A.
+    // SS hub descriptors have a larger fixed header (12 bytes) and some hubs are
+    // picky about the requested length.
+    let tries: &[(u8, u16)] = if prefer_ss {
+        &[(0x2A, 12), (0x29, 9)]
+    } else {
+        &[(0x29, 9), (0x2A, 12)]
+    };
 
-    if res.is_err() {
-        desc_type = 0x2Au8;
-        res = super::control_in(
+    let mut used_type: u8 = tries[0].0;
+    let mut transferred: u16 = 0;
+    let mut ok = false;
+    for (ty, len) in tries.iter().copied() {
+        used_type = ty;
+        transferred = 0;
+        if let Ok((_cc, xfer)) = super::control_in(
             ctx,
             ep0_ring,
             slot_id,
-            setup_get_hub_descriptor(desc_type, 9),
+            setup_get_hub_descriptor(ty, len),
             buf_phys,
-            9,
+            len,
             "hub-desc",
             800,
         )
-        .await;
+        .await
+        {
+            transferred = xfer;
+            ok = true;
+            break;
+        }
+
+        // If the first probe STALLs on some devices, the safest fix is to avoid
+        // probing the wrong descriptor first (handled by `prefer_ss`). If we still
+        // fail here, we fall through and report failure.
     }
 
-    let info = if res.is_ok() {
+    let info = if ok {
         unsafe {
-            let b = core::slice::from_raw_parts(buf_virt, 9);
+            let want = (transferred as usize).min(64);
+            let b = core::slice::from_raw_parts(buf_virt, want);
             if b.len() >= 3 {
+                // Prefer what the device actually returned.
+                let desc_type = if b.len() >= 2 { b[1] } else { used_type };
                 let w_hub_chars = if b.len() >= 5 {
                     u16::from_le_bytes([b[3], b[4]])
                 } else {
                     0
                 };
-                let tt_think_time = ((w_hub_chars >> 5) & 0x3) as u8;
+                let tt_think_time = if desc_type == 0x2A {
+                    0
+                } else {
+                    ((w_hub_chars >> 5) & 0x3) as u8
+                };
                 let raw_delay = if b.len() >= 6 { b[5] } else { 0 };
                 let mut power_on_good_ms = (raw_delay as u16) * 2;
                 if power_on_good_ms == 0 {
@@ -818,6 +850,7 @@ pub async fn scan_ports(
     slot_id: u32,
     port_count: u8,
     power_on_good_ms: u16,
+    hub_speed_code: u32,
 ) -> Vec<HubPortState, 32> {
     let mut out: Vec<HubPortState, 32> = Vec::new();
     let (buf_phys, buf_virt) = match dma::alloc(8, 8) {
@@ -837,7 +870,10 @@ pub async fn scan_ports(
         let mut state_opt = None;
         while attempt < 3 {
             attempt += 1;
-            if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+            if let Some(state) =
+                read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code)
+                    .await
+            {
                 state_opt = Some(state);
                 break;
             }
@@ -870,6 +906,7 @@ pub async fn ensure_port_enabled(
     slot_id: u32,
     port: u8,
     power_on_good_ms: u16,
+    hub_speed_code: u32,
 ) -> Option<HubPortState> {
     let (buf_phys, buf_virt) = dma::alloc(8, 8)?;
 
@@ -882,15 +919,30 @@ pub async fn ensure_port_enabled(
     while attempts < 4 {
         attempts += 1;
 
-        if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+        if let Some(state) =
+            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        {
+            let saw_connect_change = (state.change & 0x0001) != 0;
+            let need_reset = state.connected && (!state.enabled || saw_connect_change);
             if state.connected {
-                crate::log!(
-                    "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={}\n",
-                    port,
-                    state.status,
-                    state.change,
-                    state.enabled as u8,
-                );
+                if hub_speed_code >= 4 {
+                    crate::log!(
+                        "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={} pls={}\n",
+                        port,
+                        state.status,
+                        state.change,
+                        state.enabled as u8,
+                        ss_link_state(state.status),
+                    );
+                } else {
+                    crate::log!(
+                        "usb: hub port {} pre status=0x{:04X} change=0x{:04X} ped={}\n",
+                        port,
+                        state.status,
+                        state.change,
+                        state.enabled as u8,
+                    );
+                }
             }
 
             if (state.status & (1 << 8)) == 0 {
@@ -898,18 +950,39 @@ pub async fn ensure_port_enabled(
                 Timer::after(EmbassyDuration::from_millis(20)).await;
             }
 
-            let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, state.change).await;
-
-            if state.connected && !state.enabled {
+            // Some hubs will report PED=1 immediately after a connect change.
+            // Still force a reset on connect-change so the downstream device
+            // reliably enters Default state before we issue Address Device.
+            // Also, perform the reset before clearing change bits; some hubs
+            // appear sensitive to the ordering here.
+            if need_reset {
                 let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
                 let mut wait = 0u32;
                 while wait < 12 {
                     Timer::after(EmbassyDuration::from_millis(20)).await;
                     wait += 1;
-                    if let Some(after_reset) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+                    if let Some(after_reset) = read_port_state(
+                        ctx,
+                        ep0_ring,
+                        slot_id,
+                        port,
+                        buf_phys,
+                        buf_virt,
+                        hub_speed_code,
+                    )
+                    .await
+                    {
                         let reset_active = (after_reset.status & (1 << 4)) != 0;
                         let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_reset.change).await;
-                        if after_reset.connected && after_reset.enabled && !reset_active {
+                        let ss_pls_ok = if hub_speed_code >= 4 {
+                            // For SS hubs, wait until the link settles into a normal state.
+                            // U0/U1/U2 are fine; transient states (Polling/Recovery/Hot Reset) are not.
+                            matches!(ss_link_state(after_reset.status), 0 | 1 | 2)
+                        } else {
+                            true
+                        };
+
+                        if after_reset.connected && after_reset.enabled && !reset_active && ss_pls_ok {
                             crate::log!(
                                 "usb: hub port {} reset ok status=0x{:04X} change=0x{:04X}\n",
                                 port,
@@ -919,7 +992,7 @@ pub async fn ensure_port_enabled(
                             let settle_ms = match after_reset.speed_code {
                                 1 | 2 => 50,
                                 3 => 10,
-                                _ => 20,
+                                _ => 80,
                             };
                             Timer::after(EmbassyDuration::from_millis(settle_ms)).await;
                             last = Some(after_reset);
@@ -935,14 +1008,35 @@ pub async fn ensure_port_enabled(
 
                 let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
                 Timer::after(EmbassyDuration::from_millis(20)).await;
-                if let Some(after_enable) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
-                    crate::log!(
-                        "usb: hub port {} enable status=0x{:04X} change=0x{:04X} ped={}\n",
-                        port,
-                        after_enable.status,
-                        after_enable.change,
-                        after_enable.enabled as u8,
-                    );
+                if let Some(after_enable) = read_port_state(
+                    ctx,
+                    ep0_ring,
+                    slot_id,
+                    port,
+                    buf_phys,
+                    buf_virt,
+                    hub_speed_code,
+                )
+                .await
+                {
+                    if hub_speed_code >= 4 {
+                        crate::log!(
+                            "usb: hub port {} enable status=0x{:04X} change=0x{:04X} ped={} pls={}\n",
+                            port,
+                            after_enable.status,
+                            after_enable.change,
+                            after_enable.enabled as u8,
+                            ss_link_state(after_enable.status),
+                        );
+                    } else {
+                        crate::log!(
+                            "usb: hub port {} enable status=0x{:04X} change=0x{:04X} ped={}\n",
+                            port,
+                            after_enable.status,
+                            after_enable.change,
+                            after_enable.enabled as u8,
+                        );
+                    }
                     let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change).await;
                     if after_enable.connected && after_enable.enabled {
                         last = Some(after_enable);
@@ -950,9 +1044,13 @@ pub async fn ensure_port_enabled(
                     }
                 }
             }
+
+            let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, state.change).await;
         }
 
-        if let Some(state) = read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt).await {
+        if let Some(state) =
+            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        {
             last = Some(state);
             if state.connected && state.enabled {
                 break;
@@ -1006,7 +1104,9 @@ pub async fn collect_children(
     };
     let mut ep0_ring = unsafe { TrbRing::from_state(ep0_state) };
 
-    let ports = scan_ports(ctx, &mut ep0_ring, hub_slot_id, port_count, power_on_good_ms).await;
+    let ports =
+        scan_ports(ctx, &mut ep0_ring, hub_slot_id, port_count, power_on_good_ms, hub_speed_code)
+            .await;
     for port_state in ports.iter() {
         crate::log!(
             "usb: hub child scan slot={} port={} status=0x{:04X} change=0x{:04X} ccs={} ped={} speed_code={}\n",
@@ -1028,6 +1128,7 @@ pub async fn collect_children(
             hub_slot_id,
             port_state.port,
             power_on_good_ms,
+            hub_speed_code,
         )
         .await
         else {
@@ -1164,6 +1265,7 @@ async fn read_port_state(
     port: u8,
     buf_phys: u64,
     buf_virt: *mut u8,
+    hub_speed_code: u32,
 ) -> Option<HubPortState> {
     let mut attempt = 0u8;
     while attempt < 3 {
@@ -1201,9 +1303,17 @@ async fn read_port_state(
 
     let connected = (status & (1 << 0)) != 0;
     let enabled = (status & (1 << 1)) != 0;
-    let low = (status & (1 << 9)) != 0;
-    let high = (status & (1 << 10)) != 0;
-    let speed_code = if high { 3 } else if low { 2 } else { 1 };
+
+    // USB2 hub port status encodes LS/HS in bits 9/10. USB3 hub port status uses
+    // different semantics; those bits are not reliable there. If this hub is SS
+    // (xHCI speed ID 4/5), treat downstream devices as SS.
+    let speed_code = if hub_speed_code >= 4 {
+        hub_speed_code
+    } else {
+        let low = (status & (1 << 9)) != 0;
+        let high = (status & (1 << 10)) != 0;
+        if high { 3 } else if low { 2 } else { 1 }
+    };
 
     Some(HubPortState {
         port,
