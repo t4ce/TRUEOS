@@ -30,6 +30,29 @@ pub enum UsbFsWriteError {
     TooLarge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsError {
+    Read(UsbFsReadError),
+    Write(UsbFsWriteError),
+}
+
+/// Minimal filesystem binding backed by the USBMS FAT volume.
+///
+/// Intended to map to higher-level APIs like `fs.readFile()` / `fs.writeFile()`.
+pub struct Fs;
+
+impl Fs {
+    #[inline]
+    pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, FsError> {
+        read_usbms_file(path).map_err(FsError::Read)
+    }
+
+    #[inline]
+    pub fn write_file(path: &str, data: &[u8]) -> Result<(), FsError> {
+        write_usbms_file(path, data).map_err(FsError::Write)
+    }
+}
+
 const MAX_READ_BYTES: usize = 256 * 1024;
 const MAX_WRITE_BYTES: usize = 256 * 1024;
 

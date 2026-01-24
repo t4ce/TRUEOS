@@ -39,6 +39,10 @@ fn main() {
         .flag("-ffreestanding")
         .flag("-fno-builtin")
         .flag("-fno-stack-protector")
+        .flag("-fno-pic")
+        .flag("-mno-red-zone")
+        .flag("-msse2")
+        .flag("-mcmodel=kernel")
         .define("CONFIG_VERSION", Some("\"TRUEOS\""))
         .compile("quickjs");
 }
