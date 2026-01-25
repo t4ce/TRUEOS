@@ -51,6 +51,11 @@ fn main() {
         .flag("-fno-builtin")
         .flag("-fno-stack-protector")
         .flag("-fno-pic")
+        // Release builds often enable glibc "fortify" wrappers (snprintf -> __snprintf_chk)
+        // when optimization is on. In a freestanding kernel link, those symbols don't exist.
+        .flag("-U_FORTIFY_SOURCE")
+        .define("_FORTIFY_SOURCE", Some("0"))
+        .define("__NO_FORTIFY", Some("1"))
         .flag("-mno-red-zone")
         .flag("-msse2")
         .flag("-mcmodel=kernel")
