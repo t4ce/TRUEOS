@@ -758,3 +758,47 @@ pub fn blit_image(origin_x: usize, origin_y: usize, image: &Image<'_>) -> bool {
     })
     .unwrap_or(false)
 }
+
+static RENDER_MANDELBROT_ONCE: Once<()> = Once::new();
+
+const MANDELBROT_W: usize = 256;
+const MANDELBROT_H: usize = 256;
+
+#[link_section = ".bss"]
+static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] =
+    [0; MANDELBROT_W * MANDELBROT_H];
+
+pub(crate) fn draw_mandelbrot() {
+    let Some((fb_w, fb_h)) = framebuffer_dimensions() else {
+        return;
+    };
+
+    let fb_w = fb_w as usize;
+    let fb_h = fb_h as usize;
+    let w = MANDELBROT_W;
+    let h = MANDELBROT_H;
+    let expected = w * h;
+
+    // Rendering is the expensive part; do it once.
+    RENDER_MANDELBROT_ONCE.call_once(|| unsafe {
+        trueos_math::render_mandelbrot_rgb32(&mut MANDELBROT_PIXELS[..expected], w, h, 64);
+    });
+
+    unsafe {
+        let img = Image {
+            width: w,
+            height: h,
+            pixels: &MANDELBROT_PIXELS[..expected],
+        };
+
+        let (origin_x, origin_y) = match crate::acpi::bgrt::last_logo_rect() {
+            Some((logo_x, logo_y, logo_w, _logo_h)) => {
+                let x = logo_x.saturating_add(logo_w).saturating_sub(w);
+                let y = logo_y.saturating_sub(h);
+                (x, y)
+            }
+            None => (fb_w, fb_h),
+        };
+        let _ = blit_image(origin_x, origin_y, &img);
+    }
+}

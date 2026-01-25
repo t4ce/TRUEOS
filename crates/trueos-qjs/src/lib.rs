@@ -45,6 +45,7 @@ pub struct JSValue {
 pub type JSValueConst = JSValue;
 
 pub const JS_TAG_FIRST: i64 = -9;
+pub const JS_TAG_MODULE: i64 = -3;
 pub const JS_TAG_OBJECT: i64 = -1;
 pub const JS_TAG_INT: i64 = 0;
 pub const JS_TAG_BOOL: i64 = 1;
@@ -55,6 +56,8 @@ pub const JS_TAG_FLOAT64: i64 = 8;
 
 pub const JS_EVAL_TYPE_GLOBAL: c_int = 0;
 pub const JS_EVAL_TYPE_MODULE: c_int = 1;
+
+pub const JS_EVAL_FLAG_COMPILE_ONLY: c_int = 1 << 5;
 
 pub const JS_CFUNC_GENERIC: c_int = 0;
 
@@ -206,6 +209,9 @@ extern "C" {
         cesu8: c_int,
     ) -> *const c_char;
     pub fn JS_FreeCString(ctx: *mut JSContext, ptr: *const c_char);
+
+    pub fn js_malloc(ctx: *mut JSContext, size: usize) -> *mut c_void;
+    pub fn js_free(ctx: *mut JSContext, ptr: *mut c_void);
 
     pub fn __JS_FreeValue(ctx: *mut JSContext, v: JSValue);
 }

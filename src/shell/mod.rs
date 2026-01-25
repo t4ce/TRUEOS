@@ -1,12 +1,28 @@
-use core::fmt::Write;
 use core::ffi::c_char;
+use core::fmt::Write;
+
+use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
-use crate::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
-use crate::ecma48;
 use crate::disc::block;
+use crate::ecma48;
+use crate::shell::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
+
+pub(crate) mod shellcube;
+pub(crate) mod shellqjs;
+
+mod interface;
+pub(crate) use interface::{ShellBackend, ShellIo};
+
+pub(crate) mod backends;
+pub(crate) use backends::{
+    NetTcpShellBackend, UsbCdcShellBackend, Uart1Com1Backend, NET_TCP_SHELL_BACKEND,
+    UART1_COM1_BACKEND, USB_CDC_SHELL_BACKEND,
+};
+
+pub(crate) mod uart1_com1;
 
 struct Utf8Decoder {
     buf: [u8; 4],
@@ -93,141 +109,6 @@ const SHELL_COMMANDS: [&str; 19] = [
     "txt",
     "insane",
 ];
-
-pub(crate) trait ShellIo {
-    fn write_str(&self, s: &str);
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
-    fn write_char(&self, ch: char);
-    fn write_byte(&self, b: u8);
-}
-
-pub(crate) trait ShellBackend: ShellIo {
-    fn init(&self) {}
-    fn read_byte(&self) -> Option<u8>;
-}
-
-pub(crate) struct Uart1Com1Backend;
-
-pub(crate) static UART1_COM1_BACKEND: Uart1Com1Backend = Uart1Com1Backend;
-
-impl ShellIo for Uart1Com1Backend {
-    #[inline]
-    fn write_str(&self, s: &str) {
-        uart1_com1::write_str(s);
-    }
-
-    #[inline]
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        uart1_com1::write_fmt(args);
-    }
-
-    #[inline]
-    fn write_char(&self, ch: char) {
-        uart1_com1::write_char(ch);
-    }
-
-    #[inline]
-    fn write_byte(&self, b: u8) {
-        uart1_com1::write_byte(b);
-    }
-}
-
-impl ShellBackend for Uart1Com1Backend {
-    #[inline]
-    fn init(&self) {
-        uart1_com1::init();
-    }
-
-    #[inline]
-    fn read_byte(&self) -> Option<u8> {
-        uart1_com1::read_byte()
-    }
-}
-
-pub(crate) struct UsbCdcShellBackend;
-
-pub(crate) static USB_CDC_SHELL_BACKEND: UsbCdcShellBackend = UsbCdcShellBackend;
-
-pub(crate) struct NetTcpShellBackend;
-
-pub(crate) static NET_TCP_SHELL_BACKEND: NetTcpShellBackend = NetTcpShellBackend;
-
-impl ShellIo for UsbCdcShellBackend {
-    #[inline]
-    fn write_str(&self, s: &str) {
-        let _ = crate::usb::cdc_shell::write(s.as_bytes());
-    }
-
-    #[inline]
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        use core::fmt::Write;
-        struct Writer;
-        impl Write for Writer {
-            fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                let _ = crate::usb::cdc_shell::write(s.as_bytes());
-                Ok(())
-            }
-        }
-        let _ = Writer.write_fmt(args);
-    }
-
-    #[inline]
-    fn write_char(&self, ch: char) {
-        let mut buf = [0u8; 4];
-        let s = ch.encode_utf8(&mut buf);
-        let _ = crate::usb::cdc_shell::write(s.as_bytes());
-    }
-
-    #[inline]
-    fn write_byte(&self, b: u8) {
-        let _ = crate::usb::cdc_shell::write(&[b]);
-    }
-}
-
-impl ShellBackend for UsbCdcShellBackend {
-    #[inline]
-    fn read_byte(&self) -> Option<u8> {
-        crate::usb::cdc_shell::read_byte()
-    }
-}
-
-impl ShellIo for NetTcpShellBackend {
-    #[inline]
-    fn write_str(&self, s: &str) {
-        crate::net::adapter::net_shell_write_bytes(s.as_bytes());
-    }
-
-    #[inline]
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        struct Writer;
-        impl Write for Writer {
-            fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                crate::net::adapter::net_shell_write_bytes(s.as_bytes());
-                Ok(())
-            }
-        }
-        let _ = Writer.write_fmt(args);
-    }
-
-    #[inline]
-    fn write_char(&self, ch: char) {
-        let mut buf = [0u8; 4];
-        let s = ch.encode_utf8(&mut buf);
-        crate::net::adapter::net_shell_write_bytes(s.as_bytes());
-    }
-
-    #[inline]
-    fn write_byte(&self, b: u8) {
-        crate::net::adapter::net_shell_write_byte(b);
-    }
-}
-
-impl ShellBackend for NetTcpShellBackend {
-    #[inline]
-    fn read_byte(&self) -> Option<u8> {
-        crate::net::adapter::net_shell_read_byte()
-    }
-}
 
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
@@ -361,10 +242,7 @@ fn set_go_mode(io: &dyn ShellIo, go_mode: &mut bool, enable: bool) {
 enum PendingAction {
     Reset,
     S5,
-    Install {
-        raw_id: u32,
-        migrate: bool,
-    },
+    Install { raw_id: u32, migrate: bool },
 }
 
 enum CommandAction {
@@ -552,7 +430,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     pending_deadline = None;
                     match action {
                         PendingAction::Reset => {
-                            if let Err(err) = crate::acpi::facp::reset_system() {
+                            if let Err(_err) = crate::acpi::facp::reset_system() {
                                 io.write_str("tlb miss warn\r\n");
                                 write_prompt(io);
                             }
@@ -657,10 +535,7 @@ fn handle_line(
             let _ = rest;
             let seq = crate::disc::files::file_tree_seq();
             let nodes = crate::disc::files::file_tree_len();
-            io.write_fmt(format_args!(
-                "files: cache seq={} nodes={}\r\n",
-                seq, nodes
-            ));
+            io.write_fmt(format_args!("files: cache seq={} nodes={}\r\n", seq, nodes));
             match crate::matrix::alloc_slot("files scan") {
                 Some(slot) => {
                     crate::matrix::push_line(slot, "files: job started");
@@ -720,23 +595,27 @@ fn handle_line(
                     match crate::disc::files::Fs::read_file(path) {
                         Ok(bytes) => {
                             let flags = if path.ends_with(".mjs")
-                                || crate::shellqjs::looks_like_module_bytes(&bytes)
+                                || shellqjs::looks_like_module_bytes(&bytes)
                             {
                                 trueos_qjs::JS_EVAL_TYPE_MODULE
                             } else {
                                 trueos_qjs::JS_EVAL_TYPE_GLOBAL
                             };
-                            let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
-                                b"<shell-module-file>\0".as_ptr() as *const c_char
-                            } else {
-                                b"<shell-file>\0".as_ptr() as *const c_char
-                            };
-                            crate::shellqjs::eval_bytes(io, filename, &bytes, flags);
+
+                            let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
+                            filename_buf.extend_from_slice(path.as_bytes());
+                            filename_buf.push(0);
+                            shellqjs::eval_bytes(
+                                io,
+                                filename_buf.as_ptr() as *const c_char,
+                                &bytes,
+                                flags,
+                            );
                         }
                         Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
                     }
                 } else {
-                    crate::shellqjs::eval(io, src);
+                    shellqjs::eval(io, src);
                 }
             }
             return CommandAction::None;
@@ -751,13 +630,20 @@ fn handle_line(
                     let path = path.trim();
                     match crate::disc::files::Fs::read_file(path) {
                         Ok(bytes) => {
-                            let filename = b"<shell-module-file>\0".as_ptr() as *const c_char;
-                            crate::shellqjs::eval_bytes(io, filename, &bytes, trueos_qjs::JS_EVAL_TYPE_MODULE);
+                            let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
+                            filename_buf.extend_from_slice(path.as_bytes());
+                            filename_buf.push(0);
+                            shellqjs::eval_bytes(
+                                io,
+                                filename_buf.as_ptr() as *const c_char,
+                                &bytes,
+                                trueos_qjs::JS_EVAL_TYPE_MODULE,
+                            );
                         }
                         Err(e) => io.write_fmt(format_args!("qjsm: read_file failed ({:?})\r\n", e)),
                     }
                 } else {
-                    crate::shellqjs::eval_module(io, src);
+                    shellqjs::eval_module(io, src);
                 }
             }
             return CommandAction::None;
@@ -785,10 +671,7 @@ fn handle_line(
     } else if cmd.eq_ignore_ascii_case("files") {
         let seq = crate::disc::files::file_tree_seq();
         let nodes = crate::disc::files::file_tree_len();
-        io.write_fmt(format_args!(
-            "files: cache seq={} nodes={}\r\n",
-            seq, nodes
-        ));
+        io.write_fmt(format_args!("files: cache seq={} nodes={}\r\n", seq, nodes));
         match crate::matrix::alloc_slot("files scan") {
             Some(slot) => {
                 crate::matrix::push_line(slot, "files: job started");
@@ -845,7 +728,7 @@ fn handle_line(
     }
 
     if cmd.eq_ignore_ascii_case("mandel") {
-        crate::draw_mandelbrot();
+        crate::vga::draw_mandelbrot();
         io.write_str("mandel ok\r\n");
         return CommandAction::None;
     }
@@ -893,7 +776,7 @@ fn handle_line(
             let ch = match core::char::from_u32(cp) {
                 Some(ch) if !ch.is_control() => ch,
                 Some(_) => '.',
-                    None => '\0',
+                None => '\0',
             };
 
             io.write_char(ch);
@@ -922,10 +805,7 @@ fn handle_line(
     if let Some(rest) = cmd.strip_prefix("idle") {
         let rest = rest.trim();
         if rest.is_empty() {
-            io.write_fmt(format_args!(
-                "idle: {}\r\n",
-                crate::power::idle_policy().as_str()
-            ));
+            io.write_fmt(format_args!("idle: {}\r\n", crate::power::idle_policy().as_str()));
             return CommandAction::None;
         }
         let policy = match rest {
@@ -937,11 +817,7 @@ fn handle_line(
             }
         };
         let prev = crate::power::set_idle_policy(policy);
-        io.write_fmt(format_args!(
-            "idle: {} -> {}\r\n",
-            prev.as_str(),
-            policy.as_str()
-        ));
+        io.write_fmt(format_args!("idle: {} -> {}\r\n", prev.as_str(), policy.as_str()));
         return CommandAction::None;
     }
 
@@ -972,14 +848,8 @@ fn handle_line(
         };
 
         match crate::power::set_pstate_ratio(req) {
-            Ok(applied) => io.write_fmt(format_args!(
-                "pstate: applied {}\r\n",
-                applied
-            )),
-            Err(err) => io.write_fmt(format_args!(
-                "pstate: failed: {}\r\n",
-                err
-            )),
+            Ok(applied) => io.write_fmt(format_args!("pstate: applied {}\r\n", applied)),
+            Err(err) => io.write_fmt(format_args!("pstate: failed: {}\r\n", err)),
         }
         return CommandAction::None;
     }
@@ -1113,93 +983,5 @@ fn enter_cube_mode(io: &dyn ShellIo, term_cols: &mut usize, term_rows: &mut usiz
     *term_cols = CUBE_COLS;
     *term_rows = CUBE_ROWS;
     draw_corners(io, CUBE_COLS, CUBE_ROWS);
-    crate::shellcube::enter_mode();
-}
-
-pub(crate) mod uart1_com1 {
-    use core::fmt;
-    use core::sync::atomic::{AtomicBool, Ordering};
-
-    const COM1: u16 = 0x3F8;
-    static INIT: AtomicBool = AtomicBool::new(false);
-
-    pub(crate) fn init() {
-        if INIT.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        unsafe {
-            crate::portio::outb(COM1 + 1, 0x00); // disable IRQs
-            crate::portio::outb(COM1 + 3, 0x80); // DLAB on
-            crate::portio::outb(COM1 + 0, 0x01); // divisor low (115200)
-            crate::portio::outb(COM1 + 1, 0x00); // divisor high
-            crate::portio::outb(COM1 + 3, 0x03); // 8N1
-            crate::portio::outb(COM1 + 2, 0xC7); // FIFO enable
-            crate::portio::outb(COM1 + 4, 0x0B); // IRQs, RTS/DSR
-        }
-    }
-
-    #[inline]
-    pub(crate) fn write_byte(b: u8) {
-        if !INIT.load(Ordering::Acquire) {
-            init();
-        }
-        unsafe {
-            while (crate::portio::inb(COM1 + 5) & 0x20) == 0 {}
-            crate::portio::outb(COM1, b);
-        }
-    }
-
-    pub(crate) fn write_str(s: &str) {
-        for &b in s.as_bytes() {
-            if b == b'\n' {
-                write_byte(b'\r');
-            }
-            write_byte(b);
-        }
-    }
-
-    pub(crate) fn write_bytes(bytes: &[u8]) {
-        for &b in bytes {
-            write_byte(b);
-        }
-    }
-
-    pub(crate) fn write_fmt(args: fmt::Arguments<'_>) {
-        use core::fmt::Write;
-
-        struct Writer;
-
-        impl fmt::Write for Writer {
-            fn write_str(&mut self, s: &str) -> fmt::Result {
-                for &b in s.as_bytes() {
-                    if b == b'\n' {
-                        write_byte(b'\r');
-                    }
-                    write_byte(b);
-                }
-                Ok(())
-            }
-        }
-
-        let _ = Writer.write_fmt(args);
-    }
-
-    pub(crate) fn write_char(ch: char) {
-        let mut buf = [0u8; 4];
-        let s = ch.encode_utf8(&mut buf);
-        write_str(s);
-    }
-
-    pub(crate) fn read_byte() -> Option<u8> {
-        if !INIT.load(Ordering::Acquire) {
-            init();
-        }
-        unsafe {
-            if (crate::portio::inb(COM1 + 5) & 0x01) != 0 {
-                Some(crate::portio::inb(COM1))
-            } else {
-                None
-            }
-        }
-    }
+    shellcube::enter_mode();
 }
