@@ -65,6 +65,9 @@ pub fn init() {
     }
 
     crate::log!("net: no supported NIC detected.\n");
+    crate::log!(
+        "net: hint: in QEMU add virtio-net (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0,disable-modern=on)\n"
+    );
 }
 
 pub fn poll() {

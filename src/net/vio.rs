@@ -402,27 +402,59 @@ impl VirtioNetAdapter {
 
         let used_idx = self.rxq.used_idx();
         let mut processed = 0u16;
+        let mut guard = 0u16;
         while self.rxq.last_used_idx != used_idx {
+            // Safety guard: if indices ever get out of sync, don't spin for 65k iterations.
+            // Cap to one ring worth of work per poll.
+            if guard >= self.rxq.size {
+                crate::log!(
+                    "net/vio: rx guard tripped used_idx={} last_used_idx={} size={}\n",
+                    used_idx,
+                    self.rxq.last_used_idx,
+                    self.rxq.size
+                );
+                break;
+            }
+            guard = guard.wrapping_add(1);
+
             let elem = self.rxq.used_elem(self.rxq.last_used_idx % self.rxq.size);
-            let desc_id = elem.id as u16;
+            let elem_len = elem.len;
+            let desc_id = elem.id as usize;
+
+            if desc_id >= self.rx_bufs.len() {
+                // If this ever happens, we'd otherwise panic on indexing and appear to “halt”.
+                crate::log!(
+                    "net/vio: rx bad desc id={} (bufs={}) elem.len={} used_idx={} last_used_idx={}\n",
+                    desc_id,
+                    self.rx_bufs.len(),
+                    elem_len,
+                    used_idx,
+                    self.rxq.last_used_idx
+                );
+                // Advance so we don't get stuck re-reading the same used element.
+                self.rxq.last_used_idx = self.rxq.last_used_idx.wrapping_add(1);
+                processed = processed.wrapping_add(1);
+                continue;
+            }
+
             if let Some(ring_ptr) = self.ring {
                 // Safety: ring pointer is owned and kept alive by NetCore.
                 let ring = unsafe { &mut *ring_ptr };
                 let slot = ring.rx_ring_mut().push_hw_owned().ok();
                 if let Some(slot) = slot {
                     let dst = ring.rx_ring_mut().buffer_mut(slot);
-                    let buf = &self.rx_bufs[desc_id as usize];
+                    let buf = &self.rx_bufs[desc_id];
                     let src = unsafe {
                         core::slice::from_raw_parts(buf.virt(), RX_BUF_SIZE)
                     };
-                    let len = (elem.len as usize).saturating_sub(VIRTIO_NET_HDR_SIZE);
+                    let len = (elem_len as usize).saturating_sub(VIRTIO_NET_HDR_SIZE);
                     let copy_len = len.min(dst.len());
                     dst[..copy_len].copy_from_slice(&src[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]);
                     ring.rx_ring_mut().mark_complete(slot, copy_len);
                 }
             }
 
-            self.rxq.push_avail(desc_id);
+            self.rxq.push_avail(desc_id as u16);
             self.rxq.last_used_idx = self.rxq.last_used_idx.wrapping_add(1);
             processed = processed.wrapping_add(1);
         }
@@ -444,8 +476,18 @@ impl VirtioNetAdapter {
         let used_idx = self.txq.used_idx();
         while self.txq.last_used_idx != used_idx {
             let elem = self.txq.used_elem(self.txq.last_used_idx % self.txq.size);
-            let desc_id = elem.id as u16;
-            self.tx_free.push(desc_id);
+            let desc_id = elem.id as usize;
+            if desc_id < self.txq.size as usize {
+                self.tx_free.push(desc_id as u16);
+            } else {
+                crate::log!(
+                    "net/vio: tx bad desc id={} (size={}) used_idx={} last_used_idx={}\n",
+                    desc_id,
+                    self.txq.size,
+                    used_idx,
+                    self.txq.last_used_idx
+                );
+            }
             self.txq.last_used_idx = self.txq.last_used_idx.wrapping_add(1);
         }
     }

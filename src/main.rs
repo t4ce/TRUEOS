@@ -38,6 +38,7 @@ mod rng;
 mod serial;
 mod power;
 mod globalog;
+mod matrix;
 mod shell;
 mod shellqjs;
 mod install;
@@ -311,8 +312,14 @@ pub extern "C" fn kmain() -> ! {
     quickjs_smoke_test();
 
     net::init();
-    let _ = spawner.spawn(net::adapter::net_service_task());
-    let _ = spawner.spawn(net::adapter::net_smoke_task());
+    let net_ready = net::mac_address().is_some();
+    if net_ready {
+        let _ = spawner.spawn(net::adapter::net_service_task());
+        let _ = spawner.spawn(net::adapter::net_smoke_task());
+        let _ = spawner.spawn(net::adapter::net_shell_task());
+    } else {
+        crate::log!("net: skipping net tasks (no NIC)\n");
+    }
 
     if tga::is_online() {
         let _ = spawner.spawn(tga::blink_task());
@@ -340,6 +347,9 @@ pub extern "C" fn kmain() -> ! {
 
     let _ = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND));
     let _ = spawner.spawn(shell::task(spawner, &shell::USB_CDC_SHELL_BACKEND));
+    if net_ready {
+        let _ = spawner.spawn(shell::task(spawner, &shell::NET_TCP_SHELL_BACKEND));
+    }
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {

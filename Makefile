@@ -18,7 +18,7 @@ QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_
 
 QEMU_NET_FLAGS = -netdev user,id=net0 -device e1000,netdev=net0 \
 	-netdev user,id=net1 -device rtl8139,netdev=net1 \
-	-netdev user,id=net2,hostfwd=tcp::4242-:4242 -device virtio-net-pci,netdev=net2,disable-modern=on
+	-netdev user,id=net2,hostfwd=tcp::4242-:4242,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=on
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS)
 
