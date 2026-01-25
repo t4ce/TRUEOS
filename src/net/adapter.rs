@@ -1467,8 +1467,6 @@ pub async fn net_shell_task() {
     let mut ticks: u32 = 0;
     let mut pending: Option<Vec<u8>> = None;
     let mut pending_handle: Option<NetHandle> = None;
-    let mut logged_first_data = false;
-    let mut logged_first_flush = false;
 
     loop {
         for ev in events.drain(32) {
@@ -1491,15 +1489,6 @@ pub async fn net_shell_task() {
                     // Only accept bytes from the active connection.
                     if NET_SHELL_STATE.lock().handle != Some(handle) {
                         continue;
-                    }
-
-                    if !logged_first_data {
-                        logged_first_data = true;
-                        crate::log!(
-                            "net-shell: first tcp data handle={} len={}\n",
-                            handle.0,
-                            data.len()
-                        );
                     }
                     const MAX_RX: usize = 8 * 1024;
                     let mut st = NET_SHELL_STATE.lock();
@@ -1565,14 +1554,6 @@ pub async fn net_shell_task() {
 
             if let Some(handle) = handle {
                 if !chunk.is_empty() {
-                    if !logged_first_flush {
-                        logged_first_flush = true;
-                        crate::log!(
-                            "net-shell: first tcp flush handle={} len={}\n",
-                            handle.0,
-                            chunk.len()
-                        );
-                    }
                     pending_handle = Some(handle);
                     pending = Some(chunk.clone());
                     let _ = cmds.push(NetCommand::SendTcp { handle, data: chunk });
