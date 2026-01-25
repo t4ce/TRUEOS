@@ -88,10 +88,12 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 19] = [
+const SHELL_COMMANDS: [&str; 22] = [
     "echo",
     "qjs",
     "qjsm",
+    "out",
+    "in",
     "files",
     "§",
     "s5",
@@ -108,6 +110,7 @@ const SHELL_COMMANDS: [&str; 19] = [
     "ico",
     "txt",
     "insane",
+    "usb",
 ];
 
 #[inline]
@@ -242,7 +245,8 @@ fn set_go_mode(io: &dyn ShellIo, go_mode: &mut bool, enable: bool) {
 enum PendingAction {
     Reset,
     S5,
-    Install { raw_id: u32, migrate: bool },
+    Install { raw_id: u32, mode: crate::install::InstallMode },
+    Format { raw_id: u32 },
 }
 
 enum CommandAction {
@@ -250,7 +254,91 @@ enum CommandAction {
     Pending(PendingAction),
     EnterCube,
     EnterIco,
-    EnterTxtEdt { filename: String<48> },
+    EnterTxtEdt { filename: String<48>, from_slot: Option<u8> },
+}
+
+#[inline]
+fn parse_slot_ref(s: &str) -> Option<u8> {
+    let t = s.trim();
+    let n = t.strip_prefix('§')?.trim();
+    let id = n.parse::<u8>().ok()?;
+    if id == 0 {
+        return None;
+    }
+    Some(id - 1)
+}
+
+fn fill_slot_from_bytes(slot_id: u8, bytes: &[u8]) {
+    crate::matrix::clear_lines(slot_id);
+
+    // Keep a raw blob for later `txt §N`.
+    let _ = crate::matrix::set_blob(slot_id, bytes);
+
+    // Best-effort textual preview for `§N` dump.
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        for line in text.split('\n') {
+            let line = line.trim_end_matches('\r');
+            crate::matrix::push_line(slot_id, line);
+        }
+    } else {
+        crate::matrix::push_line(slot_id, "(non-utf8 bytes)");
+    }
+}
+
+#[embassy_executor::task]
+async fn out_matrix_job(slot_id: u8, path: String<160>) {
+    // File I/O is intentionally not part of txt editor; it happens here.
+    match crate::disc::files::Fs::read_file(path.as_str()) {
+        Ok(bytes) => {
+            let take = core::cmp::min(bytes.len(), crate::matrix::BLOB_CAP);
+            fill_slot_from_bytes(slot_id, &bytes[..take]);
+            if take < bytes.len() {
+                crate::matrix::push_line(slot_id, "(truncated)");
+            }
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+        }
+        Err(e) => {
+            crate::matrix::clear_lines(slot_id);
+            crate::matrix::push_line(slot_id, "out: read_file failed");
+            crate::matrix::push_line(slot_id, "(see kernel log for details)");
+            crate::log!("out: read_file '{}' failed: {:?}\n", path.as_str(), e);
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn in_matrix_job(slot_id: u8, src_slot: u8, path: String<160>) {
+    let mut snapshot: heapless::Vec<u8, { crate::matrix::BLOB_CAP }> = heapless::Vec::new();
+    let got = crate::matrix::with_slot(src_slot, |s| {
+        for &b in s.blob.iter() {
+            let _ = snapshot.push(b);
+        }
+        !snapshot.is_empty()
+    })
+    .unwrap_or(false);
+
+    if !got {
+        crate::matrix::clear_lines(slot_id);
+        crate::matrix::push_line(slot_id, "in: source slot empty");
+        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+        return;
+    }
+
+    match crate::disc::files::Fs::write_file(path.as_str(), snapshot.as_slice()) {
+        Ok(()) => {
+            crate::matrix::clear_lines(slot_id);
+            crate::matrix::push_line(slot_id, "in: ok");
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+        }
+        Err(e) => {
+            crate::matrix::clear_lines(slot_id);
+            crate::matrix::push_line(slot_id, "in: write_file failed");
+            crate::matrix::push_line(slot_id, "(see kernel log for details)");
+            crate::log!("in: write_file '{}' failed: {:?}\n", path.as_str(), e);
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+        }
+    }
 }
 
 #[embassy_executor::task]
@@ -284,14 +372,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     io.write_str(ecma48::CLEAR_SCREEN);
                     io.write_str(ecma48::HOME);
                     write_banner(io, term_cols);
+                    write_prompt(io);
                 }
                 continue;
             }
             match b {
                 b'\r' | b'\n' | b' ' if pending_action.is_some() => {
                     utf8.clear();
-                    // Pending install confirmation: Enter = proceed, Space = abort.
-                    if let Some(PendingAction::Install { raw_id, migrate }) = pending_action {
+                    // Pending destructive confirmation: Enter = proceed, Space = abort.
+                    if let Some(PendingAction::Install { raw_id, mode }) = pending_action {
                         match b {
                             b'\r' | b'\n' => {
                                 pending_action = None;
@@ -299,7 +388,31 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 set_go_mode(io, &mut go_mode, false);
                                 line.clear();
                                 io.write_str("\r\n");
-                                crate::install::run_install(io, raw_id, migrate);
+                                crate::install::run_install(io, raw_id, mode);
+                                write_prompt(io);
+                            }
+                            b' ' => {
+                                pending_action = None;
+                                pending_deadline = None;
+                                set_go_mode(io, &mut go_mode, false);
+                                line.clear();
+                                io.write_str("\r\ninstall: aborted\r\n");
+                                write_prompt(io);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    if let Some(PendingAction::Format { raw_id }) = pending_action {
+                        match b {
+                            b'\r' | b'\n' => {
+                                pending_action = None;
+                                pending_deadline = None;
+                                set_go_mode(io, &mut go_mode, false);
+                                line.clear();
+                                io.write_str("\r\n");
+                                crate::install::run_format_superfloppy(io, raw_id);
                                 write_prompt(io);
                             }
                             b' ' => {
@@ -332,6 +445,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         write_prompt(io);
                         continue;
                     }
+                    if line.is_empty() && pending_action.is_none() {
+                        io.write_str("\r\n");
+                        write_prompt(io);
+                        continue;
+                    }
                     if !line.is_empty() {
                         io.write_str("\r\n");
                         let action = handle_line(
@@ -352,6 +470,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                         Some(Instant::now() + EmbassyDuration::from_secs(5))
                                     }
                                     PendingAction::Install { .. } => None,
+                                    PendingAction::Format { .. } => None,
                                 };
                                 set_go_mode(
                                     io,
@@ -373,12 +492,65 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 cube.reset();
                                 enter_cube_mode(io, &mut term_cols, &mut term_rows);
                             }
-                            CommandAction::EnterTxtEdt { filename } => {
+                            CommandAction::EnterTxtEdt { filename, from_slot } => {
                                 cube_mode = false;
                                 set_go_mode(io, &mut go_mode, false);
                                 let cols = term_cols;
                                 let rows = term_rows;
-                                crate::txtedt::run(io, cols, rows, filename.as_str()).await;
+
+                                let mut initial: heapless::Vec<u8, { crate::txtedt::MAX_BYTES }> =
+                                    heapless::Vec::new();
+                                if let Some(slot_id) = from_slot {
+                                    let _ = crate::matrix::with_slot(slot_id, |s| {
+                                        for &b in s.blob.iter() {
+                                            let _ = initial.push(b);
+                                        }
+                                    });
+                                }
+
+                                let out_buf = crate::txtedt::run(
+                                    io,
+                                    cols,
+                                    rows,
+                                    filename.as_str(),
+                                    if initial.is_empty() {
+                                        None
+                                    } else {
+                                        Some(initial.as_slice())
+                                    },
+                                )
+                                .await;
+
+                                // Bind the final editor buffer to a new § slot.
+                                if let Some(slot) = crate::matrix::alloc_slot("txt") {
+                                    let mut title: heapless::String<{ crate::matrix::TITLE_LEN }> =
+                                        heapless::String::new();
+                                    let _ = title.push_str("txt ");
+                                    for ch in filename.chars() {
+                                        if title.push(ch).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    // Re-alloc_slot already set a title; overwrite by freeing+alloc would be noisy.
+                                    // Instead, leave title as "txt" and embed name into first line for now.
+                                    crate::matrix::clear_lines(slot);
+                                    crate::matrix::push_line(slot, title.as_str());
+                                    crate::matrix::set_blob(slot, out_buf.as_slice());
+                                    if let Ok(text) = core::str::from_utf8(out_buf.as_slice()) {
+                                        for line in text.split('\n') {
+                                            crate::matrix::push_line(slot, line.trim_end_matches('\r'));
+                                        }
+                                    }
+                                    crate::matrix::set_state(slot, crate::matrix::SlotState::Done);
+                                    io.write_fmt(format_args!(
+                                        "\r\ntxt: captured into §{}\r\n",
+                                        slot + 1
+                                    ));
+                                    refresh_matrix_symbols(io, term_cols);
+                                } else {
+                                    io.write_str("\r\ntxt: matrix full (cannot capture)\r\n");
+                                }
+
                                 io.write_str(ecma48::CLEAR_SCREEN);
                                 io.write_str(ecma48::HOME);
                                 write_banner(io, term_cols);
@@ -442,6 +614,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                         }
                         PendingAction::Install { .. } => {}
+                        PendingAction::Format { .. } => {}
                     }
                     continue;
                 }
@@ -475,6 +648,9 @@ async fn files_matrix_job(slot_id: u8, start_seq: u32) {
             let mut line: String<96> = String::new();
             let _ = write!(line, "seq={} nodes={}", now_seq, nodes);
             crate::matrix::push_line(slot_id, line.as_str());
+
+            push_latest_files_tree_to_matrix(slot_id);
+
             crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
             break;
         }
@@ -484,6 +660,87 @@ async fn files_matrix_job(slot_id: u8, start_seq: u32) {
             break;
         }
         Timer::after(EmbassyDuration::from_millis(100)).await;
+    }
+}
+
+fn push_latest_files_tree_to_matrix(slot_id: u8) {
+    const MAX_TREE_LINES: usize = 56;
+
+    fn kind_marker(kind: &crate::disc::files::FileTreeKind) -> char {
+        match kind {
+            crate::disc::files::FileTreeKind::Root => '/',
+            crate::disc::files::FileTreeKind::Device => 'D',
+            crate::disc::files::FileTreeKind::Dir => 'd',
+            crate::disc::files::FileTreeKind::File => 'f',
+        }
+    }
+
+    let mut wrote_any = false;
+    let mut wrote_lines: usize = 0;
+    let mut truncated = false;
+
+    let Some(()) = crate::disc::files::with_latest_file_tree(|seq, tree| {
+        let Some(root) = tree.root() else {
+            crate::matrix::push_line(slot_id, "tree: (empty)");
+            return;
+        };
+
+        let mut header: String<96> = String::new();
+        let _ = write!(header, "tree: seq={}", seq);
+        crate::matrix::push_line(slot_id, header.as_str());
+        wrote_any = true;
+        wrote_lines = wrote_lines.saturating_add(1);
+
+        let mut stack: Vec<(trueos_math::NodeId, usize)> = Vec::new();
+        stack.push((root, 0));
+
+        while let Some((id, depth)) = stack.pop() {
+            if wrote_lines >= MAX_TREE_LINES {
+                truncated = true;
+                break;
+            }
+
+            let Some(entry) = tree.get(id) else {
+                continue;
+            };
+
+            let mut line: String<96> = String::new();
+            for _ in 0..depth {
+                let _ = line.push(' ');
+                let _ = line.push(' ');
+            }
+            let _ = line.push(kind_marker(&entry.kind));
+            let _ = line.push(' ');
+            for ch in entry.name.chars() {
+                if line.push(ch).is_err() {
+                    break;
+                }
+            }
+            crate::matrix::push_line(slot_id, line.as_str());
+            wrote_any = true;
+            wrote_lines = wrote_lines.saturating_add(1);
+
+            // Preserve insertion order by pushing children in reverse.
+            let mut kids: Vec<trueos_math::NodeId> = Vec::new();
+            for child in tree.children(id) {
+                kids.push(child);
+            }
+            for child in kids.into_iter().rev() {
+                stack.push((child, depth.saturating_add(1)));
+            }
+        }
+    }) else {
+        crate::matrix::push_line(slot_id, "tree: unavailable");
+        return;
+    };
+
+    if !wrote_any {
+        crate::matrix::push_line(slot_id, "tree: unavailable");
+        return;
+    }
+
+    if truncated {
+        crate::matrix::push_line(slot_id, "tree: (truncated)");
     }
 }
 
@@ -522,11 +779,89 @@ fn handle_line(
     }
 
     if let Some((verb, rest)) = cmd.split_once(' ') {
+        if verb.eq_ignore_ascii_case("out") {
+            let path = rest.trim();
+            if path.is_empty() {
+                io.write_str("out: usage out <path>\r\n");
+                return CommandAction::None;
+            }
+
+            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
+            let _ = title.push_str("out ");
+            for ch in path.chars() {
+                if title.push(ch).is_err() {
+                    break;
+                }
+            }
+
+            match crate::matrix::alloc_slot(title.as_str()) {
+                Some(slot) => {
+                    let mut p: String<160> = String::new();
+                    for ch in path.chars() {
+                        if p.push(ch).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = spawner.spawn(out_matrix_job(slot, p));
+                    io.write_fmt(format_args!("out: started §{}\r\n", slot + 1));
+                    refresh_matrix_symbols(io, *term_cols);
+                }
+                None => io.write_str("out: matrix full\r\n"),
+            }
+            return CommandAction::None;
+        }
+
+        if verb.eq_ignore_ascii_case("in") {
+            let mut parts = rest.split_whitespace();
+            let a = parts.next().unwrap_or("");
+            let b = parts.next().unwrap_or("");
+            let extra = parts.next().is_some();
+
+            if a.is_empty() || b.is_empty() || extra {
+                io.write_str("in: usage in <path> §N   (or: in §N <path>)\r\n");
+                return CommandAction::None;
+            }
+
+            let (path, src_slot) = if let Some(s) = parse_slot_ref(a) {
+                (b, s)
+            } else if let Some(s) = parse_slot_ref(b) {
+                (a, s)
+            } else {
+                io.write_str("in: expected a §N slot reference\r\n");
+                return CommandAction::None;
+            };
+
+            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
+            let _ = title.push_str("in ");
+            for ch in path.chars() {
+                if title.push(ch).is_err() {
+                    break;
+                }
+            }
+
+            match crate::matrix::alloc_slot(title.as_str()) {
+                Some(slot) => {
+                    let mut p: String<160> = String::new();
+                    for ch in path.chars() {
+                        if p.push(ch).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = spawner.spawn(in_matrix_job(slot, src_slot, p));
+                    io.write_fmt(format_args!("in: started §{}\r\n", slot + 1));
+                    refresh_matrix_symbols(io, *term_cols);
+                }
+                None => io.write_str("in: matrix full\r\n"),
+            }
+            return CommandAction::None;
+        }
         if verb.eq_ignore_ascii_case("install") {
             if let Some(p) = crate::install::handle_install_command(io, rest) {
-                return CommandAction::Pending(PendingAction::Install {
-                    raw_id: p.raw_id,
-                    migrate: p.migrate,
+                return CommandAction::Pending(match p {
+                    crate::install::PendingInstall::Install { raw_id, mode } => {
+                        PendingAction::Install { raw_id, mode }
+                    }
+                    crate::install::PendingInstall::Format { raw_id } => PendingAction::Format { raw_id },
                 });
             }
             return CommandAction::None;
@@ -649,22 +984,59 @@ fn handle_line(
             return CommandAction::None;
         }
 
+        if verb.eq_ignore_ascii_case("mv") {
+            let mut parts = rest.split_whitespace();
+            let src = parts.next().unwrap_or("");
+            let dst = parts.next().unwrap_or("");
+            if src.is_empty() || dst.is_empty() || parts.next().is_some() {
+                io.write_str("mv: usage mv <src> <dst>\r\n");
+            } else {
+                match crate::disc::files::Fs::rename(src, dst) {
+                    Ok(()) => io.write_str("mv: ok\r\n"),
+                    Err(e) => io.write_fmt(format_args!("mv: failed ({:?})\r\n", e)),
+                }
+            }
+            return CommandAction::None;
+        }
+
         if verb.eq_ignore_ascii_case("txt") || verb.eq_ignore_ascii_case("txtedt") {
-            let mut filename: String<48> = String::new();
             let name = rest.trim();
+            if let Some(slot_id) = parse_slot_ref(name) {
+                // Derive a friendly title for the editor from the slot title if available.
+                let mut filename: String<48> = String::new();
+                let _ = crate::matrix::with_slot(slot_id, |s| {
+                    for ch in s.title.chars() {
+                        if filename.push(ch).is_err() {
+                            break;
+                        }
+                    }
+                });
+                if filename.is_empty() {
+                    let _ = write!(filename, "§{}", slot_id + 1);
+                }
+                return CommandAction::EnterTxtEdt {
+                    filename,
+                    from_slot: Some(slot_id),
+                };
+            }
+
+            let mut filename: String<48> = String::new();
             let name = if name.is_empty() { "untitled.txt" } else { name };
             for ch in name.chars() {
                 if filename.push(ch).is_err() {
                     break;
                 }
             }
-            return CommandAction::EnterTxtEdt { filename };
+            return CommandAction::EnterTxtEdt {
+                filename,
+                from_slot: None,
+            };
         }
     } else if cmd.eq_ignore_ascii_case("install") {
         if let Some(p) = crate::install::handle_install_command(io, "") {
-            return CommandAction::Pending(PendingAction::Install {
-                raw_id: p.raw_id,
-                migrate: p.migrate,
+            return CommandAction::Pending(match p {
+                crate::install::PendingInstall::Install { raw_id, mode } => PendingAction::Install { raw_id, mode },
+                crate::install::PendingInstall::Format { raw_id } => PendingAction::Format { raw_id },
             });
         }
         return CommandAction::None;
@@ -776,7 +1148,7 @@ fn handle_line(
             let ch = match core::char::from_u32(cp) {
                 Some(ch) if !ch.is_control() => ch,
                 Some(_) => '.',
-                None => '\0',
+                None => '�',
             };
 
             io.write_char(ch);
@@ -792,6 +1164,49 @@ fn handle_line(
             io.write_str("\r\n");
         }
         io.write_str("insane: done\r\n");
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("usb") {
+        let ctrls = crate::usb::xhci::xhc_list();
+        if ctrls.is_empty() {
+            io.write_str("usb: no xhci controllers\r\n");
+            return CommandAction::None;
+        }
+
+        for info in ctrls.iter() {
+            io.write_fmt(format_args!(
+                "usb: xHCI {} {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} ac64={}\r\n",
+                info.controller_id,
+                info.bus,
+                info.slot,
+                info.function,
+                info.bar_phys,
+                info.bar_size,
+                info.supports_64bit
+            ));
+
+            let devs = crate::usb::list_device_summaries(info.controller_id);
+            if devs.is_empty() {
+                io.write_str("  (no devices)\r\n");
+                continue;
+            }
+
+            for d in devs.iter() {
+                io.write_fmt(format_args!(
+                    "  port={} slot={} kind={} vid=0x{:04X} pid=0x{:04X} cls={:02X}/{:02X}/{:02X}\r\n",
+                    d.port,
+                    d.slot_id,
+                    d.kind,
+                    d.vid.unwrap_or(0),
+                    d.pid.unwrap_or(0),
+                    d.class.unwrap_or(0),
+                    d.subclass.unwrap_or(0),
+                    d.protocol.unwrap_or(0)
+                ));
+            }
+        }
+
         return CommandAction::None;
     }
 
@@ -871,7 +1286,10 @@ fn handle_line(
     if cmd.eq_ignore_ascii_case("txt") || cmd.eq_ignore_ascii_case("txtedt") {
         let mut filename: String<48> = String::new();
         let _ = filename.push_str("untitled.txt");
-        return CommandAction::EnterTxtEdt { filename };
+        return CommandAction::EnterTxtEdt {
+            filename,
+            from_slot: None,
+        };
     }
 
     io.write_str("unknown: ");

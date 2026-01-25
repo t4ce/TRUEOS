@@ -77,8 +77,8 @@ unsafe extern "C" fn trueos_module_normalize(
     };
 
     // Keep TRUEOS-provided native modules as-is.
-    if name == "complex" {
-        return js_alloc_cstring(ctx, "complex");
+    if name == "complex" || name == "fs" {
+        return js_alloc_cstring(ctx, name);
     }
 
     // Map bare specifiers to /qjs/<name>.mjs

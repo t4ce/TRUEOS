@@ -8,7 +8,7 @@ use fatfs::{
     format_volume, FileSystem, FormatVolumeOptions, FsOptions, IoBase, Read, Seek, SeekFrom, Write,
 };
 
-use crate::disc::block;
+use crate::disc::{block, layout};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_math::Tree;
@@ -84,9 +84,45 @@ pub enum UsbFsWriteError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbFsRenameError {
+    UsbmsNotFound,
+    DeviceIo(block::Error),
+    MountFailed,
+    BadPath,
+    NotFound,
+    AlreadyExists,
+    RenameFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbFsListDirError {
+    UsbmsNotFound,
+    DeviceIo(block::Error),
+    MountFailed,
+    BadPath,
+    OpenFailed,
+    IterFailed,
+    TooLarge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbFsRemoveError {
+    UsbmsNotFound,
+    DeviceIo(block::Error),
+    MountFailed,
+    BadPath,
+    NotFound,
+    NotEmpty,
+    RemoveFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsError {
     Read(UsbFsReadError),
     Write(UsbFsWriteError),
+    Rename(UsbFsRenameError),
+    ListDir(UsbFsListDirError),
+    Remove(UsbFsRemoveError),
 }
 
 /// Minimal filesystem binding backed by the USBMS FAT volume.
@@ -103,6 +139,21 @@ impl Fs {
     #[inline]
     pub fn write_file(path: &str, data: &[u8]) -> Result<(), FsError> {
         write_usbms_file(path, data).map_err(FsError::Write)
+    }
+
+    #[inline]
+    pub fn rename(src_path: &str, dst_path: &str) -> Result<(), FsError> {
+        rename_usbms_path(src_path, dst_path).map_err(FsError::Rename)
+    }
+
+    #[inline]
+    pub fn list_dir(path: &str) -> Result<String, FsError> {
+        list_usbms_dir(path).map_err(FsError::ListDir)
+    }
+
+    #[inline]
+    pub fn remove(path: &str) -> Result<(), FsError> {
+        remove_usbms_path(path).map_err(FsError::Remove)
     }
 }
 
@@ -215,6 +266,137 @@ pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError>
         file.write_all(bytes).map_err(|_| UsbFsWriteError::WriteFailed)?;
         file.flush().map_err(|_| UsbFsWriteError::WriteFailed)?;
         Ok(())
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+pub fn rename_usbms_path(src_path: &str, dst_path: &str) -> Result<(), UsbFsRenameError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsRenameError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsRenameError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRenameError::MountFailed)?;
+
+    let src_path = src_path.trim();
+    let dst_path = dst_path.trim();
+    let src_rel = src_path.strip_prefix('/').unwrap_or(src_path);
+    let dst_rel = dst_path.strip_prefix('/').unwrap_or(dst_path);
+    if src_rel.is_empty() || dst_rel.is_empty() {
+        let _ = fs.unmount();
+        return Err(UsbFsRenameError::BadPath);
+    }
+
+    // Ensure destination parent directories exist (best-effort, like write_file).
+    let res = {
+        let root = fs.root_dir();
+
+        let parent = match dst_rel.rsplit_once('/') {
+            Some((p, _name)) => p,
+            None => "",
+        };
+
+        if !parent.is_empty() {
+            let mut dir = root.clone();
+            for seg in parent.split('/').filter(|s| !s.is_empty()) {
+                match dir.open_dir(seg) {
+                    Ok(next) => dir = next,
+                    Err(fatfs::Error::NotFound) => {
+                        match dir.create_dir(seg) {
+                            Ok(_) => {}
+                            Err(fatfs::Error::AlreadyExists) => {}
+                            Err(_) => return Err(UsbFsRenameError::RenameFailed),
+                        }
+                        dir = dir.open_dir(seg).map_err(|_| UsbFsRenameError::RenameFailed)?;
+                    }
+                    Err(_) => return Err(UsbFsRenameError::RenameFailed),
+                }
+            }
+        }
+
+        match root.rename(src_rel, &root, dst_rel) {
+            Ok(()) => Ok(()),
+            Err(fatfs::Error::NotFound) => Err(UsbFsRenameError::NotFound),
+            Err(fatfs::Error::AlreadyExists) => Err(UsbFsRenameError::AlreadyExists),
+            Err(_) => Err(UsbFsRenameError::RenameFailed),
+        }
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+const MAX_LISTING_BYTES: usize = 64 * 1024;
+
+pub fn list_usbms_dir(path: &str) -> Result<String, UsbFsListDirError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsListDirError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsListDirError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsListDirError::MountFailed)?;
+
+    let path = path.trim();
+    let rel = path.strip_prefix('/').unwrap_or(path);
+    // Allow listing root by passing "/".
+    let rel = if rel == "/" { "" } else { rel };
+
+    let res = {
+        let root = fs.root_dir();
+        let mut dir = root.clone();
+        if !rel.is_empty() {
+            for seg in rel.split('/').filter(|s| !s.is_empty()) {
+                dir = dir.open_dir(seg).map_err(|_| UsbFsListDirError::OpenFailed)?;
+            }
+        }
+
+        let mut out = String::new();
+        for entry in dir.iter() {
+            let entry = entry.map_err(|_| UsbFsListDirError::IterFailed)?;
+            let name = entry.file_name();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&name);
+            if out.len() > MAX_LISTING_BYTES {
+                return Err(UsbFsListDirError::TooLarge);
+            }
+        }
+        Ok(out)
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+pub fn remove_usbms_path(path: &str) -> Result<(), UsbFsRemoveError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsRemoveError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsRemoveError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRemoveError::MountFailed)?;
+
+    let path = path.trim();
+    let rel = path.strip_prefix('/').unwrap_or(path);
+    if rel.is_empty() {
+        let _ = fs.unmount();
+        return Err(UsbFsRemoveError::BadPath);
+    }
+
+    let res = {
+        let root = fs.root_dir();
+        match root.remove(rel) {
+            Ok(()) => Ok(()),
+            Err(fatfs::Error::NotFound) => Err(UsbFsRemoveError::NotFound),
+            Err(fatfs::Error::DirectoryIsNotEmpty) => Err(UsbFsRemoveError::NotEmpty),
+            Err(_) => Err(UsbFsRemoveError::RemoveFailed),
+        }
     };
 
     let _ = fs.unmount();
@@ -355,6 +537,8 @@ impl Drop for AlignedBuf {
 
 struct BlockDeviceIo {
     dev: block::DeviceHandle,
+    base_lba: u64,
+    blocks: u64,
     pos: u64,
     block_size: usize,
     scratch: AlignedBuf,
@@ -370,6 +554,35 @@ impl BlockDeviceIo {
         if block_size == 0 {
             return Err(block::Error::InvalidParam);
         }
+
+        let (base_lba, blocks) = match layout::probe_fat_volume(dev) {
+            Ok(found) => {
+                let (base, blks) = layout::fat_slice_for_mount(found, info.block_count);
+                (base, blks)
+            }
+            Err(layout::ProbeError::UnsupportedBlockSize(_)) => {
+                return Err(block::Error::InvalidParam);
+            }
+            Err(layout::ProbeError::DeviceIo(e)) => {
+                return Err(e);
+            }
+            Err(layout::ProbeError::UnknownLayout) => {
+                crate::log!(
+                    "files: usbms: unknown disk layout (expected FAT@LBA0 or MBR+FAT partition); mount will fail\n"
+                );
+                return Err(block::Error::Corrupted);
+            }
+        };
+        crate::log!(
+            "files: usbms: FAT volume base_lba={} blocks={} (disk_blocks={})\n",
+            base_lba,
+            blocks,
+            info.block_count
+        );
+        if blocks == 0 {
+            return Err(block::Error::OutOfBounds);
+        }
+
         let align = info.dma_alignment.max(1) as usize;
         let mut scratch = AlignedBuf::new(block_size, align).ok_or(block::Error::DmaUnavailable)?;
         for b in scratch.as_mut_slice().iter_mut() {
@@ -377,6 +590,8 @@ impl BlockDeviceIo {
         }
         Ok(Self {
             dev,
+            base_lba,
+            blocks,
             pos: 0,
             block_size,
             scratch,
@@ -390,13 +605,17 @@ impl BlockDeviceIo {
         if self.cached_lba == lba {
             return Ok(());
         }
+        if lba >= self.blocks {
+            return Err(block::Error::OutOfBounds);
+        }
         self.read_count = self.read_count.wrapping_add(1);
         // Keep this intentionally low-noise: FAT mount may read lots of LBAs.
         if self.read_count <= 8 {
             crate::log!("files: io_read_block #{} lba={}\n", self.read_count, lba);
             self.last_logged_lba = lba;
         }
-        self.dev.read_blocks(lba, self.scratch.as_mut_slice())?;
+        let abs_lba = self.base_lba.saturating_add(lba);
+        self.dev.read_blocks(abs_lba, self.scratch.as_mut_slice())?;
         self.cached_lba = lba;
         Ok(())
     }
@@ -448,13 +667,18 @@ impl Write for BlockDeviceIo {
             let avail = self.block_size - block_off;
             let want = core::cmp::min(avail, buf.len() - total);
 
+            if lba >= self.blocks {
+                return Err(block::Error::OutOfBounds);
+            }
+
             if want != self.block_size {
                 self.io_read_block(lba)?;
             }
 
             self.scratch.as_mut_slice()[block_off..block_off + want]
                 .copy_from_slice(&buf[total..total + want]);
-            self.dev.write_blocks(lba, self.scratch.as_mut_slice())?;
+            let abs_lba = self.base_lba.saturating_add(lba);
+            self.dev.write_blocks(abs_lba, self.scratch.as_mut_slice())?;
             self.cached_lba = lba;
 
             total += want;
@@ -471,7 +695,7 @@ impl Write for BlockDeviceIo {
 
 impl Seek for BlockDeviceIo {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, Self::Error> {
-        let cap_bytes = (self.dev.block_count() as u128) * (self.block_size as u128);
+        let cap_bytes = (self.blocks as u128) * (self.block_size as u128);
         let cap_i64 = core::cmp::min(cap_bytes, i64::MAX as u128) as i64;
 
         let next = match pos {
