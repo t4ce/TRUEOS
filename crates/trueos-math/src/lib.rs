@@ -146,6 +146,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn complex_ops_smoke() {
+        let a = Complex::new(3.0, 4.0);
+        let b = Complex::new(1.0, 2.0);
+
+        let sum = a.add(b);
+        assert_eq!(sum, Complex::new(4.0, 6.0));
+
+        let sq = a.square();
+        assert_eq!(sq, Complex::new(-7.0, 24.0));
+
+        let mag2 = a.magnitude_squared();
+        assert_eq!(mag2, 25.0);
+    }
+
+    #[test]
     fn mandelbrot_smoke() {
         const WIDTH: usize = 256;
         const HEIGHT: usize = 256;

@@ -40,9 +40,7 @@ mod power;
 mod globalog;
 mod matrix;
 mod shell;
-mod shellqjs;
 mod install;
-mod shellcube;
 mod ecma48;
 mod txtedt;
 mod surface;
@@ -70,45 +68,10 @@ pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
-fn trueos_math_smoke_test() {
-    crate::log!("trueos-math: smoke test begin\n");
-
-    let a = trueos_math::Complex::new(3.0, 4.0);
-    let b = trueos_math::Complex::new(1.0, 2.0);
-
-    let sum = a.add(b);
-    if sum == trueos_math::Complex::new(4.0, 6.0) {
-        crate::log!("trueos-math: add ok\n");
-    } else {
-        crate::log!("trueos-math: add FAIL {:?}\n", sum);
-    }
-
-    let sq = a.square();
-    if sq == trueos_math::Complex::new(-7.0, 24.0) {
-        crate::log!("trueos-math: square ok\n");
-    } else {
-        crate::log!("trueos-math: square FAIL {:?}\n", sq);
-    }
-
-    let mag2 = a.magnitude_squared();
-    if mag2 == 25.0 {
-        crate::log!("trueos-math: magnitude_squared ok\n");
-    } else {
-        crate::log!("trueos-math: magnitude_squared FAIL {}\n", mag2);
-    }
-
-    crate::log!("trueos-math: smoke test end\n");
-}
-
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
 static CPU_SLOT_LEN: AtomicUsize = AtomicUsize::new(0);
-
-static RENDER_MANDELBROT_ONCE: Once<()> = Once::new();
 static LOG_CPU_TOPOLOGY_ONCE: Once<()> = Once::new();
-
-const MANDELBROT_W: usize = 256;
-const MANDELBROT_H: usize = 256;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -191,9 +154,6 @@ fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) 
     slots
 }
 
-#[link_section = ".bss"]
-static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] = [0; MANDELBROT_W * MANDELBROT_H];
-
 // Bootloader-provided stacks can be very small; debug builds can need a lot more
 // stack than expected very early (before heap/logging is fully online).
 // Provide a known-good BSP stack and switch to it immediately in `_start`.
@@ -204,11 +164,6 @@ struct BootStack([u8; BSP_BOOT_STACK_BYTES]);
 
 #[link_section = ".bss"]
 static mut BSP_BOOT_STACK: BootStack = BootStack([0; BSP_BOOT_STACK_BYTES]);
-/*
-ConPink 	FF_55_FF 
-ConBlue 	08_18_30
-ConWhite 	FF_FF_FF
-*/
 
 #[no_mangle]
 #[unsafe(naked)]
@@ -262,7 +217,6 @@ pub extern "C" fn kmain() -> ! {
     strings::smoke_test();
     path::smoke_test();
     pattern::smoke_test();
-    trueos_math_smoke_test();
     
     // If booted via UEFI, parse+log the EFI System Table once.
     let dumped_uefi_system_table = efi::log_system_table_once(); // its crashreboots on our baremetal testrig
@@ -295,8 +249,8 @@ pub extern "C" fn kmain() -> ! {
 
     usb::xhci::init_once();
 
-    // Optional: initialize TrueKey (CDC-based ESP32 binding) before enumeration.
-    usb::truekey::configure_target_serial("9C:13:9E:E4:25:B8");
+    // Optional: bind the CDC shell to a specific device serial.
+    usb::cdc_shell::configure_target_serial("9C:13:9E:E4:25:B8");
     usb::truekey::init();
     usb::cdc_shell::init();
 
@@ -309,7 +263,7 @@ pub extern "C" fn kmain() -> ! {
 
     time::init(executor);
 
-    quickjs_smoke_test();
+    unsafe { qjs::trueos_smoke::run() };
 
     net::init();
     let net_ready = net::mac_address().is_some();
@@ -340,7 +294,7 @@ pub extern "C" fn kmain() -> ! {
 
     let _ = spawner.spawn(usb::uac::sine_task());
 
-    // Continuously drains the TrueKey log cache to the ESP32 when bound.
+    // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
@@ -362,10 +316,6 @@ pub extern "C" fn kmain() -> ! {
     crate::log!("main: entering executor loop\n");
 
     _loop(executor, spawner)
-}
-
-fn quickjs_smoke_test() {
-    unsafe { qjs::trueos_smoke::run() }
 }
 
 fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
@@ -405,41 +355,6 @@ fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
 
         install_cpu_slot_table_owned(slots);
     });
-}
-
-pub(crate) fn draw_mandelbrot() {
-    let Some((fb_w, fb_h)) = vga::framebuffer_dimensions() else {
-        return;
-    };
-
-    let fb_w = fb_w as usize;
-    let fb_h = fb_h as usize;
-    let w = MANDELBROT_W;
-    let h = MANDELBROT_H;
-    let expected = w * h;
-
-    // Rendering is the expensive part; do it once.
-    RENDER_MANDELBROT_ONCE.call_once(|| unsafe {
-        trueos_math::render_mandelbrot_rgb32(&mut MANDELBROT_PIXELS[..expected], w, h, 64);
-    });
-
-    unsafe {
-        let img = vga::Image {
-            width: w,
-            height: h,
-            pixels: &MANDELBROT_PIXELS[..expected],
-        };
-
-        let (origin_x, origin_y) = match acpi::bgrt::last_logo_rect() {
-            Some((logo_x, logo_y, logo_w, _logo_h)) => {
-                let x = logo_x.saturating_add(logo_w).saturating_sub(w);
-                let y = logo_y.saturating_sub(h);
-                (x, y)
-            }
-            None => (fb_w, fb_h),
-        };
-        let _ = vga::blit_image(origin_x, origin_y, &img);
-    }
 }
 
 fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {

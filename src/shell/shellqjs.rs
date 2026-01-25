@@ -1,8 +1,163 @@
+use alloc::{string::String, vec::Vec};
 use core::ffi::{c_char, c_int, CStr};
 
 use crate::shell::{ShellBackend, ShellIo};
+use crate::disc::files::Fs;
 
 static mut QJS_SHELL_IO: Option<&'static dyn ShellBackend> = None;
+
+const QJS_FS_BASE_DIR: &str = "/qjs";
+
+fn has_extension(path: &str) -> bool {
+    path.rsplit('/').next().map(|s| s.contains('.')).unwrap_or(false)
+}
+
+fn dir_of(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(0) => "/",
+        Some(i) => &path[..i],
+        None => QJS_FS_BASE_DIR,
+    }
+}
+
+fn normalize_join(base_dir: &str, rel: &str) -> String {
+    // Build normalized absolute path by resolving '.' and '..'.
+    let mut parts: Vec<&str> = Vec::new();
+
+    for p in base_dir.split('/') {
+        if !p.is_empty() {
+            parts.push(p);
+        }
+    }
+    for p in rel.split('/') {
+        match p {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            _ => parts.push(p),
+        }
+    }
+
+    let mut out = String::new();
+    out.push('/');
+    for (i, p) in parts.iter().enumerate() {
+        out.push_str(p);
+        if i + 1 != parts.len() {
+            out.push('/');
+        }
+    }
+    out
+}
+
+unsafe fn js_alloc_cstring(ctx: *mut trueos_qjs::JSContext, s: &str) -> *mut c_char {
+    let bytes = s.as_bytes();
+    let buf = trueos_qjs::js_malloc(ctx, bytes.len() + 1) as *mut u8;
+    if buf.is_null() {
+        return core::ptr::null_mut();
+    }
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    *buf.add(bytes.len()) = 0;
+    buf as *mut c_char
+}
+
+unsafe extern "C" fn trueos_module_normalize(
+    ctx: *mut trueos_qjs::JSContext,
+    module_base_name: *const c_char,
+    module_name: *const c_char,
+    _opaque: *mut core::ffi::c_void,
+) -> *mut c_char {
+    if module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let name_bytes = CStr::from_ptr(module_name).to_bytes();
+    let Ok(name) = core::str::from_utf8(name_bytes) else {
+        return core::ptr::null_mut();
+    };
+
+    // Keep TRUEOS-provided native modules as-is.
+    if name == "complex" {
+        return js_alloc_cstring(ctx, "complex");
+    }
+
+    // Map bare specifiers to /qjs/<name>.mjs
+    // Map relative specifiers against the base module path.
+    let normalized = if name.starts_with('/') {
+        String::from(name)
+    } else if name.starts_with("./") || name.starts_with("../") {
+        let base_dir = if module_base_name.is_null() {
+            QJS_FS_BASE_DIR
+        } else {
+            let base_bytes = CStr::from_ptr(module_base_name).to_bytes();
+            match core::str::from_utf8(base_bytes) {
+                Ok(base) if base.starts_with('/') => dir_of(base),
+                _ => QJS_FS_BASE_DIR,
+            }
+        };
+        normalize_join(base_dir, name)
+    } else {
+        let mut p = String::new();
+        p.push_str(QJS_FS_BASE_DIR);
+        p.push('/');
+        p.push_str(name);
+        p
+    };
+
+    let normalized = if has_extension(&normalized) {
+        normalized
+    } else {
+        let mut p = normalized;
+        p.push_str(".mjs");
+        p
+    };
+
+    js_alloc_cstring(ctx, normalized.as_str())
+}
+
+unsafe extern "C" fn trueos_module_loader(
+    ctx: *mut trueos_qjs::JSContext,
+    module_name: *const c_char,
+    _opaque: *mut core::ffi::c_void,
+) -> *mut trueos_qjs::JSModuleDef {
+    // First, try built-in native modules (e.g. "complex").
+    let native = trueos_qjs::trueos_modules::load_native_module(ctx, module_name);
+    if !native.is_null() {
+        return native;
+    }
+
+    if module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let name_bytes = CStr::from_ptr(module_name).to_bytes();
+    let Ok(path) = core::str::from_utf8(name_bytes) else {
+        return core::ptr::null_mut();
+    };
+    if !path.starts_with('/') {
+        return core::ptr::null_mut();
+    }
+
+    let bytes = match Fs::read_file(path) {
+        Ok(b) => b,
+        Err(_) => return core::ptr::null_mut(),
+    };
+
+    let val = trueos_qjs::JS_Eval(
+        ctx,
+        bytes.as_ptr() as *const c_char,
+        bytes.len(),
+        module_name,
+        trueos_qjs::JS_EVAL_TYPE_MODULE | trueos_qjs::JS_EVAL_FLAG_COMPILE_ONLY,
+    );
+    if val.is_exception() {
+        return core::ptr::null_mut();
+    }
+
+    let m = val.u.ptr as *mut trueos_qjs::JSModuleDef;
+    trueos_qjs::js_free_value(ctx, val);
+    m
+}
 
 unsafe extern "C" fn qjs_shell_print(
     ctx: *mut trueos_qjs::JSContext,
@@ -106,8 +261,13 @@ pub(crate) fn eval_bytes(
             return;
         }
 
-        // Enable ES module loading (imports) by installing the TRUEOS module loader.
-        trueos_qjs::trueos_modules::install(rt);
+        // Enable ES module loading (imports): native modules + filesystem modules under /qjs.
+        trueos_qjs::JS_SetModuleLoaderFunc(
+            rt,
+            Some(trueos_module_normalize),
+            Some(trueos_module_loader),
+            core::ptr::null_mut(),
+        );
 
         let ctx = trueos_qjs::JS_NewContext(rt);
         if ctx.is_null() {
