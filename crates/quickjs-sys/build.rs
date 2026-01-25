@@ -5,8 +5,14 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let quickjs_dir = manifest_dir.join("..").join("..").join("quickjs");
 
-    // Local freestanding C stubs for printf/vsnprintf/etc.
-    let trueos_stdio = manifest_dir.join("trueos_stdio.c");
+    // Freestanding C ABI stubs for printf/vsnprintf/etc.
+    // Kept in the kernel's surface layer so both C and Rust can share the same routing.
+    let trueos_stdio = manifest_dir
+        .join("..")
+        .join("..")
+        .join("src")
+        .join("surface")
+        .join("stdio.c");
 
     let sources = [
         "quickjs.c",
