@@ -38,7 +38,6 @@ mod rng;
 mod serial;
 mod power;
 mod globalog;
-mod quickjs_shims;
 mod shell;
 mod shellcube;
 mod ecma48;
@@ -55,6 +54,7 @@ pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::usb::usb_scout_service;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use ::limine::mp::Cpu as LimineCpu;
+use core::ffi::c_char;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
@@ -65,6 +65,36 @@ pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
+
+fn trueos_math_smoke_test() {
+    crate::log!("trueos-math: smoke test begin\n");
+
+    let a = trueos_math::Complex::new(3.0, 4.0);
+    let b = trueos_math::Complex::new(1.0, 2.0);
+
+    let sum = a.add(b);
+    if sum == trueos_math::Complex::new(4.0, 6.0) {
+        crate::log!("trueos-math: add ok\n");
+    } else {
+        crate::log!("trueos-math: add FAIL {:?}\n", sum);
+    }
+
+    let sq = a.square();
+    if sq == trueos_math::Complex::new(-7.0, 24.0) {
+        crate::log!("trueos-math: square ok\n");
+    } else {
+        crate::log!("trueos-math: square FAIL {:?}\n", sq);
+    }
+
+    let mag2 = a.magnitude_squared();
+    if mag2 == 25.0 {
+        crate::log!("trueos-math: magnitude_squared ok\n");
+    } else {
+        crate::log!("trueos-math: magnitude_squared FAIL {}\n", mag2);
+    }
+
+    crate::log!("trueos-math: smoke test end\n");
+}
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
@@ -228,6 +258,7 @@ pub extern "C" fn kmain() -> ! {
     strings::smoke_test();
     path::smoke_test();
     pattern::smoke_test();
+    trueos_math_smoke_test();
     
     // If booted via UEFI, parse+log the EFI System Table once.
     let dumped_uefi_system_table = efi::log_system_table_once(); // its crashreboots on our baremetal testrig
@@ -321,22 +352,7 @@ pub extern "C" fn kmain() -> ! {
 }
 
 fn quickjs_smoke_test() {
-    unsafe {
-        let rt = qjs::JS_NewRuntime();
-        if rt.is_null() {
-            crate::log!("quickjs: JS_NewRuntime failed\n");
-            return;
-        }
-        let ctx = qjs::JS_NewContext(rt);
-        if ctx.is_null() {
-            crate::log!("quickjs: JS_NewContext failed\n");
-            qjs::JS_FreeRuntime(rt);
-            return;
-        }
-        crate::log!("quickjs: runtime/context ok\n");
-        qjs::JS_FreeContext(ctx);
-        qjs::JS_FreeRuntime(rt);
-    }
+    unsafe { qjs::trueos_smoke::run() }
 }
 
 fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
