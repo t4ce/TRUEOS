@@ -502,7 +502,7 @@ pub(crate) fn eval_bytes(
 
 pub(crate) fn eval(io: &'static dyn ShellBackend, source: &str) {
     let bytes = source.as_bytes();
-    let is_module = looks_like_module_bytes(bytes);
+    let is_module = looks_like_module_src(source);
     let filename = if is_module {
         b"<shell-module>\0".as_ptr() as *const c_char
     } else {

@@ -88,9 +88,8 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 23] = [
+const SHELL_COMMANDS: [&str; 22] = [
     "qjs",
-    "qjsm",
     "out",
     "in",
     "io",
@@ -433,23 +432,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     cube.reset();
     enter_cube_mode(io, &mut term_cols, &mut term_rows);
 
-    // Some backends/terminals send Enter as CRLF ("\r\n").
-    // Treat it as a single newline by ignoring an immediate '\n' after '\r'.
-    let mut ignore_next_lf: bool = false;
-
     loop {
         if let Some(b) = io.read_byte() {
-            if ignore_next_lf {
-                if b == b'\n' {
-                    ignore_next_lf = false;
-                    continue;
-                }
-                ignore_next_lf = false;
-            }
-            if b == b'\r' {
-                ignore_next_lf = true;
-            }
-
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
@@ -530,8 +514,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         continue;
                     }
                     if line.is_empty() && pending_action.is_none() {
-                        io.write_str("\r\n");
-                        write_prompt(io);
+                        // Empty command: do nothing (no newline, no prompt).
                         continue;
                     }
                     if !line.is_empty() {
@@ -1047,7 +1030,10 @@ fn handle_line(
         if verb.eq_ignore_ascii_case("qjs") {
             let src = rest.trim();
             if src.is_empty() {
-                io.write_str("qjs: usage qjs <javascript>\r\n");
+                io.write_str("qjs: usage qjs <javascript> | qjs @<path>\r\n");
+                io.write_str("qjs: auto-detects modules (import/export/import.meta)\r\n");
+                io.write_str("qjs: example qjs print(1+2)\r\n");
+                io.write_str("qjs: example qjs import { make } from 'complex'; print(make(1,2))\r\n");
             } else {
                 if let Some(path) = src.strip_prefix('@') {
                     let path = path.trim();
@@ -1079,35 +1065,6 @@ fn handle_line(
             }
             return CommandAction::None;
         }
-        if verb.eq_ignore_ascii_case("qjsm") {
-            let src = rest.trim();
-            if src.is_empty() {
-                io.write_str("qjsm: usage qjsm <module-source>\r\n");
-                io.write_str("qjsm: example qjsm import { make } from 'complex'; make(1,2)\r\n");
-            } else {
-                if let Some(path) = src.strip_prefix('@') {
-                    let path = path.trim();
-                    match crate::disc::files::Fs::read_file(path) {
-                        Ok(bytes) => {
-                            let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
-                            filename_buf.extend_from_slice(path.as_bytes());
-                            filename_buf.push(0);
-                            shellqjs::eval_bytes(
-                                io,
-                                filename_buf.as_ptr() as *const c_char,
-                                &bytes,
-                                trueos_qjs::JS_EVAL_TYPE_MODULE,
-                            );
-                        }
-                        Err(e) => io.write_fmt(format_args!("qjsm: read_file failed ({:?})\r\n", e)),
-                    }
-                } else {
-                    shellqjs::eval_module(io, src);
-                }
-            }
-            return CommandAction::None;
-        }
-
         if verb.eq_ignore_ascii_case("mv") {
             let mut parts = rest.split_whitespace();
             let src = parts.next().unwrap_or("");
@@ -1181,17 +1138,15 @@ fn handle_line(
         refresh_matrix_symbols(io, *term_cols);
         return CommandAction::None;
     } else if cmd.eq_ignore_ascii_case("qjs") {
-        io.write_str("qjs: usage qjs <javascript>\r\n");
+        io.write_str("qjs: usage qjs <javascript> | qjs @<path>\r\n");
+        io.write_str("qjs: auto-detects modules (import/export/import.meta)\r\n");
         io.write_str("qjs: example qjs print(1+2)\r\n");
+        io.write_str("qjs: example qjs import { make } from 'complex'; print(make(1,2))\r\n");
         return CommandAction::None;
     } else if cmd == "§" {
         let mut buf: String<512> = String::new();
         crate::matrix::list_slots(&mut buf);
         io.write_str(buf.as_str());
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("qjsm") {
-        io.write_str("qjsm: usage qjsm <module-source>\r\n");
-        io.write_str("qjsm: example qjsm import { make } from 'complex'; make(1,2)\r\n");
         return CommandAction::None;
     }
 
