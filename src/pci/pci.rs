@@ -158,8 +158,10 @@ fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32)
     Some(())
 }
 
-pub fn enumerate_once() {
-    crate::log!("pci: enumerate\n");
+fn enumerate_impl(log: bool) {
+    if log {
+        crate::log!("pci: enumerate\n");
+    }
 
     DEVICES.lock().clear();
 
@@ -194,7 +196,17 @@ pub fn enumerate_once() {
         }
     }
 
-    crate::log!("pci: done\n");
+    if log {
+        crate::log!("pci: done\n");
+    }
+}
+
+pub fn enumerate_once() {
+    enumerate_impl(true)
+}
+
+pub fn enumerate_silent() {
+    enumerate_impl(false)
 }
 
 fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {

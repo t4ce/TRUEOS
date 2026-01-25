@@ -4,7 +4,7 @@ use heapless::{String, Vec};
 use crate::ecma48;
 use crate::shell::ShellBackend;
 
-const MAX_BYTES: usize = 512;
+pub const MAX_BYTES: usize = 512;
 const FILENAME_MAX: usize = 48;
 const DIRTY_RGB: (u8, u8, u8) = (255, 55, 255);
 
@@ -16,10 +16,16 @@ enum EscState {
     Ss3,
 }
 
-pub async fn run(io: &'static dyn ShellBackend, cols: usize, rows: usize, filename: &str) {
-    let mut editor = TextEditor::new(cols, rows, filename);
+pub async fn run(
+    io: &'static dyn ShellBackend,
+    cols: usize,
+    rows: usize,
+    filename: &str,
+    initial: Option<&[u8]>,
+) -> Vec<u8, MAX_BYTES> {
+    let mut editor = TextEditor::new(cols, rows, filename, initial);
 
-        io.write_str(ecma48::SHOW_CURSOR);
+    io.write_str(ecma48::SHOW_CURSOR);
     editor.redraw(io);
 
     loop {
@@ -33,6 +39,8 @@ pub async fn run(io: &'static dyn ShellBackend, cols: usize, rows: usize, filena
     }
 
     io.write_str(ecma48::SHOW_CURSOR);
+    let TextEditor { buf, .. } = editor;
+    buf
 }
 
 struct TextEditor {
@@ -55,7 +63,7 @@ struct TextEditor {
 }
 
 impl TextEditor {
-    fn new(cols: usize, rows: usize, filename: &str) -> Self {
+    fn new(cols: usize, rows: usize, filename: &str, initial: Option<&[u8]>) -> Self {
         let mut name: String<FILENAME_MAX> = String::new();
         let trimmed = filename.trim();
         let fallback = if trimmed.is_empty() { "untitled.txt" } else { trimmed };
@@ -68,7 +76,7 @@ impl TextEditor {
         let mut status_msg: String<64> = String::new();
         let _ = status_msg.push_str("ready");
 
-        Self {
+        let mut this = Self {
             cols,
             rows,
             filename: name,
@@ -81,7 +89,16 @@ impl TextEditor {
             esc: EscState::None,
             csi_param: 0,
             status_msg,
+        };
+
+        if let Some(bytes) = initial {
+            for &b in bytes.iter().take(MAX_BYTES) {
+                let _ = this.buf.push(b);
+            }
+            this.cursor = this.buf.len();
         }
+
+        this
     }
 
     fn handle_byte(&mut self, io: &dyn ShellBackend, b: u8) -> bool {

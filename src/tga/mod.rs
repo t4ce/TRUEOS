@@ -1,7 +1,7 @@
 use core::ptr::{read_volatile, write_volatile};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Once;
+use spin::Mutex;
 
 use crate::pci::PciDevice;
 
@@ -27,23 +27,35 @@ impl Tga {
     }
 }
 
-static TGA: Once<Option<Tga>> = Once::new();
+static TGA: Mutex<Option<Tga>> = Mutex::new(None);
+
+pub fn try_init() -> bool {
+    if is_online() {
+        return true;
+    }
+
+    let mut found: Option<PciDevice> = None;
+    crate::pci::with_devices(|devices| {
+        found = devices.iter().copied().find(is_tga);
+    });
+    let Some(dev) = found else {
+        return false;
+    };
+
+    let Some(tga) = bring_online(&dev) else {
+        return false;
+    };
+
+    *TGA.lock() = Some(tga);
+    true
+}
 
 pub fn init_once() {
-    TGA.call_once(|| {
-        let mut found: Option<PciDevice> = None;
-        crate::pci::with_devices(|devices| {
-            found = devices.iter().copied().find(is_tga);
-        });
-        let Some(dev) = found else {
-            return None;
-        };
-        bring_online(&dev)
-    });
+    let _ = try_init();
 }
 
 pub fn is_online() -> bool {
-    TGA.get().and_then(|x| x.as_ref()).is_some()
+    TGA.lock().is_some()
 }
 
 fn is_tga(dev: &PciDevice) -> bool {
@@ -79,7 +91,8 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
 #[inline]
 fn with_tga<R>(f: impl FnOnce(&Tga) -> R) -> Option<R> {
-    let tga = TGA.get().and_then(|x| x.as_ref())?;
+    let guard = TGA.lock();
+    let tga = guard.as_ref()?;
     Some(f(tga))
 }
 
@@ -99,11 +112,24 @@ pub fn tga_led_off() {
 
 #[embassy_executor::task]
 pub(crate) async fn blink_task() {
+    let mut offline_ticks: u32 = 0;
     loop {
+        if !is_online() {
+            // Retry strategy: periodically rescan PCI and attempt bring-up.
+            // This supports the (rare) case where PCI devices appear after boot.
+            offline_ticks = offline_ticks.wrapping_add(1);
+            if (offline_ticks % 10) == 0 {
+                crate::pci::enumerate_silent();
+                let _ = try_init();
+            }
+            Timer::after(EmbassyDuration::from_millis(500)).await;
+            continue;
+        }
+
         tga_led_on();
         Timer::after(EmbassyDuration::from_millis(500)).await;
         tga_led_off();
         Timer::after(EmbassyDuration::from_millis(500)).await;
-        crate::log!("tga heartbeat on/off once.");
+        crate::log!("tga heartbeat on/off once.\n");
     }
 }

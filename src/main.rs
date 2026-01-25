@@ -218,9 +218,7 @@ pub extern "C" fn kmain() -> ! {
     path::smoke_test();
     pattern::smoke_test();
     
-    // If booted via UEFI, parse+log the EFI System Table once.
-    let dumped_uefi_system_table = efi::log_system_table_once(); // its crashreboots on our baremetal testrig
-
+    let dumped_uefi_system_table = efi::log_system_table_once(); 
     crate::log!(
         "turbo: {:?}\n", turbo::local_state()
     );
@@ -270,14 +268,13 @@ pub extern "C" fn kmain() -> ! {
     if net_ready {
         let _ = spawner.spawn(net::adapter::net_service_task());
         let _ = spawner.spawn(net::adapter::net_smoke_task());
+        crate::log!("net-shell: spawning tcp listener on 4245\n");
         let _ = spawner.spawn(net::adapter::net_shell_task());
     } else {
         crate::log!("net: skipping net tasks (no NIC)\n");
     }
 
-    if tga::is_online() {
-        let _ = spawner.spawn(tga::blink_task());
-    }
+    let _ = spawner.spawn(tga::blink_task());
 
     for info in usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs

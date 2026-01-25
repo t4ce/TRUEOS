@@ -233,10 +233,12 @@ fn drain_commands() -> Vec<(&'static str, Vec<NetCommand>)> {
     out
 }
 
-fn push_event(target: &'static str, event: NetEvent) {
+fn push_event(target: &'static str, event: NetEvent) -> bool {
     let guard = APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
-        let _ = entry.events.push(event);
+        entry.events.push(event).is_ok()
+    } else {
+        false
     }
 }
 
@@ -515,6 +517,7 @@ struct SocketRecord {
     kind: SocketKind,
     socket: SocketHandle,
     established: bool,
+    last_tcp_state: Option<tcp::State>,
 }
 
 struct NetService {
@@ -616,6 +619,7 @@ impl NetService {
             kind: SocketKind::Udp,
             socket: sh,
             established: false,
+            last_tcp_state: None,
         });
         Ok(handle)
     }
@@ -630,6 +634,7 @@ impl NetService {
         let mut socket = tcp::Socket::new(rx, tx);
         socket.listen(port).map_err(|_| "listen failed")?;
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
+        let initial_state = socket.state();
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
@@ -639,6 +644,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             established: false,
+            last_tcp_state: Some(initial_state),
         });
         Ok(handle)
     }
@@ -673,6 +679,8 @@ impl NetService {
             .connect(self.iface.context(), remote, local)
             .map_err(|_| "connect failed")?;
 
+        let initial_state = socket.state();
+
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         self.records.push(SocketRecord {
@@ -681,6 +689,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             established: false,
+            last_tcp_state: Some(initial_state),
         });
         Ok(handle)
     }
@@ -690,35 +699,47 @@ impl NetService {
             for cmd in cmds {
                 match cmd {
                     NetCommand::OpenUdp { port } => match self.open_udp(owner, port) {
-                        Ok(handle) => push_event(
-                            owner,
-                            NetEvent::Opened {
-                                handle,
-                                kind: SocketKind::Udp,
-                            },
-                        ),
-                        Err(msg) => push_event(owner, NetEvent::Error { msg }),
+                        Ok(handle) => {
+                            let _ = push_event(
+                                owner,
+                                NetEvent::Opened {
+                                    handle,
+                                    kind: SocketKind::Udp,
+                                },
+                            );
+                        }
+                        Err(msg) => {
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
                     },
                     NetCommand::OpenTcpListen { port } => match self.open_tcp(owner, port) {
-                        Ok(handle) => push_event(
-                            owner,
-                            NetEvent::Opened {
-                                handle,
-                                kind: SocketKind::Tcp,
-                            },
-                        ),
-                        Err(msg) => push_event(owner, NetEvent::Error { msg }),
-                    },
-                    NetCommand::OpenTcpConnect { remote } => {
-                        match self.open_tcp_connect(owner, remote) {
-                            Ok(handle) => push_event(
+                        Ok(handle) => {
+                            let _ = push_event(
                                 owner,
                                 NetEvent::Opened {
                                     handle,
                                     kind: SocketKind::Tcp,
                                 },
-                            ),
-                            Err(msg) => push_event(owner, NetEvent::Error { msg }),
+                            );
+                        }
+                        Err(msg) => {
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
+                    },
+                    NetCommand::OpenTcpConnect { remote } => {
+                        match self.open_tcp_connect(owner, remote) {
+                            Ok(handle) => {
+                                let _ = push_event(
+                                    owner,
+                                    NetEvent::Opened {
+                                        handle,
+                                        kind: SocketKind::Tcp,
+                                    },
+                                );
+                            }
+                            Err(msg) => {
+                                let _ = push_event(owner, NetEvent::Error { msg });
+                            }
                         }
                     }
                     NetCommand::SendUdp {
@@ -728,7 +749,7 @@ impl NetService {
                     } => {
                         if let Some(rec) = self.find_record(handle) {
                             if rec.kind != SocketKind::Udp {
-                                push_event(owner, NetEvent::Error { msg: "not udp" });
+                                let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
                                 continue;
                             }
                             let socket_handle = rec.socket;
@@ -738,7 +759,7 @@ impl NetService {
                             );
                             let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
                             let _ = socket.send_slice(&data, endpoint).map_err(|_| {
-                                push_event(
+                                let _ = push_event(
                                     owner,
                                     NetEvent::Error {
                                         msg: "udp send fail",
@@ -746,13 +767,13 @@ impl NetService {
                                 );
                             });
                         } else {
-                            push_event(owner, NetEvent::Error { msg: "bad handle" });
+                            let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                         }
                     }
                     NetCommand::SendTcp { handle, data } => {
                         if let Some(rec) = self.find_record(handle) {
                             if rec.kind != SocketKind::Tcp {
-                                push_event(owner, NetEvent::Error { msg: "not tcp" });
+                                let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                                 continue;
                             }
                             let socket_handle = rec.socket;
@@ -760,7 +781,7 @@ impl NetService {
                             if socket.can_send() && socket.may_send() {
                                 match socket.send_slice(&data) {
                                     Ok(sent) => {
-                                        push_event(
+                                        let _ = push_event(
                                             owner,
                                             NetEvent::TcpSent {
                                                 handle,
@@ -769,7 +790,7 @@ impl NetService {
                                         );
                                     }
                                     Err(_) => {
-                                        push_event(
+                                        let _ = push_event(
                                             owner,
                                             NetEvent::Error {
                                                 msg: "tcp send fail",
@@ -778,7 +799,7 @@ impl NetService {
                                     }
                                 }
                             } else {
-                                push_event(
+                                let _ = push_event(
                                     owner,
                                     NetEvent::Error {
                                         msg: "tcp not ready",
@@ -786,12 +807,12 @@ impl NetService {
                                 );
                             }
                         } else {
-                            push_event(owner, NetEvent::Error { msg: "bad handle" });
+                            let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                         }
                     }
                     NetCommand::Close { handle } => {
                         self.remove_record(handle);
-                        push_event(owner, NetEvent::Closed { handle });
+                        let _ = push_event(owner, NetEvent::Closed { handle });
                     }
                 }
             }
@@ -840,21 +861,41 @@ impl NetService {
         let handle = rec.handle;
         let socket = self.sockets.get_mut::<tcp::Socket>(rec.socket);
 
+        let state = socket.state();
+        if rec.last_tcp_state != Some(state) {
+            rec.last_tcp_state = Some(state);
+            crate::log!("net: tcp state owner={} handle={} state={:?}\n", owner, handle.0, state);
+        }
+
         if socket.is_active() && socket.may_recv() {
             let mut buf = [0u8; 2048];
             while let Ok(len) = socket.recv_slice(&mut buf) {
+                if len == 0 {
+                    break;
+                }
                 let data = buf[..len].to_vec();
                 let _ = push_event(owner, NetEvent::TcpData { handle, data });
             }
         }
 
         if socket.state() == tcp::State::Established && !rec.established {
+            crate::log!(
+                "net: tcp established branch owner={} handle={}\n",
+                owner,
+                handle.0
+            );
             rec.established = true;
-            push_event(owner, NetEvent::TcpEstablished { handle });
+            let ok = push_event(owner, NetEvent::TcpEstablished { handle });
+            crate::log!(
+                "net: tcp established event owner={} handle={} queued={}\n",
+                owner,
+                handle.0,
+                ok
+            );
         }
 
         if !socket.is_open() {
-            push_event(owner, NetEvent::Closed { handle });
+            let _ = push_event(owner, NetEvent::Closed { handle });
             self.remove_record(handle);
             return true;
         }
@@ -1465,14 +1506,20 @@ pub async fn net_shell_task() {
     crate::log!("net-shell: listening on tcp {} (hostfwd localhost:{} -> guest)\n", NET_SHELL_TCP_PORT, NET_SHELL_TCP_PORT);
 
     let mut ticks: u32 = 0;
+    let mut logged_first_rx: bool = false;
     let mut pending: Option<Vec<u8>> = None;
     let mut pending_handle: Option<NetHandle> = None;
+    let mut pending_ticks: u32 = 0;
+    let mut pending_len: usize = 0;
+    let mut tx_log_budget: u32 = 16;
+    let mut tcp_handle: Option<NetHandle> = None;
 
     loop {
         for ev in events.drain(32) {
             match ev {
                 NetEvent::Opened { handle, kind } => {
                     if kind == SocketKind::Tcp {
+                        tcp_handle = Some(handle);
                         crate::log!("net-shell: opened tcp handle={}\n", handle.0);
                     }
                 }
@@ -1480,6 +1527,8 @@ pub async fn net_shell_task() {
                     NET_SHELL_STATE.lock().handle = Some(handle);
                     pending = None;
                     pending_handle = Some(handle);
+                    pending_ticks = 0;
+                    pending_len = 0;
                     crate::log!("net-shell: tcp established handle={}\n", handle.0);
 
                     // Nudge: make sure the client sees *something* even if the shell is quiet.
@@ -1487,22 +1536,50 @@ pub async fn net_shell_task() {
                 }
                 NetEvent::TcpData { handle, data } => {
                     // Only accept bytes from the active connection.
-                    if NET_SHELL_STATE.lock().handle != Some(handle) {
-                        continue;
-                    }
-                    const MAX_RX: usize = 8 * 1024;
-                    let mut st = NET_SHELL_STATE.lock();
-                    for b in data {
-                        if st.rx.len() >= MAX_RX {
-                            let _ = st.rx.pop_front();
+                    // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
+                    // so treat the first inbound bytes as selecting the active handle.
+                    {
+                        let mut st = NET_SHELL_STATE.lock();
+                        if st.handle.is_none() {
+                            st.handle = Some(handle);
                         }
-                        st.rx.push_back(b);
+                        if st.handle != Some(handle) {
+                            continue;
+                        }
+
+                        if !logged_first_rx {
+                            logged_first_rx = true;
+                            crate::log!(
+                                "net-shell: first rx {} bytes (including {:?})\n",
+                                data.len(),
+                                data.get(0).copied()
+                            );
+                        }
+
+                        const MAX_RX: usize = 8 * 1024;
+                        for b in data {
+                            if st.rx.len() >= MAX_RX {
+                                let _ = st.rx.pop_front();
+                            }
+                            st.rx.push_back(b);
+                        }
                     }
                 }
                 NetEvent::TcpSent { handle, len } => {
                     if pending_handle != Some(handle) {
                         continue;
                     }
+
+                    if tx_log_budget > 0 {
+                        tx_log_budget -= 1;
+                        crate::log!(
+                            "net-shell: tx accepted handle={} len={} (pending_len={})\n",
+                            handle.0,
+                            len,
+                            pending_len
+                        );
+                    }
+
                     // Drop the bytes we now know were accepted by smoltcp.
                     // NOTE: smoltcp may accept only a prefix of the buffer; keep the rest queued.
                     let mut st = NET_SHELL_STATE.lock();
@@ -1510,6 +1587,8 @@ pub async fn net_shell_task() {
                         let _ = st.tx.pop_front();
                     }
                     pending = None;
+                    pending_ticks = 0;
+                    pending_len = 0;
                 }
                 NetEvent::Closed { handle } => {
                     let mut st = NET_SHELL_STATE.lock();
@@ -1518,7 +1597,16 @@ pub async fn net_shell_task() {
                         st.rx.clear();
                         pending = None;
                         pending_handle = None;
-                        crate::log!("net-shell: tcp closed handle={}\n", handle.0);
+                        pending_ticks = 0;
+                        pending_len = 0;
+                    }
+
+                    if tcp_handle == Some(handle) {
+                        tcp_handle = None;
+                        crate::log!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
+                        let _ = cmds.push(NetCommand::OpenTcpListen {
+                            port: NET_SHELL_TCP_PORT,
+                        });
                     }
                 }
                 NetEvent::Error { msg } => {
@@ -1556,8 +1644,41 @@ pub async fn net_shell_task() {
                 if !chunk.is_empty() {
                     pending_handle = Some(handle);
                     pending = Some(chunk.clone());
-                    let _ = cmds.push(NetCommand::SendTcp { handle, data: chunk });
+                    pending_ticks = 0;
+                    pending_len = chunk.len();
+
+                    if tx_log_budget > 0 {
+                        tx_log_budget -= 1;
+                        crate::log!(
+                            "net-shell: tx queue handle={} len={}\n",
+                            handle.0,
+                            pending_len
+                        );
+                    }
+
+                    if cmds.push(NetCommand::SendTcp { handle, data: chunk }).is_err() {
+                        // If the command queue is full, don't stall forever waiting for an event.
+                        pending = None;
+                        pending_ticks = 0;
+                        pending_len = 0;
+                        crate::log!("net-shell: tx queue full (dropping pending)\n");
+                    }
                 }
+            }
+        }
+
+        // Safety: if we somehow miss the `TcpSent` event (or the socket is briefly not-ready),
+        // don't wedge TX forever. We'll retry by clearing `pending` after a short timeout.
+        if pending.is_some() {
+            pending_ticks = pending_ticks.wrapping_add(1);
+            if pending_ticks == 250 {
+                crate::log!(
+                    "net-shell: tx stalled (pending_len={}), retrying\n",
+                    pending_len
+                );
+                pending = None;
+                pending_ticks = 0;
+                pending_len = 0;
             }
         }
 

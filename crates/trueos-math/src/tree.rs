@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), no_std)]
-
 use core::mem::MaybeUninit;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +86,81 @@ impl<T, const N: usize> Tree<T, N> {
             }
         }
         Some(child)
+    }
+
+    /// Moves an existing node (and its subtree) under a new parent.
+    ///
+    /// This is a pure metadata operation: it rewires parent/child pointers.
+    ///
+    /// Returns `true` if the node was moved.
+    pub fn move_node(&mut self, id: NodeId, new_parent: NodeId) -> bool {
+        if !self.is_used(id) || !self.is_used(new_parent) {
+            return false;
+        }
+        if self.root == Some(id) {
+            return false;
+        }
+        if id == new_parent {
+            return false;
+        }
+
+        // Prevent cycles: new_parent must not be within id's subtree.
+        if self.is_descendant_of(new_parent, id) {
+            return false;
+        }
+
+        let old_parent = match self.node(id).parent {
+            Some(p) => p,
+            None => return false,
+        };
+
+        // Unlink id from old parent's child list.
+        let mut prev: Option<NodeId> = None;
+        let mut cur = self.node(old_parent).first_child;
+        while let Some(c) = cur {
+            if c == id {
+                let next = self.node(c).next_sibling;
+                match prev {
+                    None => self.node_mut(old_parent).first_child = next,
+                    Some(p) => self.node_mut(p).next_sibling = next,
+                }
+                break;
+            }
+            prev = cur;
+            cur = self.node(c).next_sibling;
+        }
+
+        // If we didn't find it in the old parent list, tree is inconsistent.
+        if cur.is_none() {
+            return false;
+        }
+
+        // Attach to new parent at the end of its child list.
+        {
+            let node = self.node_mut(id);
+            node.parent = Some(new_parent);
+            node.next_sibling = None;
+        }
+
+        let first = self.node(new_parent).first_child;
+        match first {
+            None => {
+                self.node_mut(new_parent).first_child = Some(id);
+            }
+            Some(mut last) => {
+                loop {
+                    let next = self.node(last).next_sibling;
+                    if let Some(n) = next {
+                        last = n;
+                    } else {
+                        self.node_mut(last).next_sibling = Some(id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     pub fn get(&self, id: NodeId) -> Option<&T> {
@@ -216,12 +289,52 @@ impl<T, const N: usize> Tree<T, N> {
         id.0 < N && self.used[id.0]
     }
 
+    fn is_descendant_of(&self, mut node: NodeId, ancestor: NodeId) -> bool {
+        while let Some(p) = self.parent(node) {
+            if p == ancestor {
+                return true;
+            }
+            node = p;
+        }
+        false
+    }
+
     fn node(&self, id: NodeId) -> &Node<T> {
         unsafe { self.nodes[id.0].assume_init_ref() }
     }
 
     fn node_mut(&mut self, id: NodeId) -> &mut Node<T> {
         unsafe { self.nodes[id.0].assume_init_mut() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn move_node_basic() {
+        let mut t: Tree<&'static str, 16> = Tree::new();
+        let root = t.add_root("root").unwrap();
+        let a = t.add_child(root, "a").unwrap();
+        let b = t.add_child(root, "b").unwrap();
+        let c = t.add_child(a, "c").unwrap();
+
+        assert_eq!(t.parent(c), Some(a));
+        assert!(t.move_node(c, b));
+        assert_eq!(t.parent(c), Some(b));
+        assert!(!t.move_node(root, a), "should not move root");
+    }
+
+    #[test]
+    fn move_node_prevents_cycles() {
+        let mut t: Tree<&'static str, 16> = Tree::new();
+        let root = t.add_root("root").unwrap();
+        let a = t.add_child(root, "a").unwrap();
+        let b = t.add_child(a, "b").unwrap();
+
+        assert!(!t.move_node(a, b), "should not allow moving a under its descendant");
+        assert_eq!(t.parent(a), Some(root));
     }
 }
 

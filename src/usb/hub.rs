@@ -358,6 +358,36 @@ pub struct HubIdentity {
     pub protocol: u8,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct DeviceIdentity {
+    pub vid: u16,
+    pub pid: u16,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+}
+
+pub fn identity_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceIdentity> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+    let topo = HUB_TOPOLOGIES[controller_id].lock();
+    let tree = topo.tree.as_ref()?;
+    let node_id = topo
+        .slot_node_ids
+        .iter()
+        .find(|(slot, _)| *slot == slot_id)
+        .map(|(_, id)| *id)?;
+    let node = tree.get(node_id)?;
+    Some(DeviceIdentity {
+        vid: node.vid,
+        pid: node.pid,
+        class: node.class,
+        subclass: node.subclass,
+        protocol: node.protocol,
+    })
+}
+
 pub fn list_hubs_with_saved_ep0(ctx: &XhciContext) -> Vec<HubIdentity, MAX_DEVICES> {
     let controller_id = ctx.controller_id;
     let topo = HUB_TOPOLOGIES[controller_id].lock();

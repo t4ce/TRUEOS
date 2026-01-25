@@ -210,6 +210,10 @@ extern "C" {
     ) -> *const c_char;
     pub fn JS_FreeCString(ctx: *mut JSContext, ptr: *const c_char);
 
+    pub fn JS_NewStringLen(ctx: *mut JSContext, buf: *const c_char, buf_len: usize) -> JSValue;
+
+    pub fn JS_NewArrayBufferCopy(ctx: *mut JSContext, buf: *const u8, len: usize) -> JSValue;
+
     pub fn js_malloc(ctx: *mut JSContext, size: usize) -> *mut c_void;
     pub fn js_free(ctx: *mut JSContext, ptr: *mut c_void);
 

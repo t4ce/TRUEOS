@@ -461,14 +461,6 @@ impl VirtioNetAdapter {
 
         if processed != 0 {
             notify_queue(self.io_base, QUEUE_RX);
-        } else if (polls % 2000) == 0 {
-            crate::log!(
-                "net/vio: rx idle (polls={}) used_idx={} last_used_idx={} avail_idx={}\n",
-                polls,
-                used_idx,
-                self.rxq.last_used_idx,
-                self.rxq.avail_idx
-            );
         }
     }
 
