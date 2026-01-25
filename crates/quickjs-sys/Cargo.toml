@@ -11,3 +11,12 @@ path = "src/lib.rs"
 
 [build-dependencies]
 cc = "1.0"
+
+[dependencies]
+trueos-math = { path = "../trueos-math", default-features = false, optional = true }
+
+[features]
+default = []
+
+# TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
+trueos = ["dep:trueos-math"]
