@@ -1,4 +1,6 @@
 
+extern crate alloc;
+
 use core::fmt;
 
 /// Minimal I/O surface.
@@ -62,12 +64,19 @@ pub trait Write {
 
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
+	use alloc::vec::Vec;
+
 	#[repr(u32)]
 	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 	pub enum CStream {
 		Stdout = 1,
 		Stderr = 2,
 	}
+
+	const FS_ERR_BAD_UTF8: i32 = -1;
+	const FS_ERR_IO: i32 = -2;
+	const FS_ERR_NO_SPACE: i32 = -3;
+	const FS_ERR_BAD_PARAM: i32 = -4;
 
 	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
@@ -166,6 +175,141 @@ pub mod cabi {
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
 		crate::limine::boot_timestamp_secs().unwrap_or(0)
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_read_file(
+		path_ptr: *const u8,
+		path_len: usize,
+		out_ptr: *mut u8,
+		out_cap: usize,
+	) -> isize {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM as isize;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8 as isize;
+		};
+
+		let bytes: Vec<u8> = match crate::disc::files::Fs::read_file(path) {
+			Ok(v) => v,
+			Err(_) => return FS_ERR_IO as isize,
+		};
+
+		// Query mode: caller passes null/0 to obtain required size.
+		if out_ptr.is_null() || out_cap == 0 {
+			return bytes.len() as isize;
+		}
+		if bytes.len() > out_cap {
+			return FS_ERR_NO_SPACE as isize;
+		}
+		core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+		bytes.len() as isize
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_write_file(
+		path_ptr: *const u8,
+		path_len: usize,
+		data_ptr: *const u8,
+		data_len: usize,
+	) -> i32 {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		if data_ptr.is_null() && data_len != 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+		let data = if data_len == 0 {
+			&[]
+		} else {
+			core::slice::from_raw_parts(data_ptr, data_len)
+		};
+
+		match crate::disc::files::Fs::write_file(path, data) {
+			Ok(()) => 0,
+			Err(_) => FS_ERR_IO,
+		}
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_rename(
+		src_ptr: *const u8,
+		src_len: usize,
+		dst_ptr: *const u8,
+		dst_len: usize,
+	) -> i32 {
+		if src_ptr.is_null() || dst_ptr.is_null() || src_len == 0 || dst_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		let src_bytes = core::slice::from_raw_parts(src_ptr, src_len);
+		let dst_bytes = core::slice::from_raw_parts(dst_ptr, dst_len);
+		let Ok(src) = core::str::from_utf8(src_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+		let Ok(dst) = core::str::from_utf8(dst_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+
+		match crate::disc::files::Fs::rename(src, dst) {
+			Ok(()) => 0,
+			Err(_) => FS_ERR_IO,
+		}
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
+		path_ptr: *const u8,
+		path_len: usize,
+		out_ptr: *mut u8,
+		out_cap: usize,
+	) -> isize {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM as isize;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8 as isize;
+		};
+
+		let listing = match crate::disc::files::Fs::list_dir(path) {
+			Ok(v) => v,
+			Err(_) => return FS_ERR_IO as isize,
+		};
+		let bytes = listing.as_bytes();
+
+		if out_ptr.is_null() || out_cap == 0 {
+			return bytes.len() as isize;
+		}
+		if bytes.len() > out_cap {
+			return FS_ERR_NO_SPACE as isize;
+		}
+		core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+		bytes.len() as isize
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_remove(
+		path_ptr: *const u8,
+		path_len: usize,
+	) -> i32 {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+
+		match crate::disc::files::Fs::remove(path) {
+			Ok(()) => 0,
+			Err(_) => FS_ERR_IO,
+		}
 	}
 }
 

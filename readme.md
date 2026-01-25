@@ -8,8 +8,11 @@ sudo apt update
 sudo apt install -y rustup
 sudo apt install autoconf automake mtools nasm xorriso
 sudo apt-get install qemu-system
-qemu-img create -f raw disk.img 1G
+
 sudo apt install gdb
+
+check disc files after install
+// mdir -i disk.img@@$((2048*512)) ::
 
 # good luck with this one
 
@@ -19,7 +22,6 @@ sudo udevadm control --reload-rules && sudo udevadm trigger -s usb --action=add
 
 NOTE: The "RUN+=...unbind" lines in 99-trueos-usb.rules will intentionally unbind the host driver.
 That can make hubs show up as Driver=[none]/0p in lsusb -t (host won't enumerate devices behind them).
-
 
 # VFIO USB CONTROLLER (persistent across reboot)
 sudo bash -lc '
@@ -43,9 +45,6 @@ echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
 echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 # 
 
-check disc files after install
-// mdir -i disk.img@@$((2048*512)) ::
-
 ## FIREWALL netboot auf interface alles erlauben ## enx047bcb669593
 sudo ufw allow in on enx047bcb669593
 sudo ufw allow out on enx047bcb669593
@@ -60,8 +59,6 @@ sudo ip addr replace 192.168.55.1/24 dev enx047bcb669593
 ip -4 -br addr show dev enx047bcb669593
 sudo node pxe.js 
 
-
-
 /*
 ConPink 	FF_55_FF 
 ConBlue 	08_18_30
@@ -73,13 +70,22 @@ ConWhite 	FF_FF_FF
 # If `disk.img` is a partitioned MBR image, the FAT partition typically starts at LBA 2048.
 # If it's a FAT "superfloppy", the filesystem starts at offset 0.
 # Auto-detect the correct offset (bytes):
-start=$(fdisk -l disk.img | awk '/^disk\.img1[[:space:]]/ {print $2; exit}')
-if [ -n "$start" ]; then off=$((start*512)); else off=0; fi
-
-mdir -i disk.img@@${off} ::/qjs >/dev/null 2>&1 || mmd -i disk.img@@${off} ::/qjs
-mcopy -o -s -i disk.img@@${off} crates/trueos-qjs/app/* ::/qjs/
 
 # Verify:
-mdir -i disk.img@@${off} ::/qjs
+# mdir -i disk.img@@$((2048*512)) ::
+
+rm -f disk.img && truncate -s 1G disk.img
+mformat -i disk.img -F -v TRUEOS ::
+mmd -i disk.img ::/qjs
+mcopy -o -s -i disk.img crates/trueos-qjs/app/* ::/qjs/
+mdir -i disk.img
+mdir -i disk.img ::/qjs
+
+or
+
+mmd -i disk.img@@$((2048*512)) ::/qjs
+mcopy -o -s -i disk.img@@$((2048*512)) crates/trueos-qjs/app/* ::/qjs/
+mdir -i disk.img@@$((2048*512)) 
+mdir -i disk.img@@$((2048*512)) ::/qjs
 
 qjsm @/qjs/main.mjs

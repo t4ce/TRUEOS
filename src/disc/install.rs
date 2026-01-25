@@ -59,6 +59,39 @@ where
     install_bios_mbr_impl(handle, &mut progress_tick, &mut status, InstallMode::MigrateInPlace)
 }
 
+pub fn format_superfloppy_fat_with_progress_and_status<F, S>(
+    handle: block::DeviceHandle,
+    mut progress_tick: F,
+    mut status: S,
+) -> Result<(), InstallError>
+where
+    F: FnMut(),
+    S: FnMut(fmt::Arguments<'_>),
+{
+    let info = handle.info();
+    if !handle.supports_write() {
+        return Err(InstallError::NotWritable);
+    }
+    if info.block_size != 512 {
+        return Err(InstallError::UnsupportedBlockSize(info.block_size));
+    }
+    if info.block_count < 4096 {
+        return Err(InstallError::MediaTooSmall);
+    }
+
+    // This intentionally does NOT write zeros to the whole disk.
+    // It only writes the FAT metadata structures needed for an empty volume.
+    (status)(format_args!("format: formatting FAT superfloppy at LBA0"));
+    let mut io = SliceBlockIo::new(handle, 0, info.block_count)?;
+    format_volume(&mut io, FormatVolumeOptions::new())?;
+    (progress_tick)();
+
+    (status)(format_args!("format: flushing device"));
+    handle.flush()?;
+    (progress_tick)();
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum InstallError {
     NotWritable,
@@ -123,6 +156,7 @@ struct SliceBlockIo {
     pos: u64,
     block_size: usize,
     scratch: AlignedBuf,
+    xfer: AlignedBuf,
 }
 
 impl SliceBlockIo {
@@ -133,8 +167,22 @@ impl SliceBlockIo {
             return Err(InstallError::UnsupportedBlockSize(info.block_size));
         }
         let align = info.dma_alignment.max(1) as usize;
+
+        // Use a larger aligned transfer buffer so FAT reads/writes don't degrade into
+        // 512-byte I/O, which is painfully slow on USB mass storage.
+        let mut max_xfer_bytes = info.max_transfer_bytes;
+        if max_xfer_bytes == 0 {
+            max_xfer_bytes = info.block_size as u64;
+        }
+        // Keep memory usage bounded even if the device reports a huge max transfer.
+        max_xfer_bytes = core::cmp::min(max_xfer_bytes, 256 * 1024);
+        let mut xfer_bytes = max_xfer_bytes as usize;
+        xfer_bytes = (xfer_bytes / block_size).max(1) * block_size;
+
         let mut scratch = AlignedBuf::new(block_size, align).ok_or(block::Error::DmaUnavailable)?;
         scratch.as_mut_slice().fill(0);
+        let mut xfer = AlignedBuf::new(xfer_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+        xfer.as_mut_slice().fill(0);
         Ok(Self {
             dev,
             base_lba,
@@ -142,6 +190,7 @@ impl SliceBlockIo {
             pos: 0,
             block_size,
             scratch,
+            xfer,
         })
     }
 
@@ -168,6 +217,24 @@ impl Read for SliceBlockIo {
         while total < buf.len() {
             let lba = self.pos / (self.block_size as u64);
             let block_off = (self.pos % (self.block_size as u64)) as usize;
+
+            // Fast-path for aligned full-block reads.
+            if block_off == 0 {
+                let remaining = buf.len() - total;
+                if remaining >= self.block_size {
+                    let want_bytes = core::cmp::min(remaining, self.xfer.as_slice().len());
+                    let want_bytes = (want_bytes / self.block_size) * self.block_size;
+                    if want_bytes > 0 {
+                        self.dev
+                            .read_blocks(self.base_lba + lba, &mut self.xfer.as_mut_slice()[..want_bytes])?;
+                        buf[total..total + want_bytes]
+                            .copy_from_slice(&self.xfer.as_slice()[..want_bytes]);
+                        total += want_bytes;
+                        self.pos = self.pos.wrapping_add(want_bytes as u64);
+                        continue;
+                    }
+                }
+            }
 
             self.read_block(lba)?;
 
@@ -197,6 +264,25 @@ impl Write for SliceBlockIo {
         while total < buf.len() {
             let lba = self.pos / (self.block_size as u64);
             let block_off = (self.pos % (self.block_size as u64)) as usize;
+
+            // Fast-path for aligned full-block writes.
+            if block_off == 0 {
+                let remaining = buf.len() - total;
+                if remaining >= self.block_size {
+                    let want_bytes = core::cmp::min(remaining, self.xfer.as_slice().len());
+                    let want_bytes = (want_bytes / self.block_size) * self.block_size;
+                    if want_bytes > 0 {
+                        self.xfer.as_mut_slice()[..want_bytes]
+                            .copy_from_slice(&buf[total..total + want_bytes]);
+                        self.dev
+                            .write_blocks(self.base_lba + lba, &self.xfer.as_slice()[..want_bytes])?;
+                        total += want_bytes;
+                        self.pos = self.pos.wrapping_add(want_bytes as u64);
+                        continue;
+                    }
+                }
+            }
+
             let avail = self.block_size - block_off;
             let want = core::cmp::min(avail, buf.len() - total);
 
@@ -628,15 +714,27 @@ fn patch_boot_sector_sizes(handle: block::DeviceHandle, boot_lba: u64, bpb: &Bpb
     Ok(())
 }
 
-fn write_boot_files<F>(handle: block::DeviceHandle, part_start_lba: u64, part_sectors: u64, progress_tick: &mut F) -> Result<(), InstallError>
+fn write_boot_files<F, S>(
+    handle: block::DeviceHandle,
+    part_start_lba: u64,
+    part_sectors: u64,
+    progress_tick: &mut F,
+    status: &mut S,
+) -> Result<(), InstallError>
 where
     F: FnMut(),
+    S: FnMut(fmt::Arguments<'_>),
 {
+    (status)(format_args!(
+        "install: filesystem: opening FAT at LBA {} ({} sectors)",
+        part_start_lba, part_sectors
+    ));
     let mut part_io = SliceBlockIo::new(handle, part_start_lba, part_sectors)?;
     let fs = FileSystem::new(part_io, FsOptions::new())?;
     {
         let root = fs.root_dir();
 
+        (status)(format_args!("install: filesystem: writing limine-bios.sys"));
         // limine-bios.sys
         {
             let bios_sys = decode_xor(payload::LIMINE_BIOS_SYS_XOR, payload::INSTALL_XOR_KEY);
@@ -648,6 +746,7 @@ where
         }
         (progress_tick)();
 
+        (status)(format_args!("install: filesystem: writing limine.conf"));
         // limine.conf
         {
             let mut f = root.create_file("limine.conf")?;
@@ -659,7 +758,9 @@ where
         (progress_tick)();
 
         // Kernel image: copy the executable file bytes Limine provided (the file we booted).
+        (status)(format_args!("install: filesystem: writing TRUEOS.elf"));
         let exe = crate::limine::executable_file_bytes().ok_or(InstallError::MissingExecutableFile)?;
+        (status)(format_args!("install: filesystem: TRUEOS.elf source bytes={}", exe.len()));
         {
             let mut f = root.create_file("TRUEOS.elf")?;
             f.seek(SeekFrom::Start(0))?;
@@ -677,9 +778,13 @@ where
         }
     }
 
+    (status)(format_args!("install: filesystem: unmounting FAT"));
     fs.unmount()?;
+
+    (status)(format_args!("install: filesystem: flushing device"));
     handle.flush()?;
     (progress_tick)();
+    (status)(format_args!("install: filesystem: done"));
     Ok(())
 }
 
@@ -736,6 +841,7 @@ where
     let align = info.dma_alignment.max(1) as usize;
 
     if matches!(mode, InstallMode::MigrateInPlace) {
+        (status)(format_args!("install: migrate: reading superfloppy boot sector"));
         // Validate & relocate existing superfloppy FAT volume so it becomes the partition contents.
         let mut bs = [0u8; 512];
         {
@@ -743,8 +849,14 @@ where
             handle.read_blocks(0, tmp.as_mut_slice())?;
             bs.copy_from_slice(tmp.as_slice());
         }
+
+        (status)(format_args!("install: migrate: parsing BPB"));
         let bpb = parse_bpb(&bs)?;
+
+        (status)(format_args!("install: migrate: validating last 1MiB is free"));
         validate_tail_free(handle, &bpb, part_start_lba, progress_tick)?;
+
+        (status)(format_args!("install: migrate: computing used size"));
         let used_end = compute_used_end_lba_exclusive(handle, &bpb, progress_tick)?;
         let src_blocks = core::cmp::min(used_end, info.block_count.saturating_sub(part_start_lba));
 
@@ -762,6 +874,8 @@ where
         ));
         shift_volume_forward_in_place(handle, part_start_lba, src_blocks, progress_tick)?;
 
+        (status)(format_args!("install: migrate: patching boot sector metadata"));
+
         // Patch boot sector(s) inside the shifted volume.
         let new_total = (info.block_count - part_start_lba) as u32;
         patch_boot_sector_sizes(handle, part_start_lba, &bpb, new_total, part_start_lba as u32, align)?;
@@ -778,8 +892,10 @@ where
             }
         }
 
+        (status)(format_args!("install: migrate: flushing device"));
         handle.flush()?;
         (progress_tick)();
+        (status)(format_args!("install: migrate: done"));
     }
 
     // Build the MBR sector based on Limine's bootsector template.
@@ -797,12 +913,14 @@ where
     write_mbr_partition_entry(&mut mbr, part_start_lba as u32, part_sectors as u32);
 
     // Write MBR.
+    (status)(format_args!("install: writing MBR"));
     let mut lba0 = AlignedBuf::new(512, align).ok_or(block::Error::DmaUnavailable)?;
     lba0.as_mut_slice().copy_from_slice(&mbr);
     handle.write_blocks(0, lba0.as_slice())?;
     (progress_tick)();
 
     // Write stage2 (immediately after MBR).
+    (status)(format_args!("install: writing Limine stage2 ({} sectors)", stage2_sectors));
     let mut tmp = AlignedBuf::new(512, align).ok_or(block::Error::DmaUnavailable)?;
     for (i, chunk) in stage2_bytes.chunks(512).enumerate() {
         tmp.as_mut_slice().fill(0);
@@ -815,11 +933,13 @@ where
         }
     }
 
+    (status)(format_args!("install: flushing device"));
     handle.flush()?;
     (progress_tick)();
 
     if matches!(mode, InstallMode::Fresh) {
         // Format a fresh filesystem on the first partition.
+        (status)(format_args!("install: formatting FAT filesystem"));
         let mut part_io = SliceBlockIo::new(handle, part_start_lba, part_sectors)?;
         format_volume(&mut part_io, FormatVolumeOptions::new())?;
         (progress_tick)();
@@ -827,7 +947,9 @@ where
     }
 
     // Populate (or update) the filesystem.
-    write_boot_files(handle, part_start_lba, part_sectors, progress_tick)?;
+    (status)(format_args!("install: populating filesystem"));
+    write_boot_files(handle, part_start_lba, part_sectors, progress_tick, status)?;
+    (status)(format_args!("install: done (about to return)"));
 
     Ok(())
 }

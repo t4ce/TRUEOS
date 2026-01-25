@@ -29,6 +29,54 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 use self::hub::{LOG_PORTS_MAX, MAX_DEVICES};
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct UsbDeviceSummary {
+    pub slot_id: u32,
+    pub port: u8,
+    pub kind: &'static str,
+    pub vid: Option<u16>,
+    pub pid: Option<u16>,
+    pub class: Option<u8>,
+    pub subclass: Option<u8>,
+    pub protocol: Option<u8>,
+}
+
+pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummary, MAX_DEVICES> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return Vec::new();
+    }
+
+    let guard = DEVICES[controller_id].lock();
+    let mut out: Vec<UsbDeviceSummary, MAX_DEVICES> = Vec::new();
+
+    for d in guard.iter() {
+        let kind = match d.kind {
+            DeviceKind::Hid => "hid",
+            DeviceKind::Hub => "hub",
+            DeviceKind::Mass => "mass",
+            DeviceKind::Printer => "printer",
+            DeviceKind::Pen => "pen",
+            DeviceKind::Cdc => "cdc",
+            DeviceKind::Uac => "uac",
+            DeviceKind::Unknown => "unknown",
+        };
+
+        let ident = hub::identity_for_slot(controller_id, d.slot_id);
+        let _ = out.push(UsbDeviceSummary {
+            slot_id: d.slot_id,
+            port: d.port,
+            kind,
+            vid: ident.map(|i| i.vid),
+            pid: ident.map(|i| i.pid),
+            class: ident.map(|i| i.class),
+            subclass: ident.map(|i| i.subclass),
+            protocol: ident.map(|i| i.protocol),
+        });
+    }
+
+    out
+}
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum DeviceKind {
     Hid,

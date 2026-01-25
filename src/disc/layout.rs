@@ -1,0 +1,206 @@
+use crate::disc::block;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FatVolumeLayout {
+    /// FAT boot sector is at LBA0.
+    ///
+    /// Note: `whole_disk` is true only when the BPB total sector count matches the device size.
+    FatAtLba0 { total_sectors: u32, whole_disk: bool },
+
+    /// MBR at LBA0, with a FAT partition whose boot sector is at `start_lba`.
+    MbrPartition { start_lba: u32, sectors: u32, part_type: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeError {
+    UnsupportedBlockSize(u32),
+    DeviceIo(block::Error),
+    UnknownLayout,
+}
+
+impl From<block::Error> for ProbeError {
+    fn from(value: block::Error) -> Self {
+        ProbeError::DeviceIo(value)
+    }
+}
+
+struct AlignedBuf {
+    ptr: *mut u8,
+    len: usize,
+    layout: alloc::alloc::Layout,
+}
+
+impl AlignedBuf {
+    fn new(len: usize, align: usize) -> Option<Self> {
+        let layout = alloc::alloc::Layout::from_size_align(len, align).ok()?;
+        let ptr = unsafe { alloc::alloc::alloc(layout) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Self { ptr, len, layout })
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+impl Drop for AlignedBuf {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
+        }
+    }
+}
+
+fn read_u16_le(bs: &[u8; 512], off: usize) -> u16 {
+    u16::from_le_bytes([bs[off], bs[off + 1]])
+}
+
+fn read_u32_le(bs: &[u8; 512], off: usize) -> u32 {
+    u32::from_le_bytes([bs[off], bs[off + 1], bs[off + 2], bs[off + 3]])
+}
+
+fn is_valid_sectors_per_cluster(v: u8) -> bool {
+    matches!(v, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
+}
+
+fn looks_like_fat_boot_sector(bs: &[u8; 512]) -> Option<u32> {
+    // Signature.
+    if bs[510] != 0x55 || bs[511] != 0xAA {
+        return None;
+    }
+
+    // Jump instruction is very commonly EB xx 90 or E9 xx xx.
+    let j0 = bs[0];
+    if !(j0 == 0xEB || j0 == 0xE9) {
+        return None;
+    }
+
+    let bytes_per_sector = read_u16_le(bs, 11);
+    let sectors_per_cluster = bs[13];
+    let reserved_sectors = read_u16_le(bs, 14);
+    let fats = bs[16];
+    let root_entry_count = read_u16_le(bs, 17);
+    let tot16 = read_u16_le(bs, 19);
+    let tot32 = read_u32_le(bs, 32);
+    let total_sectors = if tot16 != 0 { tot16 as u32 } else { tot32 };
+
+    let spf16 = read_u16_le(bs, 22);
+    let spf32 = read_u32_le(bs, 36);
+    let sectors_per_fat = if spf16 != 0 { spf16 as u32 } else { spf32 };
+
+    if bytes_per_sector != 512 {
+        return None;
+    }
+    if !is_valid_sectors_per_cluster(sectors_per_cluster) {
+        return None;
+    }
+    if reserved_sectors == 0 {
+        return None;
+    }
+    if fats == 0 || fats > 4 {
+        return None;
+    }
+    if total_sectors == 0 || sectors_per_fat == 0 {
+        return None;
+    }
+
+    // Basic sanity: compute first data sector like in the FAT spec.
+    let root_dir_sectors = ((root_entry_count as u32 * 32) + (bytes_per_sector as u32 - 1)) / (bytes_per_sector as u32);
+    let first_data_sector = (reserved_sectors as u32) + (fats as u32) * sectors_per_fat + root_dir_sectors;
+    if first_data_sector >= total_sectors {
+        return None;
+    }
+
+    Some(total_sectors)
+}
+
+fn is_fat_mbr_type(t: u8) -> bool {
+    matches!(t,
+        0x01 | // FAT12
+        0x04 | 0x06 | // FAT16
+        0x0B | 0x0C | // FAT32
+        0x0E   // FAT16 LBA
+    )
+}
+
+/// Probe for a FAT volume on a raw block device.
+///
+/// We support two layouts:
+/// - FAT superfloppy (FAT boot sector at LBA0)
+/// - MBR-partitioned disk with a FAT partition (boot sector at partition start)
+pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, ProbeError> {
+    let info = handle.info();
+    if info.block_size != 512 {
+        return Err(ProbeError::UnsupportedBlockSize(info.block_size));
+    }
+
+    let align = info.dma_alignment.max(1) as usize;
+    let mut tmp = AlignedBuf::new(512, align).ok_or(ProbeError::DeviceIo(block::Error::DmaUnavailable))?;
+
+    let mut lba0 = [0u8; 512];
+    handle.read_blocks(0, tmp.as_mut_slice())?;
+    lba0.copy_from_slice(&tmp.as_mut_slice()[..512]);
+
+    if let Some(total_sectors) = looks_like_fat_boot_sector(&lba0) {
+        let whole_disk = (total_sectors as u64) == info.block_count;
+        return Ok(FatVolumeLayout::FatAtLba0 {
+            total_sectors,
+            whole_disk,
+        });
+    }
+
+    // Try MBR: look for a FAT-type partition and validate the partition boot sector.
+    if lba0[510] != 0x55 || lba0[511] != 0xAA {
+        return Err(ProbeError::UnknownLayout);
+    }
+
+    for i in 0..4usize {
+        let off = 0x1BE + i * 16;
+        let part_type = lba0[off + 4];
+        let start_lba = read_u32_le(&lba0, off + 8);
+        let sectors = read_u32_le(&lba0, off + 12);
+
+        if part_type == 0 || start_lba == 0 || sectors == 0 {
+            continue;
+        }
+        if !is_fat_mbr_type(part_type) {
+            continue;
+        }
+        let start_lba_u64 = start_lba as u64;
+        let sectors_u64 = sectors as u64;
+        if start_lba_u64 >= info.block_count {
+            continue;
+        }
+        if start_lba_u64.saturating_add(sectors_u64) > info.block_count {
+            continue;
+        }
+
+        // Validate partition boot sector is FAT.
+        let mut bs = [0u8; 512];
+        handle.read_blocks(start_lba_u64, tmp.as_mut_slice())?;
+        bs.copy_from_slice(&tmp.as_mut_slice()[..512]);
+        if looks_like_fat_boot_sector(&bs).is_some() {
+            return Ok(FatVolumeLayout::MbrPartition {
+                start_lba,
+                sectors,
+                part_type,
+            });
+        }
+    }
+
+    Err(ProbeError::UnknownLayout)
+}
+
+/// Convert a detected FAT layout into a slice (base LBA, number of blocks) to use for mounting.
+pub fn fat_slice_for_mount(layout: FatVolumeLayout, disk_blocks: u64) -> (u64, u64) {
+    match layout {
+        FatVolumeLayout::FatAtLba0 { total_sectors, .. } => (0, core::cmp::min(total_sectors as u64, disk_blocks)),
+        FatVolumeLayout::MbrPartition { start_lba, sectors, .. } => {
+            let base = start_lba as u64;
+            let blocks = core::cmp::min(sectors as u64, disk_blocks.saturating_sub(base));
+            (base, blocks)
+        }
+    }
+}

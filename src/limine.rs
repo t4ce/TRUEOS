@@ -80,7 +80,22 @@ pub fn executable_file_bytes() -> Option<&'static [u8]> {
     if addr.is_null() || size == 0 {
         return None;
     }
-    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, size) })
+
+    // Limine implementations may report either a dereferenceable virtual address or a physical
+    // address for bootloader-provided buffers. If it looks like a physical/HHDM address, translate
+    // it through HHDM so we can safely read it later.
+    let addr_u64 = addr as u64;
+    let ptr = if let Some(phys) = try_as_phys_addr(addr_u64) {
+        if let Some(hhdm) = hhdm_offset() {
+            (hhdm + phys) as *const u8
+        } else {
+            addr as *const u8
+        }
+    } else {
+        addr as *const u8
+    };
+
+    Some(unsafe { core::slice::from_raw_parts(ptr, size) })
 }
 
 pub fn smp_response() -> Option<&'static response::MpResponse> {
