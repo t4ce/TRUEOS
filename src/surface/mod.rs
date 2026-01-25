@@ -91,8 +91,6 @@ pub mod io;
 pub mod path;
 pub mod strings;
 
-mod quickjs_shims;
-
 pub mod time {
     pub use crate::time::*;
 }

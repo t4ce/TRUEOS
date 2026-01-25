@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use alloc::alloc::{alloc, dealloc};
 use core::alloc::Layout;
 use core::cmp;
@@ -5,11 +7,26 @@ use core::ffi::{c_char, c_int, c_long, c_void};
 use core::mem::{align_of, size_of};
 use core::ptr;
 
+extern "C" {
+    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    fn trueos_cabi_boot_timestamp_secs() -> u64;
+}
+
+#[inline]
+fn log_bytes(bytes: &[u8]) {
+    unsafe { trueos_cabi_write(2, bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+fn log_str(s: &str) {
+    log_bytes(s.as_bytes())
+}
+
 // --- Abort/assert shims ---
 
 #[no_mangle]
 pub unsafe extern "C" fn abort() -> ! {
-    crate::log!("abort()\n");
+    log_str("abort()\n");
     core::arch::asm!("cli", options(nomem, nostack));
     loop {
         core::arch::asm!("hlt", options(nomem, nostack));
@@ -23,7 +40,7 @@ pub unsafe extern "C" fn __assert_fail(
     _line: c_int,
     _function: *const c_char,
 ) -> ! {
-    crate::log!("__assert_fail()\n");
+    log_str("__assert_fail()\n");
     abort()
 }
 
@@ -36,8 +53,6 @@ pub unsafe extern "C" fn abs(x: c_int) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn lrint(x: f64) -> c_long {
-    // Best-effort: use rint (round to nearest; ties-to-even) if available.
-    // Fallback to a simple cast if rint isn't linked for some reason.
     let v = libm::rint(x);
     v as c_long
 }
@@ -107,7 +122,7 @@ fn uptime_secs_and_subsec_micros() -> (u64, u32) {
 #[inline]
 fn realtime_secs_and_subsec_micros() -> (u64, u32) {
     let (up_secs, up_micros) = uptime_secs_and_subsec_micros();
-    let base = crate::limine::boot_timestamp_secs().unwrap_or(0);
+    let base = unsafe { trueos_cabi_boot_timestamp_secs() };
     (base.saturating_add(up_secs), up_micros)
 }
 
@@ -318,7 +333,6 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
             options(nostack)
         );
     } else {
-        // Overlap with dest after src: copy backwards.
         let mut d = dest_u8.add(n - 1);
         let mut s = src_u8.add(n - 1);
         core::arch::asm!(

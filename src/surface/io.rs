@@ -158,6 +158,15 @@ pub mod cabi {
 		*dst.add(i) = 0;
 		i as i32
 	}
+
+	/// Returns the Limine-provided boot timestamp (seconds since Unix epoch), or 0 if unavailable.
+	///
+	/// Exposed as a C ABI so embedded C/Rust subsystems (QuickJS shims) can obtain a best-effort
+	/// realtime base without depending on kernel-internal Rust modules.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
+		crate::limine::boot_timestamp_secs().unwrap_or(0)
+	}
 }
 
 /// Writer that routes bytes to the global console pipeline (stdout).

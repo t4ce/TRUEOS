@@ -60,7 +60,7 @@ use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use embassy_executor::{raw::Executor, Spawner};
-use quickjs_sys as qjs;
+use trueos_qjs as qjs;
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};

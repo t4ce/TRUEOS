@@ -5,6 +5,9 @@ use core::ffi::{c_char, c_int, c_void};
 #[cfg(feature = "trueos")]
 pub mod trueos_smoke;
 
+#[cfg(feature = "trueos")]
+pub mod trueos_shims;
+
 #[repr(C)]
 pub struct JSRuntime {
     _private: [u8; 0],
