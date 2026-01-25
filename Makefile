@@ -22,11 +22,6 @@ QEMU_NET_FLAGS = -netdev user,id=net0 -device e1000,netdev=net0 \
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS)
 
-# Headless/debug logging helpers.
-QEMU_DEBUG_LOG_FLAGS = -d int,guest_errors,cpu_reset -D bld/qemu-debug.log
-QEMU_HEADLESS_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon file:bld/debugcon-headless.log -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial file:bld/serial-headless.log $(QEMU_NET_FLAGS)
-QEMU_HEADLESS = qemu-system-x86_64 $(QEMU_HEADLESS_FLAGS) $(QEMU_USB_FLAGS) $(QEMU_DEBUG_LOG_FLAGS)
-
 QEMU_USB_FLAGS =  \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
 	-device vfio-pci,host=0000:06:00.0 \
@@ -114,16 +109,3 @@ run: iso-debug
 
 dbg: iso-debug
 	@($(QEMU) -s -S & $(SERIAL_CONSOLE_CMD))
-
-# Headless run that writes logs under bld/ for crash/reset triage.
-run-headless: iso-debug
-	@mkdir -p bld
-	@: > bld/debugcon-headless.log
-	@: > bld/serial-headless.log
-	@: > bld/qemu.err
-	@: > bld/qemu-debug.log
-	@($(QEMU_HEADLESS) 2> bld/qemu.err & echo $$! > bld/qemu.pid)
-	@echo "qemu pid: $$(cat bld/qemu.pid)"
-
-run-headless-stop:
-	@if [ -f bld/qemu.pid ]; then kill $$(cat bld/qemu.pid) 2>/dev/null || true; rm -f bld/qemu.pid; fi
