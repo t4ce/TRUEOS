@@ -1,16 +1,16 @@
 #![allow(dead_code)]
 
+use alloc::vec::Vec as AVec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use heapless::{Deque, String, Vec};
+use heapless::{Deque, String, Vec as HVec};
 use spin::Mutex;
 
 pub const MAX_SLOTS: usize = 8;
 pub const MAX_LINES: usize = 64;
 pub const TITLE_LEN: usize = 32;
 pub const LINE_LEN: usize = 96;
-pub const BLOB_CAP: usize = 512;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SlotState {
@@ -24,7 +24,7 @@ pub struct SlotData {
     pub state: SlotState,
     pub title: String<TITLE_LEN>,
     pub lines: Deque<String<LINE_LEN>, MAX_LINES>,
-    pub blob: Vec<u8, BLOB_CAP>,
+    pub blob: AVec<u8>,
 }
 
 impl SlotData {
@@ -33,7 +33,7 @@ impl SlotData {
             state: SlotState::Done,
             title: String::new(),
             lines: Deque::new(),
-            blob: Vec::new(),
+            blob: AVec::new(),
         }
     }
 
@@ -49,6 +49,43 @@ impl SlotData {
         self.title.clear();
         self.lines.clear();
         self.blob.clear();
+    }
+}
+
+#[inline]
+fn push_line_into_lines(lines: &mut Deque<String<LINE_LEN>, MAX_LINES>, line: &str) {
+    let mut s: String<LINE_LEN> = String::new();
+    for ch in line.chars() {
+        if ch == '\r' || ch == '\n' {
+            continue;
+        }
+        if s.push(ch).is_err() {
+            break;
+        }
+    }
+
+    if lines.is_full() {
+        let _ = lines.pop_front();
+    }
+    let _ = lines.push_back(s);
+}
+
+#[inline]
+fn refresh_preview_locked(data: &mut SlotData) {
+    data.lines.clear();
+    if data.blob.is_empty() {
+        return;
+    }
+
+    let blob = data.blob.as_slice();
+    let lines = &mut data.lines;
+
+    if let Ok(text) = core::str::from_utf8(blob) {
+        for line in text.split('\n') {
+            push_line_into_lines(lines, line.trim_end_matches('\r'));
+        }
+    } else {
+        push_line_into_lines(lines, "(non-utf8 bytes)");
     }
 }
 
@@ -131,20 +168,7 @@ pub fn push_line(slot_id: u8, line: &str) {
         return;
     }
 
-    let mut s: String<LINE_LEN> = String::new();
-    for ch in line.chars() {
-        if ch == '\r' || ch == '\n' {
-            continue;
-        }
-        if s.push(ch).is_err() {
-            break;
-        }
-    }
-
-    if data.lines.is_full() {
-        let _ = data.lines.pop_front();
-    }
-    let _ = data.lines.push_back(s);
+    push_line_into_lines(&mut data.lines, line);
 }
 
 pub fn clear_lines(slot_id: u8) {
@@ -161,9 +185,9 @@ pub fn clear_lines(slot_id: u8) {
     data.lines.clear();
 }
 
-/// Stores up to `BLOB_CAP` bytes into the slot, overwriting any previous blob.
+/// Overwrites the slot blob with `bytes` (no size cap).
 ///
-/// Returns `true` if all bytes fit, `false` if truncated or slot missing.
+/// Returns `false` only if the slot is missing.
 pub fn set_blob(slot_id: u8, bytes: &[u8]) -> bool {
     let Some(slot) = slot_ref(slot_id) else {
         return false;
@@ -177,12 +201,62 @@ pub fn set_blob(slot_id: u8, bytes: &[u8]) -> bool {
     }
 
     data.blob.clear();
-    for &b in bytes.iter() {
-        if data.blob.push(b).is_err() {
-            return false;
-        }
-    }
+    data.blob.extend_from_slice(bytes);
     true
+}
+
+/// Moves an owned blob into the slot (no copy). Returns false if slot missing.
+pub fn set_blob_owned(slot_id: u8, blob: AVec<u8>) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    data.blob = blob;
+    true
+}
+
+/// Moves an owned blob into the slot and updates preview lines from it.
+pub fn set_blob_owned_with_preview(slot_id: u8, blob: AVec<u8>) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+
+    data.blob = blob;
+    refresh_preview_locked(&mut data);
+    true
+}
+
+/// Takes ownership of the slot blob, leaving it empty.
+pub fn take_blob(slot_id: u8) -> Option<AVec<u8>> {
+    let Some(slot) = slot_ref(slot_id) else {
+        return None;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return None;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(core::mem::take(&mut data.blob))
+}
+
+/// Clones the slot blob.
+pub fn blob_snapshot(slot_id: u8) -> Option<AVec<u8>> {
+    with_slot(slot_id, |s| s.blob.clone())
 }
 
 pub fn set_state(slot_id: u8, state: SlotState) {
@@ -228,7 +302,7 @@ pub fn format_symbols(out: &mut String<64>) {
 }
 
 /// Collects all allocated slots as (1-based-id, state) pairs in ascending order.
-pub fn collect_symbols(out: &mut Vec<(u8, SlotState), MAX_SLOTS>) {
+pub fn collect_symbols(out: &mut HVec<(u8, SlotState), MAX_SLOTS>) {
     out.clear();
     for (idx, slot) in SLOTS.iter().enumerate() {
         if !slot.used.load(Ordering::Acquire) {
@@ -240,6 +314,22 @@ pub fn collect_symbols(out: &mut Vec<(u8, SlotState), MAX_SLOTS>) {
         }
         let _ = out.push((idx as u8 + 1, data.state));
     }
+}
+
+/// Rebuild preview lines from the current slot blob.
+pub fn refresh_preview(slot_id: u8) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    refresh_preview_locked(&mut data);
+    true
 }
 
 pub fn list_slots(out: &mut String<512>) {

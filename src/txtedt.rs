@@ -1,10 +1,10 @@
+use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use heapless::{String, Vec};
+use heapless::String;
 
 use crate::ecma48;
 use crate::shell::ShellBackend;
 
-pub const MAX_BYTES: usize = 512;
 const FILENAME_MAX: usize = 48;
 const DIRTY_RGB: (u8, u8, u8) = (255, 55, 255);
 
@@ -21,9 +21,9 @@ pub async fn run(
     cols: usize,
     rows: usize,
     filename: &str,
-    initial: Option<&[u8]>,
-) -> Vec<u8, MAX_BYTES> {
-    let mut editor = TextEditor::new(cols, rows, filename, initial);
+    buf: Vec<u8>,
+) -> Vec<u8> {
+    let mut editor = TextEditor::new(cols, rows, filename, buf);
 
     io.write_str(ecma48::SHOW_CURSOR);
     editor.redraw(io);
@@ -48,7 +48,7 @@ struct TextEditor {
     rows: usize,
     filename: String<FILENAME_MAX>,
 
-    buf: Vec<u8, MAX_BYTES>,
+    buf: Vec<u8>,
     cursor: usize, // byte index into buf (0..=len)
 
     desired_col: usize,
@@ -63,7 +63,7 @@ struct TextEditor {
 }
 
 impl TextEditor {
-    fn new(cols: usize, rows: usize, filename: &str, initial: Option<&[u8]>) -> Self {
+    fn new(cols: usize, rows: usize, filename: &str, buf: Vec<u8>) -> Self {
         let mut name: String<FILENAME_MAX> = String::new();
         let trimmed = filename.trim();
         let fallback = if trimmed.is_empty() { "untitled.txt" } else { trimmed };
@@ -80,7 +80,7 @@ impl TextEditor {
             cols,
             rows,
             filename: name,
-            buf: Vec::new(),
+            buf,
             cursor: 0,
             desired_col: 0,
             scroll_line: 0,
@@ -91,12 +91,7 @@ impl TextEditor {
             status_msg,
         };
 
-        if let Some(bytes) = initial {
-            for &b in bytes.iter().take(MAX_BYTES) {
-                let _ = this.buf.push(b);
-            }
-            this.cursor = this.buf.len();
-        }
+        this.cursor = this.buf.len();
 
         this
     }
@@ -209,18 +204,13 @@ impl TextEditor {
     }
 
     fn insert_byte(&mut self, b: u8) {
-        if self.buf.len() >= MAX_BYTES {
-            self.set_status("buffer full (512 bytes)");
-            return;
-        }
-
         let len = self.buf.len();
         if self.cursor > len {
             self.cursor = len;
         }
 
         // Shift right by 1.
-        let _ = self.buf.push(0);
+        self.buf.push(0);
         for i in (self.cursor..len).rev() {
             self.buf[i + 1] = self.buf[i];
         }
@@ -491,8 +481,6 @@ impl TextEditor {
         let _ = push_usize(&mut footer, col2 + 1);
         let _ = footer.push_str("  Bytes ");
         let _ = push_usize(&mut footer, self.buf.len());
-        let _ = footer.push_str("/");
-        let _ = push_usize(&mut footer, MAX_BYTES);
 
         for (i, ch) in footer.chars().take(view_cols).enumerate() {
             io.write_fmt(format_args!("{}", ecma48::pos(rows, i + 1)));

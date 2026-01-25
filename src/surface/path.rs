@@ -337,6 +337,49 @@ impl<'a> Iterator for Components<'a> {
     }
 }
 
+/// Normalize a user-provided POSIX-style path into a FAT-friendly *relative* path.
+///
+/// Properties:
+/// - Collapses duplicate separators.
+/// - Ignores a leading `/` (treats absolute as rooted-at-volume).
+/// - Drops `.` segments.
+/// - Rejects any `..` segment (returns `None`).
+/// - Returns an empty string for inputs like `""`, `"/"`, or `"./"`.
+///
+/// Intended as a small, shared policy layer between shell/QJS and the FAT backend.
+pub fn normalize_rel_no_parent(input: &str) -> Option<String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Some(String::new());
+    }
+    if s.as_bytes().iter().any(|&b| b == 0) {
+        return None;
+    }
+
+    let p = Path::new(s);
+    let mut out = String::new();
+    for c in p.components() {
+        match c {
+            Component::RootDir => {
+                // Keep output relative; absolute input just means “from volume root”.
+            }
+            Component::CurDir => {}
+            Component::ParentDir => return None,
+            Component::Normal(seg) => {
+                if seg.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str(seg);
+            }
+        }
+    }
+
+    Some(out)
+}
+
 pub fn smoke_test() {
     crate::log!("path: smoke_test begin\n");
 

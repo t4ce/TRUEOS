@@ -248,6 +248,174 @@ pub(crate) fn looks_like_module_bytes(bytes: &[u8]) -> bool {
     false
 }
 
+pub(crate) fn looks_like_module_src(src: &str) -> bool {
+    // Fast path: trim leading whitespace and check for a leading keyword.
+    let s = src.trim_start_matches(|c: char| c.is_whitespace());
+    if s.starts_with("import") {
+        let b = s.as_bytes();
+        if b.len() == 6 {
+            return true;
+        }
+        if let Some(&next) = b.get(6) {
+            if matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"') {
+                return true;
+            }
+        }
+    }
+    if s.starts_with("export") {
+        let b = s.as_bytes();
+        if b.len() == 6 {
+            return true;
+        }
+        if let Some(&next) = b.get(6) {
+            if matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*') {
+                return true;
+            }
+        }
+    }
+
+    // Heuristic scan for `import`/`export` outside comments and strings.
+    // This intentionally avoids full JS parsing; it’s enough to streamline the shell UX.
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    enum Mode {
+        Code,
+        LineComment,
+        BlockComment,
+        SingleQuote,
+        DoubleQuote,
+        Template,
+    }
+
+    fn is_ident(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    fn is_keyword_at(hay: &[u8], i: usize, kw: &[u8]) -> bool {
+        if i + kw.len() > hay.len() {
+            return false;
+        }
+        if &hay[i..i + kw.len()] != kw {
+            return false;
+        }
+        if i > 0 {
+            let prev = hay[i - 1];
+            if is_ident(prev) {
+                return false;
+            }
+        }
+        if i + kw.len() < hay.len() {
+            let next = hay[i + kw.len()];
+            if is_ident(next) {
+                return false;
+            }
+        }
+        true
+    }
+
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut mode = Mode::Code;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match mode {
+            Mode::Code => {
+                // Start of comment?
+                if b == b'/' {
+                    if i + 1 < bytes.len() {
+                        match bytes[i + 1] {
+                            b'/' => {
+                                mode = Mode::LineComment;
+                                i += 2;
+                                continue;
+                            }
+                            b'*' => {
+                                mode = Mode::BlockComment;
+                                i += 2;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Start of string?
+                if b == b'\'' {
+                    mode = Mode::SingleQuote;
+                    i += 1;
+                    continue;
+                }
+                if b == b'"' {
+                    mode = Mode::DoubleQuote;
+                    i += 1;
+                    continue;
+                }
+                if b == b'`' {
+                    mode = Mode::Template;
+                    i += 1;
+                    continue;
+                }
+
+                // Keywords.
+                if b == b'i' && is_keyword_at(bytes, i, b"import") {
+                    return true;
+                }
+                if b == b'e' && is_keyword_at(bytes, i, b"export") {
+                    return true;
+                }
+                i += 1;
+            }
+            Mode::LineComment => {
+                if b == b'\n' {
+                    mode = Mode::Code;
+                }
+                i += 1;
+            }
+            Mode::BlockComment => {
+                if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    mode = Mode::Code;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Mode::SingleQuote => {
+                if b == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if b == b'\'' {
+                    mode = Mode::Code;
+                }
+                i += 1;
+            }
+            Mode::DoubleQuote => {
+                if b == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if b == b'"' {
+                    mode = Mode::Code;
+                }
+                i += 1;
+            }
+            Mode::Template => {
+                if b == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if b == b'`' {
+                    mode = Mode::Code;
+                }
+                // We intentionally treat `${ ... }` as opaque here.
+                i += 1;
+            }
+        }
+    }
+
+    false
+}
+
 pub(crate) fn eval_bytes(
     io: &'static dyn ShellBackend,
     filename: *const c_char,

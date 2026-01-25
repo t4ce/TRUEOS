@@ -168,16 +168,21 @@ pub fn read_usbms_file(path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError
     let io = BlockDeviceIo::new(handle).map_err(UsbFsReadError::DeviceIo)?;
     let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsReadError::MountFailed)?;
 
-    let path = path.trim();
-    let path = path.strip_prefix('/').unwrap_or(path);
-    if path.is_empty() {
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsReadError::OpenFailed);
+        }
+    };
+    if rel.is_empty() {
         let _ = fs.unmount();
         return Err(UsbFsReadError::OpenFailed);
     }
 
     let res = {
         let root = fs.root_dir();
-        let mut file = root.open_file(path).map_err(|_| UsbFsReadError::OpenFailed)?;
+        let mut file = root.open_file(rel.as_str()).map_err(|_| UsbFsReadError::OpenFailed)?;
 
         let mut out = alloc::vec::Vec::new();
         let mut buf = [0u8; 4096];
@@ -210,9 +215,14 @@ pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError>
     let io = BlockDeviceIo::new(handle).map_err(UsbFsWriteError::DeviceIo)?;
     let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsWriteError::MountFailed)?;
 
-    let path = path.trim();
-    let path = path.strip_prefix('/').unwrap_or(path);
-    if path.is_empty() {
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsWriteError::BadPath);
+        }
+    };
+    if rel.is_empty() {
         let _ = fs.unmount();
         return Err(UsbFsWriteError::BadPath);
     }
@@ -221,7 +231,7 @@ pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError>
         let root = fs.root_dir();
 
         // Split into parent dirs and file name.
-        let mut parts = path.split('/').filter(|p| !p.is_empty());
+        let mut parts = rel.split('/').filter(|p| !p.is_empty());
         let mut comps: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
         for p in parts.by_ref() {
             comps.push(p);
@@ -280,10 +290,20 @@ pub fn rename_usbms_path(src_path: &str, dst_path: &str) -> Result<(), UsbFsRena
     let io = BlockDeviceIo::new(handle).map_err(UsbFsRenameError::DeviceIo)?;
     let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRenameError::MountFailed)?;
 
-    let src_path = src_path.trim();
-    let dst_path = dst_path.trim();
-    let src_rel = src_path.strip_prefix('/').unwrap_or(src_path);
-    let dst_rel = dst_path.strip_prefix('/').unwrap_or(dst_path);
+    let src_rel = match crate::path::normalize_rel_no_parent(src_path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsRenameError::BadPath);
+        }
+    };
+    let dst_rel = match crate::path::normalize_rel_no_parent(dst_path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsRenameError::BadPath);
+        }
+    };
     if src_rel.is_empty() || dst_rel.is_empty() {
         let _ = fs.unmount();
         return Err(UsbFsRenameError::BadPath);
@@ -316,7 +336,7 @@ pub fn rename_usbms_path(src_path: &str, dst_path: &str) -> Result<(), UsbFsRena
             }
         }
 
-        match root.rename(src_rel, &root, dst_rel) {
+        match root.rename(src_rel.as_str(), &root, dst_rel.as_str()) {
             Ok(()) => Ok(()),
             Err(fatfs::Error::NotFound) => Err(UsbFsRenameError::NotFound),
             Err(fatfs::Error::AlreadyExists) => Err(UsbFsRenameError::AlreadyExists),
@@ -338,10 +358,13 @@ pub fn list_usbms_dir(path: &str) -> Result<String, UsbFsListDirError> {
     let io = BlockDeviceIo::new(handle).map_err(UsbFsListDirError::DeviceIo)?;
     let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsListDirError::MountFailed)?;
 
-    let path = path.trim();
-    let rel = path.strip_prefix('/').unwrap_or(path);
-    // Allow listing root by passing "/".
-    let rel = if rel == "/" { "" } else { rel };
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsListDirError::BadPath);
+        }
+    };
 
     let res = {
         let root = fs.root_dir();
@@ -382,8 +405,13 @@ pub fn remove_usbms_path(path: &str) -> Result<(), UsbFsRemoveError> {
     let io = BlockDeviceIo::new(handle).map_err(UsbFsRemoveError::DeviceIo)?;
     let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRemoveError::MountFailed)?;
 
-    let path = path.trim();
-    let rel = path.strip_prefix('/').unwrap_or(path);
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsRemoveError::BadPath);
+        }
+    };
     if rel.is_empty() {
         let _ = fs.unmount();
         return Err(UsbFsRemoveError::BadPath);
@@ -391,7 +419,7 @@ pub fn remove_usbms_path(path: &str) -> Result<(), UsbFsRemoveError> {
 
     let res = {
         let root = fs.root_dir();
-        match root.remove(rel) {
+        match root.remove(rel.as_str()) {
             Ok(()) => Ok(()),
             Err(fatfs::Error::NotFound) => Err(UsbFsRemoveError::NotFound),
             Err(fatfs::Error::DirectoryIsNotEmpty) => Err(UsbFsRemoveError::NotEmpty),
