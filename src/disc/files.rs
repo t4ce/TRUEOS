@@ -1,5 +1,8 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::boxed::Box;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use fatfs::{
     format_volume, FileSystem, FormatVolumeOptions, FsOptions, IoBase, Read, Seek, SeekFrom, Write,
@@ -7,6 +10,56 @@ use fatfs::{
 
 use crate::disc::block;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
+use trueos_math::Tree;
+
+static FILES_SCAN_REQUESTS: AtomicU32 = AtomicU32::new(0);
+static FILE_TREE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+const FILE_TREE_CAP: usize = 2048;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileTreeKind {
+    Root,
+    Device,
+    Dir,
+    File,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileTreeEntry {
+    pub kind: FileTreeKind,
+    pub name: String,
+}
+
+pub type FileTree = Tree<FileTreeEntry, FILE_TREE_CAP>;
+
+struct FileTreeCache {
+    seq: u32,
+    tree: Option<Box<FileTree>>,
+}
+
+static FILE_TREE_CACHE: Mutex<FileTreeCache> = Mutex::new(FileTreeCache { seq: 0, tree: None });
+
+/// Request a filesystem tree scan/log from the dedicated files service task.
+///
+/// This is intentionally non-blocking; the heavy work happens in the embassy task.
+pub fn request_files_scan() {
+    FILES_SCAN_REQUESTS.fetch_add(1, Ordering::Release);
+}
+
+pub fn file_tree_len() -> usize {
+    with_latest_file_tree(|_seq, tree| tree.len()).unwrap_or(0)
+}
+
+pub fn file_tree_seq() -> u32 {
+    FILE_TREE_CACHE.lock().seq
+}
+
+pub fn with_latest_file_tree<R>(f: impl FnOnce(u32, &FileTree) -> R) -> Option<R> {
+    let guard = FILE_TREE_CACHE.lock();
+    guard.tree.as_deref().map(|t| f(guard.seq, t))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbFsReadError {
@@ -242,7 +295,7 @@ impl Seek for RamDisk {
 }
 
 pub fn create_demo_file() {
-    crate::log!("fatfs demo: ");
+    crate::log!("files: ");
     const RAMDISK_BYTES: usize = 1024 * 1024; // 1 MiB scratch volume
     let mut ramdisk = RamDisk::new(RAMDISK_BYTES);
 
@@ -260,7 +313,7 @@ pub fn create_demo_file() {
 
     if let Ok(stats) = fs.stats() {
         crate::log!(
-            "fatfs demo: clusters total={} free={}",
+            "files: clusters total={} free={}",
             stats.total_clusters(),
             stats.free_clusters()
         );
@@ -307,6 +360,7 @@ struct BlockDeviceIo {
     scratch: AlignedBuf,
     read_count: u64,
     last_logged_lba: u64,
+    cached_lba: u64,
 }
 
 impl BlockDeviceIo {
@@ -328,17 +382,23 @@ impl BlockDeviceIo {
             scratch,
             read_count: 0,
             last_logged_lba: u64::MAX,
+            cached_lba: u64::MAX,
         })
     }
 
     fn io_read_block(&mut self, lba: u64) -> Result<(), block::Error> {
+        if self.cached_lba == lba {
+            return Ok(());
+        }
         self.read_count = self.read_count.wrapping_add(1);
         // Keep this intentionally low-noise: FAT mount may read lots of LBAs.
         if self.read_count <= 8 {
-            crate::log!("fatfs demo: io_read_block #{} lba={}\n", self.read_count, lba);
+            crate::log!("files: io_read_block #{} lba={}\n", self.read_count, lba);
             self.last_logged_lba = lba;
         }
-        self.dev.read_blocks(lba, self.scratch.as_mut_slice())
+        self.dev.read_blocks(lba, self.scratch.as_mut_slice())?;
+        self.cached_lba = lba;
+        Ok(())
     }
 }
 
@@ -395,6 +455,7 @@ impl Write for BlockDeviceIo {
             self.scratch.as_mut_slice()[block_off..block_off + want]
                 .copy_from_slice(&buf[total..total + want]);
             self.dev.write_blocks(lba, self.scratch.as_mut_slice())?;
+            self.cached_lba = lba;
 
             total += want;
             self.pos = self.pos.wrapping_add(want as u64);
@@ -447,7 +508,7 @@ fn pick_usbms_device() -> Option<block::DeviceHandle> {
 fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
     let info = handle.info();
     crate::log!(
-        "fatfs demo: using device id={} blocks={} block_size={}\n",
+        "files: using device id={} blocks={} block_size={}\n",
         info.id.raw(),
         info.block_count,
         info.block_size
@@ -461,7 +522,7 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
             Ok(()) => {
                 let b = probe.as_mut_slice();
                 crate::log!(
-                    "fatfs demo: read lba0 ok bytes[0..16]=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}]\n",
+                    "files: read lba0 ok bytes[0..16]=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}]\n",
                     b[0],
                     b[1],
                     b[2],
@@ -481,79 +542,79 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
                 );
             }
             Err(e) => {
-                crate::log!("fatfs demo: read lba0 FAILED err={:?}\n", e);
+                crate::log!("files: read lba0 FAILED err={:?}\n", e);
             }
         }
     } else {
-        crate::log!("fatfs demo: read lba0 SKIPPED (no aligned DMA buffer)\n");
+        crate::log!("files: read lba0 SKIPPED (no aligned DMA buffer)\n");
     }
 
     let io = match BlockDeviceIo::new(handle) {
         Ok(io) => io,
         Err(e) => {
-            crate::log!("fatfs demo: failed to init device io: {:?}\n", e);
+            crate::log!("files: failed to init device io: {:?}\n", e);
             return;
         }
     };
 
     // Prefer non-destructive behavior: attempt to mount first.
-    crate::log!("fatfs demo: mount begin\n");
+    crate::log!("files: mount begin\n");
     let fs = match FileSystem::new(io, FsOptions::new()) {
         Ok(fs) => fs,
         Err(e) => {
-            crate::log!("fatfs demo: mount failed ({:?}); formatting usbms (destructive)\n", e);
+            crate::log!("files: mount failed ({:?}); formatting usbms (destructive)\n", e);
 
             let mut io = match BlockDeviceIo::new(handle) {
                 Ok(io) => io,
                 Err(e) => {
-                    crate::log!("fatfs demo: failed to init device io for format: {:?}\n", e);
+                    crate::log!("files: failed to init device io for format: {:?}\n", e);
                     return;
                 }
             };
 
             if let Err(e) = format_volume(&mut io, FormatVolumeOptions::new()) {
-                crate::log!("fatfs demo: format failed ({:?})\n", e);
+                crate::log!("files: format failed ({:?})\n", e);
                 return;
             }
 
             match FileSystem::new(io, FsOptions::new()) {
                 Ok(fs) => fs,
                 Err(e) => {
-                    crate::log!("fatfs demo: mount after format failed ({:?})\n", e);
+                    crate::log!("files: mount after format failed ({:?})\n", e);
                     return;
                 }
             }
         }
     };
 
-    crate::log!("fatfs demo: mount ok\n");
+    crate::log!("files: mount ok\n");
 
     // Keep this 8.3-safe (<=8.3) to avoid short-name alias confusion.
     const DEMO_FILE_NAME: &str = "trueos.txt";
-    crate::log!("fatfs demo: demo file name={}\n", DEMO_FILE_NAME);
+    crate::log!("files: demo file name={}\n", DEMO_FILE_NAME);
 
     {
         let root = fs.root_dir();
 
-        crate::log!("fatfs demo: dir list begin\n");
+        crate::log!("files: dir list begin\n");
         let mut listed = 0u32;
         for entry in root.iter() {
             match entry {
                 Ok(entry) => {
-                    crate::log!("fatfs demo: dir entry: {}\n", entry.file_name());
+                    crate::log!("files: dir entry: {}\n", entry.file_name());
                     listed = listed.wrapping_add(1);
                     if listed >= 16 {
-                        crate::log!("fatfs demo: dir list truncated\n");
+                        crate::log!("files: dir list truncated\n");
                         break;
                     }
                 }
                 Err(e) => {
-                    crate::log!("fatfs demo: dir list entry failed ({:?})\n", e);
+                    crate::log!("files: dir list entry failed ({:?})\n", e);
                     break;
                 }
             }
         }
-        crate::log!("fatfs demo: dir list end (count={})\n", listed);
+        crate::log!("files: dir list end (count={})\n", listed);
 
         fn log_read<T: Read>(label: &str, file: &mut T)
         where
@@ -563,7 +624,7 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
             match file.read(&mut buf) {
                 Ok(n) => {
                     let shown = core::cmp::min(n, 128);
-                    crate::log!("fatfs demo: {} read ok n={} shown={} [", label, n, shown);
+                    crate::log!("files: {} read ok n={} shown={} [", label, n, shown);
                     for i in 0..shown {
                         crate::log!("{:02X}", buf[i]);
                         if i + 1 != shown {
@@ -575,46 +636,253 @@ fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
                     }
                     crate::log!("]\n");
                 }
-                Err(e) => crate::log!("fatfs demo: {} read failed ({:?})\n", label, e),
+                Err(e) => crate::log!("files: {} read failed ({:?})\n", label, e),
             }
         }
 
-        crate::log!("fatfs demo: open existing begin\n");
+        crate::log!("files: open existing begin\n");
         match root.open_file(DEMO_FILE_NAME) {
             Ok(mut file) => {
-                crate::log!("fatfs demo: open existing ok\n");
+                crate::log!("files: open existing ok\n");
                 log_read("existing", &mut file);
             }
             Err(fatfs::Error::NotFound) => {
-                crate::log!("fatfs demo: existing file missing; create begin\n");
+                crate::log!("files: existing file missing; create begin\n");
                 match root.create_file(DEMO_FILE_NAME) {
                     Ok(mut file) => {
-                        crate::log!("fatfs demo: create ok; write_all begin\n");
+                        crate::log!("files: create ok; write_all begin\n");
                         if let Err(e) = file.write_all("TRUEOS§".as_bytes()) {
-                            crate::log!("fatfs demo: write_all failed ({:?})\n", e);
+                            crate::log!("files: write_all failed ({:?})\n", e);
                         }
                         let _ = file.flush();
 
                         let _ = file.seek(SeekFrom::Start(0));
                         log_read("after_create", &mut file);
                     }
-                    Err(e) => crate::log!("fatfs demo: create_file failed ({:?})\n", e),
+                    Err(e) => crate::log!("files: create_file failed ({:?})\n", e),
                 }
             }
-            Err(e) => crate::log!("fatfs demo: open existing failed ({:?})\n", e),
+            Err(e) => crate::log!("files: open existing failed ({:?})\n", e),
         };
+    }
+}
+
+async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_math::NodeId, handle: block::DeviceHandle) {
+    let info = handle.info();
+    let dev_name = alloc::format!("{}", info.id);
+    let dev_id = match tree.add_child(
+        parent,
+        FileTreeEntry {
+            kind: FileTreeKind::Device,
+            name: dev_name,
+        },
+    ) {
+        Some(id) => id,
+        None => {
+            crate::log!("files: tree full; cannot add device\n");
+            return;
+        }
+    };
+
+    let io = match BlockDeviceIo::new(handle) {
+        Ok(io) => io,
+        Err(e) => {
+            crate::log!("files: device io init failed: {:?}\n", e);
+            return;
+        }
+    };
+
+    let fs = match FileSystem::new(io, FsOptions::new()) {
+        Ok(fs) => fs,
+        Err(e) => {
+            crate::log!("files: mount failed ({:?})\n", e);
+            return;
+        }
+    };
+
+    // Add a per-device filesystem root node.
+    let fs_root = match tree.add_child(
+        dev_id,
+        FileTreeEntry {
+            kind: FileTreeKind::Root,
+            name: String::from("/"),
+        },
+    ) {
+        Some(id) => id,
+        None => {
+            crate::log!("files: tree full; cannot add root\n");
+            let _ = fs.unmount();
+            return;
+        }
+    };
+
+    // Iterative walk to avoid deep recursion on kernel stacks.
+    let mut stack: Vec<(String, usize, trueos_math::NodeId)> = Vec::new();
+    stack.push((String::new(), 0, fs_root));
+
+    // Yield periodically so we don't starve other cooperative tasks.
+    const YIELD_DIRS_EVERY: u32 = 8;
+    let mut dirs_processed: u32 = 0;
+
+    while let Some((dir_path, depth, parent_id)) = stack.pop() {
+        if tree.len() + 1 >= tree.capacity() {
+            crate::log!("files: tree full; truncating walk\n");
+            break;
+        }
+
+        let mut dir = fs.root_dir();
+        let mut opened_ok = true;
+        if !dir_path.is_empty() {
+            for seg in dir_path.split('/').filter(|s| !s.is_empty()) {
+                match dir.open_dir(seg) {
+                    Ok(next) => dir = next,
+                    Err(e) => {
+                        crate::log!(
+                            "files: open_dir failed path='{}' seg='{}' err={:?}\n",
+                            dir_path,
+                            seg,
+                            e
+                        );
+                        opened_ok = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !opened_ok {
+            continue;
+        }
+
+        for entry in dir.iter() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    crate::log!("files: iter entry failed ({:?})\n", e);
+                    break;
+                }
+            };
+
+            let name = entry.file_name();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+
+            let is_dir = entry.is_dir();
+            let kind = if is_dir {
+                FileTreeKind::Dir
+            } else {
+                FileTreeKind::File
+            };
+
+            let child_id = match tree.add_child(
+                parent_id,
+                FileTreeEntry {
+                    kind,
+                    name: name.clone(),
+                },
+            ) {
+                Some(id) => id,
+                None => {
+                    crate::log!("files: tree full; truncating walk\n");
+                    break;
+                }
+            };
+
+            if is_dir {
+                let full_path = if dir_path.is_empty() {
+                    name
+                } else {
+                    alloc::format!("{}/{}", dir_path, name)
+                };
+                stack.push((full_path, depth.saturating_add(1), child_id));
+            }
+        }
+
+        dirs_processed = dirs_processed.saturating_add(1);
+        if (dirs_processed % YIELD_DIRS_EVERY) == 0 {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    }
+
+    let _ = fs.unmount();
+}
+
+async fn scan_all_devices_and_build_tree(tree: &mut FileTree, root: trueos_math::NodeId) {
+    let devices = block::device_handles();
+    if devices.is_empty() {
+        crate::log!("files: no block devices found\n");
+        return;
+    }
+
+    crate::log!("files: scanning {} device(s)\n", devices.len());
+    for dev in devices.into_iter() {
+        build_fatfs_tree_for_device_async(tree, root, dev).await;
+        Timer::after(EmbassyDuration::from_millis(1)).await;
     }
 }
 
 #[embassy_executor::task]
 pub async fn fatfs_usb_demo_task() {
-    // Wait for the USB mass storage block device to appear.
-    for _ in 0..200 {
-        if let Some(dev) = pick_usbms_device() {
-            run_fatfs_demo_on_device(dev);
-            return;
+    // Dedicated on-demand service. Heavy scanning is performed only when requested.
+    crate::log!("files: service online (type 'files' in shell)\n");
+
+    // One-time boot scan (best-effort). Keep the wait bounded so boot bringup isn't held.
+    for _ in 0..50 {
+        if !block::device_handles().is_empty() {
+            break;
         }
         Timer::after(EmbassyDuration::from_millis(100)).await;
     }
-    crate::log!("fatfs demo: usbms device not found\n");
+    crate::log!("files: boot scan\n");
+    {
+        let mut tree = FileTree::new();
+        let Some(root) = tree.add_root(FileTreeEntry {
+            kind: FileTreeKind::Root,
+            name: String::from("files"),
+        }) else {
+            crate::log!("files: tree init failed\n");
+            return;
+        };
+        scan_all_devices_and_build_tree(&mut tree, root).await;
+        let seq = FILE_TREE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let mut cache = FILE_TREE_CACHE.lock();
+        cache.seq = seq;
+        cache.tree = Some(Box::new(tree));
+        crate::log!(
+            "files: tree built seq={} nodes={} cap={}\n",
+            cache.seq,
+            cache.tree.as_ref().map(|t| t.len()).unwrap_or(0),
+            FILE_TREE_CAP
+        );
+    }
+
+    loop {
+        let pending = FILES_SCAN_REQUESTS.swap(0, Ordering::AcqRel);
+        if pending == 0 {
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+            continue;
+        }
+
+        crate::log!("files: scan requested (pending={})\n", pending);
+        let mut tree = FileTree::new();
+        let Some(root) = tree.add_root(FileTreeEntry {
+            kind: FileTreeKind::Root,
+            name: String::from("files"),
+        }) else {
+            crate::log!("files: tree init failed\n");
+            continue;
+        };
+        scan_all_devices_and_build_tree(&mut tree, root).await;
+        let seq = FILE_TREE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        let mut cache = FILE_TREE_CACHE.lock();
+        cache.seq = seq;
+        cache.tree = Some(Box::new(tree));
+        crate::log!(
+            "files: tree rebuilt seq={} nodes={} cap={}\n",
+            cache.seq,
+            cache.tree.as_ref().map(|t| t.len()).unwrap_or(0),
+            FILE_TREE_CAP
+        );
+    }
 }

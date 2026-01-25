@@ -39,8 +39,11 @@ mod serial;
 mod power;
 mod globalog;
 mod shell;
+mod shellqjs;
+mod install;
 mod shellcube;
 mod ecma48;
+mod txtedt;
 mod surface;
 mod tga;
 mod time;
@@ -309,6 +312,7 @@ pub extern "C" fn kmain() -> ! {
 
     net::init();
     let _ = spawner.spawn(net::adapter::net_service_task());
+    let _ = spawner.spawn(net::adapter::net_smoke_task());
 
     if tga::is_online() {
         let _ = spawner.spawn(tga::blink_task());
@@ -332,7 +336,6 @@ pub extern "C" fn kmain() -> ! {
     // Continuously drains the TrueKey log cache to the ESP32 when bound.
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
-    // FATFS demo on the first detected USB mass-storage device.
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
     let _ = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND));

@@ -1,18 +1,21 @@
 use core::fmt::Write;
+use core::ffi::c_char;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
 use crate::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 use crate::ecma48;
-use crate::disc::{block, install};
+use crate::disc::block;
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 13] = [
+const SHELL_COMMANDS: [&str; 17] = [
     "echo",
+    "qjs",
+    "qjsm",
     "s5",
     "reset",
     "install",
@@ -25,6 +28,8 @@ const SHELL_COMMANDS: [&str; 13] = [
     "pstate",
     "cube",
     "ico",
+    "txt",
+    "insane",
 ];
 
 pub(crate) trait ShellIo {
@@ -177,6 +182,7 @@ enum CommandAction {
     Pending(PendingAction),
     EnterCube,
     EnterIco,
+    EnterTxtEdt { filename: String<48> },
 }
 
 #[embassy_executor::task]
@@ -222,7 +228,7 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend) {
                                 set_go_mode(io, &mut go_mode, false);
                                 line.clear();
                                 io.write_str("\r\n");
-                                do_install(io, &mut go_mode, raw_id, migrate);
+                                crate::install::run_install(io, raw_id, migrate);
                                 write_prompt(io);
                             }
                             b' ' => {
@@ -293,6 +299,16 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend) {
                                 cube.set_shape(WireShape::Icosidodecahedron);
                                 cube.reset();
                                 enter_cube_mode(io, &mut term_cols, &mut term_rows);
+                            }
+                            CommandAction::EnterTxtEdt { filename } => {
+                                cube_mode = false;
+                                set_go_mode(io, &mut go_mode, false);
+                                let cols = term_cols;
+                                let rows = term_rows;
+                                crate::txtedt::run(io, cols, rows, filename.as_str()).await;
+                                io.write_str(ecma48::CLEAR_SCREEN);
+                                io.write_str(ecma48::HOME);
+                                write_banner(io, term_cols);
                             }
                             CommandAction::None => {}
                         }
@@ -374,10 +390,114 @@ fn handle_line(
 
     if let Some((verb, rest)) = cmd.split_once(' ') {
         if verb.eq_ignore_ascii_case("install") {
-            return handle_install(io, rest);
+            if let Some(p) = crate::install::handle_install_command(io, rest) {
+                return CommandAction::Pending(PendingAction::Install {
+                    raw_id: p.raw_id,
+                    migrate: p.migrate,
+                });
+            }
+            return CommandAction::None;
+        }
+        if verb.eq_ignore_ascii_case("files") {
+            let _ = rest;
+            let seq = crate::disc::files::file_tree_seq();
+            let nodes = crate::disc::files::file_tree_len();
+            io.write_fmt(format_args!(
+                "files: cache seq={} nodes={}\r\n",
+                seq, nodes
+            ));
+            crate::disc::files::request_files_scan();
+            io.write_str("files: queued\r\n");
+            return CommandAction::None;
+        }
+        if verb.eq_ignore_ascii_case("qjs") {
+            let src = rest.trim();
+            if src.is_empty() {
+                io.write_str("qjs: usage qjs <javascript>\r\n");
+            } else {
+                if let Some(path) = src.strip_prefix('@') {
+                    let path = path.trim();
+                    match crate::disc::files::Fs::read_file(path) {
+                        Ok(bytes) => {
+                            let flags = if path.ends_with(".mjs") || crate::shellqjs::looks_like_module_bytes(&bytes) {
+                                trueos_qjs::JS_EVAL_TYPE_MODULE
+                            } else {
+                                trueos_qjs::JS_EVAL_TYPE_GLOBAL
+                            };
+                            let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
+                                b"<shell-module-file>\0".as_ptr() as *const c_char
+                            } else {
+                                b"<shell-file>\0".as_ptr() as *const c_char
+                            };
+                            crate::shellqjs::eval_bytes(io, filename, &bytes, flags);
+                        }
+                        Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
+                    }
+                } else {
+                    crate::shellqjs::eval(io, src);
+                }
+            }
+            return CommandAction::None;
+        }
+        if verb.eq_ignore_ascii_case("qjsm") {
+            let src = rest.trim();
+            if src.is_empty() {
+                io.write_str("qjsm: usage qjsm <module-source>\r\n");
+                io.write_str("qjsm: example qjsm import { make } from 'complex'; make(1,2)\r\n");
+            } else {
+                if let Some(path) = src.strip_prefix('@') {
+                    let path = path.trim();
+                    match crate::disc::files::Fs::read_file(path) {
+                        Ok(bytes) => {
+                            let filename = b"<shell-module-file>\0".as_ptr() as *const c_char;
+                            crate::shellqjs::eval_bytes(io, filename, &bytes, trueos_qjs::JS_EVAL_TYPE_MODULE);
+                        }
+                        Err(e) => io.write_fmt(format_args!("qjsm: read_file failed ({:?})\r\n", e)),
+                    }
+                } else {
+                    crate::shellqjs::eval_module(io, src);
+                }
+            }
+            return CommandAction::None;
+        }
+
+        if verb.eq_ignore_ascii_case("txt") || verb.eq_ignore_ascii_case("txtedt") {
+            let mut filename: String<48> = String::new();
+            let name = rest.trim();
+            let name = if name.is_empty() { "untitled.txt" } else { name };
+            for ch in name.chars() {
+                if filename.push(ch).is_err() {
+                    break;
+                }
+            }
+            return CommandAction::EnterTxtEdt { filename };
         }
     } else if cmd.eq_ignore_ascii_case("install") {
-        return handle_install(io, "");
+        if let Some(p) = crate::install::handle_install_command(io, "") {
+            return CommandAction::Pending(PendingAction::Install {
+                raw_id: p.raw_id,
+                migrate: p.migrate,
+            });
+        }
+        return CommandAction::None;
+    } else if cmd.eq_ignore_ascii_case("files") {
+        let seq = crate::disc::files::file_tree_seq();
+        let nodes = crate::disc::files::file_tree_len();
+        io.write_fmt(format_args!(
+            "files: cache seq={} nodes={}\r\n",
+            seq, nodes
+        ));
+        crate::disc::files::request_files_scan();
+        io.write_str("files: queued\r\n");
+        return CommandAction::None;
+    } else if cmd.eq_ignore_ascii_case("qjs") {
+        io.write_str("qjs: usage qjs <javascript>\r\n");
+        io.write_str("qjs: example qjs print(1+2)\r\n");
+        return CommandAction::None;
+    } else if cmd.eq_ignore_ascii_case("qjsm") {
+        io.write_str("qjsm: usage qjsm <module-source>\r\n");
+        io.write_str("qjsm: example qjsm import { make } from 'complex'; make(1,2)\r\n");
+        return CommandAction::None;
     }
 
     if let Some((cols, rows)) = parse_set_dims(cmd) {
@@ -433,6 +553,43 @@ fn handle_line(
             second
         );
         io.write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
+        return CommandAction::None;
+    }
+
+    if cmd.eq_ignore_ascii_case("insane") {
+        let cols = (*term_cols).max(1);
+        io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
+
+        let mut col: usize = 0;
+        for cp in 0u32..=0x10FFFF {
+            if (cp & 0x3FF) == 0 {
+                if let Some(b) = io.read_byte() {
+                    if b == 0x03 {
+                        io.write_str("\r\ninsane: aborted\r\n");
+                        return CommandAction::None;
+                    }
+                }
+            }
+
+            let ch = match core::char::from_u32(cp) {
+                Some(ch) if !ch.is_control() => ch,
+                Some(_) => '.',
+                    None => '\0',
+            };
+
+            io.write_char(ch);
+
+            col += 1;
+            if col >= cols {
+                io.write_str("\r\n");
+                col = 0;
+            }
+        }
+
+        if col != 0 {
+            io.write_str("\r\n");
+        }
+        io.write_str("insane: done\r\n");
         return CommandAction::None;
     }
 
@@ -522,160 +679,16 @@ fn handle_line(
         return CommandAction::EnterIco;
     }
 
+    if cmd.eq_ignore_ascii_case("txt") || cmd.eq_ignore_ascii_case("txtedt") {
+        let mut filename: String<48> = String::new();
+        let _ = filename.push_str("untitled.txt");
+        return CommandAction::EnterTxtEdt { filename };
+    }
+
     io.write_str("unknown: ");
     io.write_str(cmd);
     io.write_str("\r\n");
     CommandAction::None
-}
-
-fn handle_install(io: &dyn ShellIo, args: &str) -> CommandAction {
-    let args = args.trim();
-
-    if args.is_empty() {
-        io.write_str("install: BIOS/MBR install (DESTRUCTIVE)\r\n");
-        io.write_str("usage: install <disc_id>\r\n");
-        io.write_str("       install <disc_id> migrate\r\n");
-        io.write_str("example: install 1\r\n");
-        io.write_str("example: install 1 migrate\r\n");
-        io.write_str("available disks:\r\n");
-        for h in block::device_handles().into_iter() {
-            let info = h.info();
-            io.write_fmt(format_args!(
-                "  id={} ({}) kind={:?} blocks={} bs={} writable={} label={:?}\r\n",
-                info.id.raw(),
-                info.id,
-                info.kind,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label
-            ));
-        }
-        return CommandAction::None;
-    }
-
-    let mut parts = args.split_whitespace();
-    let first = match parts.next() {
-        Some(s) => s,
-        None => {
-            io.write_str("install: missing args\r\n");
-            return CommandAction::None;
-        }
-    };
-
-    // Supported forms:
-    //   install <id>
-    //   install <id> migrate
-    //   install migrate <id>
-    let (mode_migrate, id_str) = if first.eq_ignore_ascii_case("migrate") {
-        let id_str = match parts.next() {
-            Some(s) => s,
-            None => {
-                io.write_str("install: missing id\r\n");
-                return CommandAction::None;
-            }
-        };
-        (true, id_str)
-    } else {
-        let second = parts.next();
-        match second {
-            Some(s2) if s2.eq_ignore_ascii_case("migrate") => (true, first),
-            Some(_) => (false, first),
-            None => (false, first),
-        }
-    };
-
-    let raw_id = match parse_disc_id_raw(id_str) {
-        Some(v) => v,
-        None => {
-            io.write_str("install: invalid id (use decimal like '1' or 'disc001')\r\n");
-            return CommandAction::None;
-        }
-    };
-
-    let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
-    let Some(handle) = target else {
-        io.write_str("install: no such device\r\n");
-        return CommandAction::None;
-    };
-
-    let info = handle.info();
-    io.write_fmt(format_args!(
-        "install: target id={} ({}) label={:?} blocks={} bs={}\r\n",
-        info.id.raw(),
-        info.id,
-        info.label,
-        info.block_count,
-        info.block_size
-    ));
-    if mode_migrate {
-        io.write_str(
-            "install: migrate shifts a FAT superfloppy (FAT-at-LBA0) forward by 1MiB into a partition.\r\n",
-        );
-        io.write_str(
-            "install: it validates the last 1MiB is free; otherwise it aborts to avoid data loss.\r\n",
-        );
-        io.write_str("install: still destructive; always back up.\r\n");
-    } else {
-        io.write_str("install: this will ERASE the disk.\r\n");
-    }
-    io.write_str("install: press Enter to proceed, Space to abort\r\n");
-
-    CommandAction::Pending(PendingAction::Install {
-        raw_id: info.id.raw(),
-        migrate: mode_migrate,
-    })
-}
-
-fn do_install(io: &dyn ShellIo, go_mode: &mut bool, raw_id: u32, mode_migrate: bool) {
-    let target = block::device_handles().into_iter().find(|h| h.id().raw() == raw_id);
-    let Some(handle) = target else {
-        io.write_str("install: no such device\r\n");
-        return;
-    };
-
-    let info = handle.info();
-    io.write_fmt(format_args!(
-        "install: installing Limine BIOS + TRUEOS to id={} ({})...\r\n",
-        info.id.raw(),
-        info.id
-    ));
-
-    set_go_mode(io, go_mode, true);
-    let mut go_idx: usize = 0;
-    let mut tick = || {
-        let ch = GO_CHARS[go_idx];
-        go_idx = (go_idx + 1) % GO_CHARS.len();
-        io.write_str("\r");
-        write_prompt(io);
-        io.write_char(ch);
-    };
-
-    let mut status = |args: core::fmt::Arguments<'_>| {
-        // Print a user-visible status line without fighting the spinner.
-        io.write_str("\r\n");
-        io.write_fmt(args);
-        io.write_str("\r\n");
-    };
-
-    let res = if mode_migrate {
-        install::install_bios_mbr_migrate_superfloppy_with_progress_and_status(handle, &mut tick, &mut status)
-    } else {
-        install::install_bios_mbr_with_progress(handle, &mut tick)
-    };
-    set_go_mode(io, go_mode, false);
-    io.write_str("\r\n");
-
-    match res {
-        Ok(()) => io.write_str("install: ok\r\n"),
-        Err(e) => io.write_fmt(format_args!("install: failed: {:?}\r\n", e)),
-    }
-}
-
-fn parse_disc_id_raw(s: &str) -> Option<u32> {
-    let s = s.trim();
-    let s = s.strip_prefix("disc").unwrap_or(s);
-    s.parse::<u32>().ok()
 }
 
 fn parse_set_dims(cmd: &str) -> Option<(usize, usize)> {
