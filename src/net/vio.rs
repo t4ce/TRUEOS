@@ -23,6 +23,7 @@ const VIRTIO_PCI_REG_QUEUE_NOTIFY: u16 = 0x10;
 const VIRTIO_PCI_REG_DEVICE_STATUS: u16 = 0x12;
 const VIRTIO_PCI_REG_ISR_STATUS: u16 = 0x13;
 const VIRTIO_PCI_REG_DEVICE_CFG: u16 = 0x14;
+const VIRTIO_PCI_REG_GUEST_PAGE_SIZE: u16 = 0x28;
 
 const VIRTIO_STATUS_ACK: u8 = 0x01;
 const VIRTIO_STATUS_DRIVER: u8 = 0x02;
@@ -36,7 +37,7 @@ const QUEUE_TX: u16 = 1;
 
 const VIRTQ_DESC_F_WRITE: u16 = 2;
 
-const VIRTIO_NET_HDR_SIZE: usize = 12;
+const VIRTIO_NET_HDR_SIZE: usize = 10;
 const RX_BUF_SIZE: usize = 2048 + VIRTIO_NET_HDR_SIZE;
 const TX_BUF_SIZE: usize = 2048 + VIRTIO_NET_HDR_SIZE;
 
@@ -125,8 +126,22 @@ impl VirtioNetAdapter {
         let io_base = read_io_base(&dev)?;
         enable_io_and_bus_master(&dev);
 
+        crate::log!(
+            "net/vio: found virtio-net {:02x}:{:02x}.{} vid={:04x} did={:04x} io_base=0x{:04x}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            dev.vendor,
+            dev.device,
+            io_base
+        );
+
         reset_device(io_base);
         set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER);
+
+        // Legacy virtio PCI requires the guest to program page size (used by PFN-based queue regs).
+        // QEMU typically expects 4096 here.
+        unsafe { crate::portio::outl(io_base + VIRTIO_PCI_REG_GUEST_PAGE_SIZE, 4096) };
 
         let features = read_device_features(io_base);
         let mut guest = 0u32;
@@ -143,6 +158,18 @@ impl VirtioNetAdapter {
         } else {
             [0; 6]
         };
+
+        crate::log!(
+            "net/vio: features=0x{:08x} guest=0x{:08x} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            features,
+            guest,
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
+        );
 
         let (rx_bufs, rxq) = init_rx_buffers(io_base, rxq)?;
         let (tx_bufs, tx_free) = init_tx_buffers(&mut txq)?;
@@ -314,9 +341,13 @@ fn setup_queue(io_base: u16, queue_index: u16) -> Result<VirtQueue, ()> {
     }
 
     let desc_size = size as usize * core::mem::size_of::<VirtqDesc>();
-    let avail_size = 4 + (size as usize * 2) + 2;
-    let used_offset = align_up(desc_size + avail_size, 4);
-    let used_size = 4 + (size as usize * 8) + 2;
+	// Legacy virtqueue layout (no EVENT_IDX negotiated):
+	// avail: flags(u16) + idx(u16) + ring[size](u16)
+	let avail_size = 4 + (size as usize * 2);
+    // For virtio-pci legacy, the used ring is page-aligned (Linux/QEMU use align=PAGE_SIZE).
+    let used_offset = align_up(desc_size + avail_size, 4096);
+	// used: flags(u16) + idx(u16) + ring[size](VirtqUsedElem)
+	let used_size = 4 + (size as usize * 8);
     let total = align_up(used_offset + used_size, 4096);
 
     let mem = DmaRegion::alloc(total, 4096).ok_or(())?;
@@ -366,6 +397,9 @@ fn init_tx_buffers(txq: &mut VirtQueue) -> Result<(Vec<DmaRegion>, Vec<u16>), ()
 
 impl VirtioNetAdapter {
     fn poll_rx_queue(&mut self) {
+        static POLL_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let polls = POLL_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+
         let used_idx = self.rxq.used_idx();
         let mut processed = 0u16;
         while self.rxq.last_used_idx != used_idx {
@@ -395,6 +429,14 @@ impl VirtioNetAdapter {
 
         if processed != 0 {
             notify_queue(self.io_base, QUEUE_RX);
+        } else if (polls % 2000) == 0 {
+            crate::log!(
+                "net/vio: rx idle (polls={}) used_idx={} last_used_idx={} avail_idx={}\n",
+                polls,
+                used_idx,
+                self.rxq.last_used_idx,
+                self.rxq.avail_idx
+            );
         }
     }
 

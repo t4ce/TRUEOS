@@ -1,5 +1,6 @@
 KERNEL_BIN = target/86_64/$(BUILD_MODE)/TRUEOS
 
+
 ISO_DIR 		:= bld
 ISO_PATH 		:= bld/trueos.iso
 LIMINE_CFG 		:= limine.conf
@@ -17,7 +18,7 @@ QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_
 
 QEMU_NET_FLAGS = -netdev user,id=net0 -device e1000,netdev=net0 \
 	-netdev user,id=net1 -device rtl8139,netdev=net1 \
-	-netdev user,id=net2 -device virtio-net-pci,netdev=net2
+	-netdev user,id=net2,hostfwd=tcp::4242-:4242 -device virtio-net-pci,netdev=net2,disable-modern=on
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS)
 
@@ -96,6 +97,7 @@ iso-release: iso
 	7z a -t7z -mx=9 -m0=lzma2 $(ISO_DIR)/TrueOS.7z $(ISO_PATH)
 	gio mount smb://t4ce@pdjb/home-share || true
 	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
+	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
 
 iso-debug: BUILD_MODE := debug
 iso-debug: iso
