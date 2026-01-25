@@ -88,4 +88,4 @@ mcopy -o -s -i disk.img@@$((2048*512)) crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img@@$((2048*512)) 
 mdir -i disk.img@@$((2048*512)) ::/qjs
 
-qjsm @/qjs/main.mjs
+qjs @/qjs/main.mjs
