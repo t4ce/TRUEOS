@@ -1,22 +1,24 @@
 [package]
-name = "quickjs-sys"
+name = "trueos-qjs"
 version = "0.1.0"
 edition = "2021"
 links = "quickjs"
 build = "build.rs"
 
 [lib]
-name = "quickjs_sys"
+name = "trueos_qjs"
 path = "src/lib.rs"
 
 [build-dependencies]
 cc = "1.0"
 
 [dependencies]
+embassy-time-driver = { version = "0.2.1", default-features = false, optional = true }
+libm = { version = "0.2", default-features = false, optional = true }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
 
 [features]
 default = []
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
-trueos = ["dep:trueos-math"]
+trueos = ["dep:trueos-math", "dep:embassy-time-driver", "dep:libm"]
