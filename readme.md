@@ -59,3 +59,27 @@ sudo ip addr add 192.168.55.1/24 dev enx047bcb669593
 sudo ip addr replace 192.168.55.1/24 dev enx047bcb669593
 ip -4 -br addr show dev enx047bcb669593
 sudo node pxe.js 
+
+
+
+/*
+ConPink 	FF_55_FF 
+ConBlue 	08_18_30
+ConWhite 	FF_FF_FF
+*/
+
+## QuickJS filesystem modules (/qjs)
+
+# If `disk.img` is a partitioned MBR image, the FAT partition typically starts at LBA 2048.
+# If it's a FAT "superfloppy", the filesystem starts at offset 0.
+# Auto-detect the correct offset (bytes):
+start=$(fdisk -l disk.img | awk '/^disk\.img1[[:space:]]/ {print $2; exit}')
+if [ -n "$start" ]; then off=$((start*512)); else off=0; fi
+
+mdir -i disk.img@@${off} ::/qjs >/dev/null 2>&1 || mmd -i disk.img@@${off} ::/qjs
+mcopy -o -s -i disk.img@@${off} crates/trueos-qjs/app/* ::/qjs/
+
+# Verify:
+mdir -i disk.img@@${off} ::/qjs
+
+qjsm @/qjs/main.mjs

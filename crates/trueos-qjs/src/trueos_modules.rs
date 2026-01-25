@@ -163,10 +163,12 @@ unsafe extern "C" fn qjs_complex_module_init(ctx: *mut qjs::JSContext, m: *mut q
     0
 }
 
-unsafe extern "C" fn trueos_module_loader(
+/// Attempt to load a TRUEOS-provided native module.
+///
+/// Returns null if the module is not recognized.
+pub unsafe fn load_native_module(
     ctx: *mut qjs::JSContext,
     module_name: *const c_char,
-    _opaque: *mut core::ffi::c_void,
 ) -> *mut qjs::JSModuleDef {
     if module_name.is_null() {
         return core::ptr::null_mut();
@@ -190,6 +192,14 @@ unsafe extern "C" fn trueos_module_loader(
     let _ = qjs::JS_AddModuleExport(ctx, m, square_name.as_ptr() as *const c_char);
 
     m
+}
+
+unsafe extern "C" fn trueos_module_loader(
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
+    _opaque: *mut core::ffi::c_void,
+) -> *mut qjs::JSModuleDef {
+    load_native_module(ctx, module_name)
 }
 
 /// Install the TRUEOS module loader into a runtime.
