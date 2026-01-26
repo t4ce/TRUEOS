@@ -63,20 +63,17 @@ impl NetDevice for ActiveDevice {
     }
 }
 
-static DEVICE: Mutex<Option<ActiveDevice>> = Mutex::new(None);
-
-pub fn adapter_backend_name() -> Option<&'static str> {
-    let guard = DEVICE.lock();
-    guard.as_ref().map(|dev| match dev {
-        ActiveDevice::Virtio(_) => "virtio-net",
-        ActiveDevice::E1000(_) => "e1000",
-        ActiveDevice::R8169(_) => "r8169",
-    })
-}
+static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
 
 pub fn init() {
-    if let Ok(adapter) = R8169Adapter::init() {
-        let mut guard = DEVICE.lock();
+    {
+        let mut guard = DEVICES.lock();
+        guard.clear();
+    }
+
+    let mut added: usize = 0;
+
+    for adapter in R8169Adapter::init_all() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
@@ -84,15 +81,12 @@ pub fn init() {
             TX_BUF_SIZE,
             POLL_BUDGET,
         );
-        *guard = Some(ActiveDevice::R8169(NetCore::new(adapter, ring)));
-        crate::log!("net: using r8169 adapter.\n");
-        return;
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::R8169(NetCore::new(adapter, ring)));
+        added += 1;
     }
 
-    crate::log!("net: r8169 init failed; trying e1000.\n");
-
-    if let Ok(adapter) = E1000Adapter::init() {
-        let mut guard = DEVICE.lock();
+    for adapter in E1000Adapter::init_all() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
@@ -100,15 +94,12 @@ pub fn init() {
             TX_BUF_SIZE,
             POLL_BUDGET,
         );
-        *guard = Some(ActiveDevice::E1000(NetCore::new(adapter, ring)));
-        crate::log!("net: using e1000 adapter.\n");
-        return;
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::E1000(NetCore::new(adapter, ring)));
+        added += 1;
     }
 
-    crate::log!("net: e1000 init failed; trying virtio-net.\n");
-
-    if let Ok(adapter) = VirtioNetAdapter::init() {
-        let mut guard = DEVICE.lock();
+    for adapter in VirtioNetAdapter::init_all() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
@@ -116,12 +107,16 @@ pub fn init() {
             TX_BUF_SIZE,
             POLL_BUDGET,
         );
-        *guard = Some(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
-        crate::log!("net: using virtio-net adapter.\n");
-        return;
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
+        added += 1;
     }
 
-    crate::log!("net: virtio-net init failed; no supported NIC detected.\n");
+    if added == 0 {
+        crate::log!("net: no supported NIC detected.\n");
+    } else {
+        crate::log!("net: detected {} NIC(s); primary=0\n", added);
+    }
 
     crate::log!(
         "net: hint: in QEMU add virtio-net (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0,disable-modern=on)\n"
@@ -129,26 +124,50 @@ pub fn init() {
 }
 
 pub fn poll() {
-    with_device(|dev| dev.poll_rx());
+    poll_at(0);
+}
+
+pub fn poll_at(index: usize) {
+    let _ = with_device_at(index, |dev| dev.poll_rx());
+}
+
+pub fn poll_all() {
+    let count = device_count();
+    for idx in 0..count {
+        poll_at(idx);
+    }
 }
 
 pub fn pop_rx_packet() -> Option<alloc::vec::Vec<u8>> {
-    with_device(|dev| dev.pop_rx()).flatten()
+    pop_rx_packet_at(0)
+}
+
+pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
+    with_device_at(index, |dev| dev.pop_rx()).flatten()
 }
 
 pub fn transmit_packet(data: &[u8]) -> Result<(), ()> {
-    with_device(|dev| dev.transmit(data)).unwrap_or(Err(()))
+    transmit_packet_at(0, data)
+}
+
+pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
+    with_device_at(index, |dev| dev.transmit(data)).unwrap_or(Err(()))
 }
 
 pub fn mac_address() -> Option<[u8; 6]> {
-    with_device(|dev| Some(dev.mac())).flatten()
+    mac_address_at(0)
 }
 
-fn with_device<R>(f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
-    let mut guard = DEVICE.lock();
-    if let Some(ref mut dev) = *guard {
-        Some(f(dev))
-    } else {
-        None
-    }
+pub fn mac_address_at(index: usize) -> Option<[u8; 6]> {
+    with_device_at(index, |dev| Some(dev.mac())).flatten()
+}
+
+pub fn device_count() -> usize {
+    DEVICES.lock().len()
+}
+
+fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {
+    let mut guard = DEVICES.lock();
+    let dev = guard.get_mut(index)?;
+    Some(f(dev))
 }
