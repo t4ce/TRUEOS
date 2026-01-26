@@ -272,9 +272,6 @@ pub extern "C" fn kmain() -> ! {
         if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
             crate::log!("net: spawn net_service_task failed: {:?}\n", e);
         }
-        if let Err(e) = spawner.spawn(net::adapter::net_smoke_task()) {
-            crate::log!("net: spawn net_smoke_task failed: {:?}\n", e);
-        }
         if let Err(e) = spawner.spawn(net::html::net_http_smoke_task()) {
             crate::log!("net: spawn net_http_smoke_task failed: {:?}\n", e);
         }

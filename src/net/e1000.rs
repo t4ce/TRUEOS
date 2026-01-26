@@ -114,14 +114,30 @@ pub struct E1000Adapter {
 unsafe impl Send for E1000Adapter {}
 
 impl E1000Adapter {
-    pub fn init() -> Result<Self, ()> {
-        let dev = match find_e1000_device() {
-            Some(d) => d,
-            None => {
-                crate::log!("net/e1000: no supported device found\n");
-                return Err(());
+    pub fn init_all() -> alloc::vec::Vec<Self> {
+        let mut out = alloc::vec::Vec::new();
+        let devs = find_e1000_devices();
+        if devs.is_empty() {
+            return out;
+        }
+
+        for dev in devs {
+            match Self::init_from_device(dev) {
+                Ok(adapter) => out.push(adapter),
+                Err(()) => {
+                    crate::log!(
+                        "net/e1000: init failed for {:02x}:{:02x}.{}\n",
+                        dev.bus,
+                        dev.slot,
+                        dev.function
+                    );
+                }
             }
-        };
+        }
+        out
+    }
+
+    fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
         let (bar_index, bar_phys) = match find_mmio_bar_phys(&dev) {
@@ -450,7 +466,8 @@ impl VendorAdapter for E1000Adapter {
     }
 }
 
-fn find_e1000_device() -> Option<pci::PciDevice> {
+fn find_e1000_devices() -> alloc::vec::Vec<pci::PciDevice> {
+    let mut out = alloc::vec::Vec::new();
     pci::with_devices(|list| {
         for dev in list {
             if dev.vendor != E1000_VENDOR_ID {
@@ -462,10 +479,10 @@ fn find_e1000_device() -> Option<pci::PciDevice> {
             if dev.class != 0x02 {
                 continue;
             }
-            return Some(*dev);
+            out.push(*dev);
         }
-        None
-    })
+    });
+    out
 }
 
 fn read_bar0_phys(dev: &pci::PciDevice) -> Result<u64, ()> {

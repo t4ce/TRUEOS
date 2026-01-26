@@ -221,32 +221,48 @@ fn log_http_snippet(buf: &[u8]) {
 /// - Resolves `google.de` via the slirp DNS server (10.0.2.3).
 /// - Connects to port 80 and issues a minimal HTTP/1.1 GET.
 /// - Treats 200 and all 3xx redirects as success.
-#[task]
-pub async fn net_http_smoke_task() {
-    if NET_HTTP_SMOKE_STARTED.swap(true, Ordering::SeqCst) {
+fn leak_str(s: String) -> &'static str {
+    alloc::boxed::Box::leak(s.into_boxed_str())
+}
+
+async fn net_http_smoke_for_device(idx: usize) {
+    if crate::net::mac_address_at(idx).is_none() {
+        crate::log!("net-http-smoke: device={} skipped (no MAC)\n", idx);
         return;
     }
 
-    if crate::net::mac_address().is_none() {
-        crate::log!("net-http-smoke: disabled (no NIC)\n");
-        return;
-    }
+    let owner = leak_str(alloc::format!("net-http-smoke@{}", idx));
+    let cmd_name = leak_str(alloc::format!("net-http-smoke-{}-cmd", idx));
+    let evt_name = leak_str(alloc::format!("net-http-smoke-{}-evt", idx));
 
-    const OWNER: &'static str = "net-http-smoke";
     const DNS_ID: u16 = 0x1300;
     const HOST: &'static str = "google.de";
     const PATH: &'static str = "/";
 
-    let cmds = NetQueue::new_leaked("net-http-smoke-cmd", 64);
-    let events = NetQueue::new_leaked("net-http-smoke-evt", 64);
-    register_app_queues(OWNER, cmds, events);
+    let cmds = NetQueue::new_leaked(cmd_name, 64);
+    let events = NetQueue::new_leaked(evt_name, 64);
+    register_app_queues(owner, cmds, events);
 
     let _ = cmds.push(NetCommand::OpenUdp {
         port: HTTP_SMOKE_UDP_PORT,
     });
 
+    if let Some(mac) = crate::net::mac_address_at(idx) {
+        crate::log!(
+            "net-http-smoke: device={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            idx,
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
+        );
+    }
+
     crate::log!(
-        "net-http-smoke: starting (dns={} tcp=80 udp_bind={})\n",
+        "net-http-smoke: starting device={} (dns={} tcp=80 udp_bind={})\n",
+        idx,
         "10.0.2.3",
         HTTP_SMOKE_UDP_PORT
     );
@@ -273,11 +289,19 @@ pub async fn net_http_smoke_task() {
                 NetEvent::Opened { handle, kind } => {
                     if kind == SocketKind::Udp {
                         udp_handle = Some(handle);
-                        crate::log!("net-http-smoke: opened udp handle={}\n", handle.0);
+                        crate::log!(
+                            "net-http-smoke: device={} opened udp handle={}\n",
+                            idx,
+                            handle.0
+                        );
                     }
                     if kind == SocketKind::Tcp {
                         tcp_handle = Some(handle);
-                        crate::log!("net-http-smoke: opened tcp handle={}\n", handle.0);
+                        crate::log!(
+                            "net-http-smoke: device={} opened tcp handle={}\n",
+                            idx,
+                            handle.0
+                        );
                     }
                 }
                 NetEvent::UdpPacket { from, data, .. } => {
@@ -286,7 +310,8 @@ pub async fn net_http_smoke_task() {
                             Ok(Some(ip)) => {
                                 resolved_ip = Some(ip);
                                 crate::log!(
-                                    "net-http-smoke: nslookup {} => A {}.{}.{}.{}\n",
+                                    "net-http-smoke: device={} nslookup {} => A {}.{}.{}.{}\n",
+                                    idx,
                                     HOST,
                                     ip[0],
                                     ip[1],
@@ -296,14 +321,22 @@ pub async fn net_http_smoke_task() {
                             }
                             Ok(None) => {}
                             Err(msg) => {
-                                crate::log!("net-http-smoke: dns parse error ({})\n", msg);
+                                crate::log!(
+                                    "net-http-smoke: device={} dns parse error ({})\n",
+                                    idx,
+                                    msg
+                                );
                             }
                         }
                     }
                 }
                 NetEvent::TcpEstablished { handle } => {
                     if tcp_handle == Some(handle) {
-                        crate::log!("net-http-smoke: tcp established handle={}\n", handle.0);
+                        crate::log!(
+                            "net-http-smoke: device={} tcp established handle={}\n",
+                            idx,
+                            handle.0
+                        );
                         tcp_established = true;
                     }
                 }
@@ -320,7 +353,8 @@ pub async fn net_http_smoke_task() {
                     if let Some(code) = parse_http_status(&rx_buf) {
                         let ok = matches!(code, 200 | 301 | 302 | 303 | 307 | 308);
                         crate::log!(
-                            "net-http-smoke: http {} {} => status={} ({})\n",
+                            "net-http-smoke: device={} http {} {} => status={} ({})\n",
+                            idx,
                             HOST,
                             PATH,
                             code,
@@ -352,7 +386,7 @@ pub async fn net_http_smoke_task() {
                     // `SendTcp` before ESTABLISHED will typically yield "tcp not ready".
                     // Keep errors visible but not spammy.
                     if (ticks % 20) == 0 {
-                        crate::log!("net-http-smoke: error {}\n", msg);
+                        crate::log!("net-http-smoke: device={} error {}\n", idx, msg);
                     }
                 }
                 NetEvent::TcpSent { handle, len } => {
@@ -361,7 +395,8 @@ pub async fn net_http_smoke_task() {
                             http_sent = true;
                         }
                         crate::log!(
-                            "net-http-smoke: tcp sent handle={} len={}\n",
+                            "net-http-smoke: device={} tcp sent handle={} len={}\n",
+                            idx,
                             handle.0,
                             len
                         );
@@ -382,7 +417,11 @@ pub async fn net_http_smoke_task() {
                     data: dns_query(DNS_ID, HOST, 1),
                 });
                 dns_sent = true;
-                crate::log!("net-http-smoke: nslookup {} (udp) via 10.0.2.3:53\n", HOST);
+                crate::log!(
+                    "net-http-smoke: device={} nslookup {} (udp) via 10.0.2.3:53\n",
+                    idx,
+                    HOST
+                );
             }
         }
 
@@ -394,7 +433,8 @@ pub async fn net_http_smoke_task() {
                 });
                 tcp_connect_sent = true;
                 crate::log!(
-                    "net-http-smoke: tcp connect {}.{}.{}.{}:80\n",
+                    "net-http-smoke: device={} tcp connect {}.{}.{}.{}:80\n",
+                    idx,
                     ip[0],
                     ip[1],
                     ip[2],
@@ -419,7 +459,7 @@ pub async fn net_http_smoke_task() {
         if !http_sent && tcp_established {
             if let (Some(handle), Some(req)) = (tcp_handle, http_req.clone()) {
                 if cmds.push(NetCommand::SendTcp { handle, data: req }).is_ok() {
-                    crate::log!("net-http-smoke: http get {}{}\n", HOST, PATH);
+                    crate::log!("net-http-smoke: device={} http get {}{}\n", idx, HOST, PATH);
                 }
             }
         }
@@ -433,7 +473,8 @@ pub async fn net_http_smoke_task() {
             if last_stats != Some(cur) {
                 last_stats = Some(cur);
                 crate::log!(
-                    "net-http-smoke: stats rx={} tx={} dropped={} tcp_handle={} udp_handle={}\n",
+                    "net-http-smoke: device={} stats rx={} tx={} dropped={} tcp_handle={} udp_handle={}\n",
+                    idx,
                     rx,
                     tx,
                     dropped,
@@ -444,7 +485,7 @@ pub async fn net_http_smoke_task() {
         }
 
         if ticks >= TIMEOUT_TICKS {
-            crate::log!("net-http-smoke: timed out\n");
+            crate::log!("net-http-smoke: device={} timed out\n", idx);
 
             // If we got any bytes, show them to aid debugging.
             if !rx_buf.is_empty() {
@@ -461,5 +502,22 @@ pub async fn net_http_smoke_task() {
         }
 
         Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+}
+
+#[task]
+pub async fn net_http_smoke_task() {
+    if NET_HTTP_SMOKE_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let count = crate::net::device_count();
+    if count == 0 {
+        crate::log!("net-http-smoke: disabled (no NIC)\n");
+        return;
+    }
+
+    for idx in 0..count {
+        net_http_smoke_for_device(idx).await;
     }
 }

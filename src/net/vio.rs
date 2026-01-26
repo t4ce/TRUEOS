@@ -121,8 +121,31 @@ pub struct VirtioNetAdapter {
 unsafe impl Send for VirtioNetAdapter {}
 
 impl VirtioNetAdapter {
+    pub fn init_all() -> alloc::vec::Vec<Self> {
+        let mut out = alloc::vec::Vec::new();
+        let devs = find_virtio_net_devices();
+        for dev in devs {
+            match Self::init_from_device(dev) {
+                Ok(adapter) => out.push(adapter),
+                Err(()) => {
+                    crate::log!(
+                        "net/vio: init failed for {:02x}:{:02x}.{}\n",
+                        dev.bus,
+                        dev.slot,
+                        dev.function
+                    );
+                }
+            }
+        }
+        out
+    }
+
     pub fn init() -> Result<Self, ()> {
         let dev = find_virtio_net_device().ok_or(())?;
+        Self::init_from_device(dev)
+    }
+
+    fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
         let io_base = read_io_base(&dev)?;
         enable_io_and_bus_master(&dev);
 
@@ -265,6 +288,20 @@ fn find_virtio_net_device() -> Option<pci::PciDevice> {
         }
     });
     found
+}
+
+fn find_virtio_net_devices() -> alloc::vec::Vec<pci::PciDevice> {
+    let mut out = alloc::vec::Vec::new();
+    pci::with_devices(|list| {
+        for dev in list {
+            if dev.vendor == VIRTIO_PCI_VENDOR
+                && (dev.device == VIRTIO_NET_DEVICE_LEGACY || dev.device == VIRTIO_NET_DEVICE_MODERN)
+            {
+                out.push(*dev);
+            }
+        }
+    });
+    out
 }
 
 fn read_io_base(dev: &pci::PciDevice) -> Result<u16, ()> {
