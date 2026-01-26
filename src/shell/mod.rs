@@ -13,6 +13,8 @@ use crate::shell::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 pub(crate) mod shellcube;
 pub(crate) mod shellqjs;
 
+mod crlf;
+
 mod interface;
 pub(crate) use interface::{ShellBackend, ShellIo};
 
@@ -622,7 +624,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
             }
         } else {
             if cube_mode {
-                cube.draw_frame();
+                cube.draw_frame(io);
                 Timer::after(EmbassyDuration::from_millis(333)).await;
                 continue;
             }
@@ -1600,5 +1602,5 @@ fn enter_cube_mode(io: &dyn ShellIo, term_cols: &mut usize, term_rows: &mut usiz
     *term_cols = CUBE_COLS;
     *term_rows = CUBE_ROWS;
     draw_corners(io, CUBE_COLS, CUBE_ROWS);
-    shellcube::enter_mode();
+    shellcube::enter_mode(io);
 }

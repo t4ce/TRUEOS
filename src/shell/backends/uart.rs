@@ -1,29 +1,53 @@
 use crate::shell::uart1_com1;
 use crate::shell::{ShellBackend, ShellIo};
+use core::sync::atomic::AtomicBool;
 
 pub(crate) struct Uart1Com1Backend;
 
 pub(crate) static UART1_COM1_BACKEND: Uart1Com1Backend = Uart1Com1Backend;
 
+static UART_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+
 impl ShellIo for Uart1Com1Backend {
     #[inline]
     fn write_str(&self, s: &str) {
-        uart1_com1::write_str(s);
+        crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &UART_LAST_WAS_CR, |chunk| {
+            uart1_com1::write_bytes(chunk);
+        });
     }
 
     #[inline]
     fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        uart1_com1::write_fmt(args);
+        use core::fmt::Write;
+
+        struct Writer;
+
+        impl Write for Writer {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &UART_LAST_WAS_CR, |chunk| {
+                    uart1_com1::write_bytes(chunk);
+                });
+                Ok(())
+            }
+        }
+
+        let _ = Writer.write_fmt(args);
     }
 
     #[inline]
     fn write_char(&self, ch: char) {
-        uart1_com1::write_char(ch);
+        let mut buf = [0u8; 4];
+        let s = ch.encode_utf8(&mut buf);
+        crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &UART_LAST_WAS_CR, |chunk| {
+            uart1_com1::write_bytes(chunk);
+        });
     }
 
     #[inline]
     fn write_byte(&self, b: u8) {
-        uart1_com1::write_byte(b);
+        crate::shell::crlf::write_bytes_crlf(&[b], &UART_LAST_WAS_CR, |chunk| {
+            uart1_com1::write_bytes(chunk);
+        });
     }
 }
 

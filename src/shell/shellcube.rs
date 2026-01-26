@@ -1,5 +1,5 @@
 use crate::ecma48;
-use crate::shell::uart1_com1;
+use crate::shell::interface::ShellIo;
 
 pub const CUBE_COLS: usize = 75;
 pub const CUBE_ROWS: usize = 75;
@@ -81,8 +81,9 @@ impl CubeState {
         }
     }
 
-    pub fn draw_frame(&mut self) {
+    pub fn draw_frame(&mut self, io: &dyn ShellIo) {
         draw_poly_frame(
+            io,
             self.phase,
             self.shape,
             &self.verts,
@@ -96,12 +97,13 @@ impl CubeState {
     }
 }
 
-pub fn enter_mode() {
-    uart1_com1::write_str(ecma48::CLEAR_SCREEN);
-    uart1_com1::write_str(ecma48::HOME);
+pub fn enter_mode(io: &dyn ShellIo) {
+    io.write_str(ecma48::CLEAR_SCREEN);
+    io.write_str(ecma48::HOME);
 }
 
 fn draw_poly_frame(
+    io: &dyn ShellIo,
     phase: u8,
     shape: WireShape,
     verts: &[(i32, i32, i32); MAX_VERTS],
@@ -175,14 +177,14 @@ fn draw_poly_frame(
         if now != prev[idx] || (now == b'#' && color_now != prev_color[idx]) {
             let row = idx / CUBE_COLS;
             let col = idx % CUBE_COLS;
-            write_pos(row + 1, col + 1);
+            write_pos(io, row + 1, col + 1);
             if now == b'#' {
                 let (r, g, b) = line_rgb(color_now);
-                uart1_com1::write_fmt(format_args!("{}", ecma48::color("§", (r, g, b))));
+                io.write_fmt(format_args!("{}", ecma48::color("§", (r, g, b))));
             } else if now == b'.' {
-                uart1_com1::write_byte(b'.');
+                io.write_byte(b'.');
             } else {
-                uart1_com1::write_byte(b' ');
+                io.write_byte(b' ');
             }
             prev[idx] = now;
             prev_color[idx] = color_now;
@@ -261,8 +263,8 @@ fn plot(
 }
 
 #[inline]
-fn write_pos(row: usize, col: usize) {
-    uart1_com1::write_fmt(format_args!("{}", ecma48::pos(row, col)));
+fn write_pos(io: &dyn ShellIo, row: usize, col: usize) {
+    io.write_fmt(format_args!("{}", ecma48::pos(row, col)));
 }
 
 #[inline]

@@ -1,13 +1,18 @@
 use crate::shell::{ShellBackend, ShellIo};
+use core::sync::atomic::AtomicBool;
 
 pub(crate) struct UsbCdcShellBackend;
 
 pub(crate) static USB_CDC_SHELL_BACKEND: UsbCdcShellBackend = UsbCdcShellBackend;
 
+static USB_CDC_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+
 impl ShellIo for UsbCdcShellBackend {
     #[inline]
     fn write_str(&self, s: &str) {
-        let _ = crate::usb::cdc_shell::write(s.as_bytes());
+        crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &USB_CDC_LAST_WAS_CR, |chunk| {
+            let _ = crate::usb::cdc_shell::write(chunk);
+        });
     }
 
     #[inline]
@@ -18,7 +23,13 @@ impl ShellIo for UsbCdcShellBackend {
 
         impl Write for Writer {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                let _ = crate::usb::cdc_shell::write(s.as_bytes());
+                crate::shell::crlf::write_bytes_crlf(
+                    s.as_bytes(),
+                    &USB_CDC_LAST_WAS_CR,
+                    |chunk| {
+                        let _ = crate::usb::cdc_shell::write(chunk);
+                    },
+                );
                 Ok(())
             }
         }
@@ -30,12 +41,16 @@ impl ShellIo for UsbCdcShellBackend {
     fn write_char(&self, ch: char) {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
-        let _ = crate::usb::cdc_shell::write(s.as_bytes());
+        crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &USB_CDC_LAST_WAS_CR, |chunk| {
+            let _ = crate::usb::cdc_shell::write(chunk);
+        });
     }
 
     #[inline]
     fn write_byte(&self, b: u8) {
-        let _ = crate::usb::cdc_shell::write(&[b]);
+        crate::shell::crlf::write_bytes_crlf(&[b], &USB_CDC_LAST_WAS_CR, |chunk| {
+            let _ = crate::usb::cdc_shell::write(chunk);
+        });
     }
 }
 
