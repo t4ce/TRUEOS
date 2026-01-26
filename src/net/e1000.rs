@@ -1,18 +1,17 @@
-use crate::isr;
-use crate::net::core::VendorAdapter;
-use crate::{frame, mmio::MmioRegion, pci};
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::vec::Vec;
+
 use core::cmp::min;
 use core::mem::size_of;
-use core::sync::atomic::{AtomicU8, Ordering};
-use spin::Mutex;
+use core::ptr::{read_volatile, write_volatile, NonNull};
+
+use crate::net::core::VendorAdapter;
+use crate::net::ring::{DmaRegion, NetRing};
+use crate::pci;
 
 const E1000_VENDOR_ID: u16 = 0x8086;
-const E1000_DEVICE_ID: u16 = 0x100E; // 82540EM
+const E1000_DEVICE_ID: u16 = 0x100E; // 82540EM (QEMU e1000)
 
 const REG_CTRL: u32 = 0x0000;
-const REG_STATUS: u32 = 0x0008;
-const REG_EECD: u32 = 0x0010;
 const REG_RCTL: u32 = 0x0100;
 const REG_TCTL: u32 = 0x0400;
 const REG_TIPG: u32 = 0x0410;
@@ -27,57 +26,34 @@ const REG_TDLEN: u32 = 0x3808;
 const REG_TDH: u32 = 0x3810;
 const REG_TDT: u32 = 0x3818;
 const REG_ICR: u32 = 0x00C0;
-const REG_IMS: u32 = 0x00D0;
 const REG_IMC: u32 = 0x00D8;
 const REG_RAL0: u32 = 0x5400;
 const REG_RAH0: u32 = 0x5404;
 
 const CTRL_RST: u32 = 1 << 26;
+
 const RCTL_EN: u32 = 1 << 1;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_SECRC: u32 = 1 << 26;
+
 const TCTL_EN: u32 = 1 << 1;
 const TCTL_PSP: u32 = 1 << 3;
 const TCTL_CT_SHIFT: u32 = 4;
 const TCTL_COLD_SHIFT: u32 = 12;
+
+const RX_STATUS_DD: u8 = 1 << 0;
+
 const TX_CMD_EOP: u8 = 1 << 0;
 const TX_CMD_IFCS: u8 = 1 << 1;
 const TX_CMD_RS: u8 = 1 << 3;
 const TX_STATUS_DD: u8 = 1 << 0;
+
 const RAH_AV: u32 = 1 << 31;
 
 const RX_RING_SIZE: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
 const TX_RING_SIZE: usize = 64;
 const TX_BUF_SIZE: usize = 2048;
-const RX_QUEUE_DEPTH: usize = 32;
-
-pub struct E1000Adapter;
-
-impl E1000Adapter {
-    pub fn init() -> Result<Self, ()> {
-        init_device()?;
-        Ok(Self)
-    }
-}
-
-impl VendorAdapter for E1000Adapter {
-    fn mac(&self) -> [u8; 6] {
-        mac_address().unwrap_or([0; 6])
-    }
-
-    fn poll_rx(&mut self) {
-        poll();
-    }
-
-    fn pop_rx(&mut self) -> Option<Vec<u8>> {
-        pop_rx_packet()
-    }
-
-    fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
-        transmit_packet(frame)
-    }
-}
 
 #[repr(C, packed)]
 struct RxDesc {
@@ -99,351 +75,449 @@ struct TxDesc {
     css: u8,
     special: u16,
 }
+struct Mmio {
+    base: NonNull<u8>,
+}
 
-struct E1000 {
-    mmio: MmioRegion,
-    rx_ring_phys: u64,
-    rx_ring: usize,
-    rx_bufs: [u64; RX_RING_SIZE],
+// Safety: mapped MMIO pointer stored behind net device mutex.
+unsafe impl Send for Mmio {}
+
+impl Mmio {
+    #[inline]
+    unsafe fn read_u32(&self, off: u32) -> u32 {
+        read_volatile(self.base.as_ptr().add(off as usize) as *const u32)
+    }
+
+    #[inline]
+    unsafe fn write_u32(&self, off: u32, val: u32) {
+        write_volatile(self.base.as_ptr().add(off as usize) as *mut u32, val);
+    }
+}
+
+pub struct E1000Adapter {
+    mmio: Mmio,
+    mac: [u8; 6],
+    ring: Option<*mut NetRing>,
+
+    rx_desc_mem: DmaRegion,
+    rx_desc: *mut RxDesc,
+    rx_bufs: Vec<DmaRegion>,
     rx_idx: usize,
-    pkt_count: u64,
-    tx_ring_phys: u64,
-    tx_ring: usize,
-    tx_bufs: [u64; TX_RING_SIZE],
+
+    tx_desc_mem: DmaRegion,
+    tx_desc: *mut TxDesc,
+    tx_bufs: Vec<DmaRegion>,
     tx_idx: usize,
 }
 
-impl E1000 {
-    fn from_bar(bar: u32) -> Option<Self> {
-        if bar & 0x1 != 0 {
-            return None; // IO BAR
-        }
-        let phys = (bar & 0xFFFF_FFF0) as usize;
-        let mmio = match MmioRegion::map(phys, 0x20000) {
-            Ok(region) => region,
-            Err(err) => {
-                crate::log_warn!("e1000: failed to map BAR0 0x{:08X}: {}", phys, err);
-                return None;
+// Safety: this adapter is driven by the net task and protected by the global net mutex.
+unsafe impl Send for E1000Adapter {}
+
+impl E1000Adapter {
+    pub fn init() -> Result<Self, ()> {
+        let dev = match find_e1000_device() {
+            Some(d) => d,
+            None => {
+                crate::log!("net/e1000: no supported device found\n");
+                return Err(());
             }
         };
-        crate::log_info!(
-            "e1000 MMIO: phys=0x{:08X} virt=0x{:016X}",
-            mmio.phys_base(),
-            mmio.as_ptr() as usize
+        pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+
+        let (bar_index, bar_phys) = match find_mmio_bar_phys(&dev) {
+            Ok(v) => v,
+            Err(()) => {
+                crate::log!(
+                    "net/e1000: no MMIO BAR found at {:02x}:{:02x}.{}\n",
+                    dev.bus,
+                    dev.slot,
+                    dev.function
+                );
+                return Err(());
+            }
+        };
+
+        let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, 0x20000) {
+            Ok(v) => v,
+            Err(_) => {
+                crate::log!(
+                    "net/e1000: failed to map MMIO (bar{} @ 0x{:x})\n",
+                    bar_index,
+                    bar_phys
+                );
+                return Err(());
+            }
+        };
+        let mmio = Mmio { base: mapped };
+
+        crate::log!(
+            "net/e1000: found {:02x}:{:02x}.{} vid={:04x} did={:04x} mmio=bar{}@0x{:x}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            dev.vendor,
+            dev.device,
+            bar_index,
+            bar_phys
         );
-        Some(Self {
+
+        let rx_desc_mem = match DmaRegion::alloc(size_of::<RxDesc>() * RX_RING_SIZE, 16) {
+            Some(r) => r,
+            None => {
+                crate::log!("net/e1000: DMA alloc failed for RX desc ring\n");
+                return Err(());
+            }
+        };
+        let tx_desc_mem = match DmaRegion::alloc(size_of::<TxDesc>() * TX_RING_SIZE, 16) {
+            Some(r) => r,
+            None => {
+                crate::log!("net/e1000: DMA alloc failed for TX desc ring\n");
+                return Err(());
+            }
+        };
+
+        let mut adapter = Self {
             mmio,
-            rx_ring_phys: 0,
-            rx_ring: 0,
-            rx_bufs: [0; RX_RING_SIZE],
+            mac: [0; 6],
+            ring: None,
+            rx_desc: rx_desc_mem.virt() as *mut RxDesc,
+            rx_desc_mem,
+            rx_bufs: Vec::new(),
             rx_idx: 0,
-            pkt_count: 0,
-            tx_ring_phys: 0,
-            tx_ring: 0,
-            tx_bufs: [0; TX_RING_SIZE],
+            tx_desc: tx_desc_mem.virt() as *mut TxDesc,
+            tx_desc_mem,
+            tx_bufs: Vec::new(),
             tx_idx: 0,
-        })
+        };
+
+        adapter.reset();
+
+        // Disable interrupts for now (polling)
+        unsafe {
+            adapter.mmio.write_u32(REG_IMC, 0xFFFF_FFFF);
+            let _ = adapter.mmio.read_u32(REG_ICR);
+        }
+
+        if adapter.setup_rx().is_err() {
+            crate::log!("net/e1000: setup_rx failed\n");
+            return Err(());
+        }
+        if adapter.setup_tx().is_err() {
+            crate::log!("net/e1000: setup_tx failed\n");
+            return Err(());
+        }
+
+        adapter.mac = adapter.read_mac();
+        crate::log!(
+            "net/e1000: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            adapter.mac[0],
+            adapter.mac[1],
+            adapter.mac[2],
+            adapter.mac[3],
+            adapter.mac[4],
+            adapter.mac[5]
+        );
+
+        Ok(adapter)
     }
 
-    fn read_reg(&self, offset: u32) -> u32 {
-        self.mmio.read_u32(offset as usize)
+    fn reset(&mut self) {
+        unsafe {
+            let ctrl = self.mmio.read_u32(REG_CTRL);
+            self.mmio.write_u32(REG_CTRL, ctrl | CTRL_RST);
+            for _ in 0..1_000_000 {
+                if (self.mmio.read_u32(REG_CTRL) & CTRL_RST) == 0 {
+                    break;
+                }
+            }
+        }
     }
 
-    fn write_reg(&self, offset: u32, value: u32) {
-        self.mmio.write_u32(offset as usize, value)
-    }
-
-    fn reset(&self) {
-        let ctrl = self.read_reg(REG_CTRL);
-        self.write_reg(REG_CTRL, ctrl | CTRL_RST);
-        while self.read_reg(REG_CTRL) & CTRL_RST != 0 {}
+    fn read_mac(&self) -> [u8; 6] {
+        unsafe {
+            let ral = self.mmio.read_u32(REG_RAL0);
+            let rah = self.mmio.read_u32(REG_RAH0);
+            if (rah & RAH_AV) == 0 {
+                return [0; 6];
+            }
+            [
+                (ral & 0xFF) as u8,
+                ((ral >> 8) & 0xFF) as u8,
+                ((ral >> 16) & 0xFF) as u8,
+                ((ral >> 24) & 0xFF) as u8,
+                (rah & 0xFF) as u8,
+                ((rah >> 8) & 0xFF) as u8,
+            ]
+        }
     }
 
     fn setup_rx(&mut self) -> Result<(), ()> {
-        // Allocate a single 4K frame for descriptors (fits 64 descriptors).
-        let ring_phys = frame::alloc_frame_4k().ok_or(())?;
-        let ring_virt = crate::phys::phys_to_virt(ring_phys as usize) as usize;
-        // Zero descriptors.
         unsafe {
-            core::ptr::write_bytes(ring_virt as *mut u8, 0, RX_RING_SIZE * size_of::<RxDesc>());
+            core::ptr::write_bytes(self.rx_desc as *mut u8, 0, size_of::<RxDesc>() * RX_RING_SIZE);
         }
 
-        // Allocate RX buffers.
+        let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_RING_SIZE);
         for i in 0..RX_RING_SIZE {
-            let buf_phys = frame::alloc_frame_4k().ok_or(())?;
-            self.rx_bufs[i] = buf_phys;
+            let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
             unsafe {
-                let desc = (ring_virt as *mut RxDesc).add(i);
-                (*desc).addr = buf_phys;
-                (*desc).status = 0;
+                write_volatile(
+                    self.rx_desc.add(i),
+                    RxDesc {
+                        addr: buf.phys(),
+                        length: 0,
+                        csum: 0,
+                        status: 0,
+                        errors: 0,
+                        special: 0,
+                    },
+                );
             }
+            rx_bufs.push(buf);
         }
-
-        self.rx_ring_phys = ring_phys;
-        self.rx_ring = ring_virt;
+        self.rx_bufs = rx_bufs;
         self.rx_idx = 0;
 
-        // Program registers.
-        self.write_reg(REG_RDBAL, (ring_phys & 0xFFFF_FFFF) as u32);
-        self.write_reg(REG_RDBAH, (ring_phys >> 32) as u32);
-        self.write_reg(REG_RDLEN, (RX_RING_SIZE * size_of::<RxDesc>()) as u32);
-        self.write_reg(REG_RDH, 0);
-        self.write_reg(REG_RDT, (RX_RING_SIZE - 1) as u32);
+        unsafe {
+            self.mmio.write_u32(REG_RDBAL, self.rx_desc_mem.phys() as u32);
+            self.mmio
+                .write_u32(REG_RDBAH, (self.rx_desc_mem.phys() >> 32) as u32);
+            self.mmio
+                .write_u32(REG_RDLEN, (RX_RING_SIZE * size_of::<RxDesc>()) as u32);
+            self.mmio.write_u32(REG_RDH, 0);
+            self.mmio.write_u32(REG_RDT, (RX_RING_SIZE - 1) as u32);
 
-        // Enable receiver: 2048-byte buffers, broadcast accept, strip CRC.
-        let mut rctl = self.read_reg(REG_RCTL);
-        rctl |= RCTL_EN | RCTL_BAM | RCTL_SECRC;
-        // Clear buffer size bits (00 => 2048).
-        rctl &= !((1 << 16) | (1 << 17) | (1 << 25));
-        self.write_reg(REG_RCTL, rctl);
+            // Enable receiver: 2048-byte buffers, broadcast accept, strip CRC.
+            let mut rctl = self.mmio.read_u32(REG_RCTL);
+            rctl |= RCTL_EN | RCTL_BAM | RCTL_SECRC;
+            // Clear buffer size bits (00 => 2048).
+            rctl &= !((1 << 16) | (1 << 17) | (1 << 25));
+            self.mmio.write_u32(REG_RCTL, rctl);
+        }
+
         Ok(())
     }
 
     fn setup_tx(&mut self) -> Result<(), ()> {
-        let ring_phys = frame::alloc_frame_4k().ok_or(())?;
-        let ring_virt = crate::phys::phys_to_virt(ring_phys as usize) as usize;
         unsafe {
-            core::ptr::write_bytes(ring_virt as *mut u8, 0, TX_RING_SIZE * size_of::<TxDesc>());
+            core::ptr::write_bytes(self.tx_desc as *mut u8, 0, size_of::<TxDesc>() * TX_RING_SIZE);
         }
 
+        let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_RING_SIZE);
         for i in 0..TX_RING_SIZE {
-            let buf_phys = frame::alloc_frame_4k().ok_or(())?;
-            self.tx_bufs[i] = buf_phys;
+            let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
             unsafe {
-                let desc = (ring_virt as *mut TxDesc).add(i);
-                (*desc).addr = buf_phys;
-                (*desc).status = TX_STATUS_DD;
+                write_volatile(
+                    self.tx_desc.add(i),
+                    TxDesc {
+                        addr: buf.phys(),
+                        length: 0,
+                        cso: 0,
+                        cmd: 0,
+                        status: TX_STATUS_DD,
+                        css: 0,
+                        special: 0,
+                    },
+                );
             }
+            tx_bufs.push(buf);
         }
-
-        self.tx_ring_phys = ring_phys;
-        self.tx_ring = ring_virt;
+        self.tx_bufs = tx_bufs;
         self.tx_idx = 0;
 
-        self.write_reg(REG_TDBAL, (ring_phys & 0xFFFF_FFFF) as u32);
-        self.write_reg(REG_TDBAH, (ring_phys >> 32) as u32);
-        self.write_reg(REG_TDLEN, (TX_RING_SIZE * size_of::<TxDesc>()) as u32);
-        self.write_reg(REG_TDH, 0);
-        self.write_reg(REG_TDT, 0);
-
-        let mut tctl = self.read_reg(REG_TCTL);
-        tctl |= TCTL_EN | TCTL_PSP;
-        tctl |= 0x10 << TCTL_CT_SHIFT;
-        tctl |= 0x40 << TCTL_COLD_SHIFT;
-        self.write_reg(REG_TCTL, tctl);
-        self.write_reg(REG_TIPG, 0x0060_200A);
-        Ok(())
-    }
-
-    fn transmit(&mut self, data: &[u8]) -> Result<(), ()> {
-        if self.tx_ring == 0 {
-            return Err(());
-        }
-        if data.len() > TX_BUF_SIZE {
-            return Err(());
-        }
-        let idx = self.tx_idx;
-        let desc = unsafe { &mut *(self.tx_ring as *mut TxDesc).add(idx) };
-        if desc.status & TX_STATUS_DD == 0 {
-            return Err(());
-        }
-
-        let buf_virt = crate::phys::phys_to_virt(self.tx_bufs[idx] as usize);
         unsafe {
-            core::ptr::copy_nonoverlapping(data.as_ptr(), buf_virt as *mut u8, data.len());
+            self.mmio.write_u32(REG_TDBAL, self.tx_desc_mem.phys() as u32);
+            self.mmio
+                .write_u32(REG_TDBAH, (self.tx_desc_mem.phys() >> 32) as u32);
+            self.mmio
+                .write_u32(REG_TDLEN, (TX_RING_SIZE * size_of::<TxDesc>()) as u32);
+            self.mmio.write_u32(REG_TDH, 0);
+            self.mmio.write_u32(REG_TDT, 0);
+
+            let mut tctl = self.mmio.read_u32(REG_TCTL);
+            tctl |= TCTL_EN | TCTL_PSP;
+            tctl |= 0x10 << TCTL_CT_SHIFT;
+            tctl |= 0x40 << TCTL_COLD_SHIFT;
+            self.mmio.write_u32(REG_TCTL, tctl);
+            self.mmio.write_u32(REG_TIPG, 0x0060_200A);
         }
 
-        desc.length = data.len() as u16;
-        desc.cmd = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
-        desc.status = 0;
-
-        self.tx_idx = (self.tx_idx + 1) % TX_RING_SIZE;
-        self.write_reg(REG_TDT, self.tx_idx as u32);
         Ok(())
     }
 
-    fn poll_rx(&mut self) {
-        if self.rx_ring == 0 {
-            return;
-        }
+    fn poll_rx_ring(&mut self) {
+        let ring_ptr = self.ring;
         let mut processed = 0;
+
         loop {
-            let idx = self.rx_idx;
-            let desc = unsafe { &mut *(self.rx_ring as *mut RxDesc).add(idx) };
-            let status = desc.status;
-            if status & 0x1 == 0 {
-                break;
-            }
-            let len = desc.length as usize;
-            self.pkt_count += 1;
-            let buf_virt = crate::phys::phys_to_virt(self.rx_bufs[idx] as usize);
-            let packet = unsafe {
-                core::slice::from_raw_parts(buf_virt as *const u8, min(len, RX_BUF_SIZE))
-            };
-            enqueue_rx(packet);
-            // Return descriptor to NIC.
-            desc.status = 0;
-            self.rx_idx = (self.rx_idx + 1) % RX_RING_SIZE;
-            let rdt = (self.rx_idx + RX_RING_SIZE - 1) % RX_RING_SIZE;
-            self.write_reg(REG_RDT, rdt as u32);
-            processed += 1;
             if processed >= RX_RING_SIZE {
                 break;
             }
+
+            let idx = self.rx_idx;
+            let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
+            if (desc.status & RX_STATUS_DD) == 0 {
+                break;
+            }
+
+            let len = min(desc.length as usize, RX_BUF_SIZE);
+            if let Some(ring_ptr) = ring_ptr {
+                let data = unsafe {
+                    core::slice::from_raw_parts(self.rx_bufs[idx].virt() as *const u8, len)
+                };
+                unsafe {
+                    let ring = &mut *ring_ptr;
+                    let _ = ring.push_rx_packet(data);
+                }
+            }
+
+            // Return descriptor to NIC.
+            unsafe {
+                let d = self.rx_desc.add(idx);
+                (*d).status = 0;
+            }
+
+            self.rx_idx = (self.rx_idx + 1) % RX_RING_SIZE;
+            let rdt = (self.rx_idx + RX_RING_SIZE - 1) % RX_RING_SIZE;
+            unsafe {
+                self.mmio.write_u32(REG_RDT, rdt as u32);
+            }
+
+            processed += 1;
         }
     }
 
-    fn mac(&self) -> [u8; 6] {
-        let ral = self.read_reg(REG_RAL0);
-        let rah = self.read_reg(REG_RAH0);
-        if rah & RAH_AV == 0 {
-            return [0; 6];
+    fn transmit_hw(&mut self, frame: &[u8]) -> Result<(), ()> {
+        if frame.is_empty() {
+            return Ok(());
         }
-        [
-            (ral & 0xFF) as u8,
-            ((ral >> 8) & 0xFF) as u8,
-            ((ral >> 16) & 0xFF) as u8,
-            ((ral >> 24) & 0xFF) as u8,
-            (rah & 0xFF) as u8,
-            ((rah >> 8) & 0xFF) as u8,
-        ]
-    }
-}
+        if frame.len() > TX_BUF_SIZE {
+            return Err(());
+        }
 
-static DEV: Mutex<Option<E1000>> = Mutex::new(None);
-static IRQ_LINE: AtomicU8 = AtomicU8::new(0xFF);
-static RX_QUEUE: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
+        let idx = self.tx_idx;
+        let cur = unsafe { read_volatile(self.tx_desc.add(idx)) };
+        if (cur.status & TX_STATUS_DD) == 0 {
+            return Err(());
+        }
 
-#[allow(clippy::result_unit_err)]
-fn init_device() -> Result<(), ()> {
-    let device = match pci::find_device(E1000_VENDOR_ID, E1000_DEVICE_ID) {
-        Some(dev) => dev,
-        None => return Err(()),
-    };
+        unsafe {
+            core::ptr::copy_nonoverlapping(frame.as_ptr(), self.tx_bufs[idx].virt(), frame.len());
+        }
 
-    crate::log_info!(
-        "e1000 detected at bus {:02X} slot {:02X} func {}",
-        device.bus,
-        device.slot,
-        device.function
-    );
-
-    let bar0 = pci::read_config_u32(&device, 0x10);
-    crate::log_info!("e1000 BAR0 raw: 0x{:08X}", bar0);
-    let mut nic = E1000::from_bar(bar0).ok_or(())?;
-
-    nic.reset();
-
-    let status = nic.read_reg(REG_STATUS);
-    let eecd = nic.read_reg(REG_EECD);
-    crate::log_info!("e1000 status: 0x{:08X} eecd: 0x{:08X}", status, eecd);
-
-    configure_command_register(&device);
-
-    if nic.setup_rx().is_err() {
-        crate::log_warn!("e1000: failed to set up RX ring.");
-    } else {
-        crate::log_info!(
-            "e1000: RX ring initialized ({} desc, {}B buffers).",
-            RX_RING_SIZE,
-            RX_BUF_SIZE
-        );
-    }
-
-    if nic.setup_tx().is_err() {
-        crate::log_warn!("e1000: failed to set up TX ring.");
-    } else {
-        crate::log_info!(
-            "e1000: TX ring initialized ({} desc, {}B buffers).",
-            TX_RING_SIZE,
-            TX_BUF_SIZE
-        );
-    }
-
-    // Enable interrupts (legacy INTx). Mask all, clear pending, then unmask basic RX.
-    nic.write_reg(REG_IMC, 0xFFFF_FFFF);
-    nic.read_reg(REG_ICR);
-    // Enable RX-related interrupts: RXDW (bit 0) and RXO (bit 6).
-    nic.write_reg(REG_IMS, 0x0000_0041);
-
-    // Register IRQ handler.
-    let irq_line = pci::read_config_u8(&device, 0x3C) & 0x1F;
-    IRQ_LINE.store(irq_line, Ordering::Relaxed);
-    if let Err(err) = isr::register_irq_handler(irq_line, e1000_irq_handler) {
-        crate::log_warn!("e1000: failed to register IRQ handler: {}", err);
-    } else {
-        isr::unmask_irq(irq_line);
-        crate::log_info!("e1000: INTx enabled on IRQ {}", irq_line);
-    }
-
-    let mut guard = DEV.lock();
-    *guard = Some(nic);
-
-    Ok(())
-}
-
-fn configure_command_register(device: &pci::PciDevice) {
-    let mask = pci::COMMAND_IO_SPACE | pci::COMMAND_MEMORY_SPACE | pci::COMMAND_BUS_MASTER;
-    if let Some((command, changed)) = pci::ensure_command_bits(device, mask) {
-        if changed {
-            crate::log_info!(
-                "e1000: {:02X}:{:02X}.{} PCI command -> 0x{:04X}",
-                device.bus,
-                device.slot,
-                device.function,
-                command
+        unsafe {
+            write_volatile(
+                self.tx_desc.add(idx),
+                TxDesc {
+                    addr: self.tx_bufs[idx].phys(),
+                    length: frame.len() as u16,
+                    cso: 0,
+                    cmd: TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS,
+                    status: 0,
+                    css: 0,
+                    special: 0,
+                },
             );
         }
+
+        self.tx_idx = (self.tx_idx + 1) % TX_RING_SIZE;
+        unsafe {
+            self.mmio.write_u32(REG_TDT, self.tx_idx as u32);
+        }
+
+        Ok(())
     }
 }
 
-/// Poll the NIC for received packets.
-fn poll() {
-    if let Some(ref mut nic) = *DEV.lock() {
-        nic.poll_rx();
+impl VendorAdapter for E1000Adapter {
+    fn mac(&self) -> [u8; 6] {
+        self.mac
+    }
+
+    fn poll_rx(&mut self) {
+        self.poll_rx_ring();
+    }
+
+    fn pop_rx(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
+        self.transmit_hw(frame)
+    }
+
+    fn bind_ring(&mut self, ring: *mut NetRing) {
+        self.ring = Some(ring);
     }
 }
 
-fn pop_rx_packet() -> Option<Vec<u8>> {
-    let mut q = RX_QUEUE.lock();
-    q.pop_front()
+fn find_e1000_device() -> Option<pci::PciDevice> {
+    pci::with_devices(|list| {
+        for dev in list {
+            if dev.vendor != E1000_VENDOR_ID {
+                continue;
+            }
+            if dev.device != E1000_DEVICE_ID {
+                continue;
+            }
+            if dev.class != 0x02 {
+                continue;
+            }
+            return Some(*dev);
+        }
+        None
+    })
 }
 
-#[allow(clippy::result_unit_err)]
-fn transmit_packet(data: &[u8]) -> Result<(), ()> {
-    let mut guard = DEV.lock();
-    if let Some(ref mut nic) = *guard {
-        nic.transmit(data)
-    } else {
-        Err(())
+fn read_bar0_phys(dev: &pci::PciDevice) -> Result<u64, ()> {
+    let (bar_lo, bar_hi) = pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
+    if (bar_lo & 0x1) != 0 {
+        return Err(());
     }
+    let lo = (bar_lo as u64) & !0xFu64;
+    let hi = bar_hi.unwrap_or(0) as u64;
+    Ok(lo | (hi << 32))
 }
 
-fn mac_address() -> Option<[u8; 6]> {
-    let guard = DEV.lock();
-    guard.as_ref().map(|nic| nic.mac())
-}
+fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
+    // Scan BAR0..BAR5 for the first memory BAR. QEMU e1000 can expose BAR0 as an IO BAR.
+    let mut i = 0u8;
+    while i < 6 {
+        let off = 0x10u16 + (i as u16) * 4;
+        let bar_lo = pci::config_read_u32(dev.bus, dev.slot, dev.function, off);
+        if bar_lo == 0 {
+            i += 1;
+            continue;
+        }
 
-fn irq_line() -> u8 {
-    IRQ_LINE.load(Ordering::Relaxed)
-}
+        // IO BAR?
+        if (bar_lo & 0x1) != 0 {
+            crate::log!(
+                "net/e1000: bar{} is IO (raw=0x{:08x})\n",
+                i,
+                bar_lo
+            );
+            i += 1;
+            continue;
+        }
 
-fn e1000_irq_handler(_ctx: &mut isr::AsyncFrame<'_>) {
-    let mut guard = DEV.lock();
-    if let Some(ref mut nic) = *guard {
-        // Reading ICR acknowledges.
-        let _icr = nic.read_reg(REG_ICR);
-        nic.poll_rx();
+        let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+        let lo = (bar_lo as u64) & !0xFu64;
+        let hi = if is_64 {
+            let bar_hi = pci::config_read_u32(dev.bus, dev.slot, dev.function, off + 4);
+            (bar_hi as u64) << 32
+        } else {
+            0
+        };
+
+        crate::log!(
+            "net/e1000: bar{} mmio raw=0x{:08x}{} => 0x{:x}\n",
+            i,
+            bar_lo,
+            if is_64 { " (64)" } else { "" },
+            lo | hi
+        );
+
+        return Ok((i, lo | hi));
     }
-    isr::acknowledge_irq(irq_line());
-}
-
-fn enqueue_rx(packet: &[u8]) {
-    let mut q = RX_QUEUE.lock();
-    if q.len() >= RX_QUEUE_DEPTH {
-        q.pop_front();
-    }
-    let mut vec = Vec::with_capacity(packet.len());
-    vec.extend_from_slice(packet);
-    q.push_back(vec);
+    Err(())
 }

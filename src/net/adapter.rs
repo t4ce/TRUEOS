@@ -1078,6 +1078,9 @@ pub async fn net_smoke_task() {
         return;
     }
 
+    let backend = crate::net::adapter_backend_name().unwrap_or("none");
+    crate::log!("net-smoke: backend={}\n", backend);
+
     const OWNER: &'static str = "net-smoke";
 
     let cmds = NetQueue::new_leaked("net-smoke-cmd", 64);
