@@ -122,8 +122,31 @@ pub struct R8169Adapter {
 unsafe impl Send for R8169Adapter {}
 
 impl R8169Adapter {
+    pub fn init_all() -> alloc::vec::Vec<Self> {
+        let mut out = alloc::vec::Vec::new();
+        let devs = find_r8169_devices();
+        for dev in devs {
+            match Self::init_from_device(dev) {
+                Ok(adapter) => out.push(adapter),
+                Err(()) => {
+                    crate::log!(
+                        "net/r8169: init failed for {:02x}:{:02x}.{}\n",
+                        dev.bus,
+                        dev.slot,
+                        dev.function
+                    );
+                }
+            }
+        }
+        out
+    }
+
     pub fn init() -> Result<Self, ()> {
         let dev = find_r8169_device().ok_or(())?;
+        Self::init_from_device(dev)
+    }
+
+    fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
         let bar_phys = read_bar0_phys(&dev)?;
@@ -390,6 +413,25 @@ fn find_r8169_device() -> Option<pci::PciDevice> {
         }
         None
     })
+}
+
+fn find_r8169_devices() -> alloc::vec::Vec<pci::PciDevice> {
+    let mut out = alloc::vec::Vec::new();
+    pci::with_devices(|list| {
+        for dev in list {
+            if dev.vendor != REALTEK_VENDOR_ID {
+                continue;
+            }
+            if !RTL8169_DEVICE_IDS.contains(&dev.device) {
+                continue;
+            }
+            if dev.class != 0x02 {
+                continue;
+            }
+            out.push(*dev);
+        }
+    });
+    out
 }
 
 fn read_bar0_phys(dev: &pci::PciDevice) -> Result<u64, ()> {

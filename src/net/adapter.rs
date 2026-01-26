@@ -23,10 +23,6 @@ const ICMP_IDENT: u16 = 0x1234;
 const SLIRP_GUEST_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 15);
 const SLIRP_PREFIX: u8 = 24;
 const SLIRP_GATEWAY_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
-const SLIRP_DNS_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 3);
-
-const SMOKE_TCP_PORT: u16 = 4242;
-const SMOKE_UDP_PORT: u16 = 4243;
 const NET_SHELL_TCP_PORT: u16 = 4245;
 
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -151,9 +147,6 @@ pub struct NetQueue<T> {
     dropped: AtomicU32,
 }
 
-static NET_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-static NET_ICMP_OK_X3: AtomicBool = AtomicBool::new(false);
-
 impl<T> NetQueue<T> {
     pub fn new_leaked(name: &'static str, capacity: usize) -> &'static Self {
         let q = Self {
@@ -244,6 +237,10 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
 
 struct AdapterDevice;
 
+struct AdapterDeviceAt {
+    index: usize,
+}
+
 impl Device for AdapterDevice {
     type RxToken<'a>
         = AdapterRxToken
@@ -277,6 +274,42 @@ impl Device for AdapterDevice {
     }
 }
 
+impl Device for AdapterDeviceAt {
+    type RxToken<'a>
+        = AdapterRxToken
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = AdapterTxTokenAt
+    where
+        Self: 'a;
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        crate::net::pop_rx_packet_at(self.index).map(|packet| {
+            let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+            if (new_total & 0x3F) == 0 {
+                log!("net: rx frames={}\n", new_total);
+            }
+            (
+                AdapterRxToken { buffer: packet },
+                AdapterTxTokenAt { index: self.index },
+            )
+        })
+    }
+
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        Some(AdapterTxTokenAt { index: self.index })
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut caps = DeviceCapabilities::default();
+        caps.max_transmission_unit = 1500;
+        caps.max_burst_size = Some(1);
+        caps.medium = Medium::Ethernet;
+        caps
+    }
+}
+
 struct AdapterRxToken {
     buffer: Vec<u8>,
 }
@@ -295,6 +328,10 @@ impl RxToken for AdapterRxToken {
 }
 
 struct AdapterTxToken;
+
+struct AdapterTxTokenAt {
+    index: usize,
+}
 
 impl TxToken for AdapterTxToken {
     fn consume<R, F>(self, len: usize, f: F) -> R
@@ -319,196 +356,31 @@ impl TxToken for AdapterTxToken {
     fn set_meta(&mut self, _meta: PacketMeta) {}
 }
 
-struct LoopbackDevice {
-    queue: VecDeque<Vec<u8>>,
-}
-
-struct LoopbackRxToken {
-    buffer: Vec<u8>,
-}
-
-struct LoopbackTxToken<'a> {
-    queue: &'a mut VecDeque<Vec<u8>>,
-}
-
-impl Device for LoopbackDevice {
-    type RxToken<'a>
-        = LoopbackRxToken
-    where
-        Self: 'a;
-    type TxToken<'a>
-        = LoopbackTxToken<'a>
-    where
-        Self: 'a;
-
-    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let packet = self.queue.pop_front()?;
-        Some((
-            LoopbackRxToken { buffer: packet },
-            LoopbackTxToken {
-                queue: &mut self.queue,
-            },
-        ))
-    }
-
-    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(LoopbackTxToken {
-            queue: &mut self.queue,
-        })
-    }
-
-    fn capabilities(&self) -> DeviceCapabilities {
-        let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
-        caps.max_burst_size = Some(1);
-        caps.medium = Medium::Ethernet;
-        caps
-    }
-}
-
-impl RxToken for LoopbackRxToken {
-    fn consume<R, F>(self, f: F) -> R
-    where
-        F: FnOnce(&[u8]) -> R,
-    {
-        f(&self.buffer[..])
-    }
-
-    fn meta(&self) -> PacketMeta {
-        PacketMeta::default()
-    }
-}
-
-impl<'a> TxToken for LoopbackTxToken<'a> {
+impl TxToken for AdapterTxTokenAt {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
         let mut buf = vec![0u8; len];
         let result = f(&mut buf[..]);
-        self.queue.push_back(buf);
+        let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+        if crate::net::transmit_packet_at(self.index, &buf[..]).is_err() {
+            let dropped = NET_TX_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+            log!("net: TX busy, dropping {}-byte frame.\n", len);
+            if (dropped & 0x3F) == 0 {
+                log!("net: tx frames={} dropped={}\n", new_total, dropped);
+            }
+        } else if (new_total & 0x3F) == 0 {
+            log!(
+                "net: tx frames={} dropped={}\n",
+                new_total,
+                NET_TX_DROPPED.load(Ordering::Relaxed)
+            );
+        }
         result
     }
 
     fn set_meta(&mut self, _meta: PacketMeta) {}
-}
-
-struct TcpLoopbackSmoke {
-    device: LoopbackDevice,
-    iface: Interface,
-    sockets: SocketSet<'static>,
-    server: SocketHandle,
-    client: SocketHandle,
-    sent: bool,
-    got_echo: bool,
-    start: Instant,
-}
-
-impl TcpLoopbackSmoke {
-    fn new() -> Self {
-        const IP: Ipv4Address = Ipv4Address::new(192, 0, 2, 1);
-        const PORT: u16 = 4244;
-
-        let hw_addr = HardwareAddress::Ethernet(EthernetAddress([0x02, 0, 0, 0, 0, 1]));
-        let mut cfg = IfaceConfig::new(hw_addr);
-        cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0xC0DE_CAFE);
-
-        let mut device = LoopbackDevice {
-            queue: VecDeque::new(),
-        };
-        let mut iface = Interface::new(cfg, &mut device, now());
-        iface.update_ip_addrs(|addrs| {
-            let _ = addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(IP, 24)));
-        });
-
-        let mut sockets = SocketSet::new(Vec::new());
-
-        let server_rx = tcp::SocketBuffer::new(vec![0; 2048]);
-        let server_tx = tcp::SocketBuffer::new(vec![0; 2048]);
-        let mut server_socket = tcp::Socket::new(server_rx, server_tx);
-        server_socket.listen(PORT).ok();
-        let server = sockets.add(server_socket);
-
-        let client_rx = tcp::SocketBuffer::new(vec![0; 2048]);
-        let client_tx = tcp::SocketBuffer::new(vec![0; 2048]);
-        let mut client_socket = tcp::Socket::new(client_rx, client_tx);
-        client_socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
-
-        let local = IpEndpoint::new(IpAddress::Ipv4(IP), 49152);
-        let remote = IpEndpoint::new(IpAddress::Ipv4(IP), PORT);
-        let _ = client_socket.connect(iface.context(), remote, local);
-        let client = sockets.add(client_socket);
-
-        Self {
-            device,
-            iface,
-            sockets,
-            server,
-            client,
-            sent: false,
-            got_echo: false,
-            start: now(),
-        }
-    }
-
-    fn step(&mut self) -> Option<bool> {
-        let t = now();
-        let _ = self
-            .iface
-            .poll(t, &mut self.device, &mut self.sockets);
-
-        // Server: echo any received payload back.
-        {
-            let socket = self.sockets.get_mut::<tcp::Socket>(self.server);
-            if socket.can_recv() {
-                let mut buf = [0u8; 256];
-                while let Ok(len) = socket.recv_slice(&mut buf) {
-                    if len == 0 {
-                        break;
-                    }
-                    if socket.can_send() && socket.may_send() {
-                        let _ = socket.send_slice(&buf[..len]);
-                    }
-                }
-            }
-        }
-
-        // Client: send once after established; then wait for echo.
-        {
-            const PAYLOAD: &[u8] = b"TRUEOS-tcp-loop";
-            let socket = self.sockets.get_mut::<tcp::Socket>(self.client);
-            if !self.sent
-                && socket.state() == tcp::State::Established
-                && socket.can_send()
-                && socket.may_send()
-            {
-                let _ = socket.send_slice(PAYLOAD);
-                self.sent = true;
-            }
-
-            if socket.can_recv() {
-                let mut buf = [0u8; 256];
-                while let Ok(len) = socket.recv_slice(&mut buf) {
-                    if len == 0 {
-                        break;
-                    }
-                    if &buf[..len] == PAYLOAD {
-                        self.got_echo = true;
-                    }
-                }
-            }
-        }
-
-        if self.sent && self.got_echo {
-            return Some(true);
-        }
-
-        if t >= self.start + SmolDuration::from_millis(2000) {
-            return Some(false);
-        }
-
-        None
-    }
 }
 
 struct SocketRecord {
@@ -521,6 +393,7 @@ struct SocketRecord {
 }
 
 struct NetService {
+    device_index: usize,
     iface: Interface,
     sockets: SocketSet<'static>,
     records: Vec<SocketRecord>,
@@ -537,13 +410,13 @@ struct NetService {
 }
 
 impl NetService {
-    fn new() -> Self {
-        let mac = crate::net::mac_address().unwrap_or([0, 0, 0, 0, 0, 1]);
+    fn new(device_index: usize) -> Self {
+        let mac = crate::net::mac_address_at(device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
         let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
 
         let mut cfg = IfaceConfig::new(hw_addr);
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
-        let mut device = AdapterDevice;
+        let mut device = AdapterDeviceAt { index: device_index };
         let mut iface = Interface::new(cfg, &mut device, now());
         iface.update_ip_addrs(|addrs| {
             let _ = addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(
@@ -567,6 +440,7 @@ impl NetService {
         let icmp = sockets.add(icmp_socket);
 
         Self {
+            device_index,
             iface,
             sockets,
             records: Vec::new(),
@@ -921,9 +795,10 @@ impl NetService {
 
     fn tick(&mut self) {
         let timestamp = now();
-        let _ = self
-            .iface
-            .poll(timestamp, &mut AdapterDevice, &mut self.sockets);
+        let mut device = AdapterDeviceAt {
+            index: self.device_index,
+        };
+        let _ = self.iface.poll(timestamp, &mut device, &mut self.sockets);
 
         self.poll_icmp();
 
@@ -976,7 +851,8 @@ impl NetService {
         if socket.send_slice(&out, IpAddress::Ipv4(target)).is_ok() {
             let [a, b, c, d] = target.octets();
             crate::log!(
-                "net: icmp ping seq={} -> {}.{}.{}.{}\n",
+                "net: icmp ping dev={} seq={} -> {}.{}.{}.{}\n",
+                self.device_index,
                 seq_no,
                 a,
                 b,
@@ -1020,7 +896,8 @@ impl NetService {
                         if inflight_seq == seq_no {
                             let rtt = now() - sent_at;
                             crate::log!(
-                                "net: icmp pong seq={} rtt={}ms\n",
+                                "net: icmp pong dev={} seq={} rtt={}ms\n",
+                                self.device_index,
                                 seq_no,
                                 rtt.total_millis()
                             );
@@ -1029,8 +906,10 @@ impl NetService {
                             if self.icmp_ping_pongs < 3 {
                                 self.icmp_ping_pongs = self.icmp_ping_pongs.saturating_add(1);
                                 if self.icmp_ping_pongs == 3 {
-                                    NET_ICMP_OK_X3.store(true, Ordering::Relaxed);
-                                    crate::log!("net: icmp ok x3 (gateway reachable)\n");
+                                    crate::log!(
+                                        "net: icmp ok x3 dev={} (gateway reachable)\n",
+                                        self.device_index
+                                    );
                                 }
                             }
                         }
@@ -1051,433 +930,43 @@ fn now() -> Instant {
 
 #[task]
 pub async fn net_service_task() {
-    let mut svc = NetService::new();
-
-    loop {
-        crate::net::poll();
-        svc.tick();
-
-        let cmds = drain_commands();
-        if !cmds.is_empty() {
-            svc.handle_commands(cmds);
-        }
-
-        svc.poll_sockets();
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
-}
-
-/// Minimal deterministic smoke test for the TCP/IP stack.
-///
-/// - Registers an app queue.
-/// - Opens a TCP listener (`SMOKE_TCP_PORT`) and a UDP socket (`SMOKE_UDP_PORT`).
-/// - Logs key events and echoes any received TCP data back to the sender.
-#[task]
-pub async fn net_smoke_task() {
-    if NET_SMOKE_STARTED.swap(true, Ordering::SeqCst) {
+    let count = crate::net::device_count();
+    if count == 0 {
+        crate::log!("net: service disabled (no NIC)\n");
         return;
     }
 
-    let backend = crate::net::adapter_backend_name().unwrap_or("none");
-    crate::log!("net-smoke: backend={}\n", backend);
-
-    const OWNER: &'static str = "net-smoke";
-
-    let cmds = NetQueue::new_leaked("net-smoke-cmd", 64);
-    let events = NetQueue::new_leaked("net-smoke-evt", 64);
-    register_app_queues(OWNER, cmds, events);
-
-    let [a, b, c, d] = SLIRP_GUEST_IP.octets();
-    let [ga, gb, gc, gd] = SLIRP_GATEWAY_IP.octets();
-    crate::log!(
-        "net-smoke: iface={}.{}.{}.{} /{} gw={}.{}.{}.{}; tcp_listen={} udp_bind={}\n",
-        a,
-        b,
-        c,
-        d,
-        SLIRP_PREFIX,
-        ga,
-        gb,
-        gc,
-        gd,
-        SMOKE_TCP_PORT,
-        SMOKE_UDP_PORT
-    );
-
-    let _ = cmds.push(NetCommand::OpenTcpListen { port: SMOKE_TCP_PORT });
-    let _ = cmds.push(NetCommand::OpenUdp { port: SMOKE_UDP_PORT });
-
-    let mut tcp_handle: Option<NetHandle> = None;
-    let mut udp_handle: Option<NetHandle> = None;
-    let mut saw_tcp_established = false;
-    let mut saw_tcp_data = false;
-    let mut udp_probe_state: u8 = 0;
-    let mut ticks: u32 = 0;
-    let mut last_stats: Option<(u64, u64, u64, u32, u32)> = None;
-    let mut tcp_loopback: Option<TcpLoopbackSmoke> = None;
-
-    fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
-        // Minimal DNS query for <qtype>/IN <host>.
-        // Header: flags=0x0100 (RD), qdcount=1
-        let mut q = Vec::new();
-        q.extend_from_slice(&id.to_be_bytes());
-        q.extend_from_slice(&0x0100u16.to_be_bytes());
-        q.extend_from_slice(&1u16.to_be_bytes());
-        q.extend_from_slice(&0u16.to_be_bytes());
-        q.extend_from_slice(&0u16.to_be_bytes());
-        q.extend_from_slice(&0u16.to_be_bytes());
-
-        // QNAME
-        for label in host.split('.') {
-            let bytes = label.as_bytes();
-            let len = bytes.len().min(63);
-            q.push(len as u8);
-            q.extend_from_slice(&bytes[..len]);
+    fn owner_device_index(owner: &str) -> Option<usize> {
+        let (base, suffix) = owner.rsplit_once('@')?;
+        if base.is_empty() || suffix.is_empty() {
+            return None;
         }
-        q.push(0);
-
-        // QTYPE, QCLASS=IN (1)
-        q.extend_from_slice(&qtype.to_be_bytes());
-        q.extend_from_slice(&1u16.to_be_bytes());
-        q
+        if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        suffix.parse::<usize>().ok()
     }
 
-    fn dns_skip_name(pkt: &[u8], idx: &mut usize) -> bool {
-        if *idx >= pkt.len() {
-            return false;
-        }
-        let mut steps: u8 = 0;
-        loop {
-            if *idx >= pkt.len() {
-                return false;
-            }
-            let b = pkt[*idx];
-            if b == 0 {
-                *idx += 1;
-                return true;
-            }
-            if (b & 0xC0) == 0xC0 {
-                if *idx + 1 >= pkt.len() {
-                    return false;
-                }
-                *idx += 2;
-                return true;
-            }
-            let len = b as usize;
-            *idx += 1;
-            if *idx + len > pkt.len() {
-                return false;
-            }
-            *idx += len;
-            steps = steps.wrapping_add(1);
-            if steps > 64 {
-                return false;
-            }
-        }
-    }
-
-    fn dns_log_a_records_for(pkt: &[u8], want_id: u16, host: &str) {
-        if pkt.len() < 12 {
-            return;
-        }
-
-        let id = u16::from_be_bytes([pkt[0], pkt[1]]);
-        if id != want_id {
-            return;
-        }
-
-        let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
-        let rcode = (flags & 0x000F) as u8;
-        let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
-        let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
-
-        if rcode != 0 {
-            crate::log!("net-smoke: nslookup {}: dns rcode={}\n", host, rcode);
-            return;
-        }
-
-        let mut idx: usize = 12;
-        for _ in 0..qd {
-            if !dns_skip_name(pkt, &mut idx) {
-                return;
-            }
-            if idx + 4 > pkt.len() {
-                return;
-            }
-            idx += 4; // QTYPE/QCLASS
-        }
-
-        let mut found_any = false;
-        for _ in 0..an {
-            if !dns_skip_name(pkt, &mut idx) {
-                return;
-            }
-            if idx + 10 > pkt.len() {
-                return;
-            }
-            let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
-            let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
-            let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
-            idx += 10;
-            if idx + rdlen > pkt.len() {
-                return;
-            }
-
-            if typ == 1 && class == 1 && rdlen == 4 {
-                let ip = [pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]];
-                crate::log!(
-                    "net-smoke: nslookup {} => A {}.{}.{}.{}\n",
-                    host,
-                    ip[0],
-                    ip[1],
-                    ip[2],
-                    ip[3]
-                );
-                found_any = true;
-            }
-
-            idx += rdlen;
-        }
-
-        if !found_any {
-            crate::log!("net-smoke: nslookup {}: no A records\n", host);
-        }
-    }
-
-    fn dns_log_aaaa_records_for(pkt: &[u8], want_id: u16, host: &str) {
-        if pkt.len() < 12 {
-            return;
-        }
-
-        let id = u16::from_be_bytes([pkt[0], pkt[1]]);
-        if id != want_id {
-            return;
-        }
-
-        let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
-        let rcode = (flags & 0x000F) as u8;
-        let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
-        let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
-
-        if rcode != 0 {
-            crate::log!("net-smoke: nslookup {}: dns rcode={}\n", host, rcode);
-            return;
-        }
-
-        let mut idx: usize = 12;
-        for _ in 0..qd {
-            if !dns_skip_name(pkt, &mut idx) {
-                return;
-            }
-            if idx + 4 > pkt.len() {
-                return;
-            }
-            idx += 4; // QTYPE/QCLASS
-        }
-
-        let mut found_any = false;
-        for _ in 0..an {
-            if !dns_skip_name(pkt, &mut idx) {
-                return;
-            }
-            if idx + 10 > pkt.len() {
-                return;
-            }
-            let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
-            let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
-            let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
-            idx += 10;
-            if idx + rdlen > pkt.len() {
-                return;
-            }
-
-            if typ == 28 && class == 1 && rdlen == 16 {
-                let s0 = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
-                let s1 = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
-                let s2 = u16::from_be_bytes([pkt[idx + 4], pkt[idx + 5]]);
-                let s3 = u16::from_be_bytes([pkt[idx + 6], pkt[idx + 7]]);
-                let s4 = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]);
-                let s5 = u16::from_be_bytes([pkt[idx + 10], pkt[idx + 11]]);
-                let s6 = u16::from_be_bytes([pkt[idx + 12], pkt[idx + 13]]);
-                let s7 = u16::from_be_bytes([pkt[idx + 14], pkt[idx + 15]]);
-                crate::log!(
-                    "net-smoke: nslookup {} => AAAA {:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}\n",
-                    host,
-                    s0,
-                    s1,
-                    s2,
-                    s3,
-                    s4,
-                    s5,
-                    s6,
-                    s7
-                );
-                found_any = true;
-            }
-
-            idx += rdlen;
-        }
-
-        if !found_any {
-            crate::log!("net-smoke: nslookup {}: no AAAA records\n", host);
-        }
-    }
+    let mut services: Vec<NetService> = (0..count).map(NetService::new).collect();
 
     loop {
-        for ev in events.drain(16) {
-            match ev {
-                NetEvent::Opened { handle, kind } => {
-                    crate::log!("net-smoke: opened {:?} handle={}\n", kind, handle.0);
-                    if kind == SocketKind::Tcp {
-                        if tcp_handle.is_none() {
-                            tcp_handle = Some(handle);
-                        }
-                    }
-                    if kind == SocketKind::Udp {
-                        udp_handle = Some(handle);
-                    }
-                }
-                NetEvent::TcpEstablished { handle } => {
-                    crate::log!("net-smoke: tcp established handle={}\n", handle.0);
-                    saw_tcp_established = true;
-                }
-                NetEvent::TcpData { handle, data } => {
-                    crate::log!("net-smoke: tcp data handle={} len={}\n", handle.0, data.len());
-                    saw_tcp_data = true;
+        crate::net::poll_all();
 
-                    // Echo back (bounded) to verify TX path.
-                    let echo_len = data.len().min(512);
-                    let _ = cmds.push(NetCommand::SendTcp {
-                        handle,
-                        data: data[..echo_len].to_vec(),
-                    });
-                }
-                NetEvent::TcpSent { .. } => {}
-                NetEvent::UdpPacket { handle, from, data } => {
-                    crate::log!(
-                        "net-smoke: udp rx handle={} from={}.{}.{}.{}:{} len={}\n",
-                        handle.0,
-                        from.addr[0],
-                        from.addr[1],
-                        from.addr[2],
-                        from.addr[3],
-                        from.port,
-                        data.len()
-                    );
-
-                    if from.port == 53 && from.addr == SLIRP_DNS_IP.octets() {
-                        dns_log_a_records_for(&data, 0x1234, "example.com");
-                        dns_log_a_records_for(&data, 0x1235, "trueos.eu");
-                        dns_log_aaaa_records_for(&data, 0x1236, "trueos.eu");
-                    }
-                }
-                NetEvent::Closed { handle } => {
-                    crate::log!("net-smoke: closed handle={}\n", handle.0);
-                    if tcp_handle == Some(handle) {
-                        tcp_handle = None;
-                    }
-                }
-                NetEvent::Error { msg } => {
-                    crate::log!("net-smoke: error {}\n", msg);
-                }
-            }
+        for svc in services.iter_mut() {
+            svc.tick();
         }
 
-        // Try to force deterministic inbound traffic without requiring any host-side tooling:
-        // QEMU user networking (slirp) exposes a DNS server at 10.0.2.3:53.
-        if let Some(handle) = udp_handle {
-            if udp_probe_state == 0 {
-                let _ = cmds.push(NetCommand::SendUdp {
-                    handle,
-                    remote: NetEndpoint {
-                        addr: SLIRP_DNS_IP.octets(),
-                        port: 53,
-                    },
-                    data: dns_query(0x1234, "example.com", 1),
-                });
-                udp_probe_state = 1;
-                crate::log!("net-smoke: nslookup example.com (udp) via 10.0.2.3:53\n");
-            } else if udp_probe_state == 1 {
-                let _ = cmds.push(NetCommand::SendUdp {
-                    handle,
-                    remote: NetEndpoint {
-                        addr: SLIRP_DNS_IP.octets(),
-                        port: 53,
-                    },
-                    data: dns_query(0x1235, "trueos.eu", 1),
-                });
-                udp_probe_state = 2;
-                crate::log!("net-smoke: nslookup trueos.eu (udp) via 10.0.2.3:53\n");
-            } else if udp_probe_state == 2 {
-                let _ = cmds.push(NetCommand::SendUdp {
-                    handle,
-                    remote: NetEndpoint {
-                        addr: SLIRP_DNS_IP.octets(),
-                        port: 53,
-                    },
-                    data: dns_query(0x1236, "trueos.eu", 28),
-                });
-                udp_probe_state = 3;
-                crate::log!("net-smoke: nslookup trueos.eu (AAAA) (udp) via 10.0.2.3:53\n");
-            }
+        let cmds = drain_commands();
+        for (owner, batch) in cmds {
+            let idx = owner_device_index(owner).unwrap_or(0);
+            let idx = idx.min(services.len().saturating_sub(1));
+            services[idx].handle_commands(vec![(owner, batch)]);
         }
 
-        // After the ICMP proof completes, exercise TCP deterministically using an in-kernel
-        // loopback device (no dependence on slirp TCP services; cannot stall bring-up).
-        if tcp_loopback.is_none() && NET_ICMP_OK_X3.load(Ordering::Relaxed) {
-            tcp_loopback = Some(TcpLoopbackSmoke::new());
-            crate::log!("net-smoke: starting tcp loopback probe\n");
+        for svc in services.iter_mut() {
+            svc.poll_sockets();
         }
-
-        if let Some(lb) = tcp_loopback.as_mut() {
-            if let Some(ok) = lb.step() {
-                if ok {
-                    crate::log!("net-smoke: ok (tcp loopback echo)\n");
-                    if let Some(h) = tcp_handle {
-                        let _ = cmds.push(NetCommand::Close { handle: h });
-                    }
-                    if let Some(h) = udp_handle {
-                        let _ = cmds.push(NetCommand::Close { handle: h });
-                    }
-                    break;
-                } else {
-                    crate::log!("net-smoke: tcp loopback probe timed out\n");
-                    tcp_loopback = None;
-                }
-            }
-        }
-
-        if saw_tcp_established && saw_tcp_data {
-            crate::log!("net-smoke: ok (tcp established + data)\n");
-            if let Some(h) = tcp_handle {
-                let _ = cmds.push(NetCommand::Close { handle: h });
-            }
-            if let Some(h) = udp_handle {
-                let _ = cmds.push(NetCommand::Close { handle: h });
-            }
-            break;
-        }
-
-        ticks = ticks.wrapping_add(1);
-        if (ticks % 20) == 0 {
-            let (rx, tx, dropped) = net_debug_counters();
-            let tcp_id = tcp_handle.map(|h| h.0).unwrap_or(0);
-            let udp_id = udp_handle.map(|h| h.0).unwrap_or(0);
-            let cur = (rx, tx, dropped, tcp_id, udp_id);
-            if last_stats != Some(cur) {
-                last_stats = Some(cur);
-                crate::log!(
-                    "net-smoke: stats rx={} tx={} dropped={} tcp_handle={} udp_handle={}\n",
-                    rx,
-                    tx,
-                    dropped,
-                    tcp_id,
-                    udp_id
-                );
-            }
-        }
-
-        Timer::after(EmbassyDuration::from_millis(50)).await;
+        Timer::after(EmbassyDuration::from_millis(5)).await;
     }
 }
 
