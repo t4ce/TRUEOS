@@ -16,19 +16,11 @@ LIMINE_CONFIG_ARGS := --prefix=$(abspath $(LIMINE_PREFIX)) --enable-bios --enabl
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-# Keep networking deterministic: use a single NIC (virtio-net) and attach hostfwd rules
-# to that same slirp backend.
-QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4242-:4242,hostfwd=tcp::4245-:4245 \
-	-device virtio-net-pci,netdev=net0,disable-modern=on
+QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
+	-netdev user,id=net1,hostfwd=tcp::4244-:4244 -device rtl8139,netdev=net1 \
+	-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=on
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS)
-
-# Headless/debug logging helpers (for reset/triple-fault triage)
-# - `-no-reboot` keeps QEMU from instantly restarting on triple fault
-# - `-D` + `-d` writes a deterministic debug log per run
-QEMU_DEBUG_LOG_FLAGS = -no-reboot -no-shutdown -d int,cpu_reset,guest_errors -D bld/qemu-debug.log
-QEMU_HEADLESS_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -display none -debugcon file:bld/debugcon-headless.log -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial file:bld/serial-headless.log $(QEMU_NET_FLAGS)
-QEMU_HEADLESS = qemu-system-x86_64 $(QEMU_HEADLESS_FLAGS) $(QEMU_USB_FLAGS) $(QEMU_DEBUG_LOG_FLAGS)
 
 QEMU_USB_FLAGS =  \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -117,35 +109,3 @@ run: iso-debug
 
 dbg: iso-debug
 	@($(QEMU) -s -S & $(SERIAL_CONSOLE_CMD))
-
-# Headless run that writes logs under bld/ for crash/reset triage.
-run-headless: iso-debug
-	@mkdir -p bld
-	@: > bld/debugcon-headless.log
-	@: > bld/serial-headless.log
-	@: > bld/qemu.err
-	@: > bld/qemu-debug.log
-	@($(QEMU_HEADLESS) 2> bld/qemu.err & echo $$! > bld/qemu.pid)
-	@echo "qemu pid: $$(cat bld/qemu.pid)"
-
-run-headless-stop:
-	@if [ -f bld/qemu.pid ]; then kill $$(cat bld/qemu.pid) 2>/dev/null || true; rm -f bld/qemu.pid; fi
-
-# One-command repro: boot headless, connect to tcp/4245 (25s timeout), then stop QEMU.
-repro-4245: run-headless
-	@set -e; \
-	  echo "waiting for guest network readiness..."; \
-	  # Wait until the guest has proven RX/TX/IP by completing the ICMP probe.
-	  for i in $$(seq 1 250); do \
-	    grep -a "net: icmp ok x3" bld/debugcon-headless.log >/dev/null 2>&1 && break; \
-	    sleep 0.1; \
-	  done; \
-	  echo "waiting for guest tcp/4245 listener..."; \
-	  for i in $$(seq 1 250); do \
-	    grep -a "net-shell: listening on tcp 4245" bld/debugcon-headless.log >/dev/null 2>&1 && break; \
-	    sleep 0.1; \
-	  done; \
-	  echo "connecting (timeout 25s)..."; \
-	  timeout 25s sh -c '{ printf "\r\nhelp\r\n"; sleep 20; } | nc -v 127.0.0.1 4245' || true; \
-	  $(MAKE) run-headless-stop; \
-	  echo "logs: bld/qemu.err bld/qemu-debug.log bld/debugcon-headless.log bld/serial-headless.log"
