@@ -25,11 +25,20 @@ pub async fn run(
 ) -> Vec<u8> {
     let mut editor = TextEditor::new(cols, rows, filename, buf);
 
+    // Treat CRLF as a single Enter (common on serial/USB bridges).
+    let mut saw_cr: bool = false;
+
     io.write_str(ecma48::SHOW_CURSOR);
     editor.redraw(io);
 
     loop {
         if let Some(b) = io.read_byte() {
+            if saw_cr && b == b'\n' {
+                saw_cr = false;
+                continue;
+            }
+            saw_cr = b == b'\r';
+
             if editor.handle_byte(io, b) {
                 break;
             }
