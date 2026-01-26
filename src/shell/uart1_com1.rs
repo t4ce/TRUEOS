@@ -32,9 +32,6 @@ pub(crate) fn write_byte(b: u8) {
 
 pub(crate) fn write_str(s: &str) {
     for &b in s.as_bytes() {
-        if b == b'\n' {
-            write_byte(b'\r');
-        }
         write_byte(b);
     }
 }
@@ -53,9 +50,6 @@ pub(crate) fn write_fmt(args: fmt::Arguments<'_>) {
     impl fmt::Write for Writer {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             for &b in s.as_bytes() {
-                if b == b'\n' {
-                    write_byte(b'\r');
-                }
                 write_byte(b);
             }
             Ok(())

@@ -1531,9 +1531,6 @@ pub async fn net_shell_task() {
                         if is_new_conn {
                             st.rx.clear();
                         }
-                        // TCP shells are typically used from a raw terminal; start in prompt mode
-                        // immediately (the regular shell starts in "cube mode" until Enter).
-                        st.rx.push_back(b'\r');
                     }
                     pending = None;
                     pending_handle = Some(handle);
@@ -1542,9 +1539,6 @@ pub async fn net_shell_task() {
                     logged_first_rx = false;
                     tx_log_budget = 16;
                     crate::log!("net-shell: tcp established handle={}\n", handle.0);
-
-                    // Nudge: make sure the client sees *something* even if the shell is quiet.
-                    net_shell_write_bytes(b"\r\nTRUEOS net shell connected.\r\n");
                 }
                 NetEvent::TcpData { handle, data } => {
                     // Only accept bytes from the active connection.
