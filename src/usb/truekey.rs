@@ -84,23 +84,6 @@ pub fn slot_id() -> Option<u32> {
 	if slot == 0 { None } else { Some(slot) }
 }
 
-pub fn write(data: &[u8]) -> usize {
-	let Some(slot) = slot_id() else {
-		return 0;
-	};
-	let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire) as usize;
-	cdc_acm::queue_tx_bytes(controller_id, slot, data)
-}
-
-pub fn read_byte() -> Option<u8> {
-	let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
-	if slot == 0 {
-		return None;
-	}
-	let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire) as usize;
-	cdc_acm::pop_rx_byte(controller_id, slot)
-}
-
 fn on_cdc_attach(evt: CdcAttachEvent) {
 	let target_serial = *TARGET_SERIAL.lock();
 	if !target_serial.is_some() {

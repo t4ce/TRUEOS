@@ -248,9 +248,12 @@ pub extern "C" fn kmain() -> ! {
     usb::xhci::init_once();
 
     // Optional: bind the CDC shell to a specific device serial.
-    usb::cdc_shell::configure_target_serial("9C:13:9E:E4:25:B8");
+    // Keep the log sink and the CDC shell aligned; otherwise logs won't drain over USB.
+    usb::truekey::configure_target_serial("9C:13:9E:E4:25:B8");
+    // TEMP: disable CDC-shell binding to TrueKey; keep USB log sink only.
+    // usb::cdc_shell::configure_target_serial("9C:13:9E:E4:25:B8");
     usb::truekey::init();
-    usb::cdc_shell::init();
+    // usb::cdc_shell::init();
 
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
@@ -266,10 +269,19 @@ pub extern "C" fn kmain() -> ! {
     net::init();
     let net_ready = net::mac_address().is_some();
     if net_ready {
-        let _ = spawner.spawn(net::adapter::net_service_task());
-        let _ = spawner.spawn(net::adapter::net_smoke_task());
+        if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
+            crate::log!("net: spawn net_service_task failed: {:?}\n", e);
+        }
+        if let Err(e) = spawner.spawn(net::adapter::net_smoke_task()) {
+            crate::log!("net: spawn net_smoke_task failed: {:?}\n", e);
+        }
+        if let Err(e) = spawner.spawn(net::html::net_http_smoke_task()) {
+            crate::log!("net: spawn net_http_smoke_task failed: {:?}\n", e);
+        }
         crate::log!("net-shell: spawning tcp listener on 4245\n");
-        let _ = spawner.spawn(net::adapter::net_shell_task());
+        if let Err(e) = spawner.spawn(net::adapter::net_shell_task()) {
+            crate::log!("net-shell: spawn net_shell_task failed: {:?}\n", e);
+        }
     } else {
         crate::log!("net: skipping net tasks (no NIC)\n");
     }
@@ -296,10 +308,14 @@ pub extern "C" fn kmain() -> ! {
 
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
-    let _ = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND));
-    let _ = spawner.spawn(shell::task(spawner, &shell::USB_CDC_SHELL_BACKEND));
+    if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
+        crate::log!("shell: spawn UART shell failed: {:?}\n", e);
+    }
+    // let _ = spawner.spawn(shell::task(spawner, &shell::USB_CDC_SHELL_BACKEND));
     if net_ready {
-        let _ = spawner.spawn(shell::task(spawner, &shell::NET_TCP_SHELL_BACKEND));
+        if let Err(e) = spawner.spawn(shell::task(spawner, &shell::NET_TCP_SHELL_BACKEND)) {
+            crate::log!("shell: spawn net TCP shell failed: {:?}\n", e);
+        }
     }
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();

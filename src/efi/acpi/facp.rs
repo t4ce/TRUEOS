@@ -18,12 +18,12 @@ pub enum FacpError {
     FadtMissing,
     ResetUnsupported,
     SleepUnsupported,
-    Acpi(AcpiError),
+    Acpi,
 }
 
 impl From<AcpiError> for FacpError {
     fn from(value: AcpiError) -> Self {
-        FacpError::Acpi(value)
+        FacpError::Acpi
     }
 }
 

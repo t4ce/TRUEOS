@@ -93,6 +93,7 @@ const SHELL_COMMANDS: [&str; 22] = [
     "out",
     "in",
     "io",
+    "https",
     "files",
     "§",
     "s5",
@@ -102,7 +103,6 @@ const SHELL_COMMANDS: [&str; 22] = [
     "go",
     "mandel",
     "time",
-    "up",
     "idle",
     "pstate",
     "cube",
@@ -410,7 +410,7 @@ async fn in_matrix_job(slot_id: u8, src_slot: u8, path: String<160>) {
     }
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     io.init();
 
@@ -432,8 +432,16 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     cube.reset();
     enter_cube_mode(io, &mut term_cols, &mut term_rows);
 
+    // Treat CRLF as a single Enter (common on serial/USB bridges).
+    let mut saw_cr: bool = false;
+
     loop {
         if let Some(b) = io.read_byte() {
+            if saw_cr && b == b'\n' {
+                saw_cr = false;
+                continue;
+            }
+            saw_cr = b == b'\r';
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
@@ -982,6 +990,71 @@ fn handle_line(
             }
             return CommandAction::None;
         }
+
+        if verb.eq_ignore_ascii_case("https") {
+            let mut parts = rest.split_whitespace();
+            let url = parts.next().unwrap_or("");
+            if url.is_empty() {
+                io.write_str("https: usage https <host|https://url> [--tofu] [--pin <sha256hex>]\r\n");
+                io.write_str("https: example https web.de\r\n");
+                io.write_str("https: example https https://google.de/\r\n");
+                return CommandAction::None;
+            }
+
+            let mut pin_mode = crate::net::https::PinMode::None;
+
+            while let Some(arg) = parts.next() {
+                if arg == "--tofu" {
+                    pin_mode = crate::net::https::PinMode::Tofu;
+                    continue;
+                }
+                if arg == "--pin" {
+                    let Some(hex) = parts.next() else {
+                        io.write_str("https: --pin needs an argument\r\n");
+                        return CommandAction::None;
+                    };
+                    match crate::net::https::parse_pin_hex(hex) {
+                        Ok(h) => pin_mode = crate::net::https::PinMode::Pin(h),
+                        Err(e) => {
+                            io.write_str("https: bad pin\r\n");
+                            io.write_str(e);
+                            io.write_str("\r\n");
+                            return CommandAction::None;
+                        }
+                    }
+                    continue;
+                }
+
+                io.write_str("https: unknown option\r\n");
+                io.write_str("https: usage https <host|https://url> [--tofu] [--pin <sha256hex>]\r\n");
+                return CommandAction::None;
+            }
+
+            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
+            let _ = title.push_str("https ");
+            for ch in url.chars() {
+                if title.push(ch).is_err() {
+                    break;
+                }
+            }
+
+            match crate::matrix::alloc_slot(title.as_str()) {
+                Some(slot) => {
+                    let mut u: String<256> = String::new();
+                    for ch in url.chars() {
+                        if u.push(ch).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = spawner.spawn(crate::net::https::https_matrix_job(slot, u, pin_mode));
+                    io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
+                    refresh_matrix_symbols(io, *term_cols);
+                }
+                None => io.write_str("https: matrix full\r\n"),
+            }
+            return CommandAction::None;
+        }
+
         if verb.eq_ignore_ascii_case("install") {
             if let Some(p) = crate::install::handle_install_command(io, rest) {
                 return CommandAction::Pending(match p {
@@ -1341,13 +1414,6 @@ fn handle_line(
             }
         });
 
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("up") {
-        io.write_str("line1\r\nline2\r\n");
-        io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
-        io.write_str("↑\r\n");
         return CommandAction::None;
     }
 
