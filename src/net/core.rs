@@ -30,14 +30,6 @@ impl<A: VendorAdapter> NetCore<A> {
             rx_queue: VecDeque::new(),
         }
     }
-
-    pub fn adapter_mut(&mut self) -> &mut A {
-        &mut self.adapter
-    }
-
-    pub fn ring_mut(&mut self) -> &mut NetRing {
-        self.ring.as_mut()
-    }
 }
 
 impl<A: VendorAdapter> NetDevice for NetCore<A> {

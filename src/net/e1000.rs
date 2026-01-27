@@ -485,16 +485,6 @@ fn find_e1000_devices() -> alloc::vec::Vec<pci::PciDevice> {
     out
 }
 
-fn read_bar0_phys(dev: &pci::PciDevice) -> Result<u64, ()> {
-    let (bar_lo, bar_hi) = pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-    if (bar_lo & 0x1) != 0 {
-        return Err(());
-    }
-    let lo = (bar_lo as u64) & !0xFu64;
-    let hi = bar_hi.unwrap_or(0) as u64;
-    Ok(lo | (hi << 32))
-}
-
 fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
     // Scan BAR0..BAR5 for the first memory BAR. QEMU e1000 can expose BAR0 as an IO BAR.
     let mut i = 0u8;
