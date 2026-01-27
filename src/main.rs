@@ -242,6 +242,13 @@ pub extern "C" fn kmain() -> ! {
     pci::log_devices_once();
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
+
+    // Seed the kernel CSPRNG once we have our PCI entropy sources (virtio-rng).
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ok = crate::rng::init();
+        crate::log!("rng: init {}\n", if ok { "ok" } else { "failed" });
+    }
     disc::probe_once();
     tga::init_once();
 
