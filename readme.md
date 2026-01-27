@@ -10,7 +10,8 @@ sudo apt-get install qemu-system
 sudo apt install gdb
 
 # cargo install cargo-outdated
-# CARGO_BUILD_TARGET=/home/t4ce/Dokumente/TrueOS/86_64.json cargo outdated -R
+# (Note) This repo's kernel builds use a custom target JSON. Use `make iso` or pass `--target 86_64.json`.
+cargo outdated -R
 # cargo upgrade
 
 

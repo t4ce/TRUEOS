@@ -58,18 +58,6 @@ pub fn net_shell_write_bytes(bytes: &[u8]) {
     }
 }
 
-pub fn net_shell_write_byte(b: u8) {
-    net_shell_write_bytes(&[b]);
-}
-
-pub fn net_debug_counters() -> (u64, u64, u64) {
-    (
-        NET_RX_FRAMES.load(Ordering::Relaxed),
-        NET_TX_FRAMES.load(Ordering::Relaxed),
-        NET_TX_DROPPED.load(Ordering::Relaxed),
-    )
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NetHandle(pub u32);
 
@@ -141,7 +129,7 @@ pub enum SocketKind {
 }
 
 pub struct NetQueue<T> {
-    name: &'static str,
+    _name: &'static str,
     capacity: usize,
     inner: spin::Mutex<VecDeque<T>>,
     dropped: AtomicU32,
@@ -150,7 +138,7 @@ pub struct NetQueue<T> {
 impl<T> NetQueue<T> {
     pub fn new_leaked(name: &'static str, capacity: usize) -> &'static Self {
         let q = Self {
-            name,
+            _name: name,
             capacity: capacity.max(1),
             inner: spin::Mutex::new(VecDeque::with_capacity(capacity)),
             dropped: AtomicU32::new(0),
@@ -179,18 +167,6 @@ impl<T> NetQueue<T> {
             }
         }
         out
-    }
-
-    pub fn stats(&self) -> (usize, usize, u32) {
-        (
-            self.inner.lock().len(),
-            self.capacity,
-            self.dropped.load(Ordering::Relaxed),
-        )
-    }
-
-    pub fn name(&self) -> &'static str {
-        self.name
     }
 }
 
@@ -235,43 +211,8 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     }
 }
 
-struct AdapterDevice;
-
 struct AdapterDeviceAt {
     index: usize,
-}
-
-impl Device for AdapterDevice {
-    type RxToken<'a>
-        = AdapterRxToken
-    where
-        Self: 'a;
-    type TxToken<'a>
-        = AdapterTxToken
-    where
-        Self: 'a;
-
-    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        crate::net::pop_rx_packet().map(|packet| {
-            let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-            if (new_total & 0x3F) == 0 {
-                log!("net: rx frames={}\n", new_total);
-            }
-            (AdapterRxToken { buffer: packet }, AdapterTxToken)
-        })
-    }
-
-    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(AdapterTxToken)
-    }
-
-    fn capabilities(&self) -> DeviceCapabilities {
-        let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
-        caps.max_burst_size = Some(1);
-        caps.medium = Medium::Ethernet;
-        caps
-    }
 }
 
 impl Device for AdapterDeviceAt {
@@ -327,33 +268,8 @@ impl RxToken for AdapterRxToken {
     }
 }
 
-struct AdapterTxToken;
-
 struct AdapterTxTokenAt {
     index: usize,
-}
-
-impl TxToken for AdapterTxToken {
-    fn consume<R, F>(self, len: usize, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        let mut buf = vec![0u8; len];
-        let result = f(&mut buf[..]);
-        let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-        if crate::net::transmit_packet(&buf[..]).is_err() {
-            let dropped = NET_TX_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-            log!("net: TX busy, dropping {}-byte frame.\n", len);
-            if (dropped & 0x3F) == 0 {
-                log!("net: tx frames={} dropped={}\n", new_total, dropped);
-            }
-        } else if (new_total & 0x3F) == 0 {
-            log!("net: tx frames={} dropped={}\n", new_total, NET_TX_DROPPED.load(Ordering::Relaxed));
-        }
-        result
-    }
-
-    fn set_meta(&mut self, _meta: PacketMeta) {}
 }
 
 impl TxToken for AdapterTxTokenAt {

@@ -1,6 +1,3 @@
-[build]
-target = "86_64.json"
- 
 [target.'86_64.json']
 linker = "rust-lld"
 
