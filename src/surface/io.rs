@@ -1,6 +1,7 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use core::fmt;
 
 /// Minimal I/O surface.
@@ -59,6 +60,75 @@ pub trait Write {
 			}
 		}
 		Ok(())
+	}
+}
+
+/// Kernel-facing helpers for basic file I/O.
+///
+/// These intentionally expose the same underlying `disc::files::Fs` operations
+/// used by the shell, but keep the logic in one place.
+pub mod kfs {
+	use super::Vec;
+	use alloc::string::String;
+
+	#[inline]
+	pub fn read_file(path: &str) -> core::result::Result<Vec<u8>, crate::disc::files::FsError> {
+		crate::disc::files::Fs::read_file(path)
+	}
+
+	#[inline]
+	pub fn write_file(
+		path: &str,
+		data: &[u8],
+	) -> core::result::Result<(), crate::disc::files::FsError> {
+		crate::disc::files::Fs::write_file(path, data)
+	}
+
+	#[inline]
+	pub fn rename(
+		src: &str,
+		dst: &str,
+	) -> core::result::Result<(), crate::disc::files::FsError> {
+		crate::disc::files::Fs::rename(src, dst)
+	}
+
+	#[inline]
+	pub fn list_dir(path: &str) -> core::result::Result<String, crate::disc::files::FsError> {
+		crate::disc::files::Fs::list_dir(path)
+	}
+
+	#[inline]
+	pub fn remove(path: &str) -> core::result::Result<(), crate::disc::files::FsError> {
+		crate::disc::files::Fs::remove(path)
+	}
+
+	/// Read a destination file for an append operation.
+	///
+	/// Mirrors the shell's historical behavior: a missing/unopenable destination
+	/// is treated as an empty file so `append` can create it.
+	pub fn read_file_for_append(
+		path: &str,
+	) -> core::result::Result<Vec<u8>, crate::disc::files::FsError> {
+		match crate::disc::files::Fs::read_file(path) {
+			Ok(bytes) => Ok(bytes),
+			Err(crate::disc::files::FsError::Read(
+				crate::disc::files::UsbFsReadError::OpenFailed,
+			)) => Ok(Vec::new()),
+			Err(e) => Err(e),
+		}
+	}
+
+	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
+	pub fn append_into_file(
+		dst_path: &str,
+		src: &[u8],
+	) -> core::result::Result<(), crate::disc::files::FsError> {
+		if src.is_empty() {
+			return Ok(());
+		}
+		let mut dst = read_file_for_append(dst_path)?;
+		dst.extend_from_slice(src);
+		write_file(dst_path, dst.as_slice())
 	}
 }
 
@@ -192,7 +262,7 @@ pub mod cabi {
 			return FS_ERR_BAD_UTF8 as isize;
 		};
 
-		let bytes: Vec<u8> = match crate::disc::files::Fs::read_file(path) {
+		let bytes: Vec<u8> = match super::kfs::read_file(path) {
 			Ok(v) => v,
 			Err(_) => return FS_ERR_IO as isize,
 		};
@@ -231,7 +301,7 @@ pub mod cabi {
 			core::slice::from_raw_parts(data_ptr, data_len)
 		};
 
-		match crate::disc::files::Fs::write_file(path, data) {
+		match super::kfs::write_file(path, data) {
 			Ok(()) => 0,
 			Err(_) => FS_ERR_IO,
 		}
@@ -256,7 +326,7 @@ pub mod cabi {
 			return FS_ERR_BAD_UTF8;
 		};
 
-		match crate::disc::files::Fs::rename(src, dst) {
+		match super::kfs::rename(src, dst) {
 			Ok(()) => 0,
 			Err(_) => FS_ERR_IO,
 		}
@@ -277,7 +347,7 @@ pub mod cabi {
 			return FS_ERR_BAD_UTF8 as isize;
 		};
 
-		let listing = match crate::disc::files::Fs::list_dir(path) {
+		let listing = match super::kfs::list_dir(path) {
 			Ok(v) => v,
 			Err(_) => return FS_ERR_IO as isize,
 		};
@@ -306,7 +376,7 @@ pub mod cabi {
 			return FS_ERR_BAD_UTF8;
 		};
 
-		match crate::disc::files::Fs::remove(path) {
+		match super::kfs::remove(path) {
 			Ok(()) => 0,
 			Err(_) => FS_ERR_IO,
 		}
