@@ -7,8 +7,9 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
 use crate::disc::block;
-use crate::ecma48;
 use crate::shell::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
+
+pub(crate) mod ecma48;
 
 pub(crate) mod shellcube;
 pub(crate) mod shellqjs;
@@ -237,9 +238,9 @@ const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '�
 fn set_go_mode(io: &dyn ShellIo, go_mode: &mut bool, enable: bool) {
     let prev = *go_mode;
     if enable && !prev {
-        io.write_str(ecma48::HIDE_CURSOR);
+        io.write_str(crate::ecma48::HIDE_CURSOR);
     } else if !enable && prev {
-        io.write_str(ecma48::SHOW_CURSOR);
+        io.write_str(crate::ecma48::SHOW_CURSOR);
     }
     *go_mode = enable;
 }
@@ -449,8 +450,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
                     set_go_mode(io, &mut go_mode, false);
-                    io.write_str(ecma48::CLEAR_SCREEN);
-                    io.write_str(ecma48::HOME);
+                    io.write_str(crate::ecma48::CLEAR_SCREEN);
+                    io.write_str(crate::ecma48::HOME);
                     write_banner(io, term_cols);
                 }
                 continue;
@@ -579,8 +580,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 // Edit the slot blob in-place (no auto-capture into a new slot).
                                 let Some(buf) = crate::matrix::take_blob(slot_id) else {
                                     io.write_str("\r\ntxt: invalid slot\r\n");
-                                    io.write_str(ecma48::CLEAR_SCREEN);
-                                    io.write_str(ecma48::HOME);
+                                    io.write_str(crate::ecma48::CLEAR_SCREEN);
+                                    io.write_str(crate::ecma48::HOME);
                                     write_banner(io, term_cols);
                                     continue;
                                 };
@@ -592,8 +593,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 io.write_fmt(format_args!("\r\ntxt: updated §{}\r\n", slot_id + 1));
                                 refresh_matrix_symbols(io, term_cols);
 
-                                io.write_str(ecma48::CLEAR_SCREEN);
-                                io.write_str(ecma48::HOME);
+                                io.write_str(crate::ecma48::CLEAR_SCREEN);
+                                io.write_str(crate::ecma48::HOME);
                                 write_banner(io, term_cols);
                             }
                             CommandAction::None => {}
