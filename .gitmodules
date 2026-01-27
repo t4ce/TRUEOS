@@ -1,9 +1,0 @@
-[submodule "limine"]
-	path = limine
-	url = https://github.com/limine-bootloader/limine.git
-	branch = v10.x
-
-[submodule "quickjs"]
-	path = quickjs
-	url = https://github.com/bellard/quickjs
-	branch = master
