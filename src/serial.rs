@@ -42,14 +42,3 @@ impl SerialNumber {
     }
 }
 
-/// Minimal async serial interface that can be shared across transports.
-pub trait SerialPort {
-    /// Best-effort immediate write; returns bytes accepted.
-    fn write(&self, data: &[u8]) -> usize;
-
-    /// Write the full buffer, waiting for backpressure to clear.
-    fn write_all<'a>(&'a self, data: &'a [u8]) -> Pin<Box<dyn Future<Output = usize> + 'a>>;
-
-    /// Optional stable serial number for the endpoint.
-    fn serial_number(&self) -> Option<SerialNumber>;
-}

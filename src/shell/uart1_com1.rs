@@ -30,39 +30,10 @@ pub(crate) fn write_byte(b: u8) {
     }
 }
 
-pub(crate) fn write_str(s: &str) {
-    for &b in s.as_bytes() {
-        write_byte(b);
-    }
-}
-
 pub(crate) fn write_bytes(bytes: &[u8]) {
     for &b in bytes {
         write_byte(b);
     }
-}
-
-pub(crate) fn write_fmt(args: fmt::Arguments<'_>) {
-    use core::fmt::Write;
-
-    struct Writer;
-
-    impl fmt::Write for Writer {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            for &b in s.as_bytes() {
-                write_byte(b);
-            }
-            Ok(())
-        }
-    }
-
-    let _ = Writer.write_fmt(args);
-}
-
-pub(crate) fn write_char(ch: char) {
-    let mut buf = [0u8; 4];
-    let s = ch.encode_utf8(&mut buf);
-    write_str(s);
 }
 
 pub(crate) fn read_byte() -> Option<u8> {

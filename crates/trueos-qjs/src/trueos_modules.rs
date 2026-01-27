@@ -11,6 +11,7 @@ extern "C" {
     fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
     fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
+    fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
 }
 
 unsafe fn js_arg_to_utf8_bytes(ctx: *mut qjs::JSContext, val: qjs::JSValueConst) -> Option<(*const u8, usize, *const c_char)> {
@@ -524,6 +525,15 @@ unsafe extern "C" fn trueos_module_loader(
         return m;
     }
 
+    if module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let spec = CStr::from_ptr(module_name).to_bytes();
+    if spec_is_url(spec) {
+        return load_url_module(ctx, module_name, spec);
+    }
+
     load_fs_module(ctx, module_name)
 }
 
@@ -533,6 +543,89 @@ fn path_is_relative(spec: &[u8]) -> bool {
 
 fn path_is_absolute(spec: &[u8]) -> bool {
     spec.starts_with(b"/")
+}
+
+fn spec_is_url(spec: &[u8]) -> bool {
+    spec.starts_with(b"https://") || spec.starts_with(b"http://")
+}
+
+fn split_url(spec: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    // Returns (scheme_with_slashes, authority, path_with_leading_slash)
+    let (scheme, rest) = if let Some(r) = spec.strip_prefix(b"https://") {
+        (b"https://".as_slice(), r)
+    } else if let Some(r) = spec.strip_prefix(b"http://") {
+        (b"http://".as_slice(), r)
+    } else {
+        return None;
+    };
+
+    let (authority, path) = match rest.iter().position(|&b| b == b'/') {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, b"/".as_slice()),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    Some((scheme, authority, path))
+}
+
+fn url_dir_base(url: &[u8]) -> Option<Vec<u8>> {
+    // Base directory prefix for resolving relative URL specifiers.
+    // Example: https://host/a/b/c.mjs -> https://host/a/b
+    let (scheme, authority, path) = split_url(url)?;
+    let last_slash = path.iter().rposition(|&b| b == b'/').unwrap_or(0);
+    let dir = &path[..last_slash];
+
+    let mut out = Vec::new();
+    out.extend_from_slice(scheme);
+    out.extend_from_slice(authority);
+    if !dir.starts_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(dir);
+    Some(out)
+}
+
+fn normalize_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
+    let (scheme, authority, path) = split_url(url)?;
+    let normalized_path = normalize_path_bytes(path);
+    let mut out = Vec::new();
+    out.extend_from_slice(scheme);
+    out.extend_from_slice(authority);
+    if !normalized_path.starts_with(b"/") {
+        out.push(b'/');
+    }
+    out.extend_from_slice(&normalized_path);
+    Some(out)
+}
+
+fn resolve_relative_url(base_url: &[u8], rel: &[u8]) -> Option<Vec<u8>> {
+    let mut base_dir = url_dir_base(base_url)?;
+    if !base_dir.ends_with(b"/") {
+        base_dir.push(b'/');
+    }
+    base_dir.extend_from_slice(rel);
+    normalize_url_bytes(&base_dir)
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn push_hex_u64(out: &mut Vec<u8>, v: u64) {
+    for i in (0..16).rev() {
+        let nibble = ((v >> (i * 4)) & 0xF) as u8;
+        let c = match nibble {
+            0..=9 => b'0' + nibble,
+            _ => b'a' + (nibble - 10),
+        };
+        out.push(c);
+    }
 }
 
 fn normalize_path_bytes(path: &[u8]) -> Vec<u8> {
@@ -596,6 +689,25 @@ unsafe extern "C" fn trueos_module_normalize(
 
     let spec = CStr::from_ptr(module_name).to_bytes();
 
+    // URL imports: keep absolute URLs as-is; resolve relative URLs against URL base.
+    if spec_is_url(spec) {
+        if let Some(normalized) = normalize_url_bytes(spec) {
+            return js_strdup(ctx, &normalized);
+        }
+        return js_strdup(ctx, spec);
+    }
+
+    if path_is_relative(spec) {
+        if !module_base_name.is_null() {
+            let base = CStr::from_ptr(module_base_name).to_bytes();
+            if spec_is_url(base) {
+                if let Some(resolved) = resolve_relative_url(base, spec) {
+                    return js_strdup(ctx, &resolved);
+                }
+            }
+        }
+    }
+
     // Leave native/bare specifiers unchanged; loader can still accept absolute paths.
     if path_is_absolute(spec) {
         let normalized = normalize_path_bytes(spec);
@@ -626,6 +738,59 @@ unsafe extern "C" fn trueos_module_normalize(
 
     let normalized = normalize_path_bytes(&combined);
     js_strdup(ctx, &normalized)
+}
+
+unsafe fn load_url_module(
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
+    url: &[u8],
+) -> *mut qjs::JSModuleDef {
+    // Cache path: /qjs/cdn/<hash>.mjs
+    let hash = fnv1a64(url);
+    let mut cache_path: Vec<u8> = Vec::new();
+    cache_path.extend_from_slice(b"/qjs/cdn/");
+    push_hex_u64(&mut cache_path, hash);
+    cache_path.extend_from_slice(b".mjs");
+
+    let rc = trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), cache_path.as_ptr(), cache_path.len());
+    if rc != 0 {
+        return core::ptr::null_mut();
+    }
+
+    let need = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), core::ptr::null_mut(), 0);
+    if need < 0 {
+        return core::ptr::null_mut();
+    }
+    let need = need as usize;
+
+    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
+    if buf.is_null() {
+        return core::ptr::null_mut();
+    }
+    *buf.add(need) = 0;
+
+    let got = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), buf, need);
+    if got < 0 {
+        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+        return core::ptr::null_mut();
+    }
+    let got = got as usize;
+
+    let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
+    // Use the URL as the module filename so relative URL imports resolve correctly.
+    let val = qjs::JS_Eval(ctx, buf as *const c_char, got, module_name, flags);
+
+    qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+
+    if val.is_exception() {
+        return core::ptr::null_mut();
+    }
+    if val.tag != qjs::JS_TAG_MODULE {
+        qjs::js_free_value(ctx, val);
+        return core::ptr::null_mut();
+    }
+
+    val.u.ptr as *mut qjs::JSModuleDef
 }
 
 unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -> *mut qjs::JSModuleDef {
@@ -686,6 +851,7 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
 /// Provides:
 /// - Native modules: `"complex"`, `"fs"`
 /// - Filesystem-backed ES modules: `import "/path/to/mod.mjs"` and relative imports.
+/// - URL ES modules: `import "https://..."` (cached under `/qjs/cdn/`).
 pub unsafe fn install(rt: *mut qjs::JSRuntime) {
     if rt.is_null() {
         return;
