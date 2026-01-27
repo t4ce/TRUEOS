@@ -172,6 +172,11 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
     if conn.tls.is_connected() {
         if let Some(handle) = conn.handle {
             conn.connected_notified = true;
+            crate::log!(
+                "tls-socket: tls connected owner={} handle={}\n",
+                conn.user_owner,
+                handle.0
+            );
             let _ = push_tls_event(conn.user_owner, TlsEvent::Connected { handle });
         }
     }

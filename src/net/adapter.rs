@@ -304,6 +304,7 @@ struct SocketRecord {
     handle: NetHandle,
     kind: SocketKind,
     socket: SocketHandle,
+    tcp_tx: VecDeque<u8>,
     established: bool,
     last_tcp_state: Option<tcp::State>,
 }
@@ -408,6 +409,7 @@ impl NetService {
             handle,
             kind: SocketKind::Udp,
             socket: sh,
+            tcp_tx: VecDeque::new(),
             established: false,
             last_tcp_state: None,
         });
@@ -433,6 +435,7 @@ impl NetService {
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
+            tcp_tx: VecDeque::new(),
             established: false,
             last_tcp_state: Some(initial_state),
         });
@@ -478,10 +481,64 @@ impl NetService {
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
+            tcp_tx: VecDeque::new(),
             established: false,
             last_tcp_state: Some(initial_state),
         });
         Ok(handle)
+    }
+
+    fn flush_tcp_tx(&mut self, idx: usize) {
+        if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
+            return;
+        }
+
+        let owner = self.records[idx].owner;
+        let handle = self.records[idx].handle;
+
+        if self.records[idx].tcp_tx.is_empty() {
+            return;
+        }
+
+        let socket_handle = self.records[idx].socket;
+        let socket = self.sockets.get_mut::<tcp::Socket>(socket_handle);
+        if !(socket.can_send() && socket.may_send()) {
+            return;
+        }
+
+        // Bound work per tick to keep other sockets responsive.
+        let mut total_sent = 0usize;
+        for _ in 0..32 {
+            let (a, b) = self.records[idx].tcp_tx.as_slices();
+            let chunk = if !a.is_empty() { a } else { b };
+            if chunk.is_empty() {
+                break;
+            }
+
+            match socket.send_slice(chunk) {
+                Ok(sent) => {
+                    if sent == 0 {
+                        break;
+                    }
+                    total_sent = total_sent.saturating_add(sent);
+                    for _ in 0..sent {
+                        let _ = self.records[idx].tcp_tx.pop_front();
+                    }
+                }
+                Err(_) => {
+                    let _ = push_event(owner, NetEvent::Error { msg: "tcp send fail" });
+                    break;
+                }
+            }
+
+            if !(socket.can_send() && socket.may_send()) {
+                break;
+            }
+        }
+
+        if total_sent != 0 {
+            let _ = push_event(owner, NetEvent::TcpSent { handle, len: total_sent });
+        }
     }
 
     fn handle_commands(&mut self, commands: Vec<(&'static str, Vec<NetCommand>)>) {
@@ -561,41 +618,15 @@ impl NetService {
                         }
                     }
                     NetCommand::SendTcp { handle, data } => {
-                        if let Some(rec) = self.find_record(handle) {
-                            if rec.kind != SocketKind::Tcp {
+                        if let Some(idx) = self.records.iter().position(|r| r.handle == handle) {
+                            if self.records[idx].kind != SocketKind::Tcp {
                                 let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                                 continue;
                             }
-                            let socket_handle = rec.socket;
-                            let socket = self.sockets.get_mut::<tcp::Socket>(socket_handle);
-                            if socket.can_send() && socket.may_send() {
-                                match socket.send_slice(&data) {
-                                    Ok(sent) => {
-                                        let _ = push_event(
-                                            owner,
-                                            NetEvent::TcpSent {
-                                                handle,
-                                                len: sent,
-                                            },
-                                        );
-                                    }
-                                    Err(_) => {
-                                        let _ = push_event(
-                                            owner,
-                                            NetEvent::Error {
-                                                msg: "tcp send fail",
-                                            },
-                                        );
-                                    }
-                                }
-                            } else {
-                                let _ = push_event(
-                                    owner,
-                                    NetEvent::Error {
-                                        msg: "tcp not ready",
-                                    },
-                                );
-                            }
+                            // Don't drop on backpressure; queue and flush when the socket becomes writable.
+                            // This is especially important for TLS handshakes (ClientHello) right after connect.
+                            self.records[idx].tcp_tx.extend(data);
+                            self.flush_tcp_tx(idx);
                         } else {
                             let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                         }
@@ -640,52 +671,71 @@ impl NetService {
     }
 
     fn poll_tcp(&mut self, idx: usize) -> bool {
-        let Some(rec) = self.records.get_mut(idx) else {
+        if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
             return false;
+        }
+
+        let (owner, handle, socket_handle) = {
+            let rec = &self.records[idx];
+            (rec.owner, rec.handle, rec.socket)
         };
-        if rec.kind != SocketKind::Tcp {
-            return false;
-        }
 
-        let owner = rec.owner;
-        let handle = rec.handle;
-        let socket = self.sockets.get_mut::<tcp::Socket>(rec.socket);
+        let mut should_remove = false;
+        let mut state: tcp::State;
 
-        let state = socket.state();
-        if rec.last_tcp_state != Some(state) {
-            rec.last_tcp_state = Some(state);
-            crate::log!("net: tcp state owner={} handle={} state={:?}\n", owner, handle.0, state);
-        }
+        {
+            let socket = self.sockets.get_mut::<tcp::Socket>(socket_handle);
+            state = socket.state();
 
-        if socket.is_active() && socket.may_recv() {
-            let mut buf = [0u8; 2048];
-            while let Ok(len) = socket.recv_slice(&mut buf) {
-                if len == 0 {
-                    break;
+            let last = self.records[idx].last_tcp_state;
+            if last != Some(state) {
+                self.records[idx].last_tcp_state = Some(state);
+                crate::log!(
+                    "net: tcp state owner={} handle={} state={:?}\n",
+                    owner,
+                    handle.0,
+                    state
+                );
+            }
+
+            if socket.is_active() && socket.may_recv() {
+                let mut buf = [0u8; 2048];
+                while let Ok(len) = socket.recv_slice(&mut buf) {
+                    if len == 0 {
+                        break;
+                    }
+                    let data = buf[..len].to_vec();
+                    let _ = push_event(owner, NetEvent::TcpData { handle, data });
                 }
-                let data = buf[..len].to_vec();
-                let _ = push_event(owner, NetEvent::TcpData { handle, data });
+            }
+
+            // If the peer has closed its send side, smoltcp enters CLOSE-WAIT and will
+            // remain there until the local side closes too. Many of our higher-level
+            // protocols (HTTP demos, TLS demo) use "Connection: close" and expect to
+            // observe a close event without needing an explicit `Close` command.
+            //
+            // Convert CLOSE-WAIT into an orderly local close so we eventually emit
+            // `NetEvent::Closed`.
+            if socket.state() == tcp::State::CloseWait {
+                socket.close();
+                state = socket.state();
+            }
+
+            if !socket.is_open() {
+                should_remove = true;
             }
         }
 
-        // If the peer has closed its send side, smoltcp enters CLOSE-WAIT and will
-        // remain there until the local side closes too. Many of our higher-level
-        // protocols (HTTP demos, TLS demo) use "Connection: close" and expect to
-        // observe a close event without needing an explicit `Close` command.
-        //
-        // Convert CLOSE-WAIT into an orderly local close so we eventually emit
-        // `NetEvent::Closed`.
-        if socket.state() == tcp::State::CloseWait {
-            socket.close();
-        }
+        // Flush any queued outbound bytes opportunistically (after dropping the previous socket borrow).
+        self.flush_tcp_tx(idx);
 
-        if socket.state() == tcp::State::Established && !rec.established {
+        if state == tcp::State::Established && !self.records[idx].established {
             crate::log!(
                 "net: tcp established branch owner={} handle={}\n",
                 owner,
                 handle.0
             );
-            rec.established = true;
+            self.records[idx].established = true;
             let ok = push_event(owner, NetEvent::TcpEstablished { handle });
             crate::log!(
                 "net: tcp established event owner={} handle={} queued={}\n",
@@ -695,7 +745,7 @@ impl NetService {
             );
         }
 
-        if !socket.is_open() {
+        if should_remove {
             let _ = push_event(owner, NetEvent::Closed { handle });
             self.remove_record(handle);
             return true;
