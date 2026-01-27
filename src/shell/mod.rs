@@ -22,8 +22,8 @@ pub(crate) use interface::{ShellBackend, ShellIo};
 
 pub(crate) mod backends;
 pub(crate) use backends::{
-    NetTcpShellBackend, UsbCdcShellBackend, Uart1Com1Backend, NET_TCP_SHELL_BACKEND,
-    UART1_COM1_BACKEND, USB_CDC_SHELL_BACKEND,
+    NetTcpShellBackend, Uart1Com1Backend, NET_TCP_SHELL_BACKEND,
+    UART1_COM1_BACKEND
 };
 
 pub(crate) mod uart1_com1;
