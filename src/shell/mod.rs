@@ -289,20 +289,14 @@ enum IoArg {
 }
 
 fn io_read_dst_file_for_append(path: &str) -> Result<Vec<u8>, crate::disc::files::FsError> {
-    match crate::disc::files::Fs::read_file(path) {
-        Ok(bytes) => Ok(bytes),
-        Err(crate::disc::files::FsError::Read(crate::disc::files::UsbFsReadError::OpenFailed)) => {
-            Ok(Vec::new())
-        }
-        Err(e) => Err(e),
-    }
+    crate::surface::io::kfs::read_file_for_append(path)
 }
 
 #[embassy_executor::task]
 async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
     let src_bytes = match src {
         IoArg::Slot(id) => crate::matrix::blob_snapshot(id).unwrap_or_default(),
-        IoArg::Path(path) => match crate::disc::files::Fs::read_file(path.as_str()) {
+        IoArg::Path(path) => match crate::surface::io::kfs::read_file(path.as_str()) {
             Ok(bytes) => bytes,
             Err(e) => {
                 crate::matrix::clear_lines(slot_id);
@@ -374,7 +368,7 @@ async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
 #[embassy_executor::task]
 async fn out_matrix_job(slot_id: u8, path: String<160>) {
     // File I/O is intentionally not part of txt editor; it happens here.
-    match crate::disc::files::Fs::read_file(path.as_str()) {
+    match crate::surface::io::kfs::read_file(path.as_str()) {
         Ok(bytes) => {
             fill_slot_from_blob(slot_id, bytes);
             crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
@@ -399,7 +393,7 @@ async fn in_matrix_job(slot_id: u8, src_slot: u8, path: String<160>) {
         return;
     }
 
-    match crate::disc::files::Fs::write_file(path.as_str(), snapshot.as_slice()) {
+    match crate::surface::io::kfs::write_file(path.as_str(), snapshot.as_slice()) {
         Ok(()) => {
             crate::matrix::clear_lines(slot_id);
             crate::matrix::push_line(slot_id, "in: ok");

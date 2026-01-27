@@ -1,17 +1,86 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn run(cmd: &mut Command) {
+    let status = cmd.status().unwrap_or_else(|e| panic!("spawn {:?} failed: {e}", cmd));
+    if !status.success() {
+        panic!("command {:?} failed with status {status}", cmd);
+    }
+}
+
+fn ensure_quickjs_checkout(out_dir: &Path) -> PathBuf {
+    // User override: point directly at a QuickJS source tree.
+    if let Ok(p) = env::var("TRUEOS_QJS_QUICKJS_DIR") {
+        return PathBuf::from(p);
+    }
+
+    // Dev convenience: if the workspace has a top-level quickjs/ checkout, use it.
+    // This preserves the old behavior for contributors who already cloned it.
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let workspace_quickjs = manifest_dir.join("..").join("..").join("quickjs");
+    if workspace_quickjs.join("quickjs.c").is_file() {
+        return workspace_quickjs;
+    }
+
+    // Otherwise, fetch QuickJS into OUT_DIR so `cargo build` works without submodules
+    // or pre-cloned dependencies in the repo.
+    let repo = env::var("TRUEOS_QJS_QUICKJS_REPO").unwrap_or_else(|_| "https://github.com/bellard/quickjs".to_string());
+    let reference = env::var("TRUEOS_QJS_QUICKJS_REF").unwrap_or_else(|_| "master".to_string());
+
+    // If Cargo is in offline mode, don't try to hit the network.
+    if env::var_os("CARGO_NET_OFFLINE").is_some() {
+        panic!(
+            "QuickJS sources not found in workspace and CARGO_NET_OFFLINE is set. \
+Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
+        );
+    }
+
+    let checkout_dir = out_dir.join("quickjs-src");
+    if checkout_dir.join("quickjs.c").is_file() {
+        return checkout_dir;
+    }
+
+    // Fresh clone.
+    // Note: This is intentionally *not pinned* by default (per user choice).
+    // You can pin by setting TRUEOS_QJS_QUICKJS_REF=<commit-or-tag>.
+    std::fs::create_dir_all(out_dir).expect("create OUT_DIR");
+    if checkout_dir.exists() {
+        let _ = std::fs::remove_dir_all(&checkout_dir);
+    }
+
+    // Prefer git because it's widely available and QuickJS doesn't always publish tarball tags.
+    run(
+        Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg("--branch")
+            .arg(&reference)
+            .arg(&repo)
+            .arg(&checkout_dir),
+    );
+
+    if !checkout_dir.join("quickjs.c").is_file() {
+        panic!(
+            "Fetched QuickJS but did not find quickjs.c at {}",
+            checkout_dir.display()
+        );
+    }
+
+    checkout_dir
+}
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let quickjs_dir = manifest_dir.join("..").join("..").join("quickjs");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
 
-    let quickjs_probe = quickjs_dir.join("quickjs.c");
-    if !quickjs_probe.is_file() {
-        panic!(
-            "Missing QuickJS sources at {}. Fetch deps first (e.g. run `make deps` or `./scripts/fetch-deps.sh`).",
-            quickjs_probe.display()
-        );
-    }
+    println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_DIR");
+    println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_REPO");
+    println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_REF");
+    println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
+
+    let quickjs_dir = ensure_quickjs_checkout(&out_dir);
 
     // Freestanding C ABI stubs for printf/vsnprintf/etc.
     // Kept in the kernel's surface layer so both C and Rust can share the same routing.
