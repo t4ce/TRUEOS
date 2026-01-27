@@ -800,6 +800,14 @@ async fn net_http_smoke_for_device(idx: usize) {
 
 #[task]
 pub async fn net_http_smoke_task() {
+    net_http_smoke_run().await;
+}
+
+/// Runs the HTTP smoke test sequentially across all detected NICs.
+///
+/// This is a plain async function (not an Embassy task) so other tasks can
+/// await it to sequence boot demos.
+pub async fn net_http_smoke_run() {
     if NET_HTTP_SMOKE_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }

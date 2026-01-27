@@ -63,12 +63,39 @@ use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use embassy_executor::{raw::Executor, Spawner};
+use embassy_executor::{raw::Executor, task, Spawner};
 use trueos_qjs as qjs;
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
+
+#[task]
+async fn boot_net_smoke_task() {
+    crate::log!("net-boot: starting http smoke\n");
+    crate::net::html::net_http_smoke_run().await;
+
+    crate::log!("net-boot: starting https (tls) demo\n");
+    if let Some(slot) = crate::matrix::alloc_slot("https boot") {
+        let host: heapless::String<96> = heapless::String::new();
+        crate::tls_demo::tls_demo_matrix_job_run(slot, host).await;
+        crate::log!("net-boot: https (tls) demo finished\n");
+    } else {
+        crate::log!("net-boot: matrix full; skipping https demo\n");
+    }
+}
+
+#[task]
+async fn boot_https_demo_task() {
+    crate::log!("net-boot: starting https (tls) demo\n");
+    if let Some(slot) = crate::matrix::alloc_slot("https boot") {
+        let host: heapless::String<96> = heapless::String::new();
+        crate::tls_demo::tls_demo_matrix_job_run(slot, host).await;
+        crate::log!("net-boot: https (tls) demo finished\n");
+    } else {
+        crate::log!("net-boot: matrix full; skipping https demo\n");
+    }
+}
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
@@ -278,25 +305,21 @@ pub extern "C" fn kmain() -> ! {
                 crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
             }
         }
+
         if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
             crate::log!("net: spawn net_service_task failed: {:?}\n", e);
         }
+
         if let Err(e) = spawner.spawn(net::tls_socket::tls_socket_service_task()) {
-            crate::log!("net: spawn tls_socket_service_task failed: {:?}\n", e);
-        }
-        if let Err(e) = spawner.spawn(net::html::net_http_smoke_task()) {
-            crate::log!("net: spawn net_http_smoke_task failed: {:?}\n", e);
+            crate::log!("tls-socket: spawn tls_socket_service_task failed: {:?}\n", e);
         }
 
-        // Auto-run the HTTPS (TLS) smoke/demo after the plain HTTP smoke.
-        if let Some(slot) = crate::matrix::alloc_slot("https boot") {
-            let host: heapless::String<96> = heapless::String::new();
-            if let Err(e) = spawner.spawn(crate::tls_demo::tls_demo_matrix_job(slot, host)) {
-                crate::log!("https: spawn tls_demo_matrix_job failed: {:?}\n", e);
-            }
-        } else {
-            crate::log!("https: matrix full; skipping boot demo\n");
+        // NOTE: HTTP smoke disabled while debugging TLS.
+
+        if let Err(e) = spawner.spawn(boot_https_demo_task()) {
+            crate::log!("net-boot: spawn boot_https_demo_task failed: {:?}\n", e);
         }
+
         crate::log!("net-shell: spawning tcp listener on 4245\n");
         if let Err(e) = spawner.spawn(net::adapter::net_shell_task()) {
             crate::log!("net-shell: spawn net_shell_task failed: {:?}\n", e);
