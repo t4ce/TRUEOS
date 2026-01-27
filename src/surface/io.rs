@@ -542,6 +542,13 @@ pub mod cabi {
 	const NET_ERR_HTTP: i32 = -12;
 	const NET_ERR_TLS: i32 = -13;
 
+	// More granular timeout diagnostics (same “class” as NET_ERR_TIMEOUT).
+	// These intentionally live far from the base codes to avoid collisions.
+	const NET_ERR_TIMEOUT_DNS: i32 = -111;
+	const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
+	const NET_ERR_TIMEOUT_HEADERS: i32 = -113;
+	const NET_ERR_TIMEOUT_BODY: i32 = -114;
+
 	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
 		if bytes.is_empty() {
@@ -900,6 +907,123 @@ pub mod cabi {
 		None
 	}
 
+	fn parse_content_length(headers: &[u8]) -> Option<usize> {
+		let v = header_get_value(headers, b"content-length")?;
+		let s = core::str::from_utf8(v).ok()?;
+		let s = s.trim();
+		if s.is_empty() {
+			return None;
+		}
+		s.parse::<usize>().ok()
+	}
+
+	fn is_chunked_encoding(headers: &[u8]) -> bool {
+		let v = header_get_value(headers, b"transfer-encoding")
+			.or_else(|| header_get_value(headers, b"Transfer-Encoding"));
+		let Some(v) = v else {
+			return false;
+		};
+		let Ok(s) = core::str::from_utf8(v) else {
+			return false;
+		};
+		s.to_ascii_lowercase().contains("chunked")
+	}
+
+	fn parse_redirect_location(url: &ParsedUrl, headers: &[u8]) -> Option<String> {
+		let v = header_get_value(headers, b"location")?;
+		let s = core::str::from_utf8(v).ok()?.trim();
+		if s.is_empty() {
+			return None;
+		}
+		if s.starts_with("https://") {
+			return Some(s.to_string());
+		}
+		if s.starts_with('/') {
+			return Some(alloc::format!("https://{}{}", url.host, s));
+		}
+		None
+	}
+
+	fn parse_hex_usize(s: &[u8]) -> Option<usize> {
+		let mut n: usize = 0;
+		let mut any = false;
+		for &b in s {
+			let v = match b {
+				b'0'..=b'9' => (b - b'0') as usize,
+				b'a'..=b'f' => (b - b'a' + 10) as usize,
+				b'A'..=b'F' => (b - b'A' + 10) as usize,
+				_ => return None,
+			};
+			any = true;
+			n = n.checked_mul(16)?.checked_add(v)?;
+		}
+		if any { Some(n) } else { None }
+	}
+
+	/// Attempt to decode a chunked HTTP/1.1 body.
+	///
+	/// Returns:
+	/// - `Ok(Some(decoded))` when a full terminating chunk has been seen.
+	/// - `Ok(None)` when more bytes are needed.
+	/// - `Err(NET_ERR_HTTP)` on malformed input.
+	fn try_decode_chunked_body(body: &[u8], max_bytes: usize) -> core::result::Result<Option<Vec<u8>>, i32> {
+		let mut out: Vec<u8> = Vec::new();
+		let mut i = 0usize;
+		loop {
+			// Find chunk-size line end.
+			let mut line_end = None;
+			let mut j = i;
+			while j + 1 < body.len() {
+				if body[j] == b'\r' && body[j + 1] == b'\n' {
+					line_end = Some(j);
+					break;
+				}
+				j += 1;
+			}
+			let Some(line_end) = line_end else {
+				return Ok(None);
+			};
+
+			// Parse hex size up to optional ";".
+			let line = &body[i..line_end];
+			let hex_part = match line.iter().position(|&b| b == b';') {
+				Some(pos) => &line[..pos],
+				None => line,
+			};
+			let hex_part = hex_part.iter().copied().filter(|b| *b != b' ' && *b != b'\t').collect::<Vec<u8>>();
+			let Some(chunk_len) = parse_hex_usize(hex_part.as_slice()) else {
+				return Err(NET_ERR_HTTP);
+			};
+			i = line_end + 2; // skip CRLF
+
+			if chunk_len == 0 {
+				// Need at least trailing CRLF (and possibly trailers ending with CRLFCRLF).
+				if body.len() < i + 2 {
+					return Ok(None);
+				}
+				// Accept either immediate CRLF or full trailer block; easiest is to require CRLFCRLF.
+				if body[i..].windows(4).any(|w| w == b"\r\n\r\n") {
+					return Ok(Some(out));
+				}
+				return Ok(None);
+			}
+
+			// Need chunk data + trailing CRLF.
+			if body.len() < i + chunk_len + 2 {
+				return Ok(None);
+			}
+			if out.len().saturating_add(chunk_len) > max_bytes {
+				return Err(NET_ERR_HTTP);
+			}
+			out.extend_from_slice(&body[i..i + chunk_len]);
+			i += chunk_len;
+			if body.get(i) != Some(&b'\r') || body.get(i + 1) != Some(&b'\n') {
+				return Err(NET_ERR_HTTP);
+			}
+			i += 2;
+		}
+	}
+
 	// --- Blocking HTTPS fetch (drives the Embassy executor while waiting) ---
 
 	const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
@@ -1081,6 +1205,15 @@ pub mod cabi {
 	}
 
 	fn https_get_body_blocking(url: &ParsedUrl, timeout_ms: u64, max_bytes: usize) -> core::result::Result<Vec<u8>, i32> {
+		https_get_body_blocking_inner(url, timeout_ms, max_bytes, 4)
+	}
+
+	fn https_get_body_blocking_inner(
+		url: &ParsedUrl,
+		timeout_ms: u64,
+		max_bytes: usize,
+		redirects_left: u8,
+	) -> core::result::Result<Vec<u8>, i32> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::tls::{TlsClientConfig, TlsRoots};
@@ -1090,7 +1223,7 @@ pub mod cabi {
 
 		for dev_idx in 0..dev_count {
 			let Some(ip) = resolve_ipv4_blocking(dev_idx, url.host.as_str(), 1500) else {
-				last_err = NET_ERR_TIMEOUT;
+				last_err = NET_ERR_TIMEOUT_DNS;
 				continue;
 			};
 
@@ -1144,6 +1277,43 @@ pub mod cabi {
 								let take = data.len().min(room);
 								plaintext.extend_from_slice(&data[..take]);
 							}
+
+							// If we already have full headers, we may be able to finish without waiting for close.
+							if let Some(hdr_end) = find_http_header_end(&plaintext) {
+								let headers = &plaintext[..hdr_end];
+								let status = parse_http_status(headers).unwrap_or(0);
+								if status == 200 {
+									let body = &plaintext[hdr_end..];
+									if is_chunked_encoding(headers) {
+										match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+											Ok(Some(decoded)) => return Ok(decoded),
+											Ok(None) => {}
+											Err(e) => {
+												last_err = e;
+												break;
+											}
+									}
+									} else if let Some(cl) = parse_content_length(headers) {
+										if body.len() >= cl {
+											return Ok(body[..cl].to_vec());
+										}
+									}
+								} else if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)
+									&& redirects_left > 0
+								{
+									if let Some(loc) = parse_redirect_location(url, headers) {
+										let parsed = parse_url(loc.as_str())?;
+										return https_get_body_blocking_inner(
+											&parsed,
+											timeout_ms,
+											max_bytes,
+											redirects_left.saturating_sub(1),
+										);
+									}
+									last_err = NET_ERR_HTTP;
+									break;
+								}
+							}
 						}
 						TlsEvent::Closed { handle } => {
 							if tls_handle != Some(handle) {
@@ -1185,7 +1355,35 @@ pub mod cabi {
 
 				let now = embassy_time_driver::now() as u64;
 				if now >= deadline {
-					last_err = NET_ERR_TIMEOUT;
+					let hdr_end = find_http_header_end(&plaintext);
+					let have_hdr = hdr_end.is_some();
+					let (status, body_len) = if let Some(hdr_end) = hdr_end {
+						(
+							parse_http_status(&plaintext[..hdr_end]).unwrap_or(0) as u32,
+							plaintext.len().saturating_sub(hdr_end) as u32,
+						)
+					} else {
+						(0, 0)
+					};
+					crate::log!(
+						"qjs-fetch: timeout dev={} host={} port={} http_sent={} bytes={} have_hdr={} status={} body_bytes={}\n",
+						dev_idx,
+						url.host.as_str(),
+						url.port,
+						http_sent,
+						plaintext.len(),
+						have_hdr,
+						status,
+						body_len,
+					);
+
+					last_err = if tls_handle.is_none() || !http_sent {
+						NET_ERR_TIMEOUT_CONNECT
+					} else if !have_hdr {
+						NET_ERR_TIMEOUT_HEADERS
+					} else {
+						NET_ERR_TIMEOUT_BODY
+					};
 					break;
 				}
 				poll_executor_for_progress();
@@ -1247,7 +1445,7 @@ pub mod cabi {
 			return NET_ERR_BAD_URL;
 		}
 
-		let body = match https_get_body_blocking(&parsed, 12_000, 2 * 1024 * 1024) {
+		let body = match https_get_body_blocking(&parsed, 30_000, 2 * 1024 * 1024) {
 			Ok(b) => b,
 			Err(e) => return e,
 		};
