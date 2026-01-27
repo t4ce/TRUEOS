@@ -269,6 +269,12 @@ pub extern "C" fn kmain() -> ! {
     net::init();
     let net_ready = net::mac_address().is_some();
     if net_ready {
+        let count = net::device_count();
+        for idx in 0..count {
+            if let Err(e) = spawner.spawn(net::adapter::net_poll_task(idx)) {
+                crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
+            }
+        }
         if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
             crate::log!("net: spawn net_service_task failed: {:?}\n", e);
         }

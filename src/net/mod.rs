@@ -3,7 +3,6 @@ pub mod core;
 pub mod device;
 pub mod e1000;
 pub mod html;
-pub mod https;
 pub mod ring;
 pub mod r8169;
 pub mod vio;

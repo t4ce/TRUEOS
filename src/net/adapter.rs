@@ -928,6 +928,20 @@ fn now() -> Instant {
     Instant::from_millis(ms)
 }
 
+pub const MAX_NET_DEVICES: usize = 8;
+
+/// Per-NIC RX poll loop.
+///
+/// This decouples device RX polling from the smoltcp/service loop so that
+/// adding NICs doesn't make a single task heavier.
+#[task(pool_size = MAX_NET_DEVICES)]
+pub async fn net_poll_task(index: usize) {
+    loop {
+        crate::net::poll_at(index);
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
 #[task]
 pub async fn net_service_task() {
     let count = crate::net::device_count();
@@ -950,8 +964,6 @@ pub async fn net_service_task() {
     let mut services: Vec<NetService> = (0..count).map(NetService::new).collect();
 
     loop {
-        crate::net::poll_all();
-
         for svc in services.iter_mut() {
             svc.tick();
         }

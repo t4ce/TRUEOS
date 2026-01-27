@@ -1,3 +1,6 @@
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
 
 use crate as qjs;
@@ -516,15 +519,176 @@ unsafe extern "C" fn trueos_module_loader(
     module_name: *const c_char,
     _opaque: *mut core::ffi::c_void,
 ) -> *mut qjs::JSModuleDef {
-    load_native_module(ctx, module_name)
+    let m = load_native_module(ctx, module_name);
+    if !m.is_null() {
+        return m;
+    }
+
+    load_fs_module(ctx, module_name)
+}
+
+fn path_is_relative(spec: &[u8]) -> bool {
+    spec.starts_with(b"./") || spec.starts_with(b"../")
+}
+
+fn path_is_absolute(spec: &[u8]) -> bool {
+    spec.starts_with(b"/")
+}
+
+fn normalize_path_bytes(path: &[u8]) -> Vec<u8> {
+    // Very small path normalizer:
+    // - keeps a leading '/'
+    // - removes '.' segments
+    // - resolves '..' segments
+    let is_abs = path.starts_with(b"/");
+    let mut parts: Vec<&[u8]> = Vec::new();
+
+    for seg in path.split(|&b| b == b'/') {
+        if seg.is_empty() || seg == b"." {
+            continue;
+        }
+        if seg == b".." {
+            if let Some(_) = parts.pop() {
+                continue;
+            }
+            // If we're absolute, don't allow escaping above root.
+            if is_abs {
+                continue;
+            }
+            parts.push(seg);
+            continue;
+        }
+        parts.push(seg);
+    }
+
+    let mut out = Vec::new();
+    if is_abs {
+        out.push(b'/');
+    }
+    for (i, seg) in parts.iter().enumerate() {
+        if i != 0 {
+            out.push(b'/');
+        }
+        out.extend_from_slice(seg);
+    }
+    out
+}
+
+unsafe fn js_strdup(ctx: *mut qjs::JSContext, bytes: &[u8]) -> *mut c_char {
+    let buf = qjs::js_malloc(ctx, bytes.len() + 1) as *mut u8;
+    if buf.is_null() {
+        return core::ptr::null_mut();
+    }
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    *buf.add(bytes.len()) = 0;
+    buf as *mut c_char
+}
+
+unsafe extern "C" fn trueos_module_normalize(
+    ctx: *mut qjs::JSContext,
+    module_base_name: *const c_char,
+    module_name: *const c_char,
+    _opaque: *mut core::ffi::c_void,
+) -> *mut c_char {
+    if module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let spec = CStr::from_ptr(module_name).to_bytes();
+
+    // Leave native/bare specifiers unchanged; loader can still accept absolute paths.
+    if path_is_absolute(spec) {
+        let normalized = normalize_path_bytes(spec);
+        return js_strdup(ctx, &normalized);
+    }
+
+    if !path_is_relative(spec) {
+        return js_strdup(ctx, spec);
+    }
+
+    // Resolve relative specifiers against the directory part of the base name.
+    if module_base_name.is_null() {
+        return js_strdup(ctx, spec);
+    }
+
+    let base = CStr::from_ptr(module_base_name).to_bytes();
+    let base_dir = match base.iter().rposition(|&b| b == b'/') {
+        Some(pos) => &base[..pos],
+        None => b"",
+    };
+
+    let mut combined = Vec::new();
+    if !base_dir.is_empty() {
+        combined.extend_from_slice(base_dir);
+        combined.push(b'/');
+    }
+    combined.extend_from_slice(spec);
+
+    let normalized = normalize_path_bytes(&combined);
+    js_strdup(ctx, &normalized)
+}
+
+unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -> *mut qjs::JSModuleDef {
+    if module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let path = CStr::from_ptr(module_name).to_bytes();
+    // Only attempt filesystem loading for absolute paths or explicit relative paths.
+    if !(path_is_absolute(path) || path_is_relative(path)) {
+        return core::ptr::null_mut();
+    }
+
+    let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
+    if need < 0 {
+        return core::ptr::null_mut();
+    }
+    let need = need as usize;
+
+    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
+    if buf.is_null() {
+        return core::ptr::null_mut();
+    }
+    *buf.add(need) = 0;
+
+    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, need);
+    if got < 0 {
+        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+        return core::ptr::null_mut();
+    }
+    let got = got as usize;
+
+    let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
+    let val = qjs::JS_Eval(
+        ctx,
+        buf as *const c_char,
+        got,
+        module_name,
+        flags,
+    );
+
+    qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+
+    if val.is_exception() {
+        return core::ptr::null_mut();
+    }
+
+    if val.tag != qjs::JS_TAG_MODULE {
+        qjs::js_free_value(ctx, val);
+        return core::ptr::null_mut();
+    }
+
+    val.u.ptr as *mut qjs::JSModuleDef
 }
 
 /// Install the TRUEOS module loader into a runtime.
 ///
-/// Currently provides a native module named `"complex"`.
+/// Provides:
+/// - Native modules: `"complex"`, `"fs"`
+/// - Filesystem-backed ES modules: `import "/path/to/mod.mjs"` and relative imports.
 pub unsafe fn install(rt: *mut qjs::JSRuntime) {
     if rt.is_null() {
         return;
     }
-    qjs::JS_SetModuleLoaderFunc(rt, None, Some(trueos_module_loader), core::ptr::null_mut());
+    qjs::JS_SetModuleLoaderFunc(rt, Some(trueos_module_normalize), Some(trueos_module_loader), core::ptr::null_mut());
 }

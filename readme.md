@@ -1,6 +1,5 @@
 # Steps Fresh Sys
-# CARGO_BUILD_TARGET=/home/t4ce/Dokumente/TrueOS/86_64.json cargo outdated -R
-# cargo upgrade
+
 # clone repo , then
 git submodule init 
 git submodule update
@@ -8,8 +7,14 @@ sudo apt update
 sudo apt install -y rustup
 sudo apt install autoconf automake mtools nasm xorriso
 sudo apt-get install qemu-system
-
 sudo apt install gdb
+
+# cargo install cargo-outdated
+# CARGO_BUILD_TARGET=/home/t4ce/Dokumente/TrueOS/86_64.json cargo outdated -R
+# cargo upgrade
+
+
+
 
 check disc files after install
 // mdir -i disk.img@@$((2048*512)) ::
