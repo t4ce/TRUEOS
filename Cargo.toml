@@ -38,6 +38,9 @@ rustls = { version = "0.23", default-features = false, features = ["custom-provi
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
 webpki-roots = { version = "0.26", default-features = false }
 
+# Used by the TLS demo to decode gzip/deflate HTTP bodies (no_std + alloc).
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
 [profile.dev]
 panic = "abort"
 
