@@ -752,6 +752,17 @@ impl NetService {
             }
         }
 
+        // If the peer has closed its send side, smoltcp enters CLOSE-WAIT and will
+        // remain there until the local side closes too. Many of our higher-level
+        // protocols (HTTP demos, TLS demo) use "Connection: close" and expect to
+        // observe a close event without needing an explicit `Close` command.
+        //
+        // Convert CLOSE-WAIT into an orderly local close so we eventually emit
+        // `NetEvent::Closed`.
+        if socket.state() == tcp::State::CloseWait {
+            socket.close();
+        }
+
         if socket.state() == tcp::State::Established && !rec.established {
             crate::log!(
                 "net: tcp established branch owner={} handle={}\n",
