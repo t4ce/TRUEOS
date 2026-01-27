@@ -8,6 +8,7 @@ static mut QJS_SHELL_IO: Option<&'static dyn ShellBackend> = None;
 
 const QJS_FS_BASE_DIR: &str = "/qjs";
 const QJS_CDN_DIR: &str = "/qjs/cdn";
+const ESM_SH_PREFIX: &str = "https://esm.sh/";
 
 extern "C" {
     fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
@@ -76,6 +77,14 @@ fn split_url(s: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     Some((scheme, authority, path))
+}
+
+fn url_origin_prefix(s: &str) -> Option<String> {
+    let (scheme, authority, _path) = split_url(s)?;
+    let mut out = String::new();
+    out.push_str(scheme);
+    out.push_str(authority);
+    Some(out)
 }
 
 fn normalize_path_str(path: &str) -> String {
@@ -198,6 +207,20 @@ unsafe extern "C" fn trueos_module_normalize(
         return js_alloc_cstring(ctx, name);
     }
 
+    // If base is a URL, treat "/foo" as an origin-relative URL path.
+    if name.starts_with('/') && !module_base_name.is_null() {
+        let base_bytes = CStr::from_ptr(module_base_name).to_bytes();
+        if let Ok(base) = core::str::from_utf8(base_bytes) {
+            if spec_is_url(base) {
+                if let Some(mut origin) = url_origin_prefix(base) {
+                    let norm_path = normalize_path_str(name);
+                    origin.push_str(norm_path.as_str());
+                    return js_alloc_cstring(ctx, origin.as_str());
+                }
+            }
+        }
+    }
+
     if (name.starts_with("./") || name.starts_with("../")) && !module_base_name.is_null() {
         let base_bytes = CStr::from_ptr(module_base_name).to_bytes();
         if let Ok(base) = core::str::from_utf8(base_bytes) {
@@ -209,7 +232,6 @@ unsafe extern "C" fn trueos_module_normalize(
         }
     }
 
-    // Map bare specifiers to /qjs/<name>.mjs
     // Map relative specifiers against the base module path.
     let normalized = if name.starts_with('/') {
         String::from(name)
@@ -225,19 +247,24 @@ unsafe extern "C" fn trueos_module_normalize(
         };
         normalize_join(base_dir, name)
     } else {
-        let mut p = String::new();
-        p.push_str(QJS_FS_BASE_DIR);
-        p.push('/');
-        p.push_str(name);
-        p
+        // Bare specifiers resolve through esm.sh to avoid implementing npm resolution.
+        let mut u = String::new();
+        u.push_str(ESM_SH_PREFIX);
+        u.push_str(name);
+        u
     };
 
-    let normalized = if has_extension(&normalized) {
-        normalized
+    // Only auto-append ".mjs" for filesystem paths.
+    let normalized = if normalized.starts_with('/') {
+        if has_extension(&normalized) {
+            normalized
+        } else {
+            let mut p = normalized;
+            p.push_str(".mjs");
+            p
+        }
     } else {
-        let mut p = normalized;
-        p.push_str(".mjs");
-        p
+        normalized
     };
 
     js_alloc_cstring(ctx, normalized.as_str())
@@ -248,6 +275,39 @@ unsafe extern "C" fn trueos_module_loader(
     module_name: *const c_char,
     _opaque: *mut core::ffi::c_void,
 ) -> *mut trueos_qjs::JSModuleDef {
+    fn push_i32_dec(out: &mut String, v: i32) {
+        if v == 0 {
+            out.push('0');
+            return;
+        }
+        let neg = v < 0;
+        let mut n = if neg { -(v as i64) as u64 } else { v as u64 };
+        let mut buf = [0u8; 16];
+        let mut i = buf.len();
+        while n != 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        if neg {
+            out.push('-');
+        }
+        for &b in &buf[i..] {
+            out.push(b as char);
+        }
+    }
+
+    unsafe fn throw_error(ctx: *mut trueos_qjs::JSContext, msg: &str) {
+        let err = trueos_qjs::JS_NewError(ctx);
+        if err.is_exception() {
+            return;
+        }
+
+        let m = trueos_qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
+        let _ = trueos_qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
+        let _ = trueos_qjs::JS_Throw(ctx, err);
+    }
+
     // First, try built-in native modules (e.g. "complex").
     let native = trueos_qjs::trueos_modules::load_native_module(ctx, module_name);
     if !native.is_null() {
@@ -278,12 +338,28 @@ unsafe extern "C" fn trueos_module_loader(
             cache_path.as_bytes().len(),
         );
         if rc != 0 {
+            let mut msg = String::new();
+            msg.push_str("fetch-to-cache failed rc=");
+            push_i32_dec(&mut msg, rc);
+            msg.push_str(" url=");
+            msg.push_str(path);
+            msg.push_str(" cache=");
+            msg.push_str(cache_path.as_str());
+            throw_error(ctx, msg.as_str());
             return core::ptr::null_mut();
         }
 
         let bytes = match Fs::read_file(cache_path.as_str()) {
             Ok(b) => b,
-            Err(_) => return core::ptr::null_mut(),
+            Err(_) => {
+                let mut msg = String::new();
+                msg.push_str("read cached module failed url=");
+                msg.push_str(path);
+                msg.push_str(" cache=");
+                msg.push_str(cache_path.as_str());
+                throw_error(ctx, msg.as_str());
+                return core::ptr::null_mut();
+            }
         };
 
         // Compile using the URL as the module "filename" so base URL resolution works.
@@ -304,12 +380,22 @@ unsafe extern "C" fn trueos_module_loader(
     }
 
     if !path.starts_with('/') {
+        let mut msg = String::new();
+        msg.push_str("unsupported module specifier: ");
+        msg.push_str(path);
+        throw_error(ctx, msg.as_str());
         return core::ptr::null_mut();
     }
 
     let bytes = match Fs::read_file(path) {
         Ok(b) => b,
-        Err(_) => return core::ptr::null_mut(),
+        Err(_) => {
+            let mut msg = String::new();
+            msg.push_str("read module failed path=");
+            msg.push_str(path);
+            throw_error(ctx, msg.as_str());
+            return core::ptr::null_mut();
+        }
     };
 
     let val = trueos_qjs::JS_Eval(
@@ -367,25 +453,104 @@ unsafe extern "C" fn qjs_shell_print(
 }
 
 fn dump_exception(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext) {
+    fn i64_to_dec(buf: &mut [u8; 24], mut v: i64) -> &str {
+        if v == 0 {
+            buf[0] = b'0';
+            return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
+        }
+
+        let neg = v < 0;
+        if neg {
+            // Avoid overflow on i64::MIN by doing the conversion in i128.
+            let vv = -(v as i128);
+            let mut n = vv as u128;
+            let mut i = buf.len();
+            while n != 0 {
+                i -= 1;
+                buf[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+            i -= 1;
+            buf[i] = b'-';
+            return unsafe { core::str::from_utf8_unchecked(&buf[i..]) };
+        }
+
+        let mut n = v as u64;
+        let mut i = buf.len();
+        while n != 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
+    }
+
+    unsafe fn write_js_string(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext, val: trueos_qjs::JSValueConst) -> bool {
+        let cstr = trueos_qjs::js_to_cstring(ctx, val);
+        if cstr.is_null() {
+            return false;
+        }
+
+        let bytes = CStr::from_ptr(cstr).to_bytes();
+        if let Ok(s) = core::str::from_utf8(bytes) {
+            io.write_str(s);
+        } else {
+            for &b in bytes {
+                io.write_byte(b);
+            }
+        }
+        trueos_qjs::JS_FreeCString(ctx, cstr);
+        true
+    }
+
+    unsafe fn dump_prop(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext, obj: trueos_qjs::JSValueConst, key: &[u8], label: &str) {
+        let v = trueos_qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
+        if v.is_exception() {
+            let exc2 = trueos_qjs::JS_GetException(ctx);
+            io.write_str("qjs: exception while reading ");
+            io.write_str(label);
+            io.write_str(": ");
+            if !write_js_string(io, ctx, exc2) {
+                io.write_str("<toString failed>");
+            }
+            io.write_str("\r\n");
+            trueos_qjs::js_free_value(ctx, exc2);
+            return;
+        }
+
+        if v.tag != trueos_qjs::JS_TAG_UNDEFINED {
+            io.write_str("qjs: ");
+            io.write_str(label);
+            io.write_str(": ");
+            if !write_js_string(io, ctx, v) {
+                io.write_str("<toString failed>");
+                io.write_str(" (tag=");
+                let mut buf = [0u8; 24];
+                io.write_str(i64_to_dec(&mut buf, v.tag));
+                io.write_str(")");
+            }
+            io.write_str("\r\n");
+        }
+        trueos_qjs::js_free_value(ctx, v);
+    }
+
     unsafe {
         let exc = trueos_qjs::JS_GetException(ctx);
-        let cstr = trueos_qjs::js_to_cstring(ctx, exc);
-
         io.write_str("qjs: exception: ");
-        if !cstr.is_null() {
-            let bytes = CStr::from_ptr(cstr).to_bytes();
-            if let Ok(s) = core::str::from_utf8(bytes) {
-                io.write_str(s);
-            } else {
-                for &b in bytes {
-                    io.write_byte(b);
-                }
-            }
-            trueos_qjs::JS_FreeCString(ctx, cstr);
-        } else {
-            io.write_str("<toString failed>");
-        }
+        let _ = write_js_string(io, ctx, exc);
+
+        io.write_str(" (tag=");
+        let mut buf = [0u8; 24];
+        io.write_str(i64_to_dec(&mut buf, exc.tag));
+        io.write_str(")");
         io.write_str("\r\n");
+
+        // Try to print useful fields. QuickJS will ToObject() primitives like string/number.
+        if exc.tag != trueos_qjs::JS_TAG_NULL && exc.tag != trueos_qjs::JS_TAG_UNDEFINED {
+            dump_prop(io, ctx, exc, b"name\0", "name");
+            dump_prop(io, ctx, exc, b"message\0", "message");
+            dump_prop(io, ctx, exc, b"stack\0", "stack");
+        }
 
         trueos_qjs::js_free_value(ctx, exc);
     }
