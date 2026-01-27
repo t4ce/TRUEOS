@@ -441,7 +441,7 @@ fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
             );
         }
         if counter % 100_000_000 == 0 {
-            //globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
+            globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
         }
         counter = counter.wrapping_add(1);
     }
