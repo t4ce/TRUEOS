@@ -13,7 +13,7 @@ sudo apt install gdb
 
 cargo install cargo-outdated 
 cargo install cargo-edit --locked
-# (Note) This repo's kernel builds use a custom target JSON. Use `make iso` or pass `--target 86_64.json`.
+#  Use `make iso` or pass `--target 86_64.json`.
 cargo outdated -R
 cargo upgrade
 cargo update
@@ -85,6 +85,7 @@ ConWhite 	FF_FF_FF
 rm -f disk.img && truncate -s 1G disk.img
 mformat -i disk.img -F -v TRUEOS ::
 mmd -i disk.img ::/qjs
+mmd -i disk.img ::/qjs/cdn
 mcopy -o -s -i disk.img crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img
 mdir -i disk.img ::/qjs
@@ -92,6 +93,7 @@ mdir -i disk.img ::/qjs
 or
 
 mmd -i disk.img@@$((2048*512)) ::/qjs
+mmd -i disk.img@@$((2048*512)) ::/qjs/cdn
 mcopy -o -s -i disk.img@@$((2048*512)) crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img@@$((2048*512)) 
 mdir -i disk.img@@$((2048*512)) ::/qjs

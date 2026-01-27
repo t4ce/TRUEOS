@@ -214,6 +214,9 @@ extern "C" {
 
     pub fn JS_NewArrayBufferCopy(ctx: *mut JSContext, buf: *const u8, len: usize) -> JSValue;
 
+    pub fn JS_NewError(ctx: *mut JSContext) -> JSValue;
+    pub fn JS_Throw(ctx: *mut JSContext, obj: JSValue) -> JSValue;
+
     pub fn js_malloc(ctx: *mut JSContext, size: usize) -> *mut c_void;
     pub fn js_free(ctx: *mut JSContext, ptr: *mut c_void);
 
