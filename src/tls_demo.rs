@@ -762,8 +762,6 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                     }
                     TlsEvent::Closed { handle } => {
                         if tls_handle == Some(handle) {
-                            tls_handle = None;
-
                             // Parse/clean the HTTP response so chunked transfer encoding
                             // doesn't show up as chunk-size lines in the output.
                             let final_blob = if let Some(hdr_end) = find_http_header_end(&plaintext)
@@ -884,10 +882,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                             return true;
                         }
                     }
-                    TlsEvent::Error { msg, .. } => {
+                    TlsEvent::Error { msg } => {
                         crate::log!("tls_demo: net error (device={}): {}\n", dev_idx, msg);
                     }
-                    TlsEvent::TlsError { err, .. } => {
+                    TlsEvent::TlsError { err } => {
                         crate::log!("tls_demo: tls error (device={}): {:?}\n", dev_idx, err);
                         if let Some(h) = tls_handle {
                             let _ = cmds.push(TlsCommand::Close { handle: h });

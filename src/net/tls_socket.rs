@@ -106,11 +106,9 @@ pub enum TlsEvent {
         handle: NetHandle,
     },
     Error {
-        handle: Option<NetHandle>,
         msg: &'static str,
     },
     TlsError {
-        handle: Option<NetHandle>,
         err: TlsError,
     },
 }
@@ -127,8 +125,6 @@ static KERNEL_TIME: KernelTime = KernelTime;
 
 struct TlsConn {
     user_owner: &'static str,
-
-    net_owner: &'static str,
     net_cmds: &'static NetQueue<NetCommand>,
     net_events: &'static NetQueue<NetEvent>,
 
@@ -161,10 +157,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
         }
         Err(e) => {
             conn.closed = true;
-            let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError {
-                handle: conn.handle,
-                err: e,
-            });
+            let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
             if let Some(handle) = conn.handle {
                 let _ = conn.net_cmds.push(NetCommand::Close { handle });
             }
@@ -248,17 +241,13 @@ pub async fn tls_socket_service_task() {
                             Ok(c) => c,
                             Err(e) => {
                                 crate::log!("tls-socket: TlsClient::new failed: {:?}\n", e);
-                                let _ = push_tls_event(owner, TlsEvent::TlsError {
-                                    handle: None,
-                                    err: e,
-                                });
+                                let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
                                 continue;
                             }
                         };
 
-                        let mut conn = TlsConn {
+                        let conn = TlsConn {
                             user_owner: owner,
-                            net_owner,
                             net_cmds,
                             net_events,
                             handle: None,
@@ -278,10 +267,7 @@ pub async fn tls_socket_service_task() {
                             }
                             if let Err(e) = conn.tls.write_plaintext(&data) {
                                 conn.closed = true;
-                                let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError {
-                                    handle: Some(handle),
-                                    err: e,
-                                });
+                                let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
                                 let _ = conn.net_cmds.push(NetCommand::Close { handle });
                                 continue;
                             }
@@ -339,10 +325,7 @@ pub async fn tls_socket_service_task() {
                             Ok(p) => p,
                             Err(e) => {
                                 conns[idx].closed = true;
-                                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::TlsError {
-                                    handle: Some(handle),
-                                    err: e,
-                                });
+                                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::TlsError { err: e });
                                 let _ = conns[idx].net_cmds.push(NetCommand::Close { handle });
                                 continue;
                             }
@@ -378,7 +361,6 @@ pub async fn tls_socket_service_task() {
                             msg
                         );
                         let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error {
-                            handle: conns[idx].handle,
                             msg,
                         });
                     }

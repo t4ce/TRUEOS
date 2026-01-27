@@ -362,8 +362,6 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                 }
                 NetEvent::Closed { handle } => {
                     if tcp_handle == Some(handle) {
-                        tcp_handle = None;
-
                         // We expect the server to close (Connection: close). Finish now.
                         let hdr_end = find_http_header_end(&rx);
                         let body_off = hdr_end.unwrap_or(0);

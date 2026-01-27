@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 
 use crate::net::core::VendorAdapter;
-use crate::net::device::{DescFormat, LinkState, VendorNetAdapter};
 use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
 
@@ -21,14 +20,12 @@ const VIRTIO_PCI_REG_QUEUE_SIZE: u16 = 0x0C;
 const VIRTIO_PCI_REG_QUEUE_SELECT: u16 = 0x0E;
 const VIRTIO_PCI_REG_QUEUE_NOTIFY: u16 = 0x10;
 const VIRTIO_PCI_REG_DEVICE_STATUS: u16 = 0x12;
-const VIRTIO_PCI_REG_ISR_STATUS: u16 = 0x13;
 const VIRTIO_PCI_REG_DEVICE_CFG: u16 = 0x14;
 const VIRTIO_PCI_REG_GUEST_PAGE_SIZE: u16 = 0x28;
 
 const VIRTIO_STATUS_ACK: u8 = 0x01;
 const VIRTIO_STATUS_DRIVER: u8 = 0x02;
 const VIRTIO_STATUS_DRIVER_OK: u8 = 0x04;
-const VIRTIO_STATUS_FAILED: u8 = 0x80;
 
 const VIRTIO_NET_F_MAC: u32 = 1 << 5;
 
@@ -57,7 +54,7 @@ struct VirtqUsedElem {
 
 struct VirtQueue {
     size: u16,
-    mem: DmaRegion,
+    _mem: DmaRegion,
     desc: *mut VirtqDesc,
     avail: *mut u8,
     used: *mut u8,
@@ -72,7 +69,7 @@ impl VirtQueue {
     fn new(size: u16, mem: DmaRegion, desc: *mut VirtqDesc, avail: *mut u8, used: *mut u8) -> Self {
         Self {
             size,
-            mem,
+            _mem: mem,
             desc,
             avail,
             used,
@@ -138,11 +135,6 @@ impl VirtioNetAdapter {
             }
         }
         out
-    }
-
-    pub fn init() -> Result<Self, ()> {
-        let dev = find_virtio_net_device().ok_or(())?;
-        Self::init_from_device(dev)
     }
 
     fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
@@ -235,61 +227,6 @@ impl VendorAdapter for VirtioNetAdapter {
     }
 }
 
-impl VendorNetAdapter for VirtioNetAdapter {
-    fn init_hw(&mut self) -> Result<(), ()> {
-        Ok(())
-    }
-
-    fn reset(&mut self) {}
-
-    fn read_link(&mut self) -> LinkState {
-        LinkState::up(1000, true)
-    }
-
-    fn write_regs(&mut self) {}
-
-    fn kick_tx(&mut self) {}
-
-    fn ack_irq(&mut self) {
-        let _ = read_isr(self.io_base);
-    }
-
-    fn enable_irq(&mut self) {}
-
-    fn disable_irq(&mut self) {}
-
-    fn rx_desc_format(&self) -> DescFormat {
-        DescFormat {
-            desc_len: RX_BUF_SIZE,
-            align: 16,
-            writable: true,
-        }
-    }
-
-    fn tx_desc_format(&self) -> DescFormat {
-        DescFormat {
-            desc_len: TX_BUF_SIZE,
-            align: 16,
-            writable: false,
-        }
-    }
-}
-
-fn find_virtio_net_device() -> Option<pci::PciDevice> {
-    let mut found = None;
-    pci::with_devices(|list| {
-        for dev in list {
-            if dev.vendor == VIRTIO_PCI_VENDOR
-                && (dev.device == VIRTIO_NET_DEVICE_LEGACY || dev.device == VIRTIO_NET_DEVICE_MODERN)
-            {
-                found = Some(*dev);
-                break;
-            }
-        }
-    });
-    found
-}
-
 fn find_virtio_net_devices() -> alloc::vec::Vec<pci::PciDevice> {
     let mut out = alloc::vec::Vec::new();
     pci::with_devices(|list| {
@@ -349,10 +286,6 @@ fn write_queue_addr(io_base: u16, pfn: u32) {
 
 fn notify_queue(io_base: u16, queue: u16) {
     unsafe { crate::portio::outw(io_base + VIRTIO_PCI_REG_QUEUE_NOTIFY, queue) };
-}
-
-fn read_isr(io_base: u16) -> u8 {
-    unsafe { crate::portio::inb(io_base + VIRTIO_PCI_REG_ISR_STATUS) }
 }
 
 fn read_mac(io_base: u16) -> [u8; 6] {
@@ -434,9 +367,6 @@ fn init_tx_buffers(txq: &mut VirtQueue) -> Result<(Vec<DmaRegion>, Vec<u16>), ()
 
 impl VirtioNetAdapter {
     fn poll_rx_queue(&mut self) {
-        static POLL_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-        let polls = POLL_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
-
         let used_idx = self.rxq.used_idx();
         let mut processed = 0u16;
         let mut guard = 0u16;
@@ -528,7 +458,7 @@ impl VirtioNetAdapter {
         };
 
         let buf = &self.tx_bufs[desc_id as usize];
-        let mut header = [0u8; VIRTIO_NET_HDR_SIZE];
+        let header = [0u8; VIRTIO_NET_HDR_SIZE];
         unsafe {
             let dst = core::slice::from_raw_parts_mut(buf.virt(), TX_BUF_SIZE);
             dst[..VIRTIO_NET_HDR_SIZE].copy_from_slice(&header);
