@@ -155,6 +155,15 @@ impl Fs {
     pub fn remove(path: &str) -> Result<(), FsError> {
         remove_usbms_path(path).map_err(FsError::Remove)
     }
+
+    /// Create a directory path recursively (mkdir -p semantics).
+    ///
+    /// Note: errors are reported via `FsError::Write` to avoid introducing a
+    /// separate error category for now.
+    #[inline]
+    pub fn create_dir_all(path: &str) -> Result<(), FsError> {
+        create_usbms_dir_all(path).map_err(FsError::Write)
+    }
 }
 
 const MAX_READ_BYTES: usize = 256 * 1024;
@@ -275,6 +284,54 @@ pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError>
         let _ = file.truncate();
         file.write_all(bytes).map_err(|_| UsbFsWriteError::WriteFailed)?;
         file.flush().map_err(|_| UsbFsWriteError::WriteFailed)?;
+        Ok(())
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+/// Create directories for `path` recursively (mkdir -p).
+///
+/// Accepts both absolute (`/qjs/cdn`) and relative (`qjs/cdn`) paths.
+/// The empty path is treated as a no-op.
+pub fn create_usbms_dir_all(path: &str) -> Result<(), UsbFsWriteError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsWriteError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsWriteError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsWriteError::MountFailed)?;
+
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsWriteError::BadPath);
+        }
+    };
+
+    let res = {
+        let root = fs.root_dir();
+        let mut dir = root;
+
+        if !rel.is_empty() {
+            for seg in rel.split('/').filter(|s| !s.is_empty()) {
+                match dir.open_dir(seg) {
+                    Ok(next) => dir = next,
+                    Err(fatfs::Error::NotFound) => {
+                        match dir.create_dir(seg) {
+                            Ok(_) => {}
+                            Err(fatfs::Error::AlreadyExists) => {}
+                            Err(_) => return Err(UsbFsWriteError::DirFailed),
+                        }
+                        dir = dir.open_dir(seg).map_err(|_| UsbFsWriteError::DirFailed)?;
+                    }
+                    Err(_) => return Err(UsbFsWriteError::DirFailed),
+                }
+            }
+        }
+
         Ok(())
     };
 
