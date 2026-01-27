@@ -696,112 +696,58 @@ fn handle_line(
 
     if let Some((verb, rest)) = cmd.split_once(' ') {
         if verb.eq_ignore_ascii_case("out") {
-            let mut parts = rest.split_whitespace();
-            let a = parts.next().unwrap_or("");
-            let extra = parts.next().is_some();
-
-            if a.is_empty() || extra {
-                io.write_str("out: usage out <path>\r\n");
-                return CommandAction::None;
+            let resp = crate::surface::io::shellcmd::handle_out(spawner, rest);
+            match resp.print {
+                crate::surface::io::shellcmd::PrintAction::None => {}
+                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
+                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
+                    io.write_str(a);
+                    io.write_str(b);
+                }
+                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
+                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
+                }
             }
-            if crate::surface::io::shellcmd::parse_slot_ref(a).is_some() {
-                io.write_str("out: arg must be a path\r\n");
-                io.write_str("out: usage out <path>\r\n");
-                return CommandAction::None;
-            }
-
-            let path = a;
-
-            match crate::surface::io::shellcmd::start_out(spawner, path) {
-                Ok(slot) => {
-                    io.write_fmt(format_args!("out: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
-                }
-                Err(crate::surface::io::shellcmd::StartError::MatrixFull) => {
-                    io.write_str("out: matrix full\r\n")
-                }
-                Err(crate::surface::io::shellcmd::StartError::SpawnFailed) => {
-                    io.write_str("out: spawn failed\r\n")
-                }
+            if resp.refresh_symbols {
+                refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }
 
         if verb.eq_ignore_ascii_case("in") {
-            let mut parts = rest.split_whitespace();
-            let a = parts.next().unwrap_or("");
-            let b = parts.next().unwrap_or("");
-            let extra = parts.next().is_some();
-
-            if a.is_empty() || b.is_empty() || extra {
-                io.write_str("in: usage in §N <path>\r\n");
-                return CommandAction::None;
+            let resp = crate::surface::io::shellcmd::handle_in(spawner, rest);
+            match resp.print {
+                crate::surface::io::shellcmd::PrintAction::None => {}
+                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
+                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
+                    io.write_str(a);
+                    io.write_str(b);
+                }
+                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
+                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
+                }
             }
-
-            let Some(src_slot) = crate::surface::io::shellcmd::parse_slot_ref(a) else {
-                io.write_str("in: first arg must be a §N slot (no spaces)\r\n");
-                io.write_str("in: usage in §N <path>\r\n");
-                return CommandAction::None;
-            };
-            if crate::surface::io::shellcmd::parse_slot_ref(b).is_some() {
-                io.write_str("in: second arg must be a path\r\n");
-                io.write_str("in: usage in §N <path>\r\n");
-                return CommandAction::None;
-            }
-
-            let path = b;
-
-            match crate::surface::io::shellcmd::start_in(spawner, src_slot, path) {
-                Ok(slot) => {
-                    io.write_fmt(format_args!("in: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
-                }
-                Err(crate::surface::io::shellcmd::StartError::MatrixFull) => {
-                    io.write_str("in: matrix full\r\n")
-                }
-                Err(crate::surface::io::shellcmd::StartError::SpawnFailed) => {
-                    io.write_str("in: spawn failed\r\n")
-                }
+            if resp.refresh_symbols {
+                refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }
 
         if verb.eq_ignore_ascii_case("io") {
-            let mut parts = rest.split_whitespace();
-            let a = parts.next().unwrap_or("");
-            let b = parts.next().unwrap_or("");
-            let extra = parts.next().is_some();
-
-            if a.is_empty() || b.is_empty() || extra {
-                io.write_str("io: usage io <src> <dst>\r\n");
-                io.write_str("io: appends <src> into <dst>\r\n");
-                return CommandAction::None;
+            let resp = crate::surface::io::shellcmd::handle_io(spawner, rest);
+            match resp.print {
+                crate::surface::io::shellcmd::PrintAction::None => {}
+                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
+                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
+                    io.write_str(a);
+                    io.write_str(b);
+                }
+                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
+                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
+                }
             }
-
-            match crate::surface::io::shellcmd::exec_io(spawner, a, b) {
-                crate::surface::io::shellcmd::IoOutcome::ImmediateOk => {
-                    io.write_str("io: ok\r\n");
-                    refresh_matrix_symbols(io, *term_cols);
-                }
-                crate::surface::io::shellcmd::IoOutcome::ImmediateNoop => {
-                    io.write_str("io: ok (noop)\r\n");
-                }
-                crate::surface::io::shellcmd::IoOutcome::ImmediateErrSrcSlotNotFound => {
-                    io.write_str("io: src slot not found\r\n");
-                }
-                crate::surface::io::shellcmd::IoOutcome::ImmediateErrDstSlotNotFound => {
-                    io.write_str("io: dst slot not found\r\n");
-                }
-                crate::surface::io::shellcmd::IoOutcome::Started(slot) => {
-                    io.write_fmt(format_args!("io: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
-                }
-                crate::surface::io::shellcmd::IoOutcome::MatrixFull => {
-                    io.write_str("io: matrix full\r\n")
-                }
-                crate::surface::io::shellcmd::IoOutcome::SpawnFailed => {
-                    io.write_str("io: spawn failed\r\n")
-                }
+            if resp.refresh_symbols {
+                refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }

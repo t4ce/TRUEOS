@@ -160,6 +160,54 @@ pub mod shellcmd {
 		SpawnFailed,
 	}
 
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	pub enum PrintAction {
+		None,
+		One(&'static str),
+		Two(&'static str, &'static str),
+		Started(&'static str, u8),
+	}
+
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	pub struct CmdResponse {
+		pub print: PrintAction,
+		pub refresh_symbols: bool,
+	}
+
+	impl CmdResponse {
+		#[inline]
+		pub const fn none() -> Self {
+			Self {
+				print: PrintAction::None,
+				refresh_symbols: false,
+			}
+		}
+
+		#[inline]
+		pub const fn one(s: &'static str) -> Self {
+			Self {
+				print: PrintAction::One(s),
+				refresh_symbols: false,
+			}
+		}
+
+		#[inline]
+		pub const fn two(a: &'static str, b: &'static str) -> Self {
+			Self {
+				print: PrintAction::Two(a, b),
+				refresh_symbols: false,
+			}
+		}
+
+		#[inline]
+		pub const fn started(label: &'static str, slot: u8) -> Self {
+			Self {
+				print: PrintAction::Started(label, slot),
+				refresh_symbols: true,
+			}
+		}
+	}
+
 	#[inline]
 	pub fn parse_slot_ref(s: &str) -> Option<u8> {
 		let t = s.trim();
@@ -386,6 +434,81 @@ pub mod shellcmd {
 			return IoOutcome::SpawnFailed;
 		}
 		IoOutcome::Started(slot)
+	}
+
+	pub fn handle_out(spawner: &Spawner, args: &str) -> CmdResponse {
+		let mut parts = args.split_whitespace();
+		let a = parts.next().unwrap_or("");
+		let extra = parts.next().is_some();
+		if a.is_empty() || extra {
+			return CmdResponse::one("out: usage out <path>\r\n");
+		}
+		if parse_slot_ref(a).is_some() {
+			return CmdResponse::two(
+				"out: arg must be a path\r\n",
+				"out: usage out <path>\r\n",
+			);
+		}
+
+		match start_out(spawner, a) {
+			Ok(slot) => CmdResponse::started("out", slot),
+			Err(StartError::MatrixFull) => CmdResponse::one("out: matrix full\r\n"),
+			Err(StartError::SpawnFailed) => CmdResponse::one("out: spawn failed\r\n"),
+		}
+	}
+
+	pub fn handle_in(spawner: &Spawner, args: &str) -> CmdResponse {
+		let mut parts = args.split_whitespace();
+		let a = parts.next().unwrap_or("");
+		let b = parts.next().unwrap_or("");
+		let extra = parts.next().is_some();
+		if a.is_empty() || b.is_empty() || extra {
+			return CmdResponse::one("in: usage in §N <path>\r\n");
+		}
+		let Some(src_slot) = parse_slot_ref(a) else {
+			return CmdResponse::two(
+				"in: first arg must be a §N slot (no spaces)\r\n",
+				"in: usage in §N <path>\r\n",
+			);
+		};
+		if parse_slot_ref(b).is_some() {
+			return CmdResponse::two(
+				"in: second arg must be a path\r\n",
+				"in: usage in §N <path>\r\n",
+			);
+		}
+
+		match start_in(spawner, src_slot, b) {
+			Ok(slot) => CmdResponse::started("in", slot),
+			Err(StartError::MatrixFull) => CmdResponse::one("in: matrix full\r\n"),
+			Err(StartError::SpawnFailed) => CmdResponse::one("in: spawn failed\r\n"),
+		}
+	}
+
+	pub fn handle_io(spawner: &Spawner, args: &str) -> CmdResponse {
+		let mut parts = args.split_whitespace();
+		let a = parts.next().unwrap_or("");
+		let b = parts.next().unwrap_or("");
+		let extra = parts.next().is_some();
+		if a.is_empty() || b.is_empty() || extra {
+			return CmdResponse::two(
+				"io: usage io <src> <dst>\r\n",
+				"io: appends <src> into <dst>\r\n",
+			);
+		}
+
+		match exec_io(spawner, a, b) {
+			IoOutcome::ImmediateOk => CmdResponse {
+				print: PrintAction::One("io: ok\r\n"),
+				refresh_symbols: true,
+			},
+			IoOutcome::ImmediateNoop => CmdResponse::one("io: ok (noop)\r\n"),
+			IoOutcome::ImmediateErrSrcSlotNotFound => CmdResponse::one("io: src slot not found\r\n"),
+			IoOutcome::ImmediateErrDstSlotNotFound => CmdResponse::one("io: dst slot not found\r\n"),
+			IoOutcome::Started(slot) => CmdResponse::started("io", slot),
+			IoOutcome::MatrixFull => CmdResponse::one("io: matrix full\r\n"),
+			IoOutcome::SpawnFailed => CmdResponse::one("io: spawn failed\r\n"),
+		}
 	}
 }
 
