@@ -726,10 +726,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                         crate::log!("tls_demo: connected (device={})\n", dev_idx);
 
                         if !http_sent {
-                            // Ask for a plain, uncompressed HTML response so the matrix blob is readable.
-                            // If the server ignores this and sends gzip/br anyway, we'll still store the raw bytes.
+                            // Ask for gzip so we can decode it into readable HTML. (Some servers ignore
+                            // `identity` and still send a compressed body.)
                             let req = alloc::format!(
-                                "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS rustls demo\r\nAccept: text/html, */*;q=0.8\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+                                "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS rustls demo\r\nAccept: text/html, */*;q=0.8\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
                                 target.path,
                                 target.host
                             );
@@ -824,11 +824,8 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                     }
                                 }
 
-                                let mut merged: Vec<u8> = Vec::with_capacity(
-                                    headers.len().saturating_add(decoded_body.len()),
-                                );
-                                merged.extend_from_slice(headers);
-                                merged.extend_from_slice(&decoded_body);
+                                // Store only the decoded body in the blob so `§N` prints the actual page.
+                                let merged = decoded_body;
 
                                 // Redirect handling: follow up to 3 redirects.
                                 if redirects < 3 {
