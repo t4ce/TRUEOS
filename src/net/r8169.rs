@@ -76,11 +76,6 @@ impl Mmio {
     }
 
     #[inline]
-    unsafe fn write_u8(&self, off: u16, val: u8) {
-        write_volatile(self.base.as_ptr().add(off as usize) as *mut u8, val);
-    }
-
-    #[inline]
     unsafe fn read_u16(&self, off: u16) -> u16 {
         read_volatile(self.base.as_ptr().add(off as usize) as *const u16)
     }
@@ -88,11 +83,6 @@ impl Mmio {
     #[inline]
     unsafe fn write_u16(&self, off: u16, val: u16) {
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u16, val);
-    }
-
-    #[inline]
-    unsafe fn read_u32(&self, off: u16) -> u32 {
-        read_volatile(self.base.as_ptr().add(off as usize) as *const u32)
     }
 
     #[inline]
@@ -106,12 +96,12 @@ pub struct R8169Adapter {
     mac: [u8; 6],
     ring: Option<*mut NetRing>,
 
-    rx_desc_mem: DmaRegion,
+    _rx_desc_mem: DmaRegion,
     rx_desc: *mut RxDesc,
     rx_bufs: Vec<DmaRegion>,
     rx_idx: usize,
 
-    tx_desc_mem: DmaRegion,
+    _tx_desc_mem: DmaRegion,
     tx_desc: *mut TxDesc,
     tx_bufs: Vec<DmaRegion>,
     tx_head: usize,
@@ -139,11 +129,6 @@ impl R8169Adapter {
             }
         }
         out
-    }
-
-    pub fn init() -> Result<Self, ()> {
-        let dev = find_r8169_device().ok_or(())?;
-        Self::init_from_device(dev)
     }
 
     fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
@@ -206,13 +191,13 @@ impl R8169Adapter {
                         opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
                         opts2: 0,
                         addr: buf.phys(),
-                    },
-                );
+
+                        _rx_desc_mem: rx_desc_mem,
             }
             rx_bufs.push(buf);
         }
 
-        let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
+                        _tx_desc_mem: tx_desc_mem,
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
             let eor = if i + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
@@ -395,24 +380,6 @@ impl VendorAdapter for R8169Adapter {
     fn bind_ring(&mut self, ring: *mut NetRing) {
         self.ring = Some(ring);
     }
-}
-
-fn find_r8169_device() -> Option<pci::PciDevice> {
-    pci::with_devices(|list| {
-        for dev in list {
-            if dev.vendor != REALTEK_VENDOR_ID {
-                continue;
-            }
-            if !RTL8169_DEVICE_IDS.contains(&dev.device) {
-                continue;
-            }
-            if dev.class != 0x02 {
-                continue;
-            }
-            return Some(*dev);
-        }
-        None
-    })
 }
 
 fn find_r8169_devices() -> alloc::vec::Vec<pci::PciDevice> {

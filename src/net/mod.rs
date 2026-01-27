@@ -123,31 +123,12 @@ pub fn init() {
     );
 }
 
-pub fn poll() {
-    poll_at(0);
-}
-
 pub fn poll_at(index: usize) {
     let _ = with_device_at(index, |dev| dev.poll_rx());
 }
 
-pub fn poll_all() {
-    let count = device_count();
-    for idx in 0..count {
-        poll_at(idx);
-    }
-}
-
-pub fn pop_rx_packet() -> Option<alloc::vec::Vec<u8>> {
-    pop_rx_packet_at(0)
-}
-
 pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
     with_device_at(index, |dev| dev.pop_rx()).flatten()
-}
-
-pub fn transmit_packet(data: &[u8]) -> Result<(), ()> {
-    transmit_packet_at(0, data)
 }
 
 pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
