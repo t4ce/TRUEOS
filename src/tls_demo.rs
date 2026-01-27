@@ -8,11 +8,9 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use crate::net::adapter::{
-    register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
-};
-
-use crate::tls::{TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsRng, TlsTime};
+use crate::net::adapter::{NetEndpoint, NetHandle, NetQueue};
+use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::tls::{TlsClientConfig, TlsRoots};
 
 // A known stable TLS endpoint.
 // We intentionally use a hard-coded IPv4 to avoid DNS requirements in the demo.
@@ -22,34 +20,8 @@ const DEMO_PORT: u16 = 443;
 
 static TLS_DEMO_JOB_SEQ: AtomicU32 = AtomicU32::new(1);
 
-#[derive(Debug)]
-struct FixedTime;
-
-impl TlsTime for FixedTime {
-    fn unix_time_seconds(&self) -> Option<u64> {
-        // 2026-01-27-ish. Used for certificate validation.
-        // If the demo endpoint's certificate validity drifts, adjust this constant.
-        Some(1_769_000_000)
-    }
-}
-
-static FIXED_TIME: FixedTime = FixedTime;
-
-#[derive(Debug)]
-struct DemoRng;
-
-impl TlsRng for DemoRng {
-    fn fill(&mut self, out: &mut [u8]) -> Result<(), TlsError> {
-        getrandom::getrandom(out).map_err(|_| TlsError::Io)
-    }
-}
-
 fn leak_str(s: alloc::string::String) -> &'static str {
     Box::leak(s.into_boxed_str())
-}
-
-fn send_tcp(cmds: &NetQueue<NetCommand>, handle: NetHandle, data: Vec<u8>) {
-    let _ = cmds.push(NetCommand::SendTcp { handle, data });
 }
 
 #[task]
@@ -74,36 +46,24 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
     let port = DEMO_PORT;
 
     let seq = TLS_DEMO_JOB_SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = leak_str(alloc::format!("net-tlsdemo-{}-{}", slot_id + 1, seq));
-    let cmds_name = leak_str(alloc::format!("{}-cmd", owner));
-    let evts_name = leak_str(alloc::format!("{}-evt", owner));
+    let owner = leak_str(alloc::format!("tlsdemo-{}-{}", slot_id + 1, seq));
+    let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
     let cmds = NetQueue::new_leaked(cmds_name, 128);
     let events = NetQueue::new_leaked(evts_name, 128);
-    register_app_queues(owner, cmds, events);
+    register_tls_app_queues(owner, cmds, events);
 
-    let mut tcp_handle: Option<NetHandle> = None;
+    let mut tls_handle: Option<NetHandle> = None;
     let mut sent_connect = false;
     let mut http_sent = false;
 
     let mut plaintext: Vec<u8> = Vec::new();
     let mut truncated = false;
 
-    // Build TLS config + connection via `crate::tls`.
     let roots = TlsRoots::mozilla();
     let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
 
-    let mut rng = DemoRng;
-    let mut tls = match TlsClient::new(&cfg, &roots, host, &mut rng, &FIXED_TIME, None) {
-        Ok(c) => c,
-        Err(e) => {
-            crate::matrix::push_line(slot_id, "https: tls client init failed");
-            crate::log!("tls_demo: init failed: {:?}\n", e);
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-            return;
-        }
-    };
-
-    crate::matrix::push_line(slot_id, "https: opening tcp");
+    crate::matrix::push_line(slot_id, "https: opening tls/tcp");
 
     let deadline = Instant::now() + EmbassyDuration::from_secs(15);
 
@@ -113,56 +73,40 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
     loop {
         for ev in events.drain(32) {
             match ev {
-                NetEvent::Opened { handle, kind } => {
-                    if kind == SocketKind::Tcp {
-                        tcp_handle = Some(handle);
-                        crate::matrix::push_line(slot_id, "https: tcp opened");
-                    }
+                TlsEvent::Opened { handle } => {
+                    tls_handle = Some(handle);
+                    crate::matrix::push_line(slot_id, "https: tcp opened");
                 }
-                NetEvent::TcpEstablished { handle } => {
-                    if tcp_handle != Some(handle) {
+                TlsEvent::Connected { handle } => {
+                    if tls_handle != Some(handle) {
                         continue;
                     }
-                    crate::matrix::push_line(slot_id, "https: tcp established");
+                    crate::matrix::push_line(slot_id, "https: tls connected");
 
-                    // Send initial ClientHello.
-                    match tls.take_ciphertext_to_send() {
-                        Ok(data) => {
-                            if !data.is_empty() {
-                                send_tcp(cmds, handle, data);
-                            }
-                        }
-                        Err(e) => {
-                            crate::log!("tls_demo: take_ciphertext_to_send failed: {:?}\n", e);
-                            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                            let _ = cmds.push(NetCommand::Close { handle });
-                            return;
-                        }
+                    if !http_sent {
+                        let req = alloc::format!(
+                            "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS rustls demo\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                            host
+                        );
+                        let _ = cmds.push(TlsCommand::Send {
+                            handle,
+                            data: req.into_bytes(),
+                        });
+                        http_sent = true;
+                        crate::matrix::push_line(slot_id, "https: sent https request");
                     }
                 }
-                NetEvent::TcpData { handle, data } => {
-                    if tcp_handle != Some(handle) {
+                TlsEvent::Data { handle, data } => {
+                    if tls_handle != Some(handle) {
                         continue;
                     }
 
-                    let produced = match tls.ingest_encrypted(&data) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            crate::matrix::push_line(slot_id, "https: tls error");
-                            crate::log!("tls_demo: ingest_encrypted failed: {:?}\n", e);
-                            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                            let _ = cmds.push(NetCommand::Close { handle });
-                            return;
-                        }
-                    };
-
-                    // Capture plaintext.
-                    if !produced.is_empty() {
+                    if !data.is_empty() {
                         if plaintext.len() < MAX_PLAINTEXT {
                             let room = MAX_PLAINTEXT - plaintext.len();
-                            let take = produced.len().min(room);
-                            plaintext.extend_from_slice(&produced[..take]);
-                            if take < produced.len() {
+                            let take = data.len().min(room);
+                            plaintext.extend_from_slice(&data[..take]);
+                            if take < data.len() {
                                 truncated = true;
                             }
                         } else {
@@ -170,53 +114,10 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
                         }
                     }
 
-                    // Send any TLS flight generated by processing this data.
-                    match tls.take_ciphertext_to_send() {
-                        Ok(out) => {
-                            if !out.is_empty() {
-                                send_tcp(cmds, handle, out);
-                            }
-                        }
-                        Err(e) => {
-                            crate::log!("tls_demo: take_ciphertext_to_send failed: {:?}\n", e);
-                            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                            let _ = cmds.push(NetCommand::Close { handle });
-                            return;
-                        }
-                    }
-
-                    // Once connected, send the HTTPS request exactly once.
-                    if tls.is_connected() && !http_sent {
-                        let req = alloc::format!(
-                            "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS rustls demo\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                            host
-                        );
-                        if let Err(e) = tls.write_plaintext(req.as_bytes()) {
-                            crate::log!("tls_demo: write_plaintext failed: {:?}\n", e);
-                            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                            let _ = cmds.push(NetCommand::Close { handle });
-                            return;
-                        }
-                        match tls.take_ciphertext_to_send() {
-                            Ok(out) => {
-                                if !out.is_empty() {
-                                    send_tcp(cmds, handle, out);
-                                }
-                            }
-                            Err(e) => {
-                                crate::log!("tls_demo: take_ciphertext_to_send failed: {:?}\n", e);
-                                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                                let _ = cmds.push(NetCommand::Close { handle });
-                                return;
-                            }
-                        }
-                        http_sent = true;
-                        crate::matrix::push_line(slot_id, "https: sent https request");
-                    }
                 }
-                NetEvent::Closed { handle } => {
-                    if tcp_handle == Some(handle) {
-                        tcp_handle = None;
+                TlsEvent::Closed { handle } => {
+                    if tls_handle == Some(handle) {
+                        tls_handle = None;
 
                         let line = alloc::format!(
                             "https: plaintext bytes={}{}",
@@ -231,17 +132,27 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
                         return;
                     }
                 }
-                NetEvent::Error { msg } => {
-                    let _ = msg;
+                TlsEvent::Error { msg, .. } => {
+                    crate::log!("tls_demo: net error: {}\n", msg);
                 }
-                NetEvent::TcpSent { .. } => {}
-                NetEvent::UdpPacket { .. } => {}
+                TlsEvent::TlsError { err, .. } => {
+                    crate::matrix::push_line(slot_id, "https: tls error");
+                    crate::log!("tls_demo: tls error: {:?}\n", err);
+                    crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+                    if let Some(h) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                    }
+                    return;
+                }
             }
         }
 
         if !sent_connect {
-            let _ = cmds.push(NetCommand::OpenTcpConnect {
+            let _ = cmds.push(TlsCommand::OpenTcpConnect {
                 remote: NetEndpoint { addr: ip, port },
+                server_name: host,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
             });
             sent_connect = true;
         }
@@ -249,8 +160,8 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
         if Instant::now() >= deadline {
             crate::matrix::push_line(slot_id, "https: timed out");
             crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-            if let Some(h) = tcp_handle {
-                let _ = cmds.push(NetCommand::Close { handle: h });
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
             }
             return;
         }

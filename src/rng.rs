@@ -53,28 +53,36 @@ fn seed_32() -> Option<[u8; 32]> {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn ensure_csprng() -> Result<(), getrandom::Error> {
-    let mut guard = CSPRNG.lock();
-    if guard.is_some() {
-        return Ok(());
+fn ensure_csprng() -> bool {
+    // Fast path: already initialized.
+    {
+        let guard = CSPRNG.lock();
+        if guard.is_some() {
+            return true;
+        }
     }
 
+    // Slow path: gather seed material without holding the CSPRNG lock.
     let Some(mut seed) = seed_32() else {
-        return Err(getrandom::Error::UNSUPPORTED);
+        return false;
     };
 
     // Seed material is high-value; wipe it after initializing the CSPRNG.
     let rng = ChaCha20Rng::from_seed(seed);
     seed.zeroize();
-    *guard = Some(rng);
-    Ok(())
+
+    let mut guard = CSPRNG.lock();
+    if guard.is_none() {
+        *guard = Some(rng);
+    }
+    true
 }
 
 /// Initialize the kernel CSPRNG state.
 ///
 /// Safe to call multiple times; later calls are no-ops after successful init.
 #[cfg(target_arch = "x86_64")]
-pub fn init() -> Result<(), getrandom::Error> {
+pub fn init() -> bool {
     ensure_csprng()
 }
 
@@ -82,20 +90,25 @@ pub fn init() -> Result<(), getrandom::Error> {
 ///
 /// Backed by a kernel CSPRNG (ChaCha20) seeded from RDSEED/RDRAND.
 #[cfg(target_arch = "x86_64")]
-pub fn fill_bytes(dest: &mut [u8]) -> Result<(), getrandom::Error> {
-    ensure_csprng()?;
+pub fn fill_bytes(dest: &mut [u8]) -> bool {
+    if !ensure_csprng() {
+        return false;
+    }
     let mut guard = CSPRNG.lock();
     let Some(rng) = guard.as_mut() else {
-        return Err(getrandom::Error::UNSUPPORTED);
+        return false;
     };
     rng.fill_bytes(dest);
-    Ok(())
+    true
 }
-
 
 #[cfg(target_arch = "x86_64")]
 fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
-    fill_bytes(dest)
+    if fill_bytes(dest) {
+        Ok(())
+    } else {
+        Err(getrandom::Error::from(core::num::NonZeroU32::new(1).unwrap()))
+    }
 }
 
 #[cfg(target_arch = "x86_64")]

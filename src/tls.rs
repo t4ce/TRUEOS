@@ -1,14 +1,16 @@
 #![allow(dead_code)]
 
-//! TLS glue (planned).
+//! TLS glue for TRUEOS.
 //!
-//! This module intentionally provides *stubs* only.
+//! Current state:
+//! - Provides a minimal, event-driven TLS client built on rustls' unbuffered API.
+//! - Used by the HTTPS smoke/demo in `crate::tls_demo`.
 //!
-//! Goal: define the platform-facing requirements needed to support TLS in TRUEOS
-//! (no_std kernel) without committing to a specific implementation yet.
-//!
-//! The working proof is implemented separately in `crate::tls_demo` using rustls
-//! directly.
+//! Known limitations (still TODO):
+//! - Proper `close_notify` emission for the unbuffered client.
+//! - Buffer/memory limits for `incoming_tls`/`outgoing_tls`/`pending_plaintext`.
+//! - mTLS / client certs + key loading (`TlsKeyStore`).
+//! - Session resumption / ticket storage.
 
 extern crate alloc;
 
@@ -29,6 +31,7 @@ pub enum TlsError {
 }
 
 /// Trust anchors / root CA set.
+#[derive(Clone)]
 pub struct TlsRoots {
     store: Arc<rustls::RootCertStore>,
 }
@@ -65,6 +68,7 @@ impl TlsRoots {
 }
 
 /// Client-side TLS configuration.
+#[derive(Clone)]
 pub struct TlsClientConfig {
     /// ALPN protocols (e.g. "h2", "http/1.1").
     pub alpn: Vec<Vec<u8>>,
@@ -108,14 +112,28 @@ pub trait TlsTcpTransport {
     fn close(&mut self) -> Result<(), TlsError>;
 }
 
-/// A platform RNG suitable for TLS key material.
-///
-/// Requirements:
-/// - Cryptographically secure random bytes (CSPRNG).
-/// - Must be available early in boot (or TLS must fail cleanly).
-/// - Ideally backed by RDSEED/RDRAND + DRBG reseeding policy.
 pub trait TlsRng {
     fn fill(&mut self, out: &mut [u8]) -> Result<(), TlsError>;
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+pub struct KernelTlsRng;
+
+impl KernelTlsRng {
+    #[inline]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl TlsRng for KernelTlsRng {
+    fn fill(&mut self, out: &mut [u8]) -> Result<(), TlsError> {
+        if crate::rng::fill_bytes(out) {
+            Ok(())
+        } else {
+            Err(TlsError::Io)
+        }
+    }
 }
 
 /// A platform time source.
@@ -284,11 +302,17 @@ impl TlsClient {
         cfg: &TlsClientConfig,
         roots: &TlsRoots,
         server_name: &str,
-        _rng: &mut dyn TlsRng,
+        rng: &mut dyn TlsRng,
         time: &'static dyn TlsTime,
         _keys: Option<&dyn TlsKeyStore>,
     ) -> Result<Self, TlsError> {
         ensure_rustls_provider_installed();
+
+        // Fail early (and cleanly) if a CSPRNG is not available.
+        // Note: rustls' provider will also use `getrandom`, but this makes the
+        // platform requirement explicit at the API boundary.
+        let mut probe = [0u8; 1];
+        rng.fill(&mut probe)?;
 
         let server_name_static = leak_str(server_name.to_string());
         let server_name = rustls::pki_types::ServerName::try_from(server_name_static)
