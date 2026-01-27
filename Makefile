@@ -1,5 +1,5 @@
 BUILD_MODE ?= debug
-KERNEL_BIN = target/86_64/$(BUILD_MODE)/TRUEOS
+KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
 
 
 ISO_DIR 		:= bld
