@@ -281,8 +281,21 @@ pub extern "C" fn kmain() -> ! {
         if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
             crate::log!("net: spawn net_service_task failed: {:?}\n", e);
         }
+        if let Err(e) = spawner.spawn(net::tls_socket::tls_socket_service_task()) {
+            crate::log!("net: spawn tls_socket_service_task failed: {:?}\n", e);
+        }
         if let Err(e) = spawner.spawn(net::html::net_http_smoke_task()) {
             crate::log!("net: spawn net_http_smoke_task failed: {:?}\n", e);
+        }
+
+        // Auto-run the HTTPS (TLS) smoke/demo after the plain HTTP smoke.
+        if let Some(slot) = crate::matrix::alloc_slot("https boot") {
+            let host: heapless::String<96> = heapless::String::new();
+            if let Err(e) = spawner.spawn(crate::tls_demo::tls_demo_matrix_job(slot, host)) {
+                crate::log!("https: spawn tls_demo_matrix_job failed: {:?}\n", e);
+            }
+        } else {
+            crate::log!("https: matrix full; skipping boot demo\n");
         }
         crate::log!("net-shell: spawning tcp listener on 4245\n");
         if let Err(e) = spawner.spawn(net::adapter::net_shell_task()) {
