@@ -21,6 +21,8 @@ dependencies = [
  "limine",
  "log",
  "memchr",
+ "rand_chacha",
+ "rand_core",
  "raw-cpuid",
  "rdrand",
  "rustls",
@@ -34,6 +36,7 @@ dependencies = [
  "unicode-segmentation",
  "webpki-roots 0.26.11",
  "x86_64",
+ "zeroize",
 ]
 
 [[package]]
