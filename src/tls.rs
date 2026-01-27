@@ -218,6 +218,8 @@ fn pump(
     let mut plaintext: Vec<u8> = Vec::new();
 
     loop {
+        let mut should_break = false;
+
         let status = conn.process_tls_records(incoming_tls.as_mut_slice());
         let mut discard = status.discard;
 
@@ -268,22 +270,26 @@ fn pump(
                     pending_plaintext.clear();
                 } else {
                     // Ready for app data, but none queued.
-                    break;
+                    should_break = true;
                 }
             }
             ConnectionState::ReadEarlyData(_) | ConnectionState::BlockedHandshake => {
-                break;
+                should_break = true;
             }
             ConnectionState::PeerClosed | ConnectionState::Closed => {
                 *closed = true;
-                break;
+                should_break = true;
             }
-            _ => break,
+            _ => should_break = true,
         }
 
         if discard > 0 {
             let discard = discard.min(incoming_tls.len());
             incoming_tls.drain(0..discard);
+        }
+
+        if should_break {
+            break;
         }
     }
 

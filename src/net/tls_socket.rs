@@ -335,15 +335,6 @@ pub async fn tls_socket_service_task() {
                             continue;
                         }
 
-                        if !data.is_empty() {
-                            crate::log!(
-                                "tls-socket: tcp rx owner={} handle={} len={}\n",
-                                conns[idx].user_owner,
-                                handle.0,
-                                data.len()
-                            );
-                        }
-
                         let produced = match conns[idx].tls.ingest_encrypted(&data) {
                             Ok(p) => p,
                             Err(e) => {
