@@ -1,3 +1,5 @@
 bld/
 target/
 disk.img
+limine/
+quickjs/
