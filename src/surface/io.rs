@@ -132,6 +132,263 @@ pub mod kfs {
 	}
 }
 
+/// Shell-facing helpers for the `out` / `in` / `io` commands.
+///
+/// This keeps the filesystem+matrix job plumbing in one place (the surface I/O
+/// layer), while the shell remains responsible for user interaction (printing
+/// usage/errors, refreshing the prompt UI, etc).
+pub mod shellcmd {
+	use super::kfs;
+	use alloc::vec::Vec;
+	use embassy_executor::Spawner;
+	use heapless::String;
+
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	pub enum StartError {
+		MatrixFull,
+		SpawnFailed,
+	}
+
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	pub enum IoOutcome {
+		ImmediateOk,
+		ImmediateNoop,
+		ImmediateErrSrcSlotNotFound,
+		ImmediateErrDstSlotNotFound,
+		Started(u8),
+		MatrixFull,
+		SpawnFailed,
+	}
+
+	#[inline]
+	pub fn parse_slot_ref(s: &str) -> Option<u8> {
+		let t = s.trim();
+		let n = t.strip_prefix('§')?;
+		if n.is_empty() {
+			return None;
+		}
+		if !n.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+			return None;
+		}
+		let id = n.parse::<u8>().ok()?;
+		if id == 0 {
+			return None;
+		}
+		Some(id - 1)
+	}
+
+	fn title_with_prefix(prefix: &str, arg: &str) -> String<{ crate::matrix::TITLE_LEN }> {
+		let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
+		let _ = title.push_str(prefix);
+		for ch in arg.chars() {
+			if title.push(ch).is_err() {
+				break;
+			}
+		}
+		title
+	}
+
+	fn path_160(path: &str) -> String<160> {
+		let mut p: String<160> = String::new();
+		for ch in path.chars() {
+			if p.push(ch).is_err() {
+				break;
+			}
+		}
+		p
+	}
+
+	fn fill_slot_from_blob(slot_id: u8, bytes: Vec<u8>) {
+		let _ = crate::matrix::set_blob_owned_with_preview(slot_id, bytes);
+	}
+
+	enum IoArg {
+		Slot(u8),
+		Path(String<160>),
+	}
+
+	fn read_dst_file_for_append(path: &str) -> Result<Vec<u8>, crate::disc::files::FsError> {
+		kfs::read_file_for_append(path)
+	}
+
+	#[embassy_executor::task]
+	async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
+		let src_bytes = match src {
+			IoArg::Slot(id) => crate::matrix::blob_snapshot(id).unwrap_or_default(),
+			IoArg::Path(path) => match kfs::read_file(path.as_str()) {
+				Ok(bytes) => bytes,
+				Err(e) => {
+					crate::matrix::clear_lines(slot_id);
+					crate::matrix::push_line(slot_id, "io: read src failed");
+					crate::matrix::push_line(slot_id, "(see kernel log for details)");
+					crate::log!("io: read_file src '{}' failed: {:?}\n", path.as_str(), e);
+					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+					return;
+				}
+			},
+		};
+
+		if src_bytes.is_empty() {
+			crate::matrix::clear_lines(slot_id);
+			crate::matrix::push_line(slot_id, "io: ok (noop)");
+			crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+			return;
+		}
+
+		let mut dst_bytes = match &dst {
+			IoArg::Slot(id) => match crate::matrix::blob_snapshot(*id) {
+				Some(bytes) => bytes,
+				None => {
+					crate::matrix::clear_lines(slot_id);
+					crate::matrix::push_line(slot_id, "io: dst slot not found");
+					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+					return;
+				}
+			},
+			IoArg::Path(path) => match read_dst_file_for_append(path.as_str()) {
+				Ok(bytes) => bytes,
+				Err(e) => {
+					crate::matrix::clear_lines(slot_id);
+					crate::matrix::push_line(slot_id, "io: read dst failed");
+					crate::matrix::push_line(slot_id, "(see kernel log for details)");
+					crate::log!("io: read_file dst '{}' failed: {:?}\n", path.as_str(), e);
+					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+					return;
+				}
+			},
+		};
+
+		dst_bytes.extend_from_slice(src_bytes.as_slice());
+
+		match dst {
+			IoArg::Slot(id) => {
+				let _ = crate::matrix::set_blob_owned_with_preview(id, dst_bytes);
+				crate::matrix::clear_lines(slot_id);
+				crate::matrix::push_line(slot_id, "io: ok");
+				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+			}
+			IoArg::Path(path) => match kfs::write_file(path.as_str(), dst_bytes.as_slice()) {
+				Ok(()) => {
+					crate::matrix::clear_lines(slot_id);
+					crate::matrix::push_line(slot_id, "io: ok");
+					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+				}
+				Err(e) => {
+					crate::matrix::clear_lines(slot_id);
+					crate::matrix::push_line(slot_id, "io: write dst failed");
+					crate::matrix::push_line(slot_id, "(see kernel log for details)");
+					crate::log!("io: write_file dst '{}' failed: {:?}\n", path.as_str(), e);
+					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+				}
+			},
+		}
+	}
+
+	#[embassy_executor::task]
+	async fn out_matrix_job(slot_id: u8, path: String<160>) {
+		match kfs::read_file(path.as_str()) {
+			Ok(bytes) => {
+				fill_slot_from_blob(slot_id, bytes);
+				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+			}
+			Err(e) => {
+				crate::matrix::clear_lines(slot_id);
+				crate::matrix::push_line(slot_id, "out: read_file failed");
+				crate::matrix::push_line(slot_id, "(see kernel log for details)");
+				crate::log!("out: read_file '{}' failed: {:?}\n", path.as_str(), e);
+				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+			}
+		}
+	}
+
+	#[embassy_executor::task]
+	async fn in_matrix_job(slot_id: u8, src_slot: u8, path: String<160>) {
+		let snapshot = crate::matrix::blob_snapshot(src_slot).unwrap_or_default();
+		if snapshot.is_empty() {
+			crate::matrix::clear_lines(slot_id);
+			crate::matrix::push_line(slot_id, "in: source slot empty");
+			crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+			return;
+		}
+
+		match kfs::write_file(path.as_str(), snapshot.as_slice()) {
+			Ok(()) => {
+				crate::matrix::clear_lines(slot_id);
+				crate::matrix::push_line(slot_id, "in: ok");
+				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+			}
+			Err(e) => {
+				crate::matrix::clear_lines(slot_id);
+				crate::matrix::push_line(slot_id, "in: write_file failed");
+				crate::matrix::push_line(slot_id, "(see kernel log for details)");
+				crate::log!("in: write_file '{}' failed: {:?}\n", path.as_str(), e);
+				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+			}
+		}
+	}
+
+	pub fn start_out(spawner: &Spawner, path: &str) -> Result<u8, StartError> {
+		let title = title_with_prefix("out ", path);
+		let Some(slot) = crate::matrix::alloc_slot(title.as_str()) else {
+			return Err(StartError::MatrixFull);
+		};
+		let p = path_160(path);
+		spawner.spawn(out_matrix_job(slot, p)).map_err(|_| StartError::SpawnFailed)?;
+		Ok(slot)
+	}
+
+	pub fn start_in(spawner: &Spawner, src_slot: u8, path: &str) -> Result<u8, StartError> {
+		let title = title_with_prefix("in ", path);
+		let Some(slot) = crate::matrix::alloc_slot(title.as_str()) else {
+			return Err(StartError::MatrixFull);
+		};
+		let p = path_160(path);
+		spawner
+			.spawn(in_matrix_job(slot, src_slot, p))
+			.map_err(|_| StartError::SpawnFailed)?;
+		Ok(slot)
+	}
+
+	pub fn exec_io(spawner: &Spawner, src_token: &str, dst_token: &str) -> IoOutcome {
+		let src_slot = parse_slot_ref(src_token);
+		let dst_slot = parse_slot_ref(dst_token);
+
+		// Fast path: slot -> slot append is immediate (no filesystem I/O).
+		if let (Some(src_id), Some(dst_id)) = (src_slot, dst_slot) {
+			let Some(src_bytes) = crate::matrix::blob_snapshot(src_id) else {
+				return IoOutcome::ImmediateErrSrcSlotNotFound;
+			};
+			if src_bytes.is_empty() {
+				return IoOutcome::ImmediateNoop;
+			}
+			let Some(mut dst_bytes) = crate::matrix::blob_snapshot(dst_id) else {
+				return IoOutcome::ImmediateErrDstSlotNotFound;
+			};
+			dst_bytes.extend_from_slice(src_bytes.as_slice());
+			let _ = crate::matrix::set_blob_owned_with_preview(dst_id, dst_bytes);
+			return IoOutcome::ImmediateOk;
+		}
+
+		let title = title_with_prefix("io ", dst_token);
+		let src = match src_slot {
+			Some(id) => IoArg::Slot(id),
+			None => IoArg::Path(path_160(src_token)),
+		};
+		let dst = match dst_slot {
+			Some(id) => IoArg::Slot(id),
+			None => IoArg::Path(path_160(dst_token)),
+		};
+
+		let Some(slot) = crate::matrix::alloc_slot(title.as_str()) else {
+			return IoOutcome::MatrixFull;
+		};
+		if spawner.spawn(io_matrix_job(slot, src, dst)).is_err() {
+			return IoOutcome::SpawnFailed;
+		}
+		IoOutcome::Started(slot)
+	}
+}
+
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
 	use alloc::vec::Vec;

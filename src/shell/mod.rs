@@ -262,152 +262,7 @@ enum CommandAction {
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
 }
 
-#[inline]
-fn parse_slot_ref(s: &str) -> Option<u8> {
-    let t = s.trim();
-    let n = t.strip_prefix('§')?;
-    if n.is_empty() {
-        return None;
-    }
-    if !n.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let id = n.parse::<u8>().ok()?;
-    if id == 0 {
-        return None;
-    }
-    Some(id - 1)
-}
 
-fn fill_slot_from_blob(slot_id: u8, bytes: Vec<u8>) {
-    let _ = crate::matrix::set_blob_owned_with_preview(slot_id, bytes);
-}
-
-enum IoArg {
-    Slot(u8),
-    Path(String<160>),
-}
-
-fn io_read_dst_file_for_append(path: &str) -> Result<Vec<u8>, crate::disc::files::FsError> {
-    crate::surface::io::kfs::read_file_for_append(path)
-}
-
-#[embassy_executor::task]
-async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
-    let src_bytes = match src {
-        IoArg::Slot(id) => crate::matrix::blob_snapshot(id).unwrap_or_default(),
-        IoArg::Path(path) => match crate::surface::io::kfs::read_file(path.as_str()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                crate::matrix::clear_lines(slot_id);
-                crate::matrix::push_line(slot_id, "io: read src failed");
-                crate::matrix::push_line(slot_id, "(see kernel log for details)");
-                crate::log!("io: read_file src '{}' failed: {:?}\n", path.as_str(), e);
-                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                return;
-            }
-        },
-    };
-
-    if src_bytes.is_empty() {
-        crate::matrix::clear_lines(slot_id);
-        crate::matrix::push_line(slot_id, "io: ok (noop)");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-        return;
-    }
-
-    let mut dst_bytes = match &dst {
-        IoArg::Slot(id) => match crate::matrix::blob_snapshot(*id) {
-            Some(bytes) => bytes,
-            None => {
-                crate::matrix::clear_lines(slot_id);
-                crate::matrix::push_line(slot_id, "io: dst slot not found");
-                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                return;
-            }
-        },
-        IoArg::Path(path) => match io_read_dst_file_for_append(path.as_str()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                crate::matrix::clear_lines(slot_id);
-                crate::matrix::push_line(slot_id, "io: read dst failed");
-                crate::matrix::push_line(slot_id, "(see kernel log for details)");
-                crate::log!("io: read_file dst '{}' failed: {:?}\n", path.as_str(), e);
-                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-                return;
-            }
-        },
-    };
-
-    dst_bytes.extend_from_slice(src_bytes.as_slice());
-
-    match dst {
-        IoArg::Slot(id) => {
-            let _ = crate::matrix::set_blob_owned_with_preview(id, dst_bytes);
-            crate::matrix::clear_lines(slot_id);
-            crate::matrix::push_line(slot_id, "io: ok");
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-        }
-        IoArg::Path(path) => match crate::disc::files::Fs::write_file(path.as_str(), dst_bytes.as_slice()) {
-            Ok(()) => {
-                crate::matrix::clear_lines(slot_id);
-                crate::matrix::push_line(slot_id, "io: ok");
-                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-            }
-            Err(e) => {
-                crate::matrix::clear_lines(slot_id);
-                crate::matrix::push_line(slot_id, "io: write dst failed");
-                crate::matrix::push_line(slot_id, "(see kernel log for details)");
-                crate::log!("io: write_file dst '{}' failed: {:?}\n", path.as_str(), e);
-                crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-            }
-        },
-    }
-}
-
-#[embassy_executor::task]
-async fn out_matrix_job(slot_id: u8, path: String<160>) {
-    // File I/O is intentionally not part of txt editor; it happens here.
-    match crate::surface::io::kfs::read_file(path.as_str()) {
-        Ok(bytes) => {
-            fill_slot_from_blob(slot_id, bytes);
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-        }
-        Err(e) => {
-            crate::matrix::clear_lines(slot_id);
-            crate::matrix::push_line(slot_id, "out: read_file failed");
-            crate::matrix::push_line(slot_id, "(see kernel log for details)");
-            crate::log!("out: read_file '{}' failed: {:?}\n", path.as_str(), e);
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn in_matrix_job(slot_id: u8, src_slot: u8, path: String<160>) {
-    let snapshot = crate::matrix::blob_snapshot(src_slot).unwrap_or_default();
-    if snapshot.is_empty() {
-        crate::matrix::clear_lines(slot_id);
-        crate::matrix::push_line(slot_id, "in: source slot empty");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        return;
-    }
-
-    match crate::surface::io::kfs::write_file(path.as_str(), snapshot.as_slice()) {
-        Ok(()) => {
-            crate::matrix::clear_lines(slot_id);
-            crate::matrix::push_line(slot_id, "in: ok");
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-        }
-        Err(e) => {
-            crate::matrix::clear_lines(slot_id);
-            crate::matrix::push_line(slot_id, "in: write_file failed");
-            crate::matrix::push_line(slot_id, "(see kernel log for details)");
-            crate::log!("in: write_file '{}' failed: {:?}\n", path.as_str(), e);
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        }
-    }
-}
 
 #[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
@@ -849,7 +704,7 @@ fn handle_line(
                 io.write_str("out: usage out <path>\r\n");
                 return CommandAction::None;
             }
-            if parse_slot_ref(a).is_some() {
+            if crate::surface::io::shellcmd::parse_slot_ref(a).is_some() {
                 io.write_str("out: arg must be a path\r\n");
                 io.write_str("out: usage out <path>\r\n");
                 return CommandAction::None;
@@ -857,27 +712,17 @@ fn handle_line(
 
             let path = a;
 
-            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("out ");
-            for ch in path.chars() {
-                if title.push(ch).is_err() {
-                    break;
-                }
-            }
-
-            match crate::matrix::alloc_slot(title.as_str()) {
-                Some(slot) => {
-                    let mut p: String<160> = String::new();
-                    for ch in path.chars() {
-                        if p.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = spawner.spawn(out_matrix_job(slot, p));
+            match crate::surface::io::shellcmd::start_out(spawner, path) {
+                Ok(slot) => {
                     io.write_fmt(format_args!("out: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }
-                None => io.write_str("out: matrix full\r\n"),
+                Err(crate::surface::io::shellcmd::StartError::MatrixFull) => {
+                    io.write_str("out: matrix full\r\n")
+                }
+                Err(crate::surface::io::shellcmd::StartError::SpawnFailed) => {
+                    io.write_str("out: spawn failed\r\n")
+                }
             }
             return CommandAction::None;
         }
@@ -893,12 +738,12 @@ fn handle_line(
                 return CommandAction::None;
             }
 
-            let Some(src_slot) = parse_slot_ref(a) else {
+            let Some(src_slot) = crate::surface::io::shellcmd::parse_slot_ref(a) else {
                 io.write_str("in: first arg must be a §N slot (no spaces)\r\n");
                 io.write_str("in: usage in §N <path>\r\n");
                 return CommandAction::None;
             };
-            if parse_slot_ref(b).is_some() {
+            if crate::surface::io::shellcmd::parse_slot_ref(b).is_some() {
                 io.write_str("in: second arg must be a path\r\n");
                 io.write_str("in: usage in §N <path>\r\n");
                 return CommandAction::None;
@@ -906,27 +751,17 @@ fn handle_line(
 
             let path = b;
 
-            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("in ");
-            for ch in path.chars() {
-                if title.push(ch).is_err() {
-                    break;
-                }
-            }
-
-            match crate::matrix::alloc_slot(title.as_str()) {
-                Some(slot) => {
-                    let mut p: String<160> = String::new();
-                    for ch in path.chars() {
-                        if p.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = spawner.spawn(in_matrix_job(slot, src_slot, p));
+            match crate::surface::io::shellcmd::start_in(spawner, src_slot, path) {
+                Ok(slot) => {
                     io.write_fmt(format_args!("in: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }
-                None => io.write_str("in: matrix full\r\n"),
+                Err(crate::surface::io::shellcmd::StartError::MatrixFull) => {
+                    io.write_str("in: matrix full\r\n")
+                }
+                Err(crate::surface::io::shellcmd::StartError::SpawnFailed) => {
+                    io.write_str("in: spawn failed\r\n")
+                }
             }
             return CommandAction::None;
         }
@@ -943,73 +778,30 @@ fn handle_line(
                 return CommandAction::None;
             }
 
-            let src_slot = parse_slot_ref(a);
-            let dst_slot = parse_slot_ref(b);
-
-            // Fast path: slot -> slot append is immediate (no filesystem I/O).
-            if let (Some(src_id), Some(dst_id)) = (src_slot, dst_slot) {
-                let Some(src_bytes) = crate::matrix::blob_snapshot(src_id) else {
-                    io.write_str("io: src slot not found\r\n");
-                    return CommandAction::None;
-                };
-                if src_bytes.is_empty() {
+            match crate::surface::io::shellcmd::exec_io(spawner, a, b) {
+                crate::surface::io::shellcmd::IoOutcome::ImmediateOk => {
+                    io.write_str("io: ok\r\n");
+                    refresh_matrix_symbols(io, *term_cols);
+                }
+                crate::surface::io::shellcmd::IoOutcome::ImmediateNoop => {
                     io.write_str("io: ok (noop)\r\n");
-                    return CommandAction::None;
                 }
-                let Some(mut dst_bytes) = crate::matrix::blob_snapshot(dst_id) else {
+                crate::surface::io::shellcmd::IoOutcome::ImmediateErrSrcSlotNotFound => {
+                    io.write_str("io: src slot not found\r\n");
+                }
+                crate::surface::io::shellcmd::IoOutcome::ImmediateErrDstSlotNotFound => {
                     io.write_str("io: dst slot not found\r\n");
-                    return CommandAction::None;
-                };
-
-                dst_bytes.extend_from_slice(src_bytes.as_slice());
-                let _ = crate::matrix::set_blob_owned_with_preview(dst_id, dst_bytes);
-                io.write_str("io: ok\r\n");
-                refresh_matrix_symbols(io, *term_cols);
-                return CommandAction::None;
-            }
-
-            // Any variant involving filesystem I/O runs as a background job with a log slot.
-            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("io ");
-            for ch in b.chars() {
-                if title.push(ch).is_err() {
-                    break;
                 }
-            }
-
-            let src = match src_slot {
-                Some(id) => IoArg::Slot(id),
-                None => {
-                    let mut p: String<160> = String::new();
-                    for ch in a.chars() {
-                        if p.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    IoArg::Path(p)
-                }
-            };
-
-            let dst = match dst_slot {
-                Some(id) => IoArg::Slot(id),
-                None => {
-                    let mut p: String<160> = String::new();
-                    for ch in b.chars() {
-                        if p.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    IoArg::Path(p)
-                }
-            };
-
-            match crate::matrix::alloc_slot(title.as_str()) {
-                Some(slot) => {
-                    let _ = spawner.spawn(io_matrix_job(slot, src, dst));
+                crate::surface::io::shellcmd::IoOutcome::Started(slot) => {
                     io.write_fmt(format_args!("io: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }
-                None => io.write_str("io: matrix full\r\n"),
+                crate::surface::io::shellcmd::IoOutcome::MatrixFull => {
+                    io.write_str("io: matrix full\r\n")
+                }
+                crate::surface::io::shellcmd::IoOutcome::SpawnFailed => {
+                    io.write_str("io: spawn failed\r\n")
+                }
             }
             return CommandAction::None;
         }
@@ -1140,7 +932,7 @@ fn handle_line(
             } else {
                 if let Some(path) = src.strip_prefix('@') {
                     let path = path.trim();
-                    match crate::disc::files::Fs::read_file(path) {
+                    match crate::surface::io::kfs::read_file(path) {
                         Ok(bytes) => {
                             let flags = if path.ends_with(".mjs")
                                 || shellqjs::looks_like_module_bytes(&bytes)
@@ -1175,7 +967,7 @@ fn handle_line(
             if src.is_empty() || dst.is_empty() || parts.next().is_some() {
                 io.write_str("mv: usage mv <src> <dst>\r\n");
             } else {
-                match crate::disc::files::Fs::rename(src, dst) {
+                match crate::surface::io::kfs::rename(src, dst) {
                     Ok(()) => io.write_str("mv: ok\r\n"),
                     Err(e) => io.write_fmt(format_args!("mv: failed ({:?})\r\n", e)),
                 }
@@ -1185,7 +977,7 @@ fn handle_line(
 
         if verb.eq_ignore_ascii_case("txt") || verb.eq_ignore_ascii_case("txtedt") {
             let arg = rest.trim();
-            if let Some(slot_id) = parse_slot_ref(arg) {
+            if let Some(slot_id) = crate::surface::io::shellcmd::parse_slot_ref(arg) {
                 // The editor is slot-oriented; show the slot symbol in the header.
                 let mut filename: String<48> = String::new();
                 let _ = write!(filename, "§{}", slot_id + 1);

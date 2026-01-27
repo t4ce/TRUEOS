@@ -50,3 +50,6 @@ lto = "fat"
 codegen-units = 1
 strip = true
 debug = false
+
+[build-dependencies]
+trueos-limloader = { path = "crates/trueos-limloader" }
