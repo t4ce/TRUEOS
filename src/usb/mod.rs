@@ -1,6 +1,5 @@
 pub mod cdc;
 pub mod cdc_acm;
-pub mod cdc_shell;
 pub mod hid;
 pub mod hub;
 pub mod input;
