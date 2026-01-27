@@ -99,7 +99,7 @@ mmd -i disk.img@@$((2048*512)) ::/qjs
 mcopy -o -s -i disk.img@@$((2048*512)) crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img@@$((2048*512)) 
 mdir -i disk.img@@$((2048*512)) ::/qjs
-mdir -i disk.img@@$((2048*512)) ::/qjs/CDN
+mdir -i disk.img@@$((2048*512)) ::/qjs/cdn
 
 
 qjs @/qjs/main.mjs
