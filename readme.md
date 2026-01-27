@@ -1,5 +1,9 @@
 # Steps Fresh Sys
 
+## Kernel modules (no_std)
+
+See docs/kernel-module-surface.md
+
 # clone repo , then
 git submodule init 
 git submodule update

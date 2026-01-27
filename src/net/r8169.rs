@@ -76,6 +76,11 @@ impl Mmio {
     }
 
     #[inline]
+    unsafe fn write_u8(&self, off: u16, val: u8) {
+        write_volatile(self.base.as_ptr().add(off as usize) as *mut u8, val);
+    }
+
+    #[inline]
     unsafe fn read_u16(&self, off: u16) -> u16 {
         read_volatile(self.base.as_ptr().add(off as usize) as *const u16)
     }
@@ -191,13 +196,13 @@ impl R8169Adapter {
                         opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
                         opts2: 0,
                         addr: buf.phys(),
-
-                        _rx_desc_mem: rx_desc_mem,
+                    },
+                );
             }
             rx_bufs.push(buf);
         }
 
-                        _tx_desc_mem: tx_desc_mem,
+        let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
             let eor = if i + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
@@ -245,11 +250,11 @@ impl R8169Adapter {
             mmio,
             mac,
             ring: None,
-            rx_desc_mem,
+            _rx_desc_mem: rx_desc_mem,
             rx_desc,
             rx_bufs,
             rx_idx: 0,
-            tx_desc_mem,
+            _tx_desc_mem: tx_desc_mem,
             tx_desc,
             tx_bufs,
             tx_head: 0,
