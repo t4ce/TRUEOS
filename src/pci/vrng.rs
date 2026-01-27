@@ -341,10 +341,10 @@ impl VirtioRng {
                 filled += take;
             }
 
-            // Immediately ask for more entropy if needed.
-            if filled < dest.len() {
-                self.resubmit();
-            }
+            // Always keep a buffer in-flight.
+            // Even if the caller requested fewer bytes than the device wrote,
+            // we still resubmit so the next consumer doesn't stall.
+            self.resubmit();
         }
         Ok(())
     }

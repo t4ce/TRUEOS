@@ -59,6 +59,17 @@ fn leak_str(s: alloc::string::String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+fn owner_device_index(owner: &str) -> Option<usize> {
+    let (base, suffix) = owner.rsplit_once('@')?;
+    if base.is_empty() || suffix.is_empty() {
+        return None;
+    }
+    if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<usize>().ok()
+}
+
 #[derive(Clone)]
 pub enum TlsCommand {
     /// Open a TCP connection and layer TLS over it.
@@ -180,6 +191,8 @@ pub async fn tls_socket_service_task() {
         return;
     }
 
+    crate::log!("tls-socket: service running\n");
+
     let mut conns: Vec<TlsConn> = Vec::new();
 
     loop {
@@ -194,13 +207,34 @@ pub async fn tls_socket_service_task() {
                         cfg,
                         roots,
                     } => {
+                        crate::log!(
+                            "tls-socket: open request owner={} remote={}.{}.{}.{}:{} sni={}\n",
+                            owner,
+                            remote.addr[0],
+                            remote.addr[1],
+                            remote.addr[2],
+                            remote.addr[3],
+                            remote.port,
+                            server_name
+                        );
+
                         let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
-                        let net_owner = leak_str(alloc::format!("tls@{}-{}", owner, seq));
+                        let dev_idx = owner_device_index(owner).unwrap_or(0);
+                        // NOTE: net_service_task routes sockets by parsing the *last* "@<digits>"
+                        // suffix. Ensure our net owner ends with a numeric suffix so TLS can be
+                        // pinned to a specific NIC.
+                        let net_owner = leak_str(alloc::format!("tls-{}-{}@{}", owner, seq, dev_idx));
                         let net_cmd_name = leak_str(alloc::format!("{}-net-cmd", net_owner));
                         let net_evt_name = leak_str(alloc::format!("{}-net-evt", net_owner));
                         let net_cmds = NetQueue::new_leaked(net_cmd_name, 128);
                         let net_events = NetQueue::new_leaked(net_evt_name, 128);
                         register_app_queues(net_owner, net_cmds, net_events);
+
+                        crate::log!(
+                            "tls-socket: net owner={} (device={})\n",
+                            net_owner,
+                            dev_idx
+                        );
 
                         let mut rng = KernelTlsRng::new();
                         let tls = match TlsClient::new(
@@ -213,6 +247,7 @@ pub async fn tls_socket_service_task() {
                         ) {
                             Ok(c) => c,
                             Err(e) => {
+                                crate::log!("tls-socket: TlsClient::new failed: {:?}\n", e);
                                 let _ = push_tls_event(owner, TlsEvent::TlsError {
                                     handle: None,
                                     err: e,
@@ -276,11 +311,21 @@ pub async fn tls_socket_service_task() {
                     NetEvent::Opened { handle, kind } => {
                         if kind == SocketKind::Tcp {
                             conns[idx].handle = Some(handle);
+                            crate::log!(
+                                "tls-socket: tcp opened owner={} handle={}\n",
+                                conns[idx].user_owner,
+                                handle.0
+                            );
                             let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                         }
                     }
                     NetEvent::TcpEstablished { handle } => {
                         if conns[idx].handle == Some(handle) {
+                            crate::log!(
+                                "tls-socket: tcp established owner={} handle={}\n",
+                                conns[idx].user_owner,
+                                handle.0
+                            );
                             // Send the already-prepared ClientHello.
                             flush_outgoing_tls(&mut conns[idx]);
                         }
@@ -288,6 +333,15 @@ pub async fn tls_socket_service_task() {
                     NetEvent::TcpData { handle, data } => {
                         if conns[idx].handle != Some(handle) {
                             continue;
+                        }
+
+                        if !data.is_empty() {
+                            crate::log!(
+                                "tls-socket: tcp rx owner={} handle={} len={}\n",
+                                conns[idx].user_owner,
+                                handle.0,
+                                data.len()
+                            );
                         }
 
                         let produced = match conns[idx].tls.ingest_encrypted(&data) {
@@ -316,11 +370,22 @@ pub async fn tls_socket_service_task() {
                     NetEvent::Closed { handle } => {
                         if conns[idx].handle == Some(handle) {
                             conns[idx].closed = true;
+                            crate::log!(
+                                "tls-socket: tcp closed owner={} handle={}\n",
+                                conns[idx].user_owner,
+                                handle.0
+                            );
                             let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
                             remove = true;
                         }
                     }
                     NetEvent::Error { msg } => {
+                        crate::log!(
+                            "tls-socket: net error owner={} handle={:?} msg={}\n",
+                            conns[idx].user_owner,
+                            conns[idx].handle.map(|h| h.0),
+                            msg
+                        );
                         let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error {
                             handle: conns[idx].handle,
                             msg,
