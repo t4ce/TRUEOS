@@ -229,6 +229,8 @@ pub extern "C" fn kmain() -> ! {
     pci::dma::alloc_test_once();
     pci::enumerate_once();
     pci::log_devices_once();
+    pci::vrng::init_once();
+    pci::vrng::smoke_test_once();
     disc::probe_once();
     tga::init_once();
 
@@ -244,7 +246,6 @@ pub extern "C" fn kmain() -> ! {
     acpi::bgrt::log_once();
     acpi::hpet::ensure();
 
-    rng::log_rng_caps();
     power::init();
 
     usb::xhci::init_once();

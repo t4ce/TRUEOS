@@ -17,6 +17,9 @@ fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"
 rdrand = { version = "0.8", default-features = false }
 getrandom = { version = "0.2", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math" }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "lfn"] }
