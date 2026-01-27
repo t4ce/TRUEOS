@@ -66,6 +66,20 @@ pub fn init(executor: &'static RawExecutor) {
     EXECUTOR_PTR.store(executor as *const _ as *mut RawExecutor, Ordering::Release);
 }
 
+/// Poll the Embassy executor once (if initialized).
+///
+/// This is used by a few synchronous subsystems (e.g. C ABI shims) that need
+/// background async services (network/timers) to keep progressing while they
+/// wait in a tight loop.
+#[inline]
+pub fn poll_executor() {
+    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return;
+    }
+    unsafe { (&*ptr).poll() };
+}
+
 #[inline]
 fn get_spawner() -> Option<Spawner> {
     let ptr = EXECUTOR_PTR.load(Ordering::Acquire);

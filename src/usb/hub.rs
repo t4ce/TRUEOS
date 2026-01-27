@@ -29,8 +29,6 @@ enum UsbNodeKind {
 #[derive(Copy, Clone, Debug)]
 struct UsbNode {
     kind: UsbNodeKind,
-    port: u8,
-    slot_id: u32,
     vid: u16,
     pid: u16,
     class: u8,
@@ -67,8 +65,6 @@ pub fn init_topology(ctx: &XhciContext) {
     let mut tree = Tree::new();
     let root = match tree.add_root(UsbNode {
         kind: UsbNodeKind::Root,
-        port: 0,
-        slot_id: 0,
         vid: 0,
         pid: 0,
         class: 0,
@@ -93,8 +89,6 @@ pub fn init_topology(ctx: &XhciContext) {
             root,
             UsbNode {
                 kind: UsbNodeKind::Port,
-                port: port as u8,
-                slot_id: 0,
                 vid: 0,
                 pid: 0,
                 class: 0,
@@ -136,8 +130,6 @@ pub fn record_root_device(
             port_node,
             UsbNode {
                 kind: UsbNodeKind::Device,
-                port: target_port,
-                slot_id,
                 vid: dev_vid,
                 pid: dev_pid,
                 class: dev_cls,
@@ -181,8 +173,6 @@ pub fn record_hub_ports(ctx: &XhciContext, hub_slot_id: u32, port_count: u8) {
                 hub_node,
                 UsbNode {
                     kind: UsbNodeKind::Port,
-                    port,
-                    slot_id: 0,
                     vid: 0,
                     pid: 0,
                     class: 0,
@@ -229,8 +219,6 @@ pub fn record_hub_child(
             port_node,
             UsbNode {
                 kind: UsbNodeKind::Device,
-                port: hub_port,
-                slot_id,
                 vid: dev_vid,
                 pid: dev_pid,
                 class: dev_cls,
@@ -265,28 +253,6 @@ fn take_ep0_state(ctx: &XhciContext, slot_id: u32) -> Option<TrbRingState> {
         .iter()
         .find(|(slot, _)| *slot == slot_id)
         .map(|(_, s)| *s)
-}
-
-pub async fn ensure_hub_port_enabled_via_saved_ep0(
-    ctx: &XhciContext,
-    hub_slot_id: u32,
-    hub_port: u8,
-    power_on_good_ms: u16,
-    hub_speed_code: u32,
-) -> Option<HubPortState> {
-    let state = take_ep0_state(ctx, hub_slot_id)?;
-    let mut ring = unsafe { TrbRing::from_state(state) };
-    let out = ensure_port_enabled(
-        ctx,
-        &mut ring,
-        hub_slot_id,
-        hub_port,
-        power_on_good_ms,
-        hub_speed_code,
-    )
-    .await;
-    store_ep0_state(ctx, hub_slot_id, ring.snapshot());
-    out
 }
 
 pub async fn force_hub_port_reset_via_saved_ep0(
