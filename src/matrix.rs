@@ -84,8 +84,71 @@ fn refresh_preview_locked(data: &mut SlotData) {
         for line in text.split('\n') {
             push_line_into_lines(lines, line.trim_end_matches('\r'));
         }
-    } else {
-        push_line_into_lines(lines, "(non-utf8 bytes)");
+        return;
+    }
+
+    // Lossy UTF-8 decode:
+    // - preserves as much readable content as possible
+    // - replaces invalid sequences with U+FFFD
+    // - keeps the same newline splitting behavior as the UTF-8 fast path
+    let mut cur: String<LINE_LEN> = String::new();
+    let mut i: usize = 0;
+    while i < blob.len() {
+        match core::str::from_utf8(&blob[i..]) {
+            Ok(s) => {
+                for ch in s.chars() {
+                    match ch {
+                        '\r' => {}
+                        '\n' => {
+                            if lines.is_full() {
+                                let _ = lines.pop_front();
+                            }
+                            let _ = lines.push_back(cur);
+                            cur = String::new();
+                        }
+                        _ => {
+                            let _ = cur.push(ch);
+                        }
+                    }
+                }
+                break;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to != 0 {
+                    if let Ok(s) = core::str::from_utf8(&blob[i..i + valid_up_to]) {
+                        for ch in s.chars() {
+                            match ch {
+                                '\r' => {}
+                                '\n' => {
+                                    if lines.is_full() {
+                                        let _ = lines.pop_front();
+                                    }
+                                    let _ = lines.push_back(cur);
+                                    cur = String::new();
+                                }
+                                _ => {
+                                    let _ = cur.push(ch);
+                                }
+                            }
+                        }
+                    }
+                    i += valid_up_to;
+                }
+
+                // Skip the invalid byte sequence and insert a replacement char.
+                let skip = e.error_len().unwrap_or(1).max(1);
+                i = i.saturating_add(skip);
+                let _ = cur.push('\u{FFFD}');
+            }
+        }
+    }
+
+    if !cur.is_empty() {
+        if lines.is_full() {
+            let _ = lines.pop_front();
+        }
+        let _ = lines.push_back(cur);
     }
 }
 
