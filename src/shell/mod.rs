@@ -13,6 +13,7 @@ pub(crate) mod ecma48;
 
 pub(crate) mod shellcube;
 pub(crate) mod shellqjs;
+pub(crate) mod txtedt;
 
 mod crlf;
 
@@ -587,7 +588,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 };
 
                                 crate::matrix::set_state(slot_id, crate::matrix::SlotState::Running);
-                                let out_buf = crate::txtedt::run(io, cols, rows, filename.as_str(), buf).await;
+                                let out_buf = crate::shell::txtedt::run(io, cols, rows, filename.as_str(), buf).await;
                                 let _ = crate::matrix::set_blob_owned_with_preview(slot_id, out_buf);
                                 crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
                                 io.write_fmt(format_args!("\r\ntxt: updated §{}\r\n", slot_id + 1));

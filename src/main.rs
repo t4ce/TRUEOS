@@ -44,7 +44,6 @@ mod matrix;
 mod shell;
 pub(crate) use shell::ecma48;
 mod install;
-mod txtedt;
 mod surface;
 mod tga;
 mod time;
