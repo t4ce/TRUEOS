@@ -54,3 +54,23 @@ pub fn log_rng_caps() {
         }
     }
 }
+
+// Provide entropy for crates that rely on `getrandom` (e.g. rustls crypto providers).
+// This uses x86_64 RDRAND; if unavailable, callers will see an UNSUPPORTED error.
+#[cfg(target_arch = "x86_64")]
+fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
+    let mut i = 0usize;
+    while i < dest.len() {
+        let Some(v) = rdrand_u64() else {
+            return Err(getrandom::Error::UNSUPPORTED);
+        };
+        let bytes = v.to_le_bytes();
+        let n = (dest.len() - i).min(bytes.len());
+        dest[i..i + n].copy_from_slice(&bytes[..n]);
+        i += n;
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+getrandom::register_custom_getrandom!(trueos_getrandom);

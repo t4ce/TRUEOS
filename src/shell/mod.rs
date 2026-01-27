@@ -1029,6 +1029,42 @@ fn handle_line(
             return CommandAction::None;
         }
 
+        if verb.eq_ignore_ascii_case("https") {
+            let mut parts = rest.split_whitespace();
+            let host = parts.next().unwrap_or("");
+            if parts.next().is_some() {
+                io.write_str("https: usage https [host]\r\n");
+                io.write_str("https: demo: rustls handshake + GET /\r\n");
+                io.write_str("https: default host is example.com\r\n");
+                return CommandAction::None;
+            }
+
+            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
+            let _ = title.push_str("https ");
+            let show_host = if host.is_empty() { "example.com" } else { host };
+            for ch in show_host.chars() {
+                if title.push(ch).is_err() {
+                    break;
+                }
+            }
+
+            match crate::matrix::alloc_slot(title.as_str()) {
+                Some(slot) => {
+                    let mut h: String<96> = String::new();
+                    for ch in host.chars() {
+                        if h.push(ch).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = spawner.spawn(crate::tls_demo::tls_demo_matrix_job(slot, h));
+                    io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
+                    refresh_matrix_symbols(io, *term_cols);
+                }
+                None => io.write_str("https: matrix full\r\n"),
+            }
+            return CommandAction::None;
+        }
+
         if verb.eq_ignore_ascii_case("install") {
             if let Some(p) = crate::install::handle_install_command(io, rest) {
                 return CommandAction::Pending(match p {

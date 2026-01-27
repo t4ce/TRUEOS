@@ -30,6 +30,8 @@ mod exceptions;
 mod limine;
 mod limstats;
 mod net;
+mod tls;
+mod tls_demo;
 mod pci;
 mod percpu;
 mod phys;
