@@ -39,23 +39,3 @@ impl LinkState {
         }
     }
 }
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DescFormat {
-    pub desc_len: usize,
-    pub align: usize,
-    pub writable: bool,
-}
-
-pub trait VendorNetAdapter {
-    fn init_hw(&mut self) -> Result<(), ()>;
-    fn reset(&mut self);
-    fn read_link(&mut self) -> LinkState;
-    fn write_regs(&mut self);
-    fn kick_tx(&mut self);
-    fn ack_irq(&mut self);
-    fn enable_irq(&mut self);
-    fn disable_irq(&mut self);
-    fn rx_desc_format(&self) -> DescFormat;
-    fn tx_desc_format(&self) -> DescFormat;
-}
