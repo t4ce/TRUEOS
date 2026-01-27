@@ -2,7 +2,6 @@
 extern crate alloc;
 
 use core::fmt;
-use alloc::vec::Vec;
 
 /// Minimal I/O surface.
 ///
@@ -60,48 +59,6 @@ pub trait Write {
 			}
 		}
 		Ok(())
-	}
-}
-
-/// Kernel-facing file helpers used by shell commands and other subsystems.
-///
-/// Intentionally does not depend on shell/matrix/spawner types.
-pub mod files {
-	use alloc::vec::Vec;
-
-	use crate::disc::files::{Fs, FsError, UsbFsReadError};
-
-	#[inline]
-	pub fn read_file(path: &str) -> core::result::Result<Vec<u8>, FsError> {
-		Fs::read_file(path)
-	}
-
-	#[inline]
-	pub fn write_file(path: &str, data: &[u8]) -> core::result::Result<(), FsError> {
-		Fs::write_file(path, data)
-	}
-
-	/// Read a file, returning an empty buffer if it doesn't exist (OpenFailed).
-	///
-	/// This matches the shell's previous behavior for `io <src> <dst>` append.
-	pub fn read_file_or_empty(path: &str) -> core::result::Result<Vec<u8>, FsError> {
-		match Fs::read_file(path) {
-			Ok(bytes) => Ok(bytes),
-			Err(FsError::Read(UsbFsReadError::OpenFailed)) => Ok(Vec::new()),
-			Err(e) => Err(e),
-		}
-	}
-
-	/// Append `src` bytes into `dst_path`.
-	///
-	/// If `dst_path` doesn't exist, it is created.
-	pub fn append_bytes(dst_path: &str, src: &[u8]) -> core::result::Result<(), FsError> {
-		if src.is_empty() {
-			return Ok(());
-		}
-		let mut dst = read_file_or_empty(dst_path)?;
-		dst.extend_from_slice(src);
-		Fs::write_file(dst_path, dst.as_slice())
 	}
 }
 

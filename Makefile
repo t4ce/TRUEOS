@@ -1,3 +1,4 @@
+BUILD_MODE ?= debug
 KERNEL_BIN = target/86_64/$(BUILD_MODE)/TRUEOS
 
 
