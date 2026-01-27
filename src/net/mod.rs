@@ -5,6 +5,7 @@ pub mod e1000;
 pub mod html;
 pub mod ring;
 pub mod r8169;
+pub mod tls_socket;
 pub mod vio;
 
 use spin::Mutex;

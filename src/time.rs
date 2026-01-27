@@ -38,6 +38,30 @@ struct TimerEntry {
 static TIMERS: Mutex<Vec<TimerEntry, MAX_TIMERS>> = Mutex::new(Vec::new());
 
 #[inline]
+pub fn uptime_seconds() -> u64 {
+    let ticks = embassy_time_driver::now();
+    let hz = TICK_HZ as u64;
+    if hz == 0 {
+        0
+    } else {
+        ticks / hz
+    }
+}
+
+/// Best-effort Unix time (seconds since epoch).
+///
+/// Uses Limine's boot timestamp (wall clock at boot) plus monotonic uptime.
+/// Returns `None` if the boot timestamp is unavailable (or 0).
+#[inline]
+pub fn unix_time_seconds() -> Option<u64> {
+    let base = crate::limine::boot_timestamp_secs()?;
+    if base == 0 {
+        return None;
+    }
+    Some(base.saturating_add(uptime_seconds()))
+}
+
+#[inline]
 pub fn init(executor: &'static RawExecutor) {
     EXECUTOR_PTR.store(executor as *const _ as *mut RawExecutor, Ordering::Release);
 }

@@ -1266,13 +1266,10 @@ fn handle_line(
     }
 
     if cmd.eq_ignore_ascii_case("time") {
-        let Some(boot_ts) = crate::limine::boot_timestamp_secs() else {
+        let Some(ts) = crate::time::unix_time_seconds() else {
             io.write_str("time: boot timestamp unavailable\r\n");
             return CommandAction::None;
         };
-        let now_ticks = embassy_time_driver::now();
-        let elapsed_secs = now_ticks / (embassy_time_driver::TICK_HZ as u64);
-        let ts = boot_ts.saturating_add(elapsed_secs);
         let (year, month, day, hour, minute, second) = unix_timestamp_to_ymdhms(ts);
 
         let mut buf: String<64> = String::new();
