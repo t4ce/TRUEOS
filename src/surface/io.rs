@@ -102,6 +102,13 @@ pub mod kfs {
 		crate::disc::files::Fs::remove(path)
 	}
 
+	#[inline]
+	pub fn create_dir_all(
+		path: &str,
+	) -> core::result::Result<(), crate::disc::files::FsError> {
+		crate::disc::files::Fs::create_dir_all(path)
+	}
+
 	/// Read a destination file for an append operation.
 	///
 	/// Mirrors the shell's historical behavior: a missing/unopenable destination
@@ -1195,7 +1202,7 @@ pub mod cabi {
 	/// - Otherwise downloads and writes `path + ".tmp"`, then renames into place.
 	///
 	/// Notes:
-	/// - Cache directory must already exist.
+	/// - Parent directories for `path` are created automatically (mkdir -p).
 	/// - This function drives the Embassy executor while waiting for network events;
 	///   it is intended to be called from non-async contexts.
 	#[no_mangle]
@@ -1220,6 +1227,15 @@ pub mod cabi {
 		// If already cached, done.
 		if super::kfs::read_file(path).is_ok() {
 			return 0;
+		}
+
+		// Ensure the cache directory exists before downloading.
+		if let Some((parent, _name)) = path.rsplit_once('/') {
+			if !parent.is_empty() {
+				if super::kfs::create_dir_all(parent).is_err() {
+					return FS_ERR_IO;
+				}
+			}
 		}
 
 		let parsed = match parse_url(url_s) {
