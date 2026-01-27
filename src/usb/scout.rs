@@ -7,7 +7,7 @@ use super::{
     cdc_acm, disable_slot, enable_slot, enumerate_port, enumerate_with_params, hid, hub, mass,
     uac, DeviceKind, UsbControllerState, DEVICES, ENUM_READY, USB_LOG_VERBOSE,
 };
-use crate::pci::{dma, osal};
+use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -172,7 +172,6 @@ async fn enumerate_hub_ports(
 
 fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     let controller_id = info.controller_id;
-    osal::ensure_dma_api_initialized();
 
     let ctx = unsafe { XhciContext::new(info) };
     let page_size_mask = unsafe { ctx.page_size_mask() };

@@ -3,6 +3,7 @@ linker = "rust-lld"
 
 [target.'cfg(target_os = "none")']
 rustflags = [
+  "--cfg", "getrandom_backend=\"custom\"",
   "-C", "link-arg=-Tlinker.ld",
   "-C", "link-arg=--no-gc-sections",
   "-C", "link-arg=-z",
