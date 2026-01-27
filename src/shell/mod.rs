@@ -807,10 +807,34 @@ fn handle_line(
                     io.write_str("§: ids are 1..\r\n");
                     return CommandAction::None;
                 }
+                let slot_id = id - 1;
+
+                // Prefer dumping the slot blob (full, untruncated). This is what
+                // `get`/`https` jobs store their main payload in.
+                if let Some((state, title, has_blob, blob_len)) = crate::matrix::with_slot(slot_id, |s| {
+                    (s.state, s.title.clone(), !s.blob.is_empty(), s.blob.len())
+                }) {
+                    if has_blob {
+                        let blob = crate::matrix::take_blob(slot_id).unwrap_or_default();
+                        io.write_fmt(format_args!("#{} {:?} {}\r\n", id, state, title.as_str()));
+                        io.write_fmt(format_args!("(blob {} bytes)\r\n", blob_len));
+                        for &b in blob.iter() {
+                            io.write_byte(b);
+                        }
+                        if !blob.ends_with(b"\n") {
+                            io.write_str("\r\n");
+                        }
+                        let _ = crate::matrix::free_slot(slot_id);
+                        refresh_matrix_symbols(io, *term_cols);
+                        return CommandAction::None;
+                    }
+                }
+
+                // Fallback: old preview dump (limited, but useful for non-blob jobs).
                 let mut buf: String<1024> = String::new();
-                if crate::matrix::dump_slot(&mut buf, id - 1) {
+                if crate::matrix::dump_slot(&mut buf, slot_id) {
                     io.write_str(buf.as_str());
-                    let _ = crate::matrix::free_slot(id - 1);
+                    let _ = crate::matrix::free_slot(slot_id);
                     refresh_matrix_symbols(io, *term_cols);
                 } else {
                     io.write_str("§: not found\r\n");
