@@ -5,16 +5,8 @@ KERNEL_BIN = target/86_64/$(BUILD_MODE)/TRUEOS
 ISO_DIR 		:= bld
 ISO_PATH 		:= bld/trueos.iso
 LIMINE_CFG 		:= limine.conf
-LIMINE_SRC 		:= limine
-LIMINE_BUILD 	:= bld/limine-build
 LIMINE_PREFIX 	:= bld/limine-prefix
-LIMINE_STAMP 	:= $(LIMINE_BUILD)/.installed
 LIMINE_SHARE 	:= $(LIMINE_PREFIX)/share/limine
-LIMINE_BIN 		:= $(LIMINE_PREFIX)/bin/limine
-
-LIMINE_CONFIG_ARGS := --prefix=$(abspath $(LIMINE_PREFIX)) --enable-bios --enable-uefi-x86-64 --enable-uefi-cd
-
-DEPS_SCRIPT := scripts/fetch-deps.sh
 
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
@@ -44,47 +36,8 @@ QEMU_USB_FLAGS =  \
 
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
-$(LIMINE_STAMP):
-	@$(DEPS_SCRIPT)
-	@# Reconfigure/rebuild Limine if configure flags changed.
-	@mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
-	@echo '$(LIMINE_CONFIG_ARGS)' > $(LIMINE_BUILD)/.config_args.new
-	@if [ -f $(LIMINE_BUILD)/.config_args ]; then \
-		if ! cmp -s $(LIMINE_BUILD)/.config_args $(LIMINE_BUILD)/.config_args.new; then \
-			echo "Limine config changed; rebuilding..."; \
-			rm -rf $(LIMINE_BUILD) $(LIMINE_PREFIX); \
-			mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX); \
-		fi; \
-	fi
-	@mv -f $(LIMINE_BUILD)/.config_args.new $(LIMINE_BUILD)/.config_args
-	@if [ ! -f $(LIMINE_SRC)/configure ]; then \
-		if ! command -v autoreconf >/dev/null 2>&1; then \
-			echo "error: Limine bootstrap requires 'autoreconf' (autoconf)."; \
-			echo "hint: install autoconf + automake (and likely libtool), then retry."; \
-			exit 1; \
-		fi; \
-		(cd $(LIMINE_SRC) && ./bootstrap); \
-	fi
-	cd $(LIMINE_BUILD) && $(abspath $(LIMINE_SRC))/configure \
-		CC_FOR_TARGET=gcc \
-		LD_FOR_TARGET=ld \
-		OBJCOPY_FOR_TARGET=objcopy \
-		OBJDUMP_FOR_TARGET=objdump \
-		READELF_FOR_TARGET=readelf \
-		$(LIMINE_CONFIG_ARGS)
-	$(MAKE) -C $(LIMINE_BUILD)
-	$(MAKE) -C $(LIMINE_BUILD) install
-	@if [ -f $(LIMINE_BUILD)/bin/limine-bios-hdd.bin ]; then \
-		mkdir -p $(LIMINE_SHARE); \
-		cp $(LIMINE_BUILD)/bin/limine-bios-hdd.bin $(LIMINE_SHARE)/; \
-	fi
-	touch $(LIMINE_STAMP)
-
-.PHONY: deps
-deps:
-	@$(DEPS_SCRIPT)
-
-iso: deps $(LIMINE_STAMP)
+iso:
+	@# Limine is ensured by Cargo build.rs (see build.rs + trueos-limloader).
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
 	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/TRUEOS.elf $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)

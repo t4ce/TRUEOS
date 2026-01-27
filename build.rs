@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use trueos_limloader::ensure_limine_from_manifest_dir;
+
 fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|p| p.is_file()).cloned()
 }
@@ -23,6 +25,9 @@ fn write_xor_encoded(out_dir: &Path, src: &Path, dst_name: &str, key: u8) {
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+
+    // Ensure Limine is present/built for both ISO assembly and installer payload embedding.
+    ensure_limine_from_manifest_dir(&manifest_dir);
 
     // These are produced by the Makefile's Limine build (bld/limine-build + bld/limine-prefix).
     // If you invoke cargo directly without running `make iso`, these may not exist.
