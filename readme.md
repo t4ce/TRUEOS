@@ -9,12 +9,12 @@ sudo apt install autoconf automake mtools nasm xorriso
 sudo apt-get install qemu-system
 sudo apt install gdb
 
-# cargo install cargo-outdated
+cargo install cargo-outdated 
+cargo install cargo-edit --locked
 # (Note) This repo's kernel builds use a custom target JSON. Use `make iso` or pass `--target 86_64.json`.
 cargo outdated -R
-# cargo upgrade
-
-
+cargo upgrade
+cargo update
 
 
 check disc files after install

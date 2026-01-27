@@ -10,15 +10,15 @@ embassy-time-driver = { version = "0.2.1", default-features = false }
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
 spin = "0.10"
 heapless = { version = "0.9", default-features = false }
-dma-api = { version = "0.5.2", default-features = false, features = ["alloc"] }
 limine = { version = "0.5", default-features = false }
 acpi = { version = "6", default-features = false }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 rdrand = { version = "0.8", default-features = false }
-getrandom = { version = "0.2", default-features = false, features = ["custom"] }
+getrandom = { version = "0.3", default-features = false }
+getrandom02 = { package = "getrandom", version = "0.2.17", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
-rand_core = { version = "0.6", default-features = false }
-rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.9", default-features = false }
+rand_chacha = { version = "0.9", default-features = false }
 zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math" }
@@ -36,10 +36,10 @@ trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 # TLS demo (rustls). Intentionally NOT optional.
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
-webpki-roots = { version = "0.26", default-features = false }
+webpki-roots = { version = "1.0", default-features = false }
 
 # Used by the TLS demo to decode gzip/deflate HTTP bodies (no_std + alloc).
-miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 
 [profile.dev]
 panic = "abort"
