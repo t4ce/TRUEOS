@@ -1,8 +1,9 @@
-use alloc::{string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, Ordering};
+use alloc::{boxed::Box, string::String, vec::Vec};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use heapless::String as HString;
 
 use crate::net::adapter::{
     net_debug_counters, register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue,
@@ -15,6 +16,7 @@ const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
 const HTTP_SMOKE_UDP_PORT: u16 = 4244;
 
 static NET_HTTP_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static HTTP_GET_JOB_SEQ: AtomicU32 = AtomicU32::new(1);
 
 fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
     // Minimal DNS query for <qtype>/IN <host>.
@@ -222,7 +224,298 @@ fn log_http_snippet(buf: &[u8]) {
 /// - Connects to port 80 and issues a minimal HTTP/1.1 GET.
 /// - Treats 200 and all 3xx redirects as success.
 fn leak_str(s: String) -> &'static str {
-    alloc::boxed::Box::leak(s.into_boxed_str())
+    Box::leak(s.into_boxed_str())
+}
+
+#[derive(Clone, Debug)]
+struct ParsedHttpUrl {
+    host: HString<96>,
+    port: u16,
+    path: HString<160>,
+}
+
+fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
+    // Accept:
+    // - http://host[:port][/path]
+    // - host[:port][/path]
+    // (no IPv6 bracket support here yet)
+    let mut u = url.trim();
+    if u.is_empty() {
+        return Err("empty url");
+    }
+    if let Some(rest) = u.strip_prefix("http://") {
+        u = rest;
+    } else if u.strip_prefix("https://").is_some() {
+        return Err("https:// not supported here (use plaintext http://)");
+    }
+
+    let (hostport, path) = match u.split_once('/') {
+        Some((a, b)) => (a, b),
+        None => (u, ""),
+    };
+
+    let (host_str, port) = match hostport.split_once(':') {
+        Some((h, p)) => {
+            let p = p.trim();
+            if p.is_empty() {
+                return Err("empty port");
+            }
+            let port = p.parse::<u16>().map_err(|_| "bad port")?;
+            (h, port)
+        }
+        None => (hostport, 80u16),
+    };
+
+    let host_str = host_str.trim();
+    if host_str.is_empty() {
+        return Err("empty host");
+    }
+
+    let mut host: HString<96> = HString::new();
+    for ch in host_str.chars() {
+        if host.push(ch).is_err() {
+            break;
+        }
+    }
+
+    let mut out_path: HString<160> = HString::new();
+    if path.is_empty() {
+        let _ = out_path.push('/');
+    } else {
+        let _ = out_path.push('/');
+        for ch in path.chars() {
+            if out_path.push(ch).is_err() {
+                break;
+            }
+        }
+    }
+
+    Ok(ParsedHttpUrl {
+        host,
+        port,
+        path: out_path,
+    })
+}
+
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+}
+
+/// Minimal plaintext HTTP GET downloader.
+///
+/// Downloads into the matrix slot blob so users can save it via `io` later.
+#[task]
+pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
+    crate::matrix::push_line(slot_id, "get: starting");
+
+    if crate::net::mac_address().is_none() {
+        crate::matrix::push_line(slot_id, "get: disabled (no NIC)");
+        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+        return;
+    }
+
+    let parsed = match parse_http_url(url.as_str()) {
+        Ok(p) => p,
+        Err(e) => {
+            crate::matrix::push_line(slot_id, "get: bad url");
+            crate::matrix::push_line(slot_id, e);
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+            return;
+        }
+    };
+
+    let seq = HTTP_GET_JOB_SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = leak_str(alloc::format!("net-httpget-{}-{}", slot_id + 1, seq));
+    let cmds_name = leak_str(alloc::format!("{}-cmd", owner));
+    let evts_name = leak_str(alloc::format!("{}-evt", owner));
+    let cmds = NetQueue::new_leaked(cmds_name, 128);
+    let events = NetQueue::new_leaked(evts_name, 128);
+    register_app_queues(owner, cmds, events);
+
+    let dns_id: u16 = 0xA100u16.wrapping_add(slot_id as u16);
+    let udp_port: u16 = 4400u16.wrapping_add(slot_id as u16);
+    let _ = cmds.push(NetCommand::OpenUdp { port: udp_port });
+    crate::matrix::push_line(slot_id, "get: opening udp");
+
+    let mut udp_handle: Option<NetHandle> = None;
+    let mut tcp_handle: Option<NetHandle> = None;
+    let mut resolved: Option<[u8; 4]> = None;
+    let mut sent_dns = false;
+    let mut sent_connect = false;
+    let mut sent_get = false;
+
+    // Cap to avoid unbounded kernel heap growth.
+    const MAX_RX: usize = 2 * 1024 * 1024;
+    let mut rx: Vec<u8> = Vec::new();
+    let mut truncated = false;
+
+    let deadline = Instant::now() + EmbassyDuration::from_secs(12);
+
+    loop {
+        for ev in events.drain(32) {
+            match ev {
+                NetEvent::Opened { handle, kind } => match kind {
+                    SocketKind::Udp => {
+                        udp_handle = Some(handle);
+                        crate::matrix::push_line(slot_id, "get: udp opened");
+                    }
+                    SocketKind::Tcp => {
+                        tcp_handle = Some(handle);
+                        crate::matrix::push_line(slot_id, "get: tcp opened");
+                    }
+                },
+                NetEvent::UdpPacket { handle, data, .. } => {
+                    if udp_handle != Some(handle) {
+                        continue;
+                    }
+                    match dns_parse_first_a(&data, dns_id) {
+                        Ok(Some(ip)) => {
+                            resolved = Some(ip);
+                            let line = alloc::format!(
+                                "get: nslookup {} => {}.{}.{}.{}",
+                                parsed.host.as_str(),
+                                ip[0],
+                                ip[1],
+                                ip[2],
+                                ip[3]
+                            );
+                            crate::matrix::push_line(slot_id, line.as_str());
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            crate::matrix::push_line(slot_id, "get: dns parse error");
+                            crate::matrix::push_line(slot_id, e);
+                            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+                            return;
+                        }
+                    }
+                }
+                NetEvent::TcpEstablished { handle } => {
+                    if tcp_handle != Some(handle) {
+                        continue;
+                    }
+                    crate::matrix::push_line(slot_id, "get: tcp established");
+                    if !sent_get {
+                        let mut req: Vec<u8> = Vec::new();
+                        req.extend_from_slice(b"GET ");
+                        req.extend_from_slice(parsed.path.as_str().as_bytes());
+                        req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
+                        req.extend_from_slice(parsed.host.as_str().as_bytes());
+                        req.extend_from_slice(b"\r\nUser-Agent: TRUEOS get\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+                        if let Some(h) = tcp_handle {
+                            let _ = cmds.push(NetCommand::SendTcp { handle: h, data: req });
+                            sent_get = true;
+                            crate::matrix::push_line(slot_id, "get: sent http request");
+                        }
+                    }
+                }
+                NetEvent::TcpData { handle, data } => {
+                    if tcp_handle != Some(handle) {
+                        continue;
+                    }
+                    if rx.len() < MAX_RX {
+                        let room = MAX_RX - rx.len();
+                        let take = data.len().min(room);
+                        rx.extend_from_slice(&data[..take]);
+                        if take < data.len() {
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = true;
+                    }
+                }
+                NetEvent::Closed { handle } => {
+                    if tcp_handle == Some(handle) {
+                        tcp_handle = None;
+
+                        // We expect the server to close (Connection: close). Finish now.
+                        let hdr_end = find_http_header_end(&rx);
+                        let body_off = hdr_end.unwrap_or(0);
+                        let status = parse_http_status(&rx);
+                        if let Some(code) = status {
+                            let line = alloc::format!("get: http status={}", code);
+                            crate::matrix::push_line(slot_id, line.as_str());
+                        } else {
+                            crate::matrix::push_line(slot_id, "get: http status unknown");
+                        }
+
+                        let body = if body_off <= rx.len() {
+                            rx.split_off(body_off)
+                        } else {
+                            Vec::new()
+                        };
+
+                        let line = alloc::format!(
+                            "get: body bytes={}{}",
+                            body.len(),
+                            if truncated { " (truncated)" } else { "" }
+                        );
+                        crate::matrix::push_line(slot_id, line.as_str());
+
+                        let _ = crate::matrix::set_blob_owned_with_preview(slot_id, body);
+                        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
+
+                        if let Some(h) = udp_handle {
+                            let _ = cmds.push(NetCommand::Close { handle: h });
+                        }
+                        return;
+                    }
+                    if udp_handle == Some(handle) {
+                        udp_handle = None;
+                    }
+                }
+                NetEvent::Error { msg } => {
+                    let _ = msg;
+                }
+                NetEvent::TcpSent { .. } => {}
+            }
+        }
+
+        if !sent_dns {
+            if let Some(h) = udp_handle {
+                let dns = dns_query(dns_id, parsed.host.as_str(), 1);
+                let _ = cmds.push(NetCommand::SendUdp {
+                    handle: h,
+                    remote: NetEndpoint {
+                        addr: SLIRP_DNS_IP,
+                        port: 53,
+                    },
+                    data: dns,
+                });
+                sent_dns = true;
+                crate::matrix::push_line(slot_id, "get: sent dns query");
+            }
+        }
+
+        if !sent_connect {
+            if let Some(ip) = resolved {
+                let _ = cmds.push(NetCommand::OpenTcpConnect {
+                    remote: NetEndpoint {
+                        addr: ip,
+                        port: parsed.port,
+                    },
+                });
+                sent_connect = true;
+                crate::matrix::push_line(slot_id, "get: opening tcp");
+            }
+        }
+
+        if Instant::now() >= deadline {
+            crate::matrix::push_line(slot_id, "get: timed out");
+            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+            if let Some(h) = tcp_handle {
+                let _ = cmds.push(NetCommand::Close { handle: h });
+            }
+            if let Some(h) = udp_handle {
+                let _ = cmds.push(NetCommand::Close { handle: h });
+            }
+            return;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
 }
 
 async fn net_http_smoke_for_device(idx: usize) {

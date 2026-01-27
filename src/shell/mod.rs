@@ -90,12 +90,13 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 22] = [
+const SHELL_COMMANDS: [&str; 23] = [
     "qjs",
     "out",
     "in",
     "io",
     "https",
+    "get",
     "files",
     "§",
     "s5",
@@ -993,47 +994,18 @@ fn handle_line(
             return CommandAction::None;
         }
 
-        if verb.eq_ignore_ascii_case("https") {
+        if verb.eq_ignore_ascii_case("get") {
             let mut parts = rest.split_whitespace();
             let url = parts.next().unwrap_or("");
             if url.is_empty() {
-                io.write_str("https: usage https <host|https://url> [--tofu] [--pin <sha256hex>]\r\n");
-                io.write_str("https: example https web.de\r\n");
-                io.write_str("https: example https https://google.de/\r\n");
-                return CommandAction::None;
-            }
-
-            let mut pin_mode = crate::net::https::PinMode::None;
-
-            while let Some(arg) = parts.next() {
-                if arg == "--tofu" {
-                    pin_mode = crate::net::https::PinMode::Tofu;
-                    continue;
-                }
-                if arg == "--pin" {
-                    let Some(hex) = parts.next() else {
-                        io.write_str("https: --pin needs an argument\r\n");
-                        return CommandAction::None;
-                    };
-                    match crate::net::https::parse_pin_hex(hex) {
-                        Ok(h) => pin_mode = crate::net::https::PinMode::Pin(h),
-                        Err(e) => {
-                            io.write_str("https: bad pin\r\n");
-                            io.write_str(e);
-                            io.write_str("\r\n");
-                            return CommandAction::None;
-                        }
-                    }
-                    continue;
-                }
-
-                io.write_str("https: unknown option\r\n");
-                io.write_str("https: usage https <host|https://url> [--tofu] [--pin <sha256hex>]\r\n");
+                io.write_str("get: usage get <host|http://url>\r\n");
+                io.write_str("get: example get http://example.com/\r\n");
+                io.write_str("get: note: plaintext HTTP only (no TLS)\r\n");
                 return CommandAction::None;
             }
 
             let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("https ");
+            let _ = title.push_str("get ");
             for ch in url.chars() {
                 if title.push(ch).is_err() {
                     break;
@@ -1048,11 +1020,11 @@ fn handle_line(
                             break;
                         }
                     }
-                    let _ = spawner.spawn(crate::net::https::https_matrix_job(slot, u, pin_mode));
-                    io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
+                    let _ = spawner.spawn(crate::net::html::http_get_matrix_job(slot, u));
+                    io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }
-                None => io.write_str("https: matrix full\r\n"),
+                None => io.write_str("get: matrix full\r\n"),
             }
             return CommandAction::None;
         }
