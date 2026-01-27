@@ -5,7 +5,7 @@ use super::xhci::{
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
-use crate::serial::{SerialNumber, SerialPort};
+use crate::serial::{SerialNumber};
 use alloc::boxed::Box;
 use core::cmp;
 use core::future::poll_fn;
@@ -426,20 +426,6 @@ pub fn serial_port(controller_id: usize, slot_id: u32) -> Option<CdcSerialPort> 
         })
     } else {
         None
-    }
-}
-
-impl SerialPort for CdcSerialPort {
-    fn write(&self, data: &[u8]) -> usize {
-        queue_tx_bytes(self.controller_id, self.slot_id, data)
-    }
-
-    fn write_all<'a>(&'a self, data: &'a [u8]) -> Pin<Box<dyn core::future::Future<Output = usize> + 'a>> {
-        Box::pin(write_all(self.controller_id, self.slot_id, data))
-    }
-
-    fn serial_number(&self) -> Option<SerialNumber> {
-        device_serial(self.controller_id, self.slot_id)
     }
 }
 

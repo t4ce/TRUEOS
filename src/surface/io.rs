@@ -515,6 +515,8 @@ pub mod shellcmd {
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
 	use alloc::vec::Vec;
+	use alloc::boxed::Box;
+	use alloc::string::{String, ToString};
 
 	#[repr(u32)]
 	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -527,6 +529,11 @@ pub mod cabi {
 	const FS_ERR_IO: i32 = -2;
 	const FS_ERR_NO_SPACE: i32 = -3;
 	const FS_ERR_BAD_PARAM: i32 = -4;
+
+	const NET_ERR_BAD_URL: i32 = -10;
+	const NET_ERR_TIMEOUT: i32 = -11;
+	const NET_ERR_HTTP: i32 = -12;
+	const NET_ERR_TLS: i32 = -13;
 
 	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
@@ -760,6 +767,484 @@ pub mod cabi {
 			Ok(()) => 0,
 			Err(_) => FS_ERR_IO,
 		}
+	}
+
+	fn leak_str(s: String) -> &'static str {
+		Box::leak(s.into_boxed_str())
+	}
+
+	#[derive(Clone, Debug)]
+	struct ParsedUrl {
+		scheme_https: bool,
+		host: String,
+		port: u16,
+		path: String,
+	}
+
+	fn parse_url(url: &str) -> core::result::Result<ParsedUrl, i32> {
+		let mut u = url.trim();
+		if u.is_empty() {
+			return Err(NET_ERR_BAD_URL);
+		}
+
+		let scheme_https = if let Some(rest) = u.strip_prefix("https://") {
+			u = rest;
+			true
+		} else if let Some(rest) = u.strip_prefix("http://") {
+			u = rest;
+			false
+		} else {
+			// Default to https when scheme omitted.
+			true
+		};
+
+		let (authority, path) = match u.find('/') {
+			Some(pos) => (&u[..pos], &u[pos..]),
+			None => (u, "/"),
+		};
+
+		let authority = authority.trim();
+		if authority.is_empty() {
+			return Err(NET_ERR_BAD_URL);
+		}
+
+		let (host, port) = match authority.rsplit_once(':') {
+			Some((h, p)) if !h.is_empty() && !p.is_empty() => {
+				let port = p.parse::<u16>().map_err(|_| NET_ERR_BAD_URL)?;
+				(h.to_string(), port)
+			}
+			_ => {
+				let port = if scheme_https { 443 } else { 80 };
+				(authority.to_string(), port)
+			}
+		};
+
+		let path = if path.is_empty() { "/".to_string() } else { path.to_string() };
+
+		Ok(ParsedUrl {
+			scheme_https,
+			host,
+			port,
+			path,
+		})
+	}
+
+	fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+		buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+	}
+
+	fn parse_http_status(buf: &[u8]) -> Option<u16> {
+		if !buf.starts_with(b"HTTP/") {
+			return None;
+		}
+		let mut i = 0;
+		while i < buf.len() && buf[i] != b' ' {
+			i += 1;
+		}
+		if i + 4 >= buf.len() || buf[i] != b' ' {
+			return None;
+		}
+		let d1 = buf.get(i + 1)?.wrapping_sub(b'0');
+		let d2 = buf.get(i + 2)?.wrapping_sub(b'0');
+		let d3 = buf.get(i + 3)?.wrapping_sub(b'0');
+		if d1 > 9 || d2 > 9 || d3 > 9 {
+			return None;
+		}
+		Some((d1 as u16) * 100 + (d2 as u16) * 10 + (d3 as u16))
+	}
+
+	fn ascii_lower(b: u8) -> u8 {
+		if (b'A'..=b'Z').contains(&b) { b + 32 } else { b }
+	}
+
+	fn header_get_value<'a>(headers: &'a [u8], header_name: &[u8]) -> Option<&'a [u8]> {
+		let mut i = 0;
+		while i < headers.len() {
+			let mut j = i;
+			while j < headers.len() && headers[j] != b'\n' {
+				j += 1;
+			}
+			let line = &headers[i..j.min(headers.len())];
+			i = (j + 1).min(headers.len());
+			let Some(colon) = line.iter().position(|&b| b == b':') else {
+				continue;
+			};
+			let name = &line[..colon];
+			if name.len() != header_name.len() {
+				continue;
+			}
+			if !name
+				.iter()
+				.zip(header_name.iter())
+				.all(|(&a, &b)| ascii_lower(a) == ascii_lower(b))
+			{
+				continue;
+			}
+			let mut k = colon + 1;
+			while k < line.len() && (line[k] == b' ' || line[k] == b'\t') {
+				k += 1;
+			}
+			let mut v = &line[k..];
+			if v.ends_with(b"\r") {
+				v = &v[..v.len() - 1];
+			}
+			return Some(v);
+		}
+		None
+	}
+
+	// --- Blocking HTTPS fetch (drives the Embassy executor while waiting) ---
+
+	const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
+	const DNS_PORT: u16 = 53;
+
+	fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
+		let mut q = Vec::new();
+		q.extend_from_slice(&id.to_be_bytes());
+		q.extend_from_slice(&0x0100u16.to_be_bytes()); // RD
+		q.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+		q.extend_from_slice(&0u16.to_be_bytes());
+		q.extend_from_slice(&0u16.to_be_bytes());
+		q.extend_from_slice(&0u16.to_be_bytes());
+		for label in host.split('.') {
+			let bytes = label.as_bytes();
+			let len = bytes.len().min(63);
+			q.push(len as u8);
+			q.extend_from_slice(&bytes[..len]);
+		}
+		q.push(0);
+		q.extend_from_slice(&qtype.to_be_bytes());
+		q.extend_from_slice(&1u16.to_be_bytes());
+		q
+	}
+
+	fn dns_skip_name(pkt: &[u8], idx: &mut usize) -> bool {
+		if *idx >= pkt.len() {
+			return false;
+		}
+		let mut steps: u8 = 0;
+		loop {
+			if *idx >= pkt.len() {
+				return false;
+			}
+			let b = pkt[*idx];
+			if b == 0 {
+				*idx += 1;
+				return true;
+			}
+			if (b & 0xC0) == 0xC0 {
+				if *idx + 1 >= pkt.len() {
+					return false;
+				}
+				*idx += 2;
+				return true;
+			}
+			let len = b as usize;
+			*idx += 1;
+			if *idx + len > pkt.len() {
+				return false;
+			}
+			*idx += len;
+			steps = steps.wrapping_add(1);
+			if steps > 64 {
+				return false;
+			}
+		}
+	}
+
+	fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Option<[u8; 4]> {
+		if pkt.len() < 12 {
+			return None;
+		}
+		let id = u16::from_be_bytes([pkt[0], pkt[1]]);
+		if id != want_id {
+			return None;
+		}
+		let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
+		let rcode = (flags & 0x000F) as u8;
+		if rcode != 0 {
+			return None;
+		}
+		let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+		let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
+		let mut idx: usize = 12;
+		for _ in 0..qd {
+			if !dns_skip_name(pkt, &mut idx) {
+				return None;
+			}
+			if idx + 4 > pkt.len() {
+				return None;
+			}
+			idx += 4;
+		}
+		for _ in 0..an {
+			if !dns_skip_name(pkt, &mut idx) {
+				return None;
+			}
+			if idx + 10 > pkt.len() {
+				return None;
+			}
+			let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
+			let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
+			let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
+			idx += 10;
+			if idx + rdlen > pkt.len() {
+				return None;
+			}
+			if typ == 1 && class == 1 && rdlen == 4 {
+				return Some([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]);
+			}
+			idx += rdlen;
+		}
+		None
+	}
+
+	fn poll_executor_for_progress() {
+		// Keep timers and tasks moving even when called from non-async contexts.
+		crate::time::poll();
+		crate::time::poll_executor();
+	}
+
+	fn resolve_ipv4_blocking(dev_idx: usize, host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
+		use crate::net::adapter::{register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
+
+		let dns_id: u16 = 0xEA00u16.wrapping_add(dev_idx as u16);
+		let owner = leak_str(alloc::format!("qjs-dns@{}", dev_idx));
+		let cmd_name = leak_str(alloc::format!("{}-cmd", owner));
+		let evt_name = leak_str(alloc::format!("{}-evt", owner));
+		let cmds = NetQueue::new_leaked(cmd_name, 64);
+		let events = NetQueue::new_leaked(evt_name, 64);
+		register_app_queues(owner, cmds, events);
+
+		let local_port: u16 = 54000u16.wrapping_add(dev_idx as u16);
+		let _ = cmds.push(NetCommand::OpenUdp { port: local_port });
+
+		let start = embassy_time_driver::now() as u64;
+		let deadline = start.saturating_add(timeout_ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+		let mut udp: Option<NetHandle> = None;
+		let mut sent = false;
+
+		loop {
+			for ev in events.drain(32) {
+				match ev {
+					NetEvent::Opened { handle, kind } => {
+						if kind == SocketKind::Udp {
+							udp = Some(handle);
+						}
+					}
+					NetEvent::UdpPacket { handle, from, data } => {
+						if udp != Some(handle) {
+							continue;
+						}
+						if from.port == DNS_PORT && from.addr == SLIRP_DNS_IP {
+							if let Some(ip) = dns_parse_first_a(&data, dns_id) {
+								let _ = cmds.push(NetCommand::Close { handle });
+								return Some(ip);
+							}
+						}
+					}
+					_ => {}
+				}
+			}
+
+			if !sent {
+				if let Some(handle) = udp {
+					let _ = cmds.push(NetCommand::SendUdp {
+						handle,
+						remote: NetEndpoint {
+							addr: SLIRP_DNS_IP,
+							port: DNS_PORT,
+						},
+						data: dns_query(dns_id, host, 1),
+					});
+					sent = true;
+				}
+			}
+
+			let now = embassy_time_driver::now() as u64;
+			if now >= deadline {
+				if let Some(handle) = udp {
+					let _ = cmds.push(NetCommand::Close { handle });
+				}
+				return None;
+			}
+
+			poll_executor_for_progress();
+		}
+	}
+
+	fn https_get_body_blocking(url: &ParsedUrl, timeout_ms: u64, max_bytes: usize) -> core::result::Result<Vec<u8>, i32> {
+		use crate::net::adapter::{NetEndpoint, NetQueue};
+		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+		use crate::tls::{TlsClientConfig, TlsRoots};
+
+		let dev_count = crate::net::device_count().max(1);
+		let mut last_err: i32 = NET_ERR_TIMEOUT;
+
+		for dev_idx in 0..dev_count {
+			let Some(ip) = resolve_ipv4_blocking(dev_idx, url.host.as_str(), 1500) else {
+				last_err = NET_ERR_TIMEOUT;
+				continue;
+			};
+
+			let owner = leak_str(alloc::format!("qjs-https@{}", dev_idx));
+			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+			let cmds = NetQueue::new_leaked(cmds_name, 128);
+			let events = NetQueue::new_leaked(evts_name, 128);
+			register_tls_app_queues(owner, cmds, events);
+
+			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut sent_connect = false;
+			let mut http_sent = false;
+			let mut plaintext: Vec<u8> = Vec::new();
+			let start = embassy_time_driver::now() as u64;
+			let deadline = start.saturating_add(timeout_ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+
+			let roots = TlsRoots::mozilla();
+			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+			let server_name = leak_str(url.host.clone());
+
+			loop {
+				for ev in events.drain(32) {
+					match ev {
+						TlsEvent::Opened { handle } => {
+							tls_handle = Some(handle);
+						}
+						TlsEvent::Connected { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if !http_sent {
+								let req = alloc::format!(
+									"GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS qjs-fetch\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+									url.path,
+									url.host
+								);
+								let _ = cmds.push(TlsCommand::Send {
+									handle,
+									data: req.into_bytes(),
+								});
+								http_sent = true;
+							}
+						}
+						TlsEvent::Data { handle, data } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if plaintext.len() < max_bytes {
+								let room = max_bytes - plaintext.len();
+								let take = data.len().min(room);
+								plaintext.extend_from_slice(&data[..take]);
+							}
+						}
+						TlsEvent::Closed { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							// Parse status and return body.
+							let Some(hdr_end) = find_http_header_end(&plaintext) else {
+								last_err = NET_ERR_HTTP;
+								break;
+							};
+							let status = parse_http_status(&plaintext).unwrap_or(0);
+							if status != 200 {
+								last_err = NET_ERR_HTTP;
+								break;
+							}
+							let body = plaintext.split_off(hdr_end);
+							return Ok(body);
+						}
+						TlsEvent::Error { .. } => {
+							last_err = NET_ERR_HTTP;
+							break;
+						}
+						TlsEvent::TlsError { .. } => {
+							last_err = NET_ERR_TLS;
+							break;
+						}
+					}
+				}
+
+				if !sent_connect {
+					sent_connect = true;
+					let _ = cmds.push(TlsCommand::OpenTcpConnect {
+						remote: NetEndpoint { addr: ip, port: url.port },
+						server_name,
+						cfg: cfg.clone(),
+						roots: roots.clone(),
+					});
+				}
+
+				let now = embassy_time_driver::now() as u64;
+				if now >= deadline {
+					last_err = NET_ERR_TIMEOUT;
+					break;
+				}
+				poll_executor_for_progress();
+			}
+		}
+
+		Err(last_err)
+	}
+
+	/// Download the URL (currently expects HTTP/1.1 over TLS for https://) and write to `path`.
+	///
+	/// Behavior:
+	/// - If `path` already exists, returns 0 (no-op).
+	/// - Otherwise downloads and writes `path + ".tmp"`, then renames into place.
+	///
+	/// Notes:
+	/// - Cache directory must already exist.
+	/// - This function drives the Embassy executor while waiting for network events;
+	///   it is intended to be called from non-async contexts.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
+		url_ptr: *const u8,
+		url_len: usize,
+		path_ptr: *const u8,
+		path_len: usize,
+	) -> i32 {
+		if url_ptr.is_null() || url_len == 0 || path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+
+		// If already cached, done.
+		if super::kfs::read_file(path).is_ok() {
+			return 0;
+		}
+
+		let parsed = match parse_url(url_s) {
+			Ok(p) => p,
+			Err(e) => return e,
+		};
+		if !parsed.scheme_https {
+			// TODO: support plaintext http:// if desired.
+			return NET_ERR_BAD_URL;
+		}
+
+		let body = match https_get_body_blocking(&parsed, 12_000, 2 * 1024 * 1024) {
+			Ok(b) => b,
+			Err(e) => return e,
+		};
+
+		let tmp = alloc::format!("{}.tmp", path);
+		if super::kfs::write_file(tmp.as_str(), &body).is_err() {
+			return FS_ERR_IO;
+		}
+		if super::kfs::rename(tmp.as_str(), path).is_err() {
+			let _ = super::kfs::remove(tmp.as_str());
+			return FS_ERR_IO;
+		}
+		0
 	}
 }
 

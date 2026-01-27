@@ -7,6 +7,11 @@ use crate::disc::files::Fs;
 static mut QJS_SHELL_IO: Option<&'static dyn ShellBackend> = None;
 
 const QJS_FS_BASE_DIR: &str = "/qjs";
+const QJS_CDN_DIR: &str = "/qjs/cdn";
+
+extern "C" {
+    fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
+}
 
 fn has_extension(path: &str) -> bool {
     path.rsplit('/').next().map(|s| s.contains('.')).unwrap_or(false)
@@ -50,6 +55,110 @@ fn normalize_join(base_dir: &str, rel: &str) -> String {
     out
 }
 
+fn spec_is_url(s: &str) -> bool {
+    s.starts_with("https://") || s.starts_with("http://")
+}
+
+fn split_url(s: &str) -> Option<(&str, &str, &str)> {
+    let (scheme, rest) = if let Some(r) = s.strip_prefix("https://") {
+        ("https://", r)
+    } else if let Some(r) = s.strip_prefix("http://") {
+        ("http://", r)
+    } else {
+        return None;
+    };
+
+    let (authority, path) = match rest.find('/') {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, "/"),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    Some((scheme, authority, path))
+}
+
+fn normalize_path_str(path: &str) -> String {
+    let is_abs = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            _ => parts.push(seg),
+        }
+    }
+    let mut out = String::new();
+    if is_abs {
+        out.push('/');
+    }
+    for (i, seg) in parts.iter().enumerate() {
+        if i != 0 {
+            out.push('/');
+        }
+        out.push_str(seg);
+    }
+    if out.is_empty() {
+        out.push('/');
+    }
+    out
+}
+
+fn normalize_url_str(url: &str) -> Option<String> {
+    let (scheme, authority, path) = split_url(url)?;
+    let norm_path = normalize_path_str(path);
+    let mut out = String::new();
+    out.push_str(scheme);
+    out.push_str(authority);
+    if !norm_path.starts_with('/') {
+        out.push('/');
+    }
+    out.push_str(norm_path.as_str());
+    Some(out)
+}
+
+fn resolve_relative_url_str(base_url: &str, rel: &str) -> Option<String> {
+    let (scheme, authority, path) = split_url(base_url)?;
+    let base_dir = match path.rfind('/') {
+        Some(0) => "/",
+        Some(i) => &path[..i],
+        None => "/",
+    };
+    let mut combined = String::new();
+    combined.push_str(scheme);
+    combined.push_str(authority);
+    if !base_dir.starts_with('/') {
+        combined.push('/');
+    }
+    combined.push_str(base_dir);
+    if !combined.ends_with('/') {
+        combined.push('/');
+    }
+    combined.push_str(rel);
+    normalize_url_str(combined.as_str())
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn hex_u64(v: u64) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::new();
+    for i in (0..16).rev() {
+        let nibble = ((v >> (i * 4)) & 0xF) as usize;
+        out.push(HEX[nibble] as char);
+    }
+    out
+}
+
 unsafe fn js_alloc_cstring(ctx: *mut trueos_qjs::JSContext, s: &str) -> *mut c_char {
     let bytes = s.as_bytes();
     let buf = trueos_qjs::js_malloc(ctx, bytes.len() + 1) as *mut u8;
@@ -79,6 +188,25 @@ unsafe extern "C" fn trueos_module_normalize(
     // Keep TRUEOS-provided native modules as-is.
     if name == "complex" || name == "fs" {
         return js_alloc_cstring(ctx, name);
+    }
+
+    // URL imports: keep absolute URLs as-is; resolve relative URLs against URL base.
+    if spec_is_url(name) {
+        if let Some(normalized) = normalize_url_str(name) {
+            return js_alloc_cstring(ctx, normalized.as_str());
+        }
+        return js_alloc_cstring(ctx, name);
+    }
+
+    if (name.starts_with("./") || name.starts_with("../")) && !module_base_name.is_null() {
+        let base_bytes = CStr::from_ptr(module_base_name).to_bytes();
+        if let Ok(base) = core::str::from_utf8(base_bytes) {
+            if spec_is_url(base) {
+                if let Some(resolved) = resolve_relative_url_str(base, name) {
+                    return js_alloc_cstring(ctx, resolved.as_str());
+                }
+            }
+        }
     }
 
     // Map bare specifiers to /qjs/<name>.mjs
@@ -134,6 +262,47 @@ unsafe extern "C" fn trueos_module_loader(
     let Ok(path) = core::str::from_utf8(name_bytes) else {
         return core::ptr::null_mut();
     };
+
+    if spec_is_url(path) {
+        let hash = fnv1a64(path.as_bytes());
+        let mut cache_path = String::new();
+        cache_path.push_str(QJS_CDN_DIR);
+        cache_path.push('/');
+        cache_path.push_str(hex_u64(hash).as_str());
+        cache_path.push_str(".mjs");
+
+        let rc = trueos_cabi_net_fetch_to_file(
+            path.as_bytes().as_ptr(),
+            path.as_bytes().len(),
+            cache_path.as_bytes().as_ptr(),
+            cache_path.as_bytes().len(),
+        );
+        if rc != 0 {
+            return core::ptr::null_mut();
+        }
+
+        let bytes = match Fs::read_file(cache_path.as_str()) {
+            Ok(b) => b,
+            Err(_) => return core::ptr::null_mut(),
+        };
+
+        // Compile using the URL as the module "filename" so base URL resolution works.
+        let val = trueos_qjs::JS_Eval(
+            ctx,
+            bytes.as_ptr() as *const c_char,
+            bytes.len(),
+            module_name,
+            trueos_qjs::JS_EVAL_TYPE_MODULE | trueos_qjs::JS_EVAL_FLAG_COMPILE_ONLY,
+        );
+        if val.is_exception() {
+            return core::ptr::null_mut();
+        }
+
+        let m = val.u.ptr as *mut trueos_qjs::JSModuleDef;
+        trueos_qjs::js_free_value(ctx, val);
+        return m;
+    }
+
     if !path.starts_with('/') {
         return core::ptr::null_mut();
     }
@@ -514,9 +683,4 @@ pub(crate) fn eval(io: &'static dyn ShellBackend, source: &str) {
         trueos_qjs::JS_EVAL_TYPE_GLOBAL
     };
     eval_bytes(io, filename, bytes, flags);
-}
-
-pub(crate) fn eval_module(io: &'static dyn ShellBackend, source: &str) {
-    let filename = b"<shell-module>\0".as_ptr() as *const c_char;
-    eval_bytes(io, filename, source.as_bytes(), trueos_qjs::JS_EVAL_TYPE_MODULE);
 }

@@ -278,8 +278,6 @@ pub extern "C" fn kmain() -> ! {
 
     time::init(executor);
 
-    unsafe { qjs::trueos_smoke::run() };
-
     net::init();
     let net_ready = net::mac_address().is_some();
     if net_ready {
@@ -307,6 +305,9 @@ pub extern "C" fn kmain() -> ! {
     } else {
         crate::log!("net: skipping net tasks (no NIC)\n");
     }
+
+    // QuickJS smoke test (kept after net init so URL imports can work if used).
+    unsafe { qjs::trueos_smoke::run() };
 
     let _ = spawner.spawn(tga::blink_task());
 

@@ -44,7 +44,3 @@ pub fn pop_event() -> Option<InputEvent> {
         Some(q.remove(0))
     }
 }
-
-pub fn has_events() -> bool {
-    !INPUT_QUEUE.lock().is_empty()
-}
