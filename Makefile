@@ -13,6 +13,8 @@ LIMINE_BIN 		:= $(LIMINE_PREFIX)/bin/limine
 
 LIMINE_CONFIG_ARGS := --prefix=$(abspath $(LIMINE_PREFIX)) --enable-bios --enable-uefi-x86-64 --enable-uefi-cd
 
+DEPS_SCRIPT := scripts/fetch-deps.sh
+
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
@@ -42,6 +44,7 @@ QEMU_USB_FLAGS =  \
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
 $(LIMINE_STAMP):
+	@$(DEPS_SCRIPT)
 	@# Reconfigure/rebuild Limine if configure flags changed.
 	@mkdir -p $(LIMINE_BUILD) $(LIMINE_PREFIX)
 	@echo '$(LIMINE_CONFIG_ARGS)' > $(LIMINE_BUILD)/.config_args.new
@@ -76,7 +79,11 @@ $(LIMINE_STAMP):
 	fi
 	touch $(LIMINE_STAMP)
 
-iso: $(LIMINE_STAMP)
+.PHONY: deps
+deps:
+	@$(DEPS_SCRIPT)
+
+iso: deps $(LIMINE_STAMP)
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
 	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/TRUEOS.elf $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin
 	rm -f $(ISO_PATH)

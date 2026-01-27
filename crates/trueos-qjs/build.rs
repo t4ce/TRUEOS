@@ -5,6 +5,14 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let quickjs_dir = manifest_dir.join("..").join("..").join("quickjs");
 
+    let quickjs_probe = quickjs_dir.join("quickjs.c");
+    if !quickjs_probe.is_file() {
+        panic!(
+            "Missing QuickJS sources at {}. Fetch deps first (e.g. run `make deps` or `./scripts/fetch-deps.sh`).",
+            quickjs_probe.display()
+        );
+    }
+
     // Freestanding C ABI stubs for printf/vsnprintf/etc.
     // Kept in the kernel's surface layer so both C and Rust can share the same routing.
     let trueos_stdio = manifest_dir

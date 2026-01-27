@@ -5,8 +5,7 @@
 See docs/kernel-module-surface.md
 
 # clone repo , then
-git submodule init 
-git submodule update
+make deps
 sudo apt update 
 sudo apt install -y rustup
 sudo apt install autoconf automake mtools nasm xorriso
