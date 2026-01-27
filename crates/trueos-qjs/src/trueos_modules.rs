@@ -549,6 +549,8 @@ fn spec_is_url(spec: &[u8]) -> bool {
     spec.starts_with(b"https://") || spec.starts_with(b"http://")
 }
 
+const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
+
 fn split_url(spec: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     // Returns (scheme_with_slashes, authority, path_with_leading_slash)
     let (scheme, rest) = if let Some(r) = spec.strip_prefix(b"https://") {
@@ -567,6 +569,14 @@ fn split_url(spec: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         return None;
     }
     Some((scheme, authority, path))
+}
+
+fn url_origin_prefix(url: &[u8]) -> Option<Vec<u8>> {
+    let (scheme, authority, _path) = split_url(url)?;
+    let mut out = Vec::new();
+    out.extend_from_slice(scheme);
+    out.extend_from_slice(authority);
+    Some(out)
 }
 
 fn url_dir_base(url: &[u8]) -> Option<Vec<u8>> {
@@ -708,14 +718,36 @@ unsafe extern "C" fn trueos_module_normalize(
         }
     }
 
-    // Leave native/bare specifiers unchanged; loader can still accept absolute paths.
+    // If the base is a URL, treat "/foo" as an origin-relative URL path.
+    if path_is_absolute(spec) {
+        if !module_base_name.is_null() {
+            let base = CStr::from_ptr(module_base_name).to_bytes();
+            if spec_is_url(base) {
+                if let Some(mut origin) = url_origin_prefix(base) {
+                    let normalized_path = normalize_path_bytes(spec);
+                    origin.extend_from_slice(&normalized_path);
+                    return js_strdup(ctx, &origin);
+                }
+            }
+        }
+    }
+
+    // Absolute filesystem paths.
     if path_is_absolute(spec) {
         let normalized = normalize_path_bytes(spec);
         return js_strdup(ctx, &normalized);
     }
 
+    // Bare specifiers: keep native ones as-is, otherwise route through esm.sh.
     if !path_is_relative(spec) {
-        return js_strdup(ctx, spec);
+        if spec == b"complex" || spec == b"fs" {
+            return js_strdup(ctx, spec);
+        }
+
+        let mut url = Vec::new();
+        url.extend_from_slice(ESM_SH_PREFIX);
+        url.extend_from_slice(spec);
+        return js_strdup(ctx, &url);
     }
 
     // Resolve relative specifiers against the directory part of the base name.
@@ -745,6 +777,36 @@ unsafe fn load_url_module(
     module_name: *const c_char,
     url: &[u8],
 ) -> *mut qjs::JSModuleDef {
+    fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
+        if v == 0 {
+            out.push(b'0');
+            return;
+        }
+        let neg = v < 0;
+        let mut n = if neg { -(v as i64) as u64 } else { v as u64 };
+        let mut buf = [0u8; 16];
+        let mut i = buf.len();
+        while n != 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        if neg {
+            out.push(b'-');
+        }
+        out.extend_from_slice(&buf[i..]);
+    }
+
+    unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
+        let err = qjs::JS_NewError(ctx);
+        if err.is_exception() {
+            return;
+        }
+        let m = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
+        let _ = qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
+        let _ = qjs::JS_Throw(ctx, err);
+    }
+
     // Cache path: /qjs/cdn/<hash>.mjs
     let hash = fnv1a64(url);
     let mut cache_path: Vec<u8> = Vec::new();
@@ -754,11 +816,25 @@ unsafe fn load_url_module(
 
     let rc = trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), cache_path.as_ptr(), cache_path.len());
     if rc != 0 {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"fetch-to-cache failed rc=");
+        push_i32_dec(&mut msg, rc);
+        msg.extend_from_slice(b" url=");
+        msg.extend_from_slice(url);
+        msg.extend_from_slice(b" cache=");
+        msg.extend_from_slice(&cache_path);
+        throw_error(ctx, &msg);
         return core::ptr::null_mut();
     }
 
     let need = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), core::ptr::null_mut(), 0);
     if need < 0 {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"read cached module failed url=");
+        msg.extend_from_slice(url);
+        msg.extend_from_slice(b" cache=");
+        msg.extend_from_slice(&cache_path);
+        throw_error(ctx, &msg);
         return core::ptr::null_mut();
     }
     let need = need as usize;
@@ -772,6 +848,12 @@ unsafe fn load_url_module(
     let got = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), buf, need);
     if got < 0 {
         qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"read cached module failed url=");
+        msg.extend_from_slice(url);
+        msg.extend_from_slice(b" cache=");
+        msg.extend_from_slice(&cache_path);
+        throw_error(ctx, &msg);
         return core::ptr::null_mut();
     }
     let got = got as usize;
@@ -806,6 +888,17 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
 
     let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
     if need < 0 {
+        // No file found / read error.
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"read module failed path=");
+        msg.extend_from_slice(path);
+        // Intentionally don't throw if path isn't UTF-8; this is best-effort.
+        let err = qjs::JS_NewError(ctx);
+        if !err.is_exception() {
+            let m = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
+            let _ = qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
+            let _ = qjs::JS_Throw(ctx, err);
+        }
         return core::ptr::null_mut();
     }
     let need = need as usize;
