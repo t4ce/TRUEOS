@@ -92,11 +92,12 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 23] = [
+const SHELL_COMMANDS: [&str; 24] = [
     "qjs",
     "out",
     "in",
     "io",
+    "ecma48",
     "https",
     "get",
     "files",
@@ -636,6 +637,37 @@ fn push_latest_files_tree_to_matrix(slot_id: u8) {
     }
 }
 
+fn handle_ecma48(io: &'static dyn ShellBackend, rest: &str) {
+    let arg = rest.trim();
+    if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
+        io.write_str("ecma48: usage ecma48 | ecma48 demo\r\n");
+        return;
+    }
+
+    io.write_str("ecma48: demo (ANSI sequences)\r\n");
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        crate::ecma48::dim("dim text (SGR 2)")
+    ));
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        crate::ecma48::bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
+    ));
+    io.write_str("  cursor edits: [ABCDE]\r\n");
+
+    // Demonstrate cursor moves without disrupting where the shell continues printing.
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::right(18)));
+    io.write_fmt(format_args!("{}", crate::ecma48::bg_color("X", (255, 0, 0))));
+    io.write_fmt(format_args!("{}", crate::ecma48::left(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::right(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::down(1)));
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+
+    io.write_str("ecma48: done\r\n");
+}
+
 fn handle_line(
     line: &str,
     spawner: &Spawner,
@@ -749,6 +781,11 @@ fn handle_line(
             if resp.refresh_symbols {
                 refresh_matrix_symbols(io, *term_cols);
             }
+            return CommandAction::None;
+        }
+
+        if verb.eq_ignore_ascii_case("ecma48") {
+            handle_ecma48(io, rest);
             return CommandAction::None;
         }
 
@@ -983,6 +1020,9 @@ fn handle_line(
         io.write_str("qjs: auto-detects modules (import/export/import.meta)\r\n");
         io.write_str("qjs: example qjs print(1+2)\r\n");
         io.write_str("qjs: example qjs import { make } from 'complex'; print(make(1,2))\r\n");
+        return CommandAction::None;
+    } else if cmd.eq_ignore_ascii_case("ecma48") {
+        handle_ecma48(io, "");
         return CommandAction::None;
     } else if cmd == "§" {
         let mut buf: String<512> = String::new();
