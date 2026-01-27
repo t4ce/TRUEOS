@@ -85,7 +85,8 @@ ConWhite 	FF_FF_FF
 rm -f disk.img && truncate -s 1G disk.img
 mformat -i disk.img -F -v TRUEOS ::
 mmd -i disk.img ::/qjs
-mmd -i disk.img ::/qjs/cdn
+# NOTE: `/qjs/cdn` is created automatically on first URL import (cache write).
+# mmd -i disk.img ::/qjs/cdn
 mcopy -o -s -i disk.img crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img
 mdir -i disk.img ::/qjs
@@ -93,9 +94,12 @@ mdir -i disk.img ::/qjs
 or
 
 mmd -i disk.img@@$((2048*512)) ::/qjs
-mmd -i disk.img@@$((2048*512)) ::/qjs/cdn
+# NOTE: `/qjs/cdn` is created automatically on first URL import (cache write).
+# mmd -i disk.img@@$((2048*512)) ::/qjs/cdn
 mcopy -o -s -i disk.img@@$((2048*512)) crates/trueos-qjs/app/* ::/qjs/
 mdir -i disk.img@@$((2048*512)) 
 mdir -i disk.img@@$((2048*512)) ::/qjs
+mdir -i disk.img@@$((2048*512)) ::/qjs/CDN
+
 
 qjs @/qjs/main.mjs
