@@ -5,7 +5,6 @@ use super::xhci::{
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
-use crate::serial::{SerialNumber};
 use alloc::boxed::Box;
 use core::cmp;
 use core::future::poll_fn;
@@ -22,8 +21,6 @@ const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
 const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
 
-pub type UsbSerial = SerialNumber;
-
 #[repr(C, packed)]
 struct LineCoding {
     dte_rate: u32,
@@ -39,7 +36,6 @@ pub struct AttachParams<'a> {
     pub slot_id: u32,
     pub dev_vid: u16,
     pub dev_pid: u16,
-    pub dev_serial: UsbSerial,
     pub cfg: &'a [u8],
     pub dev_ctx_virt: *mut u8,
     pub ctx_stride_bytes: usize,
@@ -55,7 +51,6 @@ pub struct CdcAttachEvent {
     pub slot_id: u32,
     pub vid: u16,
     pub pid: u16,
-    pub serial: UsbSerial,
 }
 
 /// Serial port handle for CDC-ACM transports.
@@ -81,7 +76,6 @@ struct CdcRuntime {
     slot_id: u32,
     vid: u16,
     pid: u16,
-    serial: UsbSerial,
     ctx: XhciContext,
     ep_in_target: u32,
     ep_out_target: u32,
@@ -257,7 +251,6 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
                 slot_id,
                 vid: guard[idx].vid,
                 pid: guard[idx].pid,
-                serial: guard[idx].serial,
             });
             let _ = guard.remove(idx);
             removed = true;
@@ -409,15 +402,6 @@ pub fn device_ids(controller_id: usize, slot_id: u32) -> Option<(u16, u16)> {
         .map(|rt| (rt.vid, rt.pid))
 }
 
-pub fn device_serial(controller_id: usize, slot_id: u32) -> Option<UsbSerial> {
-    let guard = CDC_RUNTIMES.lock();
-    guard
-        .iter()
-        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
-        .map(|rt| rt.serial)
-        .filter(|s| s.is_some())
-}
-
 pub fn serial_port(controller_id: usize, slot_id: u32) -> Option<CdcSerialPort> {
     if runtime_exists(controller_id, slot_id) {
         Some(CdcSerialPort {
@@ -475,7 +459,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         slot_id,
         dev_vid,
         dev_pid,
-        dev_serial,
         cfg,
         dev_ctx_virt,
         ctx_stride_bytes,
@@ -643,7 +626,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         slot_id,
         vid: dev_vid,
         pid: dev_pid,
-        serial: dev_serial,
         ctx: *ctx,
         ep_in_target,
         ep_out_target,
@@ -705,7 +687,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         slot_id,
         vid: dev_vid,
         pid: dev_pid,
-        serial: dev_serial,
     };
     let guard = ATTACH_CALLBACKS.lock();
     for cb in guard.iter() {

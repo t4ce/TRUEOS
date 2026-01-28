@@ -2,7 +2,7 @@ use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use heapless::Deque;
 use spin::Mutex;
-use super::cdc_acm::{self, CdcAttachEvent, UsbSerial};
+use super::cdc_acm::{self, CdcAttachEvent};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static TRUEKEY_SLOT: AtomicU32 = AtomicU32::new(0);
@@ -10,12 +10,6 @@ static TRUEKEY_CONTROLLER: AtomicU32 = AtomicU32::new(0);
 static SERIAL_SENT_FOR_SLOT: AtomicU32 = AtomicU32::new(0);
 const LOG_CACHE_BYTES: usize = 1024 * 1024;
 static LOG_CACHE: Mutex<Deque<u8, LOG_CACHE_BYTES>> = Mutex::new(Deque::new());
-static TARGET_SERIAL: Mutex<UsbSerial> = Mutex::new(UsbSerial::none());
-
-// the serial needs to match the esp or it wont bind
-pub fn configure_target_serial(serial: &str) {
-	*TARGET_SERIAL.lock() = UsbSerial::from_str(serial);
-}
 
 pub fn init() {
 	let _ = cdc_acm::register_attach_callback(on_cdc_attach);
@@ -85,15 +79,6 @@ pub fn slot_id() -> Option<u32> {
 }
 
 fn on_cdc_attach(evt: CdcAttachEvent) {
-	let target_serial = *TARGET_SERIAL.lock();
-	if !target_serial.is_some() {
-		return;
-	}
-	if evt.serial != target_serial {
-		return;
-	}
-
-	// Take the first matching device.
 	let prev = TRUEKEY_SLOT.load(Ordering::Acquire);
 	if prev == 0 {
 		TRUEKEY_SLOT.store(evt.slot_id, Ordering::Release);
@@ -107,14 +92,9 @@ fn on_cdc_attach(evt: CdcAttachEvent) {
 		);
 
 		if let Some(bound_slot) = slot_id() {
-			crate::log!("truekey: serial={:?}-slot{}\n", evt.serial.as_bytes(), bound_slot);
+			crate::log!("truekey: slot{}\n", bound_slot);
 		}
 
-		// Emit the device serial once, raw bytes (no framing).
-		if SERIAL_SENT_FOR_SLOT.load(Ordering::Acquire) != evt.slot_id {
-			let _ = cdc_acm::queue_tx_bytes(evt.controller_id, evt.slot_id, evt.serial.as_bytes());
-			SERIAL_SENT_FOR_SLOT.store(evt.slot_id, Ordering::Release);
-		}
 	}
 }
 

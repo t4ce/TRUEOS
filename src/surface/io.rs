@@ -1168,7 +1168,89 @@ pub mod cabi {
 		}
 	}
 
-	fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Option<[u8; 4]> {
+	#[derive(Clone, Debug)]
+	enum DnsResolution {
+		A([u8; 4]),
+		Cname(alloc::string::String),
+	}
+
+	fn dns_read_name(pkt: &[u8], start: usize) -> Option<(alloc::string::String, usize)> {
+		use alloc::string::String;
+
+		if start >= pkt.len() {
+			return None;
+		}
+
+		let mut name = String::new();
+		let mut idx = start;
+		let mut consumed_end: Option<usize> = None;
+		let mut steps: u16 = 0;
+		let mut jumped: u8 = 0;
+		let mut first = true;
+
+		loop {
+			if idx >= pkt.len() {
+				return None;
+			}
+			steps = steps.wrapping_add(1);
+			if steps > 256 {
+				return None;
+			}
+
+			let len = pkt[idx];
+			if len == 0 {
+				idx += 1;
+				if consumed_end.is_none() {
+					consumed_end = Some(idx);
+				}
+				break;
+			}
+
+			// Compression pointer.
+			if (len & 0xC0) == 0xC0 {
+				if idx + 1 >= pkt.len() {
+					return None;
+				}
+				let b2 = pkt[idx + 1];
+				let ptr = (((len as u16 & 0x3F) << 8) | b2 as u16) as usize;
+				if ptr >= pkt.len() {
+					return None;
+				}
+				if consumed_end.is_none() {
+					consumed_end = Some(idx + 2);
+				}
+				idx = ptr;
+				jumped = jumped.wrapping_add(1);
+				if jumped > 16 {
+					return None;
+				}
+				continue;
+			}
+
+			let lab_len = len as usize;
+			idx += 1;
+			if idx + lab_len > pkt.len() {
+				return None;
+			}
+			if !first {
+				let _ = name.push('.');
+			}
+			first = false;
+			for &b in &pkt[idx..idx + lab_len] {
+				let ch = if b.is_ascii_graphic() || b == b'-' {
+					b as char
+				} else {
+					'_'
+				};
+				let _ = name.push(ch);
+			}
+			idx += lab_len;
+		}
+
+		Some((name, consumed_end.unwrap_or(idx)))
+	}
+
+	fn dns_parse_first_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsResolution> {
 		if pkt.len() < 12 {
 			return None;
 		}
@@ -1207,12 +1289,29 @@ pub mod cabi {
 			if idx + rdlen > pkt.len() {
 				return None;
 			}
-			if typ == 1 && class == 1 && rdlen == 4 {
-				return Some([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]);
+			if class == 1 {
+				if typ == 1 && rdlen == 4 {
+					return Some(DnsResolution::A([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]));
+				}
+				if typ == 5 {
+					if let Some((name, _end)) = dns_read_name(pkt, idx) {
+						if !name.is_empty() {
+							return Some(DnsResolution::Cname(name));
+						}
+					}
+				}
 			}
 			idx += rdlen;
 		}
 		None
+	}
+
+	// Back-compat helper for call sites that only care about A records.
+	fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Option<[u8; 4]> {
+		match dns_parse_first_a_or_cname(pkt, want_id) {
+			Some(DnsResolution::A(ip)) => Some(ip),
+			_ => None,
+		}
 	}
 
 	fn poll_executor_for_progress() {
@@ -1221,14 +1320,13 @@ pub mod cabi {
 		crate::time::poll_executor();
 	}
 
-	fn resolve_ipv4_via_dot_blocking(host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
+	fn resolve_ipv4_via_dot_blocking(dev_idx: usize, host: &str, timeout_ms: u64, cname_depth: u8) -> Option<[u8; 4]> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOT_PORT: u16 = 853;
 		let t = core::cmp::max(2000, core::cmp::min(timeout_ms, 8000));
-		let dev_count = crate::net::device_count().max(1);
 		let dns_id: u16 = 0xED00;
 		let query = dns_query(dns_id, host, 1);
 		let mut framed = Vec::with_capacity(query.len().saturating_add(2));
@@ -1241,12 +1339,11 @@ pub mod cabi {
 		];
 
 		for &(server_ip, sni) in providers {
-			for dev_idx in 0..dev_count {
-				let owner = leak_str(alloc::format!("qjs-dot@{}", dev_idx));
+			let owner = leak_str(alloc::format!("qjs-dot@{}", dev_idx));
 				let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 				let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-				let cmds = NetQueue::new_leaked(cmds_name, 128);
-				let events = NetQueue::new_leaked(evts_name, 128);
+				let cmds = NetQueue::new_leaked(cmds_name, 512);
+				let events = NetQueue::new_leaked(evts_name, 512);
 				register_tls_app_queues(owner, cmds, events);
 
 				let roots = TlsRoots::mozilla();
@@ -1261,44 +1358,59 @@ pub mod cabi {
 				let mut sent_query = false;
 				let mut buf: Vec<u8> = Vec::new();
 
-				loop {
-					for ev in events.drain(32) {
-						match ev {
-							TlsEvent::Opened { handle } => tls_handle = Some(handle),
-							TlsEvent::Connected { handle } => {
-								if tls_handle != Some(handle) {
-									continue;
-								}
-								if !sent_query {
-									let _ = cmds.push(TlsCommand::Send {
-										handle,
-										data: framed.clone(),
-									});
-									sent_query = true;
-								}
+			loop {
+				for ev in events.drain(256) {
+					match ev {
+						TlsEvent::Opened { handle } => tls_handle = Some(handle),
+						TlsEvent::Connected { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
 							}
-							TlsEvent::Data { handle, data } => {
-								if tls_handle != Some(handle) {
-									continue;
-								}
-								buf.extend_from_slice(&data);
-								if buf.len() >= 2 {
-									let msg_len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
-									if buf.len() >= 2 + msg_len {
-										let pkt = &buf[2..2 + msg_len];
-										if let Some(ip) = dns_parse_first_a(pkt, dns_id) {
+							if !sent_query {
+								let _ = cmds.push(TlsCommand::Send {
+									handle,
+									data: framed.clone(),
+								});
+								sent_query = true;
+							}
+						}
+						TlsEvent::Data { handle, data } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							buf.extend_from_slice(&data);
+							if buf.len() >= 2 {
+								let msg_len = u16::from_be_bytes([buf[0], buf[1]]) as usize;
+								if buf.len() >= 2 + msg_len {
+									let pkt = &buf[2..2 + msg_len];
+									match dns_parse_first_a_or_cname(pkt, dns_id) {
+										Some(DnsResolution::A(ip)) => {
 											let _ = cmds.push(TlsCommand::Close { handle });
 											return Some(ip);
 										}
-										break;
+										Some(DnsResolution::Cname(name)) => {
+											let _ = cmds.push(TlsCommand::Close { handle });
+											if cname_depth == 0 {
+												return None;
+											}
+											return resolve_ipv4_blocking_inner(
+												dev_idx,
+												name.as_str(),
+												timeout_ms,
+												cname_depth - 1,
+											);
+										}
+										None => {}
 									}
+									break;
 								}
 							}
-							TlsEvent::Closed { .. } => break,
-							TlsEvent::Error { .. } => break,
-							TlsEvent::TlsError { .. } => break,
 						}
+						TlsEvent::Closed { .. } => break,
+						TlsEvent::Error { .. } => break,
+						TlsEvent::TlsError { .. } => break,
 					}
+				}
 
 					if !sent_connect {
 						sent_connect = true;
@@ -1319,20 +1431,18 @@ pub mod cabi {
 					}
 					poll_executor_for_progress();
 				}
-			}
 		}
 
 		None
 	}
 
-	fn resolve_ipv4_via_doh_blocking(host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
+	fn resolve_ipv4_via_doh_blocking(dev_idx: usize, host: &str, timeout_ms: u64, cname_depth: u8) -> Option<[u8; 4]> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOH_PORT: u16 = 443;
 		let t = core::cmp::max(2500, core::cmp::min(timeout_ms, 10_000));
-		let dev_count = crate::net::device_count().max(1);
 		let dns_id: u16 = 0xEE00;
 		let query = dns_query(dns_id, host, 1);
 		let max_bytes: usize = 64 * 1024;
@@ -1345,12 +1455,11 @@ pub mod cabi {
 		];
 
 		for &(server_ip, sni) in providers {
-			for dev_idx in 0..dev_count {
-				let owner = leak_str(alloc::format!("qjs-doh@{}", dev_idx));
+			let owner = leak_str(alloc::format!("qjs-doh@{}", dev_idx));
 				let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 				let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-				let cmds = NetQueue::new_leaked(cmds_name, 128);
-				let events = NetQueue::new_leaked(evts_name, 128);
+				let cmds = NetQueue::new_leaked(cmds_name, 512);
+				let events = NetQueue::new_leaked(evts_name, 512);
 				register_tls_app_queues(owner, cmds, events);
 
 				let roots = TlsRoots::mozilla();
@@ -1372,8 +1481,8 @@ pub mod cabi {
 				)
 				.into_bytes();
 
-				loop {
-					for ev in events.drain(32) {
+			loop {
+				for ev in events.drain(256) {
 						match ev {
 							TlsEvent::Opened { handle } => tls_handle = Some(handle),
 							TlsEvent::Connected { handle } => {
@@ -1408,18 +1517,49 @@ pub mod cabi {
 									let body = &plaintext[hdr_end..];
 									if is_chunked_encoding(headers) {
 										if let Ok(Some(decoded)) = try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
-											if let Some(ip) = dns_parse_first_a(&decoded, dns_id) {
-												let _ = cmds.push(TlsCommand::Close { handle });
-												return Some(ip);
+											match dns_parse_first_a_or_cname(&decoded, dns_id) {
+												Some(DnsResolution::A(ip)) => {
+													let _ = cmds.push(TlsCommand::Close { handle });
+													return Some(ip);
+												}
+												Some(DnsResolution::Cname(name)) => {
+													let _ = cmds.push(TlsCommand::Close { handle });
+													if cname_depth == 0 {
+														return None;
+													}
+													return resolve_ipv4_blocking_inner(
+														dev_idx,
+														name.as_str(),
+														timeout_ms,
+														cname_depth - 1,
+													);
+												}
+												None => {}
 											}
+										}
 										}
 									} else if let Some(cl) = parse_content_length(headers) {
 										if body.len() >= cl {
 											let pkt = &body[..cl];
-											if let Some(ip) = dns_parse_first_a(pkt, dns_id) {
+										match dns_parse_first_a_or_cname(pkt, dns_id) {
+											Some(DnsResolution::A(ip)) => {
 												let _ = cmds.push(TlsCommand::Close { handle });
 												return Some(ip);
 											}
+											Some(DnsResolution::Cname(name)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												if cname_depth == 0 {
+													return None;
+												}
+												return resolve_ipv4_blocking_inner(
+													dev_idx,
+													name.as_str(),
+													timeout_ms,
+													cname_depth - 1,
+												);
+											}
+											None => {}
+										}
 										}
 									} else {
 										// No CL: wait for close.
@@ -1450,8 +1590,20 @@ pub mod cabi {
 								} else {
 									body.to_vec()
 								};
-								if let Some(ip) = dns_parse_first_a(&pkt, dns_id) {
-									return Some(ip);
+								match dns_parse_first_a_or_cname(&pkt, dns_id) {
+									Some(DnsResolution::A(ip)) => return Some(ip),
+									Some(DnsResolution::Cname(name)) => {
+										if cname_depth == 0 {
+											return None;
+										}
+										return resolve_ipv4_blocking_inner(
+											dev_idx,
+											name.as_str(),
+											timeout_ms,
+											cname_depth - 1,
+										);
+									}
+									None => {}
 								}
 								break;
 							}
@@ -1483,13 +1635,20 @@ pub mod cabi {
 					}
 					poll_executor_for_progress();
 				}
-			}
-		}
 
 		None
 	}
 
 	fn resolve_ipv4_blocking(dev_idx: usize, host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
+		resolve_ipv4_blocking_inner(dev_idx, host, timeout_ms, 4)
+	}
+
+	fn resolve_ipv4_blocking_inner(
+		dev_idx: usize,
+		host: &str,
+		timeout_ms: u64,
+		cname_depth: u8,
+	) -> Option<[u8; 4]> {
 		use crate::net::adapter::{register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
 
 		if let Some(ip) = parse_ipv4_literal(host) {
@@ -1500,8 +1659,8 @@ pub mod cabi {
 		let owner = leak_str(alloc::format!("qjs-dns@{}", dev_idx));
 		let cmd_name = leak_str(alloc::format!("{}-cmd", owner));
 		let evt_name = leak_str(alloc::format!("{}-evt", owner));
-		let cmds = NetQueue::new_leaked(cmd_name, 64);
-		let events = NetQueue::new_leaked(evt_name, 64);
+		let cmds = NetQueue::new_leaked(cmd_name, 256);
+		let events = NetQueue::new_leaked(evt_name, 256);
 		register_app_queues(owner, cmds, events);
 
 		let local_port: u16 = 54000u16.wrapping_add(dev_idx as u16);
@@ -1521,7 +1680,7 @@ pub mod cabi {
 		let resend_ticks: u64 = (embassy_time_driver::TICK_HZ as u64 / 2).max(1);
 
 		loop {
-			for ev in events.drain(32) {
+			for ev in events.drain(256) {
 				match ev {
 					NetEvent::Opened { handle, kind } => {
 						if kind == SocketKind::Udp {
@@ -1535,9 +1694,19 @@ pub mod cabi {
 						if from.port != DNS_PORT {
 							continue;
 						}
-						if let Some(ip) = dns_parse_first_a(&data, dns_id) {
-							let _ = cmds.push(NetCommand::Close { handle });
-							return Some(ip);
+						match dns_parse_first_a_or_cname(&data, dns_id) {
+							Some(DnsResolution::A(ip)) => {
+								let _ = cmds.push(NetCommand::Close { handle });
+								return Some(ip);
+							}
+							Some(DnsResolution::Cname(name)) => {
+								let _ = cmds.push(NetCommand::Close { handle });
+								if cname_depth == 0 {
+									return None;
+								}
+								return resolve_ipv4_blocking_inner(dev_idx, name.as_str(), timeout_ms, cname_depth - 1);
+							}
+							None => {}
 						}
 					}
 					_ => {}
@@ -1571,10 +1740,10 @@ pub mod cabi {
 					dev_idx,
 					host
 				);
-				if let Some(ip) = resolve_ipv4_via_dot_blocking(host, timeout_ms) {
+				if let Some(ip) = resolve_ipv4_via_dot_blocking(dev_idx, host, timeout_ms, cname_depth) {
 					return Some(ip);
 				}
-				return resolve_ipv4_via_doh_blocking(host, timeout_ms);
+				return resolve_ipv4_via_doh_blocking(dev_idx, host, timeout_ms, cname_depth);
 			}
 
 			poll_executor_for_progress();
@@ -1608,8 +1777,8 @@ pub mod cabi {
 			let owner = leak_str(alloc::format!("qjs-https@{}", dev_idx));
 			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-			let cmds = NetQueue::new_leaked(cmds_name, 128);
-			let events = NetQueue::new_leaked(evts_name, 128);
+			let cmds = NetQueue::new_leaked(cmds_name, 512);
+			let events = NetQueue::new_leaked(evts_name, 512);
 			register_tls_app_queues(owner, cmds, events);
 
 			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
@@ -1624,7 +1793,7 @@ pub mod cabi {
 			let server_name = leak_str(url.host.clone());
 
 			loop {
-				for ev in events.drain(32) {
+				for ev in events.drain(256) {
 					match ev {
 						TlsEvent::Opened { handle } => {
 							tls_handle = Some(handle);

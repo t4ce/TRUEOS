@@ -1119,7 +1119,6 @@ pub(crate) async fn enumerate_with_params(
 
     let dev_mfr = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_mfr).await;
     let dev_prod = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_prod).await;
-    let dev_serial = control::fetch_serial_string(&ctx, &mut ep0_ring, slot_id, dev_i_serial).await;
 
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
         Some(pair) => pair,
@@ -1281,7 +1280,6 @@ pub(crate) async fn enumerate_with_params(
         dev_cls,
         dev_sub,
         dev_prot,
-        dev_serial,
         cfg_slice,
         dev_ctx_virt,
         ctx_stride_bytes,
