@@ -14,6 +14,31 @@ extern "C" {
     fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
 }
 
+#[inline]
+fn cabi_rc_name(rc: i32) -> &'static [u8] {
+    match rc {
+        0 => b"OK",
+        -1 => b"FS_ERR_BAD_UTF8",
+        -2 => b"FS_ERR_IO",
+        -3 => b"FS_ERR_NO_SPACE",
+        -4 => b"FS_ERR_BAD_PARAM",
+        -5 => b"FS_ERR_USBMS_NOT_FOUND",
+        -6 => b"FS_ERR_BAD_PATH",
+        -7 => b"FS_ERR_TOO_LARGE",
+        -8 => b"FS_ERR_NOT_FOUND",
+        -9 => b"FS_ERR_ALREADY_EXISTS",
+        -10 => b"NET_ERR_BAD_URL",
+        -11 => b"NET_ERR_TIMEOUT",
+        -12 => b"NET_ERR_HTTP",
+        -13 => b"NET_ERR_TLS",
+        -111 => b"NET_ERR_TIMEOUT_DNS",
+        -112 => b"NET_ERR_TIMEOUT_CONNECT",
+        -113 => b"NET_ERR_TIMEOUT_HEADERS",
+        -114 => b"NET_ERR_TIMEOUT_BODY",
+        _ => b"UNKNOWN",
+    }
+}
+
 unsafe fn js_arg_to_utf8_bytes(ctx: *mut qjs::JSContext, val: qjs::JSValueConst) -> Option<(*const u8, usize, *const c_char)> {
     let mut len: usize = 0;
     let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, val, 0);
@@ -819,6 +844,9 @@ unsafe fn load_url_module(
         let mut msg = Vec::new();
         msg.extend_from_slice(b"fetch-to-cache failed rc=");
         push_i32_dec(&mut msg, rc);
+		msg.extend_from_slice(b" (");
+		msg.extend_from_slice(cabi_rc_name(rc));
+		msg.extend_from_slice(b")");
         msg.extend_from_slice(b" url=");
         msg.extend_from_slice(url);
         msg.extend_from_slice(b" cache=");

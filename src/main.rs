@@ -70,6 +70,51 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
 #[task]
+async fn boot_fetch_to_file_smoke_task() {
+    use embassy_time::Timer;
+
+    const URL: &str = "https://esm.sh/left-pad@1.3.0";
+    const PATH: &str = "/qjs/cdn/fetch-smoke-left-pad-1.3.0.mjs";
+
+    // Retry: USBMS/FAT may not be ready yet when the executor starts.
+    for attempt in 1..=60u32 {
+        let rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_net_fetch_to_file(
+                URL.as_bytes().as_ptr(),
+                URL.as_bytes().len(),
+                PATH.as_bytes().as_ptr(),
+                PATH.as_bytes().len(),
+            )
+        };
+
+        if rc == 0 {
+            crate::log!("fetch-smoke: ok url={} path={}\n", URL, PATH);
+            crate::log!("qjs-loader-smoke: starting\n");
+            unsafe { qjs::trueos_smoke::run_module_loader_smoke() };
+            crate::log!("qjs-loader-smoke: done\n");
+            return;
+        }
+
+        crate::log!(
+            "fetch-smoke: attempt={} rc={} ({}) url={} path={}\n",
+            attempt,
+            rc,
+            crate::surface::io::cabi::code_name(rc),
+            URL,
+            PATH
+        );
+
+        Timer::after_millis(500).await;
+    }
+
+    crate::log!(
+        "fetch-smoke: giving up after retries url={} path={}\n",
+        URL,
+        PATH
+    );
+}
+
+#[task]
 async fn boot_https_demo_task() {
     crate::log!("net-boot: starting https (tls) demo\n");
     if let Some(slot) = crate::matrix::alloc_slot("https boot") {
@@ -339,6 +384,11 @@ pub extern "C" fn kmain() -> ! {
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
     let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
+
+	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
+	if net_ready {
+		let _ = spawner.spawn(boot_fetch_to_file_smoke_task());
+	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
         crate::log!("shell: spawn UART shell failed: {:?}\n", e);

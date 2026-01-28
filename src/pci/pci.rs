@@ -46,7 +46,7 @@ static ECAM: Once<Option<Mutex<EcamState>>> = Once::new();
 
 fn init_ecam_once() {
     ECAM.call_once(|| {
-        let Some(tables) = crate::acpi::ensure_tables() else {
+        let Some(tables) = crate::efi::acpi::ensure_tables() else {
             return None;
         };
 
