@@ -495,13 +495,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     pending_deadline = None;
                     match action {
                         PendingAction::Reset => {
-                            if let Err(_err) = crate::acpi::facp::reset_system() {
+                            if let Err(_err) = crate::efi::acpi::facp::reset_system() {
                                 io.write_str("tlb miss warn\r\n");
                                 write_prompt(io);
                             }
                         }
                         PendingAction::S5 => {
-                            if crate::acpi::facp::enter_s5(0, None).is_err() {
+                            if crate::efi::acpi::facp::enter_s5(0, None).is_err() {
                                 io.write_str("\r\ns5 failed\r\n");
                                 write_prompt(io);
                             }
