@@ -150,6 +150,55 @@ pub fn reserve_heap_arena(size: usize, align: usize) -> Option<HeapArena> {
     })
 }
 
+/// Attempts to reserve and install a heap arena from a list of candidate sizes.
+///
+/// This keeps the selection logic colocated with the PMM/heap-arena reservation
+/// logic, but avoids a direct dependency on the allocator module by accepting an
+/// `install` callback.
+///
+/// Returns `true` on the first successfully installed arena.
+pub fn try_install_heap_arena_candidates<F>(mut install: F) -> bool
+where
+    F: FnMut(HeapArena) -> bool,
+{
+    const KIB: usize = 1024;
+    const MIB: usize = 1024 * KIB;
+    const GIB: usize = 1024 * MIB;
+
+    const HEAP_ALIGN: usize = 2 * MIB;
+    const HEAP_CANDIDATES: [usize; 7] = [
+        GIB,
+        512 * MIB,
+        256 * MIB,
+        128 * MIB,
+        64 * MIB,
+        32 * MIB,
+        16 * MIB,
+    ];
+
+    for &size in HEAP_CANDIDATES.iter() {
+        let Some(arena) = reserve_heap_arena(size, HEAP_ALIGN) else {
+            continue;
+        };
+
+        if install(arena) {
+            return true;
+        }
+
+        // If the consumer rejects the arena, release it back to the PMM to
+        // avoid leaking physical memory during boot.
+        if !free_phys_range(arena.phys_start, arena.length) {
+            crate::log!(
+                "pmm: failed to free rejected heap arena phys=0x{:X} size=0x{:X}\n",
+                arena.phys_start,
+                arena.length
+            );
+        }
+    }
+
+    false
+}
+
 pub fn alloc_phys_range(
     size: usize,
     align: usize,

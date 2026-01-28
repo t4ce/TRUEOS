@@ -93,3 +93,15 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
     unsafe { trueos_qjs::trueos_smoke::run_module_loader_smoke() };
     crate::log!("qjs-loader-smoke: done\n");
 }
+
+#[task]
+pub(crate) async fn boot_cheerio_smoke_task() {
+    use embassy_time::Timer;
+
+    // Give the network + USBMS/FAT some time to settle.
+    Timer::after_millis(1500).await;
+
+    crate::log!("qjs-cheerio-smoke: starting\n");
+    unsafe { trueos_qjs::trueos_smoke::run_cheerio_smoke() };
+    crate::log!("qjs-cheerio-smoke: done\n");
+}

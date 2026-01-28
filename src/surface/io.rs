@@ -109,6 +109,11 @@ pub mod kfs {
 		crate::disc::files::Fs::create_dir_all(path)
 	}
 
+	#[inline]
+	pub fn exists(path: &str) -> core::result::Result<bool, crate::disc::files::FsError> {
+		crate::disc::files::Fs::exists(path)
+	}
+
 	/// Read a destination file for an append operation.
 	///
 	/// Mirrors the shell's historical behavior: a missing/unopenable destination
@@ -524,6 +529,14 @@ pub mod cabi {
 	use alloc::vec::Vec;
 	use alloc::boxed::Box;
 	use alloc::string::{String, ToString};
+	use core::sync::atomic::{AtomicU32, Ordering};
+
+	static QJS_NET_SEQ: AtomicU32 = AtomicU32::new(1);
+
+	#[inline]
+	fn next_qjs_net_seq() -> u32 {
+		QJS_NET_SEQ.fetch_add(1, Ordering::Relaxed)
+	}
 
 	#[repr(u32)]
 	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1325,7 +1338,7 @@ pub mod cabi {
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
-		const DOT_PORT: u16 = 853;
+		const DOT_PORT: u16 = 853; // DNS over TLS port
 		let t = core::cmp::max(2000, core::cmp::min(timeout_ms, 8000));
 		let dns_id: u16 = 0xED00;
 		let query = dns_query(dns_id, host, 1);
@@ -1339,24 +1352,25 @@ pub mod cabi {
 		];
 
 		for &(server_ip, sni) in providers {
-			let owner = leak_str(alloc::format!("qjs-dot@{}", dev_idx));
-				let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
-				let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-				let cmds = NetQueue::new_leaked(cmds_name, 512);
-				let events = NetQueue::new_leaked(evts_name, 512);
-				register_tls_app_queues(owner, cmds, events);
+			let seq = next_qjs_net_seq();
+			let owner = leak_str(alloc::format!("qjs-dot-{}@{}", seq, dev_idx));
+			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+			let cmds = NetQueue::new_leaked(cmds_name, 512);
+			let events = NetQueue::new_leaked(evts_name, 512);
+			register_tls_app_queues(owner, cmds, events);
 
-				let roots = TlsRoots::mozilla();
-				let cfg = TlsClientConfig::new();
-				let server_name = sni;
+			let roots = TlsRoots::mozilla();
+			let cfg = TlsClientConfig::new();
+			let server_name = sni;
 
-				let start = embassy_time_driver::now() as u64;
-				let deadline = start
-					.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
-				let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
-				let mut sent_connect = false;
-				let mut sent_query = false;
-				let mut buf: Vec<u8> = Vec::new();
+			let start = embassy_time_driver::now() as u64;
+			let deadline = start
+				.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut sent_connect = false;
+			let mut sent_query = false;
+			let mut buf: Vec<u8> = Vec::new();
 
 			loop {
 				for ev in events.drain(256) {
@@ -1412,25 +1426,25 @@ pub mod cabi {
 					}
 				}
 
-					if !sent_connect {
-						sent_connect = true;
-						let _ = cmds.push(TlsCommand::OpenTcpConnect {
-							remote: NetEndpoint { addr: server_ip, port: DOT_PORT },
-							server_name,
-							cfg: cfg.clone(),
-							roots: roots.clone(),
-						});
-					}
-
-					let now = embassy_time_driver::now() as u64;
-					if now >= deadline {
-						if let Some(handle) = tls_handle {
-							let _ = cmds.push(TlsCommand::Close { handle });
-						}
-						break;
-					}
-					poll_executor_for_progress();
+				if !sent_connect {
+					sent_connect = true;
+					let _ = cmds.push(TlsCommand::OpenTcpConnect {
+						remote: NetEndpoint { addr: server_ip, port: DOT_PORT },
+						server_name,
+						cfg: cfg.clone(),
+						roots: roots.clone(),
+					});
 				}
+
+				let now = embassy_time_driver::now() as u64;
+				if now >= deadline {
+					if let Some(handle) = tls_handle {
+						let _ = cmds.push(TlsCommand::Close { handle });
+					}
+					break;
+				}
+				poll_executor_for_progress();
+			}
 		}
 
 		None
@@ -1441,106 +1455,106 @@ pub mod cabi {
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
-		const DOH_PORT: u16 = 443;
+		const DOH_PORT: u16 = 443; // DNS over HTTPS port
 		let t = core::cmp::max(2500, core::cmp::min(timeout_ms, 10_000));
 		let dns_id: u16 = 0xEE00;
 		let query = dns_query(dns_id, host, 1);
 		let max_bytes: usize = 64 * 1024;
 
 		let providers: &[([u8; 4], &'static str)] = &[
-			// Cloudflare DoH.
 			([1, 1, 1, 1], "cloudflare-dns.com"),
-			// Google DoH.
 			([8, 8, 8, 8], "dns.google"),
 		];
 
 		for &(server_ip, sni) in providers {
-			let owner = leak_str(alloc::format!("qjs-doh@{}", dev_idx));
-				let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
-				let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-				let cmds = NetQueue::new_leaked(cmds_name, 512);
-				let events = NetQueue::new_leaked(evts_name, 512);
-				register_tls_app_queues(owner, cmds, events);
+			let seq = next_qjs_net_seq();
+			let owner = leak_str(alloc::format!("qjs-doh-{}@{}", seq, dev_idx));
+			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+			let cmds = NetQueue::new_leaked(cmds_name, 512);
+			let events = NetQueue::new_leaked(evts_name, 512);
+			register_tls_app_queues(owner, cmds, events);
 
-				let roots = TlsRoots::mozilla();
-				let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
-				let server_name = sni;
+			let roots = TlsRoots::mozilla();
+			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+			let server_name = sni;
 
-				let start = embassy_time_driver::now() as u64;
-				let deadline = start
-					.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
-				let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
-				let mut sent_connect = false;
-				let mut sent_query = false;
-				let mut plaintext: Vec<u8> = Vec::new();
+			let start = embassy_time_driver::now() as u64;
+			let deadline = start
+				.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut sent_connect = false;
+			let mut sent_query = false;
+			let mut plaintext: Vec<u8> = Vec::new();
 
-				let req = alloc::format!(
-					"POST /dns-query HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS qjs-doh\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-					sni,
-					query.len()
-				)
-				.into_bytes();
+			let req = alloc::format!(
+				"POST /dns-query HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS qjs-doh\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+				sni,
+				query.len()
+			)
+			.into_bytes();
 
 			loop {
 				for ev in events.drain(256) {
-						match ev {
-							TlsEvent::Opened { handle } => tls_handle = Some(handle),
-							TlsEvent::Connected { handle } => {
-								if tls_handle != Some(handle) {
-									continue;
-								}
-								if !sent_query {
-									let mut out = Vec::with_capacity(req.len() + query.len());
-									out.extend_from_slice(&req);
-									out.extend_from_slice(&query);
-									if cmds.push(TlsCommand::Send { handle, data: out }).is_ok() {
-										sent_query = true;
-									}
+					match ev {
+						TlsEvent::Opened { handle } => tls_handle = Some(handle),
+						TlsEvent::Connected { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if !sent_query {
+								let mut out = Vec::with_capacity(req.len() + query.len());
+								out.extend_from_slice(&req);
+								out.extend_from_slice(&query);
+								if cmds.push(TlsCommand::Send { handle, data: out }).is_ok() {
+									sent_query = true;
 								}
 							}
-							TlsEvent::Data { handle, data } => {
-								if tls_handle != Some(handle) {
-									continue;
-								}
-								if plaintext.len() < max_bytes {
-									let room = max_bytes - plaintext.len();
-									let take = data.len().min(room);
-									plaintext.extend_from_slice(&data[..take]);
-								}
+						}
+						TlsEvent::Data { handle, data } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if plaintext.len() < max_bytes {
+								let room = max_bytes - plaintext.len();
+								let take = data.len().min(room);
+								plaintext.extend_from_slice(&data[..take]);
+							}
 
-								if let Some(hdr_end) = find_http_header_end(&plaintext) {
-									let headers = &plaintext[..hdr_end];
-									let status = parse_http_status(headers).unwrap_or(0);
-									if status != 200 {
-										break;
-									}
-									let body = &plaintext[hdr_end..];
-									if is_chunked_encoding(headers) {
-										if let Ok(Some(decoded)) = try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
-											match dns_parse_first_a_or_cname(&decoded, dns_id) {
-												Some(DnsResolution::A(ip)) => {
-													let _ = cmds.push(TlsCommand::Close { handle });
-													return Some(ip);
-												}
-												Some(DnsResolution::Cname(name)) => {
-													let _ = cmds.push(TlsCommand::Close { handle });
-													if cname_depth == 0 {
-														return None;
-													}
-													return resolve_ipv4_blocking_inner(
-														dev_idx,
-														name.as_str(),
-														timeout_ms,
-														cname_depth - 1,
-													);
-												}
-												None => {}
+							if let Some(hdr_end) = find_http_header_end(&plaintext) {
+								let headers = &plaintext[..hdr_end];
+								let status = parse_http_status(headers).unwrap_or(0);
+								if status != 200 {
+									break;
+								}
+								let body = &plaintext[hdr_end..];
+								if is_chunked_encoding(headers) {
+									if let Ok(Some(decoded)) =
+										try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end))
+									{
+										match dns_parse_first_a_or_cname(&decoded, dns_id) {
+											Some(DnsResolution::A(ip)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												return Some(ip);
 											}
+											Some(DnsResolution::Cname(name)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												if cname_depth == 0 {
+													return None;
+												}
+												return resolve_ipv4_blocking_inner(
+													dev_idx,
+													name.as_str(),
+													timeout_ms,
+													cname_depth - 1,
+												);
+											}
+											None => {}
 										}
-										}
-									} else if let Some(cl) = parse_content_length(headers) {
-										if body.len() >= cl {
-											let pkt = &body[..cl];
+									}
+								} else if let Some(cl) = parse_content_length(headers) {
+									if body.len() >= cl {
+										let pkt = &body[..cl];
 										match dns_parse_first_a_or_cname(pkt, dns_id) {
 											Some(DnsResolution::A(ip)) => {
 												let _ = cmds.push(TlsCommand::Close { handle });
@@ -1560,81 +1574,80 @@ pub mod cabi {
 											}
 											None => {}
 										}
-										}
-									} else {
-										// No CL: wait for close.
 									}
 								}
 							}
-							TlsEvent::Closed { handle } => {
-								if tls_handle != Some(handle) {
-									continue;
-								}
-								let Some(hdr_end) = find_http_header_end(&plaintext) else { break };
-								let headers = &plaintext[..hdr_end];
-								let status = parse_http_status(headers).unwrap_or(0);
-								if status != 200 {
-									break;
-								}
-								let body = &plaintext[hdr_end..];
-								let pkt: Vec<u8> = if is_chunked_encoding(headers) {
-									match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
-										Ok(Some(decoded)) => decoded,
-										_ => break,
-									}
-								} else if let Some(cl) = parse_content_length(headers) {
-									if body.len() < cl {
-										break;
-									}
-									body[..cl].to_vec()
-								} else {
-									body.to_vec()
-								};
-								match dns_parse_first_a_or_cname(&pkt, dns_id) {
-									Some(DnsResolution::A(ip)) => return Some(ip),
-									Some(DnsResolution::Cname(name)) => {
-										if cname_depth == 0 {
-											return None;
-										}
-										return resolve_ipv4_blocking_inner(
-											dev_idx,
-											name.as_str(),
-											timeout_ms,
-											cname_depth - 1,
-										);
-									}
-									None => {}
-								}
+						}
+						TlsEvent::Closed { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							let Some(hdr_end) = find_http_header_end(&plaintext) else { break };
+							let headers = &plaintext[..hdr_end];
+							let status = parse_http_status(headers).unwrap_or(0);
+							if status != 200 {
 								break;
 							}
-							TlsEvent::Error { .. } => break,
-							TlsEvent::TlsError { .. } => break,
+							let body = &plaintext[hdr_end..];
+							let pkt: Vec<u8> = if is_chunked_encoding(headers) {
+								match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+									Ok(Some(decoded)) => decoded,
+									_ => break,
+								}
+							} else if let Some(cl) = parse_content_length(headers) {
+								if body.len() < cl {
+									break;
+								}
+								body[..cl].to_vec()
+							} else {
+								body.to_vec()
+							};
+							match dns_parse_first_a_or_cname(&pkt, dns_id) {
+								Some(DnsResolution::A(ip)) => return Some(ip),
+								Some(DnsResolution::Cname(name)) => {
+									if cname_depth == 0 {
+										return None;
+									}
+									return resolve_ipv4_blocking_inner(
+										dev_idx,
+										name.as_str(),
+										timeout_ms,
+										cname_depth - 1,
+									);
+								}
+								None => {}
+							}
+							break;
 						}
+						TlsEvent::Error { .. } => break,
+						TlsEvent::TlsError { .. } => break,
 					}
+				}
 
-					if !sent_connect {
-								if cmds
-									.push(TlsCommand::OpenTcpConnect {
+				if !sent_connect {
+					if cmds
+						.push(TlsCommand::OpenTcpConnect {
 							remote: NetEndpoint { addr: server_ip, port: DOH_PORT },
 							server_name,
 							cfg: cfg.clone(),
 							roots: roots.clone(),
-								})
-								.is_ok()
-								{
-									sent_connect = true;
-								}
+						})
+						.is_ok()
+					{
+						sent_connect = true;
 					}
-
-					let now = embassy_time_driver::now() as u64;
-					if now >= deadline {
-						if let Some(handle) = tls_handle {
-							let _ = cmds.push(TlsCommand::Close { handle });
-						}
-						break;
-					}
-					poll_executor_for_progress();
 				}
+
+				let now = embassy_time_driver::now() as u64;
+				if now >= deadline {
+					if let Some(handle) = tls_handle {
+						let _ = cmds.push(TlsCommand::Close { handle });
+					}
+					break;
+				}
+				poll_executor_for_progress();
+			}
+		}
 
 		None
 	}
@@ -1656,18 +1669,27 @@ pub mod cabi {
 		}
 
 		let dns_id: u16 = 0xEA00u16.wrapping_add(dev_idx as u16);
-		let owner = leak_str(alloc::format!("qjs-dns@{}", dev_idx));
+		let seq = next_qjs_net_seq();
+		let owner = leak_str(alloc::format!("qjs-dns-{}@{}", seq, dev_idx));
 		let cmd_name = leak_str(alloc::format!("{}-cmd", owner));
 		let evt_name = leak_str(alloc::format!("{}-evt", owner));
 		let cmds = NetQueue::new_leaked(cmd_name, 256);
 		let events = NetQueue::new_leaked(evt_name, 256);
 		register_app_queues(owner, cmds, events);
 
-		let local_port: u16 = 54000u16.wrapping_add(dev_idx as u16);
+		// Important: the UDP port must be unique per call. Multiple concurrent
+		// DNS resolves can otherwise collide on a fixed port, causing bind failures
+		// and timeouts (especially during boot when multiple subsystems fetch).
+		let local_port: u16 = 40000u16
+			.wrapping_add(((dev_idx as u16).wrapping_mul(2000)) % 20000)
+			.wrapping_add((seq as u16) % 2000);
 		let _ = cmds.push(NetCommand::OpenUdp { port: local_port });
 
 		let start = embassy_time_driver::now() as u64;
-		let deadline = start.saturating_add(timeout_ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+		let to_ticks = |ms: u64| -> u64 {
+			ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1)
+		};
+		let deadline = start.saturating_add(to_ticks(timeout_ms));
 		let mut udp: Option<NetHandle> = None;
 		let mut sent = false;
 		let dns_servers: &[[u8; 4]] = &[
@@ -1686,6 +1708,20 @@ pub mod cabi {
 						if kind == SocketKind::Udp {
 							udp = Some(handle);
 						}
+					}
+					NetEvent::Error { msg } => {
+						// Any UDP path error (open/bind/send). Don't sit on a long timeout:
+						// immediately fall back to DoT/DoH.
+						crate::log!(
+							"qjs-dns: udp error dev={} host={} msg={} -> trying dot/doh\n",
+							dev_idx,
+							host,
+							msg
+						);
+						if let Some(ip) = resolve_ipv4_via_dot_blocking(dev_idx, host, timeout_ms, cname_depth) {
+							return Some(ip);
+						}
+						return resolve_ipv4_via_doh_blocking(dev_idx, host, timeout_ms, cname_depth);
 					}
 					NetEvent::UdpPacket { handle, from, data } => {
 						if udp != Some(handle) {
@@ -1764,17 +1800,20 @@ pub mod cabi {
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
-		let dev_count = crate::net::device_count().max(1);
+		// Use the primary NIC (device 0). Trying all NICs amplifies DNS/TLS socket
+		// usage and can trigger transient "no sockets available" failures during boot.
+		let dev_indices: [usize; 1] = [0];
 		let mut last_err: i32 = NET_ERR_TIMEOUT;
 
-		for dev_idx in 0..dev_count {
+		for dev_idx in dev_indices {
 			let dns_timeout_ms = core::cmp::max(1500, core::cmp::min(timeout_ms, 5000));
 			let Some(ip) = resolve_ipv4_blocking(dev_idx, url.host.as_str(), dns_timeout_ms) else {
 				last_err = NET_ERR_TIMEOUT_DNS;
 				continue;
 			};
 
-			let owner = leak_str(alloc::format!("qjs-https@{}", dev_idx));
+			let seq = next_qjs_net_seq();
+			let owner = leak_str(alloc::format!("qjs-https-{}@{}", seq, dev_idx));
 			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
 			let cmds = NetQueue::new_leaked(cmds_name, 512);
@@ -1785,8 +1824,18 @@ pub mod cabi {
 			let mut sent_connect = false;
 			let mut http_sent = false;
 			let mut plaintext: Vec<u8> = Vec::new();
+			#[inline]
+			fn ticks_from_ms(ms: u64) -> u64 {
+				ms.saturating_mul(embassy_time_driver::TICK_HZ as u64)
+					.saturating_div(1000)
+					.max(1)
+			}
+
+			// `timeout_ms` is treated as an *inactivity* timeout (reset on progress).
+			// Also apply a hard cap so a slow drip can't hang forever.
 			let start = embassy_time_driver::now() as u64;
-			let deadline = start.saturating_add(timeout_ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
+			let mut deadline = start.saturating_add(ticks_from_ms(timeout_ms));
+			let hard_deadline = start.saturating_add(ticks_from_ms(core::cmp::max(timeout_ms, 180_000)));
 
 			let roots = TlsRoots::mozilla();
 			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
@@ -1797,6 +1846,9 @@ pub mod cabi {
 					match ev {
 						TlsEvent::Opened { handle } => {
 							tls_handle = Some(handle);
+							// Progress in the state machine: reset inactivity timeout.
+							deadline = (embassy_time_driver::now() as u64)
+								.saturating_add(ticks_from_ms(timeout_ms));
 						}
 						TlsEvent::Connected { handle } => {
 							if tls_handle != Some(handle) {
@@ -1816,6 +1868,9 @@ pub mod cabi {
 								.is_ok()
 								{
 									http_sent = true;
+									// We successfully queued the request: reset inactivity timeout.
+									deadline = (embassy_time_driver::now() as u64)
+										.saturating_add(ticks_from_ms(timeout_ms));
 								}
 							}
 						}
@@ -1823,6 +1878,9 @@ pub mod cabi {
 							if tls_handle != Some(handle) {
 								continue;
 							}
+							// We made forward progress: reset inactivity timeout.
+							deadline = (embassy_time_driver::now() as u64)
+								.saturating_add(ticks_from_ms(timeout_ms));
 							if plaintext.len() < max_bytes {
 								let room = max_bytes - plaintext.len();
 								let take = data.len().min(room);
@@ -1928,7 +1986,7 @@ pub mod cabi {
 				}
 
 				let now = embassy_time_driver::now() as u64;
-				if now >= deadline {
+				if now >= deadline || now >= hard_deadline {
 					let hdr_end = find_http_header_end(&plaintext);
 					let have_hdr = hdr_end.is_some();
 					let (status, body_len) = if let Some(hdr_end) = hdr_end {
@@ -1997,7 +2055,7 @@ pub mod cabi {
 		};
 
 		// If already cached, done.
-		if super::kfs::read_file(path).is_ok() {
+		if super::kfs::exists(path).unwrap_or(false) {
 			return 0;
 		}
 
