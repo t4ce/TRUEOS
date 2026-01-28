@@ -10,10 +10,12 @@ use crate::{
 };
 
 pub mod bgrt;
+pub mod dbg;
 pub mod dmar;
 pub mod facp;
 pub mod fpdt;
 pub mod hpet;
+pub mod madt;
 pub mod ssdt;
 pub mod tpm2;
 
