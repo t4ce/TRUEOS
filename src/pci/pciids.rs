@@ -195,6 +195,176 @@ fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
     out
 }
 
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex4_to_u16(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    let a = hex_nibble(bytes[0])? as u16;
+    let b = hex_nibble(bytes[1])? as u16;
+    let c = hex_nibble(bytes[2])? as u16;
+    let d = hex_nibble(bytes[3])? as u16;
+    Some((a << 12) | (b << 8) | (c << 4) | d)
+}
+
+/// Lookup a vendor name by vendor ID ($vid$) from a sanitized `pci.ids` blob.
+///
+/// Returns the vendor name bytes (typically UTF-8).
+pub fn lookup_vendor_name_from_db<'a>(db: &'a [u8], vid: u16) -> Option<&'a [u8]> {
+    let mut i: usize = 0;
+    while i < db.len() {
+        let start = i;
+        while i < db.len() && db[i] != b'\n' {
+            i += 1;
+        }
+        let mut line = &db[start..i];
+        if i < db.len() && db[i] == b'\n' {
+            i += 1;
+        }
+        if let Some((&b'\r', rest)) = line.split_last() {
+            line = rest;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == b'\t' {
+            continue;
+        }
+        if line.len() < 6 {
+            continue;
+        }
+        let Some(id) = hex4_to_u16(&line[..4]) else {
+            continue;
+        };
+        if line[4] != b' ' {
+            continue;
+        }
+        if id == vid {
+            return Some(&line[5..]);
+        }
+    }
+    None
+}
+
+/// Lookup a `(vendor_name, device_name)` tuple by vendor+device IDs.
+///
+/// Works on the sanitized `pci.ids` format produced by `sanitize_pci_ids()`:
+/// - vendor lines: `vvvv <name>`
+/// - device lines: `\tdddd <name>`
+/// - subsystem lines are ignored here.
+pub fn lookup_vendor_device_from_db<'a>(
+    db: &'a [u8],
+    vid: u16,
+    did: u16,
+) -> Option<(&'a [u8], &'a [u8])> {
+    let mut i: usize = 0;
+    let mut in_vendor = false;
+    let mut seen_vendor = false;
+    let mut vendor_name: Option<&'a [u8]> = None;
+
+    while i < db.len() {
+        let start = i;
+        while i < db.len() && db[i] != b'\n' {
+            i += 1;
+        }
+        let mut line = &db[start..i];
+        if i < db.len() && db[i] == b'\n' {
+            i += 1;
+        }
+        if let Some((&b'\r', rest)) = line.split_last() {
+            line = rest;
+        }
+        if line.is_empty() {
+            continue;
+        }
+
+        // Determine indent (0/1/2 tabs) and the remaining payload.
+        let mut p: usize = 0;
+        while p < line.len() && line[p] == b'\t' {
+            p += 1;
+        }
+        let indent = core::cmp::min(p, 2);
+        let rest = &line[p..];
+
+        if indent == 0 {
+            if seen_vendor {
+                // We already passed the matching vendor section without finding the device.
+                return None;
+            }
+            if rest.len() < 6 {
+                continue;
+            }
+            let Some(v) = hex4_to_u16(&rest[..4]) else { continue };
+            if rest[4] != b' ' {
+                continue;
+            }
+            if v == vid {
+                in_vendor = true;
+                seen_vendor = true;
+                vendor_name = Some(&rest[5..]);
+            } else {
+                in_vendor = false;
+                vendor_name = None;
+            }
+            continue;
+        }
+
+        if indent == 1 {
+            if !in_vendor {
+                continue;
+            }
+            let vend = vendor_name?;
+            if rest.len() < 6 {
+                continue;
+            }
+            let Some(d) = hex4_to_u16(&rest[..4]) else { continue };
+            if rest[4] != b' ' {
+                continue;
+            }
+            if d == did {
+                return Some((vend, &rest[5..]));
+            }
+            continue;
+        }
+    }
+    None
+}
+
+/// Convenience: read the cached database and do a vendor+device lookup.
+pub fn lookup_vendor_device_cached(
+    vid: u16,
+    did: u16,
+) -> Result<Option<(alloc::string::String, alloc::string::String)>, crate::disc::files::FsError> {
+    use alloc::string::String;
+
+    const PATH: &str = "/trueos/pci/pci.ids";
+    let db = crate::surface::io::kfs::read_file(PATH)?;
+
+    let Some((v, d)) = lookup_vendor_device_from_db(&db, vid, did) else {
+        return Ok(None);
+    };
+
+    // Best-effort UTF-8 conversion for logs/UI.
+    let v = String::from_utf8_lossy(v).into_owned();
+    let d = String::from_utf8_lossy(d).into_owned();
+    Ok(Some((v, d)))
+}
+
+fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
+    // Re-enumerate here so the list reflects the system state after init.
+    // (Enumeration is cheap and uses the same static cache the shell relies on.)
+    crate::pci::enumerate_silent();
+    crate::pci::log_devices_with_pci_ids(db);
+}
+
 /// Fetch and cache the `pci.ids` database on the USBMS FAT filesystem.
 ///
 /// The download is skipped if the destination file already exists.
@@ -217,14 +387,14 @@ pub(crate) async fn boot_cache_pci_ids_task() {
         "/§/pci.ids",
     ];
 
-    let url_bytes = URL.as_bytes();
-    let path_bytes = PATH.as_bytes();
-
     // Retry: USBMS/FAT may not be ready when the executor starts.
     for attempt in 1..=60u32 {
         match crate::surface::io::kfs::exists(PATH) {
             Ok(true) => {
                 crate::log!("pciids: cache hit path={}\n", PATH);
+                if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+                    log_pci_enumeration_with_cached_ids(&db);
+                }
                 return;
             }
             Ok(false) => {}
@@ -256,6 +426,9 @@ pub(crate) async fn boot_cache_pci_ids_task() {
                                 raw.len(),
                                 cleaned.len(),
                             );
+                            if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+                                log_pci_enumeration_with_cached_ids(&db);
+                            }
                             return;
                         }
                         let _ = crate::surface::io::kfs::remove(tmp.as_str());
@@ -312,6 +485,9 @@ pub(crate) async fn boot_cache_pci_ids_task() {
                 raw.len(),
                 cleaned.len(),
             );
+            if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+                log_pci_enumeration_with_cached_ids(&db);
+            }
             return;
         }
 
