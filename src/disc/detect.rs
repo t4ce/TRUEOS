@@ -103,8 +103,7 @@ fn looks_like_ext_superblock(sb: &[u8]) -> bool {
 }
 
 fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
-    // trueos-fs ObjHeader::MAGIC = "TRUEOSFS".
-    block0.len() >= 8 && &block0[0..8] == b"TRUEOSFS"
+    block0.len() >= 8 && &block0[0..8] == &trueos_fs::MAGIC
 }
 
 pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {

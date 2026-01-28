@@ -301,15 +301,15 @@ pub extern "C" fn kmain() -> ! {
     // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
-    let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
+    //let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
 	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
 	if net_ready {
-        let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
+        // let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
         // NOTE: leave the heavier cheerio smoke test opt-in; it can add significant
         // DNS/TLS pressure during early boot and mask unrelated network issues.
         // let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
-        let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
+        // let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
 	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
@@ -402,6 +402,8 @@ unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     ap_loop(cpu.lapic_id as u32, total, slot)
 }
 
+//     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
+//     let spawner = executor.spawner();
 fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
     let mut counter: u64 = 0;
     loop {

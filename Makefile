@@ -1,12 +1,15 @@
 BUILD_MODE ?= debug
 KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
 
+ISO_DIR := bld
+ISO_PATH := bld/trueos.iso
+ISO_BOOT_DIR := bld/iso-bootroot
+ISO_PAYLOAD_DIR := bld/iso-payloadroot
+PAYLOAD_ISO_PATH := bld/trueos-payload.iso
 
-ISO_DIR 		:= bld
-ISO_PATH 		:= bld/trueos.iso
-LIMINE_CFG 		:= limine.conf
-LIMINE_PREFIX 	:= bld/limine-prefix
-LIMINE_SHARE 	:= $(LIMINE_PREFIX)/share/limine
+LIMINE_CFG := limine.conf
+LIMINE_PREFIX := bld/limine-prefix
+LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 
 QEMU = qemu-system-x86_64
 QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
@@ -20,7 +23,7 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
-QEMU_USB_FLAGS =  \
+QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
 	-device vfio-pci,host=0000:06:00.0 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse0 \
@@ -29,36 +32,63 @@ QEMU_USB_FLAGS =  \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0 \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk0 \
 	-device usb-storage,drive=usbdisk0,bus=xhci.0,port=5,id=usbms0 \
-# -drive file=disk.img,if=none,format=raw,id=nvme0 \	
-# -device nvme,drive=nvme0,serial=deadbeef \
+	# -drive file=disk.img,if=none,format=raw,id=nvme0 \
+	# -device nvme,drive=nvme0,serial=deadbeef
 
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
-iso:
+.PHONY: kernel payload-iso iso iso-debug iso-release run dbg
+
+kernel:
 	@# Limine is ensured by Cargo build.rs (see build.rs + trueos-limloader).
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
-	rm -rf $(ISO_DIR)/EFI $(ISO_DIR)/TRUEOS.elf $(ISO_DIR)/limine.conf $(ISO_DIR)/limine-uefi-cd.bin $(ISO_DIR)/limine-bios-cd.bin $(ISO_DIR)/limine-bios.sys
-	rm -f $(ISO_PATH)
-	mkdir -p $(ISO_DIR)/EFI/BOOT
-	cp $(KERNEL_BIN) $(ISO_DIR)/TRUEOS.elf
-	cp $(LIMINE_CFG) $(ISO_DIR)/limine.conf
-	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_DIR)/
-	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_DIR)/
-	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_DIR)/
+
+payload-iso: kernel
+	rm -rf $(ISO_PAYLOAD_DIR)
+	rm -f $(PAYLOAD_ISO_PATH)
+	mkdir -p $(ISO_PAYLOAD_DIR)/EFI/BOOT
+	cp $(KERNEL_BIN) $(ISO_PAYLOAD_DIR)/TRUEOS.elf
+	@# Reuse the main Limine config, but remove installer-only module directives
+	@# so the payload image doesn't try to load itself.
+	grep -v -E '^(module_path:|module_string:)' $(LIMINE_CFG) > $(ISO_PAYLOAD_DIR)/limine.conf
+	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_PAYLOAD_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_PAYLOAD_DIR)/
+	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_PAYLOAD_DIR)/
+	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_PAYLOAD_DIR)/
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
 		-r \
 		-J -joliet-long \
-		-m limine-build \
-		-m limine-prefix \
-		-m trueos.iso \
 		-b limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		-o $(ISO_PATH) $(ISO_DIR) 
+		-o $(PAYLOAD_ISO_PATH) $(ISO_PAYLOAD_DIR)
+	@# Make the payload ISO BIOS-bootable as a hybrid image (dd-able to USB/disk).
+	$(LIMINE_PREFIX)/bin/limine bios-install $(PAYLOAD_ISO_PATH)
+
+iso: kernel payload-iso
+	rm -rf $(ISO_BOOT_DIR)
+	rm -f $(ISO_PATH)
+	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT $(ISO_BOOT_DIR)/install
+	cp $(KERNEL_BIN) $(ISO_BOOT_DIR)/TRUEOS.elf
+	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
+	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_BOOT_DIR)/
+	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_BOOT_DIR)/
+	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_BOOT_DIR)/
+	cp $(PAYLOAD_ISO_PATH) $(ISO_BOOT_DIR)/install/trueos-payload.iso
+	xorriso -as mkisofs \
+		-iso-level 3 -full-iso9660-filenames \
+		-R \
+		-r \
+		-J -joliet-long \
+		-b limine-bios-cd.bin \
+		-no-emul-boot -boot-load-size 4 -boot-info-table \
+		--efi-boot limine-uefi-cd.bin \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	@# Make the ISO BIOS-bootable as a hybrid image (dd-able to USB/disk).
 	$(LIMINE_PREFIX)/bin/limine bios-install $(ISO_PATH)
 

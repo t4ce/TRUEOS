@@ -286,6 +286,7 @@ fn print_install_disk_table(io: &dyn ShellIo) {
 enum PendingAction {
     Reset,
     S5,
+    FormatConfirm { disc_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,7 +348,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 continue;
             }
             match b {
-                b'\r' | b'\n' | b' ' if pending_action.is_some() => {
+                b'\r' | b'\n' | b' ' if matches!(pending_action, Some(PendingAction::Reset | PendingAction::S5)) => {
                     utf8.clear();
                     // Other pending actions: Enter/Space cancels.
                     pending_action = None;
@@ -361,10 +362,50 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 b'\r' | b'\n' => {
                     utf8.clear();
 
+                    // Confirmation gate for destructive `format`.
+                    if let Some(PendingAction::FormatConfirm { disc_id }) = pending_action {
+                        let answer = line.as_str().trim();
+                        line.clear();
+                        pending_action = None;
+                        pending_deadline = None;
+                        set_go_mode(io, &mut go_mode, false);
+
+                        if answer == "FORMAT" {
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\nformat: no such disk\r\n");
+                                write_prompt(io);
+                                continue;
+                            };
+
+                            io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
+                            match crate::disc::trueosfs::format_blank(handle) {
+                                Ok(()) => {
+                                    let status = crate::disc::detect::detect_physical_disk(handle);
+                                    io.write_fmt(format_args!("format: ok (status now: {})\r\n", status.short()));
+                                }
+                                Err(e) => {
+                                    io.write_fmt(format_args!("format: failed ({:?})\r\n", e));
+                                }
+                            }
+                        } else {
+                            io.write_str("\r\nformat: cancelled\r\n");
+                        }
+
+                        write_prompt(io);
+                        continue;
+                    }
+
                     // Interactive install wizard consumes whole-line input (including empty line).
                     if pending_action.is_none() {
                         if let Some(InstallWizardStage::SelectDisk) = install_wizard {
-                            let s = line.as_str().trim();
+                            let mut s = line.as_str().trim();
+                            // Accept inputs like `install 1` as well as just `1`.
+                            if let Some(rest) = s.strip_prefix("install") {
+                                s = rest.trim();
+                            }
                             if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
                                 line.clear();
                                 install_wizard = None;
@@ -441,6 +482,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                     PendingAction::Reset | PendingAction::S5 => {
                                         Some(Instant::now() + EmbassyDuration::from_secs(5))
                                     }
+                                    PendingAction::FormatConfirm { .. } => None,
                                 };
                                 set_go_mode(
                                     io,
@@ -546,6 +588,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 write_prompt(io);
                             }
                         }
+                        PendingAction::FormatConfirm { .. } => {}
                     }
                     continue;
                 }
@@ -904,6 +947,46 @@ fn handle_line(
             *install_wizard = Some(InstallWizardStage::SelectDisk);
             print_install_disk_table(io);
             return CommandAction::None;
+        }
+
+        if verb.eq_ignore_ascii_case("format") {
+            let arg = rest.trim();
+            if arg.is_empty() {
+                io.write_str("format: usage format <diskid>\r\n");
+                io.write_str("format: example format 1\r\n");
+                io.write_str("format: example format disc001\r\n");
+                return CommandAction::None;
+            }
+
+            let raw_id = parse_disc_id_raw(arg).unwrap_or(0);
+            if raw_id == 0 {
+                io.write_str("format: invalid id\r\n");
+                return CommandAction::None;
+            }
+
+            let target = crate::disc::block::device_handles()
+                .into_iter()
+                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let Some(handle) = target else {
+                io.write_str("format: no such disk\r\n");
+                return CommandAction::None;
+            };
+
+            let info = handle.info();
+            let status = crate::disc::detect::detect_physical_disk(handle);
+            io.write_fmt(format_args!(
+                "format: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                info.id.raw(),
+                info.id,
+                info.block_count,
+                info.block_size,
+                info.writable,
+                info.label,
+                status.short(),
+            ));
+            io.write_str("format: DANGER: this destroys all data on the disk\r\n");
+            io.write_str("format: type FORMAT to confirm (anything else cancels)\r\n");
+            return CommandAction::Pending(PendingAction::FormatConfirm { disc_id: raw_id });
         }
         if verb.eq_ignore_ascii_case("files") {
             let _ = rest;
