@@ -4,6 +4,7 @@ pub mod files;
 pub mod layout;
 pub mod nvme;
 pub mod partition;
+pub mod trueosfs;
 
 static PROBE_ONCE: spin::Once<()> = spin::Once::new();
 
