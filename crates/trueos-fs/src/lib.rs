@@ -3,6 +3,18 @@
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 pub const VERSION: u32 = 1;
 
+/// Relative LBA (from the superblock) where the payload/data region starts.
+///
+/// Keeping this fixed means higher-level logic can treat the filesystem as
+/// "starting at super_lba", regardless of whether the disk is data-only
+/// (superblock at LBA0) or bootable (superblock inside a GPT partition).
+pub const DATA_START_LBA_REL: u64 = 8;
+
+#[inline]
+pub const fn data_lba_from_super(super_lba: u64) -> u64 {
+    super_lba + DATA_START_LBA_REL
+}
+
 pub fn write_blank_superblock(block0: &mut [u8]) {
     if block0.len() < 16 {
         return;
