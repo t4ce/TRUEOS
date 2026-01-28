@@ -1110,13 +1110,15 @@ pub(crate) async fn enumerate_with_params(
         slot_id
     );
 
-    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_serial, dev_num_cfg) = unsafe {
+    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_mfr, dev_i_prod, dev_i_serial, dev_num_cfg) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
         let vid = u16::from_le_bytes([dd[8], dd[9]]);
         let pid = u16::from_le_bytes([dd[10], dd[11]]);
-        (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[16], dd[17])
+        (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[14], dd[15], dd[16], dd[17])
     };
 
+    let dev_mfr = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_mfr).await;
+    let dev_prod = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_prod).await;
     let dev_serial = control::fetch_serial_string(&ctx, &mut ep0_ring, slot_id, dev_i_serial).await;
 
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
@@ -1186,6 +1188,15 @@ pub(crate) async fn enumerate_with_params(
         has_uac_out
     );
 
+    if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
+        crate::log!(
+            "usb: enum port {} strings mfr='{}' prod='{}'\n",
+            target_port,
+            dev_mfr.as_str(),
+            dev_prod.as_str()
+        );
+    }
+
     if let Some((hub_slot_id, hub_port)) = tree_parent {
         hub::record_hub_child(
             &state.ctx,
@@ -1212,8 +1223,11 @@ pub(crate) async fn enumerate_with_params(
     }
 
     let mut first_if: Option<(u8, u8, u8, u8)> = None;
+    let mut first_if_hid_report_len: Option<u16> = None;
     {
         let mut idx = 0usize;
+        let mut current_alt: u8 = 0;
+        let mut current_iface_is_first: bool = false;
         while idx + 2 <= cfg_slice.len() {
             let len = cfg_slice[idx] as usize;
             if len == 0 || idx + len > cfg_slice.len() {
@@ -1225,8 +1239,20 @@ pub(crate) async fn enumerate_with_params(
                 let if_cls = cfg_slice[idx + 5];
                 let if_sub = cfg_slice[idx + 6];
                 let if_prot = cfg_slice[idx + 7];
-                first_if = Some((if_num, if_cls, if_sub, if_prot));
-                break;
+                current_alt = cfg_slice[idx + 3];
+
+                if first_if.is_none() {
+                    first_if = Some((if_num, if_cls, if_sub, if_prot));
+                    current_iface_is_first = true;
+                } else {
+                    current_iface_is_first = false;
+                }
+            } else if ty == 0x21 && len >= 9 {
+                // HID descriptor: report descriptor length is at bytes 7..8.
+                if current_alt == 0 && current_iface_is_first {
+                    first_if_hid_report_len =
+                        Some(u16::from_le_bytes([cfg_slice[idx + 7], cfg_slice[idx + 8]]));
+                }
             }
             idx += len;
         }
@@ -1296,9 +1322,18 @@ pub(crate) async fn enumerate_with_params(
     let should_log = count == 1 || (count % 50 == 0);
 
     if should_log {
+        if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
+            crate::log!(
+                "usb: device strings on port {} mfr='{}' prod='{}'\n",
+                target_port,
+                dev_mfr.as_str(),
+                dev_prod.as_str()
+            );
+        }
+
         if let Some((if_num, if_cls, if_sub, if_prot)) = first_if {
             crate::log!(
-                "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if{}={:02X}/{:02X}/{:02X} portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",
+                "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if{}={:02X}/{:02X}/{:02X} hid_rep_len={:?} portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",
                 target_port,
                 dev_vid,
                 dev_pid,
@@ -1311,6 +1346,7 @@ pub(crate) async fn enumerate_with_params(
                 if_cls,
                 if_sub,
                 if_prot,
+                first_if_hid_report_len,
                 portsc,
                 ccs,
                 ped,
