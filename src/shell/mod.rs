@@ -247,12 +247,52 @@ fn set_go_mode(io: &dyn ShellIo, go_mode: &mut bool, enable: bool) {
     *go_mode = enable;
 }
 
+fn parse_disc_id_raw(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let s = s.strip_prefix("disc").unwrap_or(s);
+    s.parse::<u32>().ok()
+}
+
+fn print_install_disk_table(io: &dyn ShellIo) {
+    io.write_str("install: disk detection stage\r\n");
+    io.write_str("install: choose a disk id to continue (blank/q cancels)\r\n");
+    io.write_str("\r\n");
+
+    for h in crate::disc::block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+        let info = h.info();
+        let status = crate::disc::detect::detect_physical_disk(h);
+        io.write_fmt(format_args!(
+            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+            status.short(),
+        ));
+    }
+
+    io.write_str("\r\n");
+}
+
 #[derive(Copy, Clone)]
 enum PendingAction {
     Reset,
     S5,
     Install { raw_id: u32, mode: crate::install::InstallMode },
     Format { raw_id: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstallWizardStage {
+    SelectDisk,
 }
 
 enum CommandAction {
@@ -280,6 +320,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     let mut next_matrix_refresh: Instant = Instant::now() + EmbassyDuration::from_millis(250);
     let mut pending_action: Option<PendingAction> = None;
     let mut pending_deadline: Option<Instant> = None;
+    let mut install_wizard: Option<InstallWizardStage> = None;
     let mut go_mode: bool = false;
     let mut cube_mode = true;
     let mut cube = CubeState::new();
@@ -370,6 +411,57 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 }
                 b'\r' | b'\n' => {
                     utf8.clear();
+
+                    // Interactive install wizard consumes whole-line input (including empty line).
+                    if pending_action.is_none() {
+                        if let Some(InstallWizardStage::SelectDisk) = install_wizard {
+                            let s = line.as_str().trim();
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\ninstall: cancelled\r\n");
+                                write_prompt(io);
+                                continue;
+                            }
+
+                            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                            line.clear();
+                            if raw_id == 0 {
+                                io.write_str("\r\ninstall: invalid id\r\n");
+                                io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                                write_prompt(io);
+                                continue;
+                            }
+
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\ninstall: no such disk\r\n");
+                                write_prompt(io);
+                                continue;
+                            };
+
+                            let status = crate::disc::detect::detect_physical_disk(handle);
+                            match status {
+                                crate::disc::detect::DiscStatus::Trueos { .. } => {
+                                    io.write_str("\r\ninstall: ok (disk is TRUEOS)\r\n");
+                                    io.write_str("install: TODO: block-image installer not wired yet\r\n");
+                                }
+                                other => {
+                                    io.write_fmt(format_args!(
+                                        "\r\ninstall: refusing (disk status: {})\r\n",
+                                        other.short()
+                                    ));
+                                }
+                            }
+
+                            install_wizard = None;
+                            write_prompt(io);
+                            continue;
+                        }
+                    }
+
                     if line.is_empty() && pending_action.is_none() && go_mode {
                         set_go_mode(io, &mut go_mode, false);
                         io.write_str("\r\n");
@@ -389,6 +481,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             &mut term_cols,
                             &mut term_rows,
                             &mut go_mode,
+                            &mut install_wizard,
                         );
                         line.clear();
                         write_prompt(io);
@@ -675,6 +768,7 @@ fn handle_line(
     term_cols: &mut usize,
     term_rows: &mut usize,
     go_mode: &mut bool,
+    install_wizard: &mut Option<InstallWizardStage>,
 ) -> CommandAction {
     let cmd = line.trim();
     if cmd.is_empty() {
@@ -861,6 +955,13 @@ fn handle_line(
         }
 
         if verb.eq_ignore_ascii_case("install") {
+            let _ = rest;
+            *install_wizard = Some(InstallWizardStage::SelectDisk);
+            print_install_disk_table(io);
+            return CommandAction::None;
+        }
+
+        if verb.eq_ignore_ascii_case("install-legacy") {
             if let Some(p) = crate::install::handle_install_command(io, rest) {
                 return CommandAction::Pending(match p {
                     crate::install::PendingInstall::Install { raw_id, mode } => {
@@ -960,6 +1061,10 @@ fn handle_line(
             };
         }
     } else if cmd.eq_ignore_ascii_case("install") {
+        *install_wizard = Some(InstallWizardStage::SelectDisk);
+        print_install_disk_table(io);
+        return CommandAction::None;
+    } else if cmd.eq_ignore_ascii_case("install-legacy") {
         if let Some(p) = crate::install::handle_install_command(io, "") {
             return CommandAction::Pending(match p {
                 crate::install::PendingInstall::Install { raw_id, mode } => PendingAction::Install { raw_id, mode },
