@@ -1339,7 +1339,8 @@ pub mod cabi {
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOT_PORT: u16 = 853; // DNS over TLS port
-		let t = core::cmp::max(2000, core::cmp::min(timeout_ms, 8000));
+		// DoT involves a full TCP+TLS handshake; 8s was too tight under QEMU/SLIRP.
+		let t = core::cmp::max(5_000, core::cmp::min(timeout_ms, 20_000));
 		let dns_id: u16 = 0xED00;
 		let query = dns_query(dns_id, host, 1);
 		let mut framed = Vec::with_capacity(query.len().saturating_add(2));
@@ -1456,7 +1457,8 @@ pub mod cabi {
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOH_PORT: u16 = 443; // DNS over HTTPS port
-		let t = core::cmp::max(2500, core::cmp::min(timeout_ms, 10_000));
+		// DoH is even heavier than DoT (HTTP response parsing); allow a bit longer.
+		let t = core::cmp::max(6_000, core::cmp::min(timeout_ms, 25_000));
 		let dns_id: u16 = 0xEE00;
 		let query = dns_query(dns_id, host, 1);
 		let max_bytes: usize = 64 * 1024;
@@ -1806,7 +1808,9 @@ pub mod cabi {
 		let mut last_err: i32 = NET_ERR_TIMEOUT;
 
 		for dev_idx in dev_indices {
-			let dns_timeout_ms = core::cmp::max(1500, core::cmp::min(timeout_ms, 5000));
+			// DNS resolution is often the slowest/most jittery part under QEMU/SLIRP.
+			// Keep it bounded, but don't clamp so tightly that DoT/DoH can never complete.
+			let dns_timeout_ms = core::cmp::max(5_000, core::cmp::min(timeout_ms, 20_000));
 			let Some(ip) = resolve_ipv4_blocking(dev_idx, url.host.as_str(), dns_timeout_ms) else {
 				last_err = NET_ERR_TIMEOUT_DNS;
 				continue;
@@ -2035,6 +2039,21 @@ pub mod cabi {
 	/// - Parent directories for `path` are created automatically (mkdir -p).
 	/// - This function drives the Embassy executor while waiting for network events;
 	///   it is intended to be called from non-async contexts.
+	pub fn net_fetch_https_body_blocking(
+		url_s: &str,
+		timeout_ms: u64,
+		max_bytes: usize,
+	) -> core::result::Result<Vec<u8>, i32> {
+		let parsed = match parse_url(url_s) {
+			Ok(p) => p,
+			Err(e) => return Err(e),
+		};
+		if !parsed.scheme_https {
+			return Err(NET_ERR_BAD_URL);
+		}
+		https_get_body_blocking(&parsed, timeout_ms, max_bytes)
+	}
+
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
 		url_ptr: *const u8,
@@ -2068,16 +2087,7 @@ pub mod cabi {
 			}
 		}
 
-		let parsed = match parse_url(url_s) {
-			Ok(p) => p,
-			Err(e) => return e,
-		};
-		if !parsed.scheme_https {
-			// TODO: support plaintext http:// if desired.
-			return NET_ERR_BAD_URL;
-		}
-
-		let body = match https_get_body_blocking(&parsed, 30_000, 4 * 1024 * 1024) {
+		let body = match net_fetch_https_body_blocking(url_s, 30_000, 4 * 1024 * 1024) {
 			Ok(b) => b,
 			Err(e) => return e,
 		};
