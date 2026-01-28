@@ -607,25 +607,29 @@ unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
     let _ = qjs::JS_Throw(ctx, err);
 }
 
-unsafe fn read_file_js_malloc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), ()> {
+unsafe fn read_file_js_malloc_rc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), isize> {
     let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
     if need < 0 {
-        return Err(());
+        return Err(need);
     }
     let need = need as usize;
 
     let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
     if buf.is_null() {
-        return Err(());
+        return Err(-4); // FS_ERR_BAD_PARAM (best-effort sentinel)
     }
     *buf.add(need) = 0;
 
     let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, need);
     if got < 0 {
         qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-        return Err(());
+        return Err(got);
     }
     Ok((buf, got as usize))
+}
+
+unsafe fn read_file_js_malloc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), ()> {
+    read_file_js_malloc_rc(ctx, path).map_err(|_| ())
 }
 
 unsafe fn compile_module_from_buf(
@@ -645,7 +649,12 @@ unsafe fn compile_module_from_buf(
         return core::ptr::null_mut();
     }
 
-    val.u.ptr as *mut qjs::JSModuleDef
+    // `JS_Eval(..., COMPILE_ONLY|MODULE)` returns a `JSValue` (tagged as MODULE)
+    // which must be released after extracting the module pointer, otherwise the
+    // runtime will retain an extra reference and assert in `JS_FreeRuntime`.
+    let m = val.u.ptr as *mut qjs::JSModuleDef;
+    qjs::js_free_value(ctx, val);
+    m
 }
 
 fn split_url(spec: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
@@ -880,6 +889,29 @@ unsafe fn load_url_module(
     cache_path.extend_from_slice(CDN_DIR);
     push_hex_u64(&mut cache_path, hash);
     cache_path.extend_from_slice(b".mjs");
+
+    // Fast-path: if the cached module is already present, avoid refetching.
+    match read_file_js_malloc_rc(ctx, &cache_path) {
+        Ok((buf, len)) => {
+            let m = compile_module_from_buf(ctx, module_name, buf, len);
+            qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+            return m;
+        }
+        Err(rc) => {
+            // Only fall back to network fetch on NOT_FOUND; other errors should surface.
+            if rc != -8 {
+                let mut msg = Vec::new();
+                msg.extend_from_slice(b"read cached module failed rc=");
+                push_i32_dec(&mut msg, rc as i32);
+                msg.extend_from_slice(b" (");
+                msg.extend_from_slice(cabi_rc_name(rc as i32));
+                msg.extend_from_slice(b") cache=");
+                msg.extend_from_slice(&cache_path);
+                throw_error(ctx, &msg);
+                return core::ptr::null_mut();
+            }
+        }
+    }
 
     let rc = trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), cache_path.as_ptr(), cache_path.len());
     if rc != 0 {

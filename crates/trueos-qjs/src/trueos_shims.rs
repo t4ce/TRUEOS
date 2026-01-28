@@ -6,6 +6,7 @@ use core::cmp;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::mem::{align_of, size_of};
 use core::ptr;
+use core::ffi::CStr;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -22,6 +23,40 @@ fn log_str(s: &str) {
     log_bytes(s.as_bytes())
 }
 
+#[inline]
+fn log_cstr(ptr: *const c_char) {
+    if ptr.is_null() {
+        log_str("<null>");
+        return;
+    }
+    // If the pointer is invalid, this will still fault, but in practice this is
+    // what we want for debugging: see the actual assert payload.
+    let bytes = unsafe { CStr::from_ptr(ptr).to_bytes() };
+    log_bytes(bytes);
+}
+
+#[inline]
+fn log_i32_dec(v: c_int) {
+    let mut n = v as i64;
+    if n == 0 {
+        log_str("0");
+        return;
+    }
+    if n < 0 {
+        log_str("-");
+        n = -n;
+    }
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    let mut x = n as u64;
+    while x != 0 {
+        i -= 1;
+        buf[i] = b'0' + (x % 10) as u8;
+        x /= 10;
+    }
+    log_bytes(&buf[i..]);
+}
+
 // --- Abort/assert shims ---
 
 #[no_mangle]
@@ -35,12 +70,20 @@ pub unsafe extern "C" fn abort() -> ! {
 
 #[no_mangle]
 pub unsafe extern "C" fn __assert_fail(
-    _assertion: *const c_char,
-    _file: *const c_char,
-    _line: c_int,
-    _function: *const c_char,
+    assertion: *const c_char,
+    file: *const c_char,
+    line: c_int,
+    function: *const c_char,
 ) -> ! {
-    log_str("__assert_fail()\n");
+    log_str("__assert_fail(assertion='");
+    log_cstr(assertion);
+    log_str("' file='");
+    log_cstr(file);
+    log_str("' line=");
+    log_i32_dec(line);
+    log_str(" function='");
+    log_cstr(function);
+    log_str("')\n");
     abort()
 }
 
