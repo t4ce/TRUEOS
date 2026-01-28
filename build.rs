@@ -13,7 +13,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TRUEOS_LIMINE_CONFIG_ARGS");
     println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
 
-    // Ensure Limine is present/built for both ISO assembly and installer payload embedding.
+    // Ensure Limine is present/built for ISO assembly.
     ensure_limine_from_manifest_dir(&manifest_dir);
     println!("cargo:rerun-if-changed=build.rs");
 }

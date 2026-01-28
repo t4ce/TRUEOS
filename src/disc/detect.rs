@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::disc::{block, partition};
+use crate::disc::block;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KnownFs {
@@ -40,11 +40,6 @@ impl DiscStatus {
     }
 }
 
-// Standard EFI System Partition type GUID.
-// C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-const GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES: [u8; 16] = [
-    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
-];
 
 struct AlignedBuf {
     ptr: *mut u8,
@@ -102,10 +97,6 @@ fn looks_like_ext_superblock(sb: &[u8]) -> bool {
     sb.len() >= 58 && sb[56] == 0x53 && sb[57] == 0xEF
 }
 
-fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
-    block0.len() >= 8 && &block0[0..8] == &trueos_fs::MAGIC
-}
-
 pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
     // Only classify whole devices (not already-registered partitions).
     if handle.parent().is_some() {
@@ -140,26 +131,10 @@ pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
         };
     }
 
-    // Probe GPT header at LBA1.
-    let mut has_esp = false;
-    let mut has_trueos = false;
-    if let Ok(parts) = partition::read_gpt_partitions(handle) {
-        for p in parts.iter() {
-            if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
-                has_esp = true;
-            }
-
-            // Probe our superblock at the partition start.
-            if let Ok(p0) = read_blocks_aligned(handle, p.range.first_lba(), 1) {
-                if looks_like_trueos_superblock(&p0) {
-                    has_trueos = true;
-                }
-            }
-        }
-
-        if has_trueos {
-            return DiscStatus::Trueos { bootable: has_esp };
-        }
+    // TRUEOSFS detection: the low-level placement logic decides whether this is
+    // a bootable GPT layout (ESP + TRUEOS partition) or a data-only layout.
+    if let Ok(Some(loc)) = crate::disc::trueosfs::locate(handle) {
+        return DiscStatus::Trueos { bootable: loc.bootable };
     }
 
     // MBR-style FAT probe (superfloppy or partitioned) using the existing layout heuristic.
@@ -178,11 +153,6 @@ pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
                 detail: None,
             };
         }
-    }
-
-    // Last: raw trueos superblock at LBA0 (data-only disk images / no partition table).
-    if looks_like_trueos_superblock(&bs0) {
-        return DiscStatus::Trueos { bootable: false };
     }
 
     DiscStatus::Unknown

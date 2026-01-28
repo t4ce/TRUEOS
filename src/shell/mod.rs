@@ -15,6 +15,8 @@ pub(crate) mod shellcube;
 pub(crate) mod shellqjs;
 pub(crate) mod txtedt;
 
+pub(crate) mod matrix;
+
 mod crlf;
 
 mod interface;
@@ -92,7 +94,7 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 24] = [
+const SHELL_COMMANDS: [&str; 25] = [
     "qjs",
     "out",
     "in",
@@ -105,6 +107,7 @@ const SHELL_COMMANDS: [&str; 24] = [
     "s5",
     "reset",
     "install",
+    "format",
     "set",
     "go",
     "mandel",
@@ -364,13 +367,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
                     // Confirmation gate for destructive `format`.
                     if let Some(PendingAction::FormatConfirm { disc_id }) = pending_action {
-                        let answer = line.as_str().trim();
+                        let do_format = line.as_str().trim() == "FORMAT";
                         line.clear();
                         pending_action = None;
                         pending_deadline = None;
                         set_go_mode(io, &mut go_mode, false);
 
-                        if answer == "FORMAT" {
+                        if do_format {
                             let target = crate::disc::block::device_handles()
                                 .into_iter()
                                 .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
@@ -808,7 +811,8 @@ fn handle_line(
         }
     }
 
-    if let Some((verb, rest)) = cmd.split_once(' ') {
+    // Parse `verb` + optional `rest`. Single-word commands (no spaces) must still work.
+    let (verb, rest) = cmd.split_once(' ').unwrap_or((cmd, ""));
         if verb.eq_ignore_ascii_case("out") {
             let resp = crate::surface::io::shellcmd::handle_out(spawner, rest);
             match resp.print {
@@ -1068,7 +1072,6 @@ fn handle_line(
                 io.write_str("txt: matrix full\r\n");
                 return CommandAction::None;
             };
-
             let mut filename: String<48> = String::new();
             let _ = write!(filename, "§{}", slot_id + 1);
             return CommandAction::EnterTxtEdt {
