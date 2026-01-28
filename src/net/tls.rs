@@ -4,7 +4,7 @@
 //!
 //! Current state:
 //! - Provides a minimal, event-driven TLS client built on rustls' unbuffered API.
-//! - Used by the HTTPS smoke/demo in `crate::tls_demo`.
+//! - Used by the HTTPS smoke/demo in `crate::net::tls_demo`.
 //!
 //! Known limitations (still TODO):
 //! - Proper `close_notify` emission for the unbuffered client.

@@ -11,7 +11,7 @@ use spin::Mutex;
 use crate::net::adapter::{
     register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
 };
-use crate::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
+use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);

@@ -337,7 +337,9 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                         req.extend_from_slice(parsed.path.as_str().as_bytes());
                         req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
                         req.extend_from_slice(parsed.host.as_str().as_bytes());
-                        req.extend_from_slice(b"\r\nUser-Agent: TRUEOS get\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+                        req.extend_from_slice(
+                            b"\r\nUser-Agent: TRUEOS get\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                        );
                         if let Some(h) = tcp_handle {
                             let _ = cmds.push(NetCommand::SendTcp { handle: h, data: req });
                             sent_get = true;

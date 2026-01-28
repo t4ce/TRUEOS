@@ -1224,7 +1224,7 @@ pub mod cabi {
 	fn resolve_ipv4_via_dot_blocking(host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-		use crate::tls::{TlsClientConfig, TlsRoots};
+		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOT_PORT: u16 = 853;
 		let t = core::cmp::max(2000, core::cmp::min(timeout_ms, 8000));
@@ -1328,7 +1328,7 @@ pub mod cabi {
 	fn resolve_ipv4_via_doh_blocking(host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-		use crate::tls::{TlsClientConfig, TlsRoots};
+		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		const DOH_PORT: u16 = 443;
 		let t = core::cmp::max(2500, core::cmp::min(timeout_ms, 10_000));
@@ -1593,7 +1593,7 @@ pub mod cabi {
 	) -> core::result::Result<Vec<u8>, i32> {
 		use crate::net::adapter::{NetEndpoint, NetQueue};
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-		use crate::tls::{TlsClientConfig, TlsRoots};
+		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 		let dev_count = crate::net::device_count().max(1);
 		let mut last_err: i32 = NET_ERR_TIMEOUT;

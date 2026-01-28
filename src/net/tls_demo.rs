@@ -12,7 +12,7 @@ use crate::net::adapter::{
     register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
 };
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-use crate::tls::{TlsClientConfig, TlsRoots};
+use super::tls::{TlsClientConfig, TlsRoots};
 
 // Default host for the demo.
 // NOTE: We now resolve via the slirp DNS server so the demo is resilient to
