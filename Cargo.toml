@@ -32,7 +32,6 @@ smoltcp = { version = "0.12", default-features = false, features = ["alloc", "pr
 core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
-trueos-fs = { path = "crates/trueos-fs" }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0", default-features = false }
