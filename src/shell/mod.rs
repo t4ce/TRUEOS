@@ -286,8 +286,6 @@ fn print_install_disk_table(io: &dyn ShellIo) {
 enum PendingAction {
     Reset,
     S5,
-    Install { raw_id: u32, mode: crate::install::InstallMode },
-    Format { raw_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -351,55 +349,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
             match b {
                 b'\r' | b'\n' | b' ' if pending_action.is_some() => {
                     utf8.clear();
-                    // Pending destructive confirmation: Enter = proceed, Space = abort.
-                    if let Some(PendingAction::Install { raw_id, mode }) = pending_action {
-                        match b {
-                            b'\r' | b'\n' => {
-                                pending_action = None;
-                                pending_deadline = None;
-                                set_go_mode(io, &mut go_mode, false);
-                                line.clear();
-                                io.write_str("\r\n");
-                                crate::install::run_install(io, raw_id, mode);
-                                write_prompt(io);
-                            }
-                            b' ' => {
-                                pending_action = None;
-                                pending_deadline = None;
-                                set_go_mode(io, &mut go_mode, false);
-                                line.clear();
-                                io.write_str("\r\ninstall: aborted\r\n");
-                                write_prompt(io);
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-
-                    if let Some(PendingAction::Format { raw_id }) = pending_action {
-                        match b {
-                            b'\r' | b'\n' => {
-                                pending_action = None;
-                                pending_deadline = None;
-                                set_go_mode(io, &mut go_mode, false);
-                                line.clear();
-                                io.write_str("\r\n");
-                                crate::install::run_format_superfloppy(io, raw_id);
-                                write_prompt(io);
-                            }
-                            b' ' => {
-                                pending_action = None;
-                                pending_deadline = None;
-                                set_go_mode(io, &mut go_mode, false);
-                                line.clear();
-                                io.write_str("\r\ninstall: aborted\r\n");
-                                write_prompt(io);
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-
                     // Other pending actions: Enter/Space cancels.
                     pending_action = None;
                     pending_deadline = None;
@@ -492,8 +441,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                     PendingAction::Reset | PendingAction::S5 => {
                                         Some(Instant::now() + EmbassyDuration::from_secs(5))
                                     }
-                                    PendingAction::Install { .. } => None,
-                                    PendingAction::Format { .. } => None,
                                 };
                                 set_go_mode(
                                     io,
@@ -599,8 +546,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 write_prompt(io);
                             }
                         }
-                        PendingAction::Install { .. } => {}
-                        PendingAction::Format { .. } => {}
                     }
                     continue;
                 }
@@ -960,18 +905,6 @@ fn handle_line(
             print_install_disk_table(io);
             return CommandAction::None;
         }
-
-        if verb.eq_ignore_ascii_case("install-legacy") {
-            if let Some(p) = crate::install::handle_install_command(io, rest) {
-                return CommandAction::Pending(match p {
-                    crate::install::PendingInstall::Install { raw_id, mode } => {
-                        PendingAction::Install { raw_id, mode }
-                    }
-                    crate::install::PendingInstall::Format { raw_id } => PendingAction::Format { raw_id },
-                });
-            }
-            return CommandAction::None;
-        }
         if verb.eq_ignore_ascii_case("files") {
             let _ = rest;
             let seq = crate::disc::files::file_tree_seq();
@@ -1063,14 +996,6 @@ fn handle_line(
     } else if cmd.eq_ignore_ascii_case("install") {
         *install_wizard = Some(InstallWizardStage::SelectDisk);
         print_install_disk_table(io);
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("install-legacy") {
-        if let Some(p) = crate::install::handle_install_command(io, "") {
-            return CommandAction::Pending(match p {
-                crate::install::PendingInstall::Install { raw_id, mode } => PendingAction::Install { raw_id, mode },
-                crate::install::PendingInstall::Format { raw_id } => PendingAction::Format { raw_id },
-            });
-        }
         return CommandAction::None;
     } else if cmd.eq_ignore_ascii_case("files") {
         let seq = crate::disc::files::file_tree_seq();

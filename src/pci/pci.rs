@@ -314,6 +314,42 @@ pub fn log_devices_once() {
     });
 }
 
+pub fn log_devices_with_pci_ids(db: &[u8]) {
+    with_devices(|list| {
+        for dev in list {
+            let mut vend_name: &str = "?";
+            let mut dev_name: &str = "?";
+
+            if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(db, dev.vendor, dev.device) {
+                if let Ok(s) = core::str::from_utf8(v) {
+                    vend_name = s;
+                }
+                if let Ok(s) = core::str::from_utf8(d) {
+                    dev_name = s;
+                }
+            } else if let Some(v) = crate::pci::pciids::lookup_vendor_name_from_db(db, dev.vendor) {
+                if let Ok(s) = core::str::from_utf8(v) {
+                    vend_name = s;
+                }
+            }
+
+            crate::log!(
+                "pci+ids {:02X}:{:02X}.{} vid={:04X} did={:04X} {} / {} class={:02X}:{:02X}:{:02X}\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                dev.vendor,
+                dev.device,
+                vend_name,
+                dev_name,
+                dev.class,
+                dev.subclass,
+                dev.prog_if
+            );
+        }
+    });
+}
+
 pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     let lock = DEVICES.lock();
     f(lock.as_slice())
