@@ -193,18 +193,8 @@ pub extern "C" fn kmain() -> ! {
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
 
-
-    const KIB: usize = 1024;
-    const MIB: usize = 1024 * KIB;
-    const GIB: usize = 1024 * MIB;
-    const HEAP_ALIGN: usize = 2 * MIB;
-    const HEAP_CANDIDATES: [usize; 7] = [GIB, 512 * MIB, 256 * MIB, 128 * MIB,64 * MIB, 32 * MIB, 16 * MIB];
-    for &size in HEAP_CANDIDATES.iter() {
-        if let Some(arena) = phys::reserve_heap_arena(size, HEAP_ALIGN) {
-            if allocators::install_heap_arena(arena) {
-                break;
-            }
-        }
+    if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
+        crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
     vga::init_font_cache();
@@ -317,13 +307,14 @@ pub extern "C" fn kmain() -> ! {
 	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
 	if net_ready {
         let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
+        // Temporary: try a heavier npm package (HTML parsing) while we iterate on shims.
+        let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
         let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
 	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
         crate::log!("shell: spawn UART shell failed: {:?}\n", e);
     }
-    // let _ = spawner.spawn(shell::task(spawner, &shell::USB_CDC_SHELL_BACKEND));
     if net_ready {
         if let Err(e) = spawner.spawn(shell::task(spawner, &shell::NET_TCP_SHELL_BACKEND)) {
             crate::log!("shell: spawn net TCP shell failed: {:?}\n", e);

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use alloc::vec::Vec as AVec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
