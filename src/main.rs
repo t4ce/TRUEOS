@@ -21,7 +21,6 @@ A constant influx of resources, money, and safety.
 
 pub extern crate alloc;
 
-mod acpi;
 mod allocators;
 mod audio;
 mod backtrace;
@@ -30,8 +29,6 @@ mod exceptions;
 mod limine;
 mod limstats;
 mod net;
-mod tls;
-mod tls_demo;
 mod pci;
 mod percpu;
 mod phys;
@@ -43,6 +40,7 @@ mod globalog;
 mod matrix;
 mod shell;
 pub(crate) use shell::ecma48;
+mod tst;
 mod install;
 mod surface;
 mod tga;
@@ -70,56 +68,11 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
 #[task]
-async fn boot_fetch_to_file_smoke_task() {
-    use embassy_time::Timer;
-
-    const URL: &str = "https://esm.sh/left-pad@1.3.0";
-    const PATH: &str = "/qjs/cdn/fetch-smoke-left-pad-1.3.0.mjs";
-
-    // Retry: USBMS/FAT may not be ready yet when the executor starts.
-    for attempt in 1..=60u32 {
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_net_fetch_to_file(
-                URL.as_bytes().as_ptr(),
-                URL.as_bytes().len(),
-                PATH.as_bytes().as_ptr(),
-                PATH.as_bytes().len(),
-            )
-        };
-
-        if rc == 0 {
-            crate::log!("fetch-smoke: ok url={} path={}\n", URL, PATH);
-            crate::log!("qjs-loader-smoke: starting\n");
-            unsafe { qjs::trueos_smoke::run_module_loader_smoke() };
-            crate::log!("qjs-loader-smoke: done\n");
-            return;
-        }
-
-        crate::log!(
-            "fetch-smoke: attempt={} rc={} ({}) url={} path={}\n",
-            attempt,
-            rc,
-            crate::surface::io::cabi::code_name(rc),
-            URL,
-            PATH
-        );
-
-        Timer::after_millis(500).await;
-    }
-
-    crate::log!(
-        "fetch-smoke: giving up after retries url={} path={}\n",
-        URL,
-        PATH
-    );
-}
-
-#[task]
 async fn boot_https_demo_task() {
     crate::log!("net-boot: starting https (tls) demo\n");
     if let Some(slot) = crate::matrix::alloc_slot("https boot") {
         let host: heapless::String<96> = heapless::String::new();
-        crate::tls_demo::tls_demo_matrix_job_run(slot, host).await;
+        crate::net::tls_demo::tls_demo_matrix_job_run(slot, host).await;
         crate::log!("net-boot: https (tls) demo finished\n");
     } else {
         crate::log!("net-boot: matrix full; skipping https demo\n");
@@ -297,19 +250,19 @@ pub extern "C" fn kmain() -> ! {
     disc::probe_once();
     tga::init_once();
 
-    acpi::ensure_tables();
-    acpi::facp::log_once();
-    acpi::tpm2::log_once();
-    acpi::dmar::log_once();
-    acpi::fpdt::log_once();
-    acpi::madt::log_once();
-    acpi::dbg::log_once();
+    efi::acpi::ensure_tables();
+    efi::acpi::facp::log_once();
+    efi::acpi::tpm2::log_once();
+    efi::acpi::dmar::log_once();
+    efi::acpi::fpdt::log_once();
+    efi::acpi::madt::log_once();
+    efi::acpi::dbg::log_once();
     if !dumped_uefi_system_table {
         efi::tbl::log_once();
     }
-    acpi::ssdt::log_once();
-    acpi::bgrt::log_once();
-    acpi::hpet::ensure();
+    efi::acpi::ssdt::log_once();
+    efi::acpi::bgrt::log_once();
+    efi::acpi::hpet::ensure();
 
     power::init();
 
@@ -387,7 +340,7 @@ pub extern "C" fn kmain() -> ! {
 
 	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
 	if net_ready {
-		let _ = spawner.spawn(boot_fetch_to_file_smoke_task());
+        let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
 	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
