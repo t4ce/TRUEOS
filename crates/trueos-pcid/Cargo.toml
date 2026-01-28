@@ -1,0 +1,13 @@
+[package]
+name = "trueos-pcid"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[lib]
+name = "trueos_pcid"
+path = "src/lib.rs"
+
+[features]
+default = []
+

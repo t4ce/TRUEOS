@@ -908,38 +908,9 @@ fn handle_line(
         if verb.eq_ignore_ascii_case("qjs") {
             let src = rest.trim();
             if src.is_empty() {
-                io.write_str("qjs: usage qjs <javascript> | qjs @<path>\r\n");
-                io.write_str("qjs: auto-detects modules (import/export/import.meta)\r\n");
-                io.write_str("qjs: example qjs print(1+2)\r\n");
-                io.write_str("qjs: example qjs import { make } from 'complex'; print(make(1,2))\r\n");
+                shellqjs::help(io);
             } else {
-                if let Some(path) = src.strip_prefix('@') {
-                    let path = path.trim();
-                    match crate::surface::io::kfs::read_file(path) {
-                        Ok(bytes) => {
-                            let flags = if path.ends_with(".mjs")
-                                || shellqjs::looks_like_module_bytes(&bytes)
-                            {
-                                trueos_qjs::JS_EVAL_TYPE_MODULE
-                            } else {
-                                trueos_qjs::JS_EVAL_TYPE_GLOBAL
-                            };
-
-                            let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
-                            filename_buf.extend_from_slice(path.as_bytes());
-                            filename_buf.push(0);
-                            shellqjs::eval_bytes(
-                                io,
-                                filename_buf.as_ptr() as *const c_char,
-                                &bytes,
-                                flags,
-                            );
-                        }
-                        Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
-                    }
-                } else {
-                    shellqjs::eval(io, src);
-                }
+                shellqjs::run(io, src);
             }
             return CommandAction::None;
         }

@@ -9,6 +9,9 @@ pub mod trueos_smoke;
 pub mod trueos_modules;
 
 #[cfg(feature = "trueos")]
+pub mod node;
+
+#[cfg(feature = "trueos")]
 pub mod trueos_shims;
 
 #[repr(C)]
@@ -181,6 +184,7 @@ extern "C" {
     pub fn JS_GetGlobalObject(ctx: *mut JSContext) -> JSValue;
 
     pub fn JS_NewObject(ctx: *mut JSContext) -> JSValue;
+    pub fn JS_NewArray(ctx: *mut JSContext) -> JSValue;
     pub fn JS_GetPropertyStr(ctx: *mut JSContext, this_obj: JSValueConst, prop: *const c_char) -> JSValue;
 
     pub fn JS_ToFloat64(ctx: *mut JSContext, pres: *mut f64, val: JSValueConst) -> c_int;
@@ -190,6 +194,16 @@ extern "C" {
         prop: *const c_char,
         val: JSValue,
     ) -> c_int;
+
+    pub fn JS_SetPropertyUint32(ctx: *mut JSContext, this_obj: JSValueConst, idx: u32, val: JSValue) -> c_int;
+
+    pub fn JS_Call(
+        ctx: *mut JSContext,
+        func_obj: JSValueConst,
+        this_obj: JSValueConst,
+        argc: c_int,
+        argv: *const JSValueConst,
+    ) -> JSValue;
 
     pub fn JS_NewCFunction2(
         ctx: *mut JSContext,
@@ -216,6 +230,8 @@ extern "C" {
 
     pub fn JS_NewError(ctx: *mut JSContext) -> JSValue;
     pub fn JS_Throw(ctx: *mut JSContext, obj: JSValue) -> JSValue;
+    pub fn JS_IsJobPending(rt: *mut JSRuntime) -> c_int;
+    pub fn JS_ExecutePendingJob(rt: *mut JSRuntime, pctx: *mut *mut JSContext) -> c_int;
 
     pub fn js_malloc(ctx: *mut JSContext, size: usize) -> *mut c_void;
     pub fn js_free(ctx: *mut JSContext, ptr: *mut c_void);

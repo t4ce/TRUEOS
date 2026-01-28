@@ -28,53 +28,68 @@ fn write_hex_u64_16(out: &mut [u8; 16], v: u64) {
 pub(crate) async fn boot_fetch_to_file_smoke_task() {
     use embassy_time::Timer;
 
-    // Keep this a concrete URL (not a bare specifier) so it directly validates
+    // Keep these as concrete URLs (not bare specifiers) so this directly validates
     // the CDN fetch-to-file + persistence layer.
-    const URL: &str = "https://esm.sh/left-pad@1.3.0";
-
-    // Write into the exact same cache filename as the QuickJS loader:
-    // /qjs/cdn/<fnv1a64(url)>.mjs
-    let url_bytes = URL.as_bytes();
-    let hash = fnv1a64(url_bytes);
-    let mut path = [0u8; 29];
-    path[..9].copy_from_slice(b"/qjs/cdn/");
-    let mut hex = [0u8; 16];
-    write_hex_u64_16(&mut hex, hash);
-    path[9..25].copy_from_slice(&hex);
-    path[25..].copy_from_slice(b".mjs");
-
-    let path_str = core::str::from_utf8(&path).unwrap_or("<non-utf8>");
+    //
+    // NOTE: `path` is now provided as a TRUEOS native module, so we don't need to
+    // prefetch any external polyfill here (which also avoids DNS flakes during early boot).
+    const URLS: [&str; 1] = ["https://esm.sh/left-pad@1.3.0"];
 
     // Retry: USBMS/FAT may not be ready yet when the executor starts.
-    for attempt in 1..=60u32 {
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_net_fetch_to_file(
-                url_bytes.as_ptr(),
-                url_bytes.len(),
-                path.as_ptr(),
-                path.len(),
-            )
-        };
+    for &url in &URLS {
+        let url_bytes = url.as_bytes();
 
-        if rc == 0 {
-            crate::log!("fetch-smoke: ok url={} cache={}\n", URL, path_str);
-            crate::log!("qjs-loader-smoke: starting\n");
-            unsafe { trueos_qjs::trueos_smoke::run_module_loader_smoke() };
-            crate::log!("qjs-loader-smoke: done\n");
-            return;
+        // Write into the exact same cache filename as the QuickJS loader:
+        // /qjs/cdn/<fnv1a64(url)>.mjs
+        let hash = fnv1a64(url_bytes);
+        let mut path = [0u8; 29];
+        path[..9].copy_from_slice(b"/qjs/cdn/");
+        let mut hex = [0u8; 16];
+        write_hex_u64_16(&mut hex, hash);
+        path[9..25].copy_from_slice(&hex);
+        path[25..].copy_from_slice(b".mjs");
+
+        let path_str = core::str::from_utf8(&path).unwrap_or("<non-utf8>");
+
+        let mut ok = false;
+        for attempt in 1..=60u32 {
+            let rc = unsafe {
+                crate::surface::io::cabi::trueos_cabi_net_fetch_to_file(
+                    url_bytes.as_ptr(),
+                    url_bytes.len(),
+                    path.as_ptr(),
+                    path.len(),
+                )
+            };
+
+            if rc == 0 {
+                crate::log!("fetch-smoke: ok url={} cache={}\n", url, path_str);
+                ok = true;
+                break;
+            }
+
+            crate::log!(
+                "fetch-smoke: attempt={} rc={} ({}) url={} cache={}\n",
+                attempt,
+                rc,
+                crate::surface::io::cabi::code_name(rc),
+                url,
+                path_str
+            );
+            Timer::after_millis(500).await;
         }
 
-        crate::log!(
-            "fetch-smoke: attempt={} rc={} ({}) url={} cache={}\n",
-            attempt,
-            rc,
-            crate::surface::io::cabi::code_name(rc),
-            URL,
-            path_str
-        );
-
-        Timer::after_millis(500).await;
+        if !ok {
+            crate::log!(
+                "fetch-smoke: giving up after retries url={} cache={}\n",
+                url,
+                path_str
+            );
+            return;
+        }
     }
 
-    crate::log!("fetch-smoke: giving up after retries url={} cache={}\n", URL, path_str);
+    crate::log!("qjs-loader-smoke: starting\n");
+    unsafe { trueos_qjs::trueos_smoke::run_module_loader_smoke() };
+    crate::log!("qjs-loader-smoke: done\n");
 }

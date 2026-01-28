@@ -341,11 +341,212 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
     false
 }
 
+unsafe fn drain_pending_jobs(io: &dyn ShellIo, rt: *mut trueos_qjs::JSRuntime, fallback_ctx: *mut trueos_qjs::JSContext) -> bool {
+    if rt.is_null() {
+        return true;
+    }
+
+    loop {
+        let mut job_ctx: *mut trueos_qjs::JSContext = core::ptr::null_mut();
+        let rc = trueos_qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut trueos_qjs::JSContext);
+        if rc > 0 {
+            continue;
+        }
+        if rc < 0 {
+            let ctx = if !job_ctx.is_null() { job_ctx } else { fallback_ctx };
+            if !ctx.is_null() {
+                dump_exception(io, ctx);
+            } else {
+                io.write_str("qjs: exception while executing pending job (no ctx)\r\n");
+            }
+            return false;
+        }
+        break;
+    }
+
+    true
+}
+
+fn split_first_token(s: &str) -> (&str, &str) {
+    let s = s.trim_start();
+    if s.is_empty() {
+        return ("", "");
+    }
+    let mut it = s.splitn(2, char::is_whitespace);
+    let first = it.next().unwrap_or("");
+    let rest = it.next().unwrap_or("");
+    (first, rest)
+}
+
+pub(crate) fn help(io: &dyn ShellIo) {
+    io.write_str("qjs: usage\r\n");
+    io.write_str("qjs <javascript>\r\n");
+    io.write_str("qjs @<path>\r\n");
+    io.write_str("qjs <path.js|path.mjs>\r\n");
+    io.write_str("qjs -e <javascript>\r\n");
+    io.write_str("qjs -m -e <module javascript>\r\n");
+    io.write_str("qjs -p <expr>\r\n");
+    io.write_str("qjs: notes\r\n");
+    io.write_str("- auto-detects modules (import/export/import.meta) unless forced\r\n");
+    io.write_str("- drains the QuickJS job queue (Promises) after eval\r\n");
+    io.write_str("- does not print `=> ...` by default; use -p or print()\r\n");
+    io.write_str("qjs: examples\r\n");
+    io.write_str("qjs print(1+2)\r\n");
+    io.write_str("qjs -m -e import leftPad from 'left-pad@1.3.0'; print(leftPad('a',3,'.'));\r\n");
+    io.write_str("qjs -m -e import * as path from 'path'; print(path.join('a','b'));\r\n");
+}
+
+pub(crate) fn run(io: &'static dyn ShellBackend, src: &str) {
+    let src = src.trim();
+    if src.is_empty() {
+        help(io);
+        return;
+    }
+
+    // Parse a small subset of upstream-like flags.
+    // NOTE: Our shell receives the rest of the line as a single string; for -e/-p
+    // we consume "the rest of the line" as the code/expression.
+    let mut rest = src;
+    let mut forced_flags: Option<c_int> = None;
+    let mut suppress_result = false;
+    let mut explicit_print = false;
+    let mut code: Option<&str> = None;
+    let mut file: Option<&str> = None;
+
+    // Only treat leading '-' tokens as options.
+    loop {
+        let (tok, r) = split_first_token(rest);
+        if tok.is_empty() {
+            break;
+        }
+        if !tok.starts_with('-') {
+            break;
+        }
+        match tok {
+            "-h" | "--help" => {
+                help(io);
+                return;
+            }
+            "-m" => {
+                forced_flags = Some(trueos_qjs::JS_EVAL_TYPE_MODULE);
+                rest = r;
+            }
+            "-g" => {
+                forced_flags = Some(trueos_qjs::JS_EVAL_TYPE_GLOBAL);
+                rest = r;
+            }
+            "-q" => {
+                suppress_result = true;
+                rest = r;
+            }
+            "-e" => {
+                code = Some(r.trim_start());
+                rest = "";
+                break;
+            }
+            "-p" => {
+                code = Some(r.trim_start());
+                explicit_print = true;
+                rest = "";
+                break;
+            }
+            "--" => {
+                code = Some(r.trim_start());
+                rest = "";
+                break;
+            }
+            _ => {
+                // Unknown option: fall back to treating the full input as JS source.
+                break;
+            }
+        }
+    }
+
+    let remaining = if code.is_some() { "" } else { rest.trim_start() };
+
+    if code.is_none() {
+        if let Some(path) = remaining.strip_prefix('@') {
+            let path = path.trim();
+            if !path.is_empty() {
+                file = Some(path);
+            }
+        } else {
+            // Upstream `qjs` takes a filename argument. We support that too when it looks like a path.
+            let single = !remaining.is_empty() && !remaining.contains(char::is_whitespace);
+            let looks_like_path = remaining.starts_with('/') || remaining.starts_with("./") || remaining.starts_with("../") || remaining.ends_with(".js") || remaining.ends_with(".mjs");
+            if single && looks_like_path {
+                if crate::surface::io::kfs::read_file(remaining).is_ok() {
+                    file = Some(remaining);
+                }
+            }
+
+            if file.is_none() {
+                code = Some(remaining);
+            }
+        }
+    }
+
+    if let Some(path) = file {
+        match crate::surface::io::kfs::read_file(path) {
+            Ok(bytes) => {
+                let flags = forced_flags.unwrap_or_else(|| {
+                    if path.ends_with(".mjs") || looks_like_module_bytes(&bytes) {
+                        trueos_qjs::JS_EVAL_TYPE_MODULE
+                    } else {
+                        trueos_qjs::JS_EVAL_TYPE_GLOBAL
+                    }
+                });
+
+                let print_result = if suppress_result { false } else { explicit_print };
+
+                let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
+                filename_buf.extend_from_slice(path.as_bytes());
+                filename_buf.push(0);
+                eval_bytes_opts(io, filename_buf.as_ptr() as *const c_char, &bytes, flags, print_result);
+            }
+            Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
+        }
+        return;
+    }
+
+    let Some(source) = code else {
+        help(io);
+        return;
+    };
+
+    let flags = forced_flags.unwrap_or_else(|| {
+        if looks_like_module_src(source) {
+            trueos_qjs::JS_EVAL_TYPE_MODULE
+        } else {
+            trueos_qjs::JS_EVAL_TYPE_GLOBAL
+        }
+    });
+
+    let print_result = if suppress_result { false } else { explicit_print };
+
+    let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
+        b"<eval-module>\0".as_ptr() as *const c_char
+    } else {
+        b"<eval>\0".as_ptr() as *const c_char
+    };
+    eval_bytes_opts(io, filename, source.as_bytes(), flags, print_result);
+}
+
 pub(crate) fn eval_bytes(
     io: &'static dyn ShellBackend,
     filename: *const c_char,
     bytes: &[u8],
     eval_flags: c_int,
+) {
+    eval_bytes_opts(io, filename, bytes, eval_flags, true);
+}
+
+pub(crate) fn eval_bytes_opts(
+    io: &'static dyn ShellBackend,
+    filename: *const c_char,
+    bytes: &[u8],
+    eval_flags: c_int,
+    print_result: bool,
 ) {
     unsafe {
         let rt = trueos_qjs::JS_NewRuntime();
@@ -354,9 +555,10 @@ pub(crate) fn eval_bytes(
             return;
         }
 
-        // Enable ES module loading (imports) using the shared TRUEOS module loader
-        // (same approach as the in-kernel QuickJS smoke test).
-        trueos_qjs::trueos_modules::install(rt);
+        // Enable ES module loading (imports) using the TRUEOS Node-enhanced module loader.
+        // This keeps the existing URL/FS/native loader behavior, but improves compatibility
+        // with npm packages that expect Node-ish specifier resolution (e.g. `path`, `node:fs`).
+        trueos_qjs::node::install(rt);
 
         let ctx = trueos_qjs::JS_NewContext(rt);
         if ctx.is_null() {
@@ -381,6 +583,9 @@ pub(crate) fn eval_bytes(
         let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
         trueos_qjs::js_free_value(ctx, global);
 
+        // Provide common globals expected by many npm/browserified packages.
+        trueos_qjs::node::install_globals(ctx);
+
         let val = trueos_qjs::JS_Eval(
             ctx,
             bytes.as_ptr() as *const c_char,
@@ -392,8 +597,12 @@ pub(crate) fn eval_bytes(
         if val.is_exception() {
             dump_exception(io, ctx);
         } else {
+            // Modules often produce a Promise value from evaluation; upstream qjs drains the job queue.
+            // Do this before printing any return value so side effects (e.g., `print`) happen.
+            let _ = drain_pending_jobs(io, rt, ctx);
+
             // Print return value unless it's `undefined`.
-            if val.tag != trueos_qjs::JS_TAG_UNDEFINED {
+            if print_result && val.tag != trueos_qjs::JS_TAG_UNDEFINED {
                 let cstr = trueos_qjs::js_to_cstring(ctx, val);
                 io.write_str("qjs: => ");
                 if !cstr.is_null() {
@@ -434,5 +643,6 @@ pub(crate) fn eval(io: &'static dyn ShellBackend, source: &str) {
     } else {
         trueos_qjs::JS_EVAL_TYPE_GLOBAL
     };
-    eval_bytes(io, filename, bytes, flags);
+    // Upstream-ish default: don't print return values unless asked (e.g. via -p).
+    eval_bytes_opts(io, filename, bytes, flags, false);
 }
