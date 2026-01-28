@@ -248,3 +248,55 @@ globalThis.print('module-loader ok', out);\n\
     qjs::JS_FreeContext(ctx);
     qjs::JS_FreeRuntime(rt);
 }
+
+/// Temporary boot-time smoke for npm-style HTML parsing.
+///
+/// Goal: validate we can load and execute heavier npm packages (via esm.sh) while we
+/// iterate on Node/browser shims.
+pub unsafe fn run_cheerio_smoke() {
+    let rt = qjs::JS_NewRuntime();
+    if rt.is_null() {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    }
+
+    qjs::node::install(rt);
+
+    let ctx = qjs::JS_NewContext(rt);
+    if ctx.is_null() {
+        log_str("quickjs: JS_NewContext failed\n");
+        qjs::JS_FreeRuntime(rt);
+        return;
+    }
+
+    install_print(ctx);
+    qjs::node::install_globals(ctx);
+
+    let mod_filename = b"<smoke-cheerio>\0";
+    let mod_script = b"import * as cheerio from 'cheerio@1.0.0-rc.12';\n\
+const $ = cheerio.load('<div id=x><span class=y>hi</span></div>');\n\
+const t = $('#x .y').text();\n\
+if (t !== 'hi') throw new Error('cheerio unexpected: ' + t);\n\
+globalThis.print('cheerio ok', t);\n\
+0\n\
+\0";
+
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        mod_script.as_ptr() as *const c_char,
+        mod_script.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if mod_ret.is_exception() {
+        log_str("quickjs: cheerio JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: cheerio eval ok\n");
+    }
+
+    qjs::JS_FreeContext(ctx);
+    qjs::JS_FreeRuntime(rt);
+}

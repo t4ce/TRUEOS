@@ -156,6 +156,11 @@ impl Fs {
         remove_usbms_path(path).map_err(FsError::Remove)
     }
 
+    #[inline]
+    pub fn exists(path: &str) -> Result<bool, FsError> {
+        usbms_path_exists(path).map_err(FsError::Read)
+    }
+
     /// Create a directory path recursively (mkdir -p semantics).
     ///
     /// Note: errors are reported via `FsError::Write` to avoid introducing a
@@ -208,6 +213,39 @@ pub fn read_usbms_file(path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError
             out.extend_from_slice(&buf[..n]);
         }
         Ok(out)
+    };
+
+    let _ = fs.unmount();
+    res
+}
+
+pub fn usbms_path_exists(path: &str) -> Result<bool, UsbFsReadError> {
+    let Some(handle) = pick_usbms_device() else {
+        return Err(UsbFsReadError::UsbmsNotFound);
+    };
+
+    let io = BlockDeviceIo::new(handle).map_err(UsbFsReadError::DeviceIo)?;
+    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsReadError::MountFailed)?;
+
+    let rel = match crate::path::normalize_rel_no_parent(path) {
+        Some(p) => p,
+        None => {
+            let _ = fs.unmount();
+            return Err(UsbFsReadError::OpenFailed);
+        }
+    };
+    if rel.is_empty() {
+        let _ = fs.unmount();
+        return Err(UsbFsReadError::OpenFailed);
+    }
+
+    let res = {
+        let root = fs.root_dir();
+        match root.open_file(rel.as_str()) {
+            Ok(_f) => Ok(true),
+            Err(fatfs::Error::NotFound) => Ok(false),
+            Err(_e) => Err(UsbFsReadError::OpenFailed),
+        }
     };
 
     let _ = fs.unmount();

@@ -15,7 +15,10 @@ use smoltcp::wire::{
 
 use crate::log;
 
-const MAX_SOCKETS: usize = 8;
+// Boot can involve several concurrent TCP/TLS connections (DoH/DoT, fetches,
+// net-shell, etc.). 8 was too tight and caused transient "no sockets available"
+// failures under load.
+const MAX_SOCKETS: usize = 128;
 const MAX_DRAIN_PER_LOOP: usize = 32;
 const ICMP_IDENT: u16 = 0x1234;
 
