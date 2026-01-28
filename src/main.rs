@@ -34,7 +34,6 @@ mod percpu;
 mod phys;
 mod portio;
 mod rng;
-mod serial;
 mod power;
 mod globalog;
 mod matrix;
@@ -66,18 +65,6 @@ pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
-
-#[task]
-async fn boot_https_demo_task() {
-    crate::log!("net-boot: starting https (tls) demo\n");
-    if let Some(slot) = crate::matrix::alloc_slot("https boot") {
-        let host: heapless::String<96> = heapless::String::new();
-        crate::net::tls_demo::tls_demo_matrix_job_run(slot, host).await;
-        crate::log!("net-boot: https (tls) demo finished\n");
-    } else {
-        crate::log!("net-boot: matrix full; skipping https demo\n");
-    }
-}
 
 static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
 static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
@@ -225,9 +212,6 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
 
     io::smoke_test();
-    strings::smoke_test();
-    path::smoke_test();
-    pattern::smoke_test();
     
     let dumped_uefi_system_table = efi::log_system_table_once(); 
     crate::log!(
@@ -265,16 +249,8 @@ pub extern "C" fn kmain() -> ! {
     efi::acpi::hpet::ensure();
 
     power::init();
-
     usb::xhci::init_once();
-
-    // Optional: bind the CDC shell to a specific device serial.
-    // Keep the log sink and the CDC shell aligned; otherwise logs won't drain over USB.
-    usb::truekey::configure_target_serial("9C:13:9E:E4:25:B8");
-    // TEMP: disable CDC-shell binding to TrueKey; keep USB log sink only.
-    // usb::cdc_shell::configure_target_serial("9C:13:9E:E4:25:B8");
     usb::truekey::init();
-    // usb::cdc_shell::init();
 
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);

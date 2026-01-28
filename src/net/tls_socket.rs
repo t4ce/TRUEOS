@@ -38,7 +38,7 @@ fn drain_tls_commands() -> Vec<(&'static str, Vec<TlsCommand>)> {
     let guard = TLS_APP_QUEUES.lock();
     let mut out = Vec::new();
     for entry in guard.iter() {
-        let drained = entry.cmds.drain(32);
+        let drained = entry.cmds.drain(256);
         if !drained.is_empty() {
             out.push((entry.name, drained));
         }
@@ -227,8 +227,8 @@ pub async fn tls_socket_service_task() {
                         let net_owner = leak_str(alloc::format!("tls-{}-{}@{}", owner, seq, dev_idx));
                         let net_cmd_name = leak_str(alloc::format!("{}-net-cmd", net_owner));
                         let net_evt_name = leak_str(alloc::format!("{}-net-evt", net_owner));
-                        let net_cmds = NetQueue::new_leaked(net_cmd_name, 128);
-                        let net_events = NetQueue::new_leaked(net_evt_name, 128);
+                        let net_cmds = NetQueue::new_leaked(net_cmd_name, 512);
+                        let net_events = NetQueue::new_leaked(net_evt_name, 512);
                         register_app_queues(net_owner, net_cmds, net_events);
 
                         crate::log!(
@@ -299,7 +299,7 @@ pub async fn tls_socket_service_task() {
             let mut remove = false;
 
             // Drain a bounded number of events per conn per tick.
-            let drained = conns[idx].net_events.drain(32);
+            let drained = conns[idx].net_events.drain(256);
             for ev in drained {
                 match ev {
                     NetEvent::Opened { handle, kind } => {
