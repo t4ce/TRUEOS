@@ -89,21 +89,3 @@ where
         None
     }
 }
-
-/// Ensures the Pattern implementations keep working for fundamental cases.
-pub fn smoke_test() {
-    let haystack = "abc123xyz";
-
-    let mut str_pat = "123";
-    assert_eq!(Pattern::find_in(&mut str_pat, haystack), Some(3));
-
-    let mut char_pat = 'x';
-    assert_eq!(Pattern::find_in(&mut char_pat, haystack), Some(6));
-
-    let slice_storage = ['x', 'y'];
-    let mut slice_pat: &[char] = &slice_storage;
-    assert_eq!(Pattern::find_in(&mut slice_pat, haystack), Some(6));
-
-    let mut predicate = |ch: char| ch == 'z';
-    assert_eq!(Pattern::find_in(&mut predicate, haystack), Some(8));
-}

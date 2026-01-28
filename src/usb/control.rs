@@ -353,60 +353,6 @@ async fn fetch_first_langid(
     lang
 }
 
-pub(crate) async fn fetch_serial_string(
-    ctx: &XhciContext,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    serial_index: u8,
-) -> cdc_acm::UsbSerial {
-    if serial_index == 0 {
-        return cdc_acm::UsbSerial::none();
-    }
-
-    let langid = fetch_first_langid(ctx, ep0_ring, slot_id)
-        .await
-        .unwrap_or(0x0409);
-
-    let (buf_phys, buf_virt) = match dma::alloc(256, 64) {
-        Some(p) => p,
-        None => return cdc_acm::UsbSerial::none(),
-    };
-    unsafe { write_bytes(buf_virt, 0, 256) };
-
-    let res = control_in(
-        ctx,
-        ep0_ring,
-        slot_id,
-        setup_get_string_descriptor(serial_index, langid, 255),
-        buf_phys,
-        255,
-        "get-serial",
-        800,
-    )
-    .await;
-
-    let mut out: heapless::Vec<u8, 64> = heapless::Vec::new();
-    if let Ok((_cc, transferred)) = res {
-        unsafe {
-            let n = (transferred as usize).min(256);
-            let desc = core::slice::from_raw_parts(buf_virt, n);
-            if desc.len() >= 2 && desc[1] == 3 {
-                let total = (desc[0] as usize).min(desc.len());
-                let mut idx = 2usize;
-                while idx + 1 < total {
-                    let ch = u16::from_le_bytes([desc[idx], desc[idx + 1]]);
-                    let b = if ch <= 0x7F { ch as u8 } else { b'?' };
-                    let _ = out.push(b);
-                    idx += 2;
-                }
-            }
-        }
-    }
-
-    dma::dealloc(buf_virt, 256);
-    cdc_acm::UsbSerial::from_bytes(out.as_slice())
-}
-
 pub(crate) async fn fetch_string_ascii<const N: usize>(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
