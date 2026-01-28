@@ -166,8 +166,10 @@ impl Fs {
     }
 }
 
-const MAX_READ_BYTES: usize = 256 * 1024;
-const MAX_WRITE_BYTES: usize = 256 * 1024;
+// These caps exist to keep memory usage bounded for filesystem operations.
+// Some boot-cached assets (e.g. pci.ids) are ~1.6 MiB, so keep this comfortably above that.
+const MAX_READ_BYTES: usize = 4 * 1024 * 1024;
+const MAX_WRITE_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn read_usbms_file(path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError> {
     let Some(handle) = pick_usbms_device() else {

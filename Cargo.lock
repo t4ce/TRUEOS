@@ -32,7 +32,6 @@ dependencies = [
  "spin 0.10.0",
  "trueos-limloader",
  "trueos-math",
- "trueos-pcid",
  "trueos-qjs",
  "twoway",
  "unicode-normalization",
@@ -1462,10 +1461,6 @@ version = "0.1.0"
 
 [[package]]
 name = "trueos-math"
-version = "0.1.0"
-
-[[package]]
-name = "trueos-pcid"
 version = "0.1.0"
 
 [[package]]

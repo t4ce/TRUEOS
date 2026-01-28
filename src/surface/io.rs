@@ -1850,7 +1850,7 @@ pub mod cabi {
 			return NET_ERR_BAD_URL;
 		}
 
-		let body = match https_get_body_blocking(&parsed, 30_000, 2 * 1024 * 1024) {
+		let body = match https_get_body_blocking(&parsed, 30_000, 4 * 1024 * 1024) {
 			Ok(b) => b,
 			Err(e) => return e,
 		};
