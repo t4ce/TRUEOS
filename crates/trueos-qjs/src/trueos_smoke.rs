@@ -177,3 +177,56 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
     qjs::JS_FreeContext(ctx);
     qjs::JS_FreeRuntime(rt);
 }
+
+/// TRUEOS kernel QuickJS module-loader smoke test:
+/// - Installs the TRUEOS module loader.
+/// - Evaluates an ES module that imports a bare specifier from esm.sh.
+///
+/// This exercises:
+/// - `trueos_module_normalize` (bare specifier -> https://esm.sh/...)
+/// - URL module caching to `/qjs/cdn/<hash>.mjs` via `trueos_cabi_net_fetch_to_file`
+/// - Recursive URL import handling (origin-relative specifiers like "/pkg@ver/..." from esm.sh)
+pub unsafe fn run_module_loader_smoke() {
+    let rt = qjs::JS_NewRuntime();
+    if rt.is_null() {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    }
+
+    qjs::trueos_modules::install(rt);
+
+    let ctx = qjs::JS_NewContext(rt);
+    if ctx.is_null() {
+        log_str("quickjs: JS_NewContext failed\n");
+        qjs::JS_FreeRuntime(rt);
+        return;
+    }
+
+    install_print(ctx);
+
+    let mod_filename = b"<smoke-module-loader>\0";
+    let mod_script = b"import leftPad from 'left-pad@1.3.0';\n\
+const out = leftPad('a', 3, '.');\n\
+if (out !== '..a') throw new Error('left-pad unexpected: ' + out);\n\
+globalThis.print('module-loader ok', out);\n\
+0\n\0";
+
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        mod_script.as_ptr() as *const c_char,
+        mod_script.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if mod_ret.is_exception() {
+        log_str("quickjs: module-loader JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: module-loader eval ok\n");
+    }
+
+    qjs::JS_FreeContext(ctx);
+    qjs::JS_FreeRuntime(rt);
+}

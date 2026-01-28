@@ -532,22 +532,86 @@ pub mod cabi {
 		Stderr = 2,
 	}
 
-	const FS_ERR_BAD_UTF8: i32 = -1;
-	const FS_ERR_IO: i32 = -2;
-	const FS_ERR_NO_SPACE: i32 = -3;
-	const FS_ERR_BAD_PARAM: i32 = -4;
+	pub const FS_ERR_BAD_UTF8: i32 = -1;
+	pub const FS_ERR_IO: i32 = -2;
+	pub const FS_ERR_NO_SPACE: i32 = -3;
+	pub const FS_ERR_BAD_PARAM: i32 = -4;
+	pub const FS_ERR_USBMS_NOT_FOUND: i32 = -5;
+	pub const FS_ERR_BAD_PATH: i32 = -6;
+	pub const FS_ERR_TOO_LARGE: i32 = -7;
+	pub const FS_ERR_NOT_FOUND: i32 = -8;
+	pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
 
-	const NET_ERR_BAD_URL: i32 = -10;
-	const NET_ERR_TIMEOUT: i32 = -11;
-	const NET_ERR_HTTP: i32 = -12;
-	const NET_ERR_TLS: i32 = -13;
+	pub const NET_ERR_BAD_URL: i32 = -10;
+	pub const NET_ERR_TIMEOUT: i32 = -11;
+	pub const NET_ERR_HTTP: i32 = -12;
+	pub const NET_ERR_TLS: i32 = -13;
 
 	// More granular timeout diagnostics (same “class” as NET_ERR_TIMEOUT).
 	// These intentionally live far from the base codes to avoid collisions.
-	const NET_ERR_TIMEOUT_DNS: i32 = -111;
-	const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
-	const NET_ERR_TIMEOUT_HEADERS: i32 = -113;
-	const NET_ERR_TIMEOUT_BODY: i32 = -114;
+	pub const NET_ERR_TIMEOUT_DNS: i32 = -111;
+	pub const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
+	pub const NET_ERR_TIMEOUT_HEADERS: i32 = -113;
+	pub const NET_ERR_TIMEOUT_BODY: i32 = -114;
+
+	/// Best-effort symbolic name for a TRUEOS C ABI return code.
+	///
+	/// Intended for logs and error messages (stable string values help when triaging).
+	#[inline]
+	pub fn code_name(code: i32) -> &'static str {
+		match code {
+			0 => "OK",
+			FS_ERR_BAD_UTF8 => "FS_ERR_BAD_UTF8",
+			FS_ERR_IO => "FS_ERR_IO",
+			FS_ERR_NO_SPACE => "FS_ERR_NO_SPACE",
+			FS_ERR_BAD_PARAM => "FS_ERR_BAD_PARAM",
+			FS_ERR_USBMS_NOT_FOUND => "FS_ERR_USBMS_NOT_FOUND",
+			FS_ERR_BAD_PATH => "FS_ERR_BAD_PATH",
+			FS_ERR_TOO_LARGE => "FS_ERR_TOO_LARGE",
+			FS_ERR_NOT_FOUND => "FS_ERR_NOT_FOUND",
+			FS_ERR_ALREADY_EXISTS => "FS_ERR_ALREADY_EXISTS",
+			NET_ERR_BAD_URL => "NET_ERR_BAD_URL",
+			NET_ERR_TIMEOUT => "NET_ERR_TIMEOUT",
+			NET_ERR_HTTP => "NET_ERR_HTTP",
+			NET_ERR_TLS => "NET_ERR_TLS",
+			NET_ERR_TIMEOUT_DNS => "NET_ERR_TIMEOUT_DNS",
+			NET_ERR_TIMEOUT_CONNECT => "NET_ERR_TIMEOUT_CONNECT",
+			NET_ERR_TIMEOUT_HEADERS => "NET_ERR_TIMEOUT_HEADERS",
+			NET_ERR_TIMEOUT_BODY => "NET_ERR_TIMEOUT_BODY",
+			_ => "UNKNOWN",
+		}
+	}
+
+	#[inline]
+	fn fs_error_to_code(err: crate::disc::files::FsError) -> i32 {
+		use crate::disc::files::*;
+		match err {
+			FsError::Read(UsbFsReadError::UsbmsNotFound)
+			| FsError::Write(UsbFsWriteError::UsbmsNotFound)
+			| FsError::Rename(UsbFsRenameError::UsbmsNotFound)
+			| FsError::ListDir(UsbFsListDirError::UsbmsNotFound)
+			| FsError::Remove(UsbFsRemoveError::UsbmsNotFound) => FS_ERR_USBMS_NOT_FOUND,
+
+			FsError::Write(UsbFsWriteError::BadPath)
+			| FsError::Rename(UsbFsRenameError::BadPath)
+			| FsError::ListDir(UsbFsListDirError::BadPath)
+			| FsError::Remove(UsbFsRemoveError::BadPath) => FS_ERR_BAD_PATH,
+
+			FsError::Read(UsbFsReadError::TooLarge)
+			| FsError::Write(UsbFsWriteError::TooLarge)
+			| FsError::ListDir(UsbFsListDirError::TooLarge) => FS_ERR_TOO_LARGE,
+
+			FsError::Rename(UsbFsRenameError::NotFound)
+			| FsError::Remove(UsbFsRemoveError::NotFound) => FS_ERR_NOT_FOUND,
+
+			FsError::Rename(UsbFsRenameError::AlreadyExists) => FS_ERR_ALREADY_EXISTS,
+
+			// Read(OpenFailed) conflates multiple causes (not found vs bad path);
+			// and many underlying FAT errors are intentionally collapsed.
+			// Keep those as the generic IO class to avoid misleading callers.
+			_ => FS_ERR_IO,
+		}
+	}
 
 	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
@@ -665,7 +729,7 @@ pub mod cabi {
 
 		let bytes: Vec<u8> = match super::kfs::read_file(path) {
 			Ok(v) => v,
-			Err(_) => return FS_ERR_IO as isize,
+			Err(e) => return fs_error_to_code(e) as isize,
 		};
 
 		// Query mode: caller passes null/0 to obtain required size.
@@ -704,7 +768,7 @@ pub mod cabi {
 
 		match super::kfs::write_file(path, data) {
 			Ok(()) => 0,
-			Err(_) => FS_ERR_IO,
+			Err(e) => fs_error_to_code(e),
 		}
 	}
 
@@ -729,7 +793,7 @@ pub mod cabi {
 
 		match super::kfs::rename(src, dst) {
 			Ok(()) => 0,
-			Err(_) => FS_ERR_IO,
+			Err(e) => fs_error_to_code(e),
 		}
 	}
 
@@ -750,7 +814,7 @@ pub mod cabi {
 
 		let listing = match super::kfs::list_dir(path) {
 			Ok(v) => v,
-			Err(_) => return FS_ERR_IO as isize,
+			Err(e) => return fs_error_to_code(e) as isize,
 		};
 		let bytes = listing.as_bytes();
 
@@ -779,7 +843,7 @@ pub mod cabi {
 
 		match super::kfs::remove(path) {
 			Ok(()) => 0,
-			Err(_) => FS_ERR_IO,
+			Err(e) => fs_error_to_code(e),
 		}
 	}
 
@@ -1771,8 +1835,8 @@ pub mod cabi {
 		// Ensure the cache directory exists before downloading.
 		if let Some((parent, _name)) = path.rsplit_once('/') {
 			if !parent.is_empty() {
-				if super::kfs::create_dir_all(parent).is_err() {
-					return FS_ERR_IO;
+				if let Err(e) = super::kfs::create_dir_all(parent) {
+					return fs_error_to_code(e);
 				}
 			}
 		}
@@ -1792,12 +1856,12 @@ pub mod cabi {
 		};
 
 		let tmp = alloc::format!("{}.tmp", path);
-		if super::kfs::write_file(tmp.as_str(), &body).is_err() {
-			return FS_ERR_IO;
+		if let Err(e) = super::kfs::write_file(tmp.as_str(), &body) {
+			return fs_error_to_code(e);
 		}
-		if super::kfs::rename(tmp.as_str(), path).is_err() {
+		if let Err(e) = super::kfs::rename(tmp.as_str(), path) {
 			let _ = super::kfs::remove(tmp.as_str());
-			return FS_ERR_IO;
+			return fs_error_to_code(e);
 		}
 		0
 	}

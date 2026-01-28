@@ -791,7 +791,7 @@ pub(crate) fn draw_mandelbrot() {
             pixels: &MANDELBROT_PIXELS[..expected],
         };
 
-        let (origin_x, origin_y) = match crate::acpi::bgrt::last_logo_rect() {
+        let (origin_x, origin_y) = match crate::efi::acpi::bgrt::last_logo_rect() {
             Some((logo_x, logo_y, logo_w, _logo_h)) => {
                 let x = logo_x.saturating_add(logo_w).saturating_sub(w);
                 let y = logo_y.saturating_sub(h);
