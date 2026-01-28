@@ -13,12 +13,10 @@ QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_
 
 QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	-netdev user,id=net1,hostfwd=tcp::4244-:4244 -device rtl8139,netdev=net1 \
-	-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=on
+	-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 
-# Provide a virtio entropy source (virtio-rng). We force transitional/legacy (disable-modern=on)
-# to match the kernel's current legacy virtio-pci driver.
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
-	-device virtio-rng-pci,rng=rng0,disable-modern=on
+	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
 QEMU_COMMON_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
