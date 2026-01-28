@@ -2,8 +2,11 @@ use alloc::vec::Vec as AVec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::{Deque, String, Vec as HVec};
 use spin::Mutex;
+
+use super::ShellIo;
 
 pub const MAX_SLOTS: usize = 8;
 pub const MAX_LINES: usize = 64;
@@ -430,4 +433,198 @@ pub fn dump_slot(out: &mut String<1024>, slot_id: u8) -> bool {
         let _ = write!(out, "{}\r\n", line.as_str());
     }
     true
+}
+
+#[inline]
+pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+
+    let mut symbols: HVec<(u8, SlotState), MAX_SLOTS> = HVec::new();
+    collect_symbols(&mut symbols);
+
+    let mut visible_len: usize = 0;
+    for (i, (id, state)) in symbols.iter().enumerate() {
+        if i != 0 {
+            visible_len += 1;
+        }
+        match state {
+            SlotState::Running => {
+                // "§⣿"
+                visible_len += 2;
+            }
+            _ => {
+                // "§<id>"
+                visible_len += 1; // '§'
+                let mut n = *id as usize;
+                let mut digits = 1;
+                while n >= 10 {
+                    digits += 1;
+                    n /= 10;
+                }
+                visible_len += digits;
+            }
+        }
+    }
+
+    // Clear the right-side symbol area first so shrinking/empty updates don't
+    // leave stale characters behind.
+    if term_cols != 0 {
+        let clear_width: usize = 64;
+        let mut start_col = term_cols.saturating_sub(clear_width).saturating_add(1);
+        // Keep the left banner ("TRUE OS") intact.
+        start_col = start_col.max(9);
+        if start_col <= term_cols {
+            io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
+            let to_clear = term_cols - start_col + 1;
+            for _ in 0..to_clear {
+                io.write_byte(b' ');
+            }
+        }
+    }
+
+    if term_cols != 0 && visible_len != 0 {
+        let mut start_col = term_cols.saturating_sub(visible_len).saturating_add(1);
+        start_col = start_col.max(9);
+        if start_col <= term_cols {
+            io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
+            for (i, (id, state)) in symbols.iter().enumerate() {
+                if i != 0 {
+                    io.write_byte(b' ');
+                }
+                match *state {
+                    SlotState::Running => {
+                        let mut s: String<4> = String::new();
+                        let _ = s.push('§');
+                        let _ = s.push(super::MATRIX_RUNNING_GLYPH);
+                        io.write_str(s.as_str());
+                    }
+                    _ => {
+                        let mut s: String<8> = String::new();
+                        let _ = write!(s, "§{}", id);
+                        if *state == SlotState::Done {
+                            io.write_fmt(format_args!(
+                                "{}",
+                                crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
+                            ));
+                        } else {
+                            io.write_str(s.as_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+}
+
+#[embassy_executor::task]
+pub(crate) async fn files_matrix_job(slot_id: u8, start_seq: u32) {
+    push_line(slot_id, "queued scan request");
+    crate::disc::files::request_files_scan();
+    push_line(slot_id, "waiting for scan...");
+
+    let deadline = Instant::now() + EmbassyDuration::from_secs(10);
+    loop {
+        let now_seq = crate::disc::files::file_tree_seq();
+        if now_seq != start_seq {
+            let nodes = crate::disc::files::file_tree_len();
+            push_line(slot_id, "scan complete");
+            let mut line: String<96> = String::new();
+            let _ = write!(line, "seq={} nodes={}", now_seq, nodes);
+            push_line(slot_id, line.as_str());
+
+            push_latest_files_tree_to_matrix(slot_id);
+
+            set_state(slot_id, SlotState::Done);
+            break;
+        }
+        if Instant::now() >= deadline {
+            push_line(slot_id, "timeout waiting for scan");
+            set_state(slot_id, SlotState::Failed);
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(100)).await;
+    }
+}
+
+fn push_latest_files_tree_to_matrix(slot_id: u8) {
+    const MAX_TREE_LINES: usize = 56;
+
+    fn kind_marker(kind: &crate::disc::files::FileTreeKind) -> char {
+        match kind {
+            crate::disc::files::FileTreeKind::Root => '/',
+            crate::disc::files::FileTreeKind::Device => 'D',
+            crate::disc::files::FileTreeKind::Dir => 'd',
+            crate::disc::files::FileTreeKind::File => 'f',
+        }
+    }
+
+    let mut wrote_any = false;
+    let mut wrote_lines: usize = 0;
+    let mut truncated = false;
+
+    let Some(()) = crate::disc::files::with_latest_file_tree(|seq, tree| {
+        let Some(root) = tree.root() else {
+            push_line(slot_id, "tree: (empty)");
+            return;
+        };
+
+        let mut header: String<96> = String::new();
+        let _ = write!(header, "tree: seq={}", seq);
+        push_line(slot_id, header.as_str());
+        wrote_any = true;
+        wrote_lines = wrote_lines.saturating_add(1);
+
+        let mut stack: alloc::vec::Vec<(trueos_math::NodeId, usize)> = alloc::vec::Vec::new();
+        stack.push((root, 0));
+
+        while let Some((id, depth)) = stack.pop() {
+            if wrote_lines >= MAX_TREE_LINES {
+                truncated = true;
+                break;
+            }
+
+            let Some(entry) = tree.get(id) else {
+                continue;
+            };
+
+            let mut line: String<96> = String::new();
+            for _ in 0..depth {
+                let _ = line.push(' ');
+                let _ = line.push(' ');
+            }
+            let _ = line.push(kind_marker(&entry.kind));
+            let _ = line.push(' ');
+            for ch in entry.name.chars() {
+                if line.push(ch).is_err() {
+                    break;
+                }
+            }
+            push_line(slot_id, line.as_str());
+            wrote_any = true;
+            wrote_lines = wrote_lines.saturating_add(1);
+
+            // Preserve insertion order by pushing children in reverse.
+            let mut kids: alloc::vec::Vec<trueos_math::NodeId> = alloc::vec::Vec::new();
+            for child in tree.children(id) {
+                kids.push(child);
+            }
+            for child in kids.into_iter().rev() {
+                stack.push((child, depth.saturating_add(1)));
+            }
+        }
+    }) else {
+        push_line(slot_id, "tree: unavailable");
+        return;
+    };
+
+    if !wrote_any {
+        push_line(slot_id, "tree: unavailable");
+        return;
+    }
+
+    if truncated {
+        push_line(slot_id, "tree: (truncated)");
+    }
 }
