@@ -1320,8 +1320,9 @@ pub mod cabi {
 									let mut out = Vec::with_capacity(req.len() + query.len());
 									out.extend_from_slice(&req);
 									out.extend_from_slice(&query);
-									let _ = cmds.push(TlsCommand::Send { handle, data: out });
-									sent_query = true;
+									if cmds.push(TlsCommand::Send { handle, data: out }).is_ok() {
+										sent_query = true;
+									}
 								}
 							}
 							TlsEvent::Data { handle, data } => {
@@ -1396,13 +1397,17 @@ pub mod cabi {
 					}
 
 					if !sent_connect {
-						sent_connect = true;
-						let _ = cmds.push(TlsCommand::OpenTcpConnect {
+								if cmds
+									.push(TlsCommand::OpenTcpConnect {
 							remote: NetEndpoint { addr: server_ip, port: DOH_PORT },
 							server_name,
 							cfg: cfg.clone(),
 							roots: roots.clone(),
-						});
+								})
+								.is_ok()
+								{
+									sent_connect = true;
+								}
 					}
 
 					let now = embassy_time_driver::now() as u64;
@@ -1570,11 +1575,15 @@ pub mod cabi {
 									url.path,
 									url.host
 								);
-								let _ = cmds.push(TlsCommand::Send {
+								if cmds
+									.push(TlsCommand::Send {
 									handle,
 									data: req.into_bytes(),
-								});
-								http_sent = true;
+								})
+								.is_ok()
+								{
+									http_sent = true;
+								}
 							}
 						}
 						TlsEvent::Data { handle, data } => {
@@ -1672,13 +1681,17 @@ pub mod cabi {
 				}
 
 				if !sent_connect {
-					sent_connect = true;
-					let _ = cmds.push(TlsCommand::OpenTcpConnect {
+						if cmds
+							.push(TlsCommand::OpenTcpConnect {
 						remote: NetEndpoint { addr: ip, port: url.port },
 						server_name,
 						cfg: cfg.clone(),
 						roots: roots.clone(),
-					});
+						})
+						.is_ok()
+						{
+							sent_connect = true;
+						}
 				}
 
 				let now = embassy_time_driver::now() as u64;

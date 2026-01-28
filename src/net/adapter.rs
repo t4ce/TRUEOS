@@ -20,10 +20,19 @@ const MAX_DRAIN_PER_LOOP: usize = 32;
 const ICMP_IDENT: u16 = 0x1234;
 
 // QEMU slirp defaults we use today.
-const SLIRP_GUEST_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 15);
+// NOTE: We may have multiple NICs. Using the same static IP on all of them
+// causes ARP flapping and extremely confusing failures (DNS timeouts, TCP
+// connects that immediately close, etc). Assign a stable per-device address.
+const SLIRP_GUEST_IP_BASE_LAST_OCTET: u8 = 15;
 const SLIRP_PREFIX: u8 = 24;
 const SLIRP_GATEWAY_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
 const NET_SHELL_TCP_PORT: u16 = 4245;
+
+fn slirp_guest_ip_for_device(device_index: usize) -> Ipv4Address {
+    let idx = device_index.min(200) as u8;
+    let last = SLIRP_GUEST_IP_BASE_LAST_OCTET.saturating_add(idx).min(254);
+    Ipv4Address::new(10, 0, 2, last)
+}
 
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static NET_TX_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -335,9 +344,10 @@ impl NetService {
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
         let mut device = AdapterDeviceAt { index: device_index };
         let mut iface = Interface::new(cfg, &mut device, now());
+        let guest_ip = slirp_guest_ip_for_device(device_index);
         iface.update_ip_addrs(|addrs| {
             let _ = addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(
-                SLIRP_GUEST_IP,
+                guest_ip,
                 SLIRP_PREFIX,
             )));
         });
@@ -459,8 +469,10 @@ impl NetService {
         let local_port = self.tcp_next_ephemeral;
         self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
 
+        let local_ip = slirp_guest_ip_for_device(self.device_index);
+
         let local = IpEndpoint::new(
-            IpAddress::Ipv4(SLIRP_GUEST_IP),
+            IpAddress::Ipv4(local_ip),
             local_port,
         );
         let remote = IpEndpoint::new(
