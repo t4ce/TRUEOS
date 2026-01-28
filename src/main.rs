@@ -257,6 +257,8 @@ pub extern "C" fn kmain() -> ! {
     acpi::tpm2::log_once();
     acpi::dmar::log_once();
     acpi::fpdt::log_once();
+    acpi::madt::log_once();
+    acpi::dbg::log_once();
     if !dumped_uefi_system_table {
         efi::tbl::log_once();
     }
