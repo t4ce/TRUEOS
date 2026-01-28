@@ -78,6 +78,277 @@ unsafe fn js_make_complex(ctx: *mut qjs::JSContext, re: f64, im: f64) -> qjs::JS
     obj
 }
 
+#[inline]
+fn js_int32(v: i32) -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: v },
+        tag: qjs::JS_TAG_INT,
+    }
+}
+
+unsafe extern "C" fn qjs_process_next_tick(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let func = args[0];
+
+    let call_argc = (argc - 1).max(0);
+    let call_argv = if argc > 1 {
+        unsafe { argv.add(1) }
+    } else {
+        core::ptr::null()
+    };
+
+    // Best-effort: call immediately. Later this can be wired to a real microtask/"nextTick" queue.
+    unsafe { qjs::JS_Call(ctx, func, qjs::JSValue::undefined(), call_argc, call_argv) };
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_process_cwd(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // TODO: wire to per-context cwd once the shell/plumbing provides it.
+    let cwd = b"/\0";
+    unsafe { qjs::JS_NewStringLen(ctx, cwd.as_ptr() as *const c_char, cwd.len() - 1) }
+}
+
+unsafe extern "C" fn qjs_process_uptime(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // TODO: wire to kernel monotonic time.
+    unsafe { qjs::JS_NewFloat64(core::ptr::null_mut(), 0.0) }
+}
+
+unsafe extern "C" fn qjs_process_hrtime(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // Node-style: [seconds, nanoseconds]. Best-effort zeros for now.
+    let arr = unsafe { qjs::JS_NewArray(ctx) };
+    if arr.is_exception() {
+        return arr;
+    }
+    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 0, js_int32(0)) };
+    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 1, js_int32(0)) };
+    arr
+}
+
+unsafe extern "C" fn qjs_path_join(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return unsafe { qjs::JS_NewStringLen(ctx, b".\0".as_ptr() as *const c_char, 1) };
+    }
+
+    let args = unsafe { core::slice::from_raw_parts(argv, argc as usize) };
+    let mut out: Vec<u8> = Vec::new();
+
+    for &val in args {
+        let mut len: usize = 0;
+        let cstr = unsafe { qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, val, 0) };
+        if cstr.is_null() {
+            return qjs::JSValue::exception();
+        }
+
+        let bytes = unsafe { core::slice::from_raw_parts(cstr as *const u8, len) };
+        if !bytes.is_empty() {
+            if !out.is_empty() && out[out.len() - 1] != b'/' && bytes[0] != b'/' {
+                out.push(b'/');
+            }
+            out.extend_from_slice(bytes);
+        }
+
+        unsafe { qjs::JS_FreeCString(ctx, cstr) };
+    }
+
+    if out.is_empty() {
+        out.push(b'.');
+    }
+
+    unsafe { qjs::JS_NewStringLen(ctx, out.as_ptr() as *const c_char, out.len()) }
+}
+
+unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+    if ctx.is_null() || m.is_null() {
+        return -1;
+    }
+
+    let join_name = b"join\0";
+    let join_fn = unsafe {
+        qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_path_join),
+            join_name.as_ptr() as *const c_char,
+            2,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        )
+    };
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, join_name.as_ptr() as *const c_char, join_fn) } < 0 {
+        return -1;
+    }
+
+    0
+}
+
+unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue, qjs::JSValue> {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    let name = b"process\0";
+    let mut proc = qjs::JS_GetPropertyStr(ctx, global, name.as_ptr() as *const c_char);
+    if proc.is_exception() {
+        qjs::js_free_value(ctx, global);
+        return Err(qjs::JSValue::exception());
+    }
+
+    if proc.tag == qjs::JS_TAG_UNDEFINED || proc.tag == qjs::JS_TAG_NULL {
+        // Drop the undefined/null handle and create a fresh process object.
+        qjs::js_free_value(ctx, proc);
+
+        let obj = qjs::JS_NewObject(ctx);
+        if obj.is_exception() {
+            qjs::js_free_value(ctx, global);
+            return Err(qjs::JSValue::exception());
+        }
+
+        // env: plain object (userland can mutate)
+        let env = qjs::JS_NewObject(ctx);
+        if env.is_exception() {
+            qjs::js_free_value(ctx, global);
+            qjs::js_free_value(ctx, obj);
+            return Err(qjs::JSValue::exception());
+        }
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"env\0".as_ptr() as *const c_char, env);
+
+        // argv: ["qjs"] default
+        let argv = qjs::JS_NewArray(ctx);
+        if argv.is_exception() {
+            qjs::js_free_value(ctx, global);
+            qjs::js_free_value(ctx, obj);
+            return Err(qjs::JSValue::exception());
+        }
+        let qjs_str = qjs::JS_NewStringLen(ctx, b"qjs".as_ptr() as *const c_char, 3);
+        let _ = qjs::JS_SetPropertyUint32(ctx, argv, 0, qjs_str);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"argv\0".as_ptr() as *const c_char, argv);
+
+        // platform/arch/version
+        let platform = qjs::JS_NewStringLen(ctx, b"trueos".as_ptr() as *const c_char, 6);
+        let arch = qjs::JS_NewStringLen(ctx, b"x64".as_ptr() as *const c_char, 3);
+        let version = qjs::JS_NewStringLen(ctx, b"0.0.0-trueos".as_ptr() as *const c_char, 12);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"platform\0".as_ptr() as *const c_char, platform);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"arch\0".as_ptr() as *const c_char, arch);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"version\0".as_ptr() as *const c_char, version);
+
+        // pid (placeholder)
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pid\0".as_ptr() as *const c_char, js_int32(1));
+
+        // Functions: nextTick/cwd/hrtime/uptime
+        let next_tick = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_process_next_tick),
+            b"nextTick\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let cwd = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_process_cwd),
+            b"cwd\0".as_ptr() as *const c_char,
+            0,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let hrtime = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_process_hrtime),
+            b"hrtime\0".as_ptr() as *const c_char,
+            0,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let uptime = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_process_uptime),
+            b"uptime\0".as_ptr() as *const c_char,
+            0,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"nextTick\0".as_ptr() as *const c_char, next_tick);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cwd\0".as_ptr() as *const c_char, cwd);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"hrtime\0".as_ptr() as *const c_char, hrtime);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"uptime\0".as_ptr() as *const c_char, uptime);
+
+        // Attach to globalThis.process (JS_SetPropertyStr consumes `obj` on success).
+        let _ = qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, obj);
+
+        // Re-read the process object so we have a handle we can return/inspect.
+        proc = qjs::JS_GetPropertyStr(ctx, global, name.as_ptr() as *const c_char);
+        if proc.is_exception() {
+            qjs::js_free_value(ctx, global);
+            return Err(qjs::JSValue::exception());
+        }
+    }
+
+    qjs::js_free_value(ctx, global);
+    Ok(proc)
+}
+
+unsafe extern "C" fn qjs_process_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+    let proc = match ensure_global_process(ctx) {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+
+    // Named exports: env/argv/cwd/nextTick/hrtime/uptime
+    let env = qjs::JS_GetPropertyStr(ctx, proc, b"env\0".as_ptr() as *const c_char);
+    let argv = qjs::JS_GetPropertyStr(ctx, proc, b"argv\0".as_ptr() as *const c_char);
+    let cwd = qjs::JS_GetPropertyStr(ctx, proc, b"cwd\0".as_ptr() as *const c_char);
+    let next_tick = qjs::JS_GetPropertyStr(ctx, proc, b"nextTick\0".as_ptr() as *const c_char);
+    let hrtime = qjs::JS_GetPropertyStr(ctx, proc, b"hrtime\0".as_ptr() as *const c_char);
+    let uptime = qjs::JS_GetPropertyStr(ctx, proc, b"uptime\0".as_ptr() as *const c_char);
+
+    // Exporting consumes the values, so don't free them after.
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"env\0".as_ptr() as *const c_char, env);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"argv\0".as_ptr() as *const c_char, argv);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"cwd\0".as_ptr() as *const c_char, cwd);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"nextTick\0".as_ptr() as *const c_char, next_tick);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"hrtime\0".as_ptr() as *const c_char, hrtime);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"uptime\0".as_ptr() as *const c_char, uptime);
+
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"default\0".as_ptr() as *const c_char, proc);
+    0
+}
+
+/// Install per-context globals that many npm packages assume exist.
+///
+/// Currently provides:
+/// - `globalThis.process`
+pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
+    let Ok(proc) = ensure_global_process(ctx) else {
+        return;
+    };
+    // Keep globalThis.process installed; drop our local handle.
+    qjs::js_free_value(ctx, proc);
+}
+
 unsafe fn js_read_complex(
     ctx: *mut qjs::JSContext,
     val: qjs::JSValueConst,
@@ -524,6 +795,13 @@ pub unsafe fn load_native_module(
                 b"remove\0",
             ],
         )
+    } else if name == b"process" || name == b"node:process" {
+        (
+            qjs_process_module_init,
+            &[b"default\0", b"env\0", b"argv\0", b"cwd\0", b"nextTick\0", b"hrtime\0", b"uptime\0"],
+        )
+    } else if name == b"path" || name == b"node:path" {
+        (qjs_path_module_init, &[b"join\0"])
     } else {
         return core::ptr::null_mut();
     };
@@ -540,7 +818,7 @@ pub unsafe fn load_native_module(
     m
 }
 
-unsafe extern "C" fn trueos_module_loader(
+pub(crate) unsafe extern "C" fn trueos_module_loader(
     ctx: *mut qjs::JSContext,
     module_name: *const c_char,
     _opaque: *mut core::ffi::c_void,
@@ -793,11 +1071,37 @@ unsafe fn js_strdup(ctx: *mut qjs::JSContext, bytes: &[u8]) -> *mut c_char {
     buf as *mut c_char
 }
 
-unsafe extern "C" fn trueos_module_normalize(
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NormalizeMode {
+    /// Base TRUEOS resolution: bare specifiers go to esm.sh; `node:*` stays native.
+    Base,
+    /// Node-ish resolution: common Node builtins and unknown `node:*` may be routed to esm.sh.
+    Node,
+}
+
+fn node_builtin_shim_url(spec: &[u8]) -> Option<&'static [u8]> {
+    // esm.sh does not currently serve `node:*` specifiers directly (e.g. `https://esm.sh/node:path` is 404).
+    // For Node-ish compatibility, route common builtins to browser/polyfill packages instead.
+    match spec {
+        b"assert" => Some(b"https://esm.sh/assert@2.1.0"),
+        b"buffer" => Some(b"https://esm.sh/buffer@6.0.3"),
+        b"crypto" => Some(b"https://esm.sh/crypto-browserify@3.12.0"),
+        b"events" => Some(b"https://esm.sh/events@3.3.0"),
+        b"path" => Some(b"https://esm.sh/path-browserify@1.0.1"),
+        b"stream" => Some(b"https://esm.sh/stream-browserify@3.0.0"),
+        b"timers" => Some(b"https://esm.sh/timers-browserify@2.0.12"),
+        b"tty" => Some(b"https://esm.sh/tty-browserify@0.0.1"),
+        b"url" => Some(b"https://esm.sh/url@0.11.3"),
+        b"util" => Some(b"https://esm.sh/util@0.12.5"),
+        _ => None,
+    }
+}
+
+pub(crate) unsafe fn normalize_with_mode(
     ctx: *mut qjs::JSContext,
     module_base_name: *const c_char,
     module_name: *const c_char,
-    _opaque: *mut core::ffi::c_void,
+    mode: NormalizeMode,
 ) -> *mut c_char {
     if module_name.is_null() {
         return core::ptr::null_mut();
@@ -844,12 +1148,52 @@ unsafe extern "C" fn trueos_module_normalize(
         return js_strdup(ctx, &normalized);
     }
 
-    // Bare specifiers: keep native ones as-is, otherwise route through esm.sh.
+    // Bare specifiers.
     if !path_is_relative(spec) {
-        if spec == b"complex" || spec == b"fs" {
+        // Always keep known TRUEOS native modules.
+        if spec == b"complex"
+            || spec == b"fs"
+            || spec == b"process"
+            || spec == b"node:process"
+            || spec == b"path"
+            || spec == b"node:path"
+        {
             return js_strdup(ctx, spec);
         }
 
+        // `node:*` handling differs by mode.
+        if spec.starts_with(b"node:") {
+            match mode {
+                NormalizeMode::Base => return js_strdup(ctx, spec),
+                NormalizeMode::Node => {
+                    // Only keep truly native `node:*` modules; shim the rest.
+                    if spec == b"node:process" || spec == b"node:path" {
+                        return js_strdup(ctx, spec);
+                    }
+
+                    // Try a curated polyfill mapping first.
+                    let name = &spec[b"node:".len()..];
+                    if let Some(url) = node_builtin_shim_url(name) {
+                        return js_strdup(ctx, url);
+                    }
+
+                    // Fallback: strip `node:` and ask esm.sh for the corresponding package name.
+                    let mut url = Vec::new();
+                    url.extend_from_slice(ESM_SH_PREFIX);
+                    url.extend_from_slice(name);
+                    return js_strdup(ctx, &url);
+                }
+            }
+        }
+
+        // In Node mode, treat common Node builtins as shims.
+        if mode == NormalizeMode::Node {
+            if let Some(url) = node_builtin_shim_url(spec) {
+                return js_strdup(ctx, url);
+            }
+        }
+
+        // Default: route bare specifiers through esm.sh.
         let mut url = Vec::new();
         url.extend_from_slice(ESM_SH_PREFIX);
         url.extend_from_slice(spec);
@@ -878,6 +1222,15 @@ unsafe extern "C" fn trueos_module_normalize(
     js_strdup(ctx, &normalized)
 }
 
+unsafe extern "C" fn trueos_module_normalize(
+    ctx: *mut qjs::JSContext,
+    module_base_name: *const c_char,
+    module_name: *const c_char,
+    _opaque: *mut core::ffi::c_void,
+) -> *mut c_char {
+    normalize_with_mode(ctx, module_base_name, module_name, NormalizeMode::Base)
+}
+
 unsafe fn load_url_module(
     ctx: *mut qjs::JSContext,
     module_name: *const c_char,
@@ -898,8 +1251,10 @@ unsafe fn load_url_module(
             return m;
         }
         Err(rc) => {
-            // Only fall back to network fetch on NOT_FOUND; other errors should surface.
-            if rc != -8 {
+            // Fall back to network fetch on NOT_FOUND.
+            // Also treat IO errors as cache-miss: we may see transient FS errors or a partially
+            // written cache entry, and fetching again is a safe recovery path.
+            if rc != -8 && rc != -2 {
                 let mut msg = Vec::new();
                 msg.extend_from_slice(b"read cached module failed rc=");
                 push_i32_dec(&mut msg, rc as i32);
