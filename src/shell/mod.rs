@@ -139,92 +139,10 @@ fn write_right_aligned(io: &dyn ShellIo, row: usize, term_cols: usize, text: &st
 }
 
 #[inline]
-fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
-    io.write_str(crate::ecma48::SAVE_CURSOR);
-    let mut symbols: heapless::Vec<(u8, crate::matrix::SlotState), { crate::matrix::MAX_SLOTS }> =
-        heapless::Vec::new();
-    crate::matrix::collect_symbols(&mut symbols);
-
-    let mut visible_len: usize = 0;
-    for (i, (id, _state)) in symbols.iter().enumerate() {
-        if i != 0 {
-            visible_len += 1;
-        }
-        match _state {
-            crate::matrix::SlotState::Running => {
-                // "§⣿"
-                visible_len += 2;
-            }
-            _ => {
-                // "§<id>"
-                visible_len += 1; // '§'
-                let mut n = *id as usize;
-                let mut digits = 1;
-                while n >= 10 {
-                    digits += 1;
-                    n /= 10;
-                }
-                visible_len += digits;
-            }
-        }
-    }
-
-    // Clear the right-side symbol area first so shrinking/empty updates don't
-    // leave stale characters behind.
-    if term_cols != 0 {
-        let clear_width: usize = 64;
-        let mut start_col = term_cols.saturating_sub(clear_width).saturating_add(1);
-        // Keep the left banner ("TRUE OS") intact.
-        start_col = start_col.max(9);
-        if start_col <= term_cols {
-            io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
-            let to_clear = term_cols - start_col + 1;
-            for _ in 0..to_clear {
-                io.write_byte(b' ');
-            }
-        }
-    }
-
-    if term_cols != 0 && visible_len != 0 {
-        let mut start_col = term_cols.saturating_sub(visible_len).saturating_add(1);
-        start_col = start_col.max(9);
-        if start_col <= term_cols {
-            io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
-            for (i, (id, state)) in symbols.iter().enumerate() {
-                if i != 0 {
-                    io.write_byte(b' ');
-                }
-                match *state {
-                    crate::matrix::SlotState::Running => {
-                        let mut s: String<4> = String::new();
-                        let _ = s.push('§');
-                        let _ = s.push(MATRIX_RUNNING_GLYPH);
-                        io.write_str(s.as_str());
-                    }
-                    _ => {
-                        let mut s: String<8> = String::new();
-                        let _ = write!(s, "§{}", id);
-                        if *state == crate::matrix::SlotState::Done {
-                            io.write_fmt(format_args!(
-                                "{}",
-                                crate::ecma48::color(s.as_str(), PROMPT_RGB)
-                            ));
-                        } else {
-                            io.write_str(s.as_str());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    io.write_str(crate::ecma48::RESTORE_CURSOR);
-}
-
-#[inline]
 fn write_banner(io: &dyn ShellIo, term_cols: usize) {
     // Row 1: Banner + matrix symbols on the right.
     io.write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
-    refresh_matrix_symbols(io, term_cols);
+    crate::matrix::refresh_matrix_symbols(io, term_cols);
 
     write_prompt(io);
 
@@ -527,7 +445,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 let _ = crate::matrix::set_blob_owned_with_preview(slot_id, out_buf);
                                 crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
                                 io.write_fmt(format_args!("\r\ntxt: updated §{}\r\n", slot_id + 1));
-                                refresh_matrix_symbols(io, term_cols);
+                                crate::matrix::refresh_matrix_symbols(io, term_cols);
 
                                 io.write_str(crate::ecma48::CLEAR_SCREEN);
                                 io.write_str(crate::ecma48::HOME);
@@ -569,7 +487,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
             // Keep header symbols in sync with background job state transitions.
             if Instant::now() >= next_matrix_refresh {
-                refresh_matrix_symbols(io, term_cols);
+                crate::matrix::refresh_matrix_symbols(io, term_cols);
                 next_matrix_refresh = Instant::now() + EmbassyDuration::from_millis(250);
             }
 
@@ -607,117 +525,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 Timer::after(EmbassyDuration::from_millis(2)).await;
             }
         }
-    }
-}
-
-#[embassy_executor::task]
-async fn files_matrix_job(slot_id: u8, start_seq: u32) {
-    crate::matrix::push_line(slot_id, "queued scan request");
-    crate::disc::files::request_files_scan();
-    crate::matrix::push_line(slot_id, "waiting for scan...");
-
-    let deadline = Instant::now() + EmbassyDuration::from_secs(10);
-    loop {
-        let now_seq = crate::disc::files::file_tree_seq();
-        if now_seq != start_seq {
-            let nodes = crate::disc::files::file_tree_len();
-            crate::matrix::push_line(slot_id, "scan complete");
-            let mut line: String<96> = String::new();
-            let _ = write!(line, "seq={} nodes={}", now_seq, nodes);
-            crate::matrix::push_line(slot_id, line.as_str());
-
-            push_latest_files_tree_to_matrix(slot_id);
-
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
-            break;
-        }
-        if Instant::now() >= deadline {
-            crate::matrix::push_line(slot_id, "timeout waiting for scan");
-            crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(100)).await;
-    }
-}
-
-fn push_latest_files_tree_to_matrix(slot_id: u8) {
-    const MAX_TREE_LINES: usize = 56;
-
-    fn kind_marker(kind: &crate::disc::files::FileTreeKind) -> char {
-        match kind {
-            crate::disc::files::FileTreeKind::Root => '/',
-            crate::disc::files::FileTreeKind::Device => 'D',
-            crate::disc::files::FileTreeKind::Dir => 'd',
-            crate::disc::files::FileTreeKind::File => 'f',
-        }
-    }
-
-    let mut wrote_any = false;
-    let mut wrote_lines: usize = 0;
-    let mut truncated = false;
-
-    let Some(()) = crate::disc::files::with_latest_file_tree(|seq, tree| {
-        let Some(root) = tree.root() else {
-            crate::matrix::push_line(slot_id, "tree: (empty)");
-            return;
-        };
-
-        let mut header: String<96> = String::new();
-        let _ = write!(header, "tree: seq={}", seq);
-        crate::matrix::push_line(slot_id, header.as_str());
-        wrote_any = true;
-        wrote_lines = wrote_lines.saturating_add(1);
-
-        let mut stack: Vec<(trueos_math::NodeId, usize)> = Vec::new();
-        stack.push((root, 0));
-
-        while let Some((id, depth)) = stack.pop() {
-            if wrote_lines >= MAX_TREE_LINES {
-                truncated = true;
-                break;
-            }
-
-            let Some(entry) = tree.get(id) else {
-                continue;
-            };
-
-            let mut line: String<96> = String::new();
-            for _ in 0..depth {
-                let _ = line.push(' ');
-                let _ = line.push(' ');
-            }
-            let _ = line.push(kind_marker(&entry.kind));
-            let _ = line.push(' ');
-            for ch in entry.name.chars() {
-                if line.push(ch).is_err() {
-                    break;
-                }
-            }
-            crate::matrix::push_line(slot_id, line.as_str());
-            wrote_any = true;
-            wrote_lines = wrote_lines.saturating_add(1);
-
-            // Preserve insertion order by pushing children in reverse.
-            let mut kids: Vec<trueos_math::NodeId> = Vec::new();
-            for child in tree.children(id) {
-                kids.push(child);
-            }
-            for child in kids.into_iter().rev() {
-                stack.push((child, depth.saturating_add(1)));
-            }
-        }
-    }) else {
-        crate::matrix::push_line(slot_id, "tree: unavailable");
-        return;
-    };
-
-    if !wrote_any {
-        crate::matrix::push_line(slot_id, "tree: unavailable");
-        return;
-    }
-
-    if truncated {
-        crate::matrix::push_line(slot_id, "tree: (truncated)");
     }
 }
 
@@ -792,7 +599,7 @@ fn handle_line(
                             io.write_str("\r\n");
                         }
                         let _ = crate::matrix::free_slot(slot_id);
-                        refresh_matrix_symbols(io, *term_cols);
+                        crate::matrix::refresh_matrix_symbols(io, *term_cols);
                         return CommandAction::None;
                     }
                 }
@@ -802,7 +609,7 @@ fn handle_line(
                 if crate::matrix::dump_slot(&mut buf, slot_id) {
                     io.write_str(buf.as_str());
                     let _ = crate::matrix::free_slot(slot_id);
-                    refresh_matrix_symbols(io, *term_cols);
+                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
                 } else {
                     io.write_str("§: not found\r\n");
                 }
@@ -811,8 +618,7 @@ fn handle_line(
         }
     }
 
-    // Parse `verb` + optional `rest`. Single-word commands (no spaces) must still work.
-    let (verb, rest) = cmd.split_once(' ').unwrap_or((cmd, ""));
+    if let Some((verb, rest)) = cmd.split_once(' ') {
         if verb.eq_ignore_ascii_case("out") {
             let resp = crate::surface::io::shellcmd::handle_out(spawner, rest);
             match resp.print {
@@ -827,7 +633,7 @@ fn handle_line(
                 }
             }
             if resp.refresh_symbols {
-                refresh_matrix_symbols(io, *term_cols);
+                crate::matrix::refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }
@@ -846,7 +652,7 @@ fn handle_line(
                 }
             }
             if resp.refresh_symbols {
-                refresh_matrix_symbols(io, *term_cols);
+                crate::matrix::refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }
@@ -865,7 +671,7 @@ fn handle_line(
                 }
             }
             if resp.refresh_symbols {
-                refresh_matrix_symbols(io, *term_cols);
+                crate::matrix::refresh_matrix_symbols(io, *term_cols);
             }
             return CommandAction::None;
         }
@@ -903,7 +709,7 @@ fn handle_line(
                     }
                     let _ = spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u));
                     io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
+                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
                 }
                 None => io.write_str("get: matrix full\r\n"),
             }
@@ -939,7 +745,7 @@ fn handle_line(
                     }
                     let _ = spawner.spawn(crate::net::tls_demo::tls_demo_matrix_job(slot, h));
                     io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
+                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
                 }
                 None => io.write_str("https: matrix full\r\n"),
             }
@@ -1003,9 +809,9 @@ fn handle_line(
                     let mut line: String<64> = String::new();
                     let _ = write!(line, "start seq={}", seq);
                     crate::matrix::push_line(slot, line.as_str());
-                    let _ = spawner.spawn(files_matrix_job(slot, seq));
+                    let _ = spawner.spawn(crate::matrix::files_matrix_job(slot, seq));
                     io.write_fmt(format_args!("files: started §{}\r\n", slot + 1));
-                    refresh_matrix_symbols(io, *term_cols);
+                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
                 }
                 None => {
                     io.write_str("files: matrix full\r\n");
@@ -1079,6 +885,11 @@ fn handle_line(
                 slot_id,
             };
         }
+    } else if cmd.eq_ignore_ascii_case("format") {
+        io.write_str("format: usage format <diskid>\r\n");
+        io.write_str("format: example format 1\r\n");
+        io.write_str("format: example format disc001\r\n");
+        return CommandAction::None;
     } else if cmd.eq_ignore_ascii_case("install") {
         *install_wizard = Some(InstallWizardStage::SelectDisk);
         print_install_disk_table(io);
@@ -1093,14 +904,14 @@ fn handle_line(
                 let mut line: String<64> = String::new();
                 let _ = write!(line, "start seq={}", seq);
                 crate::matrix::push_line(slot, line.as_str());
-                let _ = spawner.spawn(files_matrix_job(slot, seq));
+                let _ = spawner.spawn(crate::matrix::files_matrix_job(slot, seq));
                 io.write_fmt(format_args!("files: started §{}\r\n", slot + 1));
             }
             None => {
                 io.write_str("files: matrix full\r\n");
             }
         }
-        refresh_matrix_symbols(io, *term_cols);
+        crate::matrix::refresh_matrix_symbols(io, *term_cols);
         return CommandAction::None;
     } else if cmd.eq_ignore_ascii_case("qjs") {
         io.write_str("qjs: usage qjs <javascript> | qjs @<path>\r\n");
