@@ -101,8 +101,8 @@ pub unsafe fn run() {
         return;
     }
 
-    // Enable ES module loading (imports) by installing the TRUEOS module loader.
-    qjs::trueos_modules::install(rt);
+    // Enable ES module loading (imports) using the Node-enhanced loader.
+    qjs::node::install(rt);
 
     let ctx = qjs::JS_NewContext(rt);
     if ctx.is_null() {
@@ -112,9 +112,20 @@ pub unsafe fn run() {
     }
 
     install_print(ctx);
+    qjs::node::install_globals(ctx);
 
     let mod_filename = b"<smoke-module>\0";
-    let mod_script = b"import { make, add, square } from 'complex';\n\
+    let mod_script = b"import proc, { argv, env, cwd, hrtime, nextTick, uptime } from 'node:process';\n\
+if (proc !== globalThis.process) throw new Error('process global mismatch');\n\
+if (!Array.isArray(argv)) throw new Error('process.argv not array');\n\
+if (typeof env !== 'object' || env === null) throw new Error('process.env not object');\n\
+if (typeof cwd() !== 'string') throw new Error('process.cwd not string');\n\
+if (typeof uptime() !== 'number') throw new Error('process.uptime not number');\n\
+const ht = hrtime();\n\
+if (!Array.isArray(ht) || ht.length !== 2) throw new Error('process.hrtime not [s,ns]');\n\
+nextTick(() => globalThis.print('nextTick ok'));\n\
+globalThis.print('process ok', cwd());\n\
+import { make, add, square } from 'complex';\n\
 const a = make(3, 4);\n\
 const b = make(1, 2);\n\
 const s = add(a, b);\n\
@@ -193,7 +204,7 @@ pub unsafe fn run_module_loader_smoke() {
         return;
     }
 
-    qjs::trueos_modules::install(rt);
+    qjs::node::install(rt);
 
     let ctx = qjs::JS_NewContext(rt);
     if ctx.is_null() {
@@ -203,9 +214,16 @@ pub unsafe fn run_module_loader_smoke() {
     }
 
     install_print(ctx);
+    qjs::node::install_globals(ctx);
 
     let mod_filename = b"<smoke-module-loader>\0";
-    let mod_script = b"import leftPad from 'left-pad@1.3.0';\n\
+    let mod_script = b"import proc from 'node:process';\n\
+if (typeof proc !== 'object' || proc === null) throw new Error('node:process missing');\n\
+import * as path from 'path';\n\
+if (typeof path.join !== 'function') throw new Error('path.join missing');\n\
+const joined = path.join('a', 'b');\n\
+if (joined !== 'a/b' && joined !== 'a\\b') throw new Error('path.join unexpected: ' + joined);\n\
+import leftPad from 'left-pad@1.3.0';\n\
 const out = leftPad('a', 3, '.');\n\
 if (out !== '..a') throw new Error('left-pad unexpected: ' + out);\n\
 globalThis.print('module-loader ok', out);\n\
