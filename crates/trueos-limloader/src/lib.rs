@@ -73,7 +73,7 @@ pub fn default_paths(repo_root: &Path) -> LiminePaths {
 
 fn default_config_args(prefix: &Path) -> String {
     format!(
-        "--prefix={} --enable-bios --enable-uefi-x86-64 --enable-uefi-cd",
+        "--prefix={} --enable-bios --enable-bios-cd --enable-uefi-x86-64 --enable-uefi-cd",
         prefix.display()
     )
 }
@@ -82,12 +82,15 @@ fn should_build(paths: &LiminePaths) -> bool {
     let share = paths.share_dir();
     // ISO build needs these.
     let need_uefi = is_file(&share.join("BOOTX64.EFI")) && is_file(&share.join("limine-uefi-cd.bin"));
+    // If BIOS CD is enabled, keep it present too so `make iso` can make a BIOS/UEFI hybrid.
+    let need_bios_cd = is_file(&share.join("limine-bios-cd.bin"))
+        || is_file(&paths.build_dir.join("bin").join("limine-bios-cd.bin"));
     // Kernel build.rs needs these (installer payload). These are typically installed too.
     let need_bios = is_file(&share.join("limine-bios.sys")) || is_file(&paths.build_dir.join("limine-bios.sys"));
     let need_hdd = is_file(&share.join("limine-bios-hdd.bin"))
         || is_file(&paths.build_dir.join("bin").join("limine-bios-hdd.bin"));
 
-    !(need_uefi && need_bios && need_hdd) || !is_file(&paths.stamp())
+    !(need_uefi && need_bios && need_hdd && need_bios_cd) || !is_file(&paths.stamp())
 }
 
 pub fn ensure_limine(repo_root: &Path) {
