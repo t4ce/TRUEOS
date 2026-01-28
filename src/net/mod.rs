@@ -2,11 +2,12 @@ pub mod adapter;
 pub mod core;
 pub mod device;
 pub mod e1000;
-pub mod html;
 pub mod ring;
 pub mod r8169;
 pub mod tls_socket;
 pub mod vio;
+pub mod tls;
+pub mod tls_demo;
 
 use spin::Mutex;
 

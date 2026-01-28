@@ -815,7 +815,7 @@ fn handle_line(
                             break;
                         }
                     }
-                    let _ = spawner.spawn(crate::net::html::http_get_matrix_job(slot, u));
+                    let _ = spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u));
                     io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }
@@ -851,7 +851,7 @@ fn handle_line(
                             break;
                         }
                     }
-                    let _ = spawner.spawn(crate::tls_demo::tls_demo_matrix_job(slot, h));
+                    let _ = spawner.spawn(crate::net::tls_demo::tls_demo_matrix_job(slot, h));
                     io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
                     refresh_matrix_symbols(io, *term_cols);
                 }

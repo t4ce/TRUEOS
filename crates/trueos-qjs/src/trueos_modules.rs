@@ -575,6 +575,78 @@ fn spec_is_url(spec: &[u8]) -> bool {
 }
 
 const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
+const CDN_DIR: &[u8] = b"/qjs/cdn/";
+
+fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
+    if v == 0 {
+        out.push(b'0');
+        return;
+    }
+    let neg = v < 0;
+    let mut n = if neg { -(v as i64) as u64 } else { v as u64 };
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    while n != 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    if neg {
+        out.push(b'-');
+    }
+    out.extend_from_slice(&buf[i..]);
+}
+
+unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
+    let err = qjs::JS_NewError(ctx);
+    if err.is_exception() {
+        return;
+    }
+    let m = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
+    let _ = qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
+    let _ = qjs::JS_Throw(ctx, err);
+}
+
+unsafe fn read_file_js_malloc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), ()> {
+    let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
+    if need < 0 {
+        return Err(());
+    }
+    let need = need as usize;
+
+    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
+    if buf.is_null() {
+        return Err(());
+    }
+    *buf.add(need) = 0;
+
+    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, need);
+    if got < 0 {
+        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
+        return Err(());
+    }
+    Ok((buf, got as usize))
+}
+
+unsafe fn compile_module_from_buf(
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
+    buf: *const u8,
+    len: usize,
+) -> *mut qjs::JSModuleDef {
+    let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
+    let val = qjs::JS_Eval(ctx, buf as *const c_char, len, module_name, flags);
+
+    if val.is_exception() {
+        return core::ptr::null_mut();
+    }
+    if val.tag != qjs::JS_TAG_MODULE {
+        qjs::js_free_value(ctx, val);
+        return core::ptr::null_mut();
+    }
+
+    val.u.ptr as *mut qjs::JSModuleDef
+}
 
 fn split_url(spec: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     // Returns (scheme_with_slashes, authority, path_with_leading_slash)
@@ -802,40 +874,10 @@ unsafe fn load_url_module(
     module_name: *const c_char,
     url: &[u8],
 ) -> *mut qjs::JSModuleDef {
-    fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
-        if v == 0 {
-            out.push(b'0');
-            return;
-        }
-        let neg = v < 0;
-        let mut n = if neg { -(v as i64) as u64 } else { v as u64 };
-        let mut buf = [0u8; 16];
-        let mut i = buf.len();
-        while n != 0 {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
-        }
-        if neg {
-            out.push(b'-');
-        }
-        out.extend_from_slice(&buf[i..]);
-    }
-
-    unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
-        let err = qjs::JS_NewError(ctx);
-        if err.is_exception() {
-            return;
-        }
-        let m = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
-        let _ = qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
-        let _ = qjs::JS_Throw(ctx, err);
-    }
-
     // Cache path: /qjs/cdn/<hash>.mjs
     let hash = fnv1a64(url);
     let mut cache_path: Vec<u8> = Vec::new();
-    cache_path.extend_from_slice(b"/qjs/cdn/");
+    cache_path.extend_from_slice(CDN_DIR);
     push_hex_u64(&mut cache_path, hash);
     cache_path.extend_from_slice(b".mjs");
 
@@ -844,9 +886,9 @@ unsafe fn load_url_module(
         let mut msg = Vec::new();
         msg.extend_from_slice(b"fetch-to-cache failed rc=");
         push_i32_dec(&mut msg, rc);
-		msg.extend_from_slice(b" (");
-		msg.extend_from_slice(cabi_rc_name(rc));
-		msg.extend_from_slice(b")");
+        msg.extend_from_slice(b" (");
+        msg.extend_from_slice(cabi_rc_name(rc));
+        msg.extend_from_slice(b")");
         msg.extend_from_slice(b" url=");
         msg.extend_from_slice(url);
         msg.extend_from_slice(b" cache=");
@@ -855,52 +897,23 @@ unsafe fn load_url_module(
         return core::ptr::null_mut();
     }
 
-    let need = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), core::ptr::null_mut(), 0);
-    if need < 0 {
-        let mut msg = Vec::new();
-        msg.extend_from_slice(b"read cached module failed url=");
-        msg.extend_from_slice(url);
-        msg.extend_from_slice(b" cache=");
-        msg.extend_from_slice(&cache_path);
-        throw_error(ctx, &msg);
-        return core::ptr::null_mut();
-    }
-    let need = need as usize;
+    let (buf, len) = match read_file_js_malloc(ctx, &cache_path) {
+        Ok(v) => v,
+        Err(()) => {
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"read cached module failed url=");
+            msg.extend_from_slice(url);
+            msg.extend_from_slice(b" cache=");
+            msg.extend_from_slice(&cache_path);
+            throw_error(ctx, &msg);
+            return core::ptr::null_mut();
+        }
+    };
 
-    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
-    if buf.is_null() {
-        return core::ptr::null_mut();
-    }
-    *buf.add(need) = 0;
-
-    let got = trueos_cabi_fs_read_file(cache_path.as_ptr(), cache_path.len(), buf, need);
-    if got < 0 {
-        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-        let mut msg = Vec::new();
-        msg.extend_from_slice(b"read cached module failed url=");
-        msg.extend_from_slice(url);
-        msg.extend_from_slice(b" cache=");
-        msg.extend_from_slice(&cache_path);
-        throw_error(ctx, &msg);
-        return core::ptr::null_mut();
-    }
-    let got = got as usize;
-
-    let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
     // Use the URL as the module filename so relative URL imports resolve correctly.
-    let val = qjs::JS_Eval(ctx, buf as *const c_char, got, module_name, flags);
-
+    let m = compile_module_from_buf(ctx, module_name, buf, len);
     qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-
-    if val.is_exception() {
-        return core::ptr::null_mut();
-    }
-    if val.tag != qjs::JS_TAG_MODULE {
-        qjs::js_free_value(ctx, val);
-        return core::ptr::null_mut();
-    }
-
-    val.u.ptr as *mut qjs::JSModuleDef
+    m
 }
 
 unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -> *mut qjs::JSModuleDef {
@@ -914,57 +927,20 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
         return core::ptr::null_mut();
     }
 
-    let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
-    if need < 0 {
-        // No file found / read error.
-        let mut msg = Vec::new();
-        msg.extend_from_slice(b"read module failed path=");
-        msg.extend_from_slice(path);
-        // Intentionally don't throw if path isn't UTF-8; this is best-effort.
-        let err = qjs::JS_NewError(ctx);
-        if !err.is_exception() {
-            let m = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
-            let _ = qjs::JS_SetPropertyStr(ctx, err, b"message\0".as_ptr() as *const c_char, m);
-            let _ = qjs::JS_Throw(ctx, err);
+    let (buf, len) = match read_file_js_malloc(ctx, path) {
+        Ok(v) => v,
+        Err(()) => {
+            let mut msg = Vec::new();
+            msg.extend_from_slice(b"read module failed path=");
+            msg.extend_from_slice(path);
+            throw_error(ctx, &msg);
+            return core::ptr::null_mut();
         }
-        return core::ptr::null_mut();
-    }
-    let need = need as usize;
+    };
 
-    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
-    if buf.is_null() {
-        return core::ptr::null_mut();
-    }
-    *buf.add(need) = 0;
-
-    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, need);
-    if got < 0 {
-        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-        return core::ptr::null_mut();
-    }
-    let got = got as usize;
-
-    let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
-    let val = qjs::JS_Eval(
-        ctx,
-        buf as *const c_char,
-        got,
-        module_name,
-        flags,
-    );
-
+    let m = compile_module_from_buf(ctx, module_name, buf, len);
     qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-
-    if val.is_exception() {
-        return core::ptr::null_mut();
-    }
-
-    if val.tag != qjs::JS_TAG_MODULE {
-        qjs::js_free_value(ctx, val);
-        return core::ptr::null_mut();
-    }
-
-    val.u.ptr as *mut qjs::JSModuleDef
+    m
 }
 
 /// Install the TRUEOS module loader into a runtime.
