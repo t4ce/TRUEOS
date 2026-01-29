@@ -11,7 +11,8 @@ LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
 
 QEMU_BIN = qemu-system-x86_64
-QEMU_BIOS = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
+# QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
+QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
 QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	-netdev user,id=net1,hostfwd=tcp::4244-:4244 -device rtl8139,netdev=net1 \
@@ -20,7 +21,7 @@ QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netd
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
-QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -116,4 +117,4 @@ QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
 run-installed-uefi: iso-debug
-	@($(QEMU_BIN) -bios $(QEMU_BIOS) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
+	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
