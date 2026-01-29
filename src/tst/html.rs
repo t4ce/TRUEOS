@@ -1,17 +1,15 @@
-use alloc::{boxed::Box, string::String, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
+use alloc::vec::Vec;
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use crate::net::adapter::{
-    register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
-};
+use trueos_v::vnet as api;
+
+use crate::v::net::VNet;
 
 // Reuse the QEMU slirp defaults from `net::adapter`.
 const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
-static HTTP_GET_JOB_SEQ: AtomicU32 = AtomicU32::new(1);
 
 fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
     // Minimal DNS query for <qtype>/IN <host>.
@@ -157,10 +155,6 @@ fn parse_http_status(buf: &[u8]) -> Option<u16> {
     Some((d1 as u16) * 100 + (d2 as u16) * 10 + (d3 as u16))
 }
 
-fn leak_str(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
-
 #[derive(Clone, Debug)]
 struct ParsedHttpUrl {
     host: HString<96>,
@@ -260,21 +254,19 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
         }
     };
 
-    let seq = HTTP_GET_JOB_SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = leak_str(alloc::format!("net-httpget-{}-{}", slot_id + 1, seq));
-    let cmds_name = leak_str(alloc::format!("{}-cmd", owner));
-    let evts_name = leak_str(alloc::format!("{}-evt", owner));
-    let cmds = NetQueue::new_leaked(cmds_name, 128);
-    let events = NetQueue::new_leaked(evts_name, 128);
-    register_app_queues(owner, cmds, events);
+    let Some(net) = VNet::open_primary() else {
+        crate::matrix::push_line(slot_id, "get: disabled (no vnet)");
+        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
+        return;
+    };
 
     let dns_id: u16 = 0xA100u16.wrapping_add(slot_id as u16);
     let udp_port: u16 = 4400u16.wrapping_add(slot_id as u16);
-    let _ = cmds.push(NetCommand::OpenUdp { port: udp_port });
+    let _ = net.submit(api::Command::OpenUdp { port: udp_port });
     crate::matrix::push_line(slot_id, "get: opening udp");
 
-    let mut udp_handle: Option<NetHandle> = None;
-    let mut tcp_handle: Option<NetHandle> = None;
+    let mut udp_handle: Option<api::NetHandle> = None;
+    let mut tcp_handle: Option<api::NetHandle> = None;
     let mut resolved: Option<[u8; 4]> = None;
     let mut sent_dns = false;
     let mut sent_connect = false;
@@ -288,23 +280,26 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
     let deadline = Instant::now() + EmbassyDuration::from_secs(12);
 
     loop {
-        for ev in events.drain(32) {
+        for _ in 0..32 {
+            let Some(ev) = net.pop_event() else { break };
             match ev {
-                NetEvent::Opened { handle, kind } => match kind {
-                    SocketKind::Udp => {
+                api::Event::Opened { handle, kind } => match kind {
+                    api::SocketKind::Udp => {
                         udp_handle = Some(handle);
                         crate::matrix::push_line(slot_id, "get: udp opened");
                     }
-                    SocketKind::Tcp => {
+                    api::SocketKind::Tcp => {
                         tcp_handle = Some(handle);
                         crate::matrix::push_line(slot_id, "get: tcp opened");
                     }
                 },
-                NetEvent::UdpPacket { handle, data, .. } => {
+                api::Event::UdpPacket {
+                    handle, data, ..
+                } => {
                     if udp_handle != Some(handle) {
                         continue;
                     }
-                    match dns_parse_first_a(&data, dns_id) {
+                    match dns_parse_first_a(data.as_slice(), dns_id) {
                         Ok(Some(ip)) => {
                             resolved = Some(ip);
                             let line = alloc::format!(
@@ -326,7 +321,7 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                         }
                     }
                 }
-                NetEvent::TcpEstablished { handle } => {
+                api::Event::TcpEstablished { handle } => {
                     if tcp_handle != Some(handle) {
                         continue;
                     }
@@ -341,16 +336,20 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                             b"\r\nUser-Agent: TRUEOS get\r\nAccept: */*\r\nConnection: close\r\n\r\n",
                         );
                         if let Some(h) = tcp_handle {
-                            let _ = cmds.push(NetCommand::SendTcp { handle: h, data: req });
+                            let _ = net.submit(api::Command::SendTcp {
+                                handle: h,
+                                data: api::ByteBuf::from_slice_trunc(req.as_slice()),
+                            });
                             sent_get = true;
                             crate::matrix::push_line(slot_id, "get: sent http request");
                         }
                     }
                 }
-                NetEvent::TcpData { handle, data } => {
+                api::Event::TcpData { handle, data } => {
                     if tcp_handle != Some(handle) {
                         continue;
                     }
+                    let data = data.as_slice();
                     if rx.len() < MAX_RX {
                         let room = MAX_RX - rx.len();
                         let take = data.len().min(room);
@@ -362,7 +361,7 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                         truncated = true;
                     }
                 }
-                NetEvent::Closed { handle } => {
+                api::Event::Closed { handle } => {
                     if tcp_handle == Some(handle) {
                         // We expect the server to close (Connection: close). Finish now.
                         let hdr_end = find_http_header_end(&rx);
@@ -392,7 +391,7 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                         crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
 
                         if let Some(h) = udp_handle {
-                            let _ = cmds.push(NetCommand::Close { handle: h });
+                            let _ = net.submit(api::Command::Close { handle: h });
                         }
                         return;
                     }
@@ -400,23 +399,23 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                         udp_handle = None;
                     }
                 }
-                NetEvent::Error { msg } => {
+                api::Event::Error { msg } => {
                     let _ = msg;
                 }
-                NetEvent::TcpSent { .. } => {}
+                api::Event::TcpSent { .. } => {}
             }
         }
 
         if !sent_dns {
             if let Some(h) = udp_handle {
                 let dns = dns_query(dns_id, parsed.host.as_str(), 1);
-                let _ = cmds.push(NetCommand::SendUdp {
+                let _ = net.submit(api::Command::SendUdp {
                     handle: h,
-                    remote: NetEndpoint {
+                    remote: api::EndpointV4 {
                         addr: SLIRP_DNS_IP,
                         port: 53,
                     },
-                    data: dns,
+                    data: api::ByteBuf::from_slice_trunc(dns.as_slice()),
                 });
                 sent_dns = true;
                 crate::matrix::push_line(slot_id, "get: sent dns query");
@@ -425,8 +424,8 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
 
         if !sent_connect {
             if let Some(ip) = resolved {
-                let _ = cmds.push(NetCommand::OpenTcpConnect {
-                    remote: NetEndpoint {
+                let _ = net.submit(api::Command::OpenTcpConnect {
+                    remote: api::EndpointV4 {
                         addr: ip,
                         port: parsed.port,
                     },
@@ -440,10 +439,10 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
             crate::matrix::push_line(slot_id, "get: timed out");
             crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
             if let Some(h) = tcp_handle {
-                let _ = cmds.push(NetCommand::Close { handle: h });
+                let _ = net.submit(api::Command::Close { handle: h });
             }
             if let Some(h) = udp_handle {
-                let _ = cmds.push(NetCommand::Close { handle: h });
+                let _ = net.submit(api::Command::Close { handle: h });
             }
             return;
         }
