@@ -305,6 +305,9 @@ pub extern "C" fn kmain() -> ! {
     // Virtual LED multiplexer/manager (best-effort; no-op when the controller is absent).
     let _ = spawner.spawn(v::leds::task());
 
+    // Periodic LED color cycle (drives a virtual LED once per second).
+    let _ = spawner.spawn(v::leds::color_cycle_task());
+
     // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
