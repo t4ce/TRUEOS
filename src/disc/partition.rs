@@ -26,6 +26,11 @@ pub const GPT_TYPE_LINUX_FILESYSTEM_BYTES: [u8; 16] = [
     0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 ];
 
+// BIOS boot partition type GUID.
+// 21686148-6449-6E6F-744E-656564454649
+// On-disk GUID bytes spell "Hah!IdontNeedEFI".
+pub const GPT_TYPE_BIOS_BOOT_PARTITION_BYTES: [u8; 16] = *b"Hah!IdontNeedEFI";
+
 const GPT_DEFAULT_ENTRY_COUNT: u32 = 128;
 const GPT_DEFAULT_ENTRY_SIZE: u32 = 128;
 const GPT_DEFAULT_TABLE_LBA: u64 = 2;
@@ -65,6 +70,7 @@ impl Drop for AlignedBuf {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TrueosBootLayout {
+    pub bios_boot: BlockRange,
     pub esp: BlockRange,
     pub trueos: BlockRange,
 }
@@ -476,7 +482,17 @@ pub fn write_trueos_bootable_gpt_layout(
         return Err(Error::InvalidParam);
     }
 
-    let esp_first = align_up_u64(first_usable, GPT_ALIGN_LBA);
+    // Limine BIOS/GPT requires a dedicated BIOS boot partition (at least 32KiB).
+    // Keep it small but aligned.
+    let bios_boot_blocks: u64 = 128; // 64KiB @ 512B sectors
+
+    let bios_boot_first = align_up_u64(first_usable, GPT_ALIGN_LBA);
+    let bios_boot_last = bios_boot_first
+        .checked_add(bios_boot_blocks)
+        .ok_or(Error::OutOfBounds)?
+        .saturating_sub(1);
+
+    let esp_first = align_up_u64(bios_boot_last.saturating_add(1), GPT_ALIGN_LBA);
     let esp_last = esp_first
         .checked_add(esp_blocks)
         .ok_or(Error::OutOfBounds)?
@@ -484,6 +500,9 @@ pub fn write_trueos_bootable_gpt_layout(
     let trueos_first = align_up_u64(esp_last.saturating_add(1), GPT_ALIGN_LBA);
     let trueos_last = last_usable;
 
+    if bios_boot_first < first_usable || bios_boot_last >= esp_first {
+        return Err(Error::OutOfBounds);
+    }
     if esp_first < first_usable || esp_last >= trueos_first {
         return Err(Error::OutOfBounds);
     }
@@ -518,9 +537,22 @@ pub fn write_trueos_bootable_gpt_layout(
     // Partition entry array
     let mut entries = vec![0u8; table_bytes];
 
-    // Entry 0: ESP
+    // Entry 0: BIOS boot partition (stage 2 area for Limine BIOS/GPT)
     {
         let off = 0usize;
+        entries[off..off + 16].copy_from_slice(&GPT_TYPE_BIOS_BOOT_PARTITION_BYTES);
+        let mut unique = [0u8; 16];
+        fill_guid_bytes(&mut unique);
+        entries[off + 16..off + 32].copy_from_slice(&unique);
+        entries[off + 32..off + 40].copy_from_slice(&bios_boot_first.to_le_bytes());
+        entries[off + 40..off + 48].copy_from_slice(&bios_boot_last.to_le_bytes());
+        entries[off + 48..off + 56].copy_from_slice(&0u64.to_le_bytes());
+        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS BIOS");
+    }
+
+    // Entry 1: ESP
+    {
+        let off = entry_size as usize;
         entries[off..off + 16].copy_from_slice(&GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES);
         let mut unique = [0u8; 16];
         fill_guid_bytes(&mut unique);
@@ -531,9 +563,9 @@ pub fn write_trueos_bootable_gpt_layout(
         write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS ESP");
     }
 
-    // Entry 1: TRUEOS data
+    // Entry 2: TRUEOS data
     {
-        let off = entry_size as usize;
+        let off = (entry_size as usize) * 2;
         entries[off..off + 16].copy_from_slice(&GPT_TYPE_LINUX_FILESYSTEM_BYTES);
         let mut unique = [0u8; 16];
         fill_guid_bytes(&mut unique);
@@ -600,6 +632,7 @@ pub fn write_trueos_bootable_gpt_layout(
     device.flush()?;
 
     Ok(TrueosBootLayout {
+        bios_boot: BlockRange::from_bounds(bios_boot_first, bios_boot_last)?,
         esp: BlockRange::from_bounds(esp_first, esp_last)?,
         trueos: BlockRange::from_bounds(trueos_first, trueos_last)?,
     })

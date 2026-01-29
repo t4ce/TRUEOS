@@ -1,6 +1,8 @@
-use crate::disc::block;
+use alloc::vec::Vec;
 
+use crate::disc::block;
 use crate::disc::{fat32, partition, trueosfs};
+use crate::install_assets;
 
 const PAYLOAD_HDR_MAGIC: &[u8; 8] = b"TRUEPLD0";
 const PAYLOAD_HDR_VERSION: u32 = 1;
@@ -32,6 +34,131 @@ impl Drop for AlignedBuf {
             unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
         }
     }
+}
+
+fn read_blocks_aligned(handle: block::DeviceHandle, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    let bytes = bs.saturating_mul(blocks);
+    let align = info.dma_alignment.max(1) as usize;
+    let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
+    tmp.as_mut_slice().fill(0);
+    handle.read_blocks(lba, tmp.as_mut_slice())?;
+    Ok(tmp.as_mut_slice().to_vec())
+}
+
+fn write_blocks_aligned(handle: block::DeviceHandle, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
+    let info = handle.info();
+    let align = info.dma_alignment.max(1) as usize;
+    let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
+    tmp.as_mut_slice().copy_from_slice(buf);
+    handle.write_blocks(lba, tmp.as_mut_slice())
+}
+
+fn write_bytes_at_lba(handle: block::DeviceHandle, start_lba: u64, bytes: &[u8]) -> Result<(), block::Error> {
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    let blocks_needed: u64 = ((bytes.len() as u64) + (bs as u64) - 1) / (bs as u64);
+    if blocks_needed == 0 {
+        return Ok(());
+    }
+    if start_lba.saturating_add(blocks_needed) > info.block_count {
+        return Err(block::Error::OutOfBounds);
+    }
+
+    let max_blocks = if info.max_transfer_bytes > 0 {
+        ((info.max_transfer_bytes as usize) / bs).max(1)
+    } else {
+        1
+    };
+    let chunk_blocks = core::cmp::min(max_blocks, 256);
+    let chunk_bytes = bs.saturating_mul(chunk_blocks);
+
+    let align = info.dma_alignment.max(1) as usize;
+    let mut tmp = AlignedBuf::new(chunk_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+    let buf = tmp.as_mut_slice();
+
+    let mut lba = start_lba;
+    let mut off: usize = 0;
+    let mut remaining_blocks = blocks_needed;
+    while remaining_blocks > 0 {
+        let this_blocks = core::cmp::min(chunk_blocks as u64, remaining_blocks) as usize;
+        let this_bytes = bs.saturating_mul(this_blocks);
+
+        buf[..this_bytes].fill(0);
+        let take = core::cmp::min(this_bytes, bytes.len().saturating_sub(off));
+        if take > 0 {
+            buf[..take].copy_from_slice(&bytes[off..off + take]);
+        }
+
+        handle.write_blocks(lba, &buf[..this_bytes])?;
+
+        lba = lba.saturating_add(this_blocks as u64);
+        off = off.saturating_add(take);
+        remaining_blocks = remaining_blocks.saturating_sub(this_blocks as u64);
+    }
+    Ok(())
+}
+
+fn install_limine_bios_stages(
+    disk: block::DeviceHandle,
+    stage2_loc_bytes: u64,
+    limine_hdd_bin: &[u8],
+) -> Result<(), block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !disk.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    let info = disk.info();
+    if info.block_size != 512 {
+        return Err(block::Error::NotSupported);
+    }
+    if stage2_loc_bytes % 512 != 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    if limine_hdd_bin.len() < 512 {
+        return Err(block::Error::InvalidParam);
+    }
+
+    // Preserve timestamp and partition table, like limine's own bios-install.
+    let orig0 = read_blocks_aligned(disk, 0, 1)?;
+    if orig0.len() < 512 {
+        return Err(block::Error::InvalidParam);
+    }
+    let mut timestamp = [0u8; 6];
+    timestamp.copy_from_slice(&orig0[218..224]);
+    let mut orig_mbr = [0u8; 70];
+    orig_mbr.copy_from_slice(&orig0[440..510]);
+
+    // Write bootsector (first 512 bytes of limine-bios-hdd.bin) to LBA0.
+    write_blocks_aligned(disk, 0, &limine_hdd_bin[0..512])?;
+
+    // Write remainder of stage2 to the requested location.
+    let stage2 = &limine_hdd_bin[512..];
+    let stage2_lba = stage2_loc_bytes / 512;
+    write_bytes_at_lba(disk, stage2_lba, stage2)?;
+
+    // Patch stage2 location in the bootsector and restore timestamp + partition table.
+    let mut bs0 = read_blocks_aligned(disk, 0, 1)?;
+    if bs0.len() < 512 {
+        return Err(block::Error::InvalidParam);
+    }
+    bs0[0x1a4..0x1a4 + 8].copy_from_slice(&stage2_loc_bytes.to_le_bytes());
+    bs0[218..224].copy_from_slice(&timestamp);
+    bs0[440..510].copy_from_slice(&orig_mbr);
+    write_blocks_aligned(disk, 0, &bs0[..512])?;
+
+    disk.flush()?;
+    Ok(())
 }
 
 pub fn write_image_to_lba0(handle: block::DeviceHandle, image: &[u8]) -> Result<(), block::Error> {
@@ -179,7 +306,6 @@ pub fn install_bootable_uefi_gpt(
     disk: block::DeviceHandle,
     bootx64_efi: &[u8],
     kernel_elf: &[u8],
-    payload_iso: &[u8],
 ) -> Result<(), block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -188,12 +314,58 @@ pub fn install_bootable_uefi_gpt(
         return Err(block::Error::NotSupported);
     }
 
-    // 256 MiB ESP: enough for BOOTX64 + kernel + payload.
-    let layout = partition::write_trueos_bootable_gpt_layout(disk, 256)?;
+    // Size ESP to actually fit the files (+ slack), rather than hardcoding 256MiB.
+    // We keep a minimum to avoid pathological tiny ESPs.
+    // Installed TRUEOS does not need the installer payload on the ESP.
+    let esp_bytes_needed = (bootx64_efi.len() as u64)
+        .saturating_add(kernel_elf.len() as u64)
+        .saturating_add(64 * 1024) // limine.conf + dir entries
+        .saturating_add(16 * 1024 * 1024); // slack for FAT tables/rounding
 
-    // Create in-memory partition devices matching the written ranges.
+    let mut esp_mib = (esp_bytes_needed + (1024 * 1024 - 1)) / (1024 * 1024);
+    // Round up to 32MiB increments for nicer alignment.
+    esp_mib = ((esp_mib + 31) / 32) * 32;
+    esp_mib = core::cmp::max(64, esp_mib);
+
+    // If this disk already contains a TRUEOSFS partition inside a GPT layout, preserve it.
+    // We only refresh the ESP boot files/config and (re)install Limine BIOS stages.
+    let existing_trueosfs = trueosfs::locate(disk)?;
+    let existing_parts = partition::read_gpt_partitions(disk).ok();
+
+    let mut preserve_trueosfs = false;
+    let mut bios_boot_start_lba: Option<u64> = None;
+
+    // Create in-memory partition devices matching the intended ranges.
     let parent_id = disk.id();
     let parent_info = disk.info();
+
+    let (esp_range, trueos_range) = if let (Some(loc), Some(parts)) = (existing_trueosfs, existing_parts) {
+        let esp = parts
+            .iter()
+            .find(|p| p.type_guid.as_bytes() == &partition::GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES)
+            .map(|p| p.range);
+        let trueos = parts
+            .iter()
+            .find(|p| p.range.first_lba() == loc.super_lba)
+            .map(|p| p.range);
+        bios_boot_start_lba = parts
+            .iter()
+            .find(|p| p.type_guid.as_bytes() == &partition::GPT_TYPE_BIOS_BOOT_PARTITION_BYTES)
+            .map(|p| p.range.first_lba());
+
+        if let (Some(esp), Some(trueos)) = (esp, trueos) {
+            preserve_trueosfs = true;
+            (esp, trueos)
+        } else {
+            let layout = partition::write_trueos_bootable_gpt_layout(disk, esp_mib)?;
+            bios_boot_start_lba = Some(layout.bios_boot.first_lba());
+            (layout.esp, layout.trueos)
+        }
+    } else {
+        let layout = partition::write_trueos_bootable_gpt_layout(disk, esp_mib)?;
+        bios_boot_start_lba = Some(layout.bios_boot.first_lba());
+        (layout.esp, layout.trueos)
+    };
 
     let esp_handle = {
         let mut d = block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
@@ -202,7 +374,7 @@ pub fn install_bootable_uefi_gpt(
         if !parent_info.writable {
             d = d.mark_read_only();
         }
-        let dev = partition::PartitionBlockDevice::new(disk, layout.esp);
+        let dev = partition::PartitionBlockDevice::new(disk, esp_range);
         block::register_device(d, dev)
     };
 
@@ -213,7 +385,7 @@ pub fn install_bootable_uefi_gpt(
         if !parent_info.writable {
             d = d.mark_read_only();
         }
-        let dev = partition::PartitionBlockDevice::new(disk, layout.trueos);
+        let dev = partition::PartitionBlockDevice::new(disk, trueos_range);
         block::register_device(d, dev)
     };
 
@@ -225,22 +397,32 @@ default_entry: 1\n\
 /TRUEOS\n\
 protocol: limine\n\
 kernel_path: boot():/TRUEOS.ELF\n\
-resolution: 1920x1080x32\n\
-module_path: boot():/install/PAYLOAD.ISO\n\
-module_string: trueos.install.payload\n\n";
+resolution: 1920x1080x32\n\n";
+
+    let limine_bios_sys = install_assets::limine_bios_sys();
+    let limine_hdd_bin = install_assets::limine_bios_hdd_bin();
 
     fat32::format_and_populate_esp_fat32(
         esp_handle,
         fat32::EspImage {
             bootx64_efi,
             kernel_elf,
-            payload_iso,
+            limine_bios_sys: Some(&limine_bios_sys),
+            payload_iso: None,
             limine_conf,
         },
     )?;
 
-    // Format TRUEOSFS at the start of the TRUEOS data partition.
-    trueosfs::format_blank_partition(trueos_handle)?;
+    // Install Limine BIOS stages (MBR + stage2), using a BIOS boot partition on GPT.
+    if let Some(start_lba) = bios_boot_start_lba {
+        let stage2_loc_bytes = start_lba.saturating_mul(512);
+        install_limine_bios_stages(disk, stage2_loc_bytes, &limine_hdd_bin)?;
+    }
+
+    // Only format TRUEOSFS on first install. Re-installs preserve existing TRUEOSFS content.
+    if !preserve_trueosfs {
+        trueosfs::format_blank_partition(trueos_handle)?;
+    }
 
     Ok(())
 }
