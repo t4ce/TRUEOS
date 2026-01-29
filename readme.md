@@ -18,9 +18,6 @@ cargo outdated -R
 cargo upgrade
 cargo update
 
-truncate -s 4G nvme.img
-
-
 konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 4245; stty sane'
 
 check disc files after install
@@ -32,9 +29,6 @@ check disc files after install
 # PASS IN USB DEVICE
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger -s usb --action=add
-
-NOTE: The "RUN+=...unbind" lines in 99-trueos-usb.rules will intentionally unbind the host driver.
-That can make hubs show up as Driver=[none]/0p in lsusb -t (host won't enumerate devices behind them).
 
 # VFIO USB CONTROLLER (persistent across reboot)
 sudo bash -lc '
@@ -80,14 +74,9 @@ ConWhite 	FF_FF_FF
 
 ## QuickJS filesystem modules (/qjs)
 
-# If `disk.img` is a partitioned MBR image, the FAT partition typically starts at LBA 2048.
-# If it's a FAT "superfloppy", the filesystem starts at offset 0.
-# Auto-detect the correct offset (bytes):
-
 # Verify:
 # mdir -i disk.img@@$((2048*512)) ::
 
-rm -f disk.img && truncate -s 1G disk.img
 mformat -i disk.img -F -v TRUEOS ::
 mmd -i disk.img ::/qjs
 # NOTE: `/qjs/cdn` is created automatically on first URL import (cache write).
