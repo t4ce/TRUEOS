@@ -273,10 +273,6 @@ impl Fs {
         Err(FsError::Read(UsbFsReadError::UsbmsNotFound))
     }
 
-    /// Create a directory path recursively (mkdir -p semantics).
-    ///
-    /// Note: errors are reported via `FsError::Write` to avoid introducing a
-    /// separate error category for now.
     #[inline]
     pub fn create_dir_all(path: &str) -> Result<(), FsError> {
         if pick_trueosfs_root().is_some() {
@@ -314,46 +310,6 @@ impl Fs {
 // These caps exist to keep memory usage bounded for filesystem operations.
 // Some boot-cached assets (e.g. pci.ids) are ~1.6 MiB, so keep this comfortably above that.
 const MAX_WRITE_BYTES: usize = 4 * 1024 * 1024;
-
-// Legacy USBMS/FAT helpers are intentionally stubbed out now.
-// TRUEOSFS is the permanent backend for file operations.
-pub fn read_usbms_file(_path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError> {
-    Err(UsbFsReadError::UsbmsNotFound)
-}
-
-pub fn usbms_path_exists(_path: &str) -> Result<bool, UsbFsReadError> {
-    Err(UsbFsReadError::UsbmsNotFound)
-}
-
-pub fn write_usbms_file(_path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
-    if bytes.len() > MAX_WRITE_BYTES {
-        return Err(UsbFsWriteError::TooLarge);
-    }
-    Err(UsbFsWriteError::UsbmsNotFound)
-}
-
-pub fn append_usbms_file(_path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
-    if bytes.len() > MAX_WRITE_BYTES {
-        return Err(UsbFsWriteError::TooLarge);
-    }
-    Err(UsbFsWriteError::UsbmsNotFound)
-}
-
-pub fn create_usbms_dir_all(_path: &str) -> Result<(), UsbFsWriteError> {
-    Err(UsbFsWriteError::UsbmsNotFound)
-}
-
-pub fn rename_usbms_path(_src_path: &str, _dst_path: &str) -> Result<(), UsbFsRenameError> {
-    Err(UsbFsRenameError::UsbmsNotFound)
-}
-
-pub fn list_usbms_dir(_path: &str) -> Result<String, UsbFsListDirError> {
-    Err(UsbFsListDirError::UsbmsNotFound)
-}
-
-pub fn remove_usbms_path(_path: &str) -> Result<(), UsbFsRemoveError> {
-    Err(UsbFsRemoveError::UsbmsNotFound)
-}
 
 async fn build_tree_for_device_async(
     tree: &mut FileTree,
