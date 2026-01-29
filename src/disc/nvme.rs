@@ -665,9 +665,9 @@ impl NvmeController {
                 nsid,
                 slba,
                 nlb,
+                cpl.status,
                 cpl.status_type(),
                 cpl.status_code(),
-                cpl.status
             );
             return Err(block::Error::Io);
         }
@@ -730,13 +730,12 @@ impl block::BlockDevice for NvmeBlockDevice {
             let (dma_phys, dma_virt) = dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
             unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
-            let ok = self
-                .ctrl
-                .io_rw(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                .is_ok();
-            if !ok {
+            if let Err(e) =
+                self.ctrl
+                    .io_rw(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+            {
                 dma::dealloc(dma_virt, bytes_here);
-                return Err(block::Error::Io);
+                return Err(e);
             }
 
             unsafe {
