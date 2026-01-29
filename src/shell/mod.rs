@@ -184,9 +184,9 @@ fn print_install_disk_table(io: &dyn ShellIo) {
             continue;
         }
         let info = h.info();
-        let status = crate::disc::detect::detect_physical_disk(h);
+        let (status, err) = crate::disc::detect::detect_physical_disk_detail(h);
         io.write_fmt(format_args!(
-            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
             info.id.raw(),
             info.id,
             info.block_count,
@@ -194,6 +194,13 @@ fn print_install_disk_table(io: &dyn ShellIo) {
             info.writable,
             info.label,
             status.short(),
+            match (&status, err) {
+                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                    // Keep it short; this is mainly for debugging why detection fails.
+                    alloc::format!(" (err={:?})", e)
+                }
+                _ => alloc::string::String::new(),
+            }
         ));
     }
 
@@ -304,8 +311,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
                             match crate::disc::trueosfs::format_blank(handle) {
                                 Ok(()) => {
-                                    let status = crate::disc::detect::detect_physical_disk(handle);
-                                    io.write_fmt(format_args!("format: ok (status now: {})\r\n", status.short()));
+                                    let (status, err) = crate::disc::detect::detect_physical_disk_detail(handle);
+                                    io.write_fmt(format_args!(
+                                        "format: ok (status now: {}{})\r\n",
+                                        status.short(),
+                                        match (&status, err) {
+                                            (crate::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
+                                            _ => alloc::string::String::new(),
+                                        }
+                                    ));
                                 }
                                 Err(e) => {
                                     io.write_fmt(format_args!("format: failed ({:?})\r\n", e));
@@ -379,24 +393,23 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 "\r\ninstall: target status: {}\r\n",
                                 status.short()
                             ));
-                            io.write_str("install: DANGER: this will REPARTITION and FORMAT the disk\r\n");
-                            io.write_str("install: creating GPT + ESP + TRUEOSFS and copying boot files\r\n");
-                            io.write_fmt(format_args!(
-                                "install: BOOTX64.EFI={} bytes, TRUEOS.elf={} bytes\r\n",
-                                bootx64.len(),
-                                kernel.len()
-                            ));
-
-                            match crate::disc::install::install_bootable_uefi_gpt(handle, bootx64, kernel) {
-                                Ok(()) => {
-                                    let status = crate::disc::detect::detect_physical_disk(handle);
-                                    io.write_fmt(format_args!(
-                                        "install: ok (status now: {})\r\n",
-                                        status.short()
+                            match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", raw_id).as_str()) {
+                                Some(slot) => {
+                                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
+                                        slot,
+                                        handle,
+                                        bootx64,
+                                        kernel,
                                     ));
+                                    io.write_fmt(format_args!(
+                                        "install: started §{} (dump logs with § {})\r\n",
+                                        slot + 1,
+                                        slot + 1
+                                    ));
+                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
                                 }
-                                Err(e) => {
-                                    io.write_fmt(format_args!("install: failed ({:?})\r\n", e));
+                                None => {
+                                    io.write_str("install: matrix full\r\n");
                                 }
                             }
 

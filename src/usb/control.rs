@@ -29,6 +29,23 @@ pub(crate) fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -
     }
 }
 
+pub(crate) fn setup_get_descriptor_indexed(
+    desc_type: u8,
+    desc_index: u8,
+    w_index: u16,
+    length: u16,
+) -> Trb {
+    // bmRequestType=0x80 (IN|Standard|Device), bRequest=0x06 (GET_DESCRIPTOR)
+    // wValue = (type << 8) | index, wIndex = caller-supplied (e.g., interface number)
+    let w_value = ((desc_type as u16) << 8) | (desc_index as u16);
+    Trb {
+        d0: (0x80u32) | (0x06u32 << 8) | ((w_value as u32) << 16),
+        d1: (w_index as u32) | ((length as u32) << 16),
+        d2: 8 | (2 << 16),          // 8-byte setup, TRT=IN
+        d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
+    }
+}
+
 pub(crate) fn setup_set_address(address: u8) -> Trb {
     // bmRequestType=0x00 (OUT|Standard|Device), bRequest=0x05 (SET_ADDRESS)
     Trb {

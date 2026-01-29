@@ -1137,6 +1137,22 @@ fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> 
 }
 
 fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let sub = _args
+        .and_then(|a| a.get(0))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if sub == "dump" {
+        ctx.io.write_str(
+            "usb: targeted descriptor dump is printed automatically when an unclaimed device matches vid=0x0416 pid=0xA125 (JGINYUE 'LED SheBei').\r\n",
+        );
+        ctx.io.write_str(
+            "usb: replug the device (or reboot) to re-trigger enumeration.\r\n",
+        );
+        return super::CommandAction::None;
+    }
+
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
         ctx.io.write_str("usb: no xhci controllers\r\n");

@@ -545,6 +545,9 @@ pub fn format_and_populate_esp_fat32(
             let take = core::cmp::min(bytes_per_cluster, remaining.len());
             write_cluster(c, &remaining[..take])?;
             remaining = &remaining[take..];
+
+            // Formatting/writing the ESP can take a while; keep the shell responsive.
+            crate::time::poll_executor();
         }
         Ok(())
     };
