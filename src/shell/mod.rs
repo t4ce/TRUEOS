@@ -355,16 +355,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
                             let status = crate::disc::detect::detect_physical_disk(handle);
 
-                            let Some(payload) = crate::limine::install_payload_bytes() else {
-                                io.write_str("\r\ninstall: payload module missing\r\n");
-                                io.write_str(
-                                    "install: expected Limine module_string trueos.install.payload\r\n",
-                                );
-                                install_wizard = None;
-                                write_prompt_for_state(io, pending_action, install_wizard);
-                                continue;
-                            };
-
                             let Some(kernel) = crate::limine::install_kernel_bytes() else {
                                 io.write_str("\r\ninstall: kernel module missing\r\n");
                                 io.write_str(
@@ -392,13 +382,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("install: DANGER: this will REPARTITION and FORMAT the disk\r\n");
                             io.write_str("install: creating GPT + ESP + TRUEOSFS and copying boot files\r\n");
                             io.write_fmt(format_args!(
-                                "install: BOOTX64.EFI={} bytes, TRUEOS.elf={} bytes, payload={} bytes\r\n",
+                                "install: BOOTX64.EFI={} bytes, TRUEOS.elf={} bytes\r\n",
                                 bootx64.len(),
-                                kernel.len(),
-                                payload.len()
+                                kernel.len()
                             ));
 
-                            match crate::disc::install::install_bootable_uefi_gpt(handle, bootx64, kernel, payload) {
+                            match crate::disc::install::install_bootable_uefi_gpt(handle, bootx64, kernel) {
                                 Ok(()) => {
                                     let status = crate::disc::detect::detect_physical_disk(handle);
                                     io.write_fmt(format_args!(

@@ -66,6 +66,65 @@ fn dir_entry(name: [u8; 11], attr: u8, first_cluster: u32, size: u32) -> [u8; 32
     e
 }
 
+fn lfn_checksum(short_name: &[u8; 11]) -> u8 {
+    // Standard VFAT checksum over 8.3 name.
+    let mut sum: u8 = 0;
+    for &b in short_name.iter() {
+        sum = (((sum & 1) << 7) | (sum >> 1)).wrapping_add(b);
+    }
+    sum
+}
+
+fn lfn_entry(sequence: u8, checksum: u8, chars: &[u16; 13]) -> [u8; 32] {
+    let mut e = [0u8; 32];
+    e[0] = sequence;
+    e[11] = 0x0F; // LFN attribute
+    e[12] = 0x00; // type
+    e[13] = checksum;
+    // e[26..28] first cluster low = 0
+
+    let mut put = |dst: &mut [u8], src: &[u16]| {
+        for (i, w) in src.iter().enumerate() {
+            let b = w.to_le_bytes();
+            dst[i * 2] = b[0];
+            dst[i * 2 + 1] = b[1];
+        }
+    };
+
+    put(&mut e[1..1 + 10], &chars[0..5]);
+    put(&mut e[14..14 + 12], &chars[5..11]);
+    put(&mut e[28..28 + 4], &chars[11..13]);
+    e
+}
+
+fn lfn_entries_for_ascii_name(long_name: &str, short_name: &[u8; 11]) -> Vec<[u8; 32]> {
+    // Directory order is: last LFN entry first (with 0x40 flag), down to 1, then the short entry.
+    let checksum = lfn_checksum(short_name);
+    let mut utf16: Vec<u16> = long_name.as_bytes().iter().map(|&b| b as u16).collect();
+    utf16.push(0u16); // NUL terminator
+
+    let total = utf16.len();
+    let entries = (total + 12) / 13;
+
+    let mut out = Vec::new();
+    for i in (1..=entries).rev() {
+        let start = (i - 1) * 13;
+        let end = core::cmp::min(start + 13, total);
+        let mut chunk = [0xFFFFu16; 13];
+        let slice = &utf16[start..end];
+        for (j, &w) in slice.iter().enumerate() {
+            chunk[j] = w;
+        }
+
+        let mut seq = i as u8;
+        if i == entries {
+            seq |= 0x40;
+        }
+        out.push(lfn_entry(seq, checksum, &chunk));
+    }
+    out
+}
+
 fn sectors_for_clusters(clusters: u32, sectors_per_cluster: u32) -> u32 {
     clusters.saturating_mul(sectors_per_cluster)
 }
@@ -73,6 +132,9 @@ fn sectors_for_clusters(clusters: u32, sectors_per_cluster: u32) -> u32 {
 fn clusters_for_bytes(bytes: usize, sectors_per_cluster: u32) -> u32 {
     let bytes_per_cluster = (sectors_per_cluster as usize).saturating_mul(512);
     if bytes_per_cluster == 0 {
+        return 0;
+    }
+    if bytes == 0 {
         return 0;
     }
     let c = (bytes + bytes_per_cluster - 1) / bytes_per_cluster;
@@ -113,10 +175,64 @@ fn compute_fat32_layout(total_sectors: u32, sectors_per_cluster: u32) -> Option<
     None
 }
 
+fn pick_fat32_geometry(
+    total_sectors: u32,
+    bootx64_len: usize,
+    kernel_len: usize,
+    bios_sys_len: usize,
+    payload_len: usize,
+    limine_conf_len: usize,
+) -> Option<(u32, u16, u32, u32)> {
+    // Return (sectors_per_cluster, reserved_sectors, fat_sectors, first_data_sector)
+    // Try small clusters first so we can support smaller ESPs while still being FAT32.
+    const CANDIDATES: [u32; 7] = [1, 2, 4, 8, 16, 32, 64];
+
+    for spc in CANDIDATES {
+        let Some((reserved, fat_sectors, first_data_sector)) = compute_fat32_layout(total_sectors, spc) else {
+            continue;
+        };
+
+        if first_data_sector >= total_sectors {
+            continue;
+        }
+        let data_sectors = total_sectors - first_data_sector;
+        let total_clusters = data_sectors / spc;
+        if total_clusters < 65_536 {
+            continue;
+        }
+
+        // Directory clusters: root + EFI + BOOT + install.
+        let dir_clusters: u32 = 4;
+        let need_bootx64 = clusters_for_bytes(bootx64_len, spc);
+        let need_kernel = clusters_for_bytes(kernel_len, spc);
+        let need_bios = clusters_for_bytes(bios_sys_len, spc);
+        let need_payload = clusters_for_bytes(payload_len, spc);
+        let need_conf = clusters_for_bytes(limine_conf_len, spc);
+        let slack: u32 = 32;
+
+        // Cluster numbers start at 2; usable cluster count is (total_clusters).
+        // We use a simple sequential allocation scheme.
+        let needed = dir_clusters
+            .saturating_add(need_bootx64)
+            .saturating_add(need_kernel)
+            .saturating_add(need_bios)
+            .saturating_add(need_conf)
+            .saturating_add(need_payload)
+            .saturating_add(slack);
+
+        if needed < total_clusters {
+            return Some((spc, reserved, fat_sectors, first_data_sector));
+        }
+    }
+
+    None
+}
+
 pub struct EspImage<'a> {
     pub bootx64_efi: &'a [u8],
     pub kernel_elf: &'a [u8],
-    pub payload_iso: &'a [u8],
+    pub limine_bios_sys: Option<&'a [u8]>,
+    pub payload_iso: Option<&'a [u8]>,
     pub limine_conf: &'a [u8],
 }
 
@@ -124,7 +240,8 @@ pub struct EspImage<'a> {
 /// - /EFI/BOOT/BOOTX64.EFI
 /// - /TRUEOS.ELF
 /// - /limine.conf
-/// - /install/PAYLOAD.ISO
+/// - /limine-bios.sys (optional, but required for BIOS boot)
+/// - /install/PAYLOAD.ISO (optional)
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
 pub fn format_and_populate_esp_fat32(
@@ -145,11 +262,18 @@ pub fn format_and_populate_esp_fat32(
     }
 
     let total_sectors = core::cmp::min(info.block_count, u32::MAX as u64) as u32;
-    let sectors_per_cluster: u32 = 8; // 4KiB clusters
 
-    let Some((reserved, fat_sectors, first_data_sector)) =
-        compute_fat32_layout(total_sectors, sectors_per_cluster)
-    else {
+    let bios_sys_len = image.limine_bios_sys.map_or(0, |p| p.len());
+    let payload_len = image.payload_iso.map_or(0, |p| p.len());
+    let limine_conf_len = image.limine_conf.len();
+    let Some((sectors_per_cluster, reserved, fat_sectors, first_data_sector)) = pick_fat32_geometry(
+        total_sectors,
+        image.bootx64_efi.len(),
+        image.kernel_elf.len(),
+        bios_sys_len,
+        payload_len,
+        limine_conf_len,
+    ) else {
         return Err(block::Error::OutOfBounds);
     };
 
@@ -175,7 +299,11 @@ pub fn format_and_populate_esp_fat32(
     let conf_start = next_cluster;
     next_cluster = next_cluster.saturating_add(conf_clusters);
 
-    let payload_clusters = clusters_for_bytes(image.payload_iso.len(), sectors_per_cluster);
+    let bios_sys_clusters = clusters_for_bytes(bios_sys_len, sectors_per_cluster);
+    let bios_sys_start = next_cluster;
+    next_cluster = next_cluster.saturating_add(bios_sys_clusters);
+
+    let payload_clusters = clusters_for_bytes(payload_len, sectors_per_cluster);
     let payload_start = next_cluster;
     next_cluster = next_cluster.saturating_add(payload_clusters);
 
@@ -221,6 +349,7 @@ pub fn format_and_populate_esp_fat32(
     chain(bootx64_start, bootx64_clusters);
     chain(kernel_start, kernel_clusters);
     chain(conf_start, conf_clusters);
+    chain(bios_sys_start, bios_sys_clusters);
     chain(payload_start, payload_clusters);
 
     // --- Write reserved region: boot sector, FSInfo, backup ---
@@ -254,7 +383,7 @@ pub fn format_and_populate_esp_fat32(
         vol_id = 0x12345678u32.to_le_bytes();
     }
     boot[67..71].copy_from_slice(&vol_id);
-    boot[71..82].copy_from_slice(b"TRUEOS ESP  ");
+    boot[71..82].copy_from_slice(b"TRUEOS ESP ");
     boot[82..90].copy_from_slice(b"FAT32   ");
     boot[510] = 0x55;
     boot[511] = 0xAA;
@@ -314,15 +443,40 @@ pub fn format_and_populate_esp_fat32(
     {
         let mut dir = [0u8; 512];
         let mut off = 0;
-        for e in [
-            dir_entry(name83("EFI", ""), 0x10, cl_efi, 0),
-            dir_entry(name83("INSTALL", ""), 0x10, cl_install, 0),
-            dir_entry(name83("TRUEOS", "ELF"), 0x20, kernel_start, image.kernel_elf.len() as u32),
-            dir_entry(name83("LIMINE", "CONF"), 0x20, conf_start, image.limine_conf.len() as u32),
-        ] {
-            dir[off..off + 32].copy_from_slice(&e);
-            off += 32;
+
+        let mut push = |e: &[u8; 32]| {
+            if off + 32 <= dir.len() {
+                dir[off..off + 32].copy_from_slice(e);
+                off += 32;
+            }
+        };
+
+        push(&dir_entry(name83("EFI", ""), 0x10, cl_efi, 0));
+        push(&dir_entry(name83("INSTALL", ""), 0x10, cl_install, 0));
+        push(&dir_entry(
+            name83("TRUEOS", "ELF"),
+            0x20,
+            kernel_start,
+            image.kernel_elf.len() as u32,
+        ));
+        push(&dir_entry(
+            name83("LIMINE", "CONF"),
+            0x20,
+            conf_start,
+            image.limine_conf.len() as u32,
+        ));
+
+        if let Some(bios_sys) = image.limine_bios_sys {
+            if !bios_sys.is_empty() {
+                // Limine expects this filename; use VFAT LFN entries with a deterministic 8.3 alias.
+                let short = name83("LIMINEBI", "SYS");
+                for lfn in lfn_entries_for_ascii_name("limine-bios.sys", &short) {
+                    push(&lfn);
+                }
+                push(&dir_entry(short, 0x20, bios_sys_start, bios_sys.len() as u32));
+            }
         }
+
         write_cluster(cl_root, &dir)?;
     }
 
@@ -368,15 +522,17 @@ pub fn format_and_populate_esp_fat32(
         for e in [
             dir_entry(name83(".", ""), 0x10, cl_install, 0),
             dir_entry(name83("..", ""), 0x10, cl_root, 0),
-            dir_entry(
-                name83("PAYLOAD", "ISO"),
-                0x20,
-                payload_start,
-                image.payload_iso.len() as u32,
-            ),
         ] {
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
+        }
+
+        if let Some(payload) = image.payload_iso {
+            if !payload.is_empty() {
+                let e = dir_entry(name83("PAYLOAD", "ISO"), 0x20, payload_start, payload.len() as u32);
+                dir[off..off + 32].copy_from_slice(&e);
+                off += 32;
+            }
         }
         write_cluster(cl_install, &dir)?;
     }
@@ -396,7 +552,16 @@ pub fn format_and_populate_esp_fat32(
     write_file(bootx64_start, bootx64_clusters, image.bootx64_efi)?;
     write_file(kernel_start, kernel_clusters, image.kernel_elf)?;
     write_file(conf_start, conf_clusters, image.limine_conf)?;
-    write_file(payload_start, payload_clusters, image.payload_iso)?;
+    if let Some(bios_sys) = image.limine_bios_sys {
+        if !bios_sys.is_empty() {
+            write_file(bios_sys_start, bios_sys_clusters, bios_sys)?;
+        }
+    }
+    if let Some(payload) = image.payload_iso {
+        if !payload.is_empty() {
+            write_file(payload_start, payload_clusters, payload)?;
+        }
+    }
 
     esp.flush()?;
     Ok(())

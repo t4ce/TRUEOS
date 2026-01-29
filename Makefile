@@ -4,8 +4,6 @@ KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
-ISO_PAYLOAD_DIR := bld/iso-payloadroot
-PAYLOAD_ISO_PATH := bld/trueos-payload.iso
 
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
@@ -30,6 +28,7 @@ QEMU_USB_FLAGS = \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost0 \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0 \
+	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,id=usbpendrive0 \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk0 \
 	-device usb-storage,drive=usbdisk0,bus=xhci.0,port=5,id=usbms0 \
 	# -drive file=disk.img,if=none,format=raw,id=nvme0 \
@@ -37,48 +36,19 @@ QEMU_USB_FLAGS = \
 
 QEMU += $(QEMU_COMMON_FLAGS) $(QEMU_USB_FLAGS)
 
-.PHONY: kernel payload-iso iso iso-debug iso-release run dbg
-
 kernel:
-	@# Limine is ensured by Cargo build.rs (see build.rs + trueos-limloader).
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
 
-payload-iso: kernel
-	rm -rf $(ISO_PAYLOAD_DIR)
-	rm -f $(PAYLOAD_ISO_PATH)
-	mkdir -p $(ISO_PAYLOAD_DIR)/EFI/BOOT
-	cp $(KERNEL_BIN) $(ISO_PAYLOAD_DIR)/TRUEOS.elf
-	@# Reuse the main Limine config, but remove installer-only module directives
-	@# so the payload image doesn't try to load itself.
-	grep -v -E '^(module_path:|module_string:)' $(LIMINE_CFG) > $(ISO_PAYLOAD_DIR)/limine.conf
-	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_PAYLOAD_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_PAYLOAD_DIR)/
-	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_PAYLOAD_DIR)/
-	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_PAYLOAD_DIR)/
-	xorriso -as mkisofs \
-		-iso-level 3 -full-iso9660-filenames \
-		-R \
-		-r \
-		-J -joliet-long \
-		-b limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
-		--efi-boot limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		-o $(PAYLOAD_ISO_PATH) $(ISO_PAYLOAD_DIR)
-	@# Make the payload ISO BIOS-bootable as a hybrid image (dd-able to USB/disk).
-	$(LIMINE_PREFIX)/bin/limine bios-install $(PAYLOAD_ISO_PATH)
-
-iso: kernel payload-iso
+iso: kernel
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
-	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT $(ISO_BOOT_DIR)/install
+	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(KERNEL_BIN) $(ISO_BOOT_DIR)/TRUEOS.elf
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_SHARE)/limine-bios.sys $(ISO_BOOT_DIR)/
 	cp $(LIMINE_SHARE)/limine-bios-cd.bin $(ISO_BOOT_DIR)/
 	cp $(LIMINE_SHARE)/limine-uefi-cd.bin $(ISO_BOOT_DIR)/
-	cp $(PAYLOAD_ISO_PATH) $(ISO_BOOT_DIR)/install/trueos-payload.iso
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
