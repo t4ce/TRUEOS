@@ -38,10 +38,18 @@ QEMU_USB_FLAGS = \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 
+images: disk.img nvme.img
+
+disk.img: 
+	truncate -s $(1G) $@
+	
+nvme.img: 
+	truncate -s $(1G) $@
+
 kernel:
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
 
-iso: kernel
+iso: kernel images
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
@@ -92,9 +100,6 @@ run: iso-debug
 
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
-
-
-
 
 # Boot the installed disk image directly (no installer ISO).
 # Useful for validating GPT+ESP+Limine stage installation.
