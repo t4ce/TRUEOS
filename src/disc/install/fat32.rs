@@ -194,7 +194,6 @@ fn pick_fat32_geometry(
     total_sectors: u32,
     bootx64_len: usize,
     kernel_len: usize,
-    bios_sys_len: usize,
     payload_len: usize,
     limine_conf_len: usize,
 ) -> Option<(u32, u16, u32, u32)> {
@@ -220,7 +219,6 @@ fn pick_fat32_geometry(
         let dir_clusters: u32 = 4;
         let need_bootx64 = clusters_for_bytes(bootx64_len, spc);
         let need_kernel = clusters_for_bytes(kernel_len, spc);
-        let need_bios = clusters_for_bytes(bios_sys_len, spc);
         let need_payload = clusters_for_bytes(payload_len, spc);
         let need_conf = clusters_for_bytes(limine_conf_len, spc);
         let slack: u32 = 32;
@@ -230,7 +228,6 @@ fn pick_fat32_geometry(
         let needed = dir_clusters
             .saturating_add(need_bootx64)
             .saturating_add(need_kernel)
-            .saturating_add(need_bios)
             .saturating_add(need_conf)
             .saturating_add(need_payload)
             .saturating_add(slack);
@@ -246,7 +243,6 @@ fn pick_fat32_geometry(
 pub struct EspImage<'a> {
     pub bootx64_efi: &'a [u8],
     pub kernel_elf: &'a [u8],
-    pub limine_bios_sys: Option<&'a [u8]>,
     pub payload_iso: Option<&'a [u8]>,
     pub limine_conf: &'a [u8],
 }
@@ -255,7 +251,6 @@ pub struct EspImage<'a> {
 /// - /EFI/BOOT/BOOTX64.EFI
 /// - /TRUEOS.ELF
 /// - /limine.conf
-/// - /limine-bios.sys (optional, but required for BIOS boot)
 /// - /install/PAYLOAD.ISO (optional)
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
@@ -286,14 +281,12 @@ pub fn format_and_populate_esp_fat32_with_log(
 
     let total_sectors = core::cmp::min(info.block_count, u32::MAX as u64) as u32;
 
-    let bios_sys_len = image.limine_bios_sys.map_or(0, |p| p.len());
     let payload_len = image.payload_iso.map_or(0, |p| p.len());
     let limine_conf_len = image.limine_conf.len();
     let Some((sectors_per_cluster, reserved, fat_sectors, first_data_sector)) = pick_fat32_geometry(
         total_sectors,
         image.bootx64_efi.len(),
         image.kernel_elf.len(),
-        bios_sys_len,
         payload_len,
         limine_conf_len,
     ) else {
@@ -321,10 +314,6 @@ pub fn format_and_populate_esp_fat32_with_log(
     let conf_clusters = clusters_for_bytes(image.limine_conf.len(), sectors_per_cluster);
     let conf_start = next_cluster;
     next_cluster = next_cluster.saturating_add(conf_clusters);
-
-    let bios_sys_clusters = clusters_for_bytes(bios_sys_len, sectors_per_cluster);
-    let bios_sys_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(bios_sys_clusters);
 
     let payload_clusters = clusters_for_bytes(payload_len, sectors_per_cluster);
     let payload_start = next_cluster;
@@ -372,7 +361,6 @@ pub fn format_and_populate_esp_fat32_with_log(
     chain(bootx64_start, bootx64_clusters);
     chain(kernel_start, kernel_clusters);
     chain(conf_start, conf_clusters);
-    chain(bios_sys_start, bios_sys_clusters);
     chain(payload_start, payload_clusters);
 
     // --- Write reserved region: boot sector, FSInfo, backup ---
@@ -489,17 +477,6 @@ pub fn format_and_populate_esp_fat32_with_log(
             image.limine_conf.len() as u32,
         ));
 
-        if let Some(bios_sys) = image.limine_bios_sys {
-            if !bios_sys.is_empty() {
-                // Limine expects this filename; use VFAT LFN entries with a deterministic 8.3 alias.
-                let short = name83("LIMINEBI", "SYS");
-                for lfn in lfn_entries_for_ascii_name("limine-bios.sys", &short) {
-                    push(&lfn);
-                }
-                push(&dir_entry(short, 0x20, bios_sys_start, bios_sys.len() as u32));
-            }
-        }
-
         write_cluster(cl_root, &dir)?;
     }
 
@@ -577,11 +554,6 @@ pub fn format_and_populate_esp_fat32_with_log(
     write_file(bootx64_start, bootx64_clusters, image.bootx64_efi)?;
     write_file(kernel_start, kernel_clusters, image.kernel_elf)?;
     write_file(conf_start, conf_clusters, image.limine_conf)?;
-    if let Some(bios_sys) = image.limine_bios_sys {
-        if !bios_sys.is_empty() {
-            write_file(bios_sys_start, bios_sys_clusters, bios_sys)?;
-        }
-    }
     if let Some(payload) = image.payload_iso {
         if !payload.is_empty() {
             write_file(payload_start, payload_clusters, payload)?;

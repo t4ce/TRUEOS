@@ -2,8 +2,7 @@ use alloc::vec;
 
 use crate::disc::block::{DeviceHandle, Error, Result};
 use crate::disc::partition::{
-    BlockRange, TrueosBootLayout, GPT_TYPE_BIOS_BOOT_PARTITION_BYTES, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES,
-    GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+    BlockRange, TrueosBootLayout, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES, GPT_TYPE_LINUX_FILESYSTEM_BYTES,
 };
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
@@ -133,9 +132,8 @@ fn write_blocks_aligned_with_log(
 }
 
 /// Create a fresh GPT partition table with:
-/// - Partition 1: BIOS boot partition (for Limine BIOS/GPT)
-/// - Partition 2: ESP (FAT32) for UEFI boot (Limine BOOTX64.EFI, config, payload)
-/// - Partition 3: TRUEOS data partition (TRUEOSFS superblock at start)
+/// - Partition 1: ESP (FAT32) for UEFI boot (Limine BOOTX64.EFI, config)
+/// - Partition 2: TRUEOS data partition (TRUEOSFS superblock at start)
 ///
 /// Returns the computed on-disk LBA ranges (absolute, on the parent disk).
 pub fn write_trueos_bootable_gpt_layout_with_log(
@@ -178,27 +176,13 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
         return Err(Error::InvalidParam);
     }
 
-    // Limine BIOS/GPT requires a dedicated BIOS boot partition (at least 32KiB).
-    // Keep it small but aligned.
-    let bios_boot_blocks: u64 = 128; // 64KiB @ 512B sectors
-
-    let bios_boot_first = align_up_u64(first_usable, GPT_ALIGN_LBA);
-    let bios_boot_last = bios_boot_first
-        .checked_add(bios_boot_blocks)
-        .ok_or(Error::OutOfBounds)?
-        .saturating_sub(1);
-
-    let esp_first = align_up_u64(bios_boot_last.saturating_add(1), GPT_ALIGN_LBA);
+    let esp_first = align_up_u64(first_usable, GPT_ALIGN_LBA);
     let esp_last = esp_first
         .checked_add(esp_blocks)
         .ok_or(Error::OutOfBounds)?
         .saturating_sub(1);
     let trueos_first = align_up_u64(esp_last.saturating_add(1), GPT_ALIGN_LBA);
     let trueos_last = last_usable;
-
-    if bios_boot_first < first_usable || bios_boot_last >= esp_first {
-        return Err(Error::OutOfBounds);
-    }
     if esp_first < first_usable || esp_last >= trueos_first {
         return Err(Error::OutOfBounds);
     }
@@ -233,22 +217,9 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
     // Partition entry array
     let mut entries = vec![0u8; table_bytes];
 
-    // Entry 0: BIOS boot partition (stage 2 area for Limine BIOS/GPT)
+    // Entry 0: ESP
     {
         let off = 0usize;
-        entries[off..off + 16].copy_from_slice(&GPT_TYPE_BIOS_BOOT_PARTITION_BYTES);
-        let mut unique = [0u8; 16];
-        fill_guid_bytes(&mut unique);
-        entries[off + 16..off + 32].copy_from_slice(&unique);
-        entries[off + 32..off + 40].copy_from_slice(&bios_boot_first.to_le_bytes());
-        entries[off + 40..off + 48].copy_from_slice(&bios_boot_last.to_le_bytes());
-        entries[off + 48..off + 56].copy_from_slice(&0u64.to_le_bytes());
-        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS BIOS");
-    }
-
-    // Entry 1: ESP
-    {
-        let off = entry_size as usize;
         entries[off..off + 16].copy_from_slice(&GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES);
         let mut unique = [0u8; 16];
         fill_guid_bytes(&mut unique);
@@ -259,9 +230,9 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
         write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS ESP");
     }
 
-    // Entry 2: TRUEOS data
+    // Entry 1: TRUEOS data
     {
-        let off = (entry_size as usize) * 2;
+        let off = entry_size as usize;
         entries[off..off + 16].copy_from_slice(&GPT_TYPE_LINUX_FILESYSTEM_BYTES);
         let mut unique = [0u8; 16];
         fill_guid_bytes(&mut unique);
@@ -328,7 +299,6 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
     device.flush()?;
 
     Ok(TrueosBootLayout {
-        bios_boot: BlockRange::from_bounds(bios_boot_first, bios_boot_last)?,
         esp: BlockRange::from_bounds(esp_first, esp_last)?,
         trueos: BlockRange::from_bounds(trueos_first, trueos_last)?,
     })
