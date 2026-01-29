@@ -936,7 +936,7 @@ async fn scan_all_devices_and_build_tree(tree: &mut FileTree, root: trueos_math:
 #[embassy_executor::task]
 pub async fn files_service_task() {
     // Dedicated on-demand service. Heavy scanning is performed only when requested.
-    crate::log!("files: service online (type 'files' in shell)\n");
+    crate::log!("files: service online\n");
 
     // One-time boot scan (best-effort). Keep the wait bounded so boot bringup isn't held.
     for _ in 0..50 {
