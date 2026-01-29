@@ -1326,7 +1326,8 @@ pub mod cabi {
 	}
 
 	fn resolve_ipv4_via_dot_blocking(dev_idx: usize, host: &str, timeout_ms: u64, cname_depth: u8) -> Option<[u8; 4]> {
-		use crate::net::adapter::{NetEndpoint, NetQueue};
+		use crate::v::net::Queue;
+		use trueos_v::vnet as vnet;
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
@@ -1349,8 +1350,8 @@ pub mod cabi {
 			let owner = leak_str(alloc::format!("qjs-dot-{}@{}", seq, dev_idx));
 			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-			let cmds = NetQueue::new_leaked(cmds_name, 512);
-			let events = NetQueue::new_leaked(evts_name, 512);
+			let cmds = Queue::new_leaked(cmds_name, 512);
+			let events = Queue::new_leaked(evts_name, 512);
 			register_tls_app_queues(owner, cmds, events);
 
 			let roots = TlsRoots::mozilla();
@@ -1360,7 +1361,7 @@ pub mod cabi {
 			let start = embassy_time_driver::now() as u64;
 			let deadline = start
 				.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
-			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut tls_handle: Option<vnet::NetHandle> = None;
 			let mut sent_connect = false;
 			let mut sent_query = false;
 			let mut buf: Vec<u8> = Vec::new();
@@ -1422,7 +1423,7 @@ pub mod cabi {
 				if !sent_connect {
 					sent_connect = true;
 					let _ = cmds.push(TlsCommand::OpenTcpConnect {
-						remote: NetEndpoint { addr: server_ip, port: DOT_PORT },
+						remote: vnet::EndpointV4 { addr: server_ip, port: DOT_PORT },
 						server_name,
 						cfg: cfg.clone(),
 						roots: roots.clone(),
@@ -1444,7 +1445,8 @@ pub mod cabi {
 	}
 
 	fn resolve_ipv4_via_doh_blocking(dev_idx: usize, host: &str, timeout_ms: u64, cname_depth: u8) -> Option<[u8; 4]> {
-		use crate::net::adapter::{NetEndpoint, NetQueue};
+		use crate::v::net::Queue;
+		use trueos_v::vnet as vnet;
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
@@ -1465,8 +1467,8 @@ pub mod cabi {
 			let owner = leak_str(alloc::format!("qjs-doh-{}@{}", seq, dev_idx));
 			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-			let cmds = NetQueue::new_leaked(cmds_name, 512);
-			let events = NetQueue::new_leaked(evts_name, 512);
+			let cmds = Queue::new_leaked(cmds_name, 512);
+			let events = Queue::new_leaked(evts_name, 512);
 			register_tls_app_queues(owner, cmds, events);
 
 			let roots = TlsRoots::mozilla();
@@ -1476,7 +1478,7 @@ pub mod cabi {
 			let start = embassy_time_driver::now() as u64;
 			let deadline = start
 				.saturating_add(t.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1));
-			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut tls_handle: Option<vnet::NetHandle> = None;
 			let mut sent_connect = false;
 			let mut sent_query = false;
 			let mut plaintext: Vec<u8> = Vec::new();
@@ -1621,7 +1623,7 @@ pub mod cabi {
 				if !sent_connect {
 					if cmds
 						.push(TlsCommand::OpenTcpConnect {
-							remote: NetEndpoint { addr: server_ip, port: DOH_PORT },
+							remote: vnet::EndpointV4 { addr: server_ip, port: DOH_PORT },
 							server_name,
 							cfg: cfg.clone(),
 							roots: roots.clone(),
@@ -1656,7 +1658,8 @@ pub mod cabi {
 		timeout_ms: u64,
 		cname_depth: u8,
 	) -> Option<[u8; 4]> {
-		use crate::net::adapter::{register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
+		use crate::v::net::VNet;
+		use trueos_v::vnet as vnet;
 
 		if let Some(ip) = parse_ipv4_literal(host) {
 			return Some(ip);
@@ -1664,12 +1667,7 @@ pub mod cabi {
 
 		let dns_id: u16 = 0xEA00u16.wrapping_add(dev_idx as u16);
 		let seq = next_qjs_net_seq();
-		let owner = leak_str(alloc::format!("qjs-dns-{}@{}", seq, dev_idx));
-		let cmd_name = leak_str(alloc::format!("{}-cmd", owner));
-		let evt_name = leak_str(alloc::format!("{}-evt", owner));
-		let cmds = NetQueue::new_leaked(cmd_name, 256);
-		let events = NetQueue::new_leaked(evt_name, 256);
-		register_app_queues(owner, cmds, events);
+		let net = VNet::open(dev_idx)?;
 
 		// Important: the UDP port must be unique per call. Multiple concurrent
 		// DNS resolves can otherwise collide on a fixed port, causing bind failures
@@ -1677,14 +1675,14 @@ pub mod cabi {
 		let local_port: u16 = 40000u16
 			.wrapping_add(((dev_idx as u16).wrapping_mul(2000)) % 20000)
 			.wrapping_add((seq as u16) % 2000);
-		let _ = cmds.push(NetCommand::OpenUdp { port: local_port });
+		let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
 
 		let start = embassy_time_driver::now() as u64;
 		let to_ticks = |ms: u64| -> u64 {
 			ms.saturating_mul(embassy_time_driver::TICK_HZ as u64 / 1000).max(1)
 		};
 		let deadline = start.saturating_add(to_ticks(timeout_ms));
-		let mut udp: Option<NetHandle> = None;
+		let mut udp: Option<vnet::NetHandle> = None;
 		let mut sent = false;
 		let dns_servers: &[[u8; 4]] = &[
 			SLIRP_DNS_IP,
@@ -1696,14 +1694,17 @@ pub mod cabi {
 		let resend_ticks: u64 = (embassy_time_driver::TICK_HZ as u64 / 2).max(1);
 
 		loop {
-			for ev in events.drain(256) {
+			for _ in 0..256 {
+				let Some(ev) = net.pop_event() else {
+					break;
+				};
 				match ev {
-					NetEvent::Opened { handle, kind } => {
-						if kind == SocketKind::Udp {
+					vnet::Event::Opened { handle, kind } => {
+						if kind == vnet::SocketKind::Udp {
 							udp = Some(handle);
 						}
 					}
-					NetEvent::Error { msg } => {
+					vnet::Event::Error { msg } => {
 						// Any UDP path error (open/bind/send). Don't sit on a long timeout:
 						// immediately fall back to DoT/DoH.
 						crate::log!(
@@ -1717,20 +1718,20 @@ pub mod cabi {
 						}
 						return resolve_ipv4_via_doh_blocking(dev_idx, host, timeout_ms, cname_depth);
 					}
-					NetEvent::UdpPacket { handle, from, data } => {
+					vnet::Event::UdpPacket { handle, from, data } => {
 						if udp != Some(handle) {
 							continue;
 						}
 						if from.port != DNS_PORT {
 							continue;
 						}
-						match dns_parse_first_a_or_cname(&data, dns_id) {
+						match dns_parse_first_a_or_cname(data.as_slice(), dns_id) {
 							Some(DnsResolution::A(ip)) => {
-								let _ = cmds.push(NetCommand::Close { handle });
+								let _ = net.submit(vnet::Command::Close { handle });
 								return Some(ip);
 							}
 							Some(DnsResolution::Cname(name)) => {
-								let _ = cmds.push(NetCommand::Close { handle });
+								let _ = net.submit(vnet::Command::Close { handle });
 								if cname_depth == 0 {
 									return None;
 								}
@@ -1748,13 +1749,10 @@ pub mod cabi {
 				if let Some(handle) = udp {
 					let query = dns_query(dns_id, host, 1);
 					for &server in dns_servers {
-						let _ = cmds.push(NetCommand::SendUdp {
+						let _ = net.submit(vnet::Command::SendUdp {
 							handle,
-							remote: NetEndpoint {
-								addr: server,
-								port: DNS_PORT,
-							},
-							data: query.clone(),
+							remote: vnet::EndpointV4 { addr: server, port: DNS_PORT },
+							data: vnet::ByteBuf::from_slice_trunc(&query),
 						});
 					}
 					sent = true;
@@ -1763,7 +1761,7 @@ pub mod cabi {
 			}
 			if now >= deadline {
 				if let Some(handle) = udp {
-					let _ = cmds.push(NetCommand::Close { handle });
+					let _ = net.submit(vnet::Command::Close { handle });
 				}
 				crate::log!(
 					"qjs-dns: udp timeout dev={} host={} -> trying dot/doh\n",
@@ -1790,7 +1788,8 @@ pub mod cabi {
 		max_bytes: usize,
 		redirects_left: u8,
 	) -> core::result::Result<Vec<u8>, i32> {
-		use crate::net::adapter::{NetEndpoint, NetQueue};
+		use crate::v::net::Queue;
+		use trueos_v::vnet as vnet;
 		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 		use crate::net::tls::{TlsClientConfig, TlsRoots};
 
@@ -1812,11 +1811,11 @@ pub mod cabi {
 			let owner = leak_str(alloc::format!("qjs-https-{}@{}", seq, dev_idx));
 			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
 			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-			let cmds = NetQueue::new_leaked(cmds_name, 512);
-			let events = NetQueue::new_leaked(evts_name, 512);
+			let cmds = Queue::new_leaked(cmds_name, 512);
+			let events = Queue::new_leaked(evts_name, 512);
 			register_tls_app_queues(owner, cmds, events);
 
-			let mut tls_handle: Option<crate::net::adapter::NetHandle> = None;
+			let mut tls_handle: Option<vnet::NetHandle> = None;
 			let mut sent_connect = false;
 			let mut http_sent = false;
 			let mut plaintext: Vec<u8> = Vec::new();
@@ -1970,7 +1969,7 @@ pub mod cabi {
 				if !sent_connect {
 						if cmds
 							.push(TlsCommand::OpenTcpConnect {
-						remote: NetEndpoint { addr: ip, port: url.port },
+							remote: vnet::EndpointV4 { addr: ip, port: url.port },
 						server_name,
 						cfg: cfg.clone(),
 						roots: roots.clone(),

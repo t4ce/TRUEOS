@@ -1,13 +1,31 @@
-use alloc::{boxed::Box, format, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use trueos_v::vnet as api;
 
+use spin::Mutex;
+
 use crate::net::adapter::{self, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
+
+pub type Queue<T> = adapter::NetQueue<T>;
+
+#[inline]
+pub fn net_shell_read_byte() -> Option<u8> {
+    adapter::net_shell_read_byte()
+}
+
+#[inline]
+pub fn net_shell_write_bytes(bytes: &[u8]) {
+    adapter::net_shell_write_bytes(bytes)
+}
+
+static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
 
 pub struct VNet {
     owner: &'static str,
     cmds: &'static NetQueue<NetCommand>,
     events: &'static NetQueue<NetEvent>,
+    pending: Mutex<VecDeque<api::Event>>,
 }
 
 impl VNet {
@@ -22,16 +40,34 @@ impl VNet {
             return None;
         }
 
+        // Must be unique per call: `register_app_queues` ignores duplicates and would
+        // otherwise leave our new queues undrained.
+        let seq = VNET_SEQ.fetch_add(1, Ordering::Relaxed);
+
         let owner: &'static str = {
-            let s = format!("vnet@{}", device_index);
+            let s = format!("vnet-{}@{}", seq, device_index);
             Box::leak(s.into_boxed_str())
         };
 
-        let cmds = NetQueue::new_leaked("vnet-cmd", 256);
-        let events = NetQueue::new_leaked("vnet-evt", 256);
+        let cmds_name: &'static str = {
+            let s = format!("{}-cmd", owner);
+            Box::leak(s.into_boxed_str())
+        };
+        let events_name: &'static str = {
+            let s = format!("{}-evt", owner);
+            Box::leak(s.into_boxed_str())
+        };
+
+        let cmds = NetQueue::new_leaked(cmds_name, 256);
+        let events = NetQueue::new_leaked(events_name, 256);
         adapter::register_app_queues(owner, cmds, events);
 
-        Some(Self { owner, cmds, events })
+        Some(Self {
+            owner,
+            cmds,
+            events,
+            pending: Mutex::new(VecDeque::new()),
+        })
     }
 
     pub fn open_primary() -> Option<Self> {
@@ -53,7 +89,33 @@ impl VNet {
     }
 
     pub fn pop_event(&self) -> Option<api::Event> {
-        self.events.drain(1).pop().and_then(from_kernel_event)
+        if let Some(ev) = self.pending.lock().pop_front() {
+            return Some(ev);
+        }
+
+        let ev = self.events.drain(1).pop()?;
+        match ev {
+            // TCP is a byte stream; don't truncate payloads. Split into multiple
+            // MAX_MSG chunks and queue the remainder.
+            NetEvent::TcpData { handle, data } => {
+                let mut chunks = data.chunks(api::MAX_MSG);
+                let first = chunks.next()?;
+                let mut pending = self.pending.lock();
+                for chunk in chunks {
+                    pending.push_back(api::Event::TcpData {
+                        handle: api::NetHandle(handle.0),
+                        data: api::ByteBuf::from_slice_trunc(chunk),
+                    });
+                }
+                Some(api::Event::TcpData {
+                    handle: api::NetHandle(handle.0),
+                    data: api::ByteBuf::from_slice_trunc(first),
+                })
+            }
+
+            // UDP is a datagram; keep the current truncation behavior.
+            other => from_kernel_event(other),
+        }
     }
 }
 

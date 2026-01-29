@@ -477,6 +477,10 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             block_count,
             block_size
         );
+
+        // Ensure the global files tree gets updated to include the newly-registered device.
+        // This is best-effort and simply schedules a rescan by the files service task.
+        crate::disc::files::request_files_scan();
     }
 
     Ok(())
