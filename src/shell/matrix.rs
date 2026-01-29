@@ -622,6 +622,7 @@ fn push_latest_files_tree_to_matrix(slot_id: u8) {
             crate::disc::files::FileTreeKind::Device => 'D',
             crate::disc::files::FileTreeKind::Dir => 'd',
             crate::disc::files::FileTreeKind::File => 'f',
+            crate::disc::files::FileTreeKind::TrueosFs => 'T',
         }
     }
 

@@ -34,6 +34,7 @@ dependencies = [
  "trueos-limloader",
  "trueos-math",
  "trueos-qjs",
+ "trueos-v",
  "twoway",
  "unicode-normalization",
  "unicode-segmentation",
@@ -1477,6 +1478,10 @@ dependencies = [
  "libm",
  "trueos-math",
 ]
+
+[[package]]
+name = "trueos-v"
+version = "0.1.0"
 
 [[package]]
 name = "ttf-parser"

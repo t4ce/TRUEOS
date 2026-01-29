@@ -1211,38 +1211,111 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
             return;
         }
 
+        fn walk_caps(
+            bus: u8,
+            slot: u8,
+            function: u8,
+        ) -> (bool, bool, Option<(u8, u8)>) {
+            // Returns (has_msi, has_msix, pcie_link(gen, width)).
+            let status = crate::pci::config_read_u16(bus, slot, function, 0x06);
+            let has_caps = (status & (1 << 4)) != 0;
+            if !has_caps {
+                return (false, false, None);
+            }
+
+            let mut has_msi = false;
+            let mut has_msix = false;
+            let mut pcie_link: Option<(u8, u8)> = None;
+
+            // Standard capability list is single-byte pointer at 0x34.
+            let mut cap_ptr = crate::pci::config_read_u8(bus, slot, function, 0x34) & 0xFC;
+            let mut iters = 0u8;
+            while cap_ptr >= 0x40 && cap_ptr <= 0xFC && iters < 48 {
+                iters = iters.wrapping_add(1);
+                let cap_id = crate::pci::config_read_u8(bus, slot, function, cap_ptr as u16);
+                let next = crate::pci::config_read_u8(bus, slot, function, (cap_ptr as u16) + 1) & 0xFC;
+
+                match cap_id {
+                    0x05 => has_msi = true,
+                    0x11 => has_msix = true,
+                    0x10 => {
+                        // PCI Express Capability.
+                        // Link Status is at cap+0x12 (16-bit): speed[3:0], width[9:4].
+                        let link_status = crate::pci::config_read_u16(
+                            bus,
+                            slot,
+                            function,
+                            (cap_ptr as u16) + 0x12,
+                        );
+                        let speed = (link_status & 0x000F) as u8;
+                        let width = ((link_status >> 4) & 0x003F) as u8;
+                        if speed != 0 && width != 0 {
+                            pcie_link = Some((speed, width));
+                        }
+                    }
+                    _ => {}
+                }
+
+                if next == 0 || next == cap_ptr {
+                    break;
+                }
+                cap_ptr = next;
+            }
+
+            (has_msi, has_msix, pcie_link)
+        }
+
         for dev in list.iter() {
             let (bar0_lo, bar0_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-            let irq_line = crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x3C) & 0x1F;
+            let irq_line = crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x3C);
+            let irq_pin = crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x3D);
+            let rev = crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x08);
+            let subsys_vid = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2C);
+            let subsys_did = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2E);
+            let (has_msi, has_msix, pcie_link) = walk_caps(dev.bus, dev.slot, dev.function);
 
             if let Some(hi) = bar0_hi {
                 ctx.io.write_fmt(format_args!(
-                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} cls={:02X}/{:02X}/{:02X} bar0=0x{:08X}{:08X} irq={}\r\n",
+                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X}{:08X} irq_line={} irq_pin={}\r\n",
                     dev.bus,
                     dev.slot,
                     dev.function,
                     dev.vendor,
                     dev.device,
+                    subsys_vid,
+                    subsys_did,
                     dev.class,
                     dev.subclass,
                     dev.prog_if,
+                    rev,
+                    has_msi,
+                    has_msix,
+                    pcie_link,
                     hi,
                     bar0_lo,
-                    irq_line
+                    irq_line,
+                    irq_pin
                 ));
             } else {
                 ctx.io.write_fmt(format_args!(
-                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} cls={:02X}/{:02X}/{:02X} bar0=0x{:08X} irq={}\r\n",
+                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X} irq_line={} irq_pin={}\r\n",
                     dev.bus,
                     dev.slot,
                     dev.function,
                     dev.vendor,
                     dev.device,
+                    subsys_vid,
+                    subsys_did,
                     dev.class,
                     dev.subclass,
                     dev.prog_if,
+                    rev,
+                    has_msi,
+                    has_msix,
+                    pcie_link,
                     bar0_lo,
-                    irq_line
+                    irq_line,
+                    irq_pin
                 ));
             }
         }

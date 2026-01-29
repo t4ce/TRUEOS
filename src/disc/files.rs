@@ -24,6 +24,7 @@ pub enum FileTreeKind {
     Device,
     Dir,
     File,
+    TrueosFs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1032,6 +1033,30 @@ async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_m
             return;
         }
     };
+
+    // TRUEOSFS: model as 1 root per *whole disk* (no slicing at this layer).
+    if info.parent.is_none() {
+        if let Ok(Some(_placement)) = crate::disc::trueosfs::locate(handle) {
+            // Best-effort: register the root in the TRUEOSFS mount registry.
+            let _ = crate::disc::trueosfs::mount_root(handle);
+
+            if let Some(tfs_id) = tree.add_child(
+                dev_id,
+                FileTreeEntry {
+                    kind: FileTreeKind::TrueosFs,
+                    name: String::from("TRUEOSFS"),
+                },
+            ) {
+                let _ = tree.add_child(
+                    tfs_id,
+                    FileTreeEntry {
+                        kind: FileTreeKind::Root,
+                        name: String::from("/"),
+                    },
+                );
+            }
+        }
+    }
 
     let io = match BlockDeviceIo::new(handle) {
         Ok(io) => io,
