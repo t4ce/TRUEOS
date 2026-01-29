@@ -1,4 +1,4 @@
 bld/
 tgt/
-disk.img
+*.img
 quickjs/
