@@ -593,29 +593,19 @@ pub(crate) fn init_builtin_shell_commands() {
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static TFSDEMO_ARGS: [ArgSpec; 1] = [ArgSpec::new("diskid", ArgType::Str)];
 
-        // Introspection
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
-
-        // Matrix slot list / dump / free:
-        // - `§` lists
-        // - `§ 1` dumps+frees
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
-
-        // NOTE: These registrations are a minimal first pass that preserves
-        // existing behavior by calling the existing implementations.
         let _ = REGSHCMD("out", &REST_MANDATORY, cmd_out);
         let _ = REGSHCMD("in", &REST_MANDATORY, cmd_in);
         let _ = REGSHCMD("io", &REST_MANDATORY, cmd_io);
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd_ecma48);
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
-        let _ = REGSHCMD("files", &[], cmd_files);
         let _ = REGSHCMD("tfsdemo", &TFSDEMO_ARGS, cmd_tfsdemo);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &FORMAT_ARGS, cmd_format);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
-
         let _ = REGSHCMD("reset", &[], cmd_reset);
         let _ = REGSHCMD("s5", &[], cmd_s5);
         let _ = REGSHCMD("go", &[], cmd_go);
@@ -846,27 +836,6 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
 
     super::CommandAction::None
 }
-
-fn cmd_files(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let seq = crate::disc::files::file_tree_seq();
-    let nodes = crate::disc::files::file_tree_len();
-    ctx.io
-        .write_fmt(format_args!("files: cache seq={} nodes={}\r\n", seq, nodes));
-    match crate::matrix::alloc_slot("files scan") {
-        Some(slot) => {
-            crate::matrix::push_line(slot, "files: job started");
-            let mut line: heapless::String<64> = heapless::String::new();
-            let _ = write!(line, "start seq={}", seq);
-            crate::matrix::push_line(slot, line.as_str());
-            let _ = ctx.spawner.spawn(crate::matrix::files_matrix_job(slot, seq));
-            ctx.io.write_fmt(format_args!("files: started §{}\r\n", slot + 1));
-            crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-        }
-        None => ctx.io.write_str("files: matrix full\r\n"),
-    }
-    super::CommandAction::None
-}
-
 fn cmd_tfsdemo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     use crate::disc::{block, trueosfs};
 
