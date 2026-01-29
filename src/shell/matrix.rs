@@ -619,7 +619,14 @@ pub(crate) async fn install_matrix_job(
         .as_str(),
     );
 
-    let result = crate::disc::install::install_bootable_uefi_gpt(disk, bootx64, kernel);
+    let result = crate::disc::install::install_bootable_uefi_gpt_with_log(
+        disk,
+        bootx64,
+        kernel,
+        &mut |line| {
+            log_line(slot_id, &mut blob, line);
+        },
+    );
     match result {
         Ok(()) => {
             let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk);

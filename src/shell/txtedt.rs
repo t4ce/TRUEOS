@@ -428,7 +428,7 @@ impl TextEditor {
         let mut line_no = 0usize;
         let mut row = 0usize;
         let mut cur = 0usize;
-        let mut col = 0usize;
+        let _col = 0usize;
 
         // Walk buffer and print only visible window.
         while row < view_rows {

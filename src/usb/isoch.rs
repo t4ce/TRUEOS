@@ -148,7 +148,7 @@ impl IsochOutPipe {
             let interval_field = {
                 let raw = if speed_code == 1 || speed_code == 2 {
                     // FS/LS: frames -> microframes -> log2-ceil.
-                    let mut period_uf = core::cmp::max(1u32, interval as u32).saturating_mul(8);
+                    let period_uf = core::cmp::max(1u32, interval as u32).saturating_mul(8);
                     let mut log2 = 0u32;
                     let mut pow2 = 1u32;
                     while pow2 < period_uf && log2 < 15 {

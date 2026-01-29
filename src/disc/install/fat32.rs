@@ -32,12 +32,31 @@ impl Drop for AlignedBuf {
     }
 }
 
-fn write_blocks_aligned(handle: DeviceHandle, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
+fn write_blocks_aligned_with_log(
+    handle: DeviceHandle,
+    lba: u64,
+    buf: &[u8],
+    log: &mut dyn FnMut(&str),
+) -> Result<(), block::Error> {
     let info = handle.info();
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-    handle.write_blocks(lba, tmp.as_mut_slice())
+    match handle.write_blocks(lba, tmp.as_mut_slice()) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            log(
+                alloc::format!(
+                    "install: fat32: write failed lba={} bytes={} err={:?}",
+                    lba,
+                    buf.len(),
+                    e
+                )
+                .as_str(),
+            );
+            Err(e)
+        }
+    }
 }
 
 fn name83(base: &str, ext: &str) -> [u8; 11] {
@@ -83,7 +102,7 @@ fn lfn_entry(sequence: u8, checksum: u8, chars: &[u16; 13]) -> [u8; 32] {
     e[13] = checksum;
     // e[26..28] first cluster low = 0
 
-    let mut put = |dst: &mut [u8], src: &[u16]| {
+    let put = |dst: &mut [u8], src: &[u16]| {
         for (i, w) in src.iter().enumerate() {
             let b = w.to_le_bytes();
             dst[i * 2] = b[0];
@@ -248,6 +267,14 @@ pub fn format_and_populate_esp_fat32(
     esp: DeviceHandle,
     image: EspImage<'_>,
 ) -> Result<(), block::Error> {
+    format_and_populate_esp_fat32_with_log(esp, image, &mut |_| {})
+}
+
+pub fn format_and_populate_esp_fat32_with_log(
+    esp: DeviceHandle,
+    image: EspImage<'_>,
+    log: &mut dyn FnMut(&str),
+) -> Result<(), block::Error> {
     if esp.parent().is_none() {
         // Must be a partition device, not the whole disk.
         return Err(block::Error::InvalidParam);
@@ -395,10 +422,10 @@ pub fn format_and_populate_esp_fat32(
     fsinfo[492..496].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes());
 
-    write_blocks_aligned(esp, 0, &boot)?;
-    write_blocks_aligned(esp, 1, &fsinfo)?;
-    write_blocks_aligned(esp, 6, &boot)?;
-    write_blocks_aligned(esp, 7, &fsinfo)?;
+    write_blocks_aligned_with_log(esp, 0, &boot, log)?;
+    write_blocks_aligned_with_log(esp, 1, &fsinfo, log)?;
+    write_blocks_aligned_with_log(esp, 6, &boot, log)?;
+    write_blocks_aligned_with_log(esp, 7, &fsinfo, log)?;
 
     // Zero remaining reserved sectors.
     let mut zero = [0u8; 512];
@@ -407,7 +434,7 @@ pub fn format_and_populate_esp_fat32(
         if lba == 6 || lba == 7 {
             continue;
         }
-        write_blocks_aligned(esp, lba, &zero)?;
+        write_blocks_aligned_with_log(esp, lba, &zero, log)?;
     }
 
     // --- Write FATs ---
@@ -415,13 +442,13 @@ pub fn format_and_populate_esp_fat32(
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned(esp, fat1_lba + i, &fat[start..end])?;
+        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log)?;
     }
     let fat2_lba = fat1_lba + fat_sectors as u64;
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned(esp, fat2_lba + i, &fat[start..end])?;
+        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log)?;
     }
 
     // Helper to write a whole cluster.
@@ -433,7 +460,7 @@ pub fn format_and_populate_esp_fat32(
         let first_sector = (cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
         for s in 0..(sectors_per_cluster as u64) {
             let off = (s as usize) * 512;
-            write_blocks_aligned(esp, first_sector + s, &cluster_buf[off..off + 512])?;
+            write_blocks_aligned_with_log(esp, first_sector + s, &cluster_buf[off..off + 512], log)?;
         }
         Ok(())
     };

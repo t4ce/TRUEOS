@@ -731,7 +731,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await?;
 
-    let mut pipe = sink.pipe.take().ok_or(())?;
+    let pipe = sink.pipe.take().ok_or(())?;
 
     // Pre-allocate a small DMA buffer pool sized to the endpoint's packet size.
     let mut bufs: Vec<DmaBuf, 64> = Vec::new();

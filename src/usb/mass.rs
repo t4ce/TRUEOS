@@ -185,8 +185,8 @@ pub struct AttachParams<'a> {
 pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     let AttachParams {
         ctx,
-        mut cmd_ring,
-        mut ep0_ring,
+        cmd_ring,
+        ep0_ring,
         slot_id,
         cfg,
         dev_ctx_virt,
@@ -259,7 +259,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         }
     };
     unsafe { write_bytes(ring_in_virt, 0, 64 * size_of::<Trb>()) };
-    let mut ring_in = unsafe { TrbRing::new(ring_in_phys, ring_in_virt as *mut Trb, 64) };
+    let ring_in = unsafe { TrbRing::new(ring_in_phys, ring_in_virt as *mut Trb, 64) };
 
     let (ring_out_phys, ring_out_virt) = match dma::alloc(64 * size_of::<Trb>(), 64) {
         Some(pair) => pair,
@@ -269,7 +269,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         }
     };
     unsafe { write_bytes(ring_out_virt, 0, 64 * size_of::<Trb>()) };
-    let mut ring_out = unsafe { TrbRing::new(ring_out_phys, ring_out_virt as *mut Trb, 64) };
+    let ring_out = unsafe { TrbRing::new(ring_out_phys, ring_out_virt as *mut Trb, 64) };
 
     let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
         Some(pair) => pair,

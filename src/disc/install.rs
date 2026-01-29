@@ -1,8 +1,11 @@
 use alloc::vec::Vec;
 
 use crate::disc::block;
-use crate::disc::{fat32, partition, trueosfs};
+use crate::disc::{partition, trueosfs};
 use crate::install_assets;
+
+mod fat32;
+mod gpt;
 
 const PAYLOAD_HDR_MAGIC: &[u8; 8] = b"TRUEPLD0";
 const PAYLOAD_HDR_VERSION: u32 = 1;
@@ -310,6 +313,15 @@ pub fn install_bootable_uefi_gpt(
     bootx64_efi: &[u8],
     kernel_elf: &[u8],
 ) -> Result<(), block::Error> {
+    install_bootable_uefi_gpt_with_log(disk, bootx64_efi, kernel_elf, &mut |_| {})
+}
+
+pub fn install_bootable_uefi_gpt_with_log(
+    disk: block::DeviceHandle,
+    bootx64_efi: &[u8],
+    kernel_elf: &[u8],
+    log: &mut dyn FnMut(&str),
+) -> Result<(), block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -330,9 +342,20 @@ pub fn install_bootable_uefi_gpt(
     esp_mib = ((esp_mib + 31) / 32) * 32;
     esp_mib = core::cmp::max(64, esp_mib);
 
+    log(alloc::format!("install: esp size target={} MiB", esp_mib).as_str());
+
     // If this disk already contains a TRUEOSFS partition inside a GPT layout, preserve it.
     // We only refresh the ESP boot files/config and (re)install Limine BIOS stages.
-    let existing_trueosfs = trueosfs::locate(disk)?;
+    log("install: stage=probe_trueosfs");
+    let existing_trueosfs = match trueosfs::locate(disk) {
+        Ok(v) => v,
+        Err(e) => {
+            log(alloc::format!("install: trueosfs::locate failed ({:?})", e).as_str());
+            return Err(e);
+        }
+    };
+
+    log("install: stage=probe_gpt");
     let existing_parts = partition::read_gpt_partitions(disk).ok();
 
     let mut preserve_trueosfs = false;
@@ -360,12 +383,26 @@ pub fn install_bootable_uefi_gpt(
             preserve_trueosfs = true;
             (esp, trueos)
         } else {
-            let layout = partition::write_trueos_bootable_gpt_layout(disk, esp_mib)?;
+            log("install: stage=write_gpt (refresh)");
+            let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log) {
+                Ok(v) => v,
+                Err(e) => {
+                    log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
+                    return Err(e);
+                }
+            };
             bios_boot_start_lba = Some(layout.bios_boot.first_lba());
             (layout.esp, layout.trueos)
         }
     } else {
-        let layout = partition::write_trueos_bootable_gpt_layout(disk, esp_mib)?;
+        log("install: stage=write_gpt (fresh)");
+        let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log) {
+            Ok(v) => v,
+            Err(e) => {
+                log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
+                return Err(e);
+            }
+        };
         bios_boot_start_lba = Some(layout.bios_boot.first_lba());
         (layout.esp, layout.trueos)
     };
@@ -405,7 +442,8 @@ resolution: 1920x1080x32\n\n";
     let limine_bios_sys = install_assets::limine_bios_sys();
     let limine_hdd_bin = install_assets::limine_bios_hdd_bin();
 
-    fat32::format_and_populate_esp_fat32(
+    log("install: stage=format_esp_fat32");
+    if let Err(e) = fat32::format_and_populate_esp_fat32(
         esp_handle,
         fat32::EspImage {
             bootx64_efi,
@@ -414,17 +452,32 @@ resolution: 1920x1080x32\n\n";
             payload_iso: None,
             limine_conf,
         },
-    )?;
+    ) {
+        log(alloc::format!("install: fat32 format/populate failed ({:?})", e).as_str());
+        return Err(e);
+    }
 
     // Install Limine BIOS stages (MBR + stage2), using a BIOS boot partition on GPT.
     if let Some(start_lba) = bios_boot_start_lba {
+        log("install: stage=install_limine_bios");
         let stage2_loc_bytes = start_lba.saturating_mul(512);
-        install_limine_bios_stages(disk, stage2_loc_bytes, &limine_hdd_bin)?;
+        if let Err(e) = install_limine_bios_stages(disk, stage2_loc_bytes, &limine_hdd_bin) {
+            log(alloc::format!(
+                "install: limine bios stage install failed ({:?}) (stage2_loc_bytes=0x{:X})",
+                e, stage2_loc_bytes
+            )
+            .as_str());
+            return Err(e);
+        }
     }
 
     // Only format TRUEOSFS on first install. Re-installs preserve existing TRUEOSFS content.
     if !preserve_trueosfs {
-        trueosfs::format_blank_partition(trueos_handle)?;
+        log("install: stage=format_trueosfs");
+        if let Err(e) = trueosfs::format_blank_partition(trueos_handle) {
+            log(alloc::format!("install: trueosfs format failed ({:?})", e).as_str());
+            return Err(e);
+        }
     }
 
     Ok(())

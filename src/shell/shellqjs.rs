@@ -44,7 +44,7 @@ unsafe extern "C" fn qjs_shell_print(
 }
 
 fn dump_exception(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext) {
-    fn i64_to_dec(buf: &mut [u8; 24], mut v: i64) -> &str {
+    fn i64_to_dec(buf: &mut [u8; 24], v: i64) -> &str {
         if v == 0 {
             buf[0] = b'0';
             return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
