@@ -28,6 +28,7 @@ dependencies = [
  "rdrand",
  "rustls",
  "rustls-rustcrypto",
+ "sha2",
  "smoltcp",
  "spin 0.10.0",
  "trueos-fs",

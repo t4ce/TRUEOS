@@ -22,7 +22,11 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 enum LedCmd {
     SetRgb { owner: u32, rgb: Rgb8 },
     SetEffect { owner: u32, effect: Effect },
-    RawOut { owner: u32, report_id: u8, data: Vec<u8, 64> },
+    RawOut {
+        owner: u32,
+        report_id: u8,
+        data: Vec<u8, 64>,
+    },
 }
 
 const CMD_Q_CAP: usize = 64;
@@ -153,9 +157,7 @@ pub async fn task() {
                         let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
                     }
                 }
-                LedCmd::RawOut {
-                    report_id, data, ..
-                } => {
+                LedCmd::RawOut { report_id, data, .. } => {
                     if online {
                         let _ = crate::usb::leds::send_output_report_first(*report_id, data).await;
                     }
