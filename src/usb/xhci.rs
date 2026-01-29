@@ -1,7 +1,7 @@
 use crate::pci::mmio;
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{AtomicBool, fence, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, fence, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -85,6 +85,50 @@ pub const MAX_XHCI_CONTROLLERS: usize = 8;
 static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
 static CONTROLLERS: Mutex<Vec<XhcInfo, MAX_XHCI_CONTROLLERS>> = Mutex::new(Vec::new());
 static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(true);
+
+// Per-controller cache of the last enumerated VID:PID per *root* port.
+// Packed as (vid << 16) | pid, with 0 meaning "unknown".
+const MAX_PORTS_TRACKED: usize = 256;
+static PORT_VIDPID: [[AtomicU32; MAX_PORTS_TRACKED]; MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; MAX_PORTS_TRACKED] }; MAX_XHCI_CONTROLLERS];
+
+pub fn set_port_vidpid(controller_id: usize, port_id: u8, vid: u16, pid: u16) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    let idx = port_id as usize;
+    if idx == 0 || idx >= MAX_PORTS_TRACKED {
+        return;
+    }
+    let packed = ((vid as u32) << 16) | (pid as u32);
+    PORT_VIDPID[controller_id][idx].store(packed, Ordering::Release);
+}
+
+pub fn get_port_vidpid(controller_id: usize, port_id: u8) -> Option<(u16, u16)> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+    let idx = port_id as usize;
+    if idx == 0 || idx >= MAX_PORTS_TRACKED {
+        return None;
+    }
+    let packed = PORT_VIDPID[controller_id][idx].load(Ordering::Acquire);
+    if packed == 0 {
+        return None;
+    }
+    Some(((packed >> 16) as u16, (packed & 0xFFFF) as u16))
+}
+
+pub fn log_cached_port_id(controller_id: usize, port_id: u8) {
+    if let Some((vid, pid)) = get_port_vidpid(controller_id, port_id) {
+        crate::log!(
+            "xhci: port {} id={:04X}:{:04X} (cached after descriptor read)\n",
+            port_id,
+            vid,
+            pid
+        );
+    }
+}
 
 pub fn set_log_ports_on_init(enable: bool) {
     LOG_PORTS_ON_INIT.store(enable, Ordering::Release);
@@ -1160,6 +1204,12 @@ pub fn log_ports_table(ctx: &XhciContext) {
             plc as u8,
             cec as u8,
         );
+
+        if ccs {
+            if let Some((vid, pid)) = get_port_vidpid(ctx.controller_id, (port + 1) as u8) {
+                crate::log!("xhci:      port {} id={:04X}:{:04X}\n", port + 1, vid, pid);
+            }
+        }
     }
 }
 

@@ -98,62 +98,88 @@ fn looks_like_ext_superblock(sb: &[u8]) -> bool {
 }
 
 pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
+    detect_physical_disk_detail(handle).0
+}
+
+/// Like `detect_physical_disk`, but also returns a best-effort error reason when the
+/// result is `Unknown` due to an I/O or parse failure.
+pub fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, Option<block::Error>) {
     // Only classify whole devices (not already-registered partitions).
     if handle.parent().is_some() {
-        return DiscStatus::Unknown;
+        return (DiscStatus::Unknown, None);
     }
 
     let info = handle.info();
     if info.block_size != 512 {
-        return DiscStatus::Unknown;
+        return (DiscStatus::Unknown, None);
     }
     if info.block_count < 8 {
-        return DiscStatus::Unknown;
+        return (DiscStatus::Unknown, None);
     }
 
     // Read MBR/boot sector.
     let bs0 = match read_blocks_aligned(handle, 0, 1) {
         Ok(v) => v,
-        Err(_) => return DiscStatus::Unknown,
+        Err(e) => return (DiscStatus::Unknown, Some(e)),
     };
 
     // Quick signature checks for common formats.
     if looks_like_ntfs(&bs0) {
-        return DiscStatus::Detected {
-            fs: KnownFs::Ntfs,
-            detail: None,
-        };
+        return (
+            DiscStatus::Detected {
+                fs: KnownFs::Ntfs,
+                detail: None,
+            },
+            None,
+        );
     }
     if looks_like_exfat(&bs0) {
-        return DiscStatus::Detected {
-            fs: KnownFs::Exfat,
-            detail: None,
-        };
+        return (
+            DiscStatus::Detected {
+                fs: KnownFs::Exfat,
+                detail: None,
+            },
+            None,
+        );
     }
 
     // TRUEOSFS detection: the low-level placement logic decides whether this is
     // a bootable GPT layout (ESP + TRUEOS partition) or a data-only layout.
-    if let Ok(Some(loc)) = crate::disc::trueosfs::locate(handle) {
-        return DiscStatus::Trueos { bootable: loc.bootable };
+    match crate::disc::trueosfs::locate(handle) {
+        Ok(Some(loc)) => return (DiscStatus::Trueos { bootable: loc.bootable }, None),
+        Ok(None) => {}
+        Err(e) => return (DiscStatus::Unknown, Some(e)),
     }
 
     // MBR-style FAT probe (superfloppy or partitioned) using the existing layout heuristic.
     if crate::disc::layout::probe_fat_volume(handle).is_ok() {
-        return DiscStatus::Detected {
-            fs: KnownFs::Fat,
-            detail: None,
-        };
+        return (
+            DiscStatus::Detected {
+                fs: KnownFs::Fat,
+                detail: None,
+            },
+            None,
+        );
     }
 
     // ext probe: read from 1024-byte offset (LBA2) for 2 sectors.
-    if let Ok(sb) = read_blocks_aligned(handle, 2, 2) {
-        if looks_like_ext_superblock(&sb) {
-            return DiscStatus::Detected {
-                fs: KnownFs::Ext,
-                detail: None,
-            };
+    match read_blocks_aligned(handle, 2, 2) {
+        Ok(sb) => {
+            if looks_like_ext_superblock(&sb) {
+                return (
+                    DiscStatus::Detected {
+                        fs: KnownFs::Ext,
+                        detail: None,
+                    },
+                    None,
+                );
+            }
+        }
+        Err(e) => {
+            // If everything else failed and even this probe errors, surface it.
+            return (DiscStatus::Unknown, Some(e));
         }
     }
 
-    DiscStatus::Unknown
+    (DiscStatus::Unknown, None)
 }

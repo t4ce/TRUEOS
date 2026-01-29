@@ -1187,6 +1187,12 @@ pub(crate) async fn enumerate_with_params(
         has_uac_out
     );
 
+    // xHCI PORTSC doesn't include VID:PID; cache it for xHCI-side debug once we've read it.
+    if tree_parent.is_none() {
+        xhci::set_port_vidpid(ctx.controller_id, target_port, dev_vid, dev_pid);
+        xhci::log_cached_port_id(ctx.controller_id, target_port);
+    }
+
     if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
         crate::log!(
             "usb: enum port {} strings mfr='{}' prod='{}'\n",
@@ -1371,6 +1377,11 @@ pub(crate) async fn enumerate_with_params(
                 count
             );
         }
+
+        // Targeted debug aid: dump descriptors for the suspected USB LED controller.
+        if count == 1 && dev_vid == 0x0416 && dev_pid == 0xA125 {
+            dump_cfg_descriptors(target_port, dev_vid, dev_pid, cfg_slice);
+        }
     }
 
     // Keep the slot assigned for unclaimed devices.
@@ -1484,4 +1495,158 @@ async fn disable_slot_and_free(
     dma::dealloc(input_ctx_virt, 4096);
     dma::dealloc(dev_ctx_virt, 4096);
     let _ = disable_slot(state, slot_id).await;
+}
+
+fn dump_cfg_descriptors(target_port: u8, dev_vid: u16, dev_pid: u16, cfg: &[u8]) {
+    crate::log!(
+        "usb: dump cfgdesc port {} vid=0x{:04X} pid=0x{:04X} len={}\n",
+        target_port,
+        dev_vid,
+        dev_pid,
+        cfg.len()
+    );
+
+    if cfg.len() < 9 {
+        crate::log!("usb: dump cfgdesc: too short\n");
+        return;
+    }
+
+    let mut idx = 0usize;
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        if len == 0 || idx + len > cfg.len() {
+            crate::log!(
+                "usb: dump cfgdesc: truncated/invalid at idx={} len={} total={}\n",
+                idx,
+                len,
+                cfg.len()
+            );
+            break;
+        }
+        let ty = cfg[idx + 1];
+
+        match ty {
+            0x02 if len >= 9 => {
+                let w_total = u16::from_le_bytes([cfg[idx + 2], cfg[idx + 3]]);
+                let num_if = cfg[idx + 4];
+                let cfg_value = cfg[idx + 5];
+                let i_cfg = cfg[idx + 6];
+                let attrs = cfg[idx + 7];
+                let max_power = cfg[idx + 8];
+                crate::log!(
+                    "usb:  cfg wTotalLength={} numIfs={} cfgValue={} iCfg={} attrs=0x{:02X} maxPower={} (2mA units)\n",
+                    w_total,
+                    num_if,
+                    cfg_value,
+                    i_cfg,
+                    attrs,
+                    max_power
+                );
+            }
+            0x0B if len >= 8 => {
+                // Interface Association Descriptor
+                let first_if = cfg[idx + 2];
+                let if_count = cfg[idx + 3];
+                let cls = cfg[idx + 4];
+                let sub = cfg[idx + 5];
+                let prot = cfg[idx + 6];
+                let i_func = cfg[idx + 7];
+                crate::log!(
+                    "usb:  iad firstIf={} ifCount={} cls={:02X}/{:02X}/{:02X} iFunc={}\n",
+                    first_if,
+                    if_count,
+                    cls,
+                    sub,
+                    prot,
+                    i_func
+                );
+            }
+            0x04 if len >= 9 => {
+                let if_num = cfg[idx + 2];
+                let alt = cfg[idx + 3];
+                let ep_count = cfg[idx + 4];
+                let cls = cfg[idx + 5];
+                let sub = cfg[idx + 6];
+                let prot = cfg[idx + 7];
+                let i_if = cfg[idx + 8];
+                crate::log!(
+                    "usb:  if{} alt={} eps={} cls={:02X}/{:02X}/{:02X} iIf={}\n",
+                    if_num,
+                    alt,
+                    ep_count,
+                    cls,
+                    sub,
+                    prot,
+                    i_if
+                );
+            }
+            0x05 if len >= 7 => {
+                let ep_addr = cfg[idx + 2];
+                let attrs = cfg[idx + 3];
+                let mps = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                let interval = cfg[idx + 6];
+                crate::log!(
+                    "usb:   ep addr=0x{:02X} attrs=0x{:02X} mps={} interval={}\n",
+                    ep_addr,
+                    attrs,
+                    (mps & 0x07FF),
+                    interval
+                );
+            }
+            0x21 if len >= 9 => {
+                // HID descriptor
+                let bcd_hid = u16::from_le_bytes([cfg[idx + 2], cfg[idx + 3]]);
+                let country = cfg[idx + 4];
+                let num_desc = cfg[idx + 5];
+                let rep_type = cfg[idx + 6];
+                let rep_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
+                crate::log!(
+                    "usb:  hid bcd=0x{:04X} country={} numDesc={} repType=0x{:02X} repLen={}\n",
+                    bcd_hid,
+                    country,
+                    num_desc,
+                    rep_type,
+                    rep_len
+                );
+            }
+            0x24 => {
+                // Class-specific interface descriptor (common in audio)
+                let sub = if len >= 3 { cfg[idx + 2] } else { 0 };
+                crate::log!("usb:  cs_if subtype=0x{:02X} len={}\n", sub, len);
+            }
+            0x25 => {
+                // Class-specific endpoint descriptor
+                let sub = if len >= 3 { cfg[idx + 2] } else { 0 };
+                crate::log!("usb:  cs_ep subtype=0x{:02X} len={}\n", sub, len);
+            }
+            0x29 if len >= 7 => {
+                // Hub descriptor (not the same as config desc type=2)
+                let ports = cfg[idx + 2];
+                let chars = u16::from_le_bytes([cfg[idx + 3], cfg[idx + 4]]);
+                let pwr_on_good = cfg[idx + 5];
+                let current = cfg[idx + 6];
+                crate::log!(
+                    "usb:  hub ports={} chars=0x{:04X} pwrOnGood={} current={}\n",
+                    ports,
+                    chars,
+                    pwr_on_good,
+                    current
+                );
+            }
+            _ => {
+                crate::log!("usb:  desc type=0x{:02X} len={} data=", ty, len);
+                let mut j = 0usize;
+                while j < len {
+                    crate::log!("{:02X}", cfg[idx + j]);
+                    if j + 1 < len {
+                        crate::log!(" ");
+                    }
+                    j += 1;
+                }
+                crate::log!("\n");
+            }
+        }
+
+        idx += len;
+    }
 }
