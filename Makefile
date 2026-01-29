@@ -28,7 +28,7 @@ QEMU_USB_FLAGS = \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd0 \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost0 \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx0 \
-	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,id=usbpendrive0 \
+	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive0 \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk0 \
 	-device usb-storage,drive=usbdisk0,bus=xhci.0,port=5,id=usbms0 \
 	# -drive file=disk.img,if=none,format=raw,id=nvme0 \
@@ -77,6 +77,27 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 
 run: iso-debug
 	@($(QEMU) & $(SERIAL_CONSOLE_CMD))
+
+
+
+
+
+
+
+
+
+
+
+# Boot the installed disk image directly (no installer ISO).
+# Useful for validating GPT+ESP+Limine stage installation.
+QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
+QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
+
+run-installed-uefi: iso-debug
+	@($(QEMU) -bios $(QEMU_BIOS) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
+
+run-installed-bios: iso-debug
+	@($(QEMU) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
 
 dbg: iso-debug
 	@($(QEMU) -s -S & $(SERIAL_CONSOLE_CMD))

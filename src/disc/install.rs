@@ -99,6 +99,9 @@ fn write_bytes_at_lba(handle: block::DeviceHandle, start_lba: u64, bytes: &[u8])
 
         handle.write_blocks(lba, &buf[..this_bytes])?;
 
+        // Keep the system responsive while we do large synchronous transfers.
+        crate::time::poll_executor();
+
         lba = lba.saturating_add(this_blocks as u64);
         off = off.saturating_add(take);
         remaining_blocks = remaining_blocks.saturating_sub(this_blocks as u64);

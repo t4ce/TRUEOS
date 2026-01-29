@@ -548,6 +548,111 @@ pub(crate) async fn files_matrix_job(slot_id: u8, start_seq: u32) {
     }
 }
 
+#[inline]
+fn append_blob_line(blob: &mut AVec<u8>, line: &str) {
+    blob.extend_from_slice(line.as_bytes());
+    blob.extend_from_slice(b"\r\n");
+}
+
+#[inline]
+fn log_line(slot_id: u8, blob: &mut AVec<u8>, line: &str) {
+    push_line(slot_id, line);
+    append_blob_line(blob, line);
+    crate::time::poll_executor();
+}
+
+#[embassy_executor::task]
+pub(crate) async fn install_matrix_job(
+    slot_id: u8,
+    disk: crate::disc::block::DeviceHandle,
+    bootx64: &'static [u8],
+    kernel: &'static [u8],
+) {
+    // Give the shell a moment to print the prompt and update the header.
+    Timer::after(EmbassyDuration::from_millis(1)).await;
+
+    let mut blob: AVec<u8> = AVec::new();
+
+    let info = disk.info();
+    log_line(slot_id, &mut blob, "install: starting");
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "install: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+        )
+        .as_str(),
+    );
+
+    let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk);
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "install: initial status: {}{}",
+            status.short(),
+            match (&status, err) {
+                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" (err={:?})", e),
+                _ => alloc::string::String::new(),
+            }
+        )
+        .as_str(),
+    );
+
+    log_line(slot_id, &mut blob, "install: DANGER: this may REPARTITION and FORMAT the disk");
+    log_line(slot_id, &mut blob, "install: creating/updating GPT + ESP + TRUEOSFS boot files");
+    log_line(slot_id, &mut blob, "install: existing TRUEOSFS will be preserved if detected");
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "install: BOOTX64.EFI={} bytes, TRUEOS.elf={} bytes",
+            bootx64.len(),
+            kernel.len()
+        )
+        .as_str(),
+    );
+
+    let result = crate::disc::install::install_bootable_uefi_gpt(disk, bootx64, kernel);
+    match result {
+        Ok(()) => {
+            let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk);
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!(
+                    "install: ok (status now: {}{})",
+                    status.short(),
+                    match (&status, err) {
+                        (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                            alloc::format!("; err={:?}", e)
+                        }
+                        _ => alloc::string::String::new(),
+                    }
+                )
+                .as_str(),
+            );
+            set_state(slot_id, SlotState::Done);
+        }
+        Err(e) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!("install: failed ({:?})", e).as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+        }
+    }
+
+    let _ = set_blob_owned_with_preview(slot_id, blob);
+}
+
 fn push_latest_files_tree_to_matrix(slot_id: u8) {
     const MAX_TREE_LINES: usize = 56;
 
