@@ -11,7 +11,6 @@ const TFTP_ROOT = "/home/t4ce/Repos/TRUEOS/bld";
 const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
 const LEASES = "/tmp/trueos-pxe.leases";
 
-// This PXE helper is UEFI-focused. Legacy BIOS PXE clients won't be served.
 // (UEFI x86_64 client arch code is 7 per RFC 4578.)
 const UEFI_X86_64_ARCH = 7;
 

@@ -23,6 +23,7 @@ zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math" }
 trueos-fs = { path = "crates/trueos-fs" }
+trueos-v = { path = "crates/trueos-v" }
 fatfs = { git = "https://github.com/rafalh/rust-fatfs", default-features = false, features = ["alloc", "lfn"] }
 hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2", default-features = false }

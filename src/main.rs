@@ -46,6 +46,7 @@ mod time;
 mod turbo;
 mod efi;
 mod usb;
+mod v_leds;
 mod vga;
 mod x2apic;
 
@@ -300,6 +301,9 @@ pub extern "C" fn kmain() -> ! {
     let _ = spawner.spawn(usb::hid::input_logger());
 
     let _ = spawner.spawn(usb::uac::sine_task());
+
+    // Virtual LED multiplexer/manager (best-effort; no-op when the controller is absent).
+    let _ = spawner.spawn(v_leds::task());
 
     // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
     let _ = spawner.spawn(usb::truekey::drain_loop());
