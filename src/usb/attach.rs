@@ -1,6 +1,6 @@
 use super::hub::HubWork;
 use super::xhci::{TrbRing, XhciContext};
-use super::{cdc_acm, hid, hub, mass, pen, print, uac, DeviceKind, UsbControllerState};
+use super::{cdc_acm, hid, hub, leds, mass, pen, print, uac, DeviceKind, UsbControllerState};
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -35,6 +35,47 @@ pub(crate) async fn try_attach_device(
     // For hub children, `target_port` is the downstream hub port (not a root port),
     // so use `root_port` when it is known.
     let registry_port = if root_port != 0 { root_port } else { target_port };
+
+    // Custom USB LED controller (JGINYUE 0x0416:0xA125)
+    if dev_vid == 0x0416 && dev_pid == 0xA125 {
+        crate::log!(
+            "usb: attach: trying leds driver port={} slot={}\n",
+            target_port,
+            slot_id
+        );
+    }
+    if leds::attach_device(leds::AttachParams {
+        ctx,
+        cmd_ring: &mut state.cmd_ring,
+        ep0_ring,
+        slot_id,
+        cfg: cfg_slice,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+        dev_vid,
+        dev_pid,
+    })
+    .await
+    .is_ok()
+    {
+        usbv!(
+            "usb: enum port {} claimed LEDS slot={} vid=0x{:04X} pid=0x{:04X}\n",
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid
+        );
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Leds,
+        );
+        return Some(DeviceKind::Leds);
+    }
 
     let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
     if has_uac_out {
@@ -187,6 +228,26 @@ pub(crate) async fn try_attach_device(
     })
     .await
     .unwrap_or(0);
+
+    let hid_count = if hid_count > 0 {
+        hid_count
+    } else {
+        // Fall back to generic HID (non-boot) so we can claim devices like LED controllers.
+        hid::attach_hid_devices(hid::BootAttachParams {
+            ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+        })
+        .await
+        .unwrap_or(0)
+    };
 
     if hid_count > 0 {
         usbv!(

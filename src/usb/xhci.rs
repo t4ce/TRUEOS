@@ -119,17 +119,6 @@ pub fn get_port_vidpid(controller_id: usize, port_id: u8) -> Option<(u16, u16)> 
     Some(((packed >> 16) as u16, (packed & 0xFFFF) as u16))
 }
 
-pub fn log_cached_port_id(controller_id: usize, port_id: u8) {
-    if let Some((vid, pid)) = get_port_vidpid(controller_id, port_id) {
-        crate::log!(
-            "xhci: port {} id={:04X}:{:04X} (cached after descriptor read)\n",
-            port_id,
-            vid,
-            pid
-        );
-    }
-}
-
 pub fn set_log_ports_on_init(enable: bool) {
     LOG_PORTS_ON_INIT.store(enable, Ordering::Release);
 }
