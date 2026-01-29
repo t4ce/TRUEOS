@@ -61,6 +61,136 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     removed
 }
 
+pub fn is_online() -> bool {
+    !LED_RUNTIMES.lock().is_empty()
+}
+
+fn first_runtime_key() -> Option<(usize, u32)> {
+    let guard = LED_RUNTIMES.lock();
+    guard.first().map(|rt| (rt.controller_id, rt.slot_id))
+}
+
+/// Send a single HID OUT report to the first attached LED controller.
+///
+/// This is intentionally small and driver-like: higher layers decide policy, rate,
+/// effects, and multiplexing.
+pub async fn send_output_report_first(report_id: u8, payload: &[u8]) -> Result<(), ()> {
+    let Some((controller_id, slot_id)) = first_runtime_key() else {
+        return Err(());
+    };
+    send_output_report(controller_id, slot_id, report_id, payload).await
+}
+
+async fn send_output_report(
+    controller_id: usize,
+    slot_id: u32,
+    report_id: u8,
+    payload: &[u8],
+) -> Result<(), ()> {
+    // Resolve controller MMIO base.
+    let mut info_opt = None;
+    for info in crate::usb::xhci::xhc_list().iter().copied() {
+        if info.controller_id == controller_id {
+            info_opt = Some(info);
+            break;
+        }
+    }
+    let Some(info) = info_opt else {
+        return Err(());
+    };
+
+    let ctx = unsafe { XhciContext::new(info) };
+
+    // Take a snapshot of the OUT ring state and endpoint target/address.
+    let (ep_out_target, mut ring_state) = {
+        let mut guard = LED_RUNTIMES.lock();
+        let Some(rt) = guard
+            .iter_mut()
+            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        else {
+            return Err(());
+        };
+        (rt.ep_out_target, rt.ep_out_ring.snapshot())
+    };
+
+    // Build report bytes. For report_id=0, many devices expect no ID byte; for non-zero,
+    // prefix with the ID.
+    let mut report: Vec<u8, 64> = Vec::new();
+    if report_id != 0 {
+        let _ = report.push(report_id);
+    }
+    let n = core::cmp::min(payload.len(), 64usize.saturating_sub(report.len()));
+    let _ = report.extend_from_slice(&payload[..n]);
+
+    // Allocate DMA for the report payload.
+    let (buf_phys, buf_virt) = dma::alloc(report.len().max(1), 64).ok_or(())?;
+    unsafe {
+        write_bytes(buf_virt, 0, report.len().max(1));
+        if !report.is_empty() {
+            core::ptr::copy_nonoverlapping(report.as_ptr(), buf_virt, report.len());
+        }
+    }
+
+    // Submit a Normal TRB on the interrupt OUT endpoint.
+    let mut ring = unsafe { TrbRing::from_state(ring_state) };
+    let trb = Trb {
+        d0: lo(buf_phys),
+        d1: hi(buf_phys),
+        d2: report.len() as u32,
+        d3: trb_type(1) | (1 << 5), // Normal TRB, IOC
+    };
+    let Some(trb_phys) = ring.push_with_phys(trb) else {
+        dma::dealloc(buf_virt, report.len().max(1));
+        return Err(());
+    };
+
+    // Persist updated ring state.
+    ring_state = ring.snapshot();
+    {
+        let mut guard = LED_RUNTIMES.lock();
+        if let Some(rt) = guard
+            .iter_mut()
+            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        {
+            rt.ep_out_ring = unsafe { TrbRing::from_state(ring_state) };
+        }
+    }
+
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_out_target) };
+
+    let evt = xhci::wait_for_event(
+        &ctx,
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            if evt_slot != slot_id {
+                return false;
+            }
+            let evt_ep_target = (evt.d3 >> 16) & 0x1F;
+            if evt_ep_target != ep_out_target {
+                return false;
+            }
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            (evt_ptr & !0xFu64) == (trb_phys & !0xFu64)
+        },
+        400,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    .ok_or(())?;
+
+    let cc = (evt.d2 >> 24) & 0xFF;
+    dma::dealloc(buf_virt, report.len().max(1));
+    if cc == 1 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
 fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
     let mut idx = 0usize;
     let mut config_value = 1u8;

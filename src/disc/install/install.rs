@@ -224,7 +224,16 @@ kernel_path: boot():/TRUEOS.ELF\n\
 resolution: 1920x1080x32\n\n";
 
     log("install: stage=format_esp_fat32");
-    if let Err(e) = fat32::format_and_populate_esp_fat32(
+    log(
+        alloc::format!(
+            "install: esp range lba={} blocks={} (~{} MiB)",
+            esp_range.first_lba(),
+            esp_range.block_count(),
+            (esp_range.block_count().saturating_mul(512) + (1024 * 1024 - 1)) / (1024 * 1024)
+        )
+        .as_str(),
+    );
+    if let Err(e) = fat32::format_and_populate_esp_with_log(
         esp_handle,
         fat32::EspImage {
             bootx64_efi,
@@ -232,6 +241,7 @@ resolution: 1920x1080x32\n\n";
             payload_iso: None,
             limine_conf,
         },
+        log,
     ) {
         log(alloc::format!("install: fat32 format/populate failed ({:?})", e).as_str());
         return Err(e);

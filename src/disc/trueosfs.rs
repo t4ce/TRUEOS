@@ -1,7 +1,10 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::disc::{block, partition};
 use core::hint::spin_loop;
+use core::sync::atomic::{AtomicU32, Ordering};
+use spin::Mutex;
+use trueos_math::Tree;
 
 // Standard EFI System Partition type GUID.
 // C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -15,6 +18,114 @@ pub struct TrueosFsPlacement {
     pub super_lba: u64,
     pub data_lba: u64,
     pub data_end_lba_exclusive: Option<u64>,
+}
+
+/// TRUEOSFS per-disk root filetree cache.
+///
+/// This is intentionally limited in scope: it is *not* a page cache.
+/// It is meant to memoize directory/file listings once we implement them.
+const TRUEOSFS_TREE_CAP: usize = 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrueosFsTreeKind {
+    Root,
+    Dir,
+    File,
+    /// Represents a nested TRUEOSFS inside the tree (future mountpoint concept).
+    TrueosFs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrueosFsTreeEntry {
+    pub kind: TrueosFsTreeKind,
+    pub name: String,
+}
+
+pub type TrueosFsTree = Tree<TrueosFsTreeEntry, TRUEOSFS_TREE_CAP>;
+
+struct RootMount {
+    disk_id: block::DiscId,
+    placement: TrueosFsPlacement,
+    seq: u32,
+    tree: Option<Box<TrueosFsTree>>,
+}
+
+static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
+static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
+
+/// Ensure a single TRUEOSFS root exists for this *whole disk*.
+///
+/// Returns:
+/// - `Ok(Some(disk_id))` if the disk contains TRUEOSFS and is now registered
+/// - `Ok(None)` if the disk does not contain TRUEOSFS
+/// - `Err(_)` on I/O or invalid param
+pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let Some(placement) = locate(disk)? else {
+        return Ok(None);
+    };
+
+    let disk_id = disk.id();
+
+    let mut roots = ROOTS.lock();
+    if roots.iter().any(|m| m.disk_id == disk_id) {
+        return Ok(Some(disk_id));
+    }
+
+    // Seed an initial tree skeleton. Directory enumeration will fill this later.
+    let mut tree = TrueosFsTree::new();
+    let root = match tree.add_root(TrueosFsTreeEntry {
+        kind: TrueosFsTreeKind::Root,
+        name: String::from("trueosfs"),
+    }) {
+        Some(id) => id,
+        None => {
+            // Capacity too small; still register without a cache.
+            roots.push(RootMount {
+                disk_id,
+                placement,
+                seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
+                tree: None,
+            });
+            return Ok(Some(disk_id));
+        }
+    };
+    let _ = tree.add_child(
+        root,
+        TrueosFsTreeEntry {
+            kind: TrueosFsTreeKind::Dir,
+            name: String::from("/"),
+        },
+    );
+
+    roots.push(RootMount {
+        disk_id,
+        placement,
+        seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
+        tree: Some(Box::new(tree)),
+    });
+
+    Ok(Some(disk_id))
+}
+
+pub fn roots_len() -> usize {
+    ROOTS.lock().len()
+}
+
+pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
+    let roots = ROOTS.lock();
+    roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)
+}
+
+pub fn with_root_tree<R>(disk_id: block::DiscId, f: impl FnOnce(u32, &TrueosFsPlacement, &TrueosFsTree) -> R) -> Option<R> {
+    let roots = ROOTS.lock();
+    roots
+        .iter()
+        .find(|m| m.disk_id == disk_id)
+        .and_then(|m| m.tree.as_deref().map(|t| f(m.seq, &m.placement, t)))
 }
 
 struct AlignedBuf {
