@@ -2,28 +2,6 @@ pub mod html;
 
 use embassy_executor::task;
 
-#[inline]
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
-#[inline]
-fn write_hex_u64_16(out: &mut [u8; 16], v: u64) {
-    for i in (0..16).rev() {
-        let nibble = ((v >> (i * 4)) & 0xF) as u8;
-        let c = match nibble {
-            0..=9 => b'0' + nibble,
-            _ => b'a' + (nibble - 10),
-        };
-        out[(15 - i) as usize] = c;
-    }
-}
-
 #[task]
 pub(crate) async fn boot_fetch_to_file_smoke_task() {
     use embassy_time::Timer;
@@ -41,11 +19,25 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
 
         // Write into the exact same cache filename as the QuickJS loader:
         // /qjs/cdn/<fnv1a64(url)>.mjs
-        let hash = fnv1a64(url_bytes);
+        let hash = {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for &b in url_bytes {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            h
+        };
         let mut path = [0u8; 29];
         path[..9].copy_from_slice(b"/qjs/cdn/");
         let mut hex = [0u8; 16];
-        write_hex_u64_16(&mut hex, hash);
+        for i in (0..16).rev() {
+            let nibble = ((hash >> (i * 4)) & 0xF) as u8;
+            let c = match nibble {
+                0..=9 => b'0' + nibble,
+                _ => b'a' + (nibble - 10),
+            };
+            hex[(15 - i) as usize] = c;
+        }
         path[9..25].copy_from_slice(&hex);
         path[25..].copy_from_slice(b".mjs");
 

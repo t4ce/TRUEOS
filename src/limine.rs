@@ -76,12 +76,6 @@ pub fn executable_address_bases() -> Option<(u64, u64)> {
     Some((resp.virtual_base(), resp.physical_base()))
 }
 
-pub fn executable_file_bytes() -> Option<&'static [u8]> {
-    let resp = EXECUTABLE_FILE_REQUEST.get_response()?;
-    let file = resp.file();
-    bytes_from_limine_file(file)
-}
-
 pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
     let resp = MODULE_REQUEST.get_response()?;
     for m in resp.modules().iter() {
@@ -90,10 +84,6 @@ pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
         }
     }
     None
-}
-
-pub fn install_payload_bytes() -> Option<&'static [u8]> {
-    module_bytes_by_string(b"trueos.install.payload")
 }
 
 pub fn install_kernel_bytes() -> Option<&'static [u8]> {
