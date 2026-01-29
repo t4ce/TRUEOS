@@ -376,8 +376,8 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
             options(nostack)
         );
     } else {
-        let mut d = dest_u8.add(n - 1);
-        let mut s = src_u8.add(n - 1);
+        let d = dest_u8.add(n - 1);
+        let s = src_u8.add(n - 1);
         core::arch::asm!(
             "std",
             "rep movsb",

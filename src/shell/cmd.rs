@@ -336,7 +336,7 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
     }
 
     // Otherwise: positional parsing by whitespace tokens, with optional trailing Rest.
-    let mut tokens: Vec<&'a str> = rest.split_whitespace().collect();
+    let tokens: Vec<&'a str> = rest.split_whitespace().collect();
 
     let has_rest = cmd.args.last().map(|a| a.ty == ArgType::Rest).unwrap_or(false);
     let positional_count = if has_rest { cmd.args.len() - 1 } else { cmd.args.len() };

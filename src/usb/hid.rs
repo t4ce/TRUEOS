@@ -517,8 +517,8 @@ pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_I
 pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
     let BootAttachParams {
         ctx,
-        mut cmd_ring,
-        mut ep0_ring,
+        cmd_ring,
+        ep0_ring,
         slot_id,
         cfg,
         dev_ctx_virt,
@@ -585,8 +585,8 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
     // Best-effort: idle/protocol setup (works for many HID devices; errors ignored)
     for ep in endpoints.iter() {
-        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
+        let _ = class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+        let _ = class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
     }
 
     let mut attached = 0usize;
@@ -705,7 +705,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         let report_len = ep.max_packet as u32;
 
         if ep.report_desc_len > 0 {
-            let _ = fetch_report_descriptor(ctx, &mut ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await;
+            let _ = fetch_report_descriptor(ctx, &mut *ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await;
         }
 
         let normal = Trb {
@@ -888,8 +888,8 @@ pub struct BootAttachParams<'a> {
 pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
     let BootAttachParams {
         ctx,
-        mut cmd_ring,
-        mut ep0_ring,
+        cmd_ring,
+        ep0_ring,
         slot_id,
         cfg,
         dev_ctx_virt,
@@ -957,9 +957,9 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
 
     for ep in endpoints.iter() {
         let _ =
-            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
         let _ =
-            class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
+            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
     }
 
     let mut attached = 0usize;
@@ -1091,7 +1091,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         if hid_kind == 1 && ep.report_desc_len > 0 {
             if let Some(desc) = fetch_report_descriptor(
                 ctx,
-                &mut ep0_ring,
+                &mut *ep0_ring,
                 slot_id,
                 ep.interface,
                 ep.report_desc_len as usize,
