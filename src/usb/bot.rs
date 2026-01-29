@@ -1,7 +1,7 @@
 use super::scsi;
 use super::xhci::{self, hi, lo, trb_type, Trb, TrbRing, XhciContext};
 use crate::pci::dma;
-use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::ptr::{write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
 
 const CBW_SIGNATURE: u32 = 0x4342_5355; // 'USBC'

@@ -1,4 +1,3 @@
-use super::cdc_acm;
 use super::xhci;
 use super::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext};
 use crate::pci::dma;

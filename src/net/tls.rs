@@ -5,9 +5,7 @@
 //! - Used by the HTTPS smoke/demo in `crate::net::tls_demo`.
 //!
 //! Known limitations (still TODO):
-//! - Proper `close_notify` emission for the unbuffered client.
 //! - Buffer/memory limits for `incoming_tls`/`outgoing_tls`/`pending_plaintext`.
-//! - mTLS / client certs + key loading (`TlsKeyStore`).
 //! - Session resumption / ticket storage.
 
 extern crate alloc;
@@ -22,7 +20,6 @@ use spin::Once;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum TlsError {
-    Unsupported,
     InvalidConfig,
     HandshakeFailed,
     Io,
@@ -35,12 +32,6 @@ pub struct TlsRoots {
 }
 
 impl TlsRoots {
-    pub fn empty() -> Self {
-        Self {
-            store: Arc::new(rustls::RootCertStore::empty()),
-        }
-    }
-
     /// Mozilla root set via `webpki-roots`.
     pub fn mozilla() -> Self {
         let mut roots = rustls::RootCertStore::empty();
@@ -48,20 +39,6 @@ impl TlsRoots {
         Self {
             store: Arc::new(roots),
         }
-    }
-
-    /// Build a root store from a list of DER-encoded certs.
-    pub fn from_der_certs(certs: &[&[u8]]) -> Result<Self, TlsError> {
-        let mut roots = rustls::RootCertStore::empty();
-        for der in certs {
-            let der = rustls::pki_types::CertificateDer::from((*der).to_vec());
-            roots
-                .add(der)
-                .map_err(|_| TlsError::InvalidConfig)?;
-        }
-        Ok(Self {
-            store: Arc::new(roots),
-        })
     }
 }
 
@@ -96,20 +73,6 @@ impl TlsClientConfig {
     }
 }
 
-/// A platform TCP transport that TLS can run on top of.
-///
-/// Requirements for an implementation:
-/// - Non-blocking or event-driven I/O is fine, but must provide a way for TLS to:
-///   - push encrypted bytes to the network
-///   - consume encrypted bytes received from the network
-/// - Must support orderly close.
-/// - Should tolerate partial sends/receives.
-pub trait TlsTcpTransport {
-    fn send_encrypted(&mut self, bytes: &[u8]) -> Result<usize, TlsError>;
-    fn recv_encrypted(&mut self, out: &mut [u8]) -> Result<usize, TlsError>;
-    fn close(&mut self) -> Result<(), TlsError>;
-}
-
 pub trait TlsRng {
     fn fill(&mut self, out: &mut [u8]) -> Result<(), TlsError>;
 }
@@ -141,16 +104,6 @@ impl TlsRng for KernelTlsRng {
 /// - Needs UTC-ish wall clock OR an explicit policy to disable time validation.
 pub trait TlsTime {
     fn unix_time_seconds(&self) -> Option<u64>;
-}
-
-/// Storage/provider for client keys (mTLS) and/or persisted session resumption.
-///
-/// Requirements:
-/// - Optional: client cert + private key retrieval.
-/// - Optional: session ticket / PSK storage.
-pub trait TlsKeyStore {
-    fn load_client_cert_chain_der(&self) -> Result<Option<Vec<Vec<u8>>>, TlsError>;
-    fn load_client_key_der(&self) -> Result<Option<Vec<u8>>, TlsError>;
 }
 
 /// A future TLS client connection abstraction.
@@ -308,7 +261,6 @@ impl TlsClient {
         server_name: &str,
         rng: &mut dyn TlsRng,
         time: &'static dyn TlsTime,
-        _keys: Option<&dyn TlsKeyStore>,
     ) -> Result<Self, TlsError> {
         ensure_rustls_provider_installed();
 
@@ -428,13 +380,5 @@ impl TlsClient {
     /// True once the handshake is finished.
     pub fn is_connected(&self) -> bool {
         self.connected && !self.closed
-    }
-
-    /// Begin an orderly shutdown.
-    pub fn close_notify(&mut self) -> Result<(), TlsError> {
-        // Proper close_notify wiring for unbuffered rustls is TODO.
-        // For now, mark closed; callers should close the underlying transport.
-        self.closed = true;
-        Ok(())
     }
 }

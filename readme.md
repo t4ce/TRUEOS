@@ -18,11 +18,14 @@ cargo outdated -R
 cargo upgrade
 cargo update
 
+truncate -s 4G nvme.img
+
 
 konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 127.0.0.1 4245; stty sane'
 
 check disc files after install
 // mdir -i disk.img@@$((2048*512)) ::
+
 
 # good luck with this one
 

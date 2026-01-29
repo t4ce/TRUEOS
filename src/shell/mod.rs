@@ -1,12 +1,7 @@
-use core::ffi::c_char;
-use core::fmt::Write;
-
-use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
-use crate::disc::block;
 use crate::shell::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 
 pub(crate) mod ecma48;
@@ -26,8 +21,7 @@ pub(crate) use interface::{ShellBackend, ShellIo};
 
 pub(crate) mod backends;
 pub(crate) use backends::{
-    NetTcpShellBackend, Uart1Com1Backend, NET_TCP_SHELL_BACKEND,
-    UART1_COM1_BACKEND
+    NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND
 };
 
 pub(crate) mod uart1_com1;
@@ -208,18 +202,18 @@ fn print_install_disk_table(io: &dyn ShellIo) {
 }
 
 #[derive(Copy, Clone)]
-enum PendingAction {
+pub(crate) enum PendingAction {
     Reset,
     S5,
     FormatConfirm { disc_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InstallWizardStage {
+pub(crate) enum InstallWizardStage {
     SelectDisk,
 }
 
-enum CommandAction {
+pub(crate) enum CommandAction {
     None,
     Pending(PendingAction),
     EnterCube,
