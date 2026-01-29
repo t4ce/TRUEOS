@@ -591,6 +591,7 @@ pub(crate) fn init_builtin_shell_commands() {
             ArgSpec::new("rows", ArgType::Usize).mandatory(),
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
+        static TFSDEMO_ARGS: [ArgSpec; 1] = [ArgSpec::new("diskid", ArgType::Str)];
 
         // Introspection
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
@@ -609,6 +610,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
         let _ = REGSHCMD("files", &[], cmd_files);
+        let _ = REGSHCMD("tfsdemo", &TFSDEMO_ARGS, cmd_tfsdemo);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &FORMAT_ARGS, cmd_format);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
@@ -862,6 +864,122 @@ fn cmd_files(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> s
         }
         None => ctx.io.write_str("files: matrix full\r\n"),
     }
+    super::CommandAction::None
+}
+
+fn cmd_tfsdemo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    use crate::disc::{block, trueosfs};
+
+    let arg = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
+    let arg = arg.trim();
+
+    let target = if arg.is_empty() {
+        // Pick the first whole disk that contains a TRUEOSFS superblock.
+        block::device_handles().into_iter().find(|h| {
+            if h.parent().is_some() {
+                return false;
+            }
+            matches!(trueosfs::locate(*h), Ok(Some(_)))
+        })
+    } else {
+        let raw_id = super::parse_disc_id_raw(arg).unwrap_or(0);
+        if raw_id == 0 {
+            ctx.io.write_str("tfsdemo: invalid id\r\n");
+            return super::CommandAction::None;
+        }
+        block::device_handles()
+            .into_iter()
+            .find(|h| h.parent().is_none() && h.id().raw() == raw_id)
+    };
+
+    let Some(handle) = target else {
+        ctx.io.write_str("tfsdemo: no TRUEOSFS disk found\r\n");
+        ctx.io.write_str("tfsdemo: usage tfsdemo [diskid]\r\n");
+        return super::CommandAction::None;
+    };
+
+    let info = handle.info();
+    ctx.io.write_fmt(format_args!(
+        "tfsdemo: target id={} ({}) blocks={} bs={} writable={} label={:?}\r\n",
+        info.id.raw(),
+        info.id,
+        info.block_count,
+        info.block_size,
+        info.writable,
+        info.label
+    ));
+
+    if !handle.supports_write() {
+        ctx.io.write_str("tfsdemo: disk is read-only\r\n");
+        return super::CommandAction::None;
+    }
+
+    let Some(_placement) = trueosfs::locate(handle).unwrap_or(None) else {
+        ctx.io.write_str("tfsdemo: no TRUEOSFS superblock detected\r\n");
+        return super::CommandAction::None;
+    };
+
+    const NAME: &str = "demo.txt";
+    const A: &[u8] = b"hello";
+    const B: &[u8] = b" world";
+    const EXPECT: &[u8] = b"hello world";
+
+    // Make output stable regardless of previous runs.
+    match trueosfs::file_delete(handle, NAME) {
+        Ok(v) => ctx.io.write_fmt(format_args!("tfsdemo: pre-delete {} -> {}\r\n", NAME, v)),
+        Err(e) => {
+            ctx.io.write_fmt(format_args!("tfsdemo: pre-delete err={:?}\r\n", e));
+            return super::CommandAction::None;
+        }
+    }
+
+    match trueosfs::file_in(handle, NAME, A) {
+        Ok(true) => ctx.io.write_str("tfsdemo: file_in ok\r\n"),
+        Ok(false) => {
+            ctx.io.write_str("tfsdemo: file_in failed (no space/invalid)\r\n");
+            return super::CommandAction::None;
+        }
+        Err(e) => {
+            ctx.io.write_fmt(format_args!("tfsdemo: file_in err={:?}\r\n", e));
+            return super::CommandAction::None;
+        }
+    }
+
+    match trueosfs::file_valid(handle, NAME) {
+        Ok(v) => ctx.io.write_fmt(format_args!("tfsdemo: valid -> {}\r\n", v)),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: valid err={:?}\r\n", e)),
+    }
+
+    match trueosfs::file_out(handle, NAME) {
+        Ok(Some(bytes)) => ctx.io.write_fmt(format_args!("tfsdemo: out len={} first={:?}\r\n", bytes.len(), bytes.get(0).copied())),
+        Ok(None) => ctx.io.write_str("tfsdemo: out missing\r\n"),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: out err={:?}\r\n", e)),
+    }
+
+    match trueosfs::file_append(handle, NAME, B) {
+        Ok(true) => ctx.io.write_str("tfsdemo: append ok\r\n"),
+        Ok(false) => ctx.io.write_str("tfsdemo: append failed\r\n"),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: append err={:?}\r\n", e)),
+    }
+
+    match trueosfs::file_out(handle, NAME) {
+        Ok(Some(bytes)) => {
+            let ok = bytes == EXPECT;
+            ctx.io.write_fmt(format_args!("tfsdemo: out2 len={} match={}\r\n", bytes.len(), ok));
+        }
+        Ok(None) => ctx.io.write_str("tfsdemo: out2 missing\r\n"),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: out2 err={:?}\r\n", e)),
+    }
+
+    match trueosfs::file_delete(handle, NAME) {
+        Ok(v) => ctx.io.write_fmt(format_args!("tfsdemo: delete -> {}\r\n", v)),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: delete err={:?}\r\n", e)),
+    }
+    match trueosfs::file_valid(handle, NAME) {
+        Ok(v) => ctx.io.write_fmt(format_args!("tfsdemo: valid after delete -> {}\r\n", v)),
+        Err(e) => ctx.io.write_fmt(format_args!("tfsdemo: valid after delete err={:?}\r\n", e)),
+    }
+
     super::CommandAction::None
 }
 
