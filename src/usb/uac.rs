@@ -6,7 +6,7 @@
 //! - Configure the xHCI isoch OUT endpoint.
 //! - Provide a small API to feed isoch OUT packets.
 
-use crate::audio::{PcmFormat, PcmSink};
+use crate::audio::PcmFormat;
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
@@ -100,12 +100,6 @@ impl UacSink {
 
     fn pipe_mut(&mut self) -> Option<&mut IsochOutPipe> {
         self.pipe.as_mut()
-    }
-}
-
-impl PcmSink for UacSink {
-    fn write(&mut self, _pcm: &[u8]) -> usize {
-        0
     }
 }
 

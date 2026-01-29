@@ -8,18 +8,3 @@ pub struct PcmFormat {
     pub channels: u8,
     pub bits_per_sample: u8,
 }
-
-/// An abstract sink for interleaved PCM bytes.
-pub trait PcmSink {
-    /// Attempt to write PCM bytes; return bytes accepted.
-    fn write(&mut self, pcm: &[u8]) -> usize;
-}
-
-/// A no-op sink useful as a placeholder.
-pub struct NullSink;
-
-impl PcmSink for NullSink {
-    fn write(&mut self, pcm: &[u8]) -> usize {
-        pcm.len()
-    }
-}
