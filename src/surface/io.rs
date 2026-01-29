@@ -114,33 +114,12 @@ pub mod kfs {
 		crate::disc::files::Fs::exists(path)
 	}
 
-	/// Read a destination file for an append operation.
-	///
-	/// Mirrors the shell's historical behavior: a missing/unopenable destination
-	/// is treated as an empty file so `append` can create it.
-	pub fn read_file_for_append(
-		path: &str,
-	) -> core::result::Result<Vec<u8>, crate::disc::files::FsError> {
-		match crate::disc::files::Fs::read_file(path) {
-			Ok(bytes) => Ok(bytes),
-			Err(crate::disc::files::FsError::Read(
-				crate::disc::files::UsbFsReadError::OpenFailed,
-			)) => Ok(Vec::new()),
-			Err(e) => Err(e),
-		}
-	}
-
 	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
 	pub fn append_into_file(
 		dst_path: &str,
 		src: &[u8],
 	) -> core::result::Result<(), crate::disc::files::FsError> {
-		if src.is_empty() {
-			return Ok(());
-		}
-		let mut dst = read_file_for_append(dst_path)?;
-		dst.extend_from_slice(src);
-		write_file(dst_path, dst.as_slice())
+		crate::disc::files::Fs::append_file(dst_path, src)
 	}
 }
 
@@ -267,10 +246,6 @@ pub mod shellcmd {
 		Path(String<160>),
 	}
 
-	fn read_dst_file_for_append(path: &str) -> Result<Vec<u8>, crate::disc::files::FsError> {
-		kfs::read_file_for_append(path)
-	}
-
 	#[embassy_executor::task]
 	async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
 		let src_bytes = match src {
@@ -305,29 +280,18 @@ pub mod shellcmd {
 					return;
 				}
 			},
-			IoArg::Path(path) => match read_dst_file_for_append(path.as_str()) {
-				Ok(bytes) => bytes,
-				Err(e) => {
-					crate::matrix::clear_lines(slot_id);
-					crate::matrix::push_line(slot_id, "io: read dst failed");
-					crate::matrix::push_line(slot_id, "(see kernel log for details)");
-					crate::log!("io: read_file dst '{}' failed: {:?}\n", path.as_str(), e);
-					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-					return;
-				}
-			},
+			IoArg::Path(_path) => Vec::new(),
 		};
-
-		dst_bytes.extend_from_slice(src_bytes.as_slice());
 
 		match dst {
 			IoArg::Slot(id) => {
+				dst_bytes.extend_from_slice(src_bytes.as_slice());
 				let _ = crate::matrix::set_blob_owned_with_preview(id, dst_bytes);
 				crate::matrix::clear_lines(slot_id);
 				crate::matrix::push_line(slot_id, "io: ok");
 				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
 			}
-			IoArg::Path(path) => match kfs::write_file(path.as_str(), dst_bytes.as_slice()) {
+			IoArg::Path(path) => match kfs::append_into_file(path.as_str(), src_bytes.as_slice()) {
 				Ok(()) => {
 					crate::matrix::clear_lines(slot_id);
 					crate::matrix::push_line(slot_id, "io: ok");
@@ -335,9 +299,9 @@ pub mod shellcmd {
 				}
 				Err(e) => {
 					crate::matrix::clear_lines(slot_id);
-					crate::matrix::push_line(slot_id, "io: write dst failed");
+					crate::matrix::push_line(slot_id, "io: append dst failed");
 					crate::matrix::push_line(slot_id, "(see kernel log for details)");
-					crate::log!("io: write_file dst '{}' failed: {:?}\n", path.as_str(), e);
+					crate::log!("io: append dst '{}' failed: {:?}\n", path.as_str(), e);
 					crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
 				}
 			},

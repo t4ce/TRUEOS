@@ -1,12 +1,8 @@
 use alloc::string::String;
-use alloc::vec::Vec;
-use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, SeekFrom, Write};
-
-use crate::disc::{block, layout};
+use crate::disc::block;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_math::Tree;
@@ -129,35 +125,152 @@ pub enum FsError {
 /// Intended to map to higher-level APIs like `fs.readFile()` / `fs.writeFile()`.
 pub struct Fs;
 
+static TRUEOSFS_ROOT: Mutex<Option<block::DiscId>> = Mutex::new(None);
+
+fn pick_trueosfs_root() -> Option<block::DeviceHandle> {
+    // Fast path: cached ID.
+    if let Some(id) = *TRUEOSFS_ROOT.lock() {
+        if let Some(h) = block::device_handle(id) {
+            return Some(h);
+        }
+        // Device disappeared; clear and rescan.
+        *TRUEOSFS_ROOT.lock() = None;
+    }
+
+    // Slow path: scan whole-disk devices for TRUEOSFS.
+    for h in block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+        if crate::disc::trueosfs::locate(h).ok().flatten().is_some() {
+            let _ = crate::disc::trueosfs::mount_root(h);
+            *TRUEOSFS_ROOT.lock() = Some(h.id());
+            return Some(h);
+        }
+    }
+    None
+}
+
+#[inline]
+fn norm_rel(path: &str) -> Result<String, ()> {
+    crate::path::normalize_rel_no_parent(path).ok_or(())
+}
+
+#[inline]
+fn norm_rel_nonempty(path: &str) -> Result<String, ()> {
+    let rel = norm_rel(path)?;
+    if rel.is_empty() {
+        return Err(());
+    }
+    Ok(rel)
+}
+
 impl Fs {
     #[inline]
     pub fn read_file(path: &str) -> Result<alloc::vec::Vec<u8>, FsError> {
-        read_usbms_file(path).map_err(FsError::Read)
+        if let Some(disk) = pick_trueosfs_root() {
+            let rel = norm_rel_nonempty(path).map_err(|_| FsError::Read(UsbFsReadError::OpenFailed))?;
+            match crate::disc::trueosfs::file_out(disk, rel.as_str()) {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => return Err(FsError::Read(UsbFsReadError::OpenFailed)),
+                Err(e) => return Err(FsError::Read(UsbFsReadError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Read(UsbFsReadError::UsbmsNotFound))
     }
 
     #[inline]
     pub fn write_file(path: &str, data: &[u8]) -> Result<(), FsError> {
-        write_usbms_file(path, data).map_err(FsError::Write)
+        if data.len() > MAX_WRITE_BYTES {
+            return Err(FsError::Write(UsbFsWriteError::TooLarge));
+        }
+
+        if let Some(disk) = pick_trueosfs_root() {
+            let rel = norm_rel_nonempty(path).map_err(|_| FsError::Write(UsbFsWriteError::BadPath))?;
+            match crate::disc::trueosfs::file_in(disk, rel.as_str(), data) {
+                Ok(true) => return Ok(()),
+                Ok(false) => return Err(FsError::Write(UsbFsWriteError::WriteFailed)),
+                Err(e) => return Err(FsError::Write(UsbFsWriteError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Write(UsbFsWriteError::UsbmsNotFound))
     }
 
     #[inline]
     pub fn rename(src_path: &str, dst_path: &str) -> Result<(), FsError> {
-        rename_usbms_path(src_path, dst_path).map_err(FsError::Rename)
+        if let Some(disk) = pick_trueosfs_root() {
+            let src = norm_rel_nonempty(src_path).map_err(|_| FsError::Rename(UsbFsRenameError::BadPath))?;
+            let dst = norm_rel_nonempty(dst_path).map_err(|_| FsError::Rename(UsbFsRenameError::BadPath))?;
+
+            // Mirror FAT-ish semantics.
+            match crate::disc::trueosfs::file_out(disk, src.as_str()) {
+                Ok(Some(bytes)) => {
+                    match crate::disc::trueosfs::file_exists(disk, dst.as_str()) {
+                        Ok(true) => return Err(FsError::Rename(UsbFsRenameError::AlreadyExists)),
+                        Ok(false) => {}
+                        Err(e) => return Err(FsError::Rename(UsbFsRenameError::DeviceIo(e))),
+                    }
+
+                    match crate::disc::trueosfs::file_in(disk, dst.as_str(), bytes.as_slice()) {
+                        Ok(true) => {}
+                        Ok(false) => return Err(FsError::Rename(UsbFsRenameError::RenameFailed)),
+                        Err(e) => return Err(FsError::Rename(UsbFsRenameError::DeviceIo(e))),
+                    }
+
+                    match crate::disc::trueosfs::file_delete(disk, src.as_str()) {
+                        Ok(true) => return Ok(()),
+                        Ok(false) => return Err(FsError::Rename(UsbFsRenameError::NotFound)),
+                        Err(e) => return Err(FsError::Rename(UsbFsRenameError::DeviceIo(e))),
+                    }
+                }
+                Ok(None) => return Err(FsError::Rename(UsbFsRenameError::NotFound)),
+                Err(e) => return Err(FsError::Rename(UsbFsRenameError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Rename(UsbFsRenameError::UsbmsNotFound))
     }
 
     #[inline]
     pub fn list_dir(path: &str) -> Result<String, FsError> {
-        list_usbms_dir(path).map_err(FsError::ListDir)
+        if let Some(disk) = pick_trueosfs_root() {
+            match crate::disc::trueosfs::list_dir(disk, path) {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(e) => return Err(FsError::ListDir(UsbFsListDirError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::ListDir(UsbFsListDirError::UsbmsNotFound))
     }
 
     #[inline]
     pub fn remove(path: &str) -> Result<(), FsError> {
-        remove_usbms_path(path).map_err(FsError::Remove)
+        if let Some(disk) = pick_trueosfs_root() {
+            let rel = norm_rel_nonempty(path).map_err(|_| FsError::Remove(UsbFsRemoveError::BadPath))?;
+            match crate::disc::trueosfs::file_delete(disk, rel.as_str()) {
+                Ok(true) => return Ok(()),
+                Ok(false) => return Err(FsError::Remove(UsbFsRemoveError::NotFound)),
+                Err(e) => return Err(FsError::Remove(UsbFsRemoveError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Remove(UsbFsRemoveError::UsbmsNotFound))
     }
 
     #[inline]
     pub fn exists(path: &str) -> Result<bool, FsError> {
-        usbms_path_exists(path).map_err(FsError::Read)
+        if let Some(disk) = pick_trueosfs_root() {
+            let rel = norm_rel_nonempty(path).map_err(|_| FsError::Read(UsbFsReadError::OpenFailed))?;
+            match crate::disc::trueosfs::file_exists(disk, rel.as_str()) {
+                Ok(v) => return Ok(v),
+                Err(e) => return Err(FsError::Read(UsbFsReadError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Read(UsbFsReadError::UsbmsNotFound))
     }
 
     /// Create a directory path recursively (mkdir -p semantics).
@@ -166,595 +279,87 @@ impl Fs {
     /// separate error category for now.
     #[inline]
     pub fn create_dir_all(path: &str) -> Result<(), FsError> {
-        create_usbms_dir_all(path).map_err(FsError::Write)
+        if pick_trueosfs_root().is_some() {
+            // TRUEOSFS stores flat keys; treat directory creation as a no-op.
+            // Still validate paths to avoid surprising behavior.
+            let _ = norm_rel(path).map_err(|_| FsError::Write(UsbFsWriteError::BadPath))?;
+            return Ok(());
+        }
+
+        Err(FsError::Write(UsbFsWriteError::UsbmsNotFound))
+    }
+
+    #[inline]
+    pub fn append_file(path: &str, data: &[u8]) -> Result<(), FsError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if data.len() > MAX_WRITE_BYTES {
+            return Err(FsError::Write(UsbFsWriteError::TooLarge));
+        }
+
+        if let Some(disk) = pick_trueosfs_root() {
+            let rel = norm_rel_nonempty(path).map_err(|_| FsError::Write(UsbFsWriteError::BadPath))?;
+            match crate::disc::trueosfs::file_append(disk, rel.as_str(), data) {
+                Ok(true) => return Ok(()),
+                Ok(false) => return Err(FsError::Write(UsbFsWriteError::WriteFailed)),
+                Err(e) => return Err(FsError::Write(UsbFsWriteError::DeviceIo(e))),
+            }
+        }
+
+        Err(FsError::Write(UsbFsWriteError::UsbmsNotFound))
     }
 }
 
 // These caps exist to keep memory usage bounded for filesystem operations.
 // Some boot-cached assets (e.g. pci.ids) are ~1.6 MiB, so keep this comfortably above that.
-const MAX_READ_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WRITE_BYTES: usize = 4 * 1024 * 1024;
 
-pub fn read_usbms_file(path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsReadError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsReadError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsReadError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsReadError::OpenFailed);
-        }
-    };
-    if rel.is_empty() {
-        let _ = fs.unmount();
-        return Err(UsbFsReadError::OpenFailed);
-    }
-
-    let res = {
-        let root = fs.root_dir();
-        let mut file = root.open_file(rel.as_str()).map_err(|_| UsbFsReadError::OpenFailed)?;
-
-        let mut out = alloc::vec::Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            let n = file.read(&mut buf).map_err(|_| UsbFsReadError::ReadFailed)?;
-            if n == 0 {
-                break;
-            }
-            if out.len().saturating_add(n) > MAX_READ_BYTES {
-                return Err(UsbFsReadError::TooLarge);
-            }
-            out.extend_from_slice(&buf[..n]);
-        }
-        Ok(out)
-    };
-
-    let _ = fs.unmount();
-    res
+// Legacy USBMS/FAT helpers are intentionally stubbed out now.
+// TRUEOSFS is the permanent backend for file operations.
+pub fn read_usbms_file(_path: &str) -> Result<alloc::vec::Vec<u8>, UsbFsReadError> {
+    Err(UsbFsReadError::UsbmsNotFound)
 }
 
-pub fn usbms_path_exists(path: &str) -> Result<bool, UsbFsReadError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsReadError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsReadError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsReadError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsReadError::OpenFailed);
-        }
-    };
-    if rel.is_empty() {
-        let _ = fs.unmount();
-        return Err(UsbFsReadError::OpenFailed);
-    }
-
-    let res = {
-        let root = fs.root_dir();
-        match root.open_file(rel.as_str()) {
-            Ok(_f) => Ok(true),
-            Err(fatfs::Error::NotFound) => Ok(false),
-            Err(_e) => Err(UsbFsReadError::OpenFailed),
-        }
-    };
-
-    let _ = fs.unmount();
-    res
+pub fn usbms_path_exists(_path: &str) -> Result<bool, UsbFsReadError> {
+    Err(UsbFsReadError::UsbmsNotFound)
 }
 
-pub fn write_usbms_file(path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
+pub fn write_usbms_file(_path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
     if bytes.len() > MAX_WRITE_BYTES {
         return Err(UsbFsWriteError::TooLarge);
     }
+    Err(UsbFsWriteError::UsbmsNotFound)
+}
 
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsWriteError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsWriteError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsWriteError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsWriteError::BadPath);
-        }
-    };
-    if rel.is_empty() {
-        let _ = fs.unmount();
-        return Err(UsbFsWriteError::BadPath);
+pub fn append_usbms_file(_path: &str, bytes: &[u8]) -> Result<(), UsbFsWriteError> {
+    if bytes.len() > MAX_WRITE_BYTES {
+        return Err(UsbFsWriteError::TooLarge);
     }
-
-    let res = {
-        let root = fs.root_dir();
-
-        // Split into parent dirs and file name.
-        let mut parts = rel.split('/').filter(|p| !p.is_empty());
-        let mut comps: alloc::vec::Vec<&str> = alloc::vec::Vec::new();
-        for p in parts.by_ref() {
-            comps.push(p);
-        }
-        if comps.is_empty() {
-            return Err(UsbFsWriteError::BadPath);
-        }
-        let file_name = comps.pop().ok_or(UsbFsWriteError::BadPath)?;
-        if file_name.is_empty() {
-            return Err(UsbFsWriteError::BadPath);
-        }
-
-        // Walk/create directories.
-        let mut dir = root;
-        for seg in comps.into_iter() {
-            if seg.is_empty() {
-                continue;
-            }
-            match dir.open_dir(seg) {
-                Ok(next) => dir = next,
-                Err(fatfs::Error::NotFound) => {
-                    match dir.create_dir(seg) {
-                        Ok(_) => {}
-                        Err(fatfs::Error::AlreadyExists) => {}
-                        Err(_) => return Err(UsbFsWriteError::DirFailed),
-                    }
-                    dir = dir.open_dir(seg).map_err(|_| UsbFsWriteError::DirFailed)?;
-                }
-                Err(_) => return Err(UsbFsWriteError::DirFailed),
-            }
-        }
-
-        // Open existing or create new.
-        let mut file = match dir.open_file(file_name) {
-            Ok(f) => f,
-            Err(fatfs::Error::NotFound) => dir.create_file(file_name).map_err(|_| UsbFsWriteError::OpenFailed)?,
-            Err(_) => return Err(UsbFsWriteError::OpenFailed),
-        };
-
-        file.seek(SeekFrom::Start(0)).map_err(|_| UsbFsWriteError::WriteFailed)?;
-        let _ = file.truncate();
-        file.write_all(bytes).map_err(|_| UsbFsWriteError::WriteFailed)?;
-        file.flush().map_err(|_| UsbFsWriteError::WriteFailed)?;
-        Ok(())
-    };
-
-    let _ = fs.unmount();
-    res
+    Err(UsbFsWriteError::UsbmsNotFound)
 }
 
-/// Create directories for `path` recursively (mkdir -p).
-///
-/// Accepts both absolute (`/qjs/cdn`) and relative (`qjs/cdn`) paths.
-/// The empty path is treated as a no-op.
-pub fn create_usbms_dir_all(path: &str) -> Result<(), UsbFsWriteError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsWriteError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsWriteError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsWriteError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsWriteError::BadPath);
-        }
-    };
-
-    let res = {
-        let root = fs.root_dir();
-        let mut dir = root;
-
-        if !rel.is_empty() {
-            for seg in rel.split('/').filter(|s| !s.is_empty()) {
-                match dir.open_dir(seg) {
-                    Ok(next) => dir = next,
-                    Err(fatfs::Error::NotFound) => {
-                        match dir.create_dir(seg) {
-                            Ok(_) => {}
-                            Err(fatfs::Error::AlreadyExists) => {}
-                            Err(_) => return Err(UsbFsWriteError::DirFailed),
-                        }
-                        dir = dir.open_dir(seg).map_err(|_| UsbFsWriteError::DirFailed)?;
-                    }
-                    Err(_) => return Err(UsbFsWriteError::DirFailed),
-                }
-            }
-        }
-
-        Ok(())
-    };
-
-    let _ = fs.unmount();
-    res
+pub fn create_usbms_dir_all(_path: &str) -> Result<(), UsbFsWriteError> {
+    Err(UsbFsWriteError::UsbmsNotFound)
 }
 
-pub fn rename_usbms_path(src_path: &str, dst_path: &str) -> Result<(), UsbFsRenameError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsRenameError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsRenameError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRenameError::MountFailed)?;
-
-    let src_rel = match crate::path::normalize_rel_no_parent(src_path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsRenameError::BadPath);
-        }
-    };
-    let dst_rel = match crate::path::normalize_rel_no_parent(dst_path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsRenameError::BadPath);
-        }
-    };
-    if src_rel.is_empty() || dst_rel.is_empty() {
-        let _ = fs.unmount();
-        return Err(UsbFsRenameError::BadPath);
-    }
-
-    // Ensure destination parent directories exist (best-effort, like write_file).
-    let res = {
-        let root = fs.root_dir();
-
-        let parent = match dst_rel.rsplit_once('/') {
-            Some((p, _name)) => p,
-            None => "",
-        };
-
-        if !parent.is_empty() {
-            let mut dir = root.clone();
-            for seg in parent.split('/').filter(|s| !s.is_empty()) {
-                match dir.open_dir(seg) {
-                    Ok(next) => dir = next,
-                    Err(fatfs::Error::NotFound) => {
-                        match dir.create_dir(seg) {
-                            Ok(_) => {}
-                            Err(fatfs::Error::AlreadyExists) => {}
-                            Err(_) => return Err(UsbFsRenameError::RenameFailed),
-                        }
-                        dir = dir.open_dir(seg).map_err(|_| UsbFsRenameError::RenameFailed)?;
-                    }
-                    Err(_) => return Err(UsbFsRenameError::RenameFailed),
-                }
-            }
-        }
-
-        match root.rename(src_rel.as_str(), &root, dst_rel.as_str()) {
-            Ok(()) => Ok(()),
-            Err(fatfs::Error::NotFound) => Err(UsbFsRenameError::NotFound),
-            Err(fatfs::Error::AlreadyExists) => Err(UsbFsRenameError::AlreadyExists),
-            Err(_) => Err(UsbFsRenameError::RenameFailed),
-        }
-    };
-
-    let _ = fs.unmount();
-    res
+pub fn rename_usbms_path(_src_path: &str, _dst_path: &str) -> Result<(), UsbFsRenameError> {
+    Err(UsbFsRenameError::UsbmsNotFound)
 }
 
-const MAX_LISTING_BYTES: usize = 64 * 1024;
-
-pub fn list_usbms_dir(path: &str) -> Result<String, UsbFsListDirError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsListDirError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsListDirError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsListDirError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsListDirError::BadPath);
-        }
-    };
-
-    let res = {
-        let root = fs.root_dir();
-        let mut dir = root.clone();
-        if !rel.is_empty() {
-            for seg in rel.split('/').filter(|s| !s.is_empty()) {
-                dir = dir.open_dir(seg).map_err(|_| UsbFsListDirError::OpenFailed)?;
-            }
-        }
-
-        let mut out = String::new();
-        for entry in dir.iter() {
-            let entry = entry.map_err(|_| UsbFsListDirError::IterFailed)?;
-            let name = entry.file_name();
-            if name.is_empty() || name == "." || name == ".." {
-                continue;
-            }
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&name);
-            if out.len() > MAX_LISTING_BYTES {
-                return Err(UsbFsListDirError::TooLarge);
-            }
-        }
-        Ok(out)
-    };
-
-    let _ = fs.unmount();
-    res
+pub fn list_usbms_dir(_path: &str) -> Result<String, UsbFsListDirError> {
+    Err(UsbFsListDirError::UsbmsNotFound)
 }
 
-pub fn remove_usbms_path(path: &str) -> Result<(), UsbFsRemoveError> {
-    let Some(handle) = pick_usbms_device() else {
-        return Err(UsbFsRemoveError::UsbmsNotFound);
-    };
-
-    let io = BlockDeviceIo::new(handle).map_err(UsbFsRemoveError::DeviceIo)?;
-    let fs = FileSystem::new(io, FsOptions::new()).map_err(|_| UsbFsRemoveError::MountFailed)?;
-
-    let rel = match crate::path::normalize_rel_no_parent(path) {
-        Some(p) => p,
-        None => {
-            let _ = fs.unmount();
-            return Err(UsbFsRemoveError::BadPath);
-        }
-    };
-    if rel.is_empty() {
-        let _ = fs.unmount();
-        return Err(UsbFsRemoveError::BadPath);
-    }
-
-    let res = {
-        let root = fs.root_dir();
-        match root.remove(rel.as_str()) {
-            Ok(()) => Ok(()),
-            Err(fatfs::Error::NotFound) => Err(UsbFsRemoveError::NotFound),
-            Err(fatfs::Error::DirectoryIsNotEmpty) => Err(UsbFsRemoveError::NotEmpty),
-            Err(_) => Err(UsbFsRemoveError::RemoveFailed),
-        }
-    };
-
-    let _ = fs.unmount();
-    res
+pub fn remove_usbms_path(_path: &str) -> Result<(), UsbFsRemoveError> {
+    Err(UsbFsRemoveError::UsbmsNotFound)
 }
 
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: Layout,
-}
-
-impl AlignedBuf {
-    fn new(len: usize, align: usize) -> Option<Self> {
-        let layout = Layout::from_size_align(len, align).ok()?;
-        let ptr = unsafe { alloc(layout) };
-        if ptr.is_null() {
-            return None;
-        }
-        Some(Self {
-            ptr,
-            len,
-            layout,
-        })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe { dealloc(self.ptr, self.layout) };
-        }
-    }
-}
-
-struct BlockDeviceIo {
-    dev: block::DeviceHandle,
-    base_lba: u64,
-    blocks: u64,
-    pos: u64,
-    block_size: usize,
-    scratch: AlignedBuf,
-    read_count: u64,
-    last_logged_lba: u64,
-    cached_lba: u64,
-}
-
-impl BlockDeviceIo {
-    fn new(dev: block::DeviceHandle) -> Result<Self, block::Error> {
-        let info = dev.info();
-        let block_size = info.block_size as usize;
-        if block_size == 0 {
-            return Err(block::Error::InvalidParam);
-        }
-
-        let (base_lba, blocks) = match layout::probe_fat_volume(dev) {
-            Ok(found) => {
-                let (base, blks) = layout::fat_slice_for_mount(found, info.block_count);
-                (base, blks)
-            }
-            Err(layout::ProbeError::UnsupportedBlockSize(_)) => {
-                return Err(block::Error::InvalidParam);
-            }
-            Err(layout::ProbeError::DeviceIo(e)) => {
-                return Err(e);
-            }
-            Err(layout::ProbeError::UnknownLayout) => {
-                crate::log!(
-                    "files: usbms: unknown disk layout (expected FAT@LBA0, MBR+FAT, or GPT+FAT partition); mount will fail\n"
-                );
-                return Err(block::Error::Corrupted);
-            }
-        };
-        crate::log!(
-            "files: usbms: FAT volume base_lba={} blocks={} (disk_blocks={})\n",
-            base_lba,
-            blocks,
-            info.block_count
-        );
-        if blocks == 0 {
-            return Err(block::Error::OutOfBounds);
-        }
-
-        let align = info.dma_alignment.max(1) as usize;
-        let mut scratch = AlignedBuf::new(block_size, align).ok_or(block::Error::DmaUnavailable)?;
-        for b in scratch.as_mut_slice().iter_mut() {
-            *b = 0;
-        }
-        Ok(Self {
-            dev,
-            base_lba,
-            blocks,
-            pos: 0,
-            block_size,
-            scratch,
-            read_count: 0,
-            last_logged_lba: u64::MAX,
-            cached_lba: u64::MAX,
-        })
-    }
-
-    fn io_read_block(&mut self, lba: u64) -> Result<(), block::Error> {
-        if self.cached_lba == lba {
-            return Ok(());
-        }
-        if lba >= self.blocks {
-            return Err(block::Error::OutOfBounds);
-        }
-        self.read_count = self.read_count.wrapping_add(1);
-        // Keep this intentionally low-noise: FAT mount may read lots of LBAs.
-        if self.read_count <= 8 {
-            crate::log!("files: io_read_block #{} lba={}\n", self.read_count, lba);
-            self.last_logged_lba = lba;
-        }
-        let abs_lba = self.base_lba.saturating_add(lba);
-        self.dev.read_blocks(abs_lba, self.scratch.as_mut_slice())?;
-        self.cached_lba = lba;
-        Ok(())
-    }
-}
-
-impl IoBase for BlockDeviceIo {
-    type Error = block::Error;
-}
-
-impl Read for BlockDeviceIo {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        let mut total = 0usize;
-        while total < buf.len() {
-            let lba = self.pos / (self.block_size as u64);
-            let block_off = (self.pos % (self.block_size as u64)) as usize;
-
-            self.io_read_block(lba)?;
-
-            let avail = self.block_size - block_off;
-            let want = core::cmp::min(avail, buf.len() - total);
-            buf[total..total + want]
-                .copy_from_slice(&self.scratch.as_mut_slice()[block_off..block_off + want]);
-
-            total += want;
-            self.pos = self.pos.wrapping_add(want as u64);
-        }
-
-        Ok(total)
-    }
-}
-
-impl Write for BlockDeviceIo {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        if !self.dev.supports_write() {
-            return Err(block::Error::NotSupported);
-        }
-
-        let mut total = 0usize;
-        while total < buf.len() {
-            let lba = self.pos / (self.block_size as u64);
-            let block_off = (self.pos % (self.block_size as u64)) as usize;
-            let avail = self.block_size - block_off;
-            let want = core::cmp::min(avail, buf.len() - total);
-
-            if lba >= self.blocks {
-                return Err(block::Error::OutOfBounds);
-            }
-
-            if want != self.block_size {
-                self.io_read_block(lba)?;
-            }
-
-            self.scratch.as_mut_slice()[block_off..block_off + want]
-                .copy_from_slice(&buf[total..total + want]);
-            let abs_lba = self.base_lba.saturating_add(lba);
-            self.dev.write_blocks(abs_lba, self.scratch.as_mut_slice())?;
-            self.cached_lba = lba;
-
-            total += want;
-            self.pos = self.pos.wrapping_add(want as u64);
-        }
-
-        Ok(total)
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.dev.flush()
-    }
-}
-
-impl Seek for BlockDeviceIo {
-    fn seek(&mut self, pos: SeekFrom) -> Result<u64, Self::Error> {
-        let cap_bytes = (self.blocks as u128) * (self.block_size as u128);
-        let cap_i64 = core::cmp::min(cap_bytes, i64::MAX as u128) as i64;
-
-        let next = match pos {
-            SeekFrom::Start(off) => {
-                if (off as u128) > cap_bytes {
-                    return Err(block::Error::OutOfBounds);
-                }
-                off as i64
-            }
-            SeekFrom::End(delta) => cap_i64.checked_add(delta).ok_or(block::Error::OutOfBounds)?,
-            SeekFrom::Current(delta) => (self.pos as i64)
-                .checked_add(delta)
-                .ok_or(block::Error::OutOfBounds)?,
-        };
-
-        if next < 0 {
-            return Err(block::Error::OutOfBounds);
-        }
-        self.pos = next as u64;
-        Ok(self.pos)
-    }
-}
-
-fn pick_usbms_device() -> Option<block::DeviceHandle> {
-    for h in block::device_handles().into_iter() {
-        let info = h.info();
-        if info.label.as_deref() == Some("usbms") {
-            return Some(h);
-        }
-    }
-    None
-}
-
-async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_math::NodeId, handle: block::DeviceHandle) {
+async fn build_tree_for_device_async(
+    tree: &mut FileTree,
+    parent: trueos_math::NodeId,
+    handle: block::DeviceHandle,
+) {
     let info = handle.info();
     let dev_name = alloc::format!("{}", info.id);
     let dev_id = match tree.add_child(
@@ -773,8 +378,7 @@ async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_m
 
     // TRUEOSFS: model as 1 root per *whole disk* (no slicing at this layer).
     if info.parent.is_none() {
-        if let Ok(Some(_placement)) = crate::disc::trueosfs::locate(handle) {
-            // Best-effort: register the root in the TRUEOSFS mount registry.
+        if crate::disc::trueosfs::locate(handle).ok().flatten().is_some() {
             let _ = crate::disc::trueosfs::mount_root(handle);
 
             if let Some(tfs_id) = tree.add_child(
@@ -794,129 +398,6 @@ async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_m
             }
         }
     }
-
-    let io = match BlockDeviceIo::new(handle) {
-        Ok(io) => io,
-        Err(e) => {
-            crate::log!("files: device io init failed: {:?}\n", e);
-            return;
-        }
-    };
-
-    let fs = match FileSystem::new(io, FsOptions::new()) {
-        Ok(fs) => fs,
-        Err(e) => {
-            crate::log!("files: mount failed ({:?})\n", e);
-            return;
-        }
-    };
-
-    // Add a per-device filesystem root node.
-    let fs_root = match tree.add_child(
-        dev_id,
-        FileTreeEntry {
-            kind: FileTreeKind::Root,
-            name: String::from("/"),
-        },
-    ) {
-        Some(id) => id,
-        None => {
-            crate::log!("files: tree full; cannot add root\n");
-            let _ = fs.unmount();
-            return;
-        }
-    };
-
-    // Iterative walk to avoid deep recursion on kernel stacks.
-    let mut stack: Vec<(String, usize, trueos_math::NodeId)> = Vec::new();
-    stack.push((String::new(), 0, fs_root));
-
-    // Yield periodically so we don't starve other cooperative tasks.
-    const YIELD_DIRS_EVERY: u32 = 8;
-    let mut dirs_processed: u32 = 0;
-
-    while let Some((dir_path, depth, parent_id)) = stack.pop() {
-        if tree.len() + 1 >= tree.capacity() {
-            crate::log!("files: tree full; truncating walk\n");
-            break;
-        }
-
-        let mut dir = fs.root_dir();
-        let mut opened_ok = true;
-        if !dir_path.is_empty() {
-            for seg in dir_path.split('/').filter(|s| !s.is_empty()) {
-                match dir.open_dir(seg) {
-                    Ok(next) => dir = next,
-                    Err(e) => {
-                        crate::log!(
-                            "files: open_dir failed path='{}' seg='{}' err={:?}\n",
-                            dir_path,
-                            seg,
-                            e
-                        );
-                        opened_ok = false;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if !opened_ok {
-            continue;
-        }
-
-        for entry in dir.iter() {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    crate::log!("files: iter entry failed ({:?})\n", e);
-                    break;
-                }
-            };
-
-            let name = entry.file_name();
-            if name.is_empty() || name == "." || name == ".." {
-                continue;
-            }
-
-            let is_dir = entry.is_dir();
-            let kind = if is_dir {
-                FileTreeKind::Dir
-            } else {
-                FileTreeKind::File
-            };
-
-            let child_id = match tree.add_child(
-                parent_id,
-                FileTreeEntry {
-                    kind,
-                    name: name.clone(),
-                },
-            ) {
-                Some(id) => id,
-                None => {
-                    crate::log!("files: tree full; truncating walk\n");
-                    break;
-                }
-            };
-
-            if is_dir {
-                let full_path = if dir_path.is_empty() {
-                    name
-                } else {
-                    alloc::format!("{}/{}", dir_path, name)
-                };
-                stack.push((full_path, depth.saturating_add(1), child_id));
-            }
-        }
-
-        dirs_processed = dirs_processed.saturating_add(1);
-        if (dirs_processed % YIELD_DIRS_EVERY) == 0 {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-        }
-    }
-
-    let _ = fs.unmount();
 }
 
 async fn scan_all_devices_and_build_tree(tree: &mut FileTree, root: trueos_math::NodeId) {
@@ -928,7 +409,7 @@ async fn scan_all_devices_and_build_tree(tree: &mut FileTree, root: trueos_math:
 
     crate::log!("files: scanning {} device(s)\n", devices.len());
     for dev in devices.into_iter() {
-        build_fatfs_tree_for_device_async(tree, root, dev).await;
+        build_tree_for_device_async(tree, root, dev).await;
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
 }
