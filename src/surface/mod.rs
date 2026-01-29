@@ -1,5 +1,3 @@
-#![allow(unused, dead_code)]
-
 pub use ::alloc;
 
 macro_rules! surface_reexport {

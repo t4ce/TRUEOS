@@ -3,8 +3,6 @@
 //! This is intended as a *fallback entropy source* for seeding the kernel CSPRNG
 //! when RDSEED/RDRAND are unavailable.
 
-#![allow(dead_code)]
-
 use spin::{Mutex, Once};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;

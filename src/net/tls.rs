@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! TLS glue for TRUEOS.
 //!
 //! Current state:
