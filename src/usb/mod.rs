@@ -115,7 +115,7 @@ static NOT_CLAIMED_KEY: [[AtomicU32; LOG_PORTS_MAX]; MAX_XHCI_CONTROLLERS] =
 static NOT_CLAIMED_COUNT: [[AtomicU32; LOG_PORTS_MAX]; MAX_XHCI_CONTROLLERS] =
     [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX] }; MAX_XHCI_CONTROLLERS];
 
-struct UsbControllerState {
+pub(crate) struct UsbControllerState {
     info: xhci::XhcInfo,
     ctx: XhciContext,
     ctx_stride_bytes: usize,

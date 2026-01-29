@@ -365,8 +365,11 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await?;
 
-    register_runtime(MassRuntime {
-        controller_id: ctx.controller_id,
+    // Build the runtime locally first so we can perform best-effort async probing
+    // without ever holding MASS_RUNTIMES across an .await.
+    let controller_id = ctx.controller_id;
+    let mut rt = MassRuntime {
+        controller_id,
         ctx: *ctx,
         info: pair,
         slot_id,
@@ -378,100 +381,102 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         disc: None,
         block_size: 512,
         block_count: 0,
-    });
+    };
 
     // Prove the SCSI/BOT path early: attempt a basic INQUIRY + READ CAPACITY.
-    // This is best-effort for now; failures should not prevent device registration.
-
-    // NOTE: We intentionally do this *before* upper block-device integration.
-    // If it fails, we still keep the runtime so future iterations can retry.
+    // This is best-effort; failures should not prevent runtime registration.
+    let tag_tur = rt.bot_tag;
+    if bot::scsi_test_unit_ready(
+        ctx,
+        &mut rt.ring_out,
+        &mut rt.ring_in,
+        slot_id,
+        rt.ep_out_target,
+        rt.ep_in_target,
+        tag_tur,
+    )
+    .await
+    .is_ok()
     {
+        rt.bot_tag = rt.bot_tag.wrapping_add(1);
+    }
+
+    let tag0 = rt.bot_tag;
+    if let Ok(inq) = bot::scsi_inquiry_basic(
+        ctx,
+        &mut rt.ring_out,
+        &mut rt.ring_in,
+        slot_id,
+        rt.ep_out_target,
+        rt.ep_in_target,
+        tag0,
+    )
+    .await
+    {
+        rt.bot_tag = rt.bot_tag.wrapping_add(1);
+        crate::log!(
+            "usb: mass inquiry pdt={} removable={} vendor={:?} product={:?} rev={:?}\n",
+            inq.peripheral_type,
+            inq.removable,
+            &inq.vendor,
+            &inq.product,
+            &inq.revision
+        );
+    }
+
+    let tag1 = rt.bot_tag;
+    if let Ok(cap) = bot::scsi_read_capacity_10(
+        ctx,
+        &mut rt.ring_out,
+        &mut rt.ring_in,
+        slot_id,
+        rt.ep_out_target,
+        rt.ep_in_target,
+        tag1,
+    )
+    .await
+    {
+        rt.bot_tag = rt.bot_tag.wrapping_add(1);
+        rt.block_size = cap.block_size.max(1);
+        rt.block_count = (cap.last_lba as u64).saturating_add(1);
+        crate::log!(
+            "usb: mass capacity last_lba={} block_size={} bytes\n",
+            cap.last_lba,
+            cap.block_size
+        );
+    }
+
+    let block_size = rt.block_size;
+    let block_count = rt.block_count;
+    register_runtime(rt);
+
+    // Only register a block device if we got a sane capacity.
+    if block_count > 0 {
+        let descriptor = disc_block::DeviceDescriptor::new(disc_block::DeviceKind::Unknown)
+            .with_label("usbms");
+
+        let dev = UsbMassBlockDevice {
+            controller_id,
+            slot_id,
+            block_size,
+            block_count,
+        };
+        let handle = disc_block::register_device(descriptor, dev);
+
         let mut guard = MASS_RUNTIMES.lock();
         if let Some(rt) = guard
             .iter_mut()
-            .find(|r| r.controller_id == ctx.controller_id && r.slot_id == slot_id)
+            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
         {
-            let tag_tur = rt.bot_tag;
-            if bot::scsi_test_unit_ready(
-                ctx,
-                &mut rt.ring_out,
-                &mut rt.ring_in,
-                slot_id,
-                rt.ep_out_target,
-                rt.ep_in_target,
-                tag_tur,
-            )
-            .await
-            .is_ok()
-            {
-                rt.bot_tag = rt.bot_tag.wrapping_add(1);
-            }
-
-            let tag0 = rt.bot_tag;
-            if let Ok(inq) = bot::scsi_inquiry_basic(
-                ctx,
-                &mut rt.ring_out,
-                &mut rt.ring_in,
-                slot_id,
-                rt.ep_out_target,
-                rt.ep_in_target,
-                tag0,
-            )
-            .await
-            {
-                rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                crate::log!(
-                    "usb: mass inquiry pdt={} removable={} vendor={:?} product={:?} rev={:?}\n",
-                    inq.peripheral_type,
-                    inq.removable,
-                    &inq.vendor,
-                    &inq.product,
-                    &inq.revision
-                );
-            }
-
-            let tag1 = rt.bot_tag;
-            if let Ok(cap) = bot::scsi_read_capacity_10(
-                ctx,
-                &mut rt.ring_out,
-                &mut rt.ring_in,
-                slot_id,
-                rt.ep_out_target,
-                rt.ep_in_target,
-                tag1,
-            )
-            .await
-            {
-                rt.bot_tag = rt.bot_tag.wrapping_add(1);
-                rt.block_size = cap.block_size.max(1);
-                rt.block_count = (cap.last_lba as u64).saturating_add(1);
-                crate::log!(
-                    "usb: mass capacity last_lba={} block_size={} bytes\n",
-                    cap.last_lba,
-                    cap.block_size
-                );
-
-                if rt.disc.is_none() && rt.block_count > 0 {
-                    let descriptor = disc_block::DeviceDescriptor::new(disc_block::DeviceKind::Unknown)
-                        .with_label("usbms");
-
-                    let dev = UsbMassBlockDevice {
-                        controller_id: rt.controller_id,
-                        slot_id: rt.slot_id,
-                        block_size: rt.block_size,
-                        block_count: rt.block_count,
-                    };
-                    let handle = disc_block::register_device(descriptor, dev);
-                    rt.disc = Some(handle);
-                    crate::log!(
-                        "usb: mass registered block device id={} blocks={} block_size={}\n",
-                        handle.id().raw(),
-                        rt.block_count,
-                        rt.block_size
-                    );
-                }
-            }
+            rt.disc = Some(handle);
         }
+
+        crate::log!(
+            "usb: mass registered block device id={} blocks={} block_size={}\n",
+            handle.id().raw(),
+            block_count,
+            block_size
+        );
     }
 
     Ok(())
@@ -604,6 +609,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             }
             dma::dealloc(dma_virt, bytes_here);
 
+            // Keep the system responsive during long synchronous IO.
+            crate::time::poll_executor();
+
             remaining = &mut remaining[bytes_here..];
             cur_lba += blocks_here as u64;
         }
@@ -719,6 +727,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
 
             remaining = &remaining[bytes_here..];
             cur_lba += blocks_here as u64;
+
+            // Keep the system responsive during long synchronous IO.
+            crate::time::poll_executor();
         }
 
         Ok(())
