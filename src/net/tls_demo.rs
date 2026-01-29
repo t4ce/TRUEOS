@@ -8,9 +8,9 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use crate::net::adapter::{
-    register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
-};
+use trueos_v::vnet as vnet;
+
+use crate::v::net::{Queue, VNet};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use super::tls::{TlsClientConfig, TlsRoots};
 
@@ -512,64 +512,61 @@ fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Result<Option<[u8; 4]>, &'stat
 
 async fn resolve_ipv4_for_device(dev_idx: usize, host: &str) -> Option<[u8; 4]> {
     let dns_id: u16 = 0xD000u16.wrapping_add(dev_idx as u16);
-    // Must be unique per call; `register_app_queues` ignores duplicate names and
-    // would otherwise leave our new queues undrained.
-    let seq = TLS_DEMO_DNS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = leak_str(alloc::format!("tlsdemo-dns-{}@{}", seq, dev_idx));
-    let cmd_name = leak_str(alloc::format!("{}-cmd", owner));
-    let evt_name = leak_str(alloc::format!("{}-evt", owner));
-    let cmds = NetQueue::new_leaked(cmd_name, 64);
-    let events = NetQueue::new_leaked(evt_name, 64);
-    register_app_queues(owner, cmds, events);
+
+    let net = VNet::open(dev_idx)?;
 
     // Use a stable local UDP port (must be non-zero).
     let local_port: u16 = 53000u16.wrapping_add(dev_idx as u16);
-    let _ = cmds.push(NetCommand::OpenUdp { port: local_port });
+    let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
 
     let deadline = Instant::now() + EmbassyDuration::from_millis(1500);
-    let mut udp: Option<NetHandle> = None;
+    let mut udp: Option<vnet::NetHandle> = None;
     let mut sent = false;
 
     loop {
-        for ev in events.drain(32) {
+        for _ in 0..64 {
+            let Some(ev) = net.pop_event() else {
+                break;
+            };
             match ev {
-                NetEvent::Opened { handle, kind } => {
-                    if kind == SocketKind::Udp {
+                vnet::Event::Opened { handle, kind } => {
+                    if kind == vnet::SocketKind::Udp {
                         udp = Some(handle);
                     }
                 }
-                NetEvent::UdpPacket { handle, from, data } => {
+                vnet::Event::UdpPacket { handle, from, data } => {
                     if udp != Some(handle) {
                         continue;
                     }
                     if from.port == DNS_PORT && from.addr == SLIRP_DNS_IP {
-                        match dns_parse_first_a(&data, dns_id) {
+                        match dns_parse_first_a(data.as_slice(), dns_id) {
                             Ok(Some(ip)) => {
-                                let _ = cmds.push(NetCommand::Close { handle });
+                                let _ = net.submit(vnet::Command::Close { handle });
                                 return Some(ip);
                             }
                             Ok(None) => {}
                             Err(_) => {
-                                let _ = cmds.push(NetCommand::Close { handle });
+                                let _ = net.submit(vnet::Command::Close { handle });
                                 return None;
                             }
                         }
                     }
                 }
-                NetEvent::Error { .. } => {}
+                vnet::Event::Error { .. } => {}
                 _ => {}
             }
         }
 
         if !sent {
             if let Some(handle) = udp {
-                let _ = cmds.push(NetCommand::SendUdp {
+                let q = dns_query(dns_id, host, 1);
+                let _ = net.submit(vnet::Command::SendUdp {
                     handle,
-                    remote: NetEndpoint {
+                    remote: vnet::EndpointV4 {
                         addr: SLIRP_DNS_IP,
                         port: DNS_PORT,
                     },
-                    data: dns_query(dns_id, host, 1),
+                    data: vnet::ByteBuf::from_slice_trunc(&q),
                 });
                 sent = true;
             }
@@ -577,7 +574,7 @@ async fn resolve_ipv4_for_device(dev_idx: usize, host: &str) -> Option<[u8; 4]> 
 
         if Instant::now() >= deadline {
             if let Some(handle) = udp {
-                let _ = cmds.push(NetCommand::Close { handle });
+                let _ = net.submit(vnet::Command::Close { handle });
             }
             return None;
         }
@@ -691,11 +688,11 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
         let owner = leak_str(alloc::format!("tlsdemo-{}-{}@{}", slot_id + 1, seq, dev_idx));
         let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
         let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
-        let cmds = NetQueue::new_leaked(cmds_name, 128);
-        let events = NetQueue::new_leaked(evts_name, 128);
+        let cmds = Queue::new_leaked(cmds_name, 128);
+        let events = Queue::new_leaked(evts_name, 128);
         register_tls_app_queues(owner, cmds, events);
 
-        let mut tls_handle: Option<NetHandle> = None;
+        let mut tls_handle: Option<vnet::NetHandle> = None;
         let mut sent_connect = false;
         let mut http_sent = false;
 
@@ -897,10 +894,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
 
             if !sent_connect {
                 let _ = cmds.push(TlsCommand::OpenTcpConnect {
-                    remote: NetEndpoint {
-                        addr: ip,
-                        port: target.port,
-                    },
+                    remote: vnet::EndpointV4 { addr: ip, port: target.port },
                     server_name: target.host,
                     cfg: cfg.clone(),
                     roots: roots.clone(),
