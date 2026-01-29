@@ -377,7 +377,7 @@ fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
     });
 }
 
-fn _loop(executor: &'static Executor, spawner: Spawner) -> ! {
+fn _loop(executor: &'static Executor, _spawner: Spawner) -> ! {
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000 == 0 {

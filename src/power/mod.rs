@@ -114,32 +114,6 @@ pub fn msr_armed() -> bool {
     }
 }
 
-/// Arms MSR usage for this boot.
-///
-/// This does not read or write any MSR; it only flips an internal guard that
-/// higher-level functions check before doing MSR I/O.
-///
-/// Recommended usage: call only after you have solid exception handling (IDT +
-/// #GP handler) and you *want* frequency/p-state features.
-pub fn arm_msr() -> bool {
-    #[cfg(not(feature = "power-msr"))]
-    {
-        return false;
-    }
-
-    #[cfg(feature = "power-msr")]
-    {
-    let Some(c) = caps() else {
-        return false;
-    };
-    if !c.has_msr {
-        return false;
-    }
-    MSR_ARMED.store(1, Ordering::Release);
-    true
-    }
-}
-
 pub fn msr_details() -> Option<&'static PowerMsrDetails> {
     #[cfg(feature = "power-msr")]
     {
