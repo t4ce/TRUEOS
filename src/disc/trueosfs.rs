@@ -13,6 +13,7 @@ pub struct TrueosFsPlacement {
     pub bootable: bool,
     pub super_lba: u64,
     pub data_lba: u64,
+    pub data_end_lba_exclusive: Option<u64>,
 }
 
 struct AlignedBuf {
@@ -83,10 +84,12 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
             if let Ok(p0) = read_blocks_aligned(handle, p.range.first_lba(), 1) {
                 if looks_like_trueos_superblock(&p0) {
                     let super_lba = p.range.first_lba();
+                    let end_lba_exclusive = p.range.last_lba().saturating_add(1);
                     return Ok(Some(TrueosFsPlacement {
                         bootable: has_esp,
                         super_lba,
                         data_lba: trueos_fs::data_lba_from_super(super_lba),
+                        data_end_lba_exclusive: Some(end_lba_exclusive),
                     }));
                 }
             }
@@ -100,6 +103,7 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
             bootable: false,
             super_lba: 0,
             data_lba: trueos_fs::data_lba_from_super(0),
+            data_end_lba_exclusive: None,
         }));
     }
 
@@ -131,6 +135,20 @@ pub fn format_blank(handle: block::DeviceHandle) -> Result<(), block::Error> {
 
     // Data-only (superblock at LBA0).
     format_blank_at(handle, 0)
+}
+
+/// Format TRUEOSFS at the start of an already-created partition.
+///
+/// This is intended for installer code that first creates a GPT layout and then
+/// formats the TRUEOS data partition without clobbering LBA0 of the whole disk.
+pub fn format_blank_partition(partition: block::DeviceHandle) -> Result<(), block::Error> {
+    if partition.parent().is_none() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !partition.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+    format_blank_at(partition, 0)
 }
 
 fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), block::Error> {

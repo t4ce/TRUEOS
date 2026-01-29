@@ -15,6 +15,8 @@ pub(crate) mod shellcube;
 pub(crate) mod shellqjs;
 pub(crate) mod txtedt;
 
+pub(crate) mod cmd;
+
 pub(crate) mod matrix;
 
 mod crlf;
@@ -94,37 +96,25 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
 
-const SHELL_COMMANDS: [&str; 25] = [
-    "qjs",
-    "out",
-    "in",
-    "io",
-    "ecma48",
-    "https",
-    "get",
-    "files",
-    "§",
-    "s5",
-    "reset",
-    "install",
-    "format",
-    "set",
-    "go",
-    "mandel",
-    "time",
-    "idle",
-    "pstate",
-    "cube",
-    "ico",
-    "txt",
-    "insane",
-    "usb",
-    "pci",
-];
-
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
     io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
+}
+
+#[inline]
+fn write_prompt_for_state(
+    io: &dyn ShellIo,
+    pending_action: Option<PendingAction>,
+    install_wizard: Option<InstallWizardStage>,
+) {
+    // When we are actively asking the user for wizard/confirmation input,
+    // avoid printing any prompt prefix so the user's typed input starts at
+    // column 0 (less confusing in transcripts).
+    if pending_action.is_some() || install_wizard.is_some() {
+        return;
+    }
+
+    write_prompt(io);
 }
 
 #[inline]
@@ -147,7 +137,14 @@ fn write_banner(io: &dyn ShellIo, term_cols: usize) {
     write_prompt(io);
 
     io.write_str(crate::ecma48::SAVE_CURSOR);
-    for (idx, cmd) in SHELL_COMMANDS.iter().enumerate() {
+
+    // Banner command list: derive from the registry (single source of truth).
+    // Keep it sorted for stable UI.
+    let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
+    crate::shell::cmd::list_command_names(&mut cmds);
+    cmds.as_mut_slice().sort_unstable();
+
+    for (idx, cmd) in cmds.iter().enumerate() {
         // Start at row 2 so row 1 stays reserved for banner + symbols.
         let row = idx + 2;
         write_right_aligned(io, row, term_cols, cmd);
@@ -229,6 +226,9 @@ enum CommandAction {
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     io.init();
 
+    // Ensure the registry is populated before the shell starts.
+    self::cmd::init_builtin_shell_commands();
+
     let mut term_cols: usize = DEFAULT_TERM_COLS;
     let mut term_rows: usize = DEFAULT_TERM_ROWS;
 
@@ -277,7 +277,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     set_go_mode(io, &mut go_mode, false);
                     line.clear();
                     io.write_str("\r\n");
-                    write_prompt(io);
+                    write_prompt_for_state(io, pending_action, install_wizard);
                     continue;
                 }
                 b'\r' | b'\n' => {
@@ -315,7 +315,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\nformat: cancelled\r\n");
                         }
 
-                        write_prompt(io);
+                        write_prompt_for_state(io, pending_action, install_wizard);
                         continue;
                     }
 
@@ -331,7 +331,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 line.clear();
                                 install_wizard = None;
                                 io.write_str("\r\ninstall: cancelled\r\n");
-                                write_prompt(io);
+                                write_prompt_for_state(io, pending_action, install_wizard);
                                 continue;
                             }
 
@@ -340,7 +340,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             if raw_id == 0 {
                                 io.write_str("\r\ninstall: invalid id\r\n");
                                 io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
-                                write_prompt(io);
+                                write_prompt_for_state(io, pending_action, install_wizard);
                                 continue;
                             }
 
@@ -349,26 +349,70 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
                             let Some(handle) = target else {
                                 io.write_str("\r\ninstall: no such disk\r\n");
-                                write_prompt(io);
+                                write_prompt_for_state(io, pending_action, install_wizard);
                                 continue;
                             };
 
                             let status = crate::disc::detect::detect_physical_disk(handle);
-                            match status {
-                                crate::disc::detect::DiscStatus::Trueos { .. } => {
-                                    io.write_str("\r\ninstall: ok (disk is TRUEOS)\r\n");
-                                    io.write_str("install: TODO: block-image installer not wired yet\r\n");
-                                }
-                                other => {
+
+                            let Some(payload) = crate::limine::install_payload_bytes() else {
+                                io.write_str("\r\ninstall: payload module missing\r\n");
+                                io.write_str(
+                                    "install: expected Limine module_string trueos.install.payload\r\n",
+                                );
+                                install_wizard = None;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let Some(kernel) = crate::limine::install_kernel_bytes() else {
+                                io.write_str("\r\ninstall: kernel module missing\r\n");
+                                io.write_str(
+                                    "install: expected Limine module_string trueos.install.kernel\r\n",
+                                );
+                                install_wizard = None;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
+                                io.write_str("\r\ninstall: BOOTX64.EFI module missing\r\n");
+                                io.write_str(
+                                    "install: expected Limine module_string trueos.install.bootx64\r\n",
+                                );
+                                install_wizard = None;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            io.write_fmt(format_args!(
+                                "\r\ninstall: target status: {}\r\n",
+                                status.short()
+                            ));
+                            io.write_str("install: DANGER: this will REPARTITION and FORMAT the disk\r\n");
+                            io.write_str("install: creating GPT + ESP + TRUEOSFS and copying boot files\r\n");
+                            io.write_fmt(format_args!(
+                                "install: BOOTX64.EFI={} bytes, TRUEOS.elf={} bytes, payload={} bytes\r\n",
+                                bootx64.len(),
+                                kernel.len(),
+                                payload.len()
+                            ));
+
+                            match crate::disc::install::install_bootable_uefi_gpt(handle, bootx64, kernel, payload) {
+                                Ok(()) => {
+                                    let status = crate::disc::detect::detect_physical_disk(handle);
                                     io.write_fmt(format_args!(
-                                        "\r\ninstall: refusing (disk status: {})\r\n",
-                                        other.short()
+                                        "install: ok (status now: {})\r\n",
+                                        status.short()
                                     ));
+                                }
+                                Err(e) => {
+                                    io.write_fmt(format_args!("install: failed ({:?})\r\n", e));
                                 }
                             }
 
                             install_wizard = None;
-                            write_prompt(io);
+                            write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
                     }
@@ -376,7 +420,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     if line.is_empty() && pending_action.is_none() && go_mode {
                         set_go_mode(io, &mut go_mode, false);
                         io.write_str("\r\n");
-                        write_prompt(io);
+                        write_prompt_for_state(io, pending_action, install_wizard);
                         continue;
                     }
                     if line.is_empty() && pending_action.is_none() {
@@ -395,7 +439,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             &mut install_wizard,
                         );
                         line.clear();
-                        write_prompt(io);
                         match action {
                             CommandAction::Pending(action) => {
                                 pending_action = Some(action);
@@ -410,6 +453,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                     &mut go_mode,
                                     matches!(action, PendingAction::Reset | PendingAction::S5),
                                 );
+                                write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::EnterCube => {
                                 cube_mode = true;
@@ -451,7 +495,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 io.write_str(crate::ecma48::HOME);
                                 write_banner(io, term_cols);
                             }
-                            CommandAction::None => {}
+                            CommandAction::None => {
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
                         }
                     }
                 }
@@ -528,37 +574,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     }
 }
 
-fn handle_ecma48(io: &'static dyn ShellBackend, rest: &str) {
-    let arg = rest.trim();
-    if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
-        io.write_str("ecma48: usage ecma48 | ecma48 demo\r\n");
-        return;
-    }
-
-    io.write_str("ecma48: demo (ANSI sequences)\r\n");
-    io.write_fmt(format_args!(
-        "  {}\r\n",
-        crate::ecma48::dim("dim text (SGR 2)")
-    ));
-    io.write_fmt(format_args!(
-        "  {}\r\n",
-        crate::ecma48::bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
-    ));
-    io.write_str("  cursor edits: [ABCDE]\r\n");
-
-    // Demonstrate cursor moves without disrupting where the shell continues printing.
-    io.write_str(crate::ecma48::SAVE_CURSOR);
-    io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::right(18)));
-    io.write_fmt(format_args!("{}", crate::ecma48::bg_color("X", (255, 0, 0))));
-    io.write_fmt(format_args!("{}", crate::ecma48::left(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::right(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::down(1)));
-    io.write_str(crate::ecma48::RESTORE_CURSOR);
-
-    io.write_str("ecma48: done\r\n");
-}
-
 fn handle_line(
     line: &str,
     spawner: &Spawner,
@@ -573,658 +588,26 @@ fn handle_line(
         return CommandAction::None;
     }
 
-    // Shorthand: "§1" dumps + frees slot 1.
-    if let Some(n) = cmd.strip_prefix('§') {
-        if !n.is_empty() {
-            if let Ok(id) = n.parse::<u8>() {
-                if id == 0 {
-                    io.write_str("§: ids are 1..\r\n");
-                    return CommandAction::None;
-                }
-                let slot_id = id - 1;
-
-                // Prefer dumping the slot blob (full, untruncated). This is what
-                // `get`/`https` jobs store their main payload in.
-                if let Some((state, title, has_blob, blob_len)) = crate::matrix::with_slot(slot_id, |s| {
-                    (s.state, s.title.clone(), !s.blob.is_empty(), s.blob.len())
-                }) {
-                    if has_blob {
-                        let blob = crate::matrix::take_blob(slot_id).unwrap_or_default();
-                        io.write_fmt(format_args!("#{} {:?} {}\r\n", id, state, title.as_str()));
-                        io.write_fmt(format_args!("(blob {} bytes)\r\n", blob_len));
-                        for &b in blob.iter() {
-                            io.write_byte(b);
-                        }
-                        if !blob.ends_with(b"\n") {
-                            io.write_str("\r\n");
-                        }
-                        let _ = crate::matrix::free_slot(slot_id);
-                        crate::matrix::refresh_matrix_symbols(io, *term_cols);
-                        return CommandAction::None;
-                    }
-                }
-
-                // Fallback: old preview dump (limited, but useful for non-blob jobs).
-                let mut buf: String<1024> = String::new();
-                if crate::matrix::dump_slot(&mut buf, slot_id) {
-                    io.write_str(buf.as_str());
-                    let _ = crate::matrix::free_slot(slot_id);
-                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
-                } else {
-                    io.write_str("§: not found\r\n");
-                }
-                return CommandAction::None;
-            }
-        }
-    }
-
-    if let Some((verb, rest)) = cmd.split_once(' ') {
-        if verb.eq_ignore_ascii_case("out") {
-            let resp = crate::surface::io::shellcmd::handle_out(spawner, rest);
-            match resp.print {
-                crate::surface::io::shellcmd::PrintAction::None => {}
-                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
-                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-                    io.write_str(a);
-                    io.write_str(b);
-                }
-                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-                }
-            }
-            if resp.refresh_symbols {
-                crate::matrix::refresh_matrix_symbols(io, *term_cols);
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("in") {
-            let resp = crate::surface::io::shellcmd::handle_in(spawner, rest);
-            match resp.print {
-                crate::surface::io::shellcmd::PrintAction::None => {}
-                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
-                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-                    io.write_str(a);
-                    io.write_str(b);
-                }
-                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-                }
-            }
-            if resp.refresh_symbols {
-                crate::matrix::refresh_matrix_symbols(io, *term_cols);
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("io") {
-            let resp = crate::surface::io::shellcmd::handle_io(spawner, rest);
-            match resp.print {
-                crate::surface::io::shellcmd::PrintAction::None => {}
-                crate::surface::io::shellcmd::PrintAction::One(a) => io.write_str(a),
-                crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-                    io.write_str(a);
-                    io.write_str(b);
-                }
-                crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-                    io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-                }
-            }
-            if resp.refresh_symbols {
-                crate::matrix::refresh_matrix_symbols(io, *term_cols);
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("ecma48") {
-            handle_ecma48(io, rest);
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("get") {
-            let mut parts = rest.split_whitespace();
-            let url = parts.next().unwrap_or("");
-            if url.is_empty() {
-                io.write_str("get: usage get <host|http://url>\r\n");
-                io.write_str("get: example get http://example.com/\r\n");
-                io.write_str("get: note: plaintext HTTP only (no TLS)\r\n");
-                return CommandAction::None;
-            }
-
-            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("get ");
-            for ch in url.chars() {
-                if title.push(ch).is_err() {
-                    break;
-                }
-            }
-
-            match crate::matrix::alloc_slot(title.as_str()) {
-                Some(slot) => {
-                    let mut u: String<256> = String::new();
-                    for ch in url.chars() {
-                        if u.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u));
-                    io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
-                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
-                }
-                None => io.write_str("get: matrix full\r\n"),
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("https") {
-            let mut parts = rest.split_whitespace();
-            let host = parts.next().unwrap_or("");
-            if parts.next().is_some() {
-                io.write_str("https: usage https [host]\r\n");
-                io.write_str("https: demo: rustls handshake + GET /\r\n");
-                io.write_str("https: default host is example.com\r\n");
-                return CommandAction::None;
-            }
-
-            let mut title: String<{ crate::matrix::TITLE_LEN }> = String::new();
-            let _ = title.push_str("https ");
-            let show_host = if host.is_empty() { "example.com" } else { host };
-            for ch in show_host.chars() {
-                if title.push(ch).is_err() {
-                    break;
-                }
-            }
-
-            match crate::matrix::alloc_slot(title.as_str()) {
-                Some(slot) => {
-                    let mut h: String<96> = String::new();
-                    for ch in host.chars() {
-                        if h.push(ch).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = spawner.spawn(crate::net::tls_demo::tls_demo_matrix_job(slot, h));
-                    io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
-                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
-                }
-                None => io.write_str("https: matrix full\r\n"),
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("install") {
-            let _ = rest;
-            *install_wizard = Some(InstallWizardStage::SelectDisk);
-            print_install_disk_table(io);
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("format") {
-            let arg = rest.trim();
-            if arg.is_empty() {
-                io.write_str("format: usage format <diskid>\r\n");
-                io.write_str("format: example format 1\r\n");
-                io.write_str("format: example format disc001\r\n");
-                return CommandAction::None;
-            }
-
-            let raw_id = parse_disc_id_raw(arg).unwrap_or(0);
-            if raw_id == 0 {
-                io.write_str("format: invalid id\r\n");
-                return CommandAction::None;
-            }
-
-            let target = crate::disc::block::device_handles()
-                .into_iter()
-                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
-            let Some(handle) = target else {
-                io.write_str("format: no such disk\r\n");
-                return CommandAction::None;
-            };
-
-            let info = handle.info();
-            let status = crate::disc::detect::detect_physical_disk(handle);
-            io.write_fmt(format_args!(
-                "format: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
-                info.id.raw(),
-                info.id,
-                info.block_count,
-                info.block_size,
-                info.writable,
-                info.label,
-                status.short(),
-            ));
-            io.write_str("format: DANGER: this destroys all data on the disk\r\n");
-            io.write_str("format: type FORMAT to confirm (anything else cancels)\r\n");
-            return CommandAction::Pending(PendingAction::FormatConfirm { disc_id: raw_id });
-        }
-        if verb.eq_ignore_ascii_case("files") {
-            let _ = rest;
-            let seq = crate::disc::files::file_tree_seq();
-            let nodes = crate::disc::files::file_tree_len();
-            io.write_fmt(format_args!("files: cache seq={} nodes={}\r\n", seq, nodes));
-            match crate::matrix::alloc_slot("files scan") {
-                Some(slot) => {
-                    crate::matrix::push_line(slot, "files: job started");
-                    let mut line: String<64> = String::new();
-                    let _ = write!(line, "start seq={}", seq);
-                    crate::matrix::push_line(slot, line.as_str());
-                    let _ = spawner.spawn(crate::matrix::files_matrix_job(slot, seq));
-                    io.write_fmt(format_args!("files: started §{}\r\n", slot + 1));
-                    crate::matrix::refresh_matrix_symbols(io, *term_cols);
-                }
-                None => {
-                    io.write_str("files: matrix full\r\n");
-                }
-            }
-            return CommandAction::None;
-        }
-        if verb == "§" {
-            let mut arg = rest.trim();
-            if arg.is_empty() {
-                let mut buf: String<512> = String::new();
-                crate::matrix::list_slots(&mut buf);
-                io.write_str(buf.as_str());
-                return CommandAction::None;
-            }
-
-            // Spaced forms like "§ 1" are intentionally invalid; use "§1".
-            io.write_str("§: usage § (list) | §<id> (dump+free)\r\n");
-            return CommandAction::None;
-        }
-        if verb.eq_ignore_ascii_case("qjs") {
-            let src = rest.trim();
-            if src.is_empty() {
-                shellqjs::help(io);
-            } else {
-                shellqjs::run(io, src);
-            }
-            return CommandAction::None;
-        }
-        if verb.eq_ignore_ascii_case("mv") {
-            let mut parts = rest.split_whitespace();
-            let src = parts.next().unwrap_or("");
-            let dst = parts.next().unwrap_or("");
-            if src.is_empty() || dst.is_empty() || parts.next().is_some() {
-                io.write_str("mv: usage mv <src> <dst>\r\n");
-            } else {
-                match crate::surface::io::kfs::rename(src, dst) {
-                    Ok(()) => io.write_str("mv: ok\r\n"),
-                    Err(e) => io.write_fmt(format_args!("mv: failed ({:?})\r\n", e)),
-                }
-            }
-            return CommandAction::None;
-        }
-
-        if verb.eq_ignore_ascii_case("txt") || verb.eq_ignore_ascii_case("txtedt") {
-            let arg = rest.trim();
-            if let Some(slot_id) = crate::surface::io::shellcmd::parse_slot_ref(arg) {
-                // The editor is slot-oriented; show the slot symbol in the header.
-                let mut filename: String<48> = String::new();
-                let _ = write!(filename, "§{}", slot_id + 1);
-                return CommandAction::EnterTxtEdt {
-                    filename,
-                    slot_id,
-                };
-            }
-
-            // Non-slot arguments are intentionally ignored so `txt` doesn't model filenames.
-            if !arg.is_empty() {
-                io.write_str("txt: argument is not a file path here; use `out <path>` then `txt §N`\r\n");
-            }
-
-            // Always back txt by a § slot.
-            let Some(slot_id) = crate::matrix::alloc_slot("txt") else {
-                io.write_str("txt: matrix full\r\n");
-                return CommandAction::None;
-            };
-            let mut filename: String<48> = String::new();
-            let _ = write!(filename, "§{}", slot_id + 1);
-            return CommandAction::EnterTxtEdt {
-                filename,
-                slot_id,
-            };
-        }
-    } else if cmd.eq_ignore_ascii_case("format") {
-        io.write_str("format: usage format <diskid>\r\n");
-        io.write_str("format: example format 1\r\n");
-        io.write_str("format: example format disc001\r\n");
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("install") {
-        *install_wizard = Some(InstallWizardStage::SelectDisk);
-        print_install_disk_table(io);
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("files") {
-        let seq = crate::disc::files::file_tree_seq();
-        let nodes = crate::disc::files::file_tree_len();
-        io.write_fmt(format_args!("files: cache seq={} nodes={}\r\n", seq, nodes));
-        match crate::matrix::alloc_slot("files scan") {
-            Some(slot) => {
-                crate::matrix::push_line(slot, "files: job started");
-                let mut line: String<64> = String::new();
-                let _ = write!(line, "start seq={}", seq);
-                crate::matrix::push_line(slot, line.as_str());
-                let _ = spawner.spawn(crate::matrix::files_matrix_job(slot, seq));
-                io.write_fmt(format_args!("files: started §{}\r\n", slot + 1));
-            }
-            None => {
-                io.write_str("files: matrix full\r\n");
-            }
-        }
-        crate::matrix::refresh_matrix_symbols(io, *term_cols);
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("qjs") {
-        io.write_str("qjs: usage qjs <javascript> | qjs @<path>\r\n");
-        io.write_str("qjs: auto-detects modules (import/export/import.meta)\r\n");
-        io.write_str("qjs: example qjs print(1+2)\r\n");
-        io.write_str("qjs: example qjs import { make } from 'complex'; print(make(1,2))\r\n");
-        return CommandAction::None;
-    } else if cmd.eq_ignore_ascii_case("ecma48") {
-        handle_ecma48(io, "");
-        return CommandAction::None;
-    } else if cmd == "§" {
-        let mut buf: String<512> = String::new();
-        crate::matrix::list_slots(&mut buf);
-        io.write_str(buf.as_str());
-        return CommandAction::None;
-    }
-
-    if let Some((cols, rows)) = parse_set_dims(cmd) {
-        *term_cols = cols;
-        *term_rows = rows;
-        io.write_str("term set: ");
-        write_usize(io, cols);
-        io.write_str("x");
-        write_usize(io, rows);
-        io.write_str("\r\n");
-        draw_corners(io, cols, rows);
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("reset") {
-        return CommandAction::Pending(PendingAction::Reset);
-    }
-
-    if cmd.eq_ignore_ascii_case("s5") {
-        return CommandAction::Pending(PendingAction::S5);
-    }
-
-    if cmd.eq_ignore_ascii_case("go") {
-        set_go_mode(io, go_mode, true);
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("mandel") {
-        crate::vga::draw_mandelbrot();
-        io.write_str("mandel ok\r\n");
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("time") {
-        let Some(ts) = crate::time::unix_time_seconds() else {
-            io.write_str("time: boot timestamp unavailable\r\n");
-            return CommandAction::None;
+    // New-style registered commands (typed args + validation + introspection).
+    {
+        let mut ctx = crate::shell::cmd::ShellCommandCtx {
+            line: cmd,
+            spawner,
+            io,
+            term_cols,
+            term_rows,
+            go_mode,
+            install_wizard,
         };
-        let (year, month, day, hour, minute, second) = unix_timestamp_to_ymdhms(ts);
-
-        let mut buf: String<64> = String::new();
-        let _ = write!(
-            &mut buf,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second
-        );
-        io.write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("insane") {
-        let cols = (*term_cols).max(1);
-        io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
-
-        let mut col: usize = 0;
-        for cp in 0u32..=0x10FFFF {
-            if (cp & 0x3FF) == 0 {
-                if let Some(b) = io.read_byte() {
-                    if b == 0x03 {
-                        io.write_str("\r\ninsane: aborted\r\n");
-                        return CommandAction::None;
-                    }
-                }
-            }
-
-            let ch = match core::char::from_u32(cp) {
-                Some(ch) if !ch.is_control() => ch,
-                Some(_) => '.',
-                None => '�',
-            };
-
-            io.write_char(ch);
-
-            col += 1;
-            if col >= cols {
-                io.write_str("\r\n");
-                col = 0;
-            }
+        if let Some(action) = crate::shell::cmd::dispatch_line(&mut ctx) {
+            return action;
         }
-
-        if col != 0 {
-            io.write_str("\r\n");
-        }
-        io.write_str("insane: done\r\n");
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("usb") {
-        let ctrls = crate::usb::xhci::xhc_list();
-        if ctrls.is_empty() {
-            io.write_str("usb: no xhci controllers\r\n");
-            return CommandAction::None;
-        }
-
-        for info in ctrls.iter() {
-            io.write_fmt(format_args!(
-                "usb: xHCI {} {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} ac64={}\r\n",
-                info.controller_id,
-                info.bus,
-                info.slot,
-                info.function,
-                info.bar_phys,
-                info.bar_size,
-                info.supports_64bit
-            ));
-
-            let devs = crate::usb::list_device_summaries(info.controller_id);
-            if devs.is_empty() {
-                io.write_str("  (no devices)\r\n");
-                continue;
-            }
-
-            for d in devs.iter() {
-                io.write_fmt(format_args!(
-                    "  port={} slot={} kind={} vid=0x{:04X} pid=0x{:04X} cls={:02X}/{:02X}/{:02X}\r\n",
-                    d.port,
-                    d.slot_id,
-                    d.kind,
-                    d.vid.unwrap_or(0),
-                    d.pid.unwrap_or(0),
-                    d.class.unwrap_or(0),
-                    d.subclass.unwrap_or(0),
-                    d.protocol.unwrap_or(0)
-                ));
-            }
-        }
-
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("pci") {
-        let mut len: usize = 0;
-        crate::pci::with_devices(|list| {
-            len = list.len();
-        });
-        if len == 0 {
-            // Enumeration is expected to populate a static cache; if it's empty,
-            // do a silent scan so the command is useful even if init ordering changed.
-            crate::pci::enumerate_silent();
-        }
-
-        crate::pci::with_devices(|list| {
-            io.write_fmt(format_args!("pci: devices={}\r\n", list.len()));
-            if list.is_empty() {
-                io.write_str("pci: no devices\r\n");
-                return;
-            }
-
-            for dev in list.iter() {
-                let (bar0_lo, bar0_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-                let irq_line = crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x3C) & 0x1F;
-
-                if let Some(hi) = bar0_hi {
-                    io.write_fmt(format_args!(
-                        "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} cls={:02X}/{:02X}/{:02X} bar0=0x{:08X}{:08X} irq={}\r\n",
-                        dev.bus,
-                        dev.slot,
-                        dev.function,
-                        dev.vendor,
-                        dev.device,
-                        dev.class,
-                        dev.subclass,
-                        dev.prog_if,
-                        hi,
-                        bar0_lo,
-                        irq_line
-                    ));
-                } else {
-                    io.write_fmt(format_args!(
-                        "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} cls={:02X}/{:02X}/{:02X} bar0=0x{:08X} irq={}\r\n",
-                        dev.bus,
-                        dev.slot,
-                        dev.function,
-                        dev.vendor,
-                        dev.device,
-                        dev.class,
-                        dev.subclass,
-                        dev.prog_if,
-                        bar0_lo,
-                        irq_line
-                    ));
-                }
-            }
-        });
-
-        return CommandAction::None;
-    }
-
-    if let Some(rest) = cmd.strip_prefix("idle") {
-        let rest = rest.trim();
-        if rest.is_empty() {
-            io.write_fmt(format_args!("idle: {}\r\n", crate::power::idle_policy().as_str()));
-            return CommandAction::None;
-        }
-        let policy = match rest {
-            "spin" => crate::power::IdlePolicy::Spin,
-            "hlt" => crate::power::IdlePolicy::Halt,
-            _ => {
-                io.write_str("idle: usage idle [spin|hlt]\r\n");
-                return CommandAction::None;
-            }
-        };
-        let prev = crate::power::set_idle_policy(policy);
-        io.write_fmt(format_args!("idle: {} -> {}\r\n", prev.as_str(), policy.as_str()));
-        return CommandAction::None;
-    }
-
-    if let Some(rest) = cmd.strip_prefix("pstate") {
-        let rest = rest.trim();
-        if rest.is_empty() {
-            let cur = crate::power::current_ratio();
-            let armed = crate::power::msr_armed();
-            let details = crate::power::msr_details().copied();
-
-            match (cur, armed, details) {
-                (Some(cur), true, Some(d)) => io.write_fmt(format_args!(
-                    "pstate: current={} min={} max={}\r\n",
-                    cur,
-                    d.min_ratio.unwrap_or(0),
-                    d.max_ratio.unwrap_or(0)
-                )),
-                (_, false, _) => io.write_str("pstate: msr disarmed\r\n"),
-                (_, true, None) => io.write_str("pstate: msr details not probed\r\n"),
-                _ => io.write_str("pstate: unsupported\r\n"),
-            }
-            return CommandAction::None;
-        }
-
-        let Some(req) = rest.parse::<u8>().ok() else {
-            io.write_str("pstate: usage pstate <ratio>\r\n");
-            return CommandAction::None;
-        };
-
-        match crate::power::set_pstate_ratio(req) {
-            Ok(applied) => io.write_fmt(format_args!("pstate: applied {}\r\n", applied)),
-            Err(err) => io.write_fmt(format_args!("pstate: failed: {}\r\n", err)),
-        }
-        return CommandAction::None;
-    }
-
-    if cmd.eq_ignore_ascii_case("cube") {
-        return CommandAction::EnterCube;
-    }
-
-    if cmd.eq_ignore_ascii_case("ico") {
-        return CommandAction::EnterIco;
-    }
-
-    if cmd.eq_ignore_ascii_case("txt") || cmd.eq_ignore_ascii_case("txtedt") {
-        let Some(slot_id) = crate::matrix::alloc_slot("txt") else {
-            io.write_str("txt: matrix full\r\n");
-            return CommandAction::None;
-        };
-
-        let mut filename: String<48> = String::new();
-        let _ = write!(filename, "§{}", slot_id + 1);
-        return CommandAction::EnterTxtEdt {
-            filename,
-            slot_id,
-        };
     }
 
     io.write_str("unknown: ");
     io.write_str(cmd);
     io.write_str("\r\n");
     CommandAction::None
-}
-
-fn parse_set_dims(cmd: &str) -> Option<(usize, usize)> {
-    let cmd = cmd.trim();
-    let inner = cmd.strip_prefix("set(")?.strip_suffix(')')?;
-    let (a, b) = inner.split_once(',')?;
-    let cols = a.trim().parse::<usize>().ok()?;
-    let rows = b.trim().parse::<usize>().ok()?;
-    Some((cols, rows))
-}
-
-fn write_usize(io: &dyn ShellIo, value: usize) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    let mut v = value;
-    if v == 0 {
-        io.write_byte(b'0');
-        return;
-    }
-    while v > 0 {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-    }
-    for b in &buf[i..] {
-        io.write_byte(*b);
-    }
 }
 
 fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
@@ -1277,7 +660,7 @@ fn is_leap_year(year: u32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
-fn draw_corners(io: &dyn ShellIo, cols: usize, rows: usize) {
+pub(crate) fn draw_corners(io: &dyn ShellIo, cols: usize, rows: usize) {
     if cols == 0 || rows == 0 {
         return;
     }
