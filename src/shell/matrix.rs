@@ -545,6 +545,22 @@ pub(crate) async fn install_matrix_job(
     log_line(slot_id, &mut blob, "install: DANGER: this may REPARTITION and FORMAT the disk");
     log_line(slot_id, &mut blob, "install: creating/updating GPT + ESP + TRUEOSFS boot files");
     log_line(slot_id, &mut blob, "install: existing TRUEOSFS will be preserved if detected");
+
+    // UEFI-only install: if the installer was booted in legacy/CSM mode, warn loudly.
+    let uefi = crate::limine::efi_system_table_address().unwrap_or(0) != 0;
+    if !uefi {
+        log_line(
+            slot_id,
+            &mut blob,
+            "install: WARNING: running without UEFI (legacy/CSM boot). Installed TRUEOS is UEFI-only.",
+        );
+        log_line(
+            slot_id,
+            &mut blob,
+            "install: After install, reboot and select the UEFI boot entry for this disk.",
+        );
+    }
+
     log_line(
         slot_id,
         &mut blob,

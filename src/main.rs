@@ -26,7 +26,6 @@ mod audio;
 mod backtrace;
 mod disc;
 mod exceptions;
-mod install_assets;
 mod limine;
 mod limstats;
 mod net;

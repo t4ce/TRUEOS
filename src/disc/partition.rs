@@ -26,14 +26,8 @@ pub const GPT_TYPE_LINUX_FILESYSTEM_BYTES: [u8; 16] = [
     0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 ];
 
-// BIOS boot partition type GUID.
-// 21686148-6449-6E6F-744E-656564454649
-// On-disk GUID bytes spell "Hah!IdontNeedEFI".
-pub const GPT_TYPE_BIOS_BOOT_PARTITION_BYTES: [u8; 16] = *b"Hah!IdontNeedEFI";
-
 #[derive(Clone, Copy, Debug)]
 pub struct TrueosBootLayout {
-    pub bios_boot: BlockRange,
     pub esp: BlockRange,
     pub trueos: BlockRange,
 }
