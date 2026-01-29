@@ -19,9 +19,7 @@ use crate::net::vio::VirtioNetAdapter;
 use crate::net::e1000::E1000Adapter;
 
 const RX_DESC_COUNT: usize = 64;
-const TX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
-const TX_BUF_SIZE: usize = 2048;
 const POLL_BUDGET: usize = 32;
 
 enum ActiveDevice {
@@ -78,8 +76,6 @@ pub fn init() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
-            TX_DESC_COUNT,
-            TX_BUF_SIZE,
             POLL_BUDGET,
         );
         let mut guard = DEVICES.lock();
@@ -91,8 +87,6 @@ pub fn init() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
-            TX_DESC_COUNT,
-            TX_BUF_SIZE,
             POLL_BUDGET,
         );
         let mut guard = DEVICES.lock();
@@ -104,8 +98,6 @@ pub fn init() {
         let ring = NetRing::new(
             RX_DESC_COUNT,
             RX_BUF_SIZE,
-            TX_DESC_COUNT,
-            TX_BUF_SIZE,
             POLL_BUDGET,
         );
         let mut guard = DEVICES.lock();

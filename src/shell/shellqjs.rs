@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
 
 use crate::shell::{ShellBackend, ShellIo};

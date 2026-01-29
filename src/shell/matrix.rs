@@ -18,7 +18,6 @@ pub enum SlotState {
     Running,
     Done,
     Failed,
-    Cancelled,
 }
 
 pub struct SlotData {
@@ -252,38 +251,6 @@ pub fn clear_lines(slot_id: u8) {
 /// Overwrites the slot blob with `bytes` (no size cap).
 ///
 /// Returns `false` only if the slot is missing.
-pub fn set_blob(slot_id: u8, bytes: &[u8]) -> bool {
-    let Some(slot) = slot_ref(slot_id) else {
-        return false;
-    };
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-    let mut data = slot.data.lock();
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-
-    data.blob.clear();
-    data.blob.extend_from_slice(bytes);
-    true
-}
-
-/// Moves an owned blob into the slot (no copy). Returns false if slot missing.
-pub fn set_blob_owned(slot_id: u8, blob: AVec<u8>) -> bool {
-    let Some(slot) = slot_ref(slot_id) else {
-        return false;
-    };
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-    let mut data = slot.data.lock();
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-    data.blob = blob;
-    true
-}
 
 /// Moves an owned blob into the slot and updates preview lines from it.
 pub fn set_blob_owned_with_preview(slot_id: u8, blob: AVec<u8>) -> bool {
@@ -351,20 +318,6 @@ pub fn with_slot<R>(slot_id: u8, f: impl FnOnce(&SlotData) -> R) -> Option<R> {
     Some(f(&data))
 }
 
-/// Formats a compact list like "§1 §3" for all allocated slots.
-pub fn format_symbols(out: &mut String<64>) {
-    out.clear();
-    for (idx, slot) in SLOTS.iter().enumerate() {
-        if !slot.used.load(Ordering::Acquire) {
-            continue;
-        }
-        if !out.is_empty() {
-            let _ = out.push(' ');
-        }
-        let _ = write!(out, "§{}", idx + 1);
-    }
-}
-
 /// Collects all allocated slots as (1-based-id, state) pairs in ascending order.
 pub fn collect_symbols(out: &mut HVec<(u8, SlotState), MAX_SLOTS>) {
     out.clear();
@@ -378,22 +331,6 @@ pub fn collect_symbols(out: &mut HVec<(u8, SlotState), MAX_SLOTS>) {
         }
         let _ = out.push((idx as u8 + 1, data.state));
     }
-}
-
-/// Rebuild preview lines from the current slot blob.
-pub fn refresh_preview(slot_id: u8) -> bool {
-    let Some(slot) = slot_ref(slot_id) else {
-        return false;
-    };
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-    let mut data = slot.data.lock();
-    if !slot.used.load(Ordering::Acquire) {
-        return false;
-    }
-    refresh_preview_locked(&mut data);
-    true
 }
 
 pub fn list_slots(out: &mut String<512>) {

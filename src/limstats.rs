@@ -56,11 +56,6 @@ pub fn log_limine_markers() {
         None => crate::log!("LIMINE PERF MISSING\n"),
     }
 
-    let req_ptr = &limine::MEMMAP_REQUEST as *const _ as usize;
-    let resp_ptr = limine::MEMMAP_REQUEST
-        .get_response()
-        .map(|r| r as *const _ as usize)
-        .unwrap_or(0);
     if let Some(entries) = limine::memmap_entries() {
         for entry in entries {
             crate::log!(

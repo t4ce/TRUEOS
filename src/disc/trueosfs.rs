@@ -234,5 +234,41 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
 
     handle.write_blocks(super_lba, buf)?;
     handle.flush()?;
+
+    // Best-effort end-to-end NVMe sanity check: write a tiny payload into the data region
+    // and read it back. This keeps validation at the block device layer (no extra shell cmds)
+    // and avoids clobbering partition tables/boot sectors.
+    let info = handle.info();
+    if info.kind == block::DeviceKind::Nvme {
+        let data_lba = trueos_fs::data_lba_from_super(super_lba);
+        // Need at least 2 blocks available in the data region.
+        if data_lba.saturating_add(2) <= info.block_count {
+            let blocks_verify = core::cmp::min(2usize, max_blocks);
+            let bytes_verify = bs.saturating_mul(blocks_verify);
+            let mut tmp2 = AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
+            let w = tmp2.as_mut_slice();
+            w.fill(0);
+            let tag = b"TRUEOSFS-NVME-VERIFY";
+            let n = core::cmp::min(tag.len(), bs);
+            w[..n].copy_from_slice(&tag[..n]);
+            // Put some changing bytes in the second block too.
+            if blocks_verify > 1 {
+                for (i, b) in w[bs..(2 * bs)].iter_mut().enumerate() {
+                    *b = (i as u8).wrapping_mul(17).wrapping_add(0x5A);
+                }
+            }
+
+            handle.write_blocks(data_lba, w)?;
+            handle.flush()?;
+
+            let mut rtmp = AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
+            let r = rtmp.as_mut_slice();
+            r.fill(0);
+            handle.read_blocks(data_lba, r)?;
+            if r != w {
+                return Err(block::Error::Corrupted);
+            }
+        }
+    }
     Ok(())
 }

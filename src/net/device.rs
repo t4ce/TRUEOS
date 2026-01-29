@@ -12,14 +12,6 @@ pub trait NetDevice {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OffloadFlags {
-    pub checksum: bool,
-    pub tso: bool,
-    pub lro: bool,
-    pub vlan: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LinkState {
     pub up: bool,
     pub speed_mbps: u32,
@@ -29,13 +21,5 @@ pub struct LinkState {
 impl LinkState {
     pub fn down() -> Self {
         Self::default()
-    }
-
-    pub fn up(speed_mbps: u32, full_duplex: bool) -> Self {
-        Self {
-            up: true,
-            speed_mbps,
-            full_duplex,
-        }
     }
 }

@@ -228,11 +228,11 @@ pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
 }
 
 fn detect_caps_cpuid_only() -> Option<PowerCaps> {
-    let r0 = unsafe { __cpuid(0x0) };
+    let r0 = __cpuid(0x0);
     let max_leaf = r0.eax;
     let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
 
-    let r1 = unsafe { __cpuid(0x1) };
+    let r1 = __cpuid(0x1);
     let has_msr = (r1.edx & (1 << 5)) != 0;
     // EIST/HWP probing is Intel-specific. On other vendors, treating these bits as
     // authoritative can lead to invalid MSR reads and a #GP (which currently reboots).
@@ -240,7 +240,7 @@ fn detect_caps_cpuid_only() -> Option<PowerCaps> {
 
     let mut has_hwp = false;
     if vendor_intel && max_leaf >= 0x6 {
-        let r6 = unsafe { __cpuid(0x6) };
+        let r6 = __cpuid(0x6);
         has_hwp = (r6.eax & (1 << 7)) != 0;
     }
 

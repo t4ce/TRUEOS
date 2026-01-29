@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::net::device::{LinkState, OffloadFlags};
+use crate::net::device::LinkState;
 
 pub struct DmaRegion {
     phys: u64,
@@ -24,10 +24,6 @@ impl DmaRegion {
     pub fn virt(&self) -> *mut u8 {
         self.virt
     }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
 }
 
 impl Drop for DmaRegion {
@@ -43,12 +39,6 @@ impl Drop for DmaRegion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TxError {
-    RingFull,
-    FrameTooLarge,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RxError {
     RingFull,
 }
@@ -59,11 +49,6 @@ struct RxSlot {
     owned_by_hw: bool,
 }
 
-struct TxSlot {
-    buf: Vec<u8>,
-    len: usize,
-    owned_by_hw: bool,
-}
 
 pub struct RxRing {
     slots: Vec<RxSlot>,
@@ -144,130 +129,35 @@ impl RxRing {
     }
 }
 
-pub struct TxRing {
-    slots: Vec<TxSlot>,
-    head: usize,
-    tail: usize,
-}
-
-impl TxRing {
-    pub fn new(desc_count: usize, buf_size: usize) -> Self {
-        let mut slots = Vec::with_capacity(desc_count.max(1));
-        for _ in 0..desc_count.max(1) {
-            slots.push(TxSlot {
-                buf: alloc::vec![0u8; buf_size],
-                len: 0,
-                owned_by_hw: false,
-            });
-        }
-        Self { slots, head: 0, tail: 0 }
-    }
-
-    pub fn submit(&mut self, frame: &[u8]) -> Result<(), TxError> {
-        let slot = &mut self.slots[self.tail];
-        if slot.owned_by_hw {
-            return Err(TxError::RingFull);
-        }
-        if frame.len() > slot.buf.len() {
-            return Err(TxError::FrameTooLarge);
-        }
-        slot.buf[..frame.len()].copy_from_slice(frame);
-        slot.len = frame.len();
-        slot.owned_by_hw = true;
-        self.tail = (self.tail + 1) % self.slots.len();
-        Ok(())
-    }
-
-    pub fn mark_complete(&mut self, slot: usize) {
-        let idx = slot % self.slots.len();
-        let slot = &mut self.slots[idx];
-        slot.len = 0;
-        slot.owned_by_hw = false;
-        if idx == self.head {
-            self.head = (self.head + 1) % self.slots.len();
-        }
-    }
-
-    pub fn buffer(&self, slot: usize) -> &[u8] {
-        let idx = slot % self.slots.len();
-        let slot = &self.slots[idx];
-        &slot.buf[..slot.len]
-    }
-}
-
 pub struct NetRing {
     rx: RxRing,
-    tx: TxRing,
     poll_budget: usize,
-    link: LinkState,
-    offloads: OffloadFlags,
-    irq_pending: bool,
+    _link: LinkState,
 }
 
 impl NetRing {
     pub fn new(
         rx_desc: usize,
         rx_buf_size: usize,
-        tx_desc: usize,
-        tx_buf_size: usize,
         poll_budget: usize,
     ) -> Self {
         Self {
             rx: RxRing::new(rx_desc, rx_buf_size),
-            tx: TxRing::new(tx_desc, tx_buf_size),
             poll_budget: poll_budget.max(1),
-            link: LinkState::down(),
-            offloads: OffloadFlags::default(),
-            irq_pending: false,
+            _link: LinkState::down(),
         }
     }
 
     pub fn poll_rx(&mut self) -> Vec<Vec<u8>> {
-        self.irq_pending = false;
         self.rx.poll(self.poll_budget)
-    }
-
-    pub fn tx_submit(&mut self, frame: &[u8]) -> Result<(), TxError> {
-        self.tx.submit(frame)
     }
 
     pub fn push_rx_packet(&mut self, data: &[u8]) -> Result<(), RxError> {
         self.rx.push_packet(data)
     }
 
-    pub fn set_link(&mut self, link: LinkState) {
-        self.link = link;
-    }
-
-    pub fn set_offloads(&mut self, offloads: OffloadFlags) {
-        self.offloads = offloads;
-    }
-
-    pub fn note_irq(&mut self) {
-        self.irq_pending = true;
-    }
 
     pub fn rx_ring_mut(&mut self) -> &mut RxRing {
         &mut self.rx
     }
-
-    pub fn tx_ring_mut(&mut self) -> &mut TxRing {
-        &mut self.tx
-    }
-
-    pub fn link(&self) -> LinkState {
-        self.link
-    }
-
-    pub fn offloads(&self) -> OffloadFlags {
-        self.offloads
-    }
-}
-
-pub fn smoke_test() -> bool {
-    let mut ring = NetRing::new(4, 64, 4, 64, 4);
-    let _ = ring.tx_submit(&[1, 2, 3, 4]);
-    ring.set_link(LinkState::up(1000, true));
-    ring.set_offloads(OffloadFlags::default());
-    ring.link().up && !ring.offloads().tso
 }

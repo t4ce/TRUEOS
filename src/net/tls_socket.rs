@@ -244,7 +244,6 @@ pub async fn tls_socket_service_task() {
                             server_name,
                             &mut rng,
                             &KERNEL_TIME,
-                            None,
                         ) {
                             Ok(c) => c,
                             Err(e) => {

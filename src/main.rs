@@ -54,12 +54,11 @@ pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::usb::usb_scout_service;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use ::limine::mp::Cpu as LimineCpu;
-use core::ffi::c_char;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use embassy_executor::{raw::Executor, task, Spawner};
+use embassy_executor::{raw::Executor, Spawner};
 use trueos_qjs as qjs;
 pub use surface::pat as pattern;
 pub use surface::{io, path, strings};
@@ -158,10 +157,14 @@ fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) 
 const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 #[repr(align(16))]
-struct BootStack([u8; BSP_BOOT_STACK_BYTES]);
+struct BootStack {
+    _bytes: [u8; BSP_BOOT_STACK_BYTES],
+}
 
 #[link_section = ".bss"]
-static mut BSP_BOOT_STACK: BootStack = BootStack([0; BSP_BOOT_STACK_BYTES]);
+static mut BSP_BOOT_STACK: BootStack = BootStack {
+    _bytes: [0; BSP_BOOT_STACK_BYTES],
+};
 
 #[no_mangle]
 #[unsafe(naked)]

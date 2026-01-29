@@ -1,4 +1,3 @@
-use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 const COM1: u16 = 0x3F8;

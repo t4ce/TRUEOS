@@ -271,17 +271,6 @@ pub fn alloc_with_max(
     Some((phys, virt))
 }
 
-/// Allocate respecting a conventional DMA mask (e.g. `0xFFFF_FFFF` for 32-bit).
-pub fn alloc_with_mask(size: usize, align: usize, dma_mask: u64) -> Option<(u64, *mut u8)> {
-    // Convert inclusive mask to exclusive upper bound.
-    let max_exclusive = if dma_mask == u64::MAX {
-        None
-    } else {
-        dma_mask.checked_add(1)
-    };
-    alloc_with_max(size, align, max_exclusive)
-}
-
 pub fn dealloc(ptr: *mut u8, size: usize) {
     if ptr.is_null() || size == 0 || !ensure_ready() {
         return;
@@ -311,10 +300,6 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
         PMM_FREES.fetch_add(1, Ordering::Relaxed);
         PMM_BYTES.fetch_sub(size as u64, Ordering::Relaxed);
     }
-}
-
-pub fn virt_to_phys(ptr: *const u8) -> Option<u64> {
-    crate::phys::virt_to_phys_checked(ptr)
 }
 
 pub fn alloc_test_once() {
