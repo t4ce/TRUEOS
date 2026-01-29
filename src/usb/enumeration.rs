@@ -1190,7 +1190,12 @@ pub(crate) async fn enumerate_with_params(
     // xHCI PORTSC doesn't include VID:PID; cache it for xHCI-side debug once we've read it.
     if tree_parent.is_none() {
         xhci::set_port_vidpid(ctx.controller_id, target_port, dev_vid, dev_pid);
-        xhci::log_cached_port_id(ctx.controller_id, target_port);
+        crate::log!(
+            "xhci: port {} id={:04X}:{:04X}\n",
+            target_port,
+            dev_vid,
+            dev_pid
+        );
     }
 
     if !(dev_mfr.is_empty() && dev_prod.is_empty()) {

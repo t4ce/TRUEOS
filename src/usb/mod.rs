@@ -10,6 +10,7 @@ pub mod pen;
 pub mod print;
 pub mod isoch;
 pub mod uac;
+pub mod leds;
 pub mod truekey;
 pub mod xhci;
 mod scout;
@@ -58,6 +59,7 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
             DeviceKind::Pen => "pen",
             DeviceKind::Cdc => "cdc",
             DeviceKind::Uac => "uac",
+            DeviceKind::Leds => "leds",
             DeviceKind::Unknown => "unknown",
         };
 
@@ -85,6 +87,7 @@ enum DeviceKind {
     Pen,
     Cdc,
     Uac,
+    Leds,
     Unknown,
 }
 
@@ -359,6 +362,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}
+            Some(DeviceKind::Leds) => {
+                // LED controller endpoints are configured, but no periodic transfers are driven yet.
+            }
             Some(DeviceKind::Unknown) => {
                 // Unclaimed devices keep a slot assigned so we don't thrash.
                 // No transfers should complete for them because no endpoints are configured.

@@ -413,6 +413,337 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
     endpoints
 }
 
+pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
+    let mut idx = 0usize;
+    let mut config_value = 1u8;
+    let mut current_iface: Option<u8> = None;
+    let mut current_alt: u8 = 0;
+    let mut current_class: u8 = 0;
+    let mut current_proto: u8 = 0;
+    let mut current_report_len: u16 = 0;
+    let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
+
+    while idx + 2 <= cfg.len() {
+        let len = cfg[idx] as usize;
+        let ty = cfg[idx + 1];
+        if len == 0 || idx + len > cfg.len() {
+            break;
+        }
+        match ty {
+            2 => {
+                if len >= 6 {
+                    config_value = cfg[idx + 5];
+                }
+            }
+            4 => {
+                if len >= 9 {
+                    current_iface = Some(cfg[idx + 2]);
+                    current_alt = cfg[idx + 3];
+                    current_class = cfg[idx + 5];
+                    current_proto = cfg[idx + 7];
+                    current_report_len = 0;
+                } else {
+                    current_iface = None;
+                }
+            }
+            0x21 => {
+                // HID descriptor: extract report descriptor length for the current interface.
+                if len >= 9 {
+                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
+                }
+            }
+            5 => {
+                if let Some(iface) = current_iface {
+                    // Only claim HID interfaces.
+                    if current_alt == 0 && current_class == 0x03 {
+                        if len >= 7 {
+                            let ep_addr = cfg[idx + 2];
+                            let attrs = cfg[idx + 3];
+                            let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                            let interval = cfg[idx + 6];
+                            // Interrupt IN
+                            if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
+                                if endpoints
+                                    .iter()
+                                    .any(|e| e.interface == iface && e.address == ep_addr)
+                                {
+                                    hidlog!(
+                                        "[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n",
+                                        iface,
+                                        ep_addr
+                                    );
+                                } else if endpoints
+                                    .push(HidEpInfo {
+                                        configuration: config_value,
+                                        interface: iface,
+                                        address: ep_addr,
+                                        max_packet,
+                                        interval,
+                                        protocol: current_proto,
+                                        report_desc_len: current_report_len,
+                                    })
+                                    .is_err()
+                                {
+                                    hidlog!(
+                                        "[hid] HID endpoint list full, dropping iface={} addr=0x{:02X}\n",
+                                        iface,
+                                        ep_addr
+                                    );
+                                } else {
+                                    hidlog!(
+                                        "[hid] parse hid ep iface={} addr=0x{:02X} mps={} interval={} cfg={} proto={} rep_len={}\n",
+                                        iface,
+                                        ep_addr,
+                                        max_packet,
+                                        interval,
+                                        config_value,
+                                        current_proto,
+                                        current_report_len
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        idx += len;
+    }
+
+    endpoints
+}
+
+pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
+    let BootAttachParams {
+        ctx,
+        mut cmd_ring,
+        mut ep0_ring,
+        slot_id,
+        cfg,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+    } = params;
+
+    if cfg.is_empty() {
+        hidlog!("[hid] empty configuration descriptor\n");
+        return Err(());
+    }
+
+    let endpoints = parse_hid_interrupt_in_endpoints(cfg);
+    if endpoints.is_empty() {
+        hidlog!("[hid] no HID interrupt IN endpoints found\n");
+        return Err(());
+    }
+
+    let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
+
+    // SET_CONFIGURATION
+    let setup_cfg = Trb {
+        d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
+        d1: 0,
+        d2: 8,
+        d3: trb_type(2) | (1 << 6),
+    };
+    let status_cfg = Trb {
+        d0: 0,
+        d1: 0,
+        d2: 0,
+        d3: trb_type(4) | (1 << 5) | (1 << 16),
+    };
+    if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
+        hidlog!("usb: ep0 ring overflow for set_configuration\n");
+        return Err(());
+    }
+    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+    let Some(set_cfg_evt) = xhci::wait_for_event(
+        ctx,
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            evt_slot == slot_id
+        },
+        400,
+        EmbassyDuration::from_millis(5),
+    )
+    .await
+    else {
+        hidlog!("usb: timeout waiting for set-configuration\n");
+        return Err(());
+    };
+
+    let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
+    if completion != 1 {
+        return Err(());
+    }
+
+    // Best-effort: idle/protocol setup (works for many HID devices; errors ignored)
+    for ep in endpoints.iter() {
+        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+        let _ = class_request_nodata(ctx, &mut ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
+    }
+
+    let mut attached = 0usize;
+    for ep in endpoints.into_iter() {
+        hidlog!(
+            "usb: hid(generic) ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
+            ep.address,
+            ep.max_packet,
+            ep.interval,
+            ep.interface,
+            ep.configuration,
+            ep.protocol
+        );
+
+        let hid_kind = hid_kind_from_protocol(ep.protocol);
+
+        let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
+            Some(pair) => pair,
+            None => {
+                hidlog!("usb: failed to alloc ep ring\n");
+                continue;
+            }
+        };
+        unsafe { write_bytes(ep_ring_virt, 0, 32 * size_of::<Trb>()) };
+        let mut ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, 32) };
+
+        let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
+            Some(pair) => pair,
+            None => {
+                hidlog!("usb: failed to alloc input ctx for cfg-ep\n");
+                continue;
+            }
+        };
+        unsafe { write_bytes(input_cfg_virt, 0, 4096) };
+
+        let ep_target = endpoint_target(ep.address);
+        let ep_ctx_index = context_index(ep.address);
+        let ep_add_bit = ep_ctx_index - 1;
+
+        unsafe {
+            let add_flags_ptr = input_cfg_virt as *mut u32;
+            write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_add_bit));
+
+            let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
+            let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
+            let ep_ctx = input_cfg_virt.add(ep_ctx_off) as *mut u32;
+
+            let dev_slot_ctx = dev_ctx_virt as *const u32;
+            for i in 0..ctx_stride_words {
+                write_volatile(slot_ctx.add(i), read_volatile(dev_slot_ctx.add(i)));
+            }
+
+            let mut dw0 = read_volatile(slot_ctx.add(0));
+            dw0 = (dw0 & !(0x1F << 27)) | (ep_add_bit << 27);
+            write_volatile(slot_ctx.add(0), dw0);
+
+            let mut dw1 = read_volatile(slot_ctx.add(1));
+            dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
+            write_volatile(slot_ctx.add(1), dw1);
+
+            let mps = (ep.max_packet as u32) & 0x7FF;
+            let interval = if speed_code == 3 {
+                core::cmp::min(15u32, ep.interval.saturating_sub(1) as u32)
+            } else {
+                ep.interval as u32
+            };
+
+            write_volatile(
+                ep_ctx.add(0),
+                ep_state_bits(EP_STATE_DISABLED) | ep_interval_bits(interval),
+            );
+            let mut ep_cfg = ep_cerr_bits(3);
+            ep_cfg |= ep_type_bits(EP_TYPE_INT_IN);
+            ep_cfg |= ep_max_packet_bits(mps);
+            write_volatile(ep_ctx.add(1), ep_cfg);
+            let dq = ep_ring.dequeue_ptr();
+            write_volatile(ep_ctx.add(2), lo(dq));
+            write_volatile(ep_ctx.add(3), hi(dq));
+            write_volatile(
+                ep_ctx.add(4),
+                ep_avg_trb_len_bits(mps) | ep_max_esit_payload_lo_bits(mps),
+            );
+        }
+
+        let cfg_ep_cmd = Trb {
+            d0: lo(input_cfg_phys),
+            d1: hi(input_cfg_phys),
+            d2: 0,
+            d3: trb_type(12) | (slot_id << 24),
+        };
+        if xhci::submit_cmd_and_wait(
+            ctx,
+            cmd_ring,
+            cfg_ep_cmd,
+            Some(slot_id),
+            "hid-config-ep",
+            400,
+            EmbassyDuration::from_millis(5),
+        )
+        .await
+        .is_err()
+        {
+            continue;
+        }
+
+        let report_bytes = core::cmp::max(usize::from(ep.max_packet), 8);
+        let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
+            Some(pair) => pair,
+            None => {
+                hidlog!("usb: failed to alloc report buffer\n");
+                continue;
+            }
+        };
+        unsafe { write_bytes(rep_virt, 0, report_bytes) };
+
+        let report_len = ep.max_packet as u32;
+
+        if ep.report_desc_len > 0 {
+            let _ = fetch_report_descriptor(ctx, &mut ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await;
+        }
+
+        let normal = Trb {
+            d0: lo(rep_phys),
+            d1: hi(rep_phys),
+            d2: report_len,
+            d3: trb_type(1) | (1 << 5),
+        };
+        if !ep_ring.push(normal) {
+            hidlog!("usb: ep ring full before interrupt IN\n");
+            continue;
+        }
+        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
+
+        register_runtime(HidRuntime {
+            controller_id: ctx.controller_id,
+            ep,
+            report_phys: rep_phys,
+            report_virt: rep_virt,
+            report_len,
+            hid_kind,
+            slot_id,
+            ep_target: ep_target as u32,
+            ep_ring,
+            seq: 0,
+            last_nonzero_seq: 0,
+        });
+
+        attached += 1;
+    }
+
+    if attached > 0 {
+        Ok(attached)
+    } else {
+        Err(())
+    }
+}
+
 async fn fetch_report_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,

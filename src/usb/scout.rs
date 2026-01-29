@@ -80,6 +80,8 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = cdc_acm::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Uac {
             let _ = uac::unregister_runtime(controller_id, slot_id);
+        } else if kind == DeviceKind::Leds {
+            let _ = super::leds::unregister_runtime(controller_id, slot_id);
         }
         crate::log!(
             "usb[xHCI {}]: dropped device slot={} (disconnected)\n",
