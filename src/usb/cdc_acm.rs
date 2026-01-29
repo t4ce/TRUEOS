@@ -277,7 +277,7 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
 }
 
 fn register_runtime(runtime: CdcRuntime) {
-    let mut runtime = runtime;
+    let runtime = runtime;
 
     let mut guard = CDC_RUNTIMES.lock();
     if let Some(existing) = guard
@@ -454,8 +454,8 @@ fn runtime_exists(controller_id: usize, slot_id: u32) -> bool {
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let AttachParams {
         ctx,
-        mut cmd_ring,
-        mut ep0_ring,
+        cmd_ring,
+        ep0_ring,
         slot_id,
         dev_vid,
         dev_pid,
@@ -620,7 +620,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         write_bytes(rx_virt, 0, CDC_DMA_CHUNK);
     }
 
-    let mut runtime = CdcRuntime {
+    let runtime = CdcRuntime {
         controller_id: ctx.controller_id,
         info: interface,
         slot_id,
@@ -646,7 +646,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     if program_line_coding(
         ctx,
-        &mut ep0_ring,
+        &mut *ep0_ring,
         slot_id,
         interface.control_interface,
         desired_baud,
@@ -658,7 +658,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
     if set_control_line_state(
         ctx,
-        &mut ep0_ring,
+        &mut *ep0_ring,
         slot_id,
         interface.control_interface,
         0x0003,

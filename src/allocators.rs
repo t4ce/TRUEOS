@@ -180,7 +180,7 @@ impl FreeList {
         let mut prev: Option<NonNull<FreeBlock>> = None;
         let mut current = self.head;
 
-        while let Some(mut node) = current {
+        while let Some(node) = current {
             if (node.as_ptr() as usize) > block_start {
                 break;
             }
