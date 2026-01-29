@@ -1,12 +1,7 @@
 //! String helpers that are small, allocation-friendly, and kernel-centric.
 
-use alloc::format;
-
-use crate::surface::{
-    fmt::{self, Write},
-    string::String,
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
+use core::fmt::Write;
 
 /// Error returned when non-ASCII data is encountered in an ASCII-only routine.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

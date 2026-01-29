@@ -34,7 +34,7 @@ pub fn init_ap(lapic_id: u32, cpu_index: u32) {
 }
 
 #[inline(always)]
-fn init_with(lapic_id: u32, cpu_index: u32, tag: &str) {
+fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
     let mut percpu = Box::new(PerCpu {
         self_ptr: core::ptr::null_mut(),
         lapic_id,

@@ -84,7 +84,7 @@ pub fn init_topology(ctx: &XhciContext) {
     topo.hub_ep0_rings.clear();
 
     let limit = core::cmp::min(ctx.port_count as usize, LOG_PORTS_MAX);
-    for port in 1..=limit {
+    for _port in 1..=limit {
         let Some(node) = tree.add_child(
             root,
             UsbNode {
@@ -570,17 +570,12 @@ pub async fn configure_hub_context(params: HubConfigParams<'_>) -> Result<(), ()
     let (input_cfg_phys, input_cfg_virt) = dma::alloc(4096, 64).ok_or(())?;
     unsafe { core::ptr::write_bytes(input_cfg_virt, 0, 4096) };
 
-    let mut in_add_flags: u32 = 0;
-    let mut in_dw0: u32 = 0;
-    let mut in_dw1: u32 = 0;
-    let mut in_dw2: u32 = 0;
-
-    unsafe {
+    let (in_add_flags, in_dw0, in_dw1, in_dw2) = unsafe {
         let add_flags_ptr = input_cfg_virt as *mut u32;
         // For Evaluate Context, include Slot + EP0. Some controllers fail to
         // latch hub fields unless EP0 is present in the input context.
         write_volatile(add_flags_ptr.add(1), 0x3);
-        in_add_flags = read_volatile(add_flags_ptr.add(1));
+        let in_add_flags = read_volatile(add_flags_ptr.add(1));
 
         copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
         let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
@@ -603,10 +598,11 @@ pub async fn configure_hub_context(params: HubConfigParams<'_>) -> Result<(), ()
             write_volatile(slot_ctx.add(2), dw2);
         }
 
-        in_dw0 = read_volatile(slot_ctx.add(0));
-        in_dw1 = read_volatile(slot_ctx.add(1));
-        in_dw2 = read_volatile(slot_ctx.add(2));
-    }
+        let in_dw0 = read_volatile(slot_ctx.add(0));
+        let in_dw1 = read_volatile(slot_ctx.add(1));
+        let in_dw2 = read_volatile(slot_ctx.add(2));
+        (in_add_flags, in_dw0, in_dw1, in_dw2)
+    };
 
     if super::USB_LOG_VERBOSE {
         crate::log!(
@@ -1221,15 +1217,13 @@ async fn force_port_reset(
     let delay_ms = core::cmp::max(20, power_on_good_ms as u64);
     Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
 
-    let mut last = None;
-
-    let Some(state) =
-        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
-    else {
+    let mut last =
+        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await;
+    let Some(state) = last else {
         dma::dealloc(buf_virt, 8);
         return None;
     };
-    last = Some(state);
+
     if state.connected {
         if hub_speed_code >= 4 {
             crate::log!(
@@ -1312,7 +1306,7 @@ pub async fn collect_children(
     parent_route: u32,
     depth: u8,
     hub_speed_code: u32,
-    multi_tt: bool,
+    _multi_tt: bool,
     port_count: u8,
     power_on_good_ms: u16,
     hub_tt_think_time: u8,

@@ -50,3 +50,7 @@ debug = false
 
 [build-dependencies]
 trueos-limloader = { path = "crates/trueos-limloader" }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+
+[features]
+power-msr = []

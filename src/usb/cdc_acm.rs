@@ -5,13 +5,11 @@ use super::xhci::{
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
-use alloc::boxed::Box;
 use core::cmp;
 use core::future::poll_fn;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::task::{Poll, Waker};
-use core::pin::Pin;
 use heapless::{Deque, Vec};
 use spin::Mutex;
 

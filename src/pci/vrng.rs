@@ -91,7 +91,7 @@ impl Drop for DmaRegion {
 
 struct VirtQueue {
     size: u16,
-    mem: DmaRegion,
+    _mem: DmaRegion,
     desc: *mut VirtqDesc,
     avail: *mut u8,
     used: *mut u8,
@@ -106,7 +106,7 @@ impl VirtQueue {
     fn new(size: u16, mem: DmaRegion, desc: *mut VirtqDesc, avail: *mut u8, used: *mut u8) -> Self {
         Self {
             size,
-            mem,
+            _mem: mem,
             desc,
             avail,
             used,

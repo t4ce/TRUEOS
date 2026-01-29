@@ -1,12 +1,8 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use core::task::Waker;
 
-use alloc::boxed::Box;
-use alloc::sync::Arc;
 use embassy_executor::raw::Executor as RawExecutor;
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
 use spin::{Mutex, Once};
@@ -17,10 +13,6 @@ struct WakeEntry {
 }
 
 const MAX_WAKEUPS: usize = 64;
-const MAX_TIMERS: usize = 128;
-
-pub type TimerId = u64;
-const INVALID_TIMER_ID: TimerId = 0;
 
 static START_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);
@@ -28,14 +20,6 @@ static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
-static NEXT_TIMER_ID: AtomicU64 = AtomicU64::new(1);
-
-struct TimerEntry {
-    id: TimerId,
-    cancelled: Arc<AtomicBool>,
-}
-
-static TIMERS: Mutex<Vec<TimerEntry, MAX_TIMERS>> = Mutex::new(Vec::new());
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -80,16 +64,6 @@ pub fn poll_executor() {
     unsafe { (&*ptr).poll() };
 }
 
-#[inline]
-fn get_spawner() -> Option<Spawner> {
-    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { (&*ptr).spawner() })
-    }
-}
-
 fn init_once() {
     INIT.call_once(|| {
         let start = unsafe { _rdtsc() as u64 };
@@ -99,20 +73,18 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
-    unsafe {
-        let r15 = __cpuid(0x15);
-        let denom = r15.eax as u64;
-        let numer = r15.ebx as u64;
-        let crystal_hz = r15.ecx as u64;
-        if denom != 0 && numer != 0 && crystal_hz != 0 {
-            return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
-        }
+    let r15 = __cpuid(0x15);
+    let denom = r15.eax as u64;
+    let numer = r15.ebx as u64;
+    let crystal_hz = r15.ecx as u64;
+    if denom != 0 && numer != 0 && crystal_hz != 0 {
+        return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
+    }
 
-        let r16 = __cpuid(0x16);
-        let base_mhz = (r16.eax & 0xFFFF) as u64;
-        if base_mhz != 0 {
-            return base_mhz * 1_000_000;
-        }
+    let r16 = __cpuid(0x16);
+    let base_mhz = (r16.eax & 0xFFFF) as u64;
+    if base_mhz != 0 {
+        return base_mhz * 1_000_000;
     }
 
     1_000_000_000
@@ -142,134 +114,6 @@ pub fn poll() {
     for w in to_wake {
         w.wake();
     }
-}
-
-#[inline]
-fn register_timer(cancelled: Arc<AtomicBool>) -> TimerId {
-    let id = NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed).max(1);
-    let mut timers = TIMERS.lock();
-    if timers.push(TimerEntry { id, cancelled }).is_err() {
-        return INVALID_TIMER_ID;
-    }
-    id
-}
-
-#[inline]
-fn remove_timer(id: TimerId) {
-    let mut timers = TIMERS.lock();
-    if let Some(pos) = timers.iter().position(|entry| entry.id == id) {
-        timers.swap_remove(pos);
-    }
-}
-
-#[inline]
-fn cancel_timer(id: TimerId) -> bool {
-    let mut timers = TIMERS.lock();
-    if let Some(pos) = timers.iter().position(|entry| entry.id == id) {
-        let entry = timers.swap_remove(pos);
-        entry.cancelled.store(true, Ordering::Release);
-        true
-    } else {
-        false
-    }
-}
-
-#[allow(non_snake_case)]
-pub fn setTimeout<F>(delay_ms: u64, callback: F) -> TimerId
-where
-    F: FnMut() + Send + 'static,
-{
-    let Some(spawner) = get_spawner() else {
-        return INVALID_TIMER_ID;
-    };
-
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let id = register_timer(cancelled.clone());
-    if id == INVALID_TIMER_ID {
-        return INVALID_TIMER_ID;
-    }
-
-    let delay = EmbassyDuration::from_millis(delay_ms);
-    if spawner
-        .spawn(timeout_task(id, delay, cancelled, Box::new(callback)))
-        .is_err()
-    {
-        cancel_timer(id);
-        return INVALID_TIMER_ID;
-    }
-
-    id
-}
-
-#[allow(non_snake_case)]
-pub fn setInterval<F>(period_ms: u64, callback: F) -> TimerId
-where
-    F: FnMut() + Send + 'static,
-{
-    let Some(spawner) = get_spawner() else {
-        return INVALID_TIMER_ID;
-    };
-
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let id = register_timer(cancelled.clone());
-    if id == INVALID_TIMER_ID {
-        return INVALID_TIMER_ID;
-    }
-
-    let period = EmbassyDuration::from_millis(period_ms.max(1));
-    if spawner
-        .spawn(interval_task(id, period, cancelled, Box::new(callback)))
-        .is_err()
-    {
-        cancel_timer(id);
-        return INVALID_TIMER_ID;
-    }
-
-    id
-}
-
-#[allow(non_snake_case)]
-pub fn clearTimeout(id: TimerId) -> bool {
-    if id == INVALID_TIMER_ID {
-        return false;
-    }
-    cancel_timer(id)
-}
-
-#[allow(non_snake_case)]
-pub fn clearInterval(id: TimerId) -> bool {
-    clearTimeout(id)
-}
-
-#[embassy_executor::task]
-async fn timeout_task(
-    id: TimerId,
-    delay: EmbassyDuration,
-    cancelled: Arc<AtomicBool>,
-    mut callback: Box<dyn FnMut() + Send + 'static>,
-) {
-    Timer::after(delay).await;
-    if !cancelled.load(Ordering::Acquire) {
-        callback();
-    }
-    remove_timer(id);
-}
-
-#[embassy_executor::task]
-async fn interval_task(
-    id: TimerId,
-    period: EmbassyDuration,
-    cancelled: Arc<AtomicBool>,
-    mut callback: Box<dyn FnMut() + Send + 'static>,
-) {
-    loop {
-        Timer::after(period).await;
-        if cancelled.load(Ordering::Acquire) {
-            break;
-        }
-        callback();
-    }
-    remove_timer(id);
 }
 
 struct TimeDriver;

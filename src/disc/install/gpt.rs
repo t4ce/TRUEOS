@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use crate::disc::block::{DeviceHandle, Error, Result};
 use crate::disc::partition::{
@@ -138,10 +138,6 @@ fn write_blocks_aligned_with_log(
 /// - Partition 3: TRUEOS data partition (TRUEOSFS superblock at start)
 ///
 /// Returns the computed on-disk LBA ranges (absolute, on the parent disk).
-pub fn write_trueos_bootable_gpt_layout(device: DeviceHandle, esp_size_mib: u64) -> Result<TrueosBootLayout> {
-    write_trueos_bootable_gpt_layout_with_log(device, esp_size_mib, &mut |_| {})
-}
-
 pub fn write_trueos_bootable_gpt_layout_with_log(
     device: DeviceHandle,
     esp_size_mib: u64,

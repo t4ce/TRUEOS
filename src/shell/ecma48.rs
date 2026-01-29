@@ -1,5 +1,4 @@
 use core::fmt;
-use core::fmt::Write;
 
 pub const RESET: &str = "\x1b[0m";
 

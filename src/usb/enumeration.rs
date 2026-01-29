@@ -3,7 +3,7 @@ use super::xhci;
 use super::xhci::{
     decode_port_status, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits,
     ep_type_bits, hi, lo, trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED,
-    EP_STATE_RUNNING, EP_TYPE_CONTROL,
+    EP_TYPE_CONTROL,
 };
 use super::{
     attach, control, hub, mass, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
@@ -544,13 +544,7 @@ pub(crate) async fn enumerate_with_params(
         *dcbaa.add(slot_id as usize) = dev_ctx_phys;
     }
 
-    let mut slot_dw0: u32 = 0;
-    let mut slot_dw1: u32 = 0;
-    let mut slot_dw2: u32 = 0;
-    let mut ep0_dw0: u32 = 0;
-    let mut ep0_dw1: u32 = 0;
-
-    unsafe {
+    let (slot_dw0, slot_dw1, slot_dw2, ep0_dw0, ep0_dw1) = unsafe {
         let add_flags_ptr = input_ctx_virt as *mut u32;
         write_volatile(add_flags_ptr.add(1), 0x3);
 
@@ -573,9 +567,9 @@ pub(crate) async fn enumerate_with_params(
         write_volatile(slot_ctx.add(1), dw1);
         write_volatile(slot_ctx.add(2), dw2);
 
-        slot_dw0 = read_volatile(slot_ctx.add(0));
-        slot_dw1 = read_volatile(slot_ctx.add(1));
-        slot_dw2 = read_volatile(slot_ctx.add(2));
+        let slot_dw0 = read_volatile(slot_ctx.add(0));
+        let slot_dw1 = read_volatile(slot_ctx.add(1));
+        let slot_dw2 = read_volatile(slot_ctx.add(2));
 
         write_volatile(ep0_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
         let mut ep_cfg = ep_cerr_bits(3);
@@ -588,9 +582,10 @@ pub(crate) async fn enumerate_with_params(
         let avg_trb_len = core::cmp::max(8u32, max_packet as u32);
         write_volatile(ep0_ctx.add(4), ep_avg_trb_len_bits(avg_trb_len));
 
-        ep0_dw0 = read_volatile(ep0_ctx.add(0));
-        ep0_dw1 = read_volatile(ep0_ctx.add(1));
-    }
+        let ep0_dw0 = read_volatile(ep0_ctx.add(0));
+        let ep0_dw1 = read_volatile(ep0_ctx.add(1));
+        (slot_dw0, slot_dw1, slot_dw2, ep0_dw0, ep0_dw1)
+    };
 
     if tree_parent.is_some() {
         Timer::after(EmbassyDuration::from_millis(hub_child_settle_delay_ms(speed_code))).await;
@@ -1110,7 +1105,7 @@ pub(crate) async fn enumerate_with_params(
         slot_id
     );
 
-    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_mfr, dev_i_prod, dev_i_serial, dev_num_cfg) = unsafe {
+    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_mfr, dev_i_prod, _dev_i_serial, dev_num_cfg) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
         let vid = u16::from_le_bytes([dd[8], dd[9]]);
         let pid = u16::from_le_bytes([dd[10], dd[11]]);

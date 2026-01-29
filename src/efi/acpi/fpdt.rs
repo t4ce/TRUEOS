@@ -1,4 +1,3 @@
-use acpi::sdt::SdtHeader;
 use spin::Once;
 
 use crate::pci::mmio;

@@ -144,10 +144,6 @@ fn lfn_entries_for_ascii_name(long_name: &str, short_name: &[u8; 11]) -> Vec<[u8
     out
 }
 
-fn sectors_for_clusters(clusters: u32, sectors_per_cluster: u32) -> u32 {
-    clusters.saturating_mul(sectors_per_cluster)
-}
-
 fn clusters_for_bytes(bytes: usize, sectors_per_cluster: u32) -> u32 {
     let bytes_per_cluster = (sectors_per_cluster as usize).saturating_mul(512);
     if bytes_per_cluster == 0 {

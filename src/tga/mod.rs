@@ -1,4 +1,4 @@
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::write_volatile;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;

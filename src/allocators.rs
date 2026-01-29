@@ -1,8 +1,7 @@
-use alloc::alloc::alloc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::mem::{align_of, size_of};
-use core::ptr::{addr_of, addr_of_mut, null_mut, NonNull};
+use core::ptr::{addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
 
 use crate::{
@@ -91,7 +90,6 @@ impl FreeList {
             let block = block_ptr.as_mut();
 
             let block_start = block as *mut FreeBlock as usize;
-            let block_end = block_start + block.size;
 
             let payload_start = match aligned_payload(block_start, layout) {
                 Some(v) => v,
