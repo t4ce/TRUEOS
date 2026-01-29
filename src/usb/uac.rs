@@ -432,8 +432,6 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
     let mut current_if: Option<(u8, u8, u8)> = None; // (ifnum, alt, (cls/sub) packed)
     let mut current_cls: u8 = 0;
     let mut current_sub: u8 = 0;
-    let mut current_alt: u8 = 0;
-    let mut current_ifnum: u8 = 0;
 
     let mut pending_ep: Option<(u8, u16, u8)> = None; // (addr, max_packet, interval)
     let mut pending_ss: Option<(u8, u8, u16)> = None; // (max_burst, mult, bytes_per_interval)
@@ -458,8 +456,8 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
                     return candidate;
                 }
 
-                current_ifnum = cfg[idx + 2];
-                current_alt = cfg[idx + 3];
+                let current_ifnum = cfg[idx + 2];
+                let current_alt = cfg[idx + 3];
                 current_cls = cfg[idx + 5];
                 current_sub = cfg[idx + 6];
                 current_if = Some((current_ifnum, current_alt, ((current_cls & 0xF) << 4) | (current_sub & 0xF)));

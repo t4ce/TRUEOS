@@ -435,7 +435,7 @@ pub struct HubChild {
     pub tt_think_time: u8,
 }
 
-pub fn is_hub_device(dev_cls: u8, dev_sub: u8, _dev_prot: u8, cfg: &[u8]) -> bool {
+pub fn is_hub_device(dev_cls: u8, _dev_sub: u8, _dev_prot: u8, cfg: &[u8]) -> bool {
     if dev_cls == USB_CLASS_HUB {
         return true;
     }

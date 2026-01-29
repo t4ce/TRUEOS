@@ -206,7 +206,7 @@ pub fn install_bootable_uefi_gpt_with_log(
     let existing_parts = partition::read_gpt_partitions(disk).ok();
 
     let mut preserve_trueosfs = false;
-    let mut bios_boot_start_lba: Option<u64> = None;
+    let mut bios_boot_start_lba: Option<u64>;
 
     // Create in-memory partition devices matching the intended ranges.
     let parent_id = disk.id();

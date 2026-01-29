@@ -222,7 +222,7 @@ pub fn init_once() {
                 let cap = mmio.as_ptr();
                 let caplength = read_volatile(cap.add(0x00) as *const u8) as u64;
                 let hci_version = read_volatile(cap.add(0x02) as *const u16);
-                let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
+                let _hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
                 let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
                 let supports_64bit = (hccparams1 & 0x1) != 0;
                 let op = cap.add(caplength as usize) as *mut u32;

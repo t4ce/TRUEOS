@@ -17,11 +17,6 @@ impl PerCpu {
     pub fn lapic_id(&self) -> u32 {
         self.lapic_id
     }
-
-    #[inline(always)]
-    pub fn cpu_index(&self) -> u32 {
-        self.cpu_index
-    }
 }
 
 pub fn init_bsp() {
