@@ -38,13 +38,17 @@ QEMU_USB_FLAGS = \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 
+IMG_SIZE ?= 1G
+
+.PHONY: images
+
 images: disk.img nvme.img
 
-disk.img: 
-	truncate -s $(1G) $@
-	
-nvme.img: 
-	truncate -s $(1G) $@
+disk.img:
+	truncate -s $(IMG_SIZE) $@
+
+nvme.img:
+	truncate -s $(IMG_SIZE) $@
 
 kernel:
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
@@ -56,6 +60,11 @@ iso: kernel images
 	cp $(KERNEL_BIN) $(ISO_BOOT_DIR)/TRUEOS.elf
 	strip -s $(ISO_BOOT_DIR)/TRUEOS.elf || true
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
+	# Stage UEFI netboot files in $(ISO_DIR) for pxe.js (dnsmasq TFTP root).
+	mkdir -p $(ISO_DIR)/EFI/BOOT
+	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
+	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	# Also put a standard UEFI removable-media path in the ISO9660 tree as a
 	# fallback. Some firmware/OVMF builds will boot this path instead of (or
 	# before) the El Torito ESP image.

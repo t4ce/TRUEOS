@@ -64,6 +64,9 @@ sudo ip addr flush dev enx047bcb669593
 sudo ip addr add 192.168.55.1/24 dev enx047bcb669593
 sudo ip addr replace 192.168.55.1/24 dev enx047bcb669593
 ip -4 -br addr show dev enx047bcb669593
+
+# Stage UEFI netboot files into ./bld (TFTP root)
+make iso
 sudo node pxe.js 
 
 /*
