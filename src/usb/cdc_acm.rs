@@ -223,7 +223,7 @@ pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
 
 pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
     let mut guard = ATTACH_CALLBACKS.lock();
-    if guard.iter().any(|existing| *existing == cb) {
+    if guard.iter().any(|existing| core::ptr::fn_addr_eq(*existing, cb)) {
         return true;
     }
     guard.push(cb).is_ok()
@@ -231,7 +231,7 @@ pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
 
 pub fn register_detach_callback(cb: fn(CdcAttachEvent)) -> bool {
     let mut guard = DETACH_CALLBACKS.lock();
-    if guard.iter().any(|existing| *existing == cb) {
+    if guard.iter().any(|existing| core::ptr::fn_addr_eq(*existing, cb)) {
         return true;
     }
     guard.push(cb).is_ok()

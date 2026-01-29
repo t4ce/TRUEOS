@@ -1069,6 +1069,46 @@ where
     }
 }
 
+/// Synchronous wait-for-event that pumps the xHCI event ring and enforces a real time-based timeout.
+///
+/// This is intended for blocking contexts (e.g. USB mass-storage synchronous reads/writes) where
+/// "N iterations" can look like a hang on slower hardware.
+pub fn wait_for_event_spin_ms<F>(ctx: &XhciContext, mut predicate: F, timeout_ms: u64) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let start = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    let max_ticks = if hz == 0 {
+        0
+    } else {
+        timeout_ms.saturating_mul(hz).saturating_add(999) / 1000
+    };
+    let deadline = start.saturating_add(max_ticks.max(1));
+
+    let mut polls = 0usize;
+    loop {
+        if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
+            return Some(evt);
+        }
+
+        // If we're in a synchronous/blocking context, the async controller poll task may not be
+        // getting scheduled. Actively drain the event ring so transfers can still complete.
+        let _ = pump_one_event(ctx);
+
+        polls = polls.wrapping_add(1);
+        if (polls & 0x3F) == 0 {
+            // Let other BSP tasks (timers, shell, etc.) run while we spin.
+            crate::time::poll_executor();
+        }
+
+        if embassy_time_driver::now() >= deadline {
+            return None;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 pub async fn submit_cmd_and_wait(
     ctx: &XhciContext,
     cmd_ring: &mut TrbRing,

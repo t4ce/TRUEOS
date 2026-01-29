@@ -302,7 +302,7 @@ pub extern "C" fn kmain() -> ! {
     // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
     let _ = spawner.spawn(usb::truekey::drain_loop());
 
-    //let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
+    let _ = spawner.spawn(disc::files::fatfs_usb_demo_task());
 
 	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
 	if net_ready {

@@ -9,6 +9,9 @@ pub enum FatVolumeLayout {
 
     /// MBR at LBA0, with a FAT partition whose boot sector is at `start_lba`.
     MbrPartition { start_lba: u32, sectors: u32, part_type: u8 },
+
+    /// GPT partitioned disk, with a partition whose first LBA contains a FAT boot sector.
+    GptPartition { start_lba: u64, sectors: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +62,19 @@ fn read_u16_le(bs: &[u8; 512], off: usize) -> u16 {
 
 fn read_u32_le(bs: &[u8; 512], off: usize) -> u32 {
     u32::from_le_bytes([bs[off], bs[off + 1], bs[off + 2], bs[off + 3]])
+}
+
+fn read_u64_le(bs: &[u8; 512], off: usize) -> u64 {
+    u64::from_le_bytes([
+        bs[off],
+        bs[off + 1],
+        bs[off + 2],
+        bs[off + 3],
+        bs[off + 4],
+        bs[off + 5],
+        bs[off + 6],
+        bs[off + 7],
+    ])
 }
 
 fn is_valid_sectors_per_cluster(v: u8) -> bool {
@@ -127,9 +143,10 @@ fn is_fat_mbr_type(t: u8) -> bool {
 
 /// Probe for a FAT volume on a raw block device.
 ///
-/// We support two layouts:
+/// We support three layouts:
 /// - FAT superfloppy (FAT boot sector at LBA0)
 /// - MBR-partitioned disk with a FAT partition (boot sector at partition start)
+/// - GPT-partitioned disk with a FAT partition (boot sector at partition start)
 pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, ProbeError> {
     let info = handle.info();
     if info.block_size != 512 {
@@ -149,6 +166,99 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
             total_sectors,
             whole_disk,
         });
+    }
+
+    // Try GPT: read header at LBA1 and scan partition entries for a FAT boot sector.
+    // CRC validation is intentionally skipped for now; we only use this to find the FAT volume.
+    if info.block_count >= 2 {
+        let mut hdr = [0u8; 512];
+        handle.read_blocks(1, tmp.as_mut_slice())?;
+        hdr.copy_from_slice(&tmp.as_mut_slice()[..512]);
+
+        if &hdr[0..8] == b"EFI PART" {
+            let entries_lba = read_u64_le(&hdr, 0x48);
+            let num_entries = read_u32_le(&hdr, 0x50) as usize;
+            let entry_size = read_u32_le(&hdr, 0x54) as usize;
+
+            if entries_lba != 0
+                && num_entries != 0
+                && entry_size >= 56
+                && entry_size <= 512
+                && entries_lba < info.block_count
+            {
+                let mut tmp2 =
+                    AlignedBuf::new(1024, align).ok_or(ProbeError::DeviceIo(block::Error::DmaUnavailable))?;
+
+                let scan_count = core::cmp::min(num_entries, 256);
+                for i in 0..scan_count {
+                    let entry_off = (i as u64) * (entry_size as u64);
+                    let lba = entries_lba + (entry_off / 512);
+                    let off = (entry_off % 512) as usize;
+                    if lba >= info.block_count {
+                        break;
+                    }
+
+                    // Read just the GPT entry header (first 56 bytes) so we can
+                    // parse fields without holding a borrow of the DMA buffer.
+                    let mut entry_hdr = [0u8; 56];
+                    if off + 56 <= 512 {
+                        handle.read_blocks(lba, tmp.as_mut_slice())?;
+                        entry_hdr.copy_from_slice(&tmp.as_mut_slice()[off..off + 56]);
+                    } else {
+                        if lba.saturating_add(1) >= info.block_count {
+                            break;
+                        }
+                        handle.read_blocks(lba, &mut tmp2.as_mut_slice()[..1024])?;
+                        entry_hdr.copy_from_slice(&tmp2.as_mut_slice()[off..off + 56]);
+                    }
+
+                    // Unused GPT entry has an all-zero type GUID.
+                    if entry_hdr[..16].iter().all(|&b| b == 0) {
+                        continue;
+                    }
+
+                    let first_lba = u64::from_le_bytes([
+                        entry_hdr[32],
+                        entry_hdr[33],
+                        entry_hdr[34],
+                        entry_hdr[35],
+                        entry_hdr[36],
+                        entry_hdr[37],
+                        entry_hdr[38],
+                        entry_hdr[39],
+                    ]);
+                    let last_lba = u64::from_le_bytes([
+                        entry_hdr[40],
+                        entry_hdr[41],
+                        entry_hdr[42],
+                        entry_hdr[43],
+                        entry_hdr[44],
+                        entry_hdr[45],
+                        entry_hdr[46],
+                        entry_hdr[47],
+                    ]);
+                    if first_lba == 0 || last_lba == 0 || first_lba > last_lba {
+                        continue;
+                    }
+                    if first_lba >= info.block_count || last_lba >= info.block_count {
+                        continue;
+                    }
+
+                    let mut bs = [0u8; 512];
+                    handle.read_blocks(first_lba, tmp.as_mut_slice())?;
+                    bs.copy_from_slice(&tmp.as_mut_slice()[..512]);
+                    if looks_like_fat_boot_sector(&bs).is_some() {
+                        let sectors = last_lba
+                            .saturating_sub(first_lba)
+                            .saturating_add(1);
+                        return Ok(FatVolumeLayout::GptPartition {
+                            start_lba: first_lba,
+                            sectors,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // Try MBR: look for a FAT-type partition and validate the partition boot sector.
@@ -200,6 +310,11 @@ pub fn fat_slice_for_mount(layout: FatVolumeLayout, disk_blocks: u64) -> (u64, u
         FatVolumeLayout::MbrPartition { start_lba, sectors, .. } => {
             let base = start_lba as u64;
             let blocks = core::cmp::min(sectors as u64, disk_blocks.saturating_sub(base));
+            (base, blocks)
+        }
+        FatVolumeLayout::GptPartition { start_lba, sectors } => {
+            let base = start_lba;
+            let blocks = core::cmp::min(sectors, disk_blocks.saturating_sub(base));
             (base, blocks)
         }
     }

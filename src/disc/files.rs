@@ -693,7 +693,7 @@ impl BlockDeviceIo {
             }
             Err(layout::ProbeError::UnknownLayout) => {
                 crate::log!(
-                    "files: usbms: unknown disk layout (expected FAT@LBA0 or MBR+FAT partition); mount will fail\n"
+                    "files: usbms: unknown disk layout (expected FAT@LBA0, MBR+FAT, or GPT+FAT partition); mount will fail\n"
                 );
                 return Err(block::Error::Corrupted);
             }

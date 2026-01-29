@@ -1,7 +1,8 @@
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN, EP_TYPE_INT_OUT,
+    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    EP_TYPE_INT_IN, EP_TYPE_INT_OUT,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -22,8 +23,8 @@ struct LedIfaceInfo {
     interface: u8,
     protocol: u8,
     report_desc_len: u16,
-    ep_in: Option<(u8, u16, u8)>,  // (addr, mps, interval)
-    ep_out: Option<(u8, u16, u8)>, // (addr, mps, interval)
+    ep_in: Option<(u8, u16, u8, u32)>,  // (addr, mps, interval, xhci_ep_type)
+    ep_out: Option<(u8, u16, u8, u32)>, // (addr, mps, interval, xhci_ep_type)
 }
 
 pub struct LedRuntime {
@@ -71,8 +72,8 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
     let mut current_class: u8 = 0;
     let mut current_proto: u8 = 0;
     let mut current_report_len: u16 = 0;
-    let mut current_ep_in: Option<(u8, u16, u8)> = None;
-    let mut current_ep_out: Option<(u8, u16, u8)> = None;
+    let mut current_ep_in: Option<(u8, u16, u8, u32)> = None;
+    let mut current_ep_out: Option<(u8, u16, u8, u32)> = None;
 
     let mut best: Option<LedIfaceInfo> = None;
 
@@ -88,8 +89,8 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
         class: u8,
         proto: u8,
         report_len: u16,
-        ep_in: Option<(u8, u16, u8)>,
-        ep_out: Option<(u8, u16, u8)>,
+        ep_in: Option<(u8, u16, u8, u32)>,
+        ep_out: Option<(u8, u16, u8, u32)>,
     ) {
         let Some(iface) = iface else {
             return;
@@ -172,12 +173,21 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
                     let attrs = cfg[idx + 3];
                     let mps = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
                     let interval = cfg[idx + 6];
-                    // Interrupt endpoints.
-                    if (attrs & 0x3) == 0x3 {
+                    // Interrupt or Bulk endpoints.
+                    let xfer = attrs & 0x3;
+                    let xhci_ep_type = match (xfer, (ep_addr & 0x80) != 0) {
+                        (0x3, true) => Some(EP_TYPE_INT_IN),
+                        (0x3, false) => Some(EP_TYPE_INT_OUT),
+                        (0x2, true) => Some(EP_TYPE_BULK_IN),
+                        (0x2, false) => Some(EP_TYPE_BULK_OUT),
+                        _ => None,
+                    };
+
+                    if let Some(ep_type) = xhci_ep_type {
                         if (ep_addr & 0x80) != 0 {
-                            current_ep_in.get_or_insert((ep_addr, mps, interval));
+                            current_ep_in.get_or_insert((ep_addr, mps, interval, ep_type));
                         } else {
-                            current_ep_out.get_or_insert((ep_addr, mps, interval));
+                            current_ep_out.get_or_insert((ep_addr, mps, interval, ep_type));
                         }
                     }
                 }
@@ -321,7 +331,7 @@ async fn set_configuration(
     }
 }
 
-async fn configure_interrupt_endpoint(
+async fn configure_endpoint(
     ctx: &XhciContext,
     cmd_ring: &mut TrbRing,
     slot_id: u32,
@@ -370,7 +380,10 @@ async fn configure_interrupt_endpoint(
         write_volatile(slot_ctx.add(1), dw1);
 
         let mps = (ep_max_packet as u32) & 0x7FF;
-        let interval = if speed_code == 3 {
+        // xHCI Interval is meaningful for interrupt/isoch; for bulk it should be 0.
+        let interval = if ep_type == EP_TYPE_BULK_IN || ep_type == EP_TYPE_BULK_OUT {
+            0u32
+        } else if speed_code == 3 {
             core::cmp::min(15u32, ep_interval.saturating_sub(1) as u32)
         } else {
             ep_interval as u32
@@ -486,7 +499,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     set_configuration(ctx, ep0_ring, slot_id, info.configuration).await?;
 
     // Configure OUT first (we expect control of LEDs via OUT reports).
-    let Some((ep_out_addr, ep_out_mps, ep_out_interval)) = info.ep_out else {
+    let Some((ep_out_addr, ep_out_mps, ep_out_interval, ep_out_type)) = info.ep_out else {
         crate::log!(
             "usb: leds: no interrupt OUT endpoint (port={} slot={} iface={})\n",
             target_port,
@@ -496,8 +509,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         return Err(());
     };
 
-    let Some((ep_out_target, ep_out_ring, out_ring_virt, out_ring_bytes)) =
-        configure_interrupt_endpoint(
+    let Some((ep_out_target, ep_out_ring, out_ring_virt, out_ring_bytes)) = configure_endpoint(
             ctx,
             cmd_ring,
             slot_id,
@@ -509,7 +521,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             ep_out_addr,
             ep_out_mps,
             ep_out_interval,
-            EP_TYPE_INT_OUT,
+            ep_out_type,
         )
         .await
     else {
@@ -518,8 +530,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     };
 
     // Optional IN endpoint (some devices send status/acks).
-    if let Some((ep_in_addr, ep_in_mps, ep_in_interval)) = info.ep_in {
-        let _ = configure_interrupt_endpoint(
+    if let Some((ep_in_addr, ep_in_mps, ep_in_interval, ep_in_type)) = info.ep_in {
+        let _ = configure_endpoint(
             ctx,
             cmd_ring,
             slot_id,
@@ -531,7 +543,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             ep_in_addr,
             ep_in_mps,
             ep_in_interval,
-            EP_TYPE_INT_IN,
+            ep_in_type,
         )
         .await;
     }

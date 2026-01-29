@@ -142,7 +142,7 @@ fn bulk_xfer_sync(
     buf_phys: u64,
     length: u32,
     what: &'static str,
-    spin_iters: usize,
+    timeout_ms: u64,
 ) -> Result<(u32, u32), ()> {
     let trb = Trb {
         d0: lo(buf_phys),
@@ -158,7 +158,7 @@ fn bulk_xfer_sync(
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target) };
 
-    let evt = xhci::wait_for_event_spin(
+    let evt = xhci::wait_for_event_spin_ms(
         ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
@@ -176,7 +176,7 @@ fn bulk_xfer_sync(
             let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
             (evt_ptr & !0xFu64) == (trb_phys & !0xFu64)
         },
-        spin_iters,
+        timeout_ms,
     )
     .ok_or(())
     .map_err(|_| {
@@ -374,7 +374,7 @@ fn bot_command_sync(
         cbw_phys,
         CBW_LEN as u32,
         "bot-cbw",
-        50_000_000,
+        500,
     )?;
     if cc_cbw != 1 {
         crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
@@ -391,7 +391,7 @@ fn bot_command_sync(
             data_phys,
             data_len as u32,
             "bot-data-in",
-            120_000_000,
+            5000,
         )?;
 
         if cc_data != 1 && cc_data != 13 {
@@ -415,7 +415,7 @@ fn bot_command_sync(
         csw_phys,
         CSW_LEN as u32,
         "bot-csw",
-        120_000_000,
+        2000,
     )?;
     if cc_csw != 1 && cc_csw != 13 {
         crate::log!("usb: bot: csw cc={}\n", cc_csw);
@@ -495,7 +495,7 @@ fn bot_command_sync_out(
         cbw_phys,
         CBW_LEN as u32,
         "bot-cbw",
-        50_000_000,
+        500,
     )?;
     if cc_cbw != 1 {
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
@@ -510,7 +510,7 @@ fn bot_command_sync_out(
         data_phys,
         data_len as u32,
         "bot-data-out",
-        120_000_000,
+        5000,
     )?;
     if cc_data != 1 {
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
@@ -525,7 +525,7 @@ fn bot_command_sync_out(
         csw_phys,
         CSW_LEN as u32,
         "bot-csw",
-        120_000_000,
+        2000,
     )?;
     if cc_csw != 1 && cc_csw != 13 {
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
