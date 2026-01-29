@@ -1,4 +1,5 @@
 use core::fmt;
+use core::fmt::Write;
 
 pub const RESET: &str = "\x1b[0m";
 
@@ -162,4 +163,35 @@ impl fmt::Display for Cub {
 /// Cursor back/left (CUB).
 pub fn left(n: usize) -> impl fmt::Display {
     Cub { n }
+}
+
+pub(crate) fn handle_ecma48(io: &'static dyn super::ShellBackend, rest: &str) {
+    let arg = rest.trim();
+    if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
+        io.write_str("ecma48: usage ecma48 | ecma48 demo\r\n");
+        return;
+    }
+
+    io.write_str("ecma48: demo (ANSI sequences)\r\n");
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        crate::ecma48::dim("dim text (SGR 2)")
+    ));
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        crate::ecma48::bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
+    ));
+    io.write_str("  cursor edits: [ABCDE]\r\n");
+
+    // Demonstrate cursor moves without disrupting where the shell continues printing.
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::right(18)));
+    io.write_fmt(format_args!("{}", crate::ecma48::bg_color("X", (255, 0, 0))));
+    io.write_fmt(format_args!("{}", crate::ecma48::left(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::right(1)));
+    io.write_fmt(format_args!("{}", crate::ecma48::down(1)));
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+
+    io.write_str("ecma48: done\r\n");
 }

@@ -33,6 +33,10 @@ pub static EXECUTABLE_FILE_REQUEST: request::ExecutableFileRequest =
 
 #[used]
 #[link_section = ".limine_requests"]
+pub static MODULE_REQUEST: request::ModuleRequest = request::ModuleRequest::new();
+
+#[used]
+#[link_section = ".limine_requests"]
 pub static STACK_SIZE_REQUEST: request::StackSizeRequest =
     request::StackSizeRequest::new().with_size(16 * 1024 * 1024);
 
@@ -75,6 +79,32 @@ pub fn executable_address_bases() -> Option<(u64, u64)> {
 pub fn executable_file_bytes() -> Option<&'static [u8]> {
     let resp = EXECUTABLE_FILE_REQUEST.get_response()?;
     let file = resp.file();
+    bytes_from_limine_file(file)
+}
+
+pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
+    let resp = MODULE_REQUEST.get_response()?;
+    for m in resp.modules().iter() {
+        if m.string().to_bytes() == expected {
+            return bytes_from_limine_file(m);
+        }
+    }
+    None
+}
+
+pub fn install_payload_bytes() -> Option<&'static [u8]> {
+    module_bytes_by_string(b"trueos.install.payload")
+}
+
+pub fn install_kernel_bytes() -> Option<&'static [u8]> {
+    module_bytes_by_string(b"trueos.install.kernel")
+}
+
+pub fn install_bootx64_bytes() -> Option<&'static [u8]> {
+    module_bytes_by_string(b"trueos.install.bootx64")
+}
+
+fn bytes_from_limine_file(file: &limine::file::File) -> Option<&'static [u8]> {
     let addr = file.addr();
     let size = file.size() as usize;
     if addr.is_null() || size == 0 {
