@@ -13,7 +13,7 @@ impl ShellIo for NetTcpShellBackend {
     #[inline]
     fn write_str(&self, s: &str) {
         crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-            crate::net::adapter::net_shell_write_bytes(chunk);
+            crate::v::net::net_shell_write_bytes(chunk);
         });
     }
 
@@ -24,7 +24,7 @@ impl ShellIo for NetTcpShellBackend {
         impl Write for Writer {
             fn write_str(&mut self, s: &str) -> core::fmt::Result {
                 crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-                    crate::net::adapter::net_shell_write_bytes(chunk);
+                    crate::v::net::net_shell_write_bytes(chunk);
                 });
                 Ok(())
             }
@@ -38,14 +38,14 @@ impl ShellIo for NetTcpShellBackend {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         crate::shell::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-            crate::net::adapter::net_shell_write_bytes(chunk);
+            crate::v::net::net_shell_write_bytes(chunk);
         });
     }
 
     #[inline]
     fn write_byte(&self, b: u8) {
         crate::shell::crlf::write_bytes_crlf(&[b], &NET_TCP_LAST_WAS_CR, |chunk| {
-            crate::net::adapter::net_shell_write_bytes(chunk);
+            crate::v::net::net_shell_write_bytes(chunk);
         });
     }
 }
@@ -53,6 +53,6 @@ impl ShellIo for NetTcpShellBackend {
 impl ShellBackend for NetTcpShellBackend {
     #[inline]
     fn read_byte(&self) -> Option<u8> {
-        crate::net::adapter::net_shell_read_byte()
+        crate::v::net::net_shell_read_byte()
     }
 }

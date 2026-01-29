@@ -8,9 +8,9 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::net::adapter::{
-    register_app_queues, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind,
-};
+use trueos_v::vnet as vnet;
+
+use crate::v::net::{Queue, VNet};
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
@@ -18,14 +18,14 @@ static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
 
 struct TlsAppQueues {
     name: &'static str,
-    cmds: &'static NetQueue<TlsCommand>,
-    events: &'static NetQueue<TlsEvent>,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
 }
 
 pub fn register_tls_app_queues(
     name: &'static str,
-    cmds: &'static NetQueue<TlsCommand>,
-    events: &'static NetQueue<TlsEvent>,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
 ) {
     let mut guard = TLS_APP_QUEUES.lock();
     if guard.iter().any(|entry| entry.name == name) {
@@ -74,36 +74,36 @@ fn owner_device_index(owner: &str) -> Option<usize> {
 pub enum TlsCommand {
     /// Open a TCP connection and layer TLS over it.
     OpenTcpConnect {
-        remote: NetEndpoint,
+        remote: vnet::EndpointV4,
         server_name: &'static str,
         cfg: TlsClientConfig,
         roots: TlsRoots,
     },
     /// Send plaintext application bytes.
     Send {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
         data: Vec<u8>,
     },
     Close {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
     },
 }
 
 #[derive(Clone, Debug)]
 pub enum TlsEvent {
     Opened {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
     },
     /// TLS handshake complete.
     Connected {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
     },
     Data {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
         data: Vec<u8>,
     },
     Closed {
-        handle: NetHandle,
+        handle: vnet::NetHandle,
     },
     Error {
         msg: &'static str,
@@ -125,18 +125,34 @@ static KERNEL_TIME: KernelTime = KernelTime;
 
 struct TlsConn {
     user_owner: &'static str,
-    net_cmds: &'static NetQueue<NetCommand>,
-    net_events: &'static NetQueue<NetEvent>,
+    net: VNet,
 
-    handle: Option<NetHandle>,
+    handle: Option<vnet::NetHandle>,
     tls: TlsClient,
     connected_notified: bool,
     closed: bool,
 }
 
 impl TlsConn {
-    fn matches_handle(&self, handle: NetHandle) -> bool {
+    fn matches_handle(&self, handle: vnet::NetHandle) -> bool {
         self.handle == Some(handle)
+    }
+}
+
+fn send_tcp_all(net: &VNet, handle: vnet::NetHandle, data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+
+    let mut offset: usize = 0;
+    while offset < data.len() {
+        let end = (offset + vnet::MAX_MSG).min(data.len());
+        let chunk = &data[offset..end];
+        let _ = net.submit(vnet::Command::SendTcp {
+            handle,
+            data: vnet::ByteBuf::from_slice_trunc(chunk),
+        });
+        offset = end;
     }
 }
 
@@ -149,9 +165,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
         Ok(data) => {
             if !data.is_empty() {
                 if let Some(handle) = conn.handle {
-                    let _ = conn
-                        .net_cmds
-                        .push(NetCommand::SendTcp { handle, data });
+                    send_tcp_all(&conn.net, handle, &data);
                 }
             }
         }
@@ -159,7 +173,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
             conn.closed = true;
             let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
             if let Some(handle) = conn.handle {
-                let _ = conn.net_cmds.push(NetCommand::Close { handle });
+                let _ = conn.net.submit(vnet::Command::Close { handle });
             }
         }
     }
@@ -221,21 +235,17 @@ pub async fn tls_socket_service_task() {
 
                         let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
                         let dev_idx = owner_device_index(owner).unwrap_or(0);
-                        // NOTE: net_service_task routes sockets by parsing the *last* "@<digits>"
-                        // suffix. Ensure our net owner ends with a numeric suffix so TLS can be
-                        // pinned to a specific NIC.
-                        let net_owner = leak_str(alloc::format!("tls-{}-{}@{}", owner, seq, dev_idx));
-                        let net_cmd_name = leak_str(alloc::format!("{}-net-cmd", net_owner));
-                        let net_evt_name = leak_str(alloc::format!("{}-net-evt", net_owner));
-                        let net_cmds = NetQueue::new_leaked(net_cmd_name, 512);
-                        let net_events = NetQueue::new_leaked(net_evt_name, 512);
-                        register_app_queues(net_owner, net_cmds, net_events);
+                        let Some(net) = VNet::open(dev_idx) else {
+                            let msg = leak_str(alloc::format!(
+                                "tls-socket: no vnet device={} (owner={})",
+                                dev_idx,
+                                owner
+                            ));
+                            let _ = push_tls_event(owner, TlsEvent::Error { msg });
+                            continue;
+                        };
 
-                        crate::log!(
-                            "tls-socket: net owner={} (device={})\n",
-                            net_owner,
-                            dev_idx
-                        );
+                        crate::log!("tls-socket: net via vnet owner={} conn={} device={}\n", owner, seq, dev_idx);
 
                         let mut rng = KernelTlsRng::new();
                         let tls = match TlsClient::new(
@@ -255,15 +265,14 @@ pub async fn tls_socket_service_task() {
 
                         let conn = TlsConn {
                             user_owner: owner,
-                            net_cmds,
-                            net_events,
+                            net,
                             handle: None,
                             tls,
                             connected_notified: false,
                             closed: false,
                         };
 
-                        let _ = conn.net_cmds.push(NetCommand::OpenTcpConnect { remote });
+                        let _ = conn.net.submit(vnet::Command::OpenTcpConnect { remote });
                         conns.push(conn);
                     }
                     TlsCommand::Send { handle, data } => {
@@ -275,7 +284,7 @@ pub async fn tls_socket_service_task() {
                             if let Err(e) = conn.tls.write_plaintext(&data) {
                                 conn.closed = true;
                                 let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
-                                let _ = conn.net_cmds.push(NetCommand::Close { handle });
+                                let _ = conn.net.submit(vnet::Command::Close { handle });
                                 continue;
                             }
                             flush_outgoing_tls(conn);
@@ -285,7 +294,7 @@ pub async fn tls_socket_service_task() {
                     TlsCommand::Close { handle } => {
                         if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
                             conn.closed = true;
-                            let _ = conn.net_cmds.push(NetCommand::Close { handle });
+                            let _ = conn.net.submit(vnet::Command::Close { handle });
                         }
                     }
                 }
@@ -298,11 +307,13 @@ pub async fn tls_socket_service_task() {
             let mut remove = false;
 
             // Drain a bounded number of events per conn per tick.
-            let drained = conns[idx].net_events.drain(256);
-            for ev in drained {
+            for _ in 0..256 {
+                let Some(ev) = conns[idx].net.pop_event() else {
+                    break;
+                };
                 match ev {
-                    NetEvent::Opened { handle, kind } => {
-                        if kind == SocketKind::Tcp {
+                    vnet::Event::Opened { handle, kind } => {
+                        if kind == vnet::SocketKind::Tcp {
                             conns[idx].handle = Some(handle);
                             crate::log!(
                                 "tls-socket: tcp opened owner={} handle={}\n",
@@ -312,7 +323,7 @@ pub async fn tls_socket_service_task() {
                             let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                         }
                     }
-                    NetEvent::TcpEstablished { handle } => {
+                    vnet::Event::TcpEstablished { handle } => {
                         if conns[idx].handle == Some(handle) {
                             crate::log!(
                                 "tls-socket: tcp established owner={} handle={}\n",
@@ -323,17 +334,17 @@ pub async fn tls_socket_service_task() {
                             flush_outgoing_tls(&mut conns[idx]);
                         }
                     }
-                    NetEvent::TcpData { handle, data } => {
+                    vnet::Event::TcpData { handle, data } => {
                         if conns[idx].handle != Some(handle) {
                             continue;
                         }
 
-                        let produced = match conns[idx].tls.ingest_encrypted(&data) {
+                        let produced = match conns[idx].tls.ingest_encrypted(data.as_slice()) {
                             Ok(p) => p,
                             Err(e) => {
                                 conns[idx].closed = true;
                                 let _ = push_tls_event(conns[idx].user_owner, TlsEvent::TlsError { err: e });
-                                let _ = conns[idx].net_cmds.push(NetCommand::Close { handle });
+                                let _ = conns[idx].net.submit(vnet::Command::Close { handle });
                                 continue;
                             }
                         };
@@ -348,7 +359,7 @@ pub async fn tls_socket_service_task() {
                         flush_outgoing_tls(&mut conns[idx]);
                         maybe_notify_connected(&mut conns[idx]);
                     }
-                    NetEvent::Closed { handle } => {
+                    vnet::Event::Closed { handle } => {
                         if conns[idx].handle == Some(handle) {
                             conns[idx].closed = true;
                             crate::log!(
@@ -360,7 +371,7 @@ pub async fn tls_socket_service_task() {
                             remove = true;
                         }
                     }
-                    NetEvent::Error { msg } => {
+                    vnet::Event::Error { msg } => {
                         crate::log!(
                             "tls-socket: net error owner={} handle={:?} msg={}\n",
                             conns[idx].user_owner,
@@ -371,8 +382,8 @@ pub async fn tls_socket_service_task() {
                             msg,
                         });
                     }
-                    NetEvent::TcpSent { .. } => {}
-                    NetEvent::UdpPacket { .. } => {}
+                    vnet::Event::TcpSent { .. } => {}
+                    vnet::Event::UdpPacket { .. } => {}
                 }
             }
 
