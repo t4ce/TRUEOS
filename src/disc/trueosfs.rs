@@ -1,4 +1,5 @@
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::{String, ToString}, vec, vec::Vec};
+use alloc::collections::BTreeSet;
 
 use crate::disc::{block, partition};
 use core::hint::spin_loop;
@@ -798,6 +799,138 @@ pub fn file_valid(disk: block::DeviceHandle, name: &str) -> Result<bool, block::
     };
     let sha = compute_sha256_of_entry_data(disk, &rec)?;
     Ok(sha == rec.sha256)
+}
+
+/// TRUEOSFS: check whether a file exists.
+pub fn file_exists(disk: block::DeviceHandle, name: &str) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate(disk)? else {
+        return Ok(false);
+    };
+    Ok(find_latest_record(disk, &placement, name)?.is_some())
+}
+
+/// TRUEOSFS: list the immediate children of a directory.
+///
+/// This treats stored file names as `/`-separated paths (e.g. `qjs/cdn/abc.mjs`).
+/// Output matches the USBMS/FAT listing format: newline-separated entry names.
+///
+/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
+pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate(disk)? else {
+        return Ok(None);
+    };
+
+    // Normalize to a relative prefix; absolute input means “from root”.
+    let Some(rel) = crate::path::normalize_rel_no_parent(dir) else {
+        return Ok(Some(String::new()));
+    };
+    let prefix = if rel.is_empty() {
+        String::new()
+    } else {
+        alloc::format!("{}/", rel)
+    };
+
+    let info = disk.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let sb_block = read_one_block_aligned(disk, placement.super_lba)?;
+    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
+        return Err(block::Error::Corrupted);
+    };
+    let mut lba = placement.data_lba;
+    let end_lba = placement.data_lba.saturating_add(sb.log_head_rel_blocks);
+
+    // Track live keys.
+    let mut live: BTreeSet<String> = BTreeSet::new();
+
+    while lba < end_lba {
+        let hdr_block = read_one_block_aligned(disk, lba)?;
+        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+            break;
+        };
+        if !hdr.committed {
+            break;
+        }
+
+        let name_len = hdr.name_len as usize;
+        let data_len = hdr.data_len as usize;
+        if name_len == 0 || name_len > 4096 {
+            break;
+        }
+
+        let name_blocks = (name_len + (bs - 1)) / bs;
+        let data_blocks = (data_len + (bs - 1)) / bs;
+        let blocks = 1u64
+            .saturating_add(name_blocks as u64)
+            .saturating_add(data_blocks as u64);
+
+        // Read name bytes (exact, without padding) and update live set.
+        let name_lba = lba.saturating_add(1);
+        let mut tmp_name = vec![0u8; name_len];
+        read_exact_bytes(disk, name_lba, 0, &mut tmp_name)?;
+        if let Ok(name) = core::str::from_utf8(&tmp_name) {
+            // Store names normalized the same way as callers are expected to.
+            match hdr.kind {
+                LogKind::Put => {
+                    live.insert(name.to_string());
+                }
+                LogKind::Delete => {
+                    let _ = live.remove(name);
+                }
+            }
+        }
+
+        lba = lba.saturating_add(blocks);
+    }
+
+    // Extract immediate children under the requested prefix.
+    let mut children: BTreeSet<String> = BTreeSet::new();
+    for name in live.iter() {
+        if !prefix.is_empty() {
+            if !name.starts_with(prefix.as_str()) {
+                continue;
+            }
+            let rest = &name[prefix.len()..];
+            if rest.is_empty() {
+                continue;
+            }
+            let seg = rest.split('/').next().unwrap_or("");
+            if !seg.is_empty() {
+                children.insert(seg.to_string());
+            }
+        } else {
+            // Root: take first segment.
+            let seg = name.split('/').next().unwrap_or("");
+            if !seg.is_empty() {
+                children.insert(seg.to_string());
+            }
+        }
+    }
+
+    // Match `list_usbms_dir` output: newline-separated names.
+    const MAX_LISTING_BYTES: usize = 64 * 1024;
+    let mut out = String::new();
+    for entry in children.iter() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(entry);
+        if out.len() > MAX_LISTING_BYTES {
+            // Too large; truncate by returning an empty listing (best-effort).
+            return Ok(Some(String::new()));
+        }
+    }
+
+    Ok(Some(out))
 }
 
 /// TRUEOSFS: append bytes by performing a full new write.
