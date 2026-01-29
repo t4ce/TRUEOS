@@ -29,31 +29,6 @@ unsafe impl Send for Hpet {}
 unsafe impl Sync for Hpet {}
 
 impl Hpet {
-    #[inline(always)]
-    pub fn frequency_hz(&self) -> u64 {
-        self.frequency_hz
-    }
-
-    #[inline(always)]
-    pub fn period_fs(&self) -> u32 {
-        self.period_fs
-    }
-
-    #[inline(always)]
-    pub fn base_phys(&self) -> usize {
-        self.info.base_address
-    }
-
-    #[inline(always)]
-    pub fn legacy_capable(&self) -> bool {
-        self.info.legacy_irq_capable
-    }
-
-    #[inline(always)]
-    pub fn counter(&self) -> u64 {
-        unsafe { self.read_reg64(MAIN_COUNTER_OFFSET) }
-    }
-
     unsafe fn read_reg64(&self, offset: usize) -> u64 {
         core::ptr::read_volatile(self.regs.as_ptr().add(offset) as *const u64)
     }
@@ -78,10 +53,6 @@ impl Hpet {
 pub fn ensure() -> Option<&'static Hpet> {
     HPET_INSTANCE.call_once(|| init_hpet());
     HPET_INSTANCE.get().and_then(|hpet| hpet.as_ref())
-}
-
-pub fn counter_ticks() -> Option<u64> {
-    ensure().map(Hpet::counter)
 }
 
 fn init_hpet() -> Option<Hpet> {

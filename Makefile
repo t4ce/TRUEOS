@@ -19,7 +19,8 @@ QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netd
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
-QEMU_ISO_FLAGS = -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+# q35 keeps PCIe devices (like NVMe) working reliably.
+QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -32,7 +33,8 @@ QEMU_USB_FLAGS = \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=7,id=usbleds \
-	-drive file=nvme.img,if=none,format=raw,id=nvme0 -device nvme,drive=nvme0,serial=t4ce
+	-drive file=nvme.img,if=none,format=raw,id=nvme0 \
+	-device nvme,drive=nvme0,serial=t4ce
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 
@@ -78,12 +80,8 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-
-
-
-
-
-
+dbg: iso-debug
+	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
 
 
 
@@ -98,6 +96,3 @@ run-installed-uefi: iso-debug
 
 run-installed-bios: iso-debug
 	@($(QEMU_BIN) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
-
-dbg: iso-debug
-	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))

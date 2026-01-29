@@ -192,7 +192,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         dev_ctx_virt,
         ctx_stride_bytes,
         ctx_stride_words,
-        speed_code,
+        speed_code: _,
         target_port,
     } = params;
 
@@ -525,7 +525,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
             let bytes_here = blocks_here * block_size;
 
-            let (dma_phys, dma_virt) = dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
+            let (_dma_phys, dma_virt) = dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
             unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
             let ok = {
@@ -644,7 +644,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
             let bytes_here = blocks_here * block_size;
 
-            let (dma_phys, dma_virt) =
+            let (_dma_phys, dma_virt) =
                 dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
             unsafe {
                 core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);

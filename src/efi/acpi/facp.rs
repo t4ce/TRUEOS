@@ -22,7 +22,7 @@ pub enum FacpError {
 }
 
 impl From<AcpiError> for FacpError {
-    fn from(value: AcpiError) -> Self {
+    fn from(_value: AcpiError) -> Self {
         FacpError::Acpi
     }
 }

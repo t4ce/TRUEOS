@@ -1319,14 +1319,6 @@ pub mod cabi {
 		None
 	}
 
-	// Back-compat helper for call sites that only care about A records.
-	fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Option<[u8; 4]> {
-		match dns_parse_first_a_or_cname(pkt, want_id) {
-			Some(DnsResolution::A(ip)) => Some(ip),
-			_ => None,
-		}
-	}
-
 	fn poll_executor_for_progress() {
 		// Keep timers and tasks moving even when called from non-async contexts.
 		crate::time::poll();
@@ -1845,7 +1837,7 @@ pub mod cabi {
 			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
 			let server_name = leak_str(url.host.clone());
 
-			loop {
+			'session: loop {
 				for ev in events.drain(256) {
 					match ev {
 						TlsEvent::Opened { handle } => {
@@ -1903,7 +1895,7 @@ pub mod cabi {
 											Ok(None) => {}
 											Err(e) => {
 												last_err = e;
-												break;
+												break 'session;
 											}
 									}
 									} else if let Some(cl) = parse_content_length(headers) {
@@ -1924,7 +1916,7 @@ pub mod cabi {
 										);
 									}
 									last_err = NET_ERR_HTTP;
-									break;
+									break 'session;
 								}
 							}
 						}
@@ -1934,13 +1926,13 @@ pub mod cabi {
 							}
 							let Some(hdr_end) = find_http_header_end(&plaintext) else {
 								last_err = NET_ERR_HTTP;
-								break;
+								break 'session;
 							};
 							let headers = &plaintext[..hdr_end];
 							let status = parse_http_status(headers).unwrap_or(0);
 							if status != 200 {
 								last_err = NET_ERR_HTTP;
-								break;
+								break 'session;
 							}
 							let body = &plaintext[hdr_end..];
 							if is_chunked_encoding(headers) {
@@ -1948,11 +1940,11 @@ pub mod cabi {
 									Ok(Some(decoded)) => return Ok(decoded),
 									Ok(None) => {
 										last_err = NET_ERR_TIMEOUT_BODY;
-										break;
+										break 'session;
 									}
 									Err(e) => {
 										last_err = e;
-										break;
+										break 'session;
 									}
 								}
 							} else if let Some(cl) = parse_content_length(headers) {
@@ -1960,17 +1952,17 @@ pub mod cabi {
 									return Ok(body[..cl].to_vec());
 								}
 								last_err = NET_ERR_TIMEOUT_BODY;
-								break;
+								break 'session;
 							}
 							return Ok(body.to_vec());
 						}
 						TlsEvent::Error { .. } => {
 							last_err = NET_ERR_HTTP;
-							break;
+							break 'session;
 						}
 						TlsEvent::TlsError { .. } => {
 							last_err = NET_ERR_TLS;
-							break;
+							break 'session;
 						}
 					}
 				}
@@ -2020,7 +2012,7 @@ pub mod cabi {
 					} else {
 						NET_ERR_TIMEOUT_BODY
 					};
-					break;
+					break 'session;
 				}
 				poll_executor_for_progress();
 			}

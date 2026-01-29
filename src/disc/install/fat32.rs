@@ -554,7 +554,6 @@ pub fn format_and_populate_esp_fat32_with_log(
             if !payload.is_empty() {
                 let e = dir_entry(name83("PAYLOAD", "ISO"), 0x20, payload_start, payload.len() as u32);
                 dir[off..off + 32].copy_from_slice(&e);
-                off += 32;
             }
         }
         write_cluster(cl_install, &dir)?;
