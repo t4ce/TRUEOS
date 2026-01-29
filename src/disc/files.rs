@@ -4,9 +4,7 @@ use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use fatfs::{
-    format_volume, FileSystem, FormatVolumeOptions, FsOptions, IoBase, Read, Seek, SeekFrom, Write,
-};
+use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, SeekFrom, Write};
 
 use crate::disc::{block, layout};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -529,105 +527,6 @@ pub fn remove_usbms_path(path: &str) -> Result<(), UsbFsRemoveError> {
     res
 }
 
-#[derive(Debug)]
-struct RamDisk {
-    data: Vec<u8>,
-    pos: usize,
-}
-
-impl RamDisk {
-    fn new(size: usize) -> Self {
-        Self {
-            data: alloc::vec![0_u8; size],
-            pos: 0,
-        }
-    }
-}
-
-impl IoBase for RamDisk {
-    type Error = ();
-}
-
-impl Read for RamDisk {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        if self.pos >= self.data.len() {
-            return Ok(0);
-        }
-        let available = self.data.len() - self.pos;
-        let to_copy = available.min(buf.len());
-        buf[..to_copy].copy_from_slice(&self.data[self.pos..self.pos + to_copy]);
-        self.pos += to_copy;
-        Ok(to_copy)
-    }
-}
-
-impl Write for RamDisk {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        if self.pos >= self.data.len() {
-            return Err(());
-        }
-        let available = self.data.len() - self.pos;
-        let to_copy = available.min(buf.len());
-        if to_copy == 0 {
-            return Err(());
-        }
-        self.data[self.pos..self.pos + to_copy].copy_from_slice(&buf[..to_copy]);
-        self.pos += to_copy;
-        Ok(to_copy)
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
-
-impl Seek for RamDisk {
-    fn seek(&mut self, pos: SeekFrom) -> Result<u64, Self::Error> {
-        let len = self.data.len() as i64;
-        let next = match pos {
-            SeekFrom::Start(offset) => {
-                if offset > self.data.len() as u64 {
-                    return Err(());
-                }
-                offset as i64
-            }
-            SeekFrom::End(delta) => len.checked_add(delta).ok_or(())?,
-            SeekFrom::Current(delta) => (self.pos as i64).checked_add(delta).ok_or(())?,
-        };
-        if next < 0 || next as usize > self.data.len() {
-            return Err(());
-        }
-        self.pos = next as usize;
-        Ok(self.pos as u64)
-    }
-}
-
-pub fn create_demo_file() {
-    crate::log!("files: ");
-    const RAMDISK_BYTES: usize = 1024 * 1024; // 1 MiB scratch volume
-    let mut ramdisk = RamDisk::new(RAMDISK_BYTES);
-
-    if format_volume(&mut ramdisk, FormatVolumeOptions::new()).is_err() {
-        return;
-    }
-    let Ok(fs) = FileSystem::new(ramdisk, FsOptions::new()) else {
-        return;
-    };
-
-    let root = fs.root_dir();
-    if let Ok(mut file) = root.create_file("helloworld") {
-        let _ = file.write_all(b"hello from fatfs in-memory demo");
-    }
-
-    if let Ok(stats) = fs.stats() {
-        crate::log!(
-            "files: clusters total={} free={}",
-            stats.total_clusters(),
-            stats.free_clusters()
-        );
-    }
-}
-
 struct AlignedBuf {
     ptr: *mut u8,
     len: usize,
@@ -855,168 +754,6 @@ fn pick_usbms_device() -> Option<block::DeviceHandle> {
     None
 }
 
-fn run_fatfs_demo_on_device(handle: block::DeviceHandle) {
-    let info = handle.info();
-    crate::log!(
-        "files: using device id={} blocks={} block_size={}\n",
-        info.id.raw(),
-        info.block_count,
-        info.block_size
-    );
-    
-    // Prove the block path is functional before we do anything destructive.
-    // A successful read of LBA0 (even if it returns zeros) demonstrates end-to-end BOT READ(10).
-    let align = info.dma_alignment.max(1) as usize;
-    if let Some(mut probe) = AlignedBuf::new(info.block_size as usize, align) {
-        match handle.read_blocks(0, probe.as_mut_slice()) {
-            Ok(()) => {
-                let b = probe.as_mut_slice();
-                crate::log!(
-                    "files: read lba0 ok bytes[0..16]=[{:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}]\n",
-                    b[0],
-                    b[1],
-                    b[2],
-                    b[3],
-                    b[4],
-                    b[5],
-                    b[6],
-                    b[7],
-                    b[8],
-                    b[9],
-                    b[10],
-                    b[11],
-                    b[12],
-                    b[13],
-                    b[14],
-                    b[15]
-                );
-            }
-            Err(e) => {
-                crate::log!("files: read lba0 FAILED err={:?}\n", e);
-            }
-        }
-    } else {
-        crate::log!("files: read lba0 SKIPPED (no aligned DMA buffer)\n");
-    }
-
-    let io = match BlockDeviceIo::new(handle) {
-        Ok(io) => io,
-        Err(e) => {
-            crate::log!("files: failed to init device io: {:?}\n", e);
-            return;
-        }
-    };
-
-    // Prefer non-destructive behavior: attempt to mount first.
-    crate::log!("files: mount begin\n");
-    let fs = match FileSystem::new(io, FsOptions::new()) {
-        Ok(fs) => fs,
-        Err(e) => {
-            crate::log!("files: mount failed ({:?}); formatting usbms (destructive)\n", e);
-
-            let mut io = match BlockDeviceIo::new(handle) {
-                Ok(io) => io,
-                Err(e) => {
-                    crate::log!("files: failed to init device io for format: {:?}\n", e);
-                    return;
-                }
-            };
-
-            if let Err(e) = format_volume(&mut io, FormatVolumeOptions::new()) {
-                crate::log!("files: format failed ({:?})\n", e);
-                return;
-            }
-
-            match FileSystem::new(io, FsOptions::new()) {
-                Ok(fs) => fs,
-                Err(e) => {
-                    crate::log!("files: mount after format failed ({:?})\n", e);
-                    return;
-                }
-            }
-        }
-    };
-
-    crate::log!("files: mount ok\n");
-
-    // Keep this 8.3-safe (<=8.3) to avoid short-name alias confusion.
-    const DEMO_FILE_NAME: &str = "trueos.txt";
-    crate::log!("files: demo file name={}\n", DEMO_FILE_NAME);
-
-    {
-        let root = fs.root_dir();
-
-        crate::log!("files: dir list begin\n");
-        let mut listed = 0u32;
-        for entry in root.iter() {
-            match entry {
-                Ok(entry) => {
-                    crate::log!("files: dir entry: {}\n", entry.file_name());
-                    listed = listed.wrapping_add(1);
-                    if listed >= 16 {
-                        crate::log!("files: dir list truncated\n");
-                        break;
-                    }
-                }
-                Err(e) => {
-                    crate::log!("files: dir list entry failed ({:?})\n", e);
-                    break;
-                }
-            }
-        }
-        crate::log!("files: dir list end (count={})\n", listed);
-
-        fn log_read<T: Read>(label: &str, file: &mut T)
-        where
-            T::Error: core::fmt::Debug,
-        {
-            let mut buf = [0u8; 256];
-            match file.read(&mut buf) {
-                Ok(n) => {
-                    let shown = core::cmp::min(n, 128);
-                    crate::log!("files: {} read ok n={} shown={} [", label, n, shown);
-                    for i in 0..shown {
-                        crate::log!("{:02X}", buf[i]);
-                        if i + 1 != shown {
-                            crate::log!(" ");
-                        }
-                    }
-                    if n > shown {
-                        crate::log!(" ...");
-                    }
-                    crate::log!("]\n");
-                }
-                Err(e) => crate::log!("files: {} read failed ({:?})\n", label, e),
-            }
-        }
-
-        crate::log!("files: open existing begin\n");
-        match root.open_file(DEMO_FILE_NAME) {
-            Ok(mut file) => {
-                crate::log!("files: open existing ok\n");
-                log_read("existing", &mut file);
-            }
-            Err(fatfs::Error::NotFound) => {
-                crate::log!("files: existing file missing; create begin\n");
-                match root.create_file(DEMO_FILE_NAME) {
-                    Ok(mut file) => {
-                        crate::log!("files: create ok; write_all begin\n");
-                        if let Err(e) = file.write_all("TRUEOS§".as_bytes()) {
-                            crate::log!("files: write_all failed ({:?})\n", e);
-                        }
-                        let _ = file.flush();
-
-                        let _ = file.seek(SeekFrom::Start(0));
-                        log_read("after_create", &mut file);
-                    }
-                    Err(e) => crate::log!("files: create_file failed ({:?})\n", e),
-                }
-            }
-            Err(e) => crate::log!("files: open existing failed ({:?})\n", e),
-        };
-    }
-}
-
 async fn build_fatfs_tree_for_device_async(tree: &mut FileTree, parent: trueos_math::NodeId, handle: block::DeviceHandle) {
     let info = handle.info();
     let dev_name = alloc::format!("{}", info.id);
@@ -1197,7 +934,7 @@ async fn scan_all_devices_and_build_tree(tree: &mut FileTree, root: trueos_math:
 }
 
 #[embassy_executor::task]
-pub async fn fatfs_usb_demo_task() {
+pub async fn files_service_task() {
     // Dedicated on-demand service. Heavy scanning is performed only when requested.
     crate::log!("files: service online (type 'files' in shell)\n");
 
