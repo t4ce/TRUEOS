@@ -20,12 +20,7 @@ QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netd
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
-# q35 keeps PCIe devices (like NVMe) working reliably.
 QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
-
-# Minimal ISO boot flags: no vfio-pci / usb-host passthrough and no external terminal.
-# Useful for environments without those devices (or without a GUI serial console).
-QEMU_ISO_BASIC_FLAGS = -machine q35 -bios $(QEMU_BIOS) -cdrom $(ISO_PATH) -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -42,7 +37,6 @@ QEMU_USB_FLAGS = \
 	-device nvme,drive=nvme0,serial=t4ce
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
-QEMU_ISO_BASIC = $(QEMU_BIN) $(QEMU_ISO_BASIC_FLAGS)
 
 kernel:
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
@@ -95,16 +89,6 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
-
-# Launch QEMU with a display window and put serial on stdio.
-# This avoids konsole+nc and skips vfio/usb passthrough.
-run-basic: iso-debug
-	@($(QEMU_ISO_BASIC) -serial mon:stdio)
-
-# Headless QEMU run (no GUI). This won't show Limine's graphical menu, but is
-# useful for smoke-testing that QEMU/OVMF can boot the ISO without host devices.
-run-headless: iso-debug
-	@($(QEMU_ISO_BASIC) -display none -serial mon:stdio)
 
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
