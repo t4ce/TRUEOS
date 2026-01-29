@@ -72,36 +72,29 @@ pub fn init() {
 
     let mut added: usize = 0;
 
-    for adapter in R8169Adapter::init_all() {
-        let ring = NetRing::new(
-            RX_DESC_COUNT,
-            RX_BUF_SIZE,
-            POLL_BUDGET,
-        );
+    // Ordering matters: most of the stack defaults to device 0 as the primary
+    // interface (e.g. `mac_address()` and early boot probes). Prefer virtio in
+    // virtualized environments so we get the best-performing/most-reliable NIC
+    // without requiring any external run flags.
+
+    for adapter in VirtioNetAdapter::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
-        guard.push(ActiveDevice::R8169(NetCore::new(adapter, ring)));
+        guard.push(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
         added += 1;
     }
 
     for adapter in E1000Adapter::init_all() {
-        let ring = NetRing::new(
-            RX_DESC_COUNT,
-            RX_BUF_SIZE,
-            POLL_BUDGET,
-        );
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
         guard.push(ActiveDevice::E1000(NetCore::new(adapter, ring)));
         added += 1;
     }
 
-    for adapter in VirtioNetAdapter::init_all() {
-        let ring = NetRing::new(
-            RX_DESC_COUNT,
-            RX_BUF_SIZE,
-            POLL_BUDGET,
-        );
+    for adapter in R8169Adapter::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
-        guard.push(ActiveDevice::Virtio(NetCore::new(adapter, ring)));
+        guard.push(ActiveDevice::R8169(NetCore::new(adapter, ring)));
         added += 1;
     }
 
@@ -111,9 +104,7 @@ pub fn init() {
         crate::log!("net: detected {} NIC(s); primary=0\n", added);
     }
 
-    crate::log!(
-        "net: hint: in QEMU add virtio-net (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0,disable-modern=on)\n"
-    );
+    crate::log!("net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n");
 }
 
 pub fn poll_at(index: usize) {
