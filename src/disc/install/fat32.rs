@@ -32,7 +32,7 @@ impl Drop for AlignedBuf {
     }
 }
 
-fn write_blocks_aligned_with_log(
+async fn write_blocks_aligned_with_log(
     handle: DeviceHandle,
     lba: u64,
     buf: &[u8],
@@ -42,7 +42,7 @@ fn write_blocks_aligned_with_log(
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-    match handle.write_blocks(lba, tmp.as_mut_slice()) {
+    match handle.write_blocks(lba, tmp.as_mut_slice()).await {
         Ok(()) => Ok(()),
         Err(e) => {
             log(
@@ -352,14 +352,15 @@ pub struct EspImage<'a> {
 /// - /install/PAYLOAD.ISO (optional)
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
-pub fn format_and_populate_esp_fat32(
+pub async fn format_and_populate_esp_fat32(
     esp: DeviceHandle,
     image: EspImage<'_>,
 ) -> Result<(), block::Error> {
-    format_and_populate_esp_fat32_with_log(esp, image, &mut |_| {})
+    let mut noop = |_| {};
+    format_and_populate_esp_fat32_with_log(esp, image, &mut noop).await
 }
 
-pub fn format_and_populate_esp_fat32_with_log(
+pub async fn format_and_populate_esp_fat32_with_log(
     esp: DeviceHandle,
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
@@ -531,10 +532,10 @@ pub fn format_and_populate_esp_fat32_with_log(
     fsinfo[492..496].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes());
 
-    write_blocks_aligned_with_log(esp, 0, &boot, log)?;
-    write_blocks_aligned_with_log(esp, 1, &fsinfo, log)?;
-    write_blocks_aligned_with_log(esp, 6, &boot, log)?;
-    write_blocks_aligned_with_log(esp, 7, &fsinfo, log)?;
+    write_blocks_aligned_with_log(esp, 0, &boot, log).await?;
+    write_blocks_aligned_with_log(esp, 1, &fsinfo, log).await?;
+    write_blocks_aligned_with_log(esp, 6, &boot, log).await?;
+    write_blocks_aligned_with_log(esp, 7, &fsinfo, log).await?;
 
     // Zero remaining reserved sectors.
     let mut zero = [0u8; 512];
@@ -543,7 +544,7 @@ pub fn format_and_populate_esp_fat32_with_log(
         if lba == 6 || lba == 7 {
             continue;
         }
-        write_blocks_aligned_with_log(esp, lba, &zero, log)?;
+        write_blocks_aligned_with_log(esp, lba, &zero, log).await?;
     }
 
     // --- Write FATs ---
@@ -551,28 +552,38 @@ pub fn format_and_populate_esp_fat32_with_log(
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log)?;
+        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log).await?;
     }
     let fat2_lba = fat1_lba + fat_sectors as u64;
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log)?;
+        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log).await?;
     }
 
     // Helper to write a whole cluster.
     let mut cluster_buf = vec![0u8; bytes_per_cluster];
-    let mut write_cluster = |cluster: u32, data: &[u8]| -> Result<(), block::Error> {
+    async fn write_cluster(
+        esp: DeviceHandle,
+        sectors_per_cluster: u32,
+        first_data_sector: u32,
+        cluster_buf: &mut [u8],
+        cluster: u32,
+        data: &[u8],
+        log: &mut dyn FnMut(&str),
+    ) -> Result<(), block::Error> {
         cluster_buf.fill(0);
         let take = core::cmp::min(cluster_buf.len(), data.len());
         cluster_buf[..take].copy_from_slice(&data[..take]);
-        let first_sector = (cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
+        let first_sector =
+            (cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
         for s in 0..(sectors_per_cluster as u64) {
             let off = (s as usize) * 512;
-            write_blocks_aligned_with_log(esp, first_sector + s, &cluster_buf[off..off + 512], log)?;
+            write_blocks_aligned_with_log(esp, first_sector + s, &cluster_buf[off..off + 512], log)
+                .await?;
         }
         Ok(())
-    };
+    }
 
     // --- Directories ---
     // Root dir
@@ -602,7 +613,7 @@ pub fn format_and_populate_esp_fat32_with_log(
             image.limine_conf.len() as u32,
         ));
 
-        write_cluster(cl_root, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_root, &dir, log).await?;
     }
 
     // EFI dir
@@ -617,7 +628,7 @@ pub fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
-        write_cluster(cl_efi, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_efi, &dir, log).await?;
     }
 
     // BOOT dir
@@ -637,7 +648,7 @@ pub fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
-        write_cluster(cl_boot, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_boot, &dir, log).await?;
     }
 
     // INSTALL dir
@@ -658,38 +669,49 @@ pub fn format_and_populate_esp_fat32_with_log(
                 dir[off..off + 32].copy_from_slice(&e);
             }
         }
-        write_cluster(cl_install, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_install, &dir, log).await?;
     }
 
     // --- File data ---
-    let mut write_file = |start_cluster: u32, clusters: u32, data: &[u8]| -> Result<(), block::Error> {
-        let mut remaining = data;
-        for i in 0..clusters {
-            let c = start_cluster + i;
-            let take = core::cmp::min(bytes_per_cluster, remaining.len());
-            write_cluster(c, &remaining[..take])?;
-            remaining = &remaining[take..];
+    {
+        let mut write_file = |start_cluster: u32, clusters: u32, data: &[u8]| async {
+            let mut remaining = data;
+            for i in 0..clusters {
+                let c = start_cluster + i;
+                let take = core::cmp::min(bytes_per_cluster, remaining.len());
+                write_cluster(
+                    esp,
+                    sectors_per_cluster,
+                    first_data_sector,
+                    &mut cluster_buf,
+                    c,
+                    &remaining[..take],
+                    log,
+                )
+                .await?;
+                remaining = &remaining[take..];
 
-            // Formatting/writing the ESP can take a while; keep the shell responsive.
-            crate::time::poll_executor();
-        }
-        Ok(())
-    };
+                // Formatting/writing the ESP can take a while; keep the shell responsive.
+                crate::time::poll_executor();
+            }
+            Ok::<(), block::Error>(())
+        };
 
-    write_file(bootx64_start, bootx64_clusters, image.bootx64_efi)?;
-    write_file(kernel_start, kernel_clusters, image.kernel_elf)?;
-    write_file(conf_start, conf_clusters, image.limine_conf)?;
-    if let Some(payload) = image.payload_iso {
-        if !payload.is_empty() {
-            write_file(payload_start, payload_clusters, payload)?;
+        write_file(bootx64_start, bootx64_clusters, image.bootx64_efi).await?;
+        write_file(kernel_start, kernel_clusters, image.kernel_elf).await?;
+        write_file(conf_start, conf_clusters, image.limine_conf).await?;
+        if let Some(payload) = image.payload_iso {
+            if !payload.is_empty() {
+                write_file(payload_start, payload_clusters, payload).await?;
+            }
         }
     }
 
-    esp.flush()?;
+    esp.flush().await?;
     Ok(())
 }
 
-pub fn format_and_populate_esp_with_log(
+pub async fn format_and_populate_esp_with_log(
     esp: DeviceHandle,
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
@@ -702,17 +724,17 @@ pub fn format_and_populate_esp_with_log(
         limine_conf: image.limine_conf,
     };
 
-    match format_and_populate_esp_fat32_with_log(esp, image_copy, log) {
+    match format_and_populate_esp_fat32_with_log(esp, image_copy, log).await {
         Ok(()) => Ok(()),
         Err(block::Error::OutOfBounds) => {
             log("install: esp: falling back to FAT16");
-            format_and_populate_esp_fat16_with_log(esp, image_copy, log)
+            format_and_populate_esp_fat16_with_log(esp, image_copy, log).await
         }
         Err(e) => Err(e),
     }
 }
 
-fn format_and_populate_esp_fat16_with_log(
+async fn format_and_populate_esp_fat16_with_log(
     esp: DeviceHandle,
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
@@ -843,7 +865,7 @@ fn format_and_populate_esp_fat16_with_log(
     boot[510] = 0x55;
     boot[511] = 0xAA;
 
-    write_blocks_aligned_with_log(esp, 0, &boot, log)?;
+    write_blocks_aligned_with_log(esp, 0, &boot, log).await?;
 
     // --- FAT tables (FAT16) ---
     let fat_bytes = (fat_sectors as usize) * 512;
@@ -882,12 +904,12 @@ fn format_and_populate_esp_fat16_with_log(
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log)?;
+        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log).await?;
     }
     for i in 0..fat_sectors as u64 {
         let start = (i as usize) * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log)?;
+        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log).await?;
     }
 
     // --- Root directory (fixed region) ---
@@ -917,12 +939,20 @@ fn format_and_populate_esp_fat16_with_log(
 
     for s in 0..(root_dir_sectors as u64) {
         let o = (s as usize) * 512;
-        write_blocks_aligned_with_log(esp, root_dir_lba + s, &root_dir[o..o + 512], log)?;
+        write_blocks_aligned_with_log(esp, root_dir_lba + s, &root_dir[o..o + 512], log).await?;
     }
 
     // Helper to write a whole cluster.
     let mut cluster_buf = vec![0u8; bytes_per_cluster];
-    let mut write_cluster = |cluster: u32, data: &[u8]| -> Result<(), block::Error> {
+    async fn write_cluster(
+        esp: DeviceHandle,
+        sectors_per_cluster: u32,
+        first_data_lba: u64,
+        cluster_buf: &mut [u8],
+        cluster: u32,
+        data: &[u8],
+        log: &mut dyn FnMut(&str),
+    ) -> Result<(), block::Error> {
         cluster_buf.fill(0);
         let take = core::cmp::min(cluster_buf.len(), data.len());
         cluster_buf[..take].copy_from_slice(&data[..take]);
@@ -934,10 +964,11 @@ fn format_and_populate_esp_fat16_with_log(
                 first_sector + s,
                 &cluster_buf[buf_off..buf_off + 512],
                 log,
-            )?;
+            )
+            .await?;
         }
         Ok(())
-    };
+    }
 
     // --- Directories (clusters) ---
     {
@@ -951,7 +982,7 @@ fn format_and_populate_esp_fat16_with_log(
             dir[o..o + 32].copy_from_slice(&e);
             o += 32;
         }
-        write_cluster(cl_efi, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_efi, &dir, log).await?;
     }
 
     {
@@ -970,7 +1001,7 @@ fn format_and_populate_esp_fat16_with_log(
             dir[o..o + 32].copy_from_slice(&e);
             o += 32;
         }
-        write_cluster(cl_boot, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_boot, &dir, log).await?;
     }
 
     {
@@ -994,32 +1025,42 @@ fn format_and_populate_esp_fat16_with_log(
                 dir[o..o + 32].copy_from_slice(&e);
             }
         }
-        write_cluster(cl_install, &dir)?;
+        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_install, &dir, log).await?;
     }
 
     // --- File data ---
-    let mut write_file =
-        |start_cluster: u32, clusters: u32, data: &[u8]| -> Result<(), block::Error> {
+    {
+        let mut write_file = |start_cluster: u32, clusters: u32, data: &[u8]| async {
             let mut remaining = data;
             for i in 0..clusters {
                 let c = start_cluster + i;
                 let take = core::cmp::min(bytes_per_cluster, remaining.len());
-                write_cluster(c, &remaining[..take])?;
+                write_cluster(
+                    esp,
+                    sectors_per_cluster,
+                    first_data_lba,
+                    &mut cluster_buf,
+                    c,
+                    &remaining[..take],
+                    log,
+                )
+                .await?;
                 remaining = &remaining[take..];
                 crate::time::poll_executor();
             }
-            Ok(())
+            Ok::<(), block::Error>(())
         };
 
-    write_file(bootx64_start, bootx64_clusters, image.bootx64_efi)?;
-    write_file(kernel_start, kernel_clusters, image.kernel_elf)?;
-    write_file(conf_start, conf_clusters, image.limine_conf)?;
-    if let Some(payload) = image.payload_iso {
-        if !payload.is_empty() {
-            write_file(payload_start, payload_clusters, payload)?;
+        write_file(bootx64_start, bootx64_clusters, image.bootx64_efi).await?;
+        write_file(kernel_start, kernel_clusters, image.kernel_elf).await?;
+        write_file(conf_start, conf_clusters, image.limine_conf).await?;
+        if let Some(payload) = image.payload_iso {
+            if !payload.is_empty() {
+                write_file(payload_start, payload_clusters, payload).await?;
+            }
         }
     }
 
-    esp.flush()?;
+    esp.flush().await?;
     Ok(())
 }
