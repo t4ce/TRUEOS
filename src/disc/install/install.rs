@@ -140,7 +140,6 @@ resolution: 1920x1080x32\n\n";
         fat32::EspImage {
             bootx64_efi,
             kernel_elf,
-            payload_iso: None,
             limine_conf,
         },
         log,
