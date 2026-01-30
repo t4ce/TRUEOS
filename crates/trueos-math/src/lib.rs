@@ -1,7 +1,16 @@
 #![cfg_attr(not(test), no_std)]
 
+#[cfg(any(feature = "alloc", test))]
+extern crate alloc;
+
 pub mod tree;
 pub use tree::{Children, NodeId, Tree};
+
+#[cfg(any(feature = "alloc", test))]
+pub mod bptree;
+
+#[cfg(any(feature = "alloc", test))]
+pub use bptree::{BPlusTree, Iter as BPlusTreeIter};
 
 /// Minimal complex number utilities tailored for kernel-side math use.
 #[derive(Clone, Copy, Debug, PartialEq)]
