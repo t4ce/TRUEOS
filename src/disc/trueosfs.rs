@@ -1,11 +1,10 @@
-use alloc::{boxed::Box, string::{String, ToString}, vec, vec::Vec};
-use alloc::collections::BTreeSet;
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::disc::{block, partition};
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicU32, Ordering};
-use sha2::{Digest, Sha256};
-use spin::Mutex;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::{Mutex, Once};
 use trueos_math::Tree;
 
 // Standard EFI System Partition type GUID.
@@ -55,550 +54,145 @@ struct RootMount {
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
 
-// --- On-disk log format (simple, append-only) ---
+static BSP_SMOKE_ONCE: Once<()> = Once::new();
+static BSP_SMOKE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-const LOG_ENTRY_MAGIC: [u8; 8] = *b"TOSFLOG\0";
-const LOG_ENTRY_VERSION: u16 = 1;
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LogKind {
-    Put = 1,
-    Delete = 2,
+/// Request that the BSP TrueOSFS smoke test run once.
+///
+/// Safe to call from hotplug/driver contexts (e.g. USB mass-storage attach).
+/// The actual smoke test runs in [`bsp_smoke_service_task`].
+pub fn request_bsp_smoke_test() {
+    BSP_SMOKE_REQUESTED.store(true, Ordering::Release);
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LogHeader {
-    kind: LogKind,
-    committed: bool,
-    name_len: u16,
-    data_len: u64,
-    sha256: [u8; 32],
-}
-
-impl LogHeader {
-    fn encode_into_block(&self, block: &mut [u8]) {
-        // Header is stored in the first block of the entry. The remainder of the
-        // block is left as-is (callers typically zero-fill it).
-        if block.len() < 64 {
+/// Background task that waits for [`request_bsp_smoke_test`] and then executes
+/// the BSP smoke test exactly once.
+#[embassy_executor::task]
+pub async fn bsp_smoke_service_task() {
+    loop {
+        if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
+            // Allow the USBMS device to settle after registration.
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+            bsp_smoke_test_once();
             return;
         }
-        block[0..8].copy_from_slice(&LOG_ENTRY_MAGIC);
-        block[8..10].copy_from_slice(&LOG_ENTRY_VERSION.to_le_bytes());
-        block[10] = self.kind as u8;
-        block[11] = if self.committed { 1 } else { 0 };
-        block[12..14].copy_from_slice(&self.name_len.to_le_bytes());
-        block[14..16].copy_from_slice(&0u16.to_le_bytes());
-        block[16..24].copy_from_slice(&self.data_len.to_le_bytes());
-        block[24..56].copy_from_slice(&self.sha256);
-        // [56..64] reserved
-        for b in block[56..64].iter_mut() {
-            *b = 0;
-        }
-    }
-
-    fn decode_from_block(block: &[u8]) -> Option<Self> {
-        if block.len() < 64 {
-            return None;
-        }
-        if &block[0..8] != &LOG_ENTRY_MAGIC {
-            return None;
-        }
-        let ver = u16::from_le_bytes([block[8], block[9]]);
-        if ver != LOG_ENTRY_VERSION {
-            return None;
-        }
-        let kind = match block[10] {
-            1 => LogKind::Put,
-            2 => LogKind::Delete,
-            _ => return None,
-        };
-        let committed = block[11] == 1;
-        let name_len = u16::from_le_bytes([block[12], block[13]]);
-        let data_len = u64::from_le_bytes([
-            block[16], block[17], block[18], block[19], block[20], block[21], block[22], block[23],
-        ]);
-        let mut sha256 = [0u8; 32];
-        sha256.copy_from_slice(&block[24..56]);
-        Some(Self {
-            kind,
-            committed,
-            name_len,
-            data_len,
-            sha256,
-        })
+        Timer::after(EmbassyDuration::from_millis(50)).await;
     }
 }
 
-#[derive(Clone, Debug)]
-struct FileRecord {
-    entry_lba: u64,
-    name_len: u16,
-    data_len: u64,
-    data_lba: u64,
-    sha256: [u8; 32],
-}
-
-fn entry_blocks(block_size: usize, name_len: usize, data_len: usize) -> u64 {
-    if block_size == 0 {
-        return 0;
-    }
-    let name_blocks = (name_len + (block_size - 1)) / block_size;
-    let data_blocks = (data_len + (block_size - 1)) / block_size;
-    (1 + name_blocks + data_blocks) as u64
-}
-
-fn disk_data_end_lba_exclusive(disk: block::DeviceHandle, placement: &TrueosFsPlacement) -> u64 {
-    placement
-        .data_end_lba_exclusive
-        .unwrap_or_else(|| disk.info().block_count)
-}
-
-fn read_one_block_aligned(handle: block::DeviceHandle, lba: u64) -> Result<Vec<u8>, block::Error> {
-    read_blocks_aligned_retry(handle, lba, 1, 3)
-}
-
-fn write_blocks_aligned_chunked(handle: block::DeviceHandle, start_lba: u64, buf: &[u8]) -> Result<(), block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 || buf.is_empty() {
-        return Err(block::Error::InvalidParam);
-    }
-    if buf.len() % bs != 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let max_blocks = if info.max_transfer_bytes > 0 {
-        (info.max_transfer_bytes as usize / bs).max(1)
-    } else {
-        1
-    };
-    let align = info.dma_alignment.max(1) as usize;
-
-    let mut lba = start_lba;
-    let mut off = 0usize;
-    while off < buf.len() {
-        let remaining = buf.len() - off;
-        let blocks_here = core::cmp::min(max_blocks, remaining / bs);
-        let bytes_here = blocks_here * bs;
-
-        let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
-        tmp.as_mut_slice().copy_from_slice(&buf[off..off + bytes_here]);
-        handle.write_blocks(lba, tmp.as_mut_slice())?;
-
-        lba = lba.saturating_add(blocks_here as u64);
-        off = off.saturating_add(bytes_here);
-
-        // Keep the system responsive.
-        crate::time::poll_executor();
-    }
-
-    Ok(())
-}
-
-fn write_stream_at_lba(
+struct KernelBlockIo {
     handle: block::DeviceHandle,
-    start_lba: u64,
-    exact_bytes: usize,
-    total_bytes_rounded: usize,
-    mut source: impl FnMut(&mut [u8]) -> Result<usize, block::Error>,
-) -> Result<(), block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
+}
+
+impl KernelBlockIo {
+    #[inline]
+    fn new(handle: block::DeviceHandle) -> Self {
+        Self { handle }
     }
-    if total_bytes_rounded == 0 || total_bytes_rounded % bs != 0 {
-        return Err(block::Error::InvalidParam);
+}
+
+impl trueos_fs::BlockIo for KernelBlockIo {
+    type Error = block::Error;
+
+    #[inline]
+    fn block_size(&self) -> usize {
+        self.handle.info().block_size as usize
     }
-    if exact_bytes > total_bytes_rounded {
-        return Err(block::Error::InvalidParam);
+
+    #[inline]
+    fn block_count(&self) -> u64 {
+        self.handle.info().block_count
     }
 
-    let max_blocks = if info.max_transfer_bytes > 0 {
-        (info.max_transfer_bytes as usize / bs).max(1)
-    } else {
-        1
-    };
-    let align = info.dma_alignment.max(1) as usize;
+    #[inline]
+    fn max_transfer_bytes(&self) -> usize {
+        let v = self.handle.info().max_transfer_bytes as usize;
+        if v == 0 { 256 * 1024 } else { v }
+    }
 
-    let mut lba = start_lba;
-    let mut written = 0usize;
-    let mut written_exact = 0usize;
-    while written < total_bytes_rounded {
-        let remaining = total_bytes_rounded - written;
-        let blocks_here = core::cmp::min(max_blocks, remaining / bs);
-        let bytes_here = blocks_here * bs;
-
-        let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
-        let chunk = tmp.as_mut_slice();
-        chunk.fill(0);
-
-        let mut filled = 0usize;
-        while filled < bytes_here {
-            if written_exact >= exact_bytes {
-                break;
-            }
-            let remaining_exact = exact_bytes - written_exact;
-            let want = core::cmp::min(bytes_here - filled, remaining_exact);
-            let n = source(&mut chunk[filled..filled + want])?;
-            if n == 0 {
-                return Err(block::Error::Corrupted);
-            }
-            filled = filled.saturating_add(n);
-            written_exact = written_exact.saturating_add(n);
+    fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
+        if blocks == 0 {
+            return Ok(Vec::new());
+        }
+        let info = self.handle.info();
+        let bs = info.block_size as usize;
+        if bs == 0 {
+            return Err(block::Error::InvalidParam);
         }
 
-        handle.write_blocks(lba, chunk)?;
-        lba = lba.saturating_add(blocks_here as u64);
-        written = written.saturating_add(bytes_here);
-
-        crate::time::poll_executor();
-    }
-    if written_exact != exact_bytes {
-        return Err(block::Error::Corrupted);
-    }
-    Ok(())
-}
-
-fn read_exact_bytes(
-    handle: block::DeviceHandle,
-    start_lba: u64,
-    start_byte_off: usize,
-    out: &mut [u8],
-) -> Result<(), block::Error> {
-    if out.is_empty() {
-        return Ok(());
-    }
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let align = info.dma_alignment.max(1) as usize;
-
-    let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    let scratch = tmp.as_mut_slice();
-    scratch.fill(0);
-
-    let mut remaining = out;
-    let mut abs_byte = start_byte_off;
-    while !remaining.is_empty() {
-        let lba = start_lba.saturating_add((abs_byte / bs) as u64);
-        let off = abs_byte % bs;
-        handle.read_blocks(lba, scratch)?;
-        let take = core::cmp::min(bs - off, remaining.len());
-        remaining[..take].copy_from_slice(&scratch[off..off + take]);
-        remaining = &mut remaining[take..];
-        abs_byte = abs_byte.saturating_add(take);
-        crate::time::poll_executor();
-    }
-    Ok(())
-}
-
-fn compute_sha256_of_entry_data(
-    handle: block::DeviceHandle,
-    rec: &FileRecord,
-) -> Result<[u8; 32], block::Error> {
-    let mut hasher = Sha256::new();
-    let mut remaining = rec.data_len as usize;
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    let scratch = tmp.as_mut_slice();
-    let mut pos = 0usize;
-    while remaining > 0 {
-        let lba = rec.data_lba.saturating_add((pos / bs) as u64);
-        let off = pos % bs;
-        handle.read_blocks(lba, scratch)?;
-        let take = core::cmp::min(bs - off, remaining);
-        hasher.update(&scratch[off..off + take]);
-        remaining = remaining.saturating_sub(take);
-        pos = pos.saturating_add(take);
-        crate::time::poll_executor();
-    }
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..]);
-    Ok(out)
-}
-
-fn find_latest_record(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-    name: &str,
-) -> Result<Option<FileRecord>, block::Error> {
-    if name.is_empty() {
-        return Ok(None);
-    }
-    let name_bytes = name.as_bytes();
-    if name_bytes.len() > (u16::MAX as usize) {
-        return Ok(None);
-    }
-
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let sb_block = read_one_block_aligned(disk, placement.super_lba)?;
-    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
-        return Err(block::Error::Corrupted);
-    };
-    let mut lba = placement.data_lba;
-    let end_lba = placement.data_lba.saturating_add(sb.log_head_rel_blocks);
-    let mut latest: Option<FileRecord> = None;
-
-    while lba < end_lba {
-        let hdr_block = read_one_block_aligned(disk, lba)?;
-        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
-            break;
+        let max_blocks = if info.max_transfer_bytes > 0 {
+            (info.max_transfer_bytes as usize / bs).max(1)
+        } else {
+            1
         };
-        if !hdr.committed {
-            break;
+        let align = info.dma_alignment.max(1) as usize;
+
+        let mut out = Vec::with_capacity(bs.saturating_mul(blocks));
+        let mut cur_lba = lba;
+        let mut remaining = blocks;
+        while remaining > 0 {
+            let blocks_here = core::cmp::min(remaining, max_blocks);
+            let bytes_here = blocks_here.saturating_mul(bs);
+            let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
+            tmp.as_mut_slice().fill(0);
+            self.handle.read_blocks(cur_lba, tmp.as_mut_slice())?;
+            out.extend_from_slice(tmp.as_mut_slice());
+
+            cur_lba = cur_lba.saturating_add(blocks_here as u64);
+            remaining = remaining.saturating_sub(blocks_here);
+            crate::time::poll_executor();
+        }
+        Ok(out)
+    }
+
+    fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let info = self.handle.info();
+        let bs = info.block_size as usize;
+        if bs == 0 || buf.len() % bs != 0 {
+            return Err(block::Error::InvalidParam);
         }
 
-        let name_len = hdr.name_len as usize;
-        let data_len = hdr.data_len as usize;
-        // Basic sanity caps.
-        if name_len == 0 || name_len > 4096 {
-            break;
-        }
-
-        let name_blocks = (name_len + (bs - 1)) / bs;
-        let data_blocks = (data_len + (bs - 1)) / bs;
-        let blocks = 1u64
-            .saturating_add(name_blocks as u64)
-            .saturating_add(data_blocks as u64);
-        let name_lba = lba.saturating_add(1);
-
-        // Compare name (exact bytes only; padding is ignored).
-        if name_len == name_bytes.len() {
-            let mut tmp_name = vec![0u8; name_len];
-            read_exact_bytes(disk, name_lba, 0, &mut tmp_name)?;
-            if tmp_name == name_bytes {
-                match hdr.kind {
-                    LogKind::Put => {
-                        let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
-                        latest = Some(FileRecord {
-                            entry_lba: lba,
-                            name_len: hdr.name_len,
-                            data_len: hdr.data_len,
-                            data_lba,
-                            sha256: hdr.sha256,
-                        });
-                    }
-                    LogKind::Delete => {
-                        latest = None;
-                    }
-                }
-            }
-        }
-
-        lba = lba.saturating_add(blocks);
-    }
-
-    Ok(latest)
-}
-
-fn check_space_for_put(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-    name_len: usize,
-    data_len: usize,
-) -> Result<Option<(trueos_fs::Superblock, u64, u64, usize)>, block::Error> {
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let sb_block = read_one_block_aligned(disk, placement.super_lba)?;
-    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
-        return Err(block::Error::Corrupted);
-    };
-
-    // We store header in its own full block.
-    let total_blocks = entry_blocks(bs, name_len, data_len);
-    let entry_lba = placement.data_lba.saturating_add(sb.log_head_rel_blocks);
-    let end_lba = disk_data_end_lba_exclusive(disk, placement);
-    if entry_lba.saturating_add(total_blocks) > end_lba {
-        return Ok(None);
-    }
-
-    let total_bytes_rounded = (total_blocks as usize).saturating_mul(bs);
-    Ok(Some((sb, entry_lba, total_blocks, total_bytes_rounded)))
-}
-
-fn write_put_entry(
-    disk: block::DeviceHandle,
-    _placement: &TrueosFsPlacement,
-    entry_lba: u64,
-    total_blocks: u64,
-    name: &str,
-    data_source: &mut dyn FnMut(&mut [u8]) -> Result<usize, block::Error>,
-    data_len: u64,
-) -> Result<(), block::Error> {
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    let align = info.dma_alignment.max(1) as usize;
-
-    let name_len = name.as_bytes().len();
-    let name_blocks = (name_len + (bs - 1)) / bs;
-    let name_bytes_rounded = name_blocks * bs;
-    let data_blocks = ((data_len as usize) + (bs - 1)) / bs;
-    let data_bytes_rounded = data_blocks * bs;
-    let expected_blocks = 1u64
-        .saturating_add(name_blocks as u64)
-        .saturating_add(data_blocks as u64);
-    if expected_blocks != total_blocks {
-        return Err(block::Error::InvalidParam);
-    }
-
-    // 1) Write header block with committed=0 and sha=0.
-    let mut hdr0 = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    hdr0.as_mut_slice().fill(0);
-    LogHeader {
-        kind: LogKind::Put,
-        committed: false,
-        name_len: name_len as u16,
-        data_len,
-        sha256: [0u8; 32],
-    }
-    .encode_into_block(hdr0.as_mut_slice());
-    disk.write_blocks(entry_lba, hdr0.as_mut_slice())?;
-
-    // 2) Write name blocks, padded with zeros.
-    let mut name_buf = AlignedBuf::new(name_bytes_rounded, align).ok_or(block::Error::DmaUnavailable)?;
-    name_buf.as_mut_slice().fill(0);
-    name_buf.as_mut_slice()[..name_len].copy_from_slice(name.as_bytes());
-    if name_bytes_rounded > 0 {
-        write_blocks_aligned_chunked(disk, entry_lba.saturating_add(1), name_buf.as_mut_slice())?;
-    }
-
-    // 3) Stream data blocks, padded with zeros, while hashing.
-    let mut hasher = Sha256::new();
-    if data_bytes_rounded > 0 {
-        let mut remaining = data_len as usize;
-        let mut data_src = |dst: &mut [u8]| -> Result<usize, block::Error> {
-            if remaining == 0 {
-                return Ok(0);
-            }
-            let want = core::cmp::min(dst.len(), remaining);
-            let got = data_source(&mut dst[..want])?;
-            if got == 0 {
-                return Err(block::Error::Corrupted);
-            }
-            hasher.update(&dst[..got]);
-            remaining = remaining.saturating_sub(got);
-            Ok(got)
+        let max_blocks = if info.max_transfer_bytes > 0 {
+            (info.max_transfer_bytes as usize / bs).max(1)
+        } else {
+            1
         };
+        let align = info.dma_alignment.max(1) as usize;
 
-        write_stream_at_lba(
-            disk,
-            entry_lba
-                .saturating_add(1)
-                .saturating_add(name_blocks as u64),
-            data_len as usize,
-            data_bytes_rounded,
-            &mut data_src,
-        )?;
-    }
-    disk.flush()?;
+        let mut cur_lba = lba;
+        let mut off = 0usize;
+        while off < buf.len() {
+            let remaining = buf.len() - off;
+            let blocks_here = core::cmp::min(max_blocks, remaining / bs);
+            let bytes_here = blocks_here * bs;
+            let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
+            tmp.as_mut_slice().copy_from_slice(&buf[off..off + bytes_here]);
+            self.handle.write_blocks(cur_lba, tmp.as_mut_slice())?;
 
-    // 4) Rewrite header block with committed=1 and real sha.
-    let digest = hasher.finalize();
-    let mut sha256 = [0u8; 32];
-    sha256.copy_from_slice(&digest[..]);
-    let mut hdr1 = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    hdr1.as_mut_slice().fill(0);
-    LogHeader {
-        kind: LogKind::Put,
-        committed: true,
-        name_len: name_len as u16,
-        data_len,
-        sha256,
-    }
-    .encode_into_block(hdr1.as_mut_slice());
-    disk.write_blocks(entry_lba, hdr1.as_mut_slice())?;
-    disk.flush()?;
-
-    Ok(())
-}
-
-fn write_delete_entry(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-    entry_lba: u64,
-    name: &str,
-) -> Result<u64, block::Error> {
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    let align = info.dma_alignment.max(1) as usize;
-    let name_len = name.len();
-
-    let blocks = entry_blocks(bs, name_len, 0);
-
-    // Header block committed immediately (no payload integrity needed).
-    let mut hdr = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    hdr.as_mut_slice().fill(0);
-    LogHeader {
-        kind: LogKind::Delete,
-        committed: true,
-        name_len: name_len as u16,
-        data_len: 0,
-        sha256: [0u8; 32],
-    }
-    .encode_into_block(hdr.as_mut_slice());
-    disk.write_blocks(entry_lba, hdr.as_mut_slice())?;
-
-    // Write name bytes after header.
-    let name_bytes = name.as_bytes();
-    let name_blocks = (name_bytes.len() + (bs - 1)) / bs;
-    let payload_bytes_rounded = name_blocks * bs;
-    let mut off = 0usize;
-    let mut src = |dst: &mut [u8]| -> Result<usize, block::Error> {
-        if off >= name_bytes.len() {
-            return Ok(0);
+            cur_lba = cur_lba.saturating_add(blocks_here as u64);
+            off = off.saturating_add(bytes_here);
+            crate::time::poll_executor();
         }
-        let take = core::cmp::min(dst.len(), name_bytes.len() - off);
-        dst[..take].copy_from_slice(&name_bytes[off..off + take]);
-        off = off.saturating_add(take);
-        Ok(take)
-    };
-    if payload_bytes_rounded > 0 {
-        write_stream_at_lba(
-            disk,
-            entry_lba.saturating_add(1),
-            name_bytes.len(),
-            payload_bytes_rounded,
-            &mut src,
-        )?;
-    }
-    disk.flush()?;
 
-    let _ = placement;
-    Ok(blocks)
+        Ok(())
+    }
+
+    #[inline]
+    fn flush(&self) -> Result<(), block::Error> {
+        self.handle.flush()
+    }
 }
 
-fn advance_log_head(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-    mut sb: trueos_fs::Superblock,
-    delta_blocks: u64,
-) -> Result<(), block::Error> {
-    sb.log_head_rel_blocks = sb.log_head_rel_blocks.saturating_add(delta_blocks);
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    tmp.as_mut_slice().fill(0);
-    trueos_fs::write_superblock(tmp.as_mut_slice(), sb);
-    disk.write_blocks(placement.super_lba, tmp.as_mut_slice())?;
-    disk.flush()?;
-    Ok(())
+#[inline]
+fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
+    match e {
+        trueos_fs::FsError::Device(e) => e,
+        trueos_fs::FsError::InvalidParam => block::Error::InvalidParam,
+        trueos_fs::FsError::Corrupted => block::Error::Corrupted,
+    }
 }
 
 /// Ensure a single TRUEOSFS root exists for this *whole disk*.
@@ -672,38 +266,14 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
     let Some(placement) = locate(disk)? else {
         return Ok(false);
     };
-    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
-        return Ok(false);
-    }
 
-    let Some((sb, entry_lba, blocks, _total_bytes_rounded)) =
-        check_space_for_put(disk, &placement, name.as_bytes().len(), bytes.len())?
-    else {
-        return Ok(false);
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-
-    let mut off = 0usize;
-    let mut src = |dst: &mut [u8]| -> Result<usize, block::Error> {
-        if off >= bytes.len() {
-            return Ok(0);
-        }
-        let take = core::cmp::min(dst.len(), bytes.len() - off);
-        dst[..take].copy_from_slice(&bytes[off..off + take]);
-        off = off.saturating_add(take);
-        Ok(take)
-    };
-
-    write_put_entry(
-        disk,
-        &placement,
-        entry_lba,
-        blocks,
-        name,
-        &mut src,
-        bytes.len() as u64,
-    )?;
-    advance_log_head(disk, &placement, sb, blocks)?;
-    Ok(true)
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: read a file.
@@ -716,23 +286,14 @@ pub fn file_out(disk: block::DeviceHandle, name: &str) -> Result<Option<Vec<u8>>
     let Some(placement) = locate(disk)? else {
         return Ok(None);
     };
-    let Some(rec) = find_latest_record(disk, &placement, name)? else {
-        return Ok(None);
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-
-    let mut out = vec![0u8; rec.data_len as usize];
-    read_exact_bytes(disk, rec.data_lba, 0, &mut out)?;
-
-    // Integrity check: recompute sha.
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != rec.sha256 {
-        return Ok(None);
-    }
-    Ok(Some(out))
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::read_file(&io, &params, name).map_err(map_engine_err)
 }
 
 pub fn file_out_ok(disk: block::DeviceHandle, name: &str, out: &mut Vec<u8>) -> Result<bool, block::Error> {
@@ -754,36 +315,14 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     let Some(placement) = locate(disk)? else {
         return Ok(false);
     };
-    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
-        return Ok(false);
-    }
-    // Must exist.
-    if find_latest_record(disk, &placement, name)?.is_none() {
-        return Ok(false);
-    }
 
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let sb_block = read_one_block_aligned(disk, placement.super_lba)?;
-    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
-        return Err(block::Error::Corrupted);
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let entry_lba = placement.data_lba.saturating_add(sb.log_head_rel_blocks);
-
-    // Space check.
-    let blocks = entry_blocks(bs, name.as_bytes().len(), 0);
-    let end_lba = disk_data_end_lba_exclusive(disk, &placement);
-    if entry_lba.saturating_add(blocks) > end_lba {
-        return Ok(false);
-    }
-
-    let written_blocks = write_delete_entry(disk, &placement, entry_lba, name)?;
-    advance_log_head(disk, &placement, sb, written_blocks)?;
-    Ok(true)
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: validate a file by comparing stored SHA-256 with recomputation.
@@ -794,11 +333,14 @@ pub fn file_valid(disk: block::DeviceHandle, name: &str) -> Result<bool, block::
     let Some(placement) = locate(disk)? else {
         return Ok(false);
     };
-    let Some(rec) = find_latest_record(disk, &placement, name)? else {
-        return Ok(false);
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let sha = compute_sha256_of_entry_data(disk, &rec)?;
-    Ok(sha == rec.sha256)
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::file_valid(&io, &params, name).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: check whether a file exists.
@@ -809,7 +351,14 @@ pub fn file_exists(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     let Some(placement) = locate(disk)? else {
         return Ok(false);
     };
-    Ok(find_latest_record(disk, &placement, name)?.is_some())
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::file_exists(&io, &params, name).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: list the immediate children of a directory.
@@ -826,110 +375,13 @@ pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, 
         return Ok(None);
     };
 
-    // Normalize to a relative prefix; absolute input means “from root”.
-    let Some(rel) = crate::path::normalize_rel_no_parent(dir) else {
-        return Ok(Some(String::new()));
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let prefix = if rel.is_empty() {
-        String::new()
-    } else {
-        alloc::format!("{}/", rel)
-    };
-
-    let info = disk.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let sb_block = read_one_block_aligned(disk, placement.super_lba)?;
-    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
-        return Err(block::Error::Corrupted);
-    };
-    let mut lba = placement.data_lba;
-    let end_lba = placement.data_lba.saturating_add(sb.log_head_rel_blocks);
-
-    // Track live keys.
-    let mut live: BTreeSet<String> = BTreeSet::new();
-
-    while lba < end_lba {
-        let hdr_block = read_one_block_aligned(disk, lba)?;
-        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
-            break;
-        };
-        if !hdr.committed {
-            break;
-        }
-
-        let name_len = hdr.name_len as usize;
-        let data_len = hdr.data_len as usize;
-        if name_len == 0 || name_len > 4096 {
-            break;
-        }
-
-        let name_blocks = (name_len + (bs - 1)) / bs;
-        let data_blocks = (data_len + (bs - 1)) / bs;
-        let blocks = 1u64
-            .saturating_add(name_blocks as u64)
-            .saturating_add(data_blocks as u64);
-
-        // Read name bytes (exact, without padding) and update live set.
-        let name_lba = lba.saturating_add(1);
-        let mut tmp_name = vec![0u8; name_len];
-        read_exact_bytes(disk, name_lba, 0, &mut tmp_name)?;
-        if let Ok(name) = core::str::from_utf8(&tmp_name) {
-            // Store names normalized the same way as callers are expected to.
-            match hdr.kind {
-                LogKind::Put => {
-                    live.insert(name.to_string());
-                }
-                LogKind::Delete => {
-                    let _ = live.remove(name);
-                }
-            }
-        }
-
-        lba = lba.saturating_add(blocks);
-    }
-
-    // Extract immediate children under the requested prefix.
-    let mut children: BTreeSet<String> = BTreeSet::new();
-    for name in live.iter() {
-        if !prefix.is_empty() {
-            if !name.starts_with(prefix.as_str()) {
-                continue;
-            }
-            let rest = &name[prefix.len()..];
-            if rest.is_empty() {
-                continue;
-            }
-            let seg = rest.split('/').next().unwrap_or("");
-            if !seg.is_empty() {
-                children.insert(seg.to_string());
-            }
-        } else {
-            // Root: take first segment.
-            let seg = name.split('/').next().unwrap_or("");
-            if !seg.is_empty() {
-                children.insert(seg.to_string());
-            }
-        }
-    }
-
-    // Match `list_usbms_dir` output: newline-separated names.
-    const MAX_LISTING_BYTES: usize = 64 * 1024;
-    let mut out = String::new();
-    for entry in children.iter() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(entry);
-        if out.len() > MAX_LISTING_BYTES {
-            // Too large; truncate by returning an empty listing (best-effort).
-            return Ok(Some(String::new()));
-        }
-    }
-
+    let io = KernelBlockIo::new(disk);
+    let out = trueos_fs::list_dir(&io, &params, dir).map_err(map_engine_err)?;
     Ok(Some(out))
 }
 
@@ -938,9 +390,6 @@ pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, 
 /// - If file missing: forwards to `file_in`.
 /// - If `append_bytes` is empty: returns `Ok(true)`.
 pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -> Result<bool, block::Error> {
-    if append_bytes.is_empty() {
-        return Ok(true);
-    }
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -948,75 +397,31 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
         return Ok(false);
     };
 
-    let Some(base) = find_latest_record(disk, &placement, name)? else {
-        return file_in(disk, name, append_bytes);
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-
-    let bs = disk.info().block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let base_name_blocks = ((base.name_len as usize) + (bs - 1)) / bs;
-    let base_data_lba = base.entry_lba.saturating_add(1).saturating_add(base_name_blocks as u64);
-
-    // Check space for the full new write.
-    let new_len = (base.data_len as usize).saturating_add(append_bytes.len());
-    let Some((sb, entry_lba, blocks, _total_bytes_rounded)) =
-        check_space_for_put(disk, &placement, name.as_bytes().len(), new_len)?
-    else {
-        return Ok(false);
-    };
-
-    // Streaming source: first old bytes, then append bytes.
-    let info = disk.info();
-    let align = info.dma_alignment.max(1) as usize;
-    let mut scratch = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
-    let scratch_buf = scratch.as_mut_slice();
-
-    let mut base_remaining = base.data_len as usize;
-    let mut base_pos = 0usize;
-    let mut append_off = 0usize;
-
-    let mut src = |dst: &mut [u8]| -> Result<usize, block::Error> {
-        if dst.is_empty() {
-            return Ok(0);
-        }
-        if base_remaining > 0 {
-            let lba = base_data_lba.saturating_add((base_pos / bs) as u64);
-            let off = base_pos % bs;
-            disk.read_blocks(lba, scratch_buf)?;
-            let take = core::cmp::min(core::cmp::min(bs - off, base_remaining), dst.len());
-            let chunk = &scratch_buf[off..off + take];
-            dst[..take].copy_from_slice(chunk);
-            base_remaining = base_remaining.saturating_sub(take);
-            base_pos = base_pos.saturating_add(take);
-            return Ok(take);
-        }
-        if append_off < append_bytes.len() {
-            let take = core::cmp::min(dst.len(), append_bytes.len() - append_off);
-            let chunk = &append_bytes[append_off..append_off + take];
-            dst[..take].copy_from_slice(chunk);
-            append_off = append_off.saturating_add(take);
-            return Ok(take);
-        }
-        Ok(0)
-    };
-
-    write_put_entry(
-        disk,
-        &placement,
-        entry_lba,
-        blocks,
-        name,
-        &mut src,
-        new_len as u64,
-    )?;
-    advance_log_head(disk, &placement, sb, blocks)?;
-    Ok(true)
+    let io = KernelBlockIo::new(disk);
+    trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)
 }
 
 pub fn roots_len() -> usize {
     ROOTS.lock().len()
+}
+
+/// Returns the most recently mounted TRUEOSFS root disk id (best-effort).
+///
+/// This is used by higher layers (shell, C ABI helpers) that want a sensible
+/// default filesystem target without user-facing mount plumbing.
+pub fn primary_root_id() -> Option<block::DiscId> {
+    let roots = ROOTS.lock();
+    roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id)
+}
+
+/// Returns a handle for the most recently mounted TRUEOSFS root disk.
+pub fn primary_root_handle() -> Option<block::DeviceHandle> {
+    primary_root_id().and_then(block::device_handle)
 }
 
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
@@ -1163,7 +568,8 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
                 Err(e) if is_transient_io(e) => {
                     spin_wait_ms(10);
                 }
-                Err(_) => break,
+                // If GPT parsing fails in a non-transient way, surface it so callers can log it.
+                Err(e) => return Err(e),
             }
             tries = tries.wrapping_add(1);
         }
@@ -1210,6 +616,46 @@ pub fn format_blank(handle: block::DeviceHandle) -> Result<(), block::Error> {
     format_blank_at(handle, 0)
 }
 
+/// Force-format the whole disk as data-only TRUEOSFS (superblock at LBA0).
+///
+/// This is intentionally destructive and is intended for interactive/debug use
+/// (e.g. the shell `format` command) after explicit user confirmation.
+///
+/// Unlike [`format_blank`], this will *not* refuse to proceed when a GPT with an
+/// ESP exists. It also wipes the primary/backup GPT headers best-effort so that
+/// subsequent detection doesn't keep treating the disk as a GPT layout.
+pub fn format_blank_force(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    if handle.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !handle.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    // Best-effort: wipe GPT headers (LBA1 and backup header at last LBA).
+    // We do not try to wipe the whole partition array here.
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    if info.block_count > 2 {
+        let align = info.dma_alignment.max(1) as usize;
+        let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
+        let z = tmp.as_mut_slice();
+        z.fill(0);
+
+        // Primary GPT header.
+        let _ = handle.write_blocks(1, z);
+        // Backup GPT header.
+        let last_lba = info.block_count.saturating_sub(1);
+        let _ = handle.write_blocks(last_lba, z);
+        let _ = handle.flush();
+    }
+
+    format_blank_at(handle, 0)
+}
+
 /// Format TRUEOSFS at the start of an already-created partition.
 ///
 /// This is intended for installer code that first creates a GPT layout and then
@@ -1250,6 +696,12 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
     handle.write_blocks(super_lba, buf)?;
     handle.flush()?;
 
+    // Verify the superblock write actually stuck (important for flaky USBMS media).
+    let verify0 = read_blocks_aligned_retry(handle, super_lba, 1, 10)?;
+    if !looks_like_trueos_superblock(&verify0) {
+        return Err(block::Error::Corrupted);
+    }
+
     // Best-effort end-to-end NVMe sanity check: write a tiny payload into the data region
     // and read it back. This keeps validation at the block device layer (no extra shell cmds)
     // and avoids clobbering partition tables/boot sectors.
@@ -1286,4 +738,238 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
         }
     }
     Ok(())
+}
+
+pub fn bsp_smoke_test_once() {
+    BSP_SMOKE_ONCE.call_once(|| {
+        crate::log!("trueosfs: bsp smoke begin\n");
+
+        let devices = block::devices();
+        if devices.is_empty() {
+            crate::log!("trueosfs: no block devices present\n");
+            return;
+        }
+
+        // 1) Log present discs (whole devices).
+        let discs: alloc::vec::Vec<_> = devices.iter().filter(|d| d.parent.is_none()).collect();
+        crate::log!(
+            "trueosfs: present devices={} discs={}\n",
+            devices.len(),
+            discs.len()
+        );
+        for info in discs.iter().copied() {
+            crate::log!(
+                "trueosfs: disc id={} kind={:?} bs={} blocks={} writable={} label={:?} pci={:?}\n",
+                info.id,
+                info.kind,
+                info.block_size,
+                info.block_count,
+                info.writable,
+                info.label,
+                info.pci
+            );
+        }
+
+        // 2) Detect classification for each disc.
+        let mut trueos_disk: Option<block::DeviceHandle> = None;
+        for h in block::device_handles().into_iter() {
+            if h.parent().is_some() {
+                continue;
+            }
+
+            // Disks can briefly report transient I/O errors right after bring-up.
+            // Retry a handful of times so BSP logs reflect the steady state.
+            let (status, err) = {
+                let mut last = (crate::disc::detect::DiscStatus::Unknown, None);
+                let mut tries = 0u8;
+                while tries < 10 {
+                    let r = crate::disc::detect::detect_physical_disk_detail(h);
+                    match r.1 {
+                        Some(e) if is_transient_io(e) => {
+                            last = r;
+                            spin_wait_ms(25);
+                        }
+                        _ => {
+                            last = r;
+                            break;
+                        }
+                    }
+                    tries = tries.wrapping_add(1);
+                }
+                last
+            };
+            if let Some(e) = err {
+                crate::log!(
+                    "trueosfs: detect {} => {} (err={:?})\n",
+                    h.id(),
+                    status.short(),
+                    e
+                );
+            } else {
+                crate::log!("trueosfs: detect {} => {}\n", h.id(), status.short());
+            }
+
+            if trueos_disk.is_none() {
+                if let crate::disc::detect::DiscStatus::Trueos { .. } = status {
+                    trueos_disk = Some(h);
+                }
+            }
+        }
+
+        // Debug convenience: allow the BSP smoke test to operate on a fresh, unformatted
+        // `disk.img` by formatting a *completely blank* disk as data-only TRUEOSFS.
+        //
+        // Safety properties:
+        // - Only in debug builds.
+        // - Only if LBA0 is all-zero (strong signal of "empty" media).
+        // - Only if the device is writable.
+        #[cfg(debug_assertions)]
+        if trueos_disk.is_none() {
+            for h in block::device_handles().into_iter() {
+                if h.parent().is_some() {
+                    continue;
+                }
+                if !h.supports_write() {
+                    continue;
+                }
+
+                let bs0 = match read_blocks_aligned_retry(h, 0, 1, 3) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: blank check read failed dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                if bs0.iter().any(|&b| b != 0) {
+                    continue;
+                }
+
+                crate::log!(
+                    "trueosfs: smoke: blank writable disk detected dev={} -> formatting TRUEOSFS\n",
+                    h.id()
+                );
+                match format_blank(h) {
+                    Ok(()) => {
+                        crate::log!("trueosfs: smoke: format ok dev={} -> mounting\n", h.id());
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: format failed dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                        continue;
+                    }
+                }
+
+                match mount_root(h) {
+                    Ok(Some(_)) => {
+                        trueos_disk = Some(h);
+                        break;
+                    }
+                    Ok(None) => {
+                        crate::log!(
+                            "trueosfs: smoke: format succeeded but mount_root returned none dev={}\n",
+                            h.id()
+                        );
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: mount_root failed after format dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        // 3) If we have a TRUEOS partition, do a write/read smoke test.
+        let Some(disk) = trueos_disk else {
+            crate::log!("trueosfs: smoke: no partition\n");
+            return;
+        };
+
+        let placement = match locate(disk) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                crate::log!("trueosfs: smoke: detect said trueos but locate returned none\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: locate failed: {:?}\n", e);
+                return;
+            }
+        };
+        crate::log!(
+            "trueosfs: smoke: using {} bootable={} super_lba={} data_lba={} end={:?} writable={}\n",
+            disk.id(),
+            placement.bootable,
+            placement.super_lba,
+            placement.data_lba,
+            placement.data_end_lba_exclusive,
+            disk.supports_write()
+        );
+
+        if !disk.supports_write() {
+            crate::log!("trueosfs: smoke: disk is read-only; skipping save/load\n");
+            return;
+        }
+
+        let name = "tst/bsp_smoke.txt";
+        let payload = b"TRUEOSFS BSP smoke test\n";
+
+        match file_in(disk, name, payload) {
+            Ok(true) => crate::log!("trueosfs: smoke: write ok name='{}' bytes={}\n", name, payload.len()),
+            Ok(false) => {
+                crate::log!("trueosfs: smoke: write returned false\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: write failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        match file_out(disk, name) {
+            Ok(Some(bytes)) => {
+                if bytes.as_slice() != payload {
+                    crate::log!(
+                        "trueosfs: smoke: read mismatch (got={} expected={})\n",
+                        bytes.len(),
+                        payload.len()
+                    );
+                    return;
+                }
+                crate::log!("trueosfs: smoke: read ok bytes={}\n", bytes.len());
+            }
+            Ok(None) => {
+                crate::log!("trueosfs: smoke: read returned none\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: read failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        match file_valid(disk, name) {
+            Ok(true) => crate::log!("trueosfs: smoke: sha valid\n"),
+            Ok(false) => {
+                crate::log!("trueosfs: smoke: sha invalid\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: sha validate failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        crate::log!("trueosfs: bsp smoke ok\n");
+    });
 }
