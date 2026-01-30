@@ -252,6 +252,9 @@ pub extern "C" fn kmain() -> ! {
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
+    // Runs only after being requested (e.g. when USBMS registers).
+    let _ = spawner.spawn(crate::disc::trueosfs::bsp_smoke_service_task());
+
     time::init(executor);
 
     net::init();
