@@ -1,6 +1,5 @@
 pub mod block;
 pub mod detect;
-pub mod files;
 pub mod install;
 pub mod layout;
 pub mod nvme;

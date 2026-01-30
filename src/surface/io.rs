@@ -560,37 +560,6 @@ pub mod cabi {
 	}
 
 	#[inline]
-	fn fs_error_to_code(err: crate::disc::files::FsError) -> i32 {
-		use crate::disc::files::*;
-		match err {
-			FsError::Read(UsbFsReadError::UsbmsNotFound)
-			| FsError::Write(UsbFsWriteError::UsbmsNotFound)
-			| FsError::Rename(UsbFsRenameError::UsbmsNotFound)
-			| FsError::ListDir(UsbFsListDirError::UsbmsNotFound)
-			| FsError::Remove(UsbFsRemoveError::UsbmsNotFound) => FS_ERR_USBMS_NOT_FOUND,
-
-			FsError::Write(UsbFsWriteError::BadPath)
-			| FsError::Rename(UsbFsRenameError::BadPath)
-			| FsError::ListDir(UsbFsListDirError::BadPath)
-			| FsError::Remove(UsbFsRemoveError::BadPath) => FS_ERR_BAD_PATH,
-
-			FsError::Read(UsbFsReadError::TooLarge)
-			| FsError::Write(UsbFsWriteError::TooLarge)
-			| FsError::ListDir(UsbFsListDirError::TooLarge) => FS_ERR_TOO_LARGE,
-
-			FsError::Rename(UsbFsRenameError::NotFound)
-			| FsError::Remove(UsbFsRemoveError::NotFound) => FS_ERR_NOT_FOUND,
-
-			FsError::Rename(UsbFsRenameError::AlreadyExists) => FS_ERR_ALREADY_EXISTS,
-
-			// Read(OpenFailed) conflates multiple causes (not found vs bad path);
-			// and many underlying FAT errors are intentionally collapsed.
-			// Keep those as the generic IO class to avoid misleading callers.
-			_ => FS_ERR_IO,
-		}
-	}
-
-	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
 		if bytes.is_empty() {
 			return;

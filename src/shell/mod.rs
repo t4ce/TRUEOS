@@ -201,16 +201,50 @@ fn print_install_disk_table(io: &dyn ShellIo) {
     io.write_str("\r\n");
 }
 
+fn print_format_disk_table(io: &dyn ShellIo) {
+    io.write_str("format: disk selection stage\r\n");
+    io.write_str("format: enter a disk id (blank/q cancels)\r\n");
+    io.write_str("\r\n");
+
+    for h in crate::disc::block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+        let info = h.info();
+        let (status, err) = crate::disc::detect::detect_physical_disk_detail(h);
+        io.write_fmt(format_args!(
+            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+            status.short(),
+            match (&status, err) {
+                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                    alloc::format!(" (err={:?})", e)
+                }
+                _ => alloc::string::String::new(),
+            }
+        ));
+    }
+
+    io.write_str("\r\n");
+}
+
 #[derive(Copy, Clone)]
 pub(crate) enum PendingAction {
     Reset,
     S5,
     FormatConfirm { disc_id: u32 },
+    InstallConfirm { disc_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallWizardStage {
     SelectDisk,
+    FormatSelectDisk,
 }
 
 pub(crate) enum CommandAction {
@@ -281,12 +315,34 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     write_prompt_for_state(io, pending_action, install_wizard);
                     continue;
                 }
+                b if matches!(pending_action, Some(PendingAction::FormatConfirm { .. })) && b != b'\r' && b != b'\n' => {
+                    // Destructive format confirmation: Enter confirms, any other key cancels.
+                    utf8.clear();
+                    pending_action = None;
+                    pending_deadline = None;
+                    set_go_mode(io, &mut go_mode, false);
+                    line.clear();
+                    io.write_str("\r\nformat: cancelled\r\n");
+                    write_prompt_for_state(io, pending_action, install_wizard);
+                    continue;
+                }
+                b if matches!(pending_action, Some(PendingAction::InstallConfirm { .. })) && b != b'\r' && b != b'\n' => {
+                    // Destructive install confirmation: Enter confirms, any other key cancels.
+                    utf8.clear();
+                    pending_action = None;
+                    pending_deadline = None;
+                    set_go_mode(io, &mut go_mode, false);
+                    line.clear();
+                    io.write_str("\r\ninstall: cancelled\r\n");
+                    write_prompt_for_state(io, pending_action, install_wizard);
+                    continue;
+                }
                 b'\r' | b'\n' => {
                     utf8.clear();
 
                     // Confirmation gate for destructive `format`.
                     if let Some(PendingAction::FormatConfirm { disc_id }) = pending_action {
-                        let do_format = line.as_str().trim() == "FORMAT";
+                        let do_format = line.is_empty();
                         line.clear();
                         pending_action = None;
                         pending_deadline = None;
@@ -303,7 +359,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             };
 
                             io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
-                            match crate::disc::trueosfs::format_blank(handle) {
+                            match crate::disc::trueosfs::format_blank_force(handle) {
                                 Ok(()) => {
                                     let (status, err) = crate::disc::detect::detect_physical_disk_detail(handle);
                                     io.write_fmt(format_args!(
@@ -321,6 +377,70 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                         } else {
                             io.write_str("\r\nformat: cancelled\r\n");
+                        }
+
+                        write_prompt_for_state(io, pending_action, install_wizard);
+                        continue;
+                    }
+
+                    // Confirmation gate for destructive `install`.
+                    if let Some(PendingAction::InstallConfirm { disc_id }) = pending_action {
+                        let do_install = line.is_empty();
+                        line.clear();
+                        pending_action = None;
+                        pending_deadline = None;
+                        set_go_mode(io, &mut go_mode, false);
+
+                        if do_install {
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\ninstall: no such disk\r\n");
+                                write_prompt(io);
+                                continue;
+                            };
+
+                            let Some(kernel) = crate::limine::install_kernel_bytes() else {
+                                io.write_str("\r\ninstall: kernel module missing\r\n");
+                                io.write_str(
+                                    "install: expected Limine module_string trueos.install.kernel\r\n",
+                                );
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
+                                io.write_str("\r\ninstall: BOOTX64.EFI module missing\r\n");
+                                io.write_str(
+                                    "install: expected Limine module_string trueos.install.bootx64\r\n",
+                                );
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            io.write_str("\r\ninstall: starting...\r\n");
+                            match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", disc_id).as_str()) {
+                                Some(slot) => {
+                                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
+                                        slot,
+                                        handle,
+                                        bootx64,
+                                        kernel,
+                                    ));
+                                    io.write_fmt(format_args!(
+                                        "install: started §{} (dump logs with § {})\r\n",
+                                        slot + 1,
+                                        slot + 1
+                                    ));
+                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
+                                }
+                                None => {
+                                    io.write_str("install: matrix full\r\n");
+                                }
+                            }
+                        } else {
+                            io.write_str("\r\ninstall: cancelled\r\n");
                         }
 
                         write_prompt_for_state(io, pending_action, install_wizard);
@@ -361,53 +481,78 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 continue;
                             };
 
+                            let info = handle.info();
                             let status = crate::disc::detect::detect_physical_disk(handle);
-
-                            let Some(kernel) = crate::limine::install_kernel_bytes() else {
-                                io.write_str("\r\ninstall: kernel module missing\r\n");
-                                io.write_str(
-                                    "install: expected Limine module_string trueos.install.kernel\r\n",
-                                );
-                                install_wizard = None;
-                                write_prompt_for_state(io, pending_action, install_wizard);
-                                continue;
-                            };
-
-                            let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
-                                io.write_str("\r\ninstall: BOOTX64.EFI module missing\r\n");
-                                io.write_str(
-                                    "install: expected Limine module_string trueos.install.bootx64\r\n",
-                                );
-                                install_wizard = None;
-                                write_prompt_for_state(io, pending_action, install_wizard);
-                                continue;
-                            };
-
                             io.write_fmt(format_args!(
-                                "\r\ninstall: target status: {}\r\n",
-                                status.short()
+                                "\r\ninstall: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                                info.id.raw(),
+                                info.id,
+                                info.block_count,
+                                info.block_size,
+                                info.writable,
+                                info.label,
+                                status.short(),
                             ));
-                            match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", raw_id).as_str()) {
-                                Some(slot) => {
-                                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
-                                        slot,
-                                        handle,
-                                        bootx64,
-                                        kernel,
-                                    ));
-                                    io.write_fmt(format_args!(
-                                        "install: started §{} (dump logs with § {})\r\n",
-                                        slot + 1,
-                                        slot + 1
-                                    ));
-                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
-                                }
-                                None => {
-                                    io.write_str("install: matrix full\r\n");
-                                }
-                            }
+                            io.write_str("install: DANGER: this may REPARTITION and FORMAT the disk\r\n");
+                            io.write_str("install: press Enter to confirm (any other key cancels)\r\n");
 
                             install_wizard = None;
+                            pending_action = Some(PendingAction::InstallConfirm { disc_id: raw_id });
+                            pending_deadline = None;
+                            write_prompt_for_state(io, pending_action, install_wizard);
+                            continue;
+                        }
+
+                        if let Some(InstallWizardStage::FormatSelectDisk) = install_wizard {
+                            let mut s = line.as_str().trim();
+                            // Accept inputs like `format 1` as well as just `1`.
+                            if let Some(rest) = s.strip_prefix("format") {
+                                s = rest.trim();
+                            }
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\nformat: cancelled\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                            line.clear();
+                            if raw_id == 0 {
+                                io.write_str("\r\nformat: invalid id\r\n");
+                                io.write_str("format: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\nformat: no such disk\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let info = handle.info();
+                            let status = crate::disc::detect::detect_physical_disk(handle);
+                            io.write_fmt(format_args!(
+                                "\r\nformat: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                                info.id.raw(),
+                                info.id,
+                                info.block_count,
+                                info.block_size,
+                                info.writable,
+                                info.label,
+                                status.short(),
+                            ));
+                            io.write_str("format: DANGER: this destroys all data on the disk\r\n");
+                            io.write_str("format: press Enter to confirm (any other key cancels)\r\n");
+
+                            install_wizard = None;
+                            pending_action = Some(PendingAction::FormatConfirm { disc_id: raw_id });
+                            pending_deadline = None;
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
@@ -443,6 +588,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                         Some(Instant::now() + EmbassyDuration::from_secs(5))
                                     }
                                     PendingAction::FormatConfirm { .. } => None,
+                                    PendingAction::InstallConfirm { .. } => None,
                                 };
                                 set_go_mode(
                                     io,
@@ -552,6 +698,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                         }
                         PendingAction::FormatConfirm { .. } => {}
+                        PendingAction::InstallConfirm { .. } => {}
                     }
                     continue;
                 }

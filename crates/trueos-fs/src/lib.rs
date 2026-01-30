@@ -134,7 +134,9 @@ impl<E> From<E> for FsError<E> {
 // --- On-disk log format (simple, append-only) ---
 
 pub const LOG_ENTRY_MAGIC: [u8; 8] = *b"TOSFLOG\0";
-pub const LOG_ENTRY_VERSION: u16 = 1;
+
+/// Delete records store the referenced (deleted) entry LBA as their data payload.
+pub const DELETE_REF_BYTES: usize = 8;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -154,45 +156,40 @@ pub struct LogHeader {
 
 impl LogHeader {
     pub fn encode_into_block(&self, block: &mut [u8]) {
-        if block.len() < 64 {
+        const MIN: usize = 52;
+        if block.len() < MIN {
             return;
         }
         block[0..8].copy_from_slice(&LOG_ENTRY_MAGIC);
-        block[8..10].copy_from_slice(&LOG_ENTRY_VERSION.to_le_bytes());
-        block[10] = self.kind as u8;
-        block[11] = if self.committed { 1 } else { 0 };
-        block[12..14].copy_from_slice(&self.name_len.to_le_bytes());
-        block[14..16].copy_from_slice(&0u16.to_le_bytes());
-        block[16..24].copy_from_slice(&self.data_len.to_le_bytes());
-        block[24..56].copy_from_slice(&self.sha256);
-        for b in block[56..64].iter_mut() {
+        block[8] = self.kind as u8;
+        block[9] = if self.committed { 1 } else { 0 };
+        block[10..12].copy_from_slice(&self.name_len.to_le_bytes());
+        block[12..20].copy_from_slice(&self.data_len.to_le_bytes());
+        block[20..52].copy_from_slice(&self.sha256);
+        for b in block[52..].iter_mut() {
             *b = 0;
         }
     }
 
     pub fn decode_from_block(block: &[u8]) -> Option<Self> {
-        if block.len() < 64 {
+        if block.len() < 52 {
             return None;
         }
         if &block[0..8] != &LOG_ENTRY_MAGIC {
             return None;
         }
-        let ver = u16::from_le_bytes([block[8], block[9]]);
-        if ver != LOG_ENTRY_VERSION {
-            return None;
-        }
-        let kind = match block[10] {
+        let kind = match block[8] {
             1 => LogKind::Put,
             2 => LogKind::Delete,
             _ => return None,
         };
-        let committed = block[11] == 1;
-        let name_len = u16::from_le_bytes([block[12], block[13]]);
+        let committed = block[9] == 1;
+        let name_len = u16::from_le_bytes([block[10], block[11]]);
         let data_len = u64::from_le_bytes([
-            block[16], block[17], block[18], block[19], block[20], block[21], block[22], block[23],
+            block[12], block[13], block[14], block[15], block[16], block[17], block[18], block[19],
         ]);
         let mut sha256 = [0u8; 32];
-        sha256.copy_from_slice(&block[24..56]);
+        sha256.copy_from_slice(&block[20..52]);
         Some(Self {
             kind,
             committed,
@@ -493,24 +490,27 @@ fn write_delete_entry<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
     name: &str,
+    deleted_entry_lba: u64,
+    deleted_sha256: [u8; 32],
 ) -> Result<u64, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
     let name_len = name.len();
-    let blocks = entry_blocks(bs, name_len, 0);
+    let blocks = entry_blocks(bs, name_len, DELETE_REF_BYTES);
 
-    let mut hdr = vec![0u8; bs];
+    // 1) Header committed=0.
+    let mut hdr0 = vec![0u8; bs];
     LogHeader {
         kind: LogKind::Delete,
-        committed: true,
+        committed: false,
         name_len: name_len as u16,
-        data_len: 0,
-        sha256: [0u8; 32],
+        data_len: DELETE_REF_BYTES as u64,
+        sha256: deleted_sha256,
     }
-    .encode_into_block(&mut hdr);
-    dev.write_blocks(entry_lba, &hdr).map_err(FsError::Device)?;
+    .encode_into_block(&mut hdr0);
+    dev.write_blocks(entry_lba, &hdr0).map_err(FsError::Device)?;
 
     let name_bytes = name.as_bytes();
     let name_blocks = (name_bytes.len() + (bs - 1)) / bs;
@@ -528,8 +528,189 @@ fn write_delete_entry<D: BlockIo>(
     if payload_bytes_rounded > 0 {
         write_stream_at_lba(dev, entry_lba.saturating_add(1), name_bytes.len(), payload_bytes_rounded, &mut src)?;
     }
+
+    // Data payload: referenced entry LBA (little-endian u64).
+    let data_blocks = (DELETE_REF_BYTES + (bs - 1)) / bs;
+    let data_bytes_rounded = data_blocks * bs;
+    let ref_bytes = deleted_entry_lba.to_le_bytes();
+    let mut ref_off = 0usize;
+    let mut ref_src = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> {
+        if ref_off >= ref_bytes.len() {
+            return Ok(0);
+        }
+        let take = core::cmp::min(dst.len(), ref_bytes.len() - ref_off);
+        dst[..take].copy_from_slice(&ref_bytes[ref_off..ref_off + take]);
+        ref_off = ref_off.saturating_add(take);
+        Ok(take)
+    };
+    if data_bytes_rounded > 0 {
+        write_stream_at_lba(
+            dev,
+            entry_lba
+                .saturating_add(1)
+                .saturating_add(name_blocks as u64),
+            DELETE_REF_BYTES,
+            data_bytes_rounded,
+            &mut ref_src,
+        )?;
+    }
+    dev.flush().map_err(FsError::Device)?;
+
+    // 2) Rewrite header committed=1 (after payload is durable).
+    let mut hdr1 = vec![0u8; bs];
+    LogHeader {
+        kind: LogKind::Delete,
+        committed: true,
+        name_len: name_len as u16,
+        data_len: DELETE_REF_BYTES as u64,
+        sha256: deleted_sha256,
+    }
+    .encode_into_block(&mut hdr1);
+    dev.write_blocks(entry_lba, &hdr1).map_err(FsError::Device)?;
     dev.flush().map_err(FsError::Device)?;
     Ok(blocks)
+}
+
+fn read_put_entry_data<D: BlockIo>(
+    dev: &D,
+    entry_lba: u64,
+) -> Result<Option<(Vec<u8>, [u8; 32])>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    let hdr_block = read_one_block(dev, entry_lba)?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed || hdr.kind != LogKind::Put {
+        return Ok(None);
+    }
+
+    let name_len = hdr.name_len as usize;
+    let data_len = hdr.data_len as usize;
+    if name_len == 0 || name_len > 4096 {
+        return Ok(None);
+    }
+
+    let name_blocks = (name_len + (bs - 1)) / bs;
+    let data_lba = entry_lba.saturating_add(1).saturating_add(name_blocks as u64);
+
+    let mut out = vec![0u8; data_len];
+    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&out);
+    let digest = hasher.finalize();
+    let mut sha = [0u8; 32];
+    sha.copy_from_slice(&digest[..]);
+    if sha != hdr.sha256 {
+        return Ok(None);
+    }
+
+    Ok(Some((out, sha)))
+}
+
+fn find_latest_delete_ref<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<(u64, [u8; 32])>, FsError<D::Error>> {
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let name_bytes = name.as_bytes();
+    if name_bytes.len() > (u16::MAX as usize) {
+        return Ok(None);
+    }
+
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    let sb_block = read_one_block(dev, params.super_lba)?;
+    let Some(sb) = parse_superblock(&sb_block) else {
+        return Err(FsError::Corrupted);
+    };
+
+    let mut lba = params.data_lba;
+    let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
+    let mut latest_delete: Option<(u64, [u8; 32])> = None;
+
+    while lba < end_lba {
+        let hdr_block = read_one_block(dev, lba)?;
+        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+            break;
+        };
+        if !hdr.committed {
+            break;
+        }
+
+        let name_len = hdr.name_len as usize;
+        let data_len = hdr.data_len as usize;
+        if name_len == 0 || name_len > 4096 {
+            break;
+        }
+        if hdr.kind == LogKind::Delete && data_len != DELETE_REF_BYTES {
+            break;
+        }
+
+        let name_blocks = (name_len + (bs - 1)) / bs;
+        let data_blocks = (data_len + (bs - 1)) / bs;
+        let blocks = 1u64
+            .saturating_add(name_blocks as u64)
+            .saturating_add(data_blocks as u64);
+
+        if name_len == name_bytes.len() {
+            let name_lba = lba.saturating_add(1);
+            let mut tmp_name = vec![0u8; name_len];
+            read_exact_bytes(dev, name_lba, 0, &mut tmp_name)?;
+            if tmp_name == name_bytes {
+                match hdr.kind {
+                    LogKind::Put => {
+                        latest_delete = None;
+                    }
+                    LogKind::Delete => {
+                        let ref_lba = lba
+                            .saturating_add(1)
+                            .saturating_add(name_blocks as u64);
+                        let mut ref_bytes = [0u8; DELETE_REF_BYTES];
+                        read_exact_bytes(dev, ref_lba, 0, &mut ref_bytes)?;
+                        let deleted_entry_lba = u64::from_le_bytes(ref_bytes);
+                        latest_delete = Some((deleted_entry_lba, hdr.sha256));
+                    }
+                }
+            }
+        }
+
+        lba = lba.saturating_add(blocks);
+    }
+
+    Ok(latest_delete)
+}
+
+/// Attempts to restore the most recently deleted version of `name`.
+///
+/// Returns `true` if a restore was performed.
+pub fn undelete_file<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    let Some((deleted_entry_lba, expected_sha)) = find_latest_delete_ref(dev, params, name)? else {
+        return Ok(false);
+    };
+
+    // Restore from the referenced Put entry.
+    let Some((data, sha)) = read_put_entry_data(dev, deleted_entry_lba)? else {
+        return Ok(false);
+    };
+    if sha != expected_sha {
+        return Ok(false);
+    }
+
+    write_file(dev, params, name, &data)
 }
 
 fn find_latest_record<D: BlockIo>(
@@ -673,6 +854,10 @@ pub fn delete_file<D: BlockIo>(
         return Ok(false);
     }
 
+    let Some(base) = find_latest_record(dev, params, name)? else {
+        return Ok(false);
+    };
+
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -683,13 +868,13 @@ pub fn delete_file<D: BlockIo>(
     };
     let entry_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
 
-    let blocks = entry_blocks(bs, name.as_bytes().len(), 0);
+    let blocks = entry_blocks(bs, name.as_bytes().len(), DELETE_REF_BYTES);
     let end_lba = disk_data_end_lba_exclusive(dev, params);
     if entry_lba.saturating_add(blocks) > end_lba {
         return Ok(false);
     }
 
-    let written_blocks = write_delete_entry(dev, entry_lba, name)?;
+    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba, base.sha256)?;
     advance_log_head(dev, params, sb, written_blocks)?;
     Ok(true)
 }
