@@ -577,7 +577,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Str)];
         static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
-        static FORMAT_ARGS: [ArgSpec; 1] = [ArgSpec::new("diskid", ArgType::Str).mandatory()];
+        static NO_ARGS: [ArgSpec; 0] = [];
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
         static MV_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("src", ArgType::Str).mandatory(),
@@ -603,7 +603,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
         let _ = REGSHCMD("tfsdemo", &TFSDEMO_ARGS, cmd_tfsdemo);
         let _ = REGSHCMD("install", &[], cmd_install);
-        let _ = REGSHCMD("format", &FORMAT_ARGS, cmd_format);
+        let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
         let _ = REGSHCMD("reset", &[], cmd_reset);
@@ -958,46 +958,10 @@ fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) ->
     super::CommandAction::None
 }
 
-fn cmd_format(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let arg = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
-    let arg = arg.trim();
-    if arg.is_empty() {
-        ctx.io.write_str("format: usage format <diskid>\r\n");
-        ctx.io.write_str("format: example format 1\r\n");
-        ctx.io.write_str("format: example format disc001\r\n");
-        return super::CommandAction::None;
-    }
-
-    let raw_id = super::parse_disc_id_raw(arg).unwrap_or(0);
-    if raw_id == 0 {
-        ctx.io.write_str("format: invalid id\r\n");
-        return super::CommandAction::None;
-    }
-
-    let target = crate::disc::block::device_handles()
-        .into_iter()
-        .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
-    let Some(handle) = target else {
-        ctx.io.write_str("format: no such disk\r\n");
-        return super::CommandAction::None;
-    };
-
-    let info = handle.info();
-    let status = crate::disc::detect::detect_physical_disk(handle);
-    ctx.io.write_fmt(format_args!(
-        "format: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
-        info.id.raw(),
-        info.id,
-        info.block_count,
-        info.block_size,
-        info.writable,
-        info.label,
-        status.short(),
-    ));
-    ctx.io.write_str("format: DANGER: this destroys all data on the disk\r\n");
-    ctx.io.write_str("format: type FORMAT to confirm (anything else cancels)\r\n");
-
-    super::CommandAction::Pending(super::PendingAction::FormatConfirm { disc_id: raw_id })
+fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    *ctx.install_wizard = Some(super::InstallWizardStage::FormatSelectDisk);
+    super::print_format_disk_table(ctx.io);
+    super::CommandAction::None
 }
 
 fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

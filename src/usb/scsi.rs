@@ -52,6 +52,7 @@ pub const OP_INQUIRY: u8 = 0x12;
 pub const OP_READ_CAPACITY_10: u8 = 0x25;
 pub const OP_READ_10: u8 = 0x28;
 pub const OP_WRITE_10: u8 = 0x2A;
+pub const OP_SYNCHRONIZE_CACHE_10: u8 = 0x35;
 
 pub fn cdb_test_unit_ready() -> [u8; 6] {
     [OP_TEST_UNIT_READY, 0, 0, 0, 0, 0]
@@ -103,6 +104,12 @@ pub fn cdb_write_10(lba: u32, blocks: u16) -> [u8; 10] {
         blocks_be[1],
         0,
     ]
+}
+
+pub fn cdb_synchronize_cache_10() -> [u8; 10] {
+    // SYNCHRONIZE CACHE(10): request device to flush volatile caches.
+    // We do not set IMMED; we want the command to complete when durable.
+    [OP_SYNCHRONIZE_CACHE_10, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -799,4 +799,89 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
     fn supports_write(&self) -> bool {
         true
     }
+
+    fn flush(&mut self) -> disc_block::Result<()> {
+        // Best-effort cache flush for USB mass storage.
+        // Many flash drives are fine without it, but some will not make data durable
+        // across power-loss/reboot unless we issue SYNCHRONIZE CACHE.
+        let mut guard = MASS_RUNTIMES.lock();
+        let Some(rt) = guard
+            .iter_mut()
+            .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
+        else {
+            return Err(disc_block::Error::NotReady);
+        };
+
+        let ctx = rt.ctx;
+        let mut tag = rt.bot_tag;
+
+        let mut attempts = 0u8;
+        while attempts < 10 {
+            let c = bot::scsi_synchronize_cache_10_sync(
+                &ctx,
+                &mut rt.ring_out,
+                &mut rt.ring_in,
+                self.slot_id,
+                rt.ep_out_target,
+                rt.ep_in_target,
+                tag,
+            );
+            tag = tag.wrapping_add(1);
+
+            match c {
+                Ok(csw) if csw.status == bot::BotStatus::Passed => {
+                    rt.bot_tag = tag;
+                    return Ok(());
+                }
+                Ok(csw) => {
+                    // Some devices report IllegalRequest for sync-cache; treat as success.
+                    if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                        &ctx,
+                        &mut rt.ring_out,
+                        &mut rt.ring_in,
+                        self.slot_id,
+                        rt.ep_out_target,
+                        rt.ep_in_target,
+                        tag,
+                    ) {
+                        tag = tag.wrapping_add(1);
+                        crate::log!(
+                            "usb: mass flush csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
+                            csw.status,
+                            sense.response_code,
+                            sense.sense_key,
+                            sense.asc,
+                            sense.ascq
+                        );
+
+                        if sense.sense_key == scsi::SenseKey::IllegalRequest {
+                            rt.bot_tag = tag;
+                            return Ok(());
+                        }
+                        if sense_is_transient(sense.sense_key) {
+                            attempts = attempts.wrapping_add(1);
+                            spin_wait_ms(25);
+                            continue;
+                        }
+                    } else {
+                        crate::log!("usb: mass flush csw={:?} request-sense failed\n", csw.status);
+                        attempts = attempts.wrapping_add(1);
+                        spin_wait_ms(25);
+                        continue;
+                    }
+
+                    rt.bot_tag = tag;
+                    return Err(disc_block::Error::Io);
+                }
+                Err(()) => {
+                    attempts = attempts.wrapping_add(1);
+                    spin_wait_ms(25);
+                    continue;
+                }
+            }
+        }
+
+        rt.bot_tag = tag;
+        Err(disc_block::Error::Io)
+    }
 }

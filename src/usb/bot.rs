@@ -840,3 +840,26 @@ pub fn scsi_write_10_sync(
         data,
     )
 }
+
+pub fn scsi_synchronize_cache_10_sync(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+) -> Result<Csw, ()> {
+    let cdb = scsi::cdb_synchronize_cache_10();
+    bot_command_sync(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        None,
+    )
+}

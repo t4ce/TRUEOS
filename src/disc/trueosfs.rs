@@ -602,6 +602,46 @@ pub fn format_blank(handle: block::DeviceHandle) -> Result<(), block::Error> {
     format_blank_at(handle, 0)
 }
 
+/// Force-format the whole disk as data-only TRUEOSFS (superblock at LBA0).
+///
+/// This is intentionally destructive and is intended for interactive/debug use
+/// (e.g. the shell `format` command) after explicit user confirmation.
+///
+/// Unlike [`format_blank`], this will *not* refuse to proceed when a GPT with an
+/// ESP exists. It also wipes the primary/backup GPT headers best-effort so that
+/// subsequent detection doesn't keep treating the disk as a GPT layout.
+pub fn format_blank_force(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    if handle.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !handle.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    // Best-effort: wipe GPT headers (LBA1 and backup header at last LBA).
+    // We do not try to wipe the whole partition array here.
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    if info.block_count > 2 {
+        let align = info.dma_alignment.max(1) as usize;
+        let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
+        let z = tmp.as_mut_slice();
+        z.fill(0);
+
+        // Primary GPT header.
+        let _ = handle.write_blocks(1, z);
+        // Backup GPT header.
+        let last_lba = info.block_count.saturating_sub(1);
+        let _ = handle.write_blocks(last_lba, z);
+        let _ = handle.flush();
+    }
+
+    format_blank_at(handle, 0)
+}
+
 /// Format TRUEOSFS at the start of an already-created partition.
 ///
 /// This is intended for installer code that first creates a GPT layout and then
