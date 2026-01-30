@@ -9,17 +9,14 @@ pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
 // Superblock layout (little-endian):
 // [0..8]   MAGIC
-// [8..12]  FLAGS (reserved)
-// [12..20] LOG_HEAD_REL_BLOCKS: u64 (relative to data_lba)
+// [8..16]  LOG_HEAD_REL_BLOCKS: u64 (relative to data_lba)
 
-pub const SUPERBLOCK_MIN_BYTES: usize = 20;
+pub const SUPERBLOCK_MIN_BYTES: usize = 16;
 
-pub const SUPERBLOCK_FLAGS_OFF: usize = 8;
-pub const SUPERBLOCK_LOG_HEAD_REL_OFF: usize = 12;
+pub const SUPERBLOCK_LOG_HEAD_REL_OFF: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Superblock {
-    pub flags: u32,
     /// Next free block in the data region (relative to `data_lba_from_super(super_lba)`).
     pub log_head_rel_blocks: u64,
 }
@@ -31,12 +28,6 @@ pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
     if &block0[0..8] != &MAGIC {
         return None;
     }
-    let flags = u32::from_le_bytes([
-        block0[SUPERBLOCK_FLAGS_OFF],
-        block0[SUPERBLOCK_FLAGS_OFF + 1],
-        block0[SUPERBLOCK_FLAGS_OFF + 2],
-        block0[SUPERBLOCK_FLAGS_OFF + 3],
-    ]);
     let log_head_rel_blocks = u64::from_le_bytes([
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF],
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF + 1],
@@ -48,7 +39,6 @@ pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF + 7],
     ]);
     Some(Superblock {
-        flags,
         log_head_rel_blocks,
     })
 }
@@ -62,7 +52,6 @@ pub fn write_superblock(block0: &mut [u8], sb: Superblock) {
         *b = 0;
     }
     block0[0..8].copy_from_slice(&MAGIC);
-    block0[SUPERBLOCK_FLAGS_OFF..SUPERBLOCK_FLAGS_OFF + 4].copy_from_slice(&sb.flags.to_le_bytes());
     block0[SUPERBLOCK_LOG_HEAD_REL_OFF..SUPERBLOCK_LOG_HEAD_REL_OFF + 8]
         .copy_from_slice(&sb.log_head_rel_blocks.to_le_bytes());
 }
@@ -87,7 +76,6 @@ pub fn write_blank_superblock(block0: &mut [u8]) {
     write_superblock(
         block0,
         Superblock {
-            flags: 0,
             log_head_rel_blocks: 0,
         },
     );

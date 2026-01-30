@@ -558,7 +558,11 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
             let bytes_here = blocks_here * block_size;
 
-            let (_dma_phys, dma_virt) = dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
+            // xHCI is 64-bit address capable on the platforms we target; avoid restricting
+            // transfers to <4GiB physical addresses to prevent spurious `DmaUnavailable`
+            // when low DMA space is fragmented/exhausted.
+            let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
+                .ok_or(disc_block::Error::DmaUnavailable)?;
             unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
             let ok = {
@@ -685,8 +689,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
             let bytes_here = blocks_here * block_size;
 
-            let (_dma_phys, dma_virt) =
-                dma::alloc(bytes_here, 64).ok_or(disc_block::Error::DmaUnavailable)?;
+            // See read path for rationale.
+            let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
+                .ok_or(disc_block::Error::DmaUnavailable)?;
             unsafe {
                 core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
             }
@@ -785,7 +790,10 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
-        64
+        // USB mass storage (BOT/SCSI) does *not* DMA into the caller's buffer.
+        // We always transfer via our own xHCI DMA buffers and then copy.
+        // Therefore the caller buffer does not need any special DMA alignment.
+        1
     }
 
     fn supports_write(&self) -> bool {

@@ -554,7 +554,8 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
                 Err(e) if is_transient_io(e) => {
                     spin_wait_ms(10);
                 }
-                Err(_) => break,
+                // If GPT parsing fails in a non-transient way, surface it so callers can log it.
+                Err(e) => return Err(e),
             }
             tries = tries.wrapping_add(1);
         }
@@ -640,6 +641,12 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
 
     handle.write_blocks(super_lba, buf)?;
     handle.flush()?;
+
+    // Verify the superblock write actually stuck (important for flaky USBMS media).
+    let verify0 = read_blocks_aligned_retry(handle, super_lba, 1, 10)?;
+    if !looks_like_trueos_superblock(&verify0) {
+        return Err(block::Error::Corrupted);
+    }
 
     // Best-effort end-to-end NVMe sanity check: write a tiny payload into the data region
     // and read it back. This keeps validation at the block device layer (no extra shell cmds)
