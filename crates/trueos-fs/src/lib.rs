@@ -1258,6 +1258,82 @@ pub fn read_file_at<D: BlockIo>(
     Ok(Some(out))
 }
 
+/// Read a file from a specific entry LBA, but also verify the entry's stored
+/// name matches `name`.
+///
+/// This is meant for index-based lookups where a stale/corrupted index must not
+/// cause returning the wrong file's contents.
+pub fn read_file_at_for_name<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    entry_lba: u64,
+) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let name_bytes = name.as_bytes();
+    if name_bytes.len() > (u16::MAX as usize) {
+        return Ok(None);
+    }
+
+    // Bounds check (best-effort).
+    if entry_lba < params.data_lba {
+        return Ok(None);
+    }
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if entry_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let hdr_block = read_one_block(dev, entry_lba)?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed || hdr.kind != LogKind::Put {
+        return Ok(None);
+    }
+
+    let stored_name_len = hdr.name_len as usize;
+    if stored_name_len != name_bytes.len() {
+        return Ok(None);
+    }
+
+    let name_blocks = (stored_name_len + (bs - 1)) / bs;
+    let name_lba = entry_lba.saturating_add(1);
+    let mut stored_name = vec![0u8; stored_name_len];
+    read_exact_bytes(dev, name_lba, 0, &mut stored_name)?;
+    if stored_name != name_bytes {
+        return Ok(None);
+    }
+
+    let data_lba = entry_lba
+        .saturating_add(1)
+        .saturating_add(name_blocks as u64);
+    if data_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let data_len = hdr.data_len as usize;
+    let mut out = vec![0u8; data_len];
+    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&out);
+    let digest = hasher.finalize();
+    let mut sha = [0u8; 32];
+    sha.copy_from_slice(&digest[..]);
+    if sha != hdr.sha256 {
+        return Ok(None);
+    }
+
+    Ok(Some(out))
+}
+
 pub fn delete_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
