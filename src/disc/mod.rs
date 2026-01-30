@@ -1,10 +1,7 @@
 pub mod block;
-pub mod detect;
 pub mod install;
 pub mod layout;
 pub mod nvme;
-pub mod partition;
-pub mod trueosfs;
 
 static PROBE_ONCE: spin::Once<()> = spin::Once::new();
 
