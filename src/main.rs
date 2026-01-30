@@ -253,7 +253,7 @@ pub extern "C" fn kmain() -> ! {
     let spawner = executor.spawner();
 
     // Runs only after being requested (e.g. when USBMS registers).
-    let _ = spawner.spawn(crate::disc::trueosfs::bsp_smoke_service_task());
+    let _ = spawner.spawn(crate::v::fs::trueosfs::bsp_smoke_service_task());
 
     time::init(executor);
 

@@ -85,65 +85,6 @@ fn dir_entry(name: [u8; 11], attr: u8, first_cluster: u32, size: u32) -> [u8; 32
     e
 }
 
-fn lfn_checksum(short_name: &[u8; 11]) -> u8 {
-    // Standard VFAT checksum over 8.3 name.
-    let mut sum: u8 = 0;
-    for &b in short_name.iter() {
-        sum = (((sum & 1) << 7) | (sum >> 1)).wrapping_add(b);
-    }
-    sum
-}
-
-fn lfn_entry(sequence: u8, checksum: u8, chars: &[u16; 13]) -> [u8; 32] {
-    let mut e = [0u8; 32];
-    e[0] = sequence;
-    e[11] = 0x0F; // LFN attribute
-    e[12] = 0x00; // type
-    e[13] = checksum;
-    // e[26..28] first cluster low = 0
-
-    let put = |dst: &mut [u8], src: &[u16]| {
-        for (i, w) in src.iter().enumerate() {
-            let b = w.to_le_bytes();
-            dst[i * 2] = b[0];
-            dst[i * 2 + 1] = b[1];
-        }
-    };
-
-    put(&mut e[1..1 + 10], &chars[0..5]);
-    put(&mut e[14..14 + 12], &chars[5..11]);
-    put(&mut e[28..28 + 4], &chars[11..13]);
-    e
-}
-
-fn lfn_entries_for_ascii_name(long_name: &str, short_name: &[u8; 11]) -> Vec<[u8; 32]> {
-    // Directory order is: last LFN entry first (with 0x40 flag), down to 1, then the short entry.
-    let checksum = lfn_checksum(short_name);
-    let mut utf16: Vec<u16> = long_name.as_bytes().iter().map(|&b| b as u16).collect();
-    utf16.push(0u16); // NUL terminator
-
-    let total = utf16.len();
-    let entries = (total + 12) / 13;
-
-    let mut out = Vec::new();
-    for i in (1..=entries).rev() {
-        let start = (i - 1) * 13;
-        let end = core::cmp::min(start + 13, total);
-        let mut chunk = [0xFFFFu16; 13];
-        let slice = &utf16[start..end];
-        for (j, &w) in slice.iter().enumerate() {
-            chunk[j] = w;
-        }
-
-        let mut seq = i as u8;
-        if i == entries {
-            seq |= 0x40;
-        }
-        out.push(lfn_entry(seq, checksum, &chunk));
-    }
-    out
-}
-
 fn clusters_for_bytes(bytes: usize, sectors_per_cluster: u32) -> u32 {
     let bytes_per_cluster = (sectors_per_cluster as usize).saturating_mul(512);
     if bytes_per_cluster == 0 {
@@ -362,7 +303,7 @@ pub async fn format_and_populate_esp_fat32(
     esp: DeviceHandle,
     image: EspImage<'_>,
 ) -> Result<(), block::Error> {
-    let mut noop = |_| {};
+    fn noop(_: &str) {}
     format_and_populate_esp_fat32_with_log(esp, image, &mut noop).await
 }
 
@@ -680,7 +621,17 @@ pub async fn format_and_populate_esp_fat32_with_log(
 
     // --- File data ---
     {
-        let mut write_file = |start_cluster: u32, clusters: u32, data: &[u8]| async {
+        async fn write_file(
+            esp: DeviceHandle,
+            sectors_per_cluster: u32,
+            first_data_sector: u32,
+            bytes_per_cluster: usize,
+            cluster_buf: &mut Vec<u8>,
+            start_cluster: u32,
+            clusters: u32,
+            data: &[u8],
+            log: &mut dyn FnMut(&str),
+        ) -> Result<(), block::Error> {
             let mut remaining = data;
             for i in 0..clusters {
                 let c = start_cluster + i;
@@ -689,7 +640,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
                     esp,
                     sectors_per_cluster,
                     first_data_sector,
-                    &mut cluster_buf,
+                    cluster_buf,
                     c,
                     &remaining[..take],
                     log,
@@ -700,15 +651,59 @@ pub async fn format_and_populate_esp_fat32_with_log(
                 // Formatting/writing the ESP can take a while; keep the shell responsive.
                 crate::time::poll_executor();
             }
-            Ok::<(), block::Error>(())
-        };
+            Ok(())
+        }
 
-        write_file(bootx64_start, bootx64_clusters, image.bootx64_efi).await?;
-        write_file(kernel_start, kernel_clusters, image.kernel_elf).await?;
-        write_file(conf_start, conf_clusters, image.limine_conf).await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_sector,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            bootx64_start,
+            bootx64_clusters,
+            image.bootx64_efi,
+            log,
+        )
+        .await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_sector,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            kernel_start,
+            kernel_clusters,
+            image.kernel_elf,
+            log,
+        )
+        .await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_sector,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            conf_start,
+            conf_clusters,
+            image.limine_conf,
+            log,
+        )
+        .await?;
         if let Some(payload) = image.payload_iso {
             if !payload.is_empty() {
-                write_file(payload_start, payload_clusters, payload).await?;
+                write_file(
+                    esp,
+                    sectors_per_cluster,
+                    first_data_sector,
+                    bytes_per_cluster,
+                    &mut cluster_buf,
+                    payload_start,
+                    payload_clusters,
+                    payload,
+                    log,
+                )
+                .await?;
             }
         }
     }
@@ -1036,7 +1031,17 @@ async fn format_and_populate_esp_fat16_with_log(
 
     // --- File data ---
     {
-        let mut write_file = |start_cluster: u32, clusters: u32, data: &[u8]| async {
+        async fn write_file(
+            esp: DeviceHandle,
+            sectors_per_cluster: u32,
+            first_data_lba: u64,
+            bytes_per_cluster: usize,
+            cluster_buf: &mut Vec<u8>,
+            start_cluster: u32,
+            clusters: u32,
+            data: &[u8],
+            log: &mut dyn FnMut(&str),
+        ) -> Result<(), block::Error> {
             let mut remaining = data;
             for i in 0..clusters {
                 let c = start_cluster + i;
@@ -1045,7 +1050,7 @@ async fn format_and_populate_esp_fat16_with_log(
                     esp,
                     sectors_per_cluster,
                     first_data_lba,
-                    &mut cluster_buf,
+                    cluster_buf,
                     c,
                     &remaining[..take],
                     log,
@@ -1054,15 +1059,59 @@ async fn format_and_populate_esp_fat16_with_log(
                 remaining = &remaining[take..];
                 crate::time::poll_executor();
             }
-            Ok::<(), block::Error>(())
-        };
+            Ok(())
+        }
 
-        write_file(bootx64_start, bootx64_clusters, image.bootx64_efi).await?;
-        write_file(kernel_start, kernel_clusters, image.kernel_elf).await?;
-        write_file(conf_start, conf_clusters, image.limine_conf).await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_lba,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            bootx64_start,
+            bootx64_clusters,
+            image.bootx64_efi,
+            log,
+        )
+        .await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_lba,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            kernel_start,
+            kernel_clusters,
+            image.kernel_elf,
+            log,
+        )
+        .await?;
+        write_file(
+            esp,
+            sectors_per_cluster,
+            first_data_lba,
+            bytes_per_cluster,
+            &mut cluster_buf,
+            conf_start,
+            conf_clusters,
+            image.limine_conf,
+            log,
+        )
+        .await?;
         if let Some(payload) = image.payload_iso {
             if !payload.is_empty() {
-                write_file(payload_start, payload_clusters, payload).await?;
+                write_file(
+                    esp,
+                    sectors_per_cluster,
+                    first_data_lba,
+                    bytes_per_cluster,
+                    &mut cluster_buf,
+                    payload_start,
+                    payload_clusters,
+                    payload,
+                    log,
+                )
+                .await?;
             }
         }
     }
