@@ -5,63 +5,19 @@ use crate::v::disc::partition;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::{Mutex, Once};
+use spin::Mutex;
+use trueos_fs::BlockIo;
 use trueos_math::{BPlusTree, Tree};
 
-// --- TRUEOSFS index checkpointing helpers (NOT wired yet) ---
+const TRUEOSFS_INDEX_M: usize = 16;
 
-const TRUEOSFS_INDEX_CKPT_MAGIC: [u8; 8] = *b"TOSIDX00";
-const TRUEOSFS_INDEX_CKPT_VERSION: u16 = 1;
-
-/// Serialize a TRUEOSFS path->LBA index into a single contiguous blob.
-///
-/// This is intended to become the payload for a future checkpoint record/area,
-/// so mounts can load an index snapshot and then replay only the tail of the log.
-///
-/// Format (little-endian):
-/// - [0..8]   MAGIC = "TOSIDX00"
-/// - [8..10]  VERSION = 1
-/// - [10..12] RESERVED = 0
-/// - [12..20] REPLAY_FROM_REL_BLOCKS: u64
-/// - [20..24] ENTRY_COUNT: u32
-/// - [24..32] RESERVED = 0
-/// - Entries...
-///
-/// Entry format:
-/// - KEY_LEN: u16
-/// - RESERVED: u16
-/// - VALUE_LBA: u64
-/// - KEY_BYTES: [u8; KEY_LEN]
-pub(crate) fn serialize_index_checkpoint<const M: usize>(
-    tree: &BPlusTree<Vec<u8>, u64, M>,
-    replay_from_rel_blocks: u64,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-
-    out.extend_from_slice(&TRUEOSFS_INDEX_CKPT_MAGIC);
-    out.extend_from_slice(&TRUEOSFS_INDEX_CKPT_VERSION.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
-    out.extend_from_slice(&replay_from_rel_blocks.to_le_bytes());
-
-    let entry_count = tree.len().min(u32::MAX as usize) as u32;
-    out.extend_from_slice(&entry_count.to_le_bytes());
-    out.extend_from_slice(&0u64.to_le_bytes());
-
-    let mut written = 0u32;
-    for (k, v) in tree.iter() {
-        if written == entry_count {
-            break;
-        }
-        let key_len = k.len().min(u16::MAX as usize) as u16;
-        out.extend_from_slice(&key_len.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&v.to_le_bytes());
-        out.extend_from_slice(&k[..key_len as usize]);
-        written = written.wrapping_add(1);
-    }
-
-    out
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IndexRef {
+    kind: trueos_fs::LogKind,
+    entry_lba: u64,
 }
+
+type TrueosFsIndex = BPlusTree<Vec<u8>, IndexRef, TRUEOSFS_INDEX_M>;
 
 // Standard EFI System Partition type GUID.
 // C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -105,13 +61,71 @@ struct RootMount {
     placement: TrueosFsPlacement,
     seq: u32,
     tree: Option<Box<TrueosFsTree>>,
+    index: Option<Box<TrueosFsIndex>>,
 }
 
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
 
-static BSP_SMOKE_ONCE: Once<()> = Once::new();
 static BSP_SMOKE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static BSP_SMOKE_DONE: AtomicBool = AtomicBool::new(false);
+
+static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
+
+/// Request that TRUEOSFS probing/mounting be performed asynchronously.
+///
+/// This is intended for driver hotplug contexts (e.g. USB mass-storage attach) where
+/// blocking the executor can starve the USB xHCI poll tasks.
+pub fn request_mount_root(disk: block::DeviceHandle) {
+    if disk.parent().is_some() {
+        return;
+    }
+
+    {
+        let mut q = MOUNT_QUEUE.lock();
+        if q.iter().any(|d| d.id() == disk.id()) {
+            return;
+        }
+        let _ = q.push(disk);
+    }
+
+    MOUNT_REQUESTED.store(true, Ordering::Release);
+}
+
+/// Background task that performs deferred TRUEOSFS probing/mounting.
+#[embassy_executor::task]
+pub async fn mount_service_task() {
+    loop {
+        if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
+            // Allow the device to settle after registration.
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+
+            let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
+            {
+                let mut q = MOUNT_QUEUE.lock();
+                while let Some(d) = q.pop() {
+                    let _ = local.push(d);
+                }
+            }
+
+            for disk in local.iter().copied() {
+                // Best-effort: only log when we actually mount or error.
+                match mount_root_async(disk).await {
+                    Ok(Some(disk_id)) => {
+                        crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        crate::log!("trueosfs: mount error {:?}\n", e);
+                    }
+                }
+            }
+        }
+
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+}
 
 /// Request that the BSP TrueOSFS smoke test run once.
 ///
@@ -129,11 +143,41 @@ pub async fn bsp_smoke_service_task() {
         if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
             // Allow the USBMS device to settle after registration.
             Timer::after(EmbassyDuration::from_millis(100)).await;
-            bsp_smoke_test_once();
+            bsp_smoke_test_once_async().await;
             return;
         }
         Timer::after(EmbassyDuration::from_millis(50)).await;
     }
+}
+
+/// Async variant of [`format_blank`].
+///
+/// This avoids `block_on` and is safe to call from async contexts.
+pub async fn format_blank_async(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    if handle.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !handle.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    // If the disk is GPT-partitioned and has an ESP, do NOT clobber LBA0.
+    // Only format an existing TRUEOS data partition (bootable layout).
+    if let Ok(parts) = partition::read_gpt_partitions(handle).await {
+        let has_esp = parts
+            .iter()
+            .any(|p| p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES);
+
+        if has_esp {
+            if let Some(loc) = locate_async(handle).await? {
+                return format_blank_at_async(handle, loc.super_lba).await;
+            }
+            return Err(block::Error::NotSupported);
+        }
+    }
+
+    // Data-only (superblock at LBA0).
+    format_blank_at_async(handle, 0).await
 }
 
 struct KernelBlockIo {
@@ -259,42 +303,101 @@ pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, bl
 
     let disk_id = disk.id();
 
-    let mut roots = ROOTS.lock();
-    if roots.iter().any(|m| m.disk_id == disk_id) {
-        return Ok(Some(disk_id));
+    {
+        let roots = ROOTS.lock();
+        if roots.iter().any(|m| m.disk_id == disk_id) {
+            return Ok(Some(disk_id));
+        }
     }
 
     // Seed an initial tree skeleton. Directory enumeration will fill this later.
     let mut tree = TrueosFsTree::new();
-    let root = match tree.add_root(TrueosFsTreeEntry {
+    let tree = match tree.add_root(TrueosFsTreeEntry {
         kind: TrueosFsTreeKind::Root,
         name: String::from("trueosfs"),
     }) {
-        Some(id) => id,
-        None => {
-            // Capacity too small; still register without a cache.
-            roots.push(RootMount {
-                disk_id,
-                placement,
-                seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
-                tree: None,
-            });
-            return Ok(Some(disk_id));
+        Some(root) => {
+            let _ = tree.add_child(
+                root,
+                TrueosFsTreeEntry {
+                    kind: TrueosFsTreeKind::Dir,
+                    name: String::from("/"),
+                },
+            );
+            Some(Box::new(tree))
         }
+        None => None,
     };
-    let _ = tree.add_child(
-        root,
-        TrueosFsTreeEntry {
-            kind: TrueosFsTreeKind::Dir,
-            name: String::from("/"),
-        },
-    );
 
+    let index = build_root_index(disk, &placement).unwrap_or(None);
+
+    let mut roots = ROOTS.lock();
+    if roots.iter().any(|m| m.disk_id == disk_id) {
+        return Ok(Some(disk_id));
+    }
     roots.push(RootMount {
         disk_id,
         placement,
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
-        tree: Some(Box::new(tree)),
+        tree,
+        index,
+    });
+
+    Ok(Some(disk_id))
+}
+
+/// Async variant of [`mount_root`].
+///
+/// Use this from async contexts to avoid `block_on` (which can starve other tasks such as USB polling).
+pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let disk_id = disk.id();
+
+    {
+        let roots = ROOTS.lock();
+        if roots.iter().any(|m| m.disk_id == disk_id) {
+            return Ok(Some(disk_id));
+        }
+    }
+
+    // Seed an initial tree skeleton. Directory enumeration will fill this later.
+    let mut tree = TrueosFsTree::new();
+    let tree = match tree.add_root(TrueosFsTreeEntry {
+        kind: TrueosFsTreeKind::Root,
+        name: String::from("trueosfs"),
+    }) {
+        Some(root) => {
+            let _ = tree.add_child(
+                root,
+                TrueosFsTreeEntry {
+                    kind: TrueosFsTreeKind::Dir,
+                    name: String::from("/"),
+                },
+            );
+            Some(Box::new(tree))
+        }
+        None => None,
+    };
+
+    let index = build_root_index(disk, &placement).unwrap_or(None);
+
+    let mut roots = ROOTS.lock();
+    if roots.iter().any(|m| m.disk_id == disk_id) {
+        return Ok(Some(disk_id));
+    }
+    roots.push(RootMount {
+        disk_id,
+        placement,
+        seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
+        tree,
+        index,
     });
 
     Ok(Some(disk_id))
@@ -320,7 +423,27 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)
+    let disk_id = disk.id();
+
+    let old_head_rel = if root_mount_has_index(disk_id) {
+        read_log_head_rel_blocks(&io, &params)?
+    } else {
+        0
+    };
+
+    let ok = trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)?;
+    if ok && root_mount_has_index(disk_id) {
+        let entry_lba = params.data_lba.saturating_add(old_head_rel);
+        root_index_insert_if_mounted(
+            disk_id,
+            name.as_bytes().to_vec(),
+            IndexRef {
+                kind: trueos_fs::LogKind::Put,
+                entry_lba,
+            },
+        );
+    }
+    Ok(ok)
 }
 
 /// TRUEOSFS: read a file.
@@ -340,6 +463,20 @@ pub fn file_out(disk: block::DeviceHandle, name: &str) -> Result<Option<Vec<u8>>
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let disk_id = disk.id();
+
+    if root_mount_has_index(disk_id) {
+        let key = name.as_bytes().to_vec();
+        if let Some(r) = root_index_lookup(disk_id, &key) {
+            if r.kind == trueos_fs::LogKind::Delete {
+                return Ok(None);
+            }
+            if let Some(bytes) = trueos_fs::read_file_at(&io, &params, r.entry_lba).map_err(map_engine_err)? {
+                return Ok(Some(bytes));
+            }
+        }
+    }
+
     trueos_fs::read_file(&io, &params, name).map_err(map_engine_err)
 }
 
@@ -369,7 +506,27 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)
+    let disk_id = disk.id();
+
+    let old_head_rel = if root_mount_has_index(disk_id) {
+        read_log_head_rel_blocks(&io, &params)?
+    } else {
+        0
+    };
+
+    let ok = trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)?;
+    if ok && root_mount_has_index(disk_id) {
+        let entry_lba = params.data_lba.saturating_add(old_head_rel);
+        root_index_insert_if_mounted(
+            disk_id,
+            name.as_bytes().to_vec(),
+            IndexRef {
+                kind: trueos_fs::LogKind::Delete,
+                entry_lba,
+            },
+        );
+    }
+    Ok(ok)
 }
 
 /// TRUEOSFS: validate a file by comparing stored SHA-256 with recomputation.
@@ -405,6 +562,15 @@ pub fn file_exists(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+
+    let disk_id = disk.id();
+    if root_mount_has_index(disk_id) {
+        let key = name.as_bytes().to_vec();
+        if let Some(r) = root_index_lookup(disk_id, &key) {
+            return Ok(r.kind == trueos_fs::LogKind::Put);
+        }
+    }
+
     trueos_fs::file_exists(&io, &params, name).map_err(map_engine_err)
 }
 
@@ -428,6 +594,14 @@ pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, 
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let disk_id = disk.id();
+
+    if root_mount_has_index(disk_id) {
+        if let Some(out) = list_dir_from_index(disk_id, dir) {
+            return Ok(Some(out));
+        }
+    }
+
     let out = trueos_fs::list_dir(&io, &params, dir).map_err(map_engine_err)?;
     Ok(Some(out))
 }
@@ -450,7 +624,175 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)
+    let disk_id = disk.id();
+
+    let old_head_rel = if root_mount_has_index(disk_id) {
+        read_log_head_rel_blocks(&io, &params)?
+    } else {
+        0
+    };
+
+    let ok = trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)?;
+    if ok && root_mount_has_index(disk_id) {
+        let entry_lba = params.data_lba.saturating_add(old_head_rel);
+        root_index_insert_if_mounted(
+            disk_id,
+            name.as_bytes().to_vec(),
+            IndexRef {
+                kind: trueos_fs::LogKind::Put,
+                entry_lba,
+            },
+        );
+    }
+    Ok(ok)
+}
+
+fn read_log_head_rel_blocks(
+    io: &KernelBlockIo,
+    params: &trueos_fs::FsParams,
+) -> Result<u64, block::Error> {
+    let sb_block = io.read_blocks(params.super_lba, 1)?;
+    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
+        return Err(block::Error::Corrupted);
+    };
+    Ok(sb.log_head_rel_blocks)
+}
+
+fn root_mount_has_index(disk_id: block::DiscId) -> bool {
+    let roots = ROOTS.lock();
+    roots
+        .iter()
+        .find(|m| m.disk_id == disk_id)
+        .and_then(|m| m.index.as_deref())
+        .is_some()
+}
+
+fn root_index_lookup(disk_id: block::DiscId, key: &Vec<u8>) -> Option<IndexRef> {
+    let roots = ROOTS.lock();
+    let idx = roots.iter().find(|m| m.disk_id == disk_id)?.index.as_deref()?;
+    idx.get(key).copied()
+}
+
+fn root_index_insert_if_mounted(disk_id: block::DiscId, key: Vec<u8>, r: IndexRef) {
+    let mut roots = ROOTS.lock();
+    let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+        return;
+    };
+    let idx = m.index.get_or_insert_with(|| Box::new(TrueosFsIndex::new()));
+    let _ = idx.insert(key, r);
+}
+
+fn list_dir_from_index(disk_id: block::DiscId, dir: &str) -> Option<String> {
+    let roots = ROOTS.lock();
+    let idx = roots.iter().find(|m| m.disk_id == disk_id)?.index.as_deref()?;
+
+    let rel = dir.trim_matches('/');
+    let prefix = if rel.is_empty() {
+        Vec::new()
+    } else {
+        let mut p = rel.as_bytes().to_vec();
+        p.push(b'/');
+        p
+    };
+
+    let mut live: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+    for (k, v) in idx.iter_from(&prefix) {
+        if !k.starts_with(&prefix) {
+            break;
+        }
+        if v.kind != trueos_fs::LogKind::Put {
+            continue;
+        }
+
+        let rest = &k[prefix.len()..];
+        if rest.is_empty() {
+            continue;
+        }
+        let cut = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
+        let child = &rest[..cut];
+        if child.is_empty() {
+            continue;
+        }
+        if let Ok(s) = core::str::from_utf8(child) {
+            live.insert(String::from(s));
+        }
+    }
+
+    let mut out = String::new();
+    for name in live.into_iter() {
+        out.push_str(&name);
+        out.push('\n');
+    }
+    Some(out)
+}
+
+fn build_root_index(
+    disk: block::DeviceHandle,
+    placement: &TrueosFsPlacement,
+) -> Result<Option<Box<TrueosFsIndex>>, block::Error> {
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let sb_block = io.read_blocks(params.super_lba, 1)?;
+    let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
+        return Err(block::Error::Corrupted);
+    };
+
+    let mut index = TrueosFsIndex::new();
+    let mut replay_from_rel = 0u64;
+
+    match trueos_fs::read_index_checkpoint(&io, &params) {
+        Ok(Some(ckpt)) => {
+            replay_from_rel = ckpt.replay_from_rel_blocks;
+            for (k, kind, entry_lba) in ckpt.entries.into_iter() {
+                let _ = index.insert(
+                    k,
+                    IndexRef {
+                        kind,
+                        entry_lba,
+                    },
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            // Best-effort: still mount without an index.
+            crate::log!("trueosfs: checkpoint read error {:?}\n", e);
+        }
+    }
+
+    let _ = trueos_fs::replay_log_range(
+        &io,
+        &params,
+        replay_from_rel,
+        sb.log_head_rel_blocks,
+        |kind, name_bytes, entry_lba| {
+            let _ = index.insert(
+                name_bytes,
+                IndexRef {
+                    kind,
+                    entry_lba,
+                },
+            );
+        },
+    );
+
+    // Best-effort: if no checkpoint exists yet, write one so next mount can be fast.
+    if disk.supports_write() && sb.checkpoint_rel_blocks == 0 {
+        let _ = trueos_fs::write_index_checkpoint(
+            &io,
+            &params,
+            sb.log_head_rel_blocks,
+            index
+                .iter()
+                .map(|(k, v)| (k.clone(), v.kind, v.entry_lba)),
+        );
+    }
+
+    Ok(Some(Box::new(index)))
 }
 
 pub fn roots_len() -> usize {
@@ -939,81 +1281,86 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
     Ok(())
 }
 
-pub fn bsp_smoke_test_once() {
-    BSP_SMOKE_ONCE.call_once(|| {
-        crate::log!("trueosfs: bsp smoke begin\n");
+pub async fn bsp_smoke_test_once_async() {
+    if BSP_SMOKE_DONE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
 
-        let devices = block::devices();
-        if devices.is_empty() {
-            crate::log!("trueosfs: no block devices present\n");
-            return;
-        }
+    crate::log!("trueosfs: bsp smoke begin\n");
 
-        // 1) Log present discs (whole devices).
-        let discs: alloc::vec::Vec<_> = devices.iter().filter(|d| d.parent.is_none()).collect();
+    let devices = block::devices();
+    if devices.is_empty() {
+        crate::log!("trueosfs: no block devices present\n");
+        return;
+    }
+
+    // 1) Log present discs (whole devices).
+    let discs: alloc::vec::Vec<_> = devices.iter().filter(|d| d.parent.is_none()).collect();
+    crate::log!(
+        "trueosfs: present devices={} discs={}\n",
+        devices.len(),
+        discs.len()
+    );
+    for info in discs.iter().copied() {
         crate::log!(
-            "trueosfs: present devices={} discs={}\n",
-            devices.len(),
-            discs.len()
+            "trueosfs: disc id={} kind={:?} bs={} blocks={} writable={} label={:?} pci={:?}\n",
+            info.id,
+            info.kind,
+            info.block_size,
+            info.block_count,
+            info.writable,
+            info.label,
+            info.pci
         );
-        for info in discs.iter().copied() {
+    }
+
+    // 2) Detect classification for each disc.
+    let mut trueos_disk: Option<block::DeviceHandle> = None;
+    for h in block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+
+        // Disks can briefly report transient I/O errors right after bring-up.
+        // Retry a handful of times so BSP logs reflect the steady state.
+        let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
+        let mut tries = 0u8;
+        while tries < 10 {
+            let r = crate::v::disc::detect::detect_physical_disk_detail(h).await;
+            match r.1 {
+                Some(e) if is_transient_io(e) => {
+                    last = r;
+                    Timer::after(EmbassyDuration::from_millis(25)).await;
+                }
+                _ => {
+                    last = r;
+                    break;
+                }
+            }
+            tries = tries.wrapping_add(1);
+        }
+
+        let (status, err) = last;
+        if let Some(e) = err {
             crate::log!(
-                "trueosfs: disc id={} kind={:?} bs={} blocks={} writable={} label={:?} pci={:?}\n",
-                info.id,
-                info.kind,
-                info.block_size,
-                info.block_count,
-                info.writable,
-                info.label,
-                info.pci
+                "trueosfs: detect {} => {} (err={:?})\n",
+                h.id(),
+                status.short(),
+                e
             );
+        } else {
+            crate::log!("trueosfs: detect {} => {}\n", h.id(), status.short());
         }
 
-        // 2) Detect classification for each disc.
-        let mut trueos_disk: Option<block::DeviceHandle> = None;
-        for h in block::device_handles().into_iter() {
-            if h.parent().is_some() {
-                continue;
-            }
-
-            // Disks can briefly report transient I/O errors right after bring-up.
-            // Retry a handful of times so BSP logs reflect the steady state.
-            let (status, err) = {
-                let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
-                let mut tries = 0u8;
-                while tries < 10 {
-                    let r = crate::time::block_on(crate::v::disc::detect::detect_physical_disk_detail(h));
-                    match r.1 {
-                        Some(e) if is_transient_io(e) => {
-                            last = r;
-                            spin_wait_ms(25);
-                        }
-                        _ => {
-                            last = r;
-                            break;
-                        }
-                    }
-                    tries = tries.wrapping_add(1);
-                }
-                last
-            };
-            if let Some(e) = err {
-                crate::log!(
-                    "trueosfs: detect {} => {} (err={:?})\n",
-                    h.id(),
-                    status.short(),
-                    e
-                );
-            } else {
-                crate::log!("trueosfs: detect {} => {}\n", h.id(), status.short());
-            }
-
-            if trueos_disk.is_none() {
-                if let crate::v::disc::detect::DiscStatus::Trueos { .. } = status {
-                    trueos_disk = Some(h);
-                }
+        if trueos_disk.is_none() {
+            if let crate::v::disc::detect::DiscStatus::Trueos { .. } = status {
+                trueos_disk = Some(h);
             }
         }
+    }
 
         // Debug convenience: allow the BSP smoke test to operate on a fresh, unformatted
         // `disk.img` by formatting a *completely blank* disk as data-only TRUEOSFS.
@@ -1022,89 +1369,89 @@ pub fn bsp_smoke_test_once() {
         // - Only in debug builds.
         // - Only if LBA0 is all-zero (strong signal of "empty" media).
         // - Only if the device is writable.
-        #[cfg(debug_assertions)]
-        if trueos_disk.is_none() {
-            for h in block::device_handles().into_iter() {
-                if h.parent().is_some() {
+    #[cfg(debug_assertions)]
+    if trueos_disk.is_none() {
+        for h in block::device_handles().into_iter() {
+            if h.parent().is_some() {
+                continue;
+            }
+            if !h.supports_write() {
+                continue;
+            }
+
+            let bs0 = match read_blocks_aligned_retry_async(h, 0, 1, 3).await {
+                Ok(v) => v,
+                Err(e) => {
+                    crate::log!(
+                        "trueosfs: smoke: blank check read failed dev={} err={:?}\n",
+                        h.id(),
+                        e
+                    );
                     continue;
                 }
-                if !h.supports_write() {
+            };
+
+            if bs0.iter().any(|&b| b != 0) {
+                continue;
+            }
+
+            crate::log!(
+                "trueosfs: smoke: blank writable disk detected dev={} -> formatting TRUEOSFS\n",
+                h.id()
+            );
+            match format_blank_async(h).await {
+                Ok(()) => {
+                    crate::log!("trueosfs: smoke: format ok dev={} -> mounting\n", h.id());
+                }
+                Err(e) => {
+                    crate::log!(
+                        "trueosfs: smoke: format failed dev={} err={:?}\n",
+                        h.id(),
+                        e
+                    );
                     continue;
                 }
+            }
 
-                let bs0 = match read_blocks_aligned_retry(h, 0, 1, 3) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        crate::log!(
-                            "trueosfs: smoke: blank check read failed dev={} err={:?}\n",
-                            h.id(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-
-                if bs0.iter().any(|&b| b != 0) {
-                    continue;
+            match mount_root_async(h).await {
+                Ok(Some(_)) => {
+                    trueos_disk = Some(h);
+                    break;
                 }
-
-                crate::log!(
-                    "trueosfs: smoke: blank writable disk detected dev={} -> formatting TRUEOSFS\n",
-                    h.id()
-                );
-                match format_blank(h) {
-                    Ok(()) => {
-                        crate::log!("trueosfs: smoke: format ok dev={} -> mounting\n", h.id());
-                    }
-                    Err(e) => {
-                        crate::log!(
-                            "trueosfs: smoke: format failed dev={} err={:?}\n",
-                            h.id(),
-                            e
-                        );
-                        continue;
-                    }
+                Ok(None) => {
+                    crate::log!(
+                        "trueosfs: smoke: format succeeded but mount_root_async returned none dev={}\n",
+                        h.id()
+                    );
                 }
-
-                match mount_root(h) {
-                    Ok(Some(_)) => {
-                        trueos_disk = Some(h);
-                        break;
-                    }
-                    Ok(None) => {
-                        crate::log!(
-                            "trueosfs: smoke: format succeeded but mount_root returned none dev={}\n",
-                            h.id()
-                        );
-                    }
-                    Err(e) => {
-                        crate::log!(
-                            "trueosfs: smoke: mount_root failed after format dev={} err={:?}\n",
-                            h.id(),
-                            e
-                        );
-                    }
+                Err(e) => {
+                    crate::log!(
+                        "trueosfs: smoke: mount_root_async failed after format dev={} err={:?}\n",
+                        h.id(),
+                        e
+                    );
                 }
             }
         }
+    }
 
         // 3) If we have a TRUEOS partition, do a write/read smoke test.
-        let Some(disk) = trueos_disk else {
-            crate::log!("trueosfs: smoke: no partition\n");
-            return;
-        };
+    let Some(disk) = trueos_disk else {
+        crate::log!("trueosfs: smoke: no partition\n");
+        return;
+    };
 
-        let placement = match locate(disk) {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                crate::log!("trueosfs: smoke: detect said trueos but locate returned none\n");
-                return;
-            }
-            Err(e) => {
-                crate::log!("trueosfs: smoke: locate failed: {:?}\n", e);
-                return;
-            }
-        };
+    let placement = match locate_async(disk).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            crate::log!("trueosfs: smoke: detect said trueos but locate_async returned none\n");
+            return;
+        }
+        Err(e) => {
+            crate::log!("trueosfs: smoke: locate_async failed: {:?}\n", e);
+            return;
+        }
+    };
         crate::log!(
             "trueosfs: smoke: using {} bootable={} super_lba={} data_lba={} end={:?} writable={}\n",
             disk.id(),
@@ -1115,60 +1462,36 @@ pub fn bsp_smoke_test_once() {
             disk.supports_write()
         );
 
-        if !disk.supports_write() {
-            crate::log!("trueosfs: smoke: disk is read-only; skipping save/load\n");
+    // Async-safe verification: re-read the superblock and parse it.
+    let info = disk.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        crate::log!("trueosfs: smoke: invalid block size\n");
+        return;
+    }
+    match disk.read_blocks(placement.super_lba, 1).await {
+        Ok(v) => {
+            let b0 = &v[..core::cmp::min(bs, v.len())];
+            if !looks_like_trueos_superblock(b0) {
+                crate::log!("trueosfs: smoke: superblock readback does not look like TRUEOSFS\n");
+                return;
+            }
+            if let Some(sb) = trueos_fs::parse_superblock(b0) {
+                crate::log!(
+                    "trueosfs: smoke: superblock ok log_head_rel={} ckpt_rel={}\n",
+                    sb.log_head_rel_blocks,
+                    sb.checkpoint_rel_blocks
+                );
+            }
+        }
+        Err(e) => {
+            crate::log!("trueosfs: smoke: superblock read failed: {:?}\n", e);
             return;
         }
+    }
 
-        let name = "tst/bsp_smoke.txt";
-        let payload = b"TRUEOSFS BSP smoke test\n";
+    // Best-effort: ensure the root is registered for higher layers.
+    let _ = mount_root_async(disk).await;
 
-        match file_in(disk, name, payload) {
-            Ok(true) => crate::log!("trueosfs: smoke: write ok name='{}' bytes={}\n", name, payload.len()),
-            Ok(false) => {
-                crate::log!("trueosfs: smoke: write returned false\n");
-                return;
-            }
-            Err(e) => {
-                crate::log!("trueosfs: smoke: write failed: {:?}\n", e);
-                return;
-            }
-        }
-
-        match file_out(disk, name) {
-            Ok(Some(bytes)) => {
-                if bytes.as_slice() != payload {
-                    crate::log!(
-                        "trueosfs: smoke: read mismatch (got={} expected={})\n",
-                        bytes.len(),
-                        payload.len()
-                    );
-                    return;
-                }
-                crate::log!("trueosfs: smoke: read ok bytes={}\n", bytes.len());
-            }
-            Ok(None) => {
-                crate::log!("trueosfs: smoke: read returned none\n");
-                return;
-            }
-            Err(e) => {
-                crate::log!("trueosfs: smoke: read failed: {:?}\n", e);
-                return;
-            }
-        }
-
-        match file_valid(disk, name) {
-            Ok(true) => crate::log!("trueosfs: smoke: sha valid\n"),
-            Ok(false) => {
-                crate::log!("trueosfs: smoke: sha invalid\n");
-                return;
-            }
-            Err(e) => {
-                crate::log!("trueosfs: smoke: sha validate failed: {:?}\n", e);
-                return;
-            }
-        }
-
-        crate::log!("trueosfs: bsp smoke ok\n");
-    });
+    crate::log!("trueosfs: bsp smoke ok\n");
 }

@@ -122,6 +122,9 @@ async fn bulk_xfer(
     .await
     .ok_or(())
     .map_err(|_| {
+        xhci::debug_event_buffer_summary(ctx.controller_id);
+        xhci::debug_peek_transfer_events(ctx.controller_id, slot_id, ep_target, 4);
+        xhci::debug_peek_transfer_events_for_slot(ctx.controller_id, slot_id, 4);
         crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
 
@@ -180,6 +183,9 @@ fn bulk_xfer_sync(
     )
     .ok_or(())
     .map_err(|_| {
+        xhci::debug_event_buffer_summary(ctx.controller_id);
+        xhci::debug_peek_transfer_events(ctx.controller_id, slot_id, ep_target, 4);
+        xhci::debug_peek_transfer_events_for_slot(ctx.controller_id, slot_id, 4);
         crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
 
