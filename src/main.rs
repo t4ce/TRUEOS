@@ -254,6 +254,8 @@ pub extern "C" fn kmain() -> ! {
 
     // Runs only after being requested (e.g. when USBMS registers).
     let _ = spawner.spawn(crate::v::fs::trueosfs::bsp_smoke_service_task());
+    // Handles deferred TRUEOSFS probing/mount requests from hotplug drivers.
+    let _ = spawner.spawn(crate::v::fs::trueosfs::mount_service_task());
 
     time::init(executor);
 

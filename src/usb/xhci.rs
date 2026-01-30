@@ -1016,6 +1016,135 @@ where
     buf.take_matching(predicate)
 }
 
+pub fn debug_peek_transfer_events(controller_id: usize, slot_id: u32, ep_target: u32, max: usize) {
+    let buf = EVENT_BUFFERS[controller_id].lock();
+    let mut shown = 0usize;
+    let mut total = 0usize;
+
+    for evt in buf.entries.iter() {
+        let evt_type = (evt.d3 >> 10) & 0x3F;
+        if evt_type != 32 {
+            continue;
+        }
+        let evt_slot = (evt.d3 >> 24) & 0xFF;
+        if evt_slot != slot_id {
+            continue;
+        }
+        let evt_ep_target = (evt.d3 >> 16) & 0x1F;
+        if evt_ep_target != ep_target {
+            continue;
+        }
+
+        total += 1;
+        if shown < max {
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            let cc = (evt.d2 >> 24) & 0xFF;
+            let residual = evt.d2 & 0x00FF_FFFF;
+            crate::log!(
+                "xhci: dbg: xfer evt slot={} ep={} cc={} residual={} ptr=0x{:016X}\n",
+                slot_id,
+                ep_target,
+                cc,
+                residual,
+                evt_ptr
+            );
+            shown += 1;
+        }
+    }
+
+    if total == 0 {
+        crate::log!(
+            "xhci: dbg: no queued transfer events for slot={} ep={} (controller_id={})\n",
+            slot_id,
+            ep_target,
+            controller_id
+        );
+    } else if total > shown {
+        crate::log!(
+            "xhci: dbg: queued transfer events slot={} ep={} total={} (showing {})\n",
+            slot_id,
+            ep_target,
+            total,
+            shown
+        );
+    }
+}
+
+pub fn debug_peek_transfer_events_for_slot(controller_id: usize, slot_id: u32, max: usize) {
+    let buf = EVENT_BUFFERS[controller_id].lock();
+    let mut shown = 0usize;
+    let mut total = 0usize;
+
+    for evt in buf.entries.iter() {
+        let evt_type = (evt.d3 >> 10) & 0x3F;
+        if evt_type != 32 {
+            continue;
+        }
+        let evt_slot = (evt.d3 >> 24) & 0xFF;
+        if evt_slot != slot_id {
+            continue;
+        }
+
+        total += 1;
+        if shown < max {
+            let evt_ep_target = (evt.d3 >> 16) & 0x1F;
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            let cc = (evt.d2 >> 24) & 0xFF;
+            let residual = evt.d2 & 0x00FF_FFFF;
+            crate::log!(
+                "xhci: dbg: xfer evt slot={} ep={} cc={} residual={} ptr=0x{:016X}\n",
+                slot_id,
+                evt_ep_target,
+                cc,
+                residual,
+                evt_ptr
+            );
+            shown += 1;
+        }
+    }
+
+    if total == 0 {
+        crate::log!(
+            "xhci: dbg: no queued transfer events for slot={} (controller_id={})\n",
+            slot_id,
+            controller_id
+        );
+    } else if total > shown {
+        crate::log!(
+            "xhci: dbg: queued transfer events slot={} total={} (showing {})\n",
+            slot_id,
+            total,
+            shown
+        );
+    }
+}
+
+pub fn debug_event_buffer_summary(controller_id: usize) {
+    let buf = EVENT_BUFFERS[controller_id].lock();
+    let mut transfer = 0usize;
+    let mut cmd_complete = 0usize;
+    let mut port_status = 0usize;
+    let mut other = 0usize;
+    for evt in buf.entries.iter() {
+        let evt_type = (evt.d3 >> 10) & 0x3F;
+        match evt_type {
+            32 => transfer += 1,
+            33 => cmd_complete += 1,
+            34 => port_status += 1,
+            _ => other += 1,
+        }
+    }
+    crate::log!(
+        "xhci: dbg: eventbuf controller_id={} len={} transfer={} cmd_complete={} port_status={} other={}\n",
+        controller_id,
+        buf.entries.len(),
+        transfer,
+        cmd_complete,
+        port_status,
+        other
+    );
+}
+
 pub fn install_event_ring(ctx: &XhciContext, ring: EventRing, intr0: *mut u32) {
     {
         let mut state = EVENT_RING_STATES[ctx.controller_id].lock();

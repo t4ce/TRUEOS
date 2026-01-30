@@ -251,7 +251,18 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     return false;
                 }
                 let evt_slot = (evt.d3 >> 24) as u32;
-                device_kind_for_slot(controller_id, evt_slot).is_some()
+                match device_kind_for_slot(controller_id, evt_slot) {
+                    // We only consume transfer events here for device kinds whose runtimes are
+                    // driven by this dispatcher task. Mass storage is driven by the mass driver
+                    // (BOT) which waits for its own transfer events; if we consume them here, BOT
+                    // will time out waiting for completions.
+                    Some(DeviceKind::Hid) | Some(DeviceKind::Cdc) | Some(DeviceKind::Uac) => true,
+                    Some(DeviceKind::Mass) => false,
+                    Some(_) => false,
+                    // During attach, transfers can complete before `register_device()` sets the
+                    // final kind. Only consume events for slots that already have a CDC runtime.
+                    None => cdc_acm::runtime_exists(controller_id, evt_slot),
+                }
             },
             400,
             EmbassyDuration::from_millis(5),

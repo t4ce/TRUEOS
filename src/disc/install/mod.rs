@@ -1,5 +1,5 @@
 mod fat32;
-mod gpt;
+pub mod gpt;
 
 mod install;
 
