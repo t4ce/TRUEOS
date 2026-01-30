@@ -147,7 +147,7 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
     if !device.supports_write() {
         return Err(Error::NotSupported);
     }
-
+        {
     let info = device.info();
     if info.block_size != 512 {
         // Simplify: GPT+FAT32 writer currently assumes 512-byte LBAs.
@@ -302,4 +302,5 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
         esp: BlockRange::from_bounds(esp_first, esp_last)?,
         trueos: BlockRange::from_bounds(trueos_first, trueos_last)?,
     })
+}
 }
