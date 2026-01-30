@@ -2,7 +2,8 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::disc::{block, partition};
 use core::hint::spin_loop;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
 use trueos_math::Tree;
 
@@ -54,6 +55,30 @@ static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
 
 static BSP_SMOKE_ONCE: Once<()> = Once::new();
+static BSP_SMOKE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Request that the BSP TrueOSFS smoke test run once.
+///
+/// Safe to call from hotplug/driver contexts (e.g. USB mass-storage attach).
+/// The actual smoke test runs in [`bsp_smoke_service_task`].
+pub fn request_bsp_smoke_test() {
+    BSP_SMOKE_REQUESTED.store(true, Ordering::Release);
+}
+
+/// Background task that waits for [`request_bsp_smoke_test`] and then executes
+/// the BSP smoke test exactly once.
+#[embassy_executor::task]
+pub async fn bsp_smoke_service_task() {
+    loop {
+        if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
+            // Allow the USBMS device to settle after registration.
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+            bsp_smoke_test_once();
+            return;
+        }
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+}
 
 struct KernelBlockIo {
     handle: block::DeviceHandle,
