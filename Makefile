@@ -23,9 +23,17 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
+USE_VFIO ?= 1
+VFIO_PCI_HOST ?= 0000:06:00.0
+ifeq ($(USE_VFIO),1)
+QEMU_VFIO_FLAGS = -device vfio-pci,host=$(VFIO_PCI_HOST)
+else
+QEMU_VFIO_FLAGS =
+endif
+
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
-	-device vfio-pci,host=0000:06:00.0 \
+	$(QEMU_VFIO_FLAGS) \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
