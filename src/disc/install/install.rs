@@ -93,7 +93,7 @@ fn write_bytes_at_lba(handle: block::DeviceHandle, start_lba: u64, bytes: &[u8])
     Ok(())
 }
 
-pub fn install_bootable_uefi_gpt_with_log(
+pub async fn install_bootable_uefi_gpt_with_log(
     disk: block::DeviceHandle,
     bootx64_efi: &[u8],
     kernel_elf: &[u8],
@@ -124,7 +124,7 @@ pub fn install_bootable_uefi_gpt_with_log(
     // If this disk already contains a TRUEOSFS partition inside a GPT layout, preserve it.
     // We only refresh the ESP boot files/config.
     log("install: stage=probe_trueosfs");
-    let existing_trueosfs = match trueosfs::locate(disk) {
+    let existing_trueosfs = match trueosfs::locate_async(disk).await {
         Ok(v) => v,
         Err(e) => {
             log(alloc::format!("install: trueosfs::locate failed ({:?}); continuing", e).as_str());
@@ -138,7 +138,7 @@ pub fn install_bootable_uefi_gpt_with_log(
     };
 
     log("install: stage=probe_gpt");
-    let existing_parts = crate::time::block_on(partition::read_gpt_partitions(disk)).ok();
+    let existing_parts = partition::read_gpt_partitions(disk).await.ok();
 
     let mut preserve_trueosfs = false;
 
@@ -161,7 +161,7 @@ pub fn install_bootable_uefi_gpt_with_log(
             (esp, trueos)
         } else {
             log("install: stage=write_gpt (refresh)");
-            let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log) {
+            let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await {
                 Ok(v) => v,
                 Err(e) => {
                     log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
@@ -172,7 +172,7 @@ pub fn install_bootable_uefi_gpt_with_log(
         }
     } else {
         log("install: stage=write_gpt (fresh)");
-        let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log) {
+        let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await {
             Ok(v) => v,
             Err(e) => {
                 log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
@@ -233,7 +233,8 @@ resolution: 1920x1080x32\n\n";
             limine_conf,
         },
         log,
-    ) {
+    )
+    .await {
         log(alloc::format!("install: fat32 format/populate failed ({:?})", e).as_str());
         return Err(e);
     }
@@ -241,7 +242,7 @@ resolution: 1920x1080x32\n\n";
     // Only format TRUEOSFS on first install. Re-installs preserve existing TRUEOSFS content.
     if !preserve_trueosfs {
         log("install: stage=format_trueosfs");
-        if let Err(e) = trueosfs::format_blank_partition(trueos_handle) {
+        if let Err(e) = trueosfs::format_blank_partition_async(trueos_handle).await {
             log(alloc::format!("install: trueosfs format failed ({:?})", e).as_str());
             return Err(e);
         }

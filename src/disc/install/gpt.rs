@@ -104,7 +104,7 @@ fn write_utf16le_fixed(dst: &mut [u8], s: &str) {
     }
 }
 
-fn write_blocks_aligned_with_log(
+async fn write_blocks_aligned_with_log(
     device: DeviceHandle,
     lba: u64,
     buf: &[u8],
@@ -114,7 +114,7 @@ fn write_blocks_aligned_with_log(
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-    match crate::time::block_on(device.write_blocks(lba, tmp.as_mut_slice())) {
+    match device.write_blocks(lba, tmp.as_mut_slice()).await {
         Ok(()) => Ok(()),
         Err(e) => {
             log(
@@ -136,7 +136,7 @@ fn write_blocks_aligned_with_log(
 /// - Partition 2: TRUEOS data partition (TRUEOSFS superblock at start)
 ///
 /// Returns the computed on-disk LBA ranges (absolute, on the parent disk).
-pub fn write_trueos_bootable_gpt_layout_with_log(
+pub async fn write_trueos_bootable_gpt_layout_with_log(
     device: DeviceHandle,
     esp_size_mib: u64,
     log: &mut dyn FnMut(&str),
@@ -212,7 +212,7 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
     pmbr[458..462].copy_from_slice(&mbr_sectors.to_le_bytes());
     pmbr[510..512].copy_from_slice(&GPT_PROTECTIVE_MBR_SIGNATURE.to_le_bytes());
 
-    write_blocks_aligned_with_log(device, 0, &pmbr, log)?;
+    write_blocks_aligned_with_log(device, 0, &pmbr, log).await?;
 
     // Partition entry array
     let mut entries = vec![0u8; table_bytes];
@@ -274,9 +274,9 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
         let lba = GPT_DEFAULT_TABLE_LBA + i as u64;
         let start = i * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(device, lba, &entries[start..end], log)?;
+        write_blocks_aligned_with_log(device, lba, &entries[start..end], log).await?;
     }
-    write_blocks_aligned_with_log(device, GPT_HEADER_LBA, &header, log)?;
+    write_blocks_aligned_with_log(device, GPT_HEADER_LBA, &header, log).await?;
 
     // Write backup table + backup header
     let backup_entries_lba = last_lba.saturating_sub(table_lbas);
@@ -284,7 +284,7 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
         let lba = backup_entries_lba + i as u64;
         let start = i * 512;
         let end = start + 512;
-        write_blocks_aligned_with_log(device, lba, &entries[start..end], log)?;
+        write_blocks_aligned_with_log(device, lba, &entries[start..end], log).await?;
     }
 
     let mut backup_header = header;
@@ -294,9 +294,9 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
     backup_header[16..20].fill(0);
     let backup_crc = crc32_ieee(&backup_header[..GPT_MIN_HEADER_SIZE as usize]);
     backup_header[16..20].copy_from_slice(&backup_crc.to_le_bytes());
-    write_blocks_aligned_with_log(device, last_lba, &backup_header, log)?;
+    write_blocks_aligned_with_log(device, last_lba, &backup_header, log).await?;
 
-    crate::time::block_on(device.flush())?;
+    device.flush().await?;
 
     Ok(TrueosBootLayout {
         esp: BlockRange::from_bounds(esp_first, esp_last)?,
