@@ -1,7 +1,8 @@
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    trb_type, Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN,
+    EP_TYPE_BULK_OUT,
 };
 use super::bot;
 use super::scsi;
@@ -57,6 +58,7 @@ pub struct MassRuntime {
     pub ctx: XhciContext,
     pub info: BulkPair,
     pub slot_id: u32,
+    pub ep0_state: TrbRingState,
     pub ep_in_target: u32,
     pub ep_out_target: u32,
     pub ring_in: TrbRing,
@@ -69,6 +71,80 @@ pub struct MassRuntime {
 
 unsafe impl Send for MassRuntime {}
 unsafe impl Sync for MassRuntime {}
+
+impl MassRuntime {
+    async fn bot_reset_recovery(&mut self) {
+        // Bulk-Only Transport reset recovery (spec):
+        // 1) Class-specific Mass Storage Reset (to interface)
+        // 2) Clear HALT on both bulk endpoints
+        // NOTE: This does not reset xHC endpoint ring dequeue pointers.
+        crate::log!(
+            "usb: mass reset recovery slot={} iface={} ep_in=0x{:02X} ep_out=0x{:02X}\n",
+            self.slot_id,
+            self.info.interface,
+            self.info.ep_in,
+            self.info.ep_out
+        );
+
+        let mut ep0_ring = unsafe { TrbRing::from_state(self.ep0_state) };
+
+        // bmRequestType = 0x21 (Host->Dev, Class, Interface)
+        // bRequest = 0xFF (Mass Storage Reset)
+        let setup_reset = Trb {
+            d0: 0x21 | ((0xFFu32) << 8),
+            d1: (self.info.interface as u32),
+            d2: 8,
+            d3: trb_type(2) | (1 << 6),
+        };
+
+        let _ = super::control_out(
+            &self.ctx,
+            &mut ep0_ring,
+            self.slot_id,
+            setup_reset,
+            None,
+            0,
+            "bot-reset",
+            400,
+        )
+        .await;
+
+        // bmRequestType = 0x02 (Host->Dev, Standard, Endpoint)
+        // bRequest = 0x01 (CLEAR_FEATURE)
+        // wValue = 0 (ENDPOINT_HALT)
+        let clear_halt = |ep_addr: u8| Trb {
+            d0: 0x02 | ((1u32) << 8),
+            d1: (ep_addr as u32),
+            d2: 8,
+            d3: trb_type(2) | (1 << 6),
+        };
+
+        let _ = super::control_out(
+            &self.ctx,
+            &mut ep0_ring,
+            self.slot_id,
+            clear_halt(self.info.ep_out),
+            None,
+            0,
+            "bot-clear-halt-out",
+            400,
+        )
+        .await;
+        let _ = super::control_out(
+            &self.ctx,
+            &mut ep0_ring,
+            self.slot_id,
+            clear_halt(self.info.ep_in),
+            None,
+            0,
+            "bot-clear-halt-in",
+            400,
+        )
+        .await;
+
+        self.ep0_state = ep0_ring.snapshot();
+    }
+}
 
 static MASS_RUNTIMES: Mutex<Vec<MassRuntime, MAX_MASS_DEVICES>> = Mutex::new(Vec::new());
 
@@ -410,6 +486,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         ctx: *ctx,
         info: pair,
         slot_id,
+        ep0_state: ep0_ring.snapshot(),
         ep_in_target,
         ep_out_target,
         ring_in,
@@ -646,6 +723,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             break;
                         }
                         Err(()) => {
+                            if attempts == 0 {
+                                rt.bot_reset_recovery().await;
+                            }
                             attempts = attempts.wrapping_add(1);
                             embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;
@@ -769,6 +849,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             break;
                         }
                         Err(()) => {
+                            if attempts == 0 {
+                                rt.bot_reset_recovery().await;
+                            }
                             attempts = attempts.wrapping_add(1);
                             embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;

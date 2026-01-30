@@ -425,23 +425,13 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
     let io = KernelBlockIo::new(disk);
     let disk_id = disk.id();
 
-    let old_head_rel = if root_mount_has_index(disk_id) {
-        read_log_head_rel_blocks(&io, &params)?
-    } else {
-        0
-    };
+    let had_index = root_mount_has_index(disk_id);
+    let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
     let ok = trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)?;
-    if ok && root_mount_has_index(disk_id) {
-        let entry_lba = params.data_lba.saturating_add(old_head_rel);
-        root_index_insert_if_mounted(
-            disk_id,
-            name.as_bytes().to_vec(),
-            IndexRef {
-                kind: trueos_fs::LogKind::Put,
-                entry_lba,
-            },
-        );
+    if ok && had_index {
+        let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
+        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
     }
     Ok(ok)
 }
@@ -510,23 +500,13 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     let io = KernelBlockIo::new(disk);
     let disk_id = disk.id();
 
-    let old_head_rel = if root_mount_has_index(disk_id) {
-        read_log_head_rel_blocks(&io, &params)?
-    } else {
-        0
-    };
+    let had_index = root_mount_has_index(disk_id);
+    let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
     let ok = trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)?;
-    if ok && root_mount_has_index(disk_id) {
-        let entry_lba = params.data_lba.saturating_add(old_head_rel);
-        root_index_insert_if_mounted(
-            disk_id,
-            name.as_bytes().to_vec(),
-            IndexRef {
-                kind: trueos_fs::LogKind::Delete,
-                entry_lba,
-            },
-        );
+    if ok && had_index {
+        let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
+        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
     }
     Ok(ok)
 }
@@ -569,7 +549,17 @@ pub fn file_exists(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     if root_mount_has_index(disk_id) {
         let key = name.as_bytes().to_vec();
         if let Some(r) = root_index_lookup(disk_id, &key) {
-            return Ok(r.kind == trueos_fs::LogKind::Put);
+            if r.kind != trueos_fs::LogKind::Put {
+                return Ok(false);
+            }
+            // Validate against on-disk name so a stale index can't lie.
+            let Some(kind) = trueos_fs::read_entry_kind_at_named(&io, &params, r.entry_lba, key.as_slice())
+                .map_err(map_engine_err)?
+            else {
+                // Fall back to engine scan.
+                return trueos_fs::file_exists(&io, &params, name).map_err(map_engine_err);
+            };
+            return Ok(kind == trueos_fs::LogKind::Put);
         }
     }
 
@@ -628,25 +618,37 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
     let io = KernelBlockIo::new(disk);
     let disk_id = disk.id();
 
-    let old_head_rel = if root_mount_has_index(disk_id) {
-        read_log_head_rel_blocks(&io, &params)?
-    } else {
-        0
-    };
+    let had_index = root_mount_has_index(disk_id);
+    let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
     let ok = trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)?;
-    if ok && root_mount_has_index(disk_id) {
-        let entry_lba = params.data_lba.saturating_add(old_head_rel);
+    if ok && had_index {
+        let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
+        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+    }
+    Ok(ok)
+}
+
+fn replay_tail_into_index(
+    disk_id: block::DiscId,
+    io: &KernelBlockIo,
+    params: &trueos_fs::FsParams,
+    start_rel: u64,
+    end_rel: u64,
+) {
+    if start_rel >= end_rel {
+        return;
+    }
+    let _ = trueos_fs::replay_log_range(io, params, start_rel, end_rel, |kind, name_bytes, entry_lba| {
         root_index_insert_if_mounted(
             disk_id,
-            name.as_bytes().to_vec(),
+            name_bytes,
             IndexRef {
-                kind: trueos_fs::LogKind::Put,
+                kind,
                 entry_lba,
             },
         );
-    }
-    Ok(ok)
+    });
 }
 
 fn read_log_head_rel_blocks(

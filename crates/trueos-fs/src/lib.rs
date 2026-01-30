@@ -1258,6 +1258,130 @@ pub fn read_file_at<D: BlockIo>(
     Ok(Some(out))
 }
 
+/// Validate an entry at `entry_lba` by checking it is committed, its name
+/// matches `expected_name`, and return its kind.
+///
+/// Returns `Ok(None)` if the entry is invalid or the name does not match.
+pub fn read_entry_kind_at_named<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+    expected_name: &[u8],
+) -> Result<Option<LogKind>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    if entry_lba < params.data_lba {
+        return Ok(None);
+    }
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if entry_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let hdr_block = read_one_block(dev, entry_lba)?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed {
+        return Ok(None);
+    }
+    if hdr.kind == LogKind::IndexCheckpoint {
+        return Ok(None);
+    }
+
+    let name_len = hdr.name_len as usize;
+    if name_len == 0 || name_len > 4096 {
+        return Ok(None);
+    }
+    if expected_name.len() != name_len {
+        return Ok(None);
+    }
+
+    let name_lba = entry_lba.saturating_add(1);
+    let mut name_bytes = vec![0u8; name_len];
+    read_exact_bytes(dev, name_lba, 0, &mut name_bytes)?;
+    if name_bytes != expected_name {
+        return Ok(None);
+    }
+
+    Ok(Some(hdr.kind))
+}
+
+/// Read a file from a specific entry LBA, but only if the entry's name matches
+/// `expected_name`.
+///
+/// Returns `Ok(None)` if the entry is invalid, not a Put, name mismatch, or
+/// fails integrity check.
+pub fn read_file_at_named<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+    expected_name: &[u8],
+) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    if entry_lba < params.data_lba {
+        return Ok(None);
+    }
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if entry_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let hdr_block = read_one_block(dev, entry_lba)?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed || hdr.kind != LogKind::Put {
+        return Ok(None);
+    }
+
+    let name_len = hdr.name_len as usize;
+    let data_len = hdr.data_len as usize;
+    if name_len == 0 || name_len > 4096 {
+        return Ok(None);
+    }
+    if expected_name.len() != name_len {
+        return Ok(None);
+    }
+
+    // Verify name matches.
+    let name_lba = entry_lba.saturating_add(1);
+    let mut name_bytes = vec![0u8; name_len];
+    read_exact_bytes(dev, name_lba, 0, &mut name_bytes)?;
+    if name_bytes != expected_name {
+        return Ok(None);
+    }
+
+    let name_blocks = (name_len + (bs - 1)) / bs;
+    let data_lba = entry_lba
+        .saturating_add(1)
+        .saturating_add(name_blocks as u64);
+    if data_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let mut out = vec![0u8; data_len];
+    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&out);
+    let digest = hasher.finalize();
+    let mut sha = [0u8; 32];
+    sha.copy_from_slice(&digest[..]);
+    if sha != hdr.sha256 {
+        return Ok(None);
+    }
+
+    Ok(Some(out))
+}
+
 /// Read a file from a specific entry LBA, but also verify the entry's stored
 /// name matches `name`.
 ///
