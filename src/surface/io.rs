@@ -65,61 +65,163 @@ pub trait Write {
 
 /// Kernel-facing helpers for basic file I/O.
 ///
-/// These intentionally expose the same underlying `disc::files::Fs` operations
-/// used by the shell, but keep the logic in one place.
+/// These expose the TRUEOSFS root filesystem operations used by the shell,
+/// but keep the logic in one place.
 pub mod kfs {
 	use super::Vec;
 	use alloc::string::String;
+	use crate::disc::block;
+
+	pub type Result<T> = core::result::Result<T, FsError>;
+
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	pub enum FsError {
+		/// No TRUEOSFS root is currently mounted/selected.
+		NoRoot,
+		BadPath,
+		NoSpace,
+		NotFound,
+		AlreadyExists,
+		Device(block::Error),
+	}
+
+	impl From<block::Error> for FsError {
+		fn from(value: block::Error) -> Self {
+			FsError::Device(value)
+		}
+	}
+
+	fn root_disk() -> Result<block::DeviceHandle> {
+		crate::disc::trueosfs::primary_root_handle().ok_or(FsError::NoRoot)
+	}
+
+	fn normalize_rel(path: &str, allow_empty: bool) -> Result<String> {
+		let mut out = String::new();
+		let t = path.trim();
+		if t.is_empty() {
+			return if allow_empty { Ok(out) } else { Err(FsError::BadPath) };
+		}
+
+		for part in t.split('/') {
+			if part.is_empty() || part == "." {
+				continue;
+			}
+			if part == ".." {
+				return Err(FsError::BadPath);
+			}
+			if !out.is_empty() {
+				out.push('/');
+			}
+			out.push_str(part);
+		}
+
+		if out.is_empty() && !allow_empty {
+			return Err(FsError::BadPath);
+		}
+		Ok(out)
+	}
 
 	#[inline]
-	pub fn read_file(path: &str) -> core::result::Result<Vec<u8>, crate::disc::files::FsError> {
-		crate::disc::files::Fs::read_file(path)
+	pub fn read_file(path: &str) -> Result<Vec<u8>> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		match crate::disc::trueosfs::file_out(disk, name.as_str())? {
+			Some(bytes) => Ok(bytes),
+			None => Err(FsError::NotFound),
+		}
 	}
 
 	#[inline]
 	pub fn write_file(
 		path: &str,
 		data: &[u8],
-	) -> core::result::Result<(), crate::disc::files::FsError> {
-		crate::disc::files::Fs::write_file(path, data)
+	) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		let ok = crate::disc::trueosfs::file_in(disk, name.as_str(), data)?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NoSpace)
+		}
 	}
 
 	#[inline]
 	pub fn rename(
 		src: &str,
 		dst: &str,
-	) -> core::result::Result<(), crate::disc::files::FsError> {
-		crate::disc::files::Fs::rename(src, dst)
+	) -> Result<()> {
+		let disk = root_disk()?;
+		let src = normalize_rel(src, false)?;
+		let dst = normalize_rel(dst, false)?;
+		if src == dst {
+			return Ok(());
+		}
+		if crate::disc::trueosfs::file_exists(disk, dst.as_str())? {
+			return Err(FsError::AlreadyExists);
+		}
+		let Some(bytes) = crate::disc::trueosfs::file_out(disk, src.as_str())? else {
+			return Err(FsError::NotFound);
+		};
+		let ok = crate::disc::trueosfs::file_in(disk, dst.as_str(), bytes.as_slice())?;
+		if !ok {
+			return Err(FsError::NoSpace);
+		}
+		let _ = crate::disc::trueosfs::file_delete(disk, src.as_str());
+		Ok(())
 	}
 
 	#[inline]
-	pub fn list_dir(path: &str) -> core::result::Result<String, crate::disc::files::FsError> {
-		crate::disc::files::Fs::list_dir(path)
+	pub fn list_dir(path: &str) -> Result<String> {
+		let disk = root_disk()?;
+		let dir = normalize_rel(path, true)?;
+		match crate::disc::trueosfs::list_dir(disk, dir.as_str())? {
+			Some(v) => Ok(v),
+			None => Err(FsError::NoRoot),
+		}
 	}
 
 	#[inline]
-	pub fn remove(path: &str) -> core::result::Result<(), crate::disc::files::FsError> {
-		crate::disc::files::Fs::remove(path)
+	pub fn remove(path: &str) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		let ok = crate::disc::trueosfs::file_delete(disk, name.as_str())?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NotFound)
+		}
 	}
 
 	#[inline]
 	pub fn create_dir_all(
 		path: &str,
-	) -> core::result::Result<(), crate::disc::files::FsError> {
-		crate::disc::files::Fs::create_dir_all(path)
+	) -> Result<()> {
+		// TRUEOSFS is key-based; directories are implied by path prefixes.
+		let _ = normalize_rel(path, true)?;
+		Ok(())
 	}
 
 	#[inline]
-	pub fn exists(path: &str) -> core::result::Result<bool, crate::disc::files::FsError> {
-		crate::disc::files::Fs::exists(path)
+	pub fn exists(path: &str) -> Result<bool> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		Ok(crate::disc::trueosfs::file_exists(disk, name.as_str())?)
 	}
 
 	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
 	pub fn append_into_file(
 		dst_path: &str,
 		src: &[u8],
-	) -> core::result::Result<(), crate::disc::files::FsError> {
-		crate::disc::files::Fs::append_file(dst_path, src)
+	) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(dst_path, false)?;
+		let ok = crate::disc::trueosfs::file_append(disk, name.as_str(), src)?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NoSpace)
+		}
 	}
 }
 
@@ -530,6 +632,29 @@ pub mod cabi {
 	pub const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
 	pub const NET_ERR_TIMEOUT_HEADERS: i32 = -113;
 	pub const NET_ERR_TIMEOUT_BODY: i32 = -114;
+
+	#[inline]
+	fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
+		use super::kfs::FsError;
+		match err {
+			FsError::NoRoot => FS_ERR_USBMS_NOT_FOUND,
+			FsError::BadPath => FS_ERR_BAD_PATH,
+			FsError::NoSpace => FS_ERR_NO_SPACE,
+			FsError::NotFound => FS_ERR_NOT_FOUND,
+			FsError::AlreadyExists => FS_ERR_ALREADY_EXISTS,
+			FsError::Device(e) => match e {
+				crate::disc::block::Error::InvalidParam => FS_ERR_BAD_PARAM,
+				crate::disc::block::Error::OutOfBounds => FS_ERR_BAD_PARAM,
+				crate::disc::block::Error::NotReady => FS_ERR_USBMS_NOT_FOUND,
+				crate::disc::block::Error::NotSupported => FS_ERR_IO,
+				crate::disc::block::Error::Timeout => FS_ERR_IO,
+				crate::disc::block::Error::Io => FS_ERR_IO,
+				crate::disc::block::Error::Corrupted => FS_ERR_IO,
+				crate::disc::block::Error::DmaUnavailable => FS_ERR_IO,
+				crate::disc::block::Error::MmioMapFailed => FS_ERR_IO,
+			},
+		}
+	}
 
 	/// Best-effort symbolic name for a TRUEOS C ABI return code.
 	///

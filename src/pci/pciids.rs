@@ -337,12 +337,12 @@ pub fn lookup_vendor_device_from_db<'a>(
     }
     None
 }
-/*
+
 /// Convenience: read the cached database and do a vendor+device lookup.
 pub fn lookup_vendor_device_cached(
     vid: u16,
     did: u16,
-) -> Result<Option<(alloc::string::String, alloc::string::String)>, crate::disc::files::FsError> {
+) -> Result<Option<(alloc::string::String, alloc::string::String)>, crate::surface::io::kfs::FsError> {
     use alloc::string::String;
 
     const PATH: &str = "/trueos/pci/pci.ids";
@@ -357,7 +357,7 @@ pub fn lookup_vendor_device_cached(
     let d = String::from_utf8_lossy(d).into_owned();
     Ok(Some((v, d)))
 }
-*/
+
 fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
     // Re-enumerate here so the list reflects the system state after init.
     // (Enumeration is cheap and uses the same static cache the shell relies on.)

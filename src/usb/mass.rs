@@ -501,9 +501,9 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             block_size
         );
 
-        // Ensure the global files tree gets updated to include the newly-registered device.
-        // This is best-effort and simply schedules a rescan by the files service task.
-        crate::disc::files::request_files_scan();
+        // Best-effort: if this disk contains TRUEOSFS, register it as a root.
+        // This enables higher layers (shell I/O, C ABI helpers) to read/write files.
+        let _ = crate::disc::trueosfs::mount_root(handle);
 
         // If we're booting from a single USB pen drive, trigger the TrueOSFS BSP smoke test
         // after USB mass storage has registered into the block registry.
