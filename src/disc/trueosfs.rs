@@ -3,7 +3,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::disc::{block, partition};
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU32, Ordering};
-use spin::Mutex;
+use spin::{Mutex, Once};
 use trueos_math::Tree;
 
 // Standard EFI System Partition type GUID.
@@ -52,6 +52,8 @@ struct RootMount {
 
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
+
+static BSP_SMOKE_ONCE: Once<()> = Once::new();
 
 struct KernelBlockIo {
     handle: block::DeviceHandle,
@@ -650,4 +652,165 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
         }
     }
     Ok(())
+}
+
+pub fn bsp_smoke_test_once() {
+    BSP_SMOKE_ONCE.call_once(|| {
+        crate::log!("trueosfs: bsp smoke begin\n");
+
+        let devices = block::devices();
+        if devices.is_empty() {
+            crate::log!("trueosfs: no block devices present\n");
+            return;
+        }
+
+        // 1) Log present discs (whole devices).
+        let discs: alloc::vec::Vec<_> = devices.iter().filter(|d| d.parent.is_none()).collect();
+        crate::log!(
+            "trueosfs: present devices={} discs={}\n",
+            devices.len(),
+            discs.len()
+        );
+        for info in discs.iter().copied() {
+            crate::log!(
+                "trueosfs: disc id={} kind={:?} bs={} blocks={} writable={} label={:?} pci={:?}\n",
+                info.id,
+                info.kind,
+                info.block_size,
+                info.block_count,
+                info.writable,
+                info.label,
+                info.pci
+            );
+        }
+
+        // 2) Detect classification for each disc.
+        let mut trueos_disk: Option<block::DeviceHandle> = None;
+        for h in block::device_handles().into_iter() {
+            if h.parent().is_some() {
+                continue;
+            }
+
+            // Disks can briefly report transient I/O errors right after bring-up.
+            // Retry a handful of times so BSP logs reflect the steady state.
+            let (status, err) = {
+                let mut last = (crate::disc::detect::DiscStatus::Unknown, None);
+                let mut tries = 0u8;
+                while tries < 10 {
+                    let r = crate::disc::detect::detect_physical_disk_detail(h);
+                    match r.1 {
+                        Some(e) if is_transient_io(e) => {
+                            last = r;
+                            spin_wait_ms(25);
+                        }
+                        _ => {
+                            last = r;
+                            break;
+                        }
+                    }
+                    tries = tries.wrapping_add(1);
+                }
+                last
+            };
+            if let Some(e) = err {
+                crate::log!(
+                    "trueosfs: detect {} => {} (err={:?})\n",
+                    h.id(),
+                    status.short(),
+                    e
+                );
+            } else {
+                crate::log!("trueosfs: detect {} => {}\n", h.id(), status.short());
+            }
+
+            if trueos_disk.is_none() {
+                if let crate::disc::detect::DiscStatus::Trueos { .. } = status {
+                    trueos_disk = Some(h);
+                }
+            }
+        }
+
+        // 3) If we have a TRUEOS partition, do a write/read smoke test.
+        let Some(disk) = trueos_disk else {
+            crate::log!("trueosfs: smoke: no partition\n");
+            return;
+        };
+
+        let placement = match locate(disk) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                crate::log!("trueosfs: smoke: detect said trueos but locate returned none\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: locate failed: {:?}\n", e);
+                return;
+            }
+        };
+        crate::log!(
+            "trueosfs: smoke: using {} bootable={} super_lba={} data_lba={} end={:?} writable={}\n",
+            disk.id(),
+            placement.bootable,
+            placement.super_lba,
+            placement.data_lba,
+            placement.data_end_lba_exclusive,
+            disk.supports_write()
+        );
+
+        if !disk.supports_write() {
+            crate::log!("trueosfs: smoke: disk is read-only; skipping save/load\n");
+            return;
+        }
+
+        let name = "tst/bsp_smoke.txt";
+        let payload = b"TRUEOSFS BSP smoke test\n";
+
+        match file_in(disk, name, payload) {
+            Ok(true) => crate::log!("trueosfs: smoke: write ok name='{}' bytes={}\n", name, payload.len()),
+            Ok(false) => {
+                crate::log!("trueosfs: smoke: write returned false\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: write failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        match file_out(disk, name) {
+            Ok(Some(bytes)) => {
+                if bytes.as_slice() != payload {
+                    crate::log!(
+                        "trueosfs: smoke: read mismatch (got={} expected={})\n",
+                        bytes.len(),
+                        payload.len()
+                    );
+                    return;
+                }
+                crate::log!("trueosfs: smoke: read ok bytes={}\n", bytes.len());
+            }
+            Ok(None) => {
+                crate::log!("trueosfs: smoke: read returned none\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: read failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        match file_valid(disk, name) {
+            Ok(true) => crate::log!("trueosfs: smoke: sha valid\n"),
+            Ok(false) => {
+                crate::log!("trueosfs: smoke: sha invalid\n");
+                return;
+            }
+            Err(e) => {
+                crate::log!("trueosfs: smoke: sha validate failed: {:?}\n", e);
+                return;
+            }
+        }
+
+        crate::log!("trueosfs: bsp smoke ok\n");
+    });
 }
