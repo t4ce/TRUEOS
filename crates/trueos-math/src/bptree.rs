@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-
+ 
 /// A minimal B+tree mapping `K -> V`.
 ///
 /// Design notes:
@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 /// `M` is the maximum number of children for internal nodes.
 /// - Max keys per internal node: `M - 1`
 /// - Max keys per leaf node: `M - 1`
-///
+/// +
 /// Recommended: `M >= 4`.
 pub struct BPlusTree<K, V, const M: usize> {
     nodes: Vec<Node<K, V, M>>,
@@ -403,7 +403,11 @@ mod tests {
         assert_eq!(t.get(&b"aa".to_vec()), Some(&1));
         assert_eq!(t.get(&b"b".to_vec()), Some(&2));
 
-        let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> = t.iter().map(|(k, _)| k.clone()).collect();
-        assert_eq!(keys, alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]);
+        let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> =
+            t.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(
+            keys,
+            alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]
+        );
     }
 }

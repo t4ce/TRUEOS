@@ -471,7 +471,9 @@ pub fn file_out(disk: block::DeviceHandle, name: &str) -> Result<Option<Vec<u8>>
             if r.kind == trueos_fs::LogKind::Delete {
                 return Ok(None);
             }
-            if let Some(bytes) = trueos_fs::read_file_at(&io, &params, r.entry_lba).map_err(map_engine_err)? {
+            if let Some(bytes) = trueos_fs::read_file_at_for_name(&io, &params, name, r.entry_lba)
+                .map_err(map_engine_err)?
+            {
                 return Ok(Some(bytes));
             }
         }
@@ -697,7 +699,7 @@ fn list_dir_from_index(disk_id: block::DiscId, dir: &str) -> Option<String> {
 
     let mut live: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
     for (k, v) in idx.iter_from(&prefix) {
-        if !k.starts_with(&prefix) {
+        if !k.as_slice().starts_with(prefix.as_slice()) {
             break;
         }
         if v.kind != trueos_fs::LogKind::Put {
