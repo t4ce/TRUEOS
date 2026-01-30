@@ -97,7 +97,7 @@ impl MassRuntime {
             d3: trb_type(2) | (1 << 6),
         };
 
-        let _ = super::control_out(
+        let reset_ok = super::control_out(
             &self.ctx,
             &mut ep0_ring,
             self.slot_id,
@@ -107,7 +107,8 @@ impl MassRuntime {
             "bot-reset",
             400,
         )
-        .await;
+        .await
+        .is_ok();
 
         // bmRequestType = 0x02 (Host->Dev, Standard, Endpoint)
         // bRequest = 0x01 (CLEAR_FEATURE)
@@ -119,7 +120,7 @@ impl MassRuntime {
             d3: trb_type(2) | (1 << 6),
         };
 
-        let _ = super::control_out(
+        let clear_out_ok = super::control_out(
             &self.ctx,
             &mut ep0_ring,
             self.slot_id,
@@ -129,8 +130,9 @@ impl MassRuntime {
             "bot-clear-halt-out",
             400,
         )
-        .await;
-        let _ = super::control_out(
+        .await
+        .is_ok();
+        let clear_in_ok = super::control_out(
             &self.ctx,
             &mut ep0_ring,
             self.slot_id,
@@ -140,7 +142,16 @@ impl MassRuntime {
             "bot-clear-halt-in",
             400,
         )
-        .await;
+        .await
+        .is_ok();
+
+        crate::log!(
+            "usb: mass reset recovery result slot={} reset_ok={} clear_out_ok={} clear_in_ok={}\n",
+            self.slot_id,
+            reset_ok as u8,
+            clear_out_ok as u8,
+            clear_in_ok as u8
+        );
 
         self.ep0_state = ep0_ring.snapshot();
     }
