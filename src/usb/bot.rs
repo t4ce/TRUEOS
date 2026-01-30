@@ -318,6 +318,103 @@ async fn bot_command(
     Ok(csw)
 }
 
+async fn bot_command_out(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+    cdb: &[u8],
+    data_out: &[u8],
+) -> Result<Csw, ()> {
+    // Allocate DMA for CBW + CSW + OUT data.
+    let (cbw_phys, cbw_virt) = dma::alloc(CBW_LEN, 64).ok_or(())?;
+    let (csw_phys, csw_virt) = match dma::alloc(CSW_LEN, 64) {
+        Some(p) => p,
+        None => {
+            dma::dealloc(cbw_virt, CBW_LEN);
+            return Err(());
+        }
+    };
+
+    unsafe {
+        write_bytes(cbw_virt, 0, CBW_LEN);
+        write_bytes(csw_virt, 0, CSW_LEN);
+    }
+
+    let data_len = data_out.len();
+    let (data_phys, data_virt) = match dma::alloc(data_len, 64) {
+        Some(p) => p,
+        None => {
+            dma::dealloc(csw_virt, CSW_LEN);
+            dma::dealloc(cbw_virt, CBW_LEN);
+            return Err(());
+        }
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(data_out.as_ptr(), data_virt, data_len);
+    }
+
+    let cbw = build_cbw(tag, data_len as u32, false, 0, cdb);
+    unsafe {
+        core::ptr::copy_nonoverlapping(cbw.as_ptr(), cbw_virt, CBW_LEN);
+    }
+
+    // Stage 1: CBW on bulk-out.
+    let (cc_cbw, _xfer_cbw) =
+        bulk_xfer(ctx, ring_out, slot_id, ep_out_target, cbw_phys, CBW_LEN as u32, "bot-cbw", 800)
+            .await?;
+    if cc_cbw != 1 {
+        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+        return Err(());
+    }
+
+    // Stage 2: OUT data stage on bulk-out.
+    let (cc_data, _xfer) = bulk_xfer(
+        ctx,
+        ring_out,
+        slot_id,
+        ep_out_target,
+        data_phys,
+        data_len as u32,
+        "bot-data-out",
+        1200,
+    )
+    .await?;
+    if cc_data != 1 {
+        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+        return Err(());
+    }
+
+    // Stage 3: CSW on bulk-in.
+    let (cc_csw, xfer_csw) =
+        bulk_xfer(ctx, ring_in, slot_id, ep_in_target, csw_phys, CSW_LEN as u32, "bot-csw", 1200)
+            .await?;
+    if cc_csw != 1 && cc_csw != 13 {
+        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+        return Err(());
+    }
+
+    let csw_buf = unsafe {
+        let n = (xfer_csw as usize).min(CSW_LEN);
+        core::slice::from_raw_parts(csw_virt, n)
+    };
+
+    let Some((csw_tag, csw)) = parse_csw(csw_buf) else {
+        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+        return Err(());
+    };
+    if csw_tag != tag {
+        goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+        return Err(());
+    }
+
+    goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
+    Ok(csw)
+}
+
 fn bot_command_sync(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
@@ -569,7 +666,7 @@ fn log_request_sense(prefix: &str, sense: &scsi::SenseFixed) {
     );
 }
 
-async fn scsi_request_sense_fixed(
+pub async fn scsi_request_sense_fixed_async(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
     ring_in: &mut TrbRing,
@@ -627,9 +724,16 @@ pub async fn scsi_test_unit_ready(
     let csw = bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, None).await?;
 
     if csw.status != BotStatus::Passed {
-        if let Some(sense) =
-            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
-                .await
+        if let Some(sense) = scsi_request_sense_fixed_async(
+            ctx,
+            ring_out,
+            ring_in,
+            slot_id,
+            ep_out_target,
+            ep_in_target,
+            tag.wrapping_add(1),
+        )
+        .await
         {
             log_request_sense("test-unit-ready", &sense);
         } else {
@@ -659,9 +763,16 @@ pub async fn scsi_inquiry_basic(
 
     if csw.status != BotStatus::Passed {
         crate::log!("usb: bot: inquiry failed status={:?} residue={}\n", csw.status, csw.residue);
-        if let Some(sense) =
-            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
-                .await
+        if let Some(sense) = scsi_request_sense_fixed_async(
+            ctx,
+            ring_out,
+            ring_in,
+            slot_id,
+            ep_out_target,
+            ep_in_target,
+            tag.wrapping_add(1),
+        )
+        .await
         {
             log_request_sense("inquiry", &sense);
         } else {
@@ -733,9 +844,16 @@ pub async fn scsi_read_capacity_10(
 
     if csw.status != BotStatus::Passed {
         crate::log!("usb: bot: read-capacity failed status={:?} residue={}\n", csw.status, csw.residue);
-        if let Some(sense) =
-            scsi_request_sense_fixed(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag.wrapping_add(1))
-                .await
+        if let Some(sense) = scsi_request_sense_fixed_async(
+            ctx,
+            ring_out,
+            ring_in,
+            slot_id,
+            ep_out_target,
+            ep_in_target,
+            tag.wrapping_add(1),
+        )
+        .await
         {
             log_request_sense("read-capacity", &sense);
         } else {
@@ -815,6 +933,33 @@ pub fn scsi_read_10_sync(
     )
 }
 
+pub async fn scsi_read_10(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+    lba: u32,
+    blocks: u16,
+    out: &mut [u8],
+) -> Result<Csw, ()> {
+    let cdb = scsi::cdb_read_10(lba, blocks);
+    bot_command(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        Some(out),
+    )
+    .await
+}
+
 pub fn scsi_write_10_sync(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
@@ -839,6 +984,33 @@ pub fn scsi_write_10_sync(
         &cdb,
         data,
     )
+}
+
+pub async fn scsi_write_10(
+    ctx: &XhciContext,
+    ring_out: &mut TrbRing,
+    ring_in: &mut TrbRing,
+    slot_id: u32,
+    ep_out_target: u32,
+    ep_in_target: u32,
+    tag: u32,
+    lba: u32,
+    blocks: u16,
+    data: &[u8],
+) -> Result<Csw, ()> {
+    let cdb = scsi::cdb_write_10(lba, blocks);
+    bot_command_out(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        data,
+    )
+    .await
 }
 
 pub fn scsi_synchronize_cache_10_sync(

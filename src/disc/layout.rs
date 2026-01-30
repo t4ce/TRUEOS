@@ -27,34 +27,6 @@ impl From<block::Error> for ProbeError {
     }
 }
 
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: alloc::alloc::Layout,
-}
-
-impl AlignedBuf {
-    fn new(len: usize, align: usize) -> Option<Self> {
-        let layout = alloc::alloc::Layout::from_size_align(len, align).ok()?;
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        if ptr.is_null() {
-            return None;
-        }
-        Some(Self { ptr, len, layout })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
-        }
-    }
-}
 
 fn read_u16_le(bs: &[u8; 512], off: usize) -> u16 {
     u16::from_le_bytes([bs[off], bs[off + 1]])
@@ -147,18 +119,18 @@ fn is_fat_mbr_type(t: u8) -> bool {
 /// - FAT superfloppy (FAT boot sector at LBA0)
 /// - MBR-partitioned disk with a FAT partition (boot sector at partition start)
 /// - GPT-partitioned disk with a FAT partition (boot sector at partition start)
-pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, ProbeError> {
+pub async fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, ProbeError> {
     let info = handle.info();
     if info.block_size != 512 {
         return Err(ProbeError::UnsupportedBlockSize(info.block_size));
     }
 
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(512, align).ok_or(ProbeError::DeviceIo(block::Error::DmaUnavailable))?;
-
+    let lba0_vec = handle.read_blocks(0, 1).await?;
+    if lba0_vec.len() < 512 {
+        return Err(ProbeError::DeviceIo(block::Error::Io));
+    }
     let mut lba0 = [0u8; 512];
-    handle.read_blocks(0, tmp.as_mut_slice())?;
-    lba0.copy_from_slice(&tmp.as_mut_slice()[..512]);
+    lba0.copy_from_slice(&lba0_vec[..512]);
 
     if let Some(total_sectors) = looks_like_fat_boot_sector(&lba0) {
         let whole_disk = (total_sectors as u64) == info.block_count;
@@ -171,9 +143,12 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
     // Try GPT: read header at LBA1 and scan partition entries for a FAT boot sector.
     // CRC validation is intentionally skipped for now; we only use this to find the FAT volume.
     if info.block_count >= 2 {
+        let hdr_vec = handle.read_blocks(1, 1).await?;
+        if hdr_vec.len() < 512 {
+            return Err(ProbeError::DeviceIo(block::Error::Io));
+        }
         let mut hdr = [0u8; 512];
-        handle.read_blocks(1, tmp.as_mut_slice())?;
-        hdr.copy_from_slice(&tmp.as_mut_slice()[..512]);
+        hdr.copy_from_slice(&hdr_vec[..512]);
 
         if &hdr[0..8] == b"EFI PART" {
             let entries_lba = read_u64_le(&hdr, 0x48);
@@ -186,9 +161,6 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
                 && entry_size <= 512
                 && entries_lba < info.block_count
             {
-                let mut tmp2 =
-                    AlignedBuf::new(1024, align).ok_or(ProbeError::DeviceIo(block::Error::DmaUnavailable))?;
-
                 let scan_count = core::cmp::min(num_entries, 256);
                 for i in 0..scan_count {
                     let entry_off = (i as u64) * (entry_size as u64);
@@ -202,14 +174,20 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
                     // parse fields without holding a borrow of the DMA buffer.
                     let mut entry_hdr = [0u8; 56];
                     if off + 56 <= 512 {
-                        handle.read_blocks(lba, tmp.as_mut_slice())?;
-                        entry_hdr.copy_from_slice(&tmp.as_mut_slice()[off..off + 56]);
+                        let v = handle.read_blocks(lba, 1).await?;
+                        if v.len() < 512 {
+                            return Err(ProbeError::DeviceIo(block::Error::Io));
+                        }
+                        entry_hdr.copy_from_slice(&v[off..off + 56]);
                     } else {
                         if lba.saturating_add(1) >= info.block_count {
                             break;
                         }
-                        handle.read_blocks(lba, &mut tmp2.as_mut_slice()[..1024])?;
-                        entry_hdr.copy_from_slice(&tmp2.as_mut_slice()[off..off + 56]);
+                        let v = handle.read_blocks(lba, 2).await?;
+                        if v.len() < 1024 {
+                            return Err(ProbeError::DeviceIo(block::Error::Io));
+                        }
+                        entry_hdr.copy_from_slice(&v[off..off + 56]);
                     }
 
                     // Unused GPT entry has an all-zero type GUID.
@@ -244,9 +222,12 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
                         continue;
                     }
 
+                    let bs_vec = handle.read_blocks(first_lba, 1).await?;
+                    if bs_vec.len() < 512 {
+                        return Err(ProbeError::DeviceIo(block::Error::Io));
+                    }
                     let mut bs = [0u8; 512];
-                    handle.read_blocks(first_lba, tmp.as_mut_slice())?;
-                    bs.copy_from_slice(&tmp.as_mut_slice()[..512]);
+                    bs.copy_from_slice(&bs_vec[..512]);
                     if looks_like_fat_boot_sector(&bs).is_some() {
                         let sectors = last_lba
                             .saturating_sub(first_lba)
@@ -288,9 +269,12 @@ pub fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLayout, 
         }
 
         // Validate partition boot sector is FAT.
+        let bs_vec = handle.read_blocks(start_lba_u64, 1).await?;
+        if bs_vec.len() < 512 {
+            return Err(ProbeError::DeviceIo(block::Error::Io));
+        }
         let mut bs = [0u8; 512];
-        handle.read_blocks(start_lba_u64, tmp.as_mut_slice())?;
-        bs.copy_from_slice(&tmp.as_mut_slice()[..512]);
+        bs.copy_from_slice(&bs_vec[..512]);
         if looks_like_fat_boot_sector(&bs).is_some() {
             return Ok(FatVolumeLayout::MbrPartition {
                 start_lba,

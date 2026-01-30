@@ -1,8 +1,8 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{char::decode_utf16, cmp, convert::TryInto};
 
 use crate::disc::block::{
-    self, BlockDevice, DeviceDescriptor, DeviceHandle, DeviceKind, DiscId, Error, Result,
+    self, BlockDevice, BoxFuture, DeviceDescriptor, DeviceHandle, DeviceKind, DiscId, Error, Result,
 };
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
@@ -186,19 +186,23 @@ impl BlockDevice for PartitionBlockDevice {
         self.range.block_count()
     }
 
-    fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> Result<()> {
-        let blocks = blocks_from_len(buf.len(), self.block_size)?;
-        let translated = self.range.translate(lba, blocks)?;
-        self.parent.read_blocks(translated, buf)
+    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> BoxFuture<'a, Result<Vec<u8>>> {
+        Box::pin(async move {
+            let blocks_u64 = blocks as u64;
+            let translated = self.range.translate(lba, blocks_u64)?;
+            self.parent.read_blocks(translated, blocks).await
+        })
     }
 
-    fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> Result<()> {
-        if !self.writable {
-            return Err(Error::NotSupported);
-        }
-        let blocks = blocks_from_len(buf.len(), self.block_size)?;
-        let translated = self.range.translate(lba, blocks)?;
-        self.parent.write_blocks(translated, buf)
+    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            if !self.writable {
+                return Err(Error::NotSupported);
+            }
+            let blocks = blocks_from_len(buf.len(), self.block_size)?;
+            let translated = self.range.translate(lba, blocks)?;
+            self.parent.write_blocks(translated, buf).await
+        })
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
@@ -214,7 +218,7 @@ impl BlockDevice for PartitionBlockDevice {
     }
 }
 
-pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
+pub async fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
     let device_info = device.info();
     let block_size = device_info.block_size as usize;
     if block_size < GPT_MIN_HEADER_SIZE as usize {
@@ -223,9 +227,8 @@ pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
         return Ok(Vec::new());
     }
 
-    let mut header_buf = vec![0u8; block_size];
-    device.read_blocks(GPT_HEADER_LBA, &mut header_buf)?;
-    if &header_buf[..GPT_SIGNATURE.len()] != GPT_SIGNATURE {
+    let header_buf = device.read_blocks(GPT_HEADER_LBA, 1).await?;
+    if header_buf.len() < GPT_SIGNATURE.len() || &header_buf[..GPT_SIGNATURE.len()] != GPT_SIGNATURE {
         // Not a GPT disk (e.g. MBR, superfloppy, or wiped header).
         return Ok(Vec::new());
     }
@@ -255,8 +258,7 @@ pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
         return Err(Error::Corrupted);
     }
 
-    let mut table = vec![0u8; align_up(table_bytes, block_size)];
-    let blocks_to_read = table.len() / block_size;
+    let blocks_to_read = align_up(table_bytes, block_size) / block_size;
     let table_span = entries_lba
         .checked_add(blocks_to_read as u64)
         .ok_or(Error::Corrupted)?;
@@ -264,11 +266,7 @@ pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
         return Err(Error::Corrupted);
     }
 
-    for i in 0..blocks_to_read {
-        let lba = entries_lba + i as u64;
-        let slice = &mut table[i * block_size..(i + 1) * block_size];
-        device.read_blocks(lba, slice)?;
-    }
+    let table = device.read_blocks(entries_lba, blocks_to_read).await?;
 
     let mut partitions = Vec::new();
     for idx in 0..entry_count as usize {
@@ -310,9 +308,9 @@ pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
     Ok(partitions)
 }
 
-pub fn register_gpt_partitions(device: DeviceHandle) -> Result<Vec<RegisteredPartition>> {
+pub async fn register_gpt_partitions(device: DeviceHandle) -> Result<Vec<RegisteredPartition>> {
     let parent_info = device.info();
-    let partitions = read_gpt_partitions(device)?;
+    let partitions = read_gpt_partitions(device).await?;
     let mut registered = Vec::with_capacity(partitions.len());
 
     for part in partitions {

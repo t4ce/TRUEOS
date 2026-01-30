@@ -6,6 +6,8 @@ use core::{
     sync::atomic::{fence, Ordering},
 };
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
+
 use crate::{
     disc::block,
     pci::{dma, mmio},
@@ -216,8 +218,31 @@ impl NvmeController {
             if embassy_time_driver::now() >= deadline {
                 return Err(block::Error::Timeout);
             }
-            crate::time::poll_executor();
             spin_loop();
+        }
+    }
+
+    async fn wait_ready(&self, want_ready: bool, timeout_ms: u64) -> core::result::Result<(), block::Error> {
+        let hz = embassy_time_driver::TICK_HZ as u64;
+        let start = embassy_time_driver::now();
+        let ticks = if hz == 0 {
+            0
+        } else {
+            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        };
+        let deadline = start.saturating_add(ticks);
+
+        loop {
+            let csts = self.reg32(NVME_REG_CSTS);
+            let rdy = (csts & 0x1) != 0;
+            if rdy == want_ready {
+                return Ok(());
+            }
+            if embassy_time_driver::now() >= deadline {
+                return Err(block::Error::Timeout);
+            }
+            // Cooperative yield while waiting for hardware state changes.
+            Timer::after(EmbassyDuration::from_micros(50)).await;
         }
     }
 
@@ -231,7 +256,7 @@ impl NvmeController {
         cid
     }
 
-    fn admin_submit_and_wait(
+    fn admin_submit_and_wait_sync(
         &mut self,
         sqe: NvmeSqe,
         cid: u16,
@@ -243,10 +268,10 @@ impl NvmeController {
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(0, tail % depth);
-        self.admin_poll_cq_for_cid(cid, timeout_ms)
+        self.admin_poll_cq_for_cid_sync(cid, timeout_ms)
     }
 
-    fn io_submit_and_wait(
+    async fn io_submit_and_wait_async(
         &mut self,
         sqe: NvmeSqe,
         cid: u16,
@@ -258,26 +283,118 @@ impl NvmeController {
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(1, tail % depth);
-        self.io_poll_cq_for_cid(cid, timeout_ms)
+        self.io_poll_cq_for_cid_async(cid, timeout_ms).await
     }
 
-    fn admin_poll_cq_for_cid(
+    fn admin_poll_cq_for_cid_sync(
         &mut self,
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid(0, cid, timeout_ms)
+        self.poll_queue_cq_for_cid_sync(0, cid, timeout_ms)
     }
 
-    fn io_poll_cq_for_cid(
+    async fn io_poll_cq_for_cid_async(
         &mut self,
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid(1, cid, timeout_ms)
+        self.poll_queue_cq_for_cid_async(1, cid, timeout_ms).await
     }
 
-    fn poll_queue_cq_for_cid(
+    fn poll_queue_cq_for_cid_sync(
+        &mut self,
+        qid: u16,
+        cid: u16,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let hz = embassy_time_driver::TICK_HZ as u64;
+        let start = embassy_time_driver::now();
+        let ticks = if hz == 0 {
+            0
+        } else {
+            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        };
+        let deadline = start.saturating_add(ticks);
+
+        loop {
+            let (maybe_cpl, new_head, depth) = if qid == 0 {
+                let q = &mut self.admin;
+                let cqe = q.cq_peek();
+                let status = (cqe.dw3 >> 16) as u16;
+                let phase = (status & 0x1) != 0;
+                if phase == q.cq_phase {
+                    fence(Ordering::Acquire);
+                    let cqe = q.cq_peek();
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+                    q.cq_pop();
+                    (
+                        Some(Completion {
+                            cid: got_cid,
+                            sq_head,
+                            sq_id,
+                            status,
+                        }),
+                        q.cq_head,
+                        q.depth,
+                    )
+                } else {
+                    (None, q.cq_head, q.depth)
+                }
+            } else {
+                let q = &mut self.io;
+                let cqe = q.cq_peek();
+                let status = (cqe.dw3 >> 16) as u16;
+                let phase = (status & 0x1) != 0;
+                if phase == q.cq_phase {
+                    fence(Ordering::Acquire);
+                    let cqe = q.cq_peek();
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+                    q.cq_pop();
+                    (
+                        Some(Completion {
+                            cid: got_cid,
+                            sq_head,
+                            sq_id,
+                            status,
+                        }),
+                        q.cq_head,
+                        q.depth,
+                    )
+                } else {
+                    (None, q.cq_head, q.depth)
+                }
+            };
+
+            if let Some(cpl) = maybe_cpl {
+                self.db_write_cq_head(qid, new_head % depth);
+                if cpl.cid == cid {
+                    return Ok(cpl);
+                }
+                crate::log!(
+                    "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
+                    self.pci,
+                    qid,
+                    cid,
+                    cpl.cid,
+                    cpl.status,
+                    cpl.status_type(),
+                    cpl.status_code(),
+                );
+            }
+
+            if embassy_time_driver::now() >= deadline {
+                return Err(block::Error::Timeout);
+            }
+            spin_loop();
+        }
+    }
+
+    async fn poll_queue_cq_for_cid_async(
         &mut self,
         qid: u16,
         cid: u16,
@@ -366,8 +483,8 @@ impl NvmeController {
             if embassy_time_driver::now() >= deadline {
                 return Err(block::Error::Timeout);
             }
-            crate::time::poll_executor();
-            spin_loop();
+            // Cooperative wait: yield to other tasks instead of busy-spinning.
+            Timer::after(EmbassyDuration::from_micros(50)).await;
         }
     }
 
@@ -451,7 +568,7 @@ impl NvmeController {
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
         // PC=1 (physically contiguous), IEN=0.
         sqe.d[11] = 1;
-        let cpl = self.admin_submit_and_wait(sqe, cid, 1000)?;
+        let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         if cpl.status_code() != 0 {
             crate::log!(
                 "nvme: {} create_io_cq failed sct={} sc={} status=0x{:04X}\n",
@@ -480,7 +597,7 @@ impl NvmeController {
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
         // PC=1 (physically contiguous), QPRIO=0, CQID in bits31:16.
         sqe.d[11] = 1 | ((cqid as u32) << 16);
-        let cpl = self.admin_submit_and_wait(sqe, cid, 1000)?;
+        let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         if cpl.status_code() != 0 {
             crate::log!(
                 "nvme: {} create_io_sq failed sct={} sc={} status=0x{:04X}\n",
@@ -555,7 +672,7 @@ impl NvmeController {
         sqe.d[9] = (prp2 >> 32) as u32;
         sqe.d[10] = cns;
 
-        let cpl = self.admin_submit_and_wait(sqe, cid, 1000)?;
+        let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         let status_ok = cpl.status_code() == 0;
 
         if let Some((_lp, lv, lb)) = prp_list {
@@ -628,7 +745,7 @@ impl NvmeController {
         Ok((nsze, block_size))
     }
 
-    fn io_rw(
+    async fn io_rw_async(
         &mut self,
         opcode: u8,
         nsid: u32,
@@ -651,7 +768,7 @@ impl NvmeController {
         sqe.d[11] = (slba >> 32) as u32;
         sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
 
-        let cpl = self.io_submit_and_wait(sqe, cid, 2000)?;
+        let cpl = self.io_submit_and_wait_async(sqe, cid, 2000).await?;
 
         if let Some((_lp, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
@@ -674,12 +791,12 @@ impl NvmeController {
         Ok(())
     }
 
-    fn io_flush(&mut self, nsid: u32) -> core::result::Result<(), block::Error> {
+    async fn io_flush_async(&mut self, nsid: u32) -> core::result::Result<(), block::Error> {
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
         sqe.d[0] = (NVME_NVM_FLUSH as u32) | ((cid as u32) << 16);
         sqe.d[1] = nsid;
-        let cpl = self.io_submit_and_wait(sqe, cid, 2000)?;
+        let cpl = self.io_submit_and_wait_async(sqe, cid, 2000).await?;
         if cpl.status_code() != 0 {
             return Err(block::Error::Io);
         }
@@ -705,95 +822,102 @@ impl block::BlockDevice for NvmeBlockDevice {
         self.block_count
     }
 
-    fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> block::Result<()> {
-        let bs = self.block_size as usize;
-        if bs == 0 || (buf.len() % bs) != 0 {
-            return Err(block::Error::InvalidParam);
-        }
-        let blocks_total = (buf.len() / bs) as u64;
-        if blocks_total == 0 {
-            return Ok(());
-        }
-        let end = lba.checked_add(blocks_total).ok_or(block::Error::OutOfBounds)?;
-        if end > self.block_count {
-            return Err(block::Error::OutOfBounds);
-        }
+    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> block::BoxFuture<'a, block::Result<alloc::vec::Vec<u8>>> {
+        Box::pin(async move {
+            let bs = self.block_size as usize;
+            if bs == 0 {
+                return Err(block::Error::InvalidParam);
+            }
+            if blocks == 0 {
+                return Ok(alloc::vec::Vec::new());
+            }
 
-        const MAX_IO_BYTES: usize = 256 * 1024;
-        let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
+            let blocks_total = blocks as u64;
+            let end = lba.checked_add(blocks_total).ok_or(block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(block::Error::OutOfBounds);
+            }
 
-        let mut remaining = buf;
-        let mut cur_lba = lba;
-        while !remaining.is_empty() {
-            let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
-            let bytes_here = blocks_here * bs;
-            let (dma_phys, dma_virt) = dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
-            unsafe { write_bytes(dma_virt, 0, bytes_here) };
+            let total_bytes = blocks
+                .checked_mul(bs)
+                .ok_or(block::Error::InvalidParam)?;
+            let mut out = alloc::vec![0u8; total_bytes];
 
-            if let Err(e) =
-                self.ctrl
-                    .io_rw(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-            {
+            const MAX_IO_BYTES: usize = 256 * 1024;
+            let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
+
+            let mut remaining = out.as_mut_slice();
+            let mut cur_lba = lba;
+            while !remaining.is_empty() {
+                let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
+                let bytes_here = blocks_here * bs;
+                let (dma_phys, dma_virt) =
+                    dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
+                unsafe { write_bytes(dma_virt, 0, bytes_here) };
+
+                if let Err(e) =
+                    self.ctrl
+                        .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+                        .await
+                {
+                    dma::dealloc(dma_virt, bytes_here);
+                    return Err(e);
+                }
+
+                unsafe {
+                    let src = core::slice::from_raw_parts(dma_virt, bytes_here);
+                    remaining[..bytes_here].copy_from_slice(src);
+                }
                 dma::dealloc(dma_virt, bytes_here);
-                return Err(e);
+
+                remaining = &mut remaining[bytes_here..];
+                cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
-            unsafe {
-                let src = core::slice::from_raw_parts(dma_virt, bytes_here);
-                remaining[..bytes_here].copy_from_slice(src);
-            }
-            dma::dealloc(dma_virt, bytes_here);
-
-            crate::time::poll_executor();
-            remaining = &mut remaining[bytes_here..];
-            cur_lba = cur_lba.saturating_add(blocks_here as u64);
-        }
-
-        Ok(())
+            Ok(out)
+        })
     }
 
-    fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> block::Result<()> {
-        let bs = self.block_size as usize;
-        if bs == 0 || (buf.len() % bs) != 0 {
-            return Err(block::Error::InvalidParam);
-        }
-        let blocks_total = (buf.len() / bs) as u64;
-        if blocks_total == 0 {
-            return Ok(());
-        }
-        let end = lba.checked_add(blocks_total).ok_or(block::Error::OutOfBounds)?;
-        if end > self.block_count {
-            return Err(block::Error::OutOfBounds);
-        }
-
-        const MAX_IO_BYTES: usize = 256 * 1024;
-        let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
-
-        let mut remaining = buf;
-        let mut cur_lba = lba;
-        while !remaining.is_empty() {
-            let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
-            let bytes_here = blocks_here * bs;
-            let (dma_phys, dma_virt) = dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
-            unsafe {
-                core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
+    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move {
+            let bs = self.block_size as usize;
+            if bs == 0 || (buf.len() % bs) != 0 {
+                return Err(block::Error::InvalidParam);
+            }
+            let blocks_total = (buf.len() / bs) as u64;
+            if blocks_total == 0 {
+                return Ok(());
+            }
+            let end = lba.checked_add(blocks_total).ok_or(block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(block::Error::OutOfBounds);
             }
 
-            let ok = self
-                .ctrl
-                .io_rw(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                .is_ok();
-            dma::dealloc(dma_virt, bytes_here);
-            if !ok {
-                return Err(block::Error::Io);
+            const MAX_IO_BYTES: usize = 256 * 1024;
+            let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
+
+            let mut remaining = buf;
+            let mut cur_lba = lba;
+            while !remaining.is_empty() {
+                let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
+                let bytes_here = blocks_here * bs;
+                let (dma_phys, dma_virt) =
+                    dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
+                }
+
+                self.ctrl
+                    .io_rw_async(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+                    .await?;
+                dma::dealloc(dma_virt, bytes_here);
+
+                remaining = &remaining[bytes_here..];
+                cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
-            crate::time::poll_executor();
-            remaining = &remaining[bytes_here..];
-            cur_lba = cur_lba.saturating_add(blocks_here as u64);
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
@@ -808,8 +932,8 @@ impl block::BlockDevice for NvmeBlockDevice {
         true
     }
 
-    fn flush(&mut self) -> block::Result<()> {
-        self.ctrl.io_flush(self.nsid)
+    fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
+        Box::pin(async move { self.ctrl.io_flush_async(self.nsid).await })
     }
 }
 
