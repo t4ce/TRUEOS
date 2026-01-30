@@ -178,7 +178,7 @@ fn print_install_disk_table(io: &dyn ShellIo) {
             continue;
         }
         let info = h.info();
-        let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
+        let (status, err) = crate::time::block_on(crate::v::disc::detect::detect_physical_disk_detail(h));
         io.write_fmt(format_args!(
             "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
             info.id.raw(),
@@ -189,7 +189,7 @@ fn print_install_disk_table(io: &dyn ShellIo) {
             info.label,
             status.short(),
             match (&status, err) {
-                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
                     // Keep it short; this is mainly for debugging why detection fails.
                     alloc::format!(" (err={:?})", e)
                 }
@@ -211,7 +211,7 @@ fn print_format_disk_table(io: &dyn ShellIo) {
             continue;
         }
         let info = h.info();
-        let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
+        let (status, err) = crate::time::block_on(crate::v::disc::detect::detect_physical_disk_detail(h));
         io.write_fmt(format_args!(
             "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
             info.id.raw(),
@@ -222,7 +222,7 @@ fn print_format_disk_table(io: &dyn ShellIo) {
             info.label,
             status.short(),
             match (&status, err) {
-                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
                     alloc::format!(" (err={:?})", e)
                 }
                 _ => alloc::string::String::new(),
@@ -359,14 +359,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             };
 
                             io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
-                            match crate::disc::trueosfs::format_blank_force(handle) {
+                            match crate::v::fs::trueosfs::format_blank_force(handle) {
                                 Ok(()) => {
-                                    let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(handle));
+                                    let (status, err) = crate::time::block_on(crate::v::disc::detect::detect_physical_disk_detail(handle));
                                     io.write_fmt(format_args!(
                                         "format: ok (status now: {}{})\r\n",
                                         status.short(),
                                         match (&status, err) {
-                                            (crate::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
+                                            (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
                                             _ => alloc::string::String::new(),
                                         }
                                     ));
