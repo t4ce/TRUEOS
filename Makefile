@@ -14,9 +14,9 @@ QEMU_BIN = qemu-system-x86_64
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-QEMU_NET_FLAGS = -netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
-	-netdev user,id=net1,hostfwd=tcp::4244-:4244 -device e1000,netdev=net1 \
-	-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
+QEMU_NET_FLAGS = -netdev user,id=net1,hostfwd=tcp::4244-:4244 -device e1000,netdev=net1 \
+	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
+	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
@@ -28,15 +28,17 @@ QEMU_USB_FLAGS = \
 	-device vfio-pci,host=0000:06:00.0 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
-	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=7,id=usbleds \
+	-drive file=disk.img,if=none,format=raw,id=usbdisk \
+	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=u
 
 #	-drive file=disk.img,if=none,format=raw,id=usbdisk 
 #	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 
 #	-drive file=nvme.img,if=none,format=raw,id=nvme0 \
 #	-device nvme,drive=nvme0,serial=t4ce
+#	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 

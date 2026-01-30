@@ -486,12 +486,17 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         };
         let handle = disc_block::register_device(descriptor, dev);
 
-        let mut guard = MASS_RUNTIMES.lock();
-        if let Some(rt) = guard
-            .iter_mut()
-            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        // IMPORTANT: drop the MASS_RUNTIMES lock before doing any filesystem probing.
+        // Probing can read blocks, which routes back through this USBMS block device and
+        // needs to take MASS_RUNTIMES again.
         {
-            rt.disc = Some(handle);
+            let mut guard = MASS_RUNTIMES.lock();
+            if let Some(rt) = guard
+                .iter_mut()
+                .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+            {
+                rt.disc = Some(handle);
+            }
         }
 
         crate::log!(
@@ -503,7 +508,20 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
         // Best-effort: if this disk contains TRUEOSFS, register it as a root.
         // This enables higher layers (shell I/O, C ABI helpers) to read/write files.
-        let _ = crate::disc::trueosfs::mount_root(handle);
+        match crate::disc::trueosfs::mount_root(handle) {
+            Ok(Some(disk_id)) => {
+                crate::log!(
+                    "usb: trueosfs: mounted root disk_id={}\n",
+                    disk_id.raw()
+                );
+            }
+            Ok(None) => {
+                crate::log!("usb: trueosfs: no filesystem found on disk\n");
+            }
+            Err(e) => {
+                crate::log!("usb: trueosfs: mount error {:?}\n", e);
+            }
+        }
 
         // If we're booting from a single USB pen drive, trigger the TrueOSFS BSP smoke test
         // after USB mass storage has registered into the block registry.

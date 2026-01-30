@@ -816,6 +816,79 @@ pub fn bsp_smoke_test_once() {
             }
         }
 
+        // Debug convenience: allow the BSP smoke test to operate on a fresh, unformatted
+        // `disk.img` by formatting a *completely blank* disk as data-only TRUEOSFS.
+        //
+        // Safety properties:
+        // - Only in debug builds.
+        // - Only if LBA0 is all-zero (strong signal of "empty" media).
+        // - Only if the device is writable.
+        #[cfg(debug_assertions)]
+        if trueos_disk.is_none() {
+            for h in block::device_handles().into_iter() {
+                if h.parent().is_some() {
+                    continue;
+                }
+                if !h.supports_write() {
+                    continue;
+                }
+
+                let bs0 = match read_blocks_aligned_retry(h, 0, 1, 3) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: blank check read failed dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                if bs0.iter().any(|&b| b != 0) {
+                    continue;
+                }
+
+                crate::log!(
+                    "trueosfs: smoke: blank writable disk detected dev={} -> formatting TRUEOSFS\n",
+                    h.id()
+                );
+                match format_blank(h) {
+                    Ok(()) => {
+                        crate::log!("trueosfs: smoke: format ok dev={} -> mounting\n", h.id());
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: format failed dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                        continue;
+                    }
+                }
+
+                match mount_root(h) {
+                    Ok(Some(_)) => {
+                        trueos_disk = Some(h);
+                        break;
+                    }
+                    Ok(None) => {
+                        crate::log!(
+                            "trueosfs: smoke: format succeeded but mount_root returned none dev={}\n",
+                            h.id()
+                        );
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: mount_root failed after format dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         // 3) If we have a TRUEOS partition, do a write/read smoke test.
         let Some(disk) = trueos_disk else {
             crate::log!("trueosfs: smoke: no partition\n");
