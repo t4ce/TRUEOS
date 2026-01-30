@@ -42,7 +42,7 @@ async fn write_blocks_aligned_with_log(
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-    match handle.write_blocks(lba, tmp.as_mut_slice()).await {
+        match handle.write_blocks(lba, tmp.as_mut_slice()).await {
         Ok(()) => Ok(()),
         Err(e) => {
             log(
@@ -202,7 +202,9 @@ fn pick_fat32_geometry(
     const CANDIDATES: [u32; 7] = [1, 2, 4, 8, 16, 32, 64];
 
     for spc in CANDIDATES {
-        let Some((reserved, fat_sectors, first_data_sector)) = compute_fat32_layout(total_sectors, spc) else {
+        let Some((reserved, fat_sectors, first_data_sector)) =
+            compute_fat32_layout(total_sectors, spc)
+        else {
             continue;
         };
 
@@ -245,13 +247,16 @@ fn compute_fat16_layout(
     sectors_per_cluster: u32,
     root_entries: u16,
 ) -> Option<(u16, u16, u16, u32, u32)> {
-    // Returns (reserved_sectors, root_entries, fat_sectors, first_data_sector, total_clusters)
+    // Returns (reserved_sectors, root_entries, fat_sectors, first_data_sector, clusters)
     let reserved: u16 = 1;
     let fats: u32 = 2;
-    let root_dir_sectors: u32 = ((root_entries as u32).saturating_mul(32).saturating_add(511)) / 512;
+    let root_dir_sectors: u32 = ((root_entries as u32)
+        .saturating_mul(32)
+        .saturating_add(511))
+        / 512;
 
     // Tiny volumes are not useful as an ESP for TRUEOS.
-    if total_sectors < 2_048 {
+    if total_sectors < 2048 {
         return None;
     }
 
@@ -268,7 +273,7 @@ fn compute_fat16_layout(
         let clusters = data_sectors / sectors_per_cluster;
 
         // FAT16 is valid for 4085..=65524 clusters.
-        if clusters < 4_085 || clusters > 65_524 {
+        if !(4085..=65524).contains(&clusters) {
             return None;
         }
 
@@ -297,7 +302,8 @@ fn pick_fat16_geometry(
     limine_conf_len: usize,
 ) -> Option<(u32, u16, u16, u16, u32, u32)> {
     // Return (sectors_per_cluster, reserved_sectors, root_entries, fat_sectors, first_data_sector, total_clusters)
-    const CANDIDATES: [u32; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+    const CANDIDATES: [u32; 7] = [1, 2, 4, 8, 16, 32, 64];
+
     let root_entries: u16 = 512;
 
     for spc in CANDIDATES {
