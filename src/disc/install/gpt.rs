@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use crate::disc::block::{DeviceHandle, Error, Result};
 use crate::v::disc::partition::{
@@ -18,6 +18,24 @@ const GPT_DEFAULT_TABLE_LBA: u64 = 2;
 const GPT_PROTECTIVE_MBR_SIGNATURE: u16 = 0xAA55;
 
 const GPT_ALIGN_LBA: u64 = 2048; // 1MiB @ 512B sectors
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PartitionSize {
+    /// Fixed size in MiB.
+    Mib(u64),
+    /// Consume the remaining usable LBAs.
+    ///
+    /// Constraint: if present, this must be the last partition.
+    Remaining,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GptPartitionSpec<'a> {
+    pub type_guid: [u8; 16],
+    pub name: &'a str,
+    pub size: PartitionSize,
+    pub attributes: u64,
+}
 
 struct AlignedBuf {
     ptr: *mut u8,
@@ -131,23 +149,61 @@ async fn write_blocks_aligned_with_log(
     }
 }
 
-/// Create a fresh GPT partition table with:
-/// - Partition 1: ESP (FAT32) for UEFI boot (Limine BOOTX64.EFI, config)
-/// - Partition 2: TRUEOS data partition (TRUEOSFS superblock at start)
+fn mib_to_blocks_512(mib: u64) -> u64 {
+    // 1MiB / 512B = 2048 sectors.
+    mib.saturating_mul(2048)
+}
+
+fn validate_partition_specs(parts: &[GptPartitionSpec<'_>]) -> Result<()> {
+    if parts.is_empty() {
+        return Err(Error::InvalidParam);
+    }
+    if (parts.len() as u32) > GPT_DEFAULT_ENTRY_COUNT {
+        return Err(Error::OutOfBounds);
+    }
+
+    // At most one Remaining, and it must be last.
+    let mut remaining_idx: Option<usize> = None;
+    for (i, p) in parts.iter().enumerate() {
+        if matches!(p.size, PartitionSize::Remaining) {
+            if remaining_idx.is_some() {
+                return Err(Error::InvalidParam);
+            }
+            remaining_idx = Some(i);
+        }
+    }
+    if let Some(i) = remaining_idx {
+        if i + 1 != parts.len() {
+            return Err(Error::InvalidParam);
+        }
+    }
+
+    Ok(())
+}
+
+/// Create a fresh GPT partition table with an arbitrary list of partitions.
 ///
-/// Returns the computed on-disk LBA ranges (absolute, on the parent disk).
-pub async fn write_trueos_bootable_gpt_layout_with_log(
+/// Notes/constraints (current implementation):
+/// - Assumes 512-byte LBAs.
+/// - Uses a fixed partition entry array size (128 entries x 128 bytes).
+/// - Partitions are allocated sequentially, aligned to 1MiB boundaries.
+/// - `PartitionSize::Remaining` (if used) must be last.
+///
+/// Returns computed absolute LBA ranges for each partition, in the same order as `parts`.
+pub async fn write_gpt_layout_with_log(
     device: DeviceHandle,
-    esp_size_mib: u64,
+    parts: &[GptPartitionSpec<'_>],
     log: &mut dyn FnMut(&str),
-) -> Result<TrueosBootLayout> {
+) -> Result<Vec<BlockRange>> {
     if device.parent().is_some() {
         return Err(Error::InvalidParam);
     }
     if !device.supports_write() {
         return Err(Error::NotSupported);
     }
-        {
+
+    validate_partition_specs(parts)?;
+
     let info = device.info();
     if info.block_size != 512 {
         // Simplify: GPT+FAT32 writer currently assumes 512-byte LBAs.
@@ -170,24 +226,47 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
         return Err(Error::OutOfBounds);
     }
 
-    let esp_blocks = (esp_size_mib.saturating_mul(1024 * 1024)) / 512;
-    if esp_blocks < 65_536 {
-        // FAT32 practical minimum.
-        return Err(Error::InvalidParam);
-    }
+    // Allocate partition ranges.
+    let mut ranges: Vec<BlockRange> = Vec::with_capacity(parts.len());
+    let mut cur = align_up_u64(first_usable, GPT_ALIGN_LBA);
+    for (idx, p) in parts.iter().enumerate() {
+        if cur < first_usable {
+            return Err(Error::OutOfBounds);
+        }
+        if cur > last_usable {
+            return Err(Error::OutOfBounds);
+        }
 
-    let esp_first = align_up_u64(first_usable, GPT_ALIGN_LBA);
-    let esp_last = esp_first
-        .checked_add(esp_blocks)
-        .ok_or(Error::OutOfBounds)?
-        .saturating_sub(1);
-    let trueos_first = align_up_u64(esp_last.saturating_add(1), GPT_ALIGN_LBA);
-    let trueos_last = last_usable;
-    if esp_first < first_usable || esp_last >= trueos_first {
-        return Err(Error::OutOfBounds);
-    }
-    if trueos_first >= trueos_last {
-        return Err(Error::OutOfBounds);
+        let (first, last) = match p.size {
+            PartitionSize::Mib(mib) => {
+                let blocks = mib_to_blocks_512(mib);
+                if blocks == 0 {
+                    return Err(Error::InvalidParam);
+                }
+                let last = cur
+                    .checked_add(blocks)
+                    .ok_or(Error::OutOfBounds)?
+                    .saturating_sub(1);
+                (cur, last)
+            }
+            PartitionSize::Remaining => {
+                if idx + 1 != parts.len() {
+                    return Err(Error::InvalidParam);
+                }
+                (cur, last_usable)
+            }
+        };
+
+        if last < first || last > last_usable {
+            return Err(Error::OutOfBounds);
+        }
+
+        ranges.push(BlockRange::from_bounds(first, last)?);
+
+        // Next partition start (aligned) unless this was the last partition.
+        if idx + 1 != parts.len() {
+            cur = align_up_u64(last.saturating_add(1), GPT_ALIGN_LBA);
+        }
     }
 
     // Protective MBR @ LBA0
@@ -214,33 +293,29 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
 
     write_blocks_aligned_with_log(device, 0, &pmbr, log).await?;
 
-    // Partition entry array
+    // Partition entry array (fixed-size, with our entries at the start).
     let mut entries = vec![0u8; table_bytes];
+    for (idx, p) in parts.iter().enumerate() {
+        let off = idx * (entry_size as usize);
 
-    // Entry 0: ESP
-    {
-        let off = 0usize;
-        entries[off..off + 16].copy_from_slice(&GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES);
+        // type GUID
+        entries[off..off + 16].copy_from_slice(&p.type_guid);
+
+        // unique GUID
         let mut unique = [0u8; 16];
         fill_guid_bytes(&mut unique);
         entries[off + 16..off + 32].copy_from_slice(&unique);
-        entries[off + 32..off + 40].copy_from_slice(&esp_first.to_le_bytes());
-        entries[off + 40..off + 48].copy_from_slice(&esp_last.to_le_bytes());
-        entries[off + 48..off + 56].copy_from_slice(&0u64.to_le_bytes());
-        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS ESP");
-    }
 
-    // Entry 1: TRUEOS data
-    {
-        let off = entry_size as usize;
-        entries[off..off + 16].copy_from_slice(&GPT_TYPE_LINUX_FILESYSTEM_BYTES);
-        let mut unique = [0u8; 16];
-        fill_guid_bytes(&mut unique);
-        entries[off + 16..off + 32].copy_from_slice(&unique);
-        entries[off + 32..off + 40].copy_from_slice(&trueos_first.to_le_bytes());
-        entries[off + 40..off + 48].copy_from_slice(&trueos_last.to_le_bytes());
-        entries[off + 48..off + 56].copy_from_slice(&0u64.to_le_bytes());
-        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], "TRUEOS");
+        // first/last LBA
+        let r = ranges[idx];
+        entries[off + 32..off + 40].copy_from_slice(&r.first_lba().to_le_bytes());
+        entries[off + 40..off + 48].copy_from_slice(&r.last_lba().to_le_bytes());
+
+        // attributes
+        entries[off + 48..off + 56].copy_from_slice(&p.attributes.to_le_bytes());
+
+        // name (UTF-16LE, fixed field)
+        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], p.name);
     }
 
     let entries_crc = crc32_ieee(&entries);
@@ -298,9 +373,54 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
 
     device.flush().await?;
 
-    Ok(TrueosBootLayout {
-        esp: BlockRange::from_bounds(esp_first, esp_last)?,
-        trueos: BlockRange::from_bounds(trueos_first, trueos_last)?,
-    })
+    Ok(ranges)
 }
+
+/// Create a fresh GPT partition table with:
+/// - Partition 1: ESP (FAT32) for UEFI boot (Limine BOOTX64.EFI, config)
+/// - Partition 2: TRUEOS data partition (TRUEOSFS superblock at start)
+///
+/// Returns the computed on-disk LBA ranges (absolute, on the parent disk).
+pub async fn write_trueos_bootable_gpt_layout_with_log(
+    device: DeviceHandle,
+    esp_size_mib: u64,
+    log: &mut dyn FnMut(&str),
+) -> Result<TrueosBootLayout> {
+    if device.parent().is_some() {
+        return Err(Error::InvalidParam);
+    }
+    if !device.supports_write() {
+        return Err(Error::NotSupported);
+    }
+
+    // FAT32 practical minimum: 65_536 clusters at 512B sectors is a decent floor.
+    let esp_blocks = mib_to_blocks_512(esp_size_mib);
+    if esp_blocks < 65_536 {
+        return Err(Error::InvalidParam);
+    }
+
+    let parts = [
+        GptPartitionSpec {
+            type_guid: GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES,
+            name: "TRUEOS ESP",
+            size: PartitionSize::Mib(esp_size_mib),
+            attributes: 0,
+        },
+        GptPartitionSpec {
+            type_guid: GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+            name: "TRUEOS",
+            size: PartitionSize::Remaining,
+            attributes: 0,
+        },
+    ];
+
+    let ranges = write_gpt_layout_with_log(device, &parts, log).await?;
+    if ranges.len() != 2 {
+        return Err(Error::Corrupted);
+    }
+
+    Ok(TrueosBootLayout {
+        esp: ranges[0],
+        trueos: ranges[1],
+    })
 }

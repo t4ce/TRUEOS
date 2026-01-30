@@ -442,7 +442,7 @@ pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     handled
 }
 
-fn runtime_exists(controller_id: usize, slot_id: u32) -> bool {
+pub(crate) fn runtime_exists(controller_id: usize, slot_id: u32) -> bool {
     let guard = CDC_RUNTIMES.lock();
     guard
         .iter()

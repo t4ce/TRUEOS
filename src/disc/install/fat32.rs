@@ -193,14 +193,6 @@ pub struct EspImage<'a> {
 /// - /limine.conf
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
-pub async fn format_and_populate_esp_fat32(
-    esp: DeviceHandle,
-    image: EspImage<'_>,
-) -> Result<(), block::Error> {
-    fn noop(_: &str) {}
-    format_and_populate_esp_fat32_with_log(esp, image, &mut noop).await
-}
-
 pub async fn format_and_populate_esp_fat32_with_log(
     esp: DeviceHandle,
     image: EspImage<'_>,

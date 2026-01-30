@@ -520,22 +520,9 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
             block_size
         );
 
-        // Best-effort: if this disk contains TRUEOSFS, register it as a root.
-        // This enables higher layers (shell I/O, C ABI helpers) to read/write files.
-        match crate::v::fs::trueosfs::mount_root(handle) {
-            Ok(Some(disk_id)) => {
-                crate::log!(
-                    "usb: trueosfs: mounted root disk_id={}\n",
-                    disk_id.raw()
-                );
-            }
-            Ok(None) => {
-                crate::log!("usb: trueosfs: no filesystem found on disk\n");
-            }
-            Err(e) => {
-                crate::log!("usb: trueosfs: mount error {:?}\n", e);
-            }
-        }
+        // Best-effort: defer TRUEOSFS probing/mounting.
+        // Doing this synchronously here can stall USB enumeration and starve xHCI poll tasks.
+        crate::v::fs::trueosfs::request_mount_root(handle);
 
         // If we're booting from a single USB pen drive, trigger the TrueOSFS BSP smoke test
         // after USB mass storage has registered into the block registry.
