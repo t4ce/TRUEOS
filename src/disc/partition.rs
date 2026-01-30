@@ -218,13 +218,16 @@ pub fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionInfo>> {
     let device_info = device.info();
     let block_size = device_info.block_size as usize;
     if block_size < GPT_MIN_HEADER_SIZE as usize {
-        return Err(Error::Corrupted);
+        // Can't possibly contain a GPT header in a single logical block.
+        // Treat this as "not GPT" so callers can fall back to other probes.
+        return Ok(Vec::new());
     }
 
     let mut header_buf = vec![0u8; block_size];
     device.read_blocks(GPT_HEADER_LBA, &mut header_buf)?;
     if &header_buf[..GPT_SIGNATURE.len()] != GPT_SIGNATURE {
-        return Err(Error::Corrupted);
+        // Not a GPT disk (e.g. MBR, superfloppy, or wiped header).
+        return Ok(Vec::new());
     }
 
     let header_size = u32::from_le_bytes(header_buf[12..16].try_into().unwrap());
