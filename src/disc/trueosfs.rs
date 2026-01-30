@@ -5,7 +5,62 @@ use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
-use trueos_math::Tree;
+use trueos_math::{BPlusTree, Tree};
+
+// --- TRUEOSFS index checkpointing helpers (NOT wired yet) ---
+
+const TRUEOSFS_INDEX_CKPT_MAGIC: [u8; 8] = *b"TOSIDX00";
+const TRUEOSFS_INDEX_CKPT_VERSION: u16 = 1;
+
+/// Serialize a TRUEOSFS path->LBA index into a single contiguous blob.
+///
+/// This is intended to become the payload for a future checkpoint record/area,
+/// so mounts can load an index snapshot and then replay only the tail of the log.
+///
+/// Format (little-endian):
+/// - [0..8]   MAGIC = "TOSIDX00"
+/// - [8..10]  VERSION = 1
+/// - [10..12] RESERVED = 0
+/// - [12..20] REPLAY_FROM_REL_BLOCKS: u64
+/// - [20..24] ENTRY_COUNT: u32
+/// - [24..32] RESERVED = 0
+/// - Entries...
+///
+/// Entry format:
+/// - KEY_LEN: u16
+/// - RESERVED: u16
+/// - VALUE_LBA: u64
+/// - KEY_BYTES: [u8; KEY_LEN]
+pub(crate) fn serialize_index_checkpoint<const M: usize>(
+    tree: &BPlusTree<Vec<u8>, u64, M>,
+    replay_from_rel_blocks: u64,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+
+    out.extend_from_slice(&TRUEOSFS_INDEX_CKPT_MAGIC);
+    out.extend_from_slice(&TRUEOSFS_INDEX_CKPT_VERSION.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&replay_from_rel_blocks.to_le_bytes());
+
+    let entry_count = tree.len().min(u32::MAX as usize) as u32;
+    out.extend_from_slice(&entry_count.to_le_bytes());
+    out.extend_from_slice(&0u64.to_le_bytes());
+
+    let mut written = 0u32;
+    for (k, v) in tree.iter() {
+        if written == entry_count {
+            break;
+        }
+        let key_len = k.len().min(u16::MAX as usize) as u16;
+        out.extend_from_slice(&key_len.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&v.to_le_bytes());
+        out.extend_from_slice(&k[..key_len as usize]);
+        written = written.wrapping_add(1);
+    }
+
+    out
+}
 
 // Standard EFI System Partition type GUID.
 // C12A7328-F81F-11D2-BA4B-00A0C93EC93B

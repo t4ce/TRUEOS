@@ -1,9 +1,12 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     fmt,
+    future::Future,
     hash::{Hash, Hasher},
+    pin::Pin,
     ptr,
     sync::atomic::{AtomicU32, Ordering},
+    task::Waker,
 };
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
@@ -24,18 +27,84 @@ pub enum Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Minimal synchronous block-device interface expected by the kernel and upper layers.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+struct AsyncMutex<T> {
+    locked: core::sync::atomic::AtomicBool,
+    waiter: spin::Mutex<Option<Waker>>,
+    value: core::cell::UnsafeCell<T>,
+}
+
+unsafe impl<T: Send> Sync for AsyncMutex<T> {}
+
+impl<T> AsyncMutex<T> {
+    const fn new(value: T) -> Self {
+        Self {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            waiter: spin::Mutex::new(None),
+            value: core::cell::UnsafeCell::new(value),
+        }
+    }
+
+    async fn lock(&self) -> AsyncMutexGuard<'_, T> {
+        core::future::poll_fn(|cx| self.poll_lock(cx)).await
+    }
+
+    fn poll_lock(&self, cx: &mut core::task::Context<'_>) -> core::task::Poll<AsyncMutexGuard<'_, T>> {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            return core::task::Poll::Ready(AsyncMutexGuard { m: self });
+        }
+
+        *self.waiter.lock() = Some(cx.waker().clone());
+        core::task::Poll::Pending
+    }
+
+    fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+        if let Some(w) = self.waiter.lock().take() {
+            w.wake();
+        }
+    }
+}
+
+struct AsyncMutexGuard<'a, T> {
+    m: &'a AsyncMutex<T>,
+}
+
+impl<T> core::ops::Deref for AsyncMutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.m.value.get() }
+    }
+}
+
+impl<T> core::ops::DerefMut for AsyncMutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.m.value.get() }
+    }
+}
+
+impl<T> Drop for AsyncMutexGuard<'_, T> {
+    fn drop(&mut self) {
+        self.m.unlock();
+    }
+}
+
+/// Minimal async block-device interface expected by the kernel and upper layers.
 ///
 /// Contract the implementor must honor:
 /// - Every Logical Block Address (LBA) is counted in multiples of `block_size_bytes()`.
-/// - Callers always pass buffers whose length is a multiple of `block_size_bytes()` and that
-///   are aligned to `dma_alignment_bytes()`; the implementation may assume this and return
-///   `Error::InvalidParam`/`Error::DmaUnavailable` otherwise.
-/// - Callers must not exceed `max_transfer_bytes()` in a single request; drivers may further split
-///   overly large commands to satisfy additional hardware limits when needed.
-/// - `read_blocks`/`write_blocks` are synchronous and must not return until the transfer either
-///   completes, fails with a concrete `Error`, or needs the caller to retry later via
-///   `Error::NotReady`.
+/// - Callers use block counts (not byte counts). The returned buffer length must be
+///   `blocks * block_size_bytes()`.
+/// - Callers must not exceed `max_transfer_bytes()` in a single request; drivers may internally
+///   split overly large commands to satisfy additional hardware limits when needed.
+/// - `read_blocks`/`write_blocks` must be cooperative: implementations should await/yield while
+///   waiting for hardware completion instead of busy-spinning, so the executor can make progress.
 /// - Implementations must bounds-check the provided LBA span and return `Error::OutOfBounds`
 ///   for invalid ranges.
 pub trait BlockDevice: Send {
@@ -45,12 +114,12 @@ pub trait BlockDevice: Send {
     /// Total number of addressable blocks.
     fn block_count(&self) -> u64;
 
-    /// Synchronous block read. `buf.len()` is always a multiple of `block_size_bytes()`.
-    fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> Result<()>;
+    /// Asynchronous block read.
+    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> BoxFuture<'a, Result<Vec<u8>>>;
 
     /// Optional block write. Default is `Error::NotSupported`.
-    fn write_blocks(&mut self, _lba: u64, _buf: &[u8]) -> Result<()> {
-        Err(Error::NotSupported)
+    fn write_blocks<'a>(&'a mut self, _lba: u64, _buf: &'a [u8]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Err(Error::NotSupported) })
     }
 
     /// Required DMA alignment in bytes (defaults to 64 bytes which matches NVMe/AHCI).
@@ -69,8 +138,8 @@ pub trait BlockDevice: Send {
     }
 
     /// Optional flush hook for devices that need explicit cache drains.
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
+    fn flush<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -270,48 +339,36 @@ impl DeviceHandle {
         self.node.info.writable
     }
 
-    pub fn read_blocks(&self, lba: u64, buf: &mut [u8]) -> Result<()> {
-        self.validate_buffer(buf)?;
-        let blocks = blocks_in_buffer(buf.len(), self.block_size())?;
-        self.validate_lba_range(lba, blocks)?;
-        self.with_driver_mut(|dev| dev.read_blocks(lba, buf))
-    }
-
-    pub fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<()> {
-        if !self.supports_write() {
-            return Err(Error::NotSupported);
+    pub async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>> {
+        let bs = self.block_size() as u64;
+        let blocks_u64 = blocks as u64;
+        if bs == 0 {
+            return Err(Error::InvalidParam);
         }
-        self.validate_buffer(buf)?;
-        let blocks = blocks_in_buffer(buf.len(), self.block_size())?;
-        self.validate_lba_range(lba, blocks)?;
-        self.with_driver_mut(|dev| dev.write_blocks(lba, buf))
-    }
+        let bytes = blocks_u64
+            .checked_mul(bs)
+            .ok_or(Error::InvalidParam)?;
 
-    pub fn flush(&self) -> Result<()> {
-        self.with_driver_mut(|dev| dev.flush())
-    }
-
-    pub fn with_driver_mut<F, R>(&self, f: F) -> Result<R>
-    where
-        F: FnOnce(&mut dyn BlockDevice) -> Result<R>,
-    {
-        let mut guard = self.node.driver.lock();
-        f(&mut **guard)
-    }
-
-    fn validate_buffer(&self, buf: &[u8]) -> Result<()> {
-        if buf.is_empty() {
-            return Ok(());
-        }
-
-        let block_size = self.block_size() as usize;
-        if buf.len() % block_size != 0 {
+        if self.node.info.max_transfer_bytes > 0 && bytes > self.node.info.max_transfer_bytes {
             return Err(Error::InvalidParam);
         }
 
-        let align = self.node.info.dma_alignment.max(1) as usize;
-        if align > 1 && (buf.as_ptr() as usize) % align != 0 {
-            return Err(Error::DmaUnavailable);
+        self.validate_lba_range(lba, blocks_u64)?;
+        let mut guard = self.node.driver.lock().await;
+        (&mut **guard).read_blocks(lba, blocks).await
+    }
+
+    pub async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<()> {
+        if !self.supports_write() {
+            return Err(Error::NotSupported);
+        }
+
+        let bs = self.block_size() as usize;
+        if bs == 0 {
+            return Err(Error::InvalidParam);
+        }
+        if buf.len() % bs != 0 {
+            return Err(Error::InvalidParam);
         }
 
         if self.node.info.max_transfer_bytes > 0
@@ -320,7 +377,16 @@ impl DeviceHandle {
             return Err(Error::InvalidParam);
         }
 
-        Ok(())
+        let blocks = blocks_in_buffer(buf.len(), self.block_size())?;
+        self.validate_lba_range(lba, blocks)?;
+
+        let mut guard = self.node.driver.lock().await;
+        (&mut **guard).write_blocks(lba, buf).await
+    }
+
+    pub async fn flush(&self) -> Result<()> {
+        let mut guard = self.node.driver.lock().await;
+        (&mut **guard).flush().await
     }
 
     fn validate_lba_range(&self, lba: u64, blocks: u64) -> Result<()> {
@@ -339,7 +405,7 @@ impl DeviceHandle {
 
 struct DeviceNode {
     info: DeviceInfo,
-    driver: spin::Mutex<Box<dyn BlockDevice>>,
+    driver: AsyncMutex<Box<dyn BlockDevice>>,
 }
 
 impl DeviceNode {
@@ -416,7 +482,7 @@ where
 
     let node = Box::leak(Box::new(DeviceNode {
         info,
-        driver: spin::Mutex::new(driver),
+        driver: AsyncMutex::new(driver),
     }));
 
     let handle = node.handle();
