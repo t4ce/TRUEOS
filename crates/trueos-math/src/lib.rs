@@ -10,7 +10,13 @@ pub use tree::{Children, NodeId, Tree};
 pub mod bptree;
 
 #[cfg(any(feature = "alloc", test))]
-pub use bptree::{BPlusTree, Iter as BPlusTreeIter};
+pub mod pbltree;
+
+#[cfg(any(feature = "alloc", test))]
+pub use pbltree::{BPlusTree, Iter as BPlusTreeIter};
+
+#[cfg(any(feature = "alloc", test))]
+pub use bptree::{BPlusTree as LegacyBPlusTree, Iter as LegacyBPlusTreeIter};
 
 /// Minimal complex number utilities tailored for kernel-side math use.
 #[derive(Clone, Copy, Debug, PartialEq)]

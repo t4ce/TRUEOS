@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
- 
+
 /// A minimal B+tree mapping `K -> V`.
 ///
 /// Design notes:
@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 /// `M` is the maximum number of children for internal nodes.
 /// - Max keys per internal node: `M - 1`
 /// - Max keys per leaf node: `M - 1`
-/// +
+///
 /// Recommended: `M >= 4`.
 pub struct BPlusTree<K, V, const M: usize> {
     nodes: Vec<Node<K, V, M>>,
@@ -78,7 +78,6 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             None => {
                 let leaf = self.alloc_leaf();
                 self.root = Some(leaf);
-                // insert into empty leaf
                 if let Node::Leaf { keys, values, .. } = &mut self.nodes[leaf] {
                     keys.push(key);
                     values.push(value);
@@ -133,7 +132,6 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
         while let Some((promo_key, right_id)) = promoted {
             match path.pop() {
                 None => {
-                    // Leaf/internal was root; create new root.
                     let new_root = self.alloc_internal();
                     self.nodes[new_root] = Node::Internal {
                         keys: alloc::vec![promo_key],
@@ -147,7 +145,6 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
                         unreachable!();
                     };
 
-                    // Insert separator key and new right child after the child we descended into.
                     keys.insert(child_idx, promo_key);
                     children.insert(child_idx + 1, right_id);
 
@@ -170,6 +167,42 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             tree: self,
             leaf,
             pos,
+        }
+    }
+
+    /// Iterates over keys/values starting at the first key `>= start`.
+    pub fn iter_from(&self, start: &K) -> Iter<'_, K, V, M> {
+        let (leaf, pos) = self.seek_to_first_ge(start);
+        Iter {
+            tree: self,
+            leaf,
+            pos,
+        }
+    }
+
+    fn seek_to_first_ge(&self, key: &K) -> (Option<NodeId>, usize) {
+        let mut id = match self.root {
+            Some(r) => r,
+            None => return (None, 0),
+        };
+
+        loop {
+            match &self.nodes[id] {
+                Node::Internal { keys, children } => {
+                    let idx = upper_bound(keys, key);
+                    id = children[idx];
+                }
+                Node::Leaf { keys, next, .. } => {
+                    let pos = match lower_bound(keys, key) {
+                        Ok(p) => p,
+                        Err(p) => p,
+                    };
+                    if pos < keys.len() {
+                        return (Some(id), pos);
+                    }
+                    return (*next, 0);
+                }
+            }
         }
     }
 
@@ -206,7 +239,6 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
     }
 
     fn split_leaf(&mut self, leaf_id: NodeId) -> (K, NodeId) {
-        // Split leaf into (left=existing leaf, right=new leaf).
         let (right_keys, right_values, old_next, promote_key);
         {
             let Node::Leaf { keys, values, next } = &mut self.nodes[leaf_id] else {
@@ -231,7 +263,6 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             next: old_next,
         };
 
-        // Link left -> right
         let Node::Leaf { next, .. } = &mut self.nodes[leaf_id] else {
             unreachable!();
         };
@@ -241,23 +272,18 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
     }
 
     fn split_internal(&mut self, node_id: NodeId) -> (K, NodeId) {
-        // Split internal node and promote the middle key.
         let (promote, right_keys, right_children);
         {
             let Node::Internal { keys, children } = &mut self.nodes[node_id] else {
                 unreachable!();
             };
 
-            // After insertion, internal node has up to M keys and M+1 children.
             let mid = keys.len() / 2;
             promote = keys[mid].clone();
 
-            // Right side gets keys after mid.
             let mut rk = keys.split_off(mid + 1);
-            // Remove promoted key from left keys.
             keys.pop();
 
-            // Children: left keeps 0..=mid, right gets mid+1..
             let rc = children.split_off(mid + 1);
 
             right_keys = core::mem::take(&mut rk);
@@ -311,7 +337,6 @@ impl<'a, K, V, const M: usize> Iterator for Iter<'a, K, V, M> {
 }
 
 fn upper_bound<K: Ord>(keys: &[K], key: &K) -> usize {
-    // first index i where keys[i] > key
     let mut lo = 0usize;
     let mut hi = keys.len();
     while lo < hi {
@@ -326,7 +351,6 @@ fn upper_bound<K: Ord>(keys: &[K], key: &K) -> usize {
 }
 
 fn lower_bound<K: Ord>(keys: &[K], key: &K) -> Result<usize, usize> {
-    // Ok(pos) if found, Err(insertion_pos) if not
     let mut lo = 0usize;
     let mut hi = keys.len();
     while lo < hi {
@@ -374,7 +398,6 @@ mod tests {
 
     #[test]
     fn split_leaf_and_iter_order() {
-        // M=4 -> max keys per node = 3, so inserting 10 keys forces multiple splits.
         let mut t: BPlusTree<u64, u32, 4> = BPlusTree::new();
         for i in 0..10u64 {
             t.insert(i, (i as u32) * 2);
@@ -403,11 +426,21 @@ mod tests {
         assert_eq!(t.get(&b"aa".to_vec()), Some(&1));
         assert_eq!(t.get(&b"b".to_vec()), Some(&2));
 
-        let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> =
-            t.iter().map(|(k, _)| k.clone()).collect();
-        assert_eq!(
-            keys,
-            alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]
-        );
+        let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> = t.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]);
+    }
+
+    #[test]
+    fn iter_from_seeks_correctly() {
+        let mut t: BPlusTree<u64, u64, 4> = BPlusTree::new();
+        for i in 0..10u64 {
+            t.insert(i * 2, i);
+        }
+
+        let keys: alloc::vec::Vec<u64> = t.iter_from(&7).map(|(k, _)| *k).collect();
+        assert_eq!(keys, alloc::vec![8, 10, 12, 14, 16, 18]);
+
+        let keys2: alloc::vec::Vec<u64> = t.iter_from(&20).map(|(k, _)| *k).collect();
+        assert!(keys2.is_empty());
     }
 }
