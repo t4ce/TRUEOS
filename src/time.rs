@@ -1,5 +1,8 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
+use core::future::Future;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use core::task::{Context, Poll, RawWaker, RawWakerVTable};
 use core::task::Waker;
 
 use embassy_executor::raw::Executor as RawExecutor;
@@ -62,6 +65,44 @@ pub fn poll_executor() {
         return;
     }
     unsafe { (&*ptr).poll() };
+}
+
+fn dummy_raw_waker() -> RawWaker {
+    fn clone(_: *const ()) -> RawWaker {
+        dummy_raw_waker()
+    }
+    fn wake(_: *const ()) {}
+    fn wake_by_ref(_: *const ()) {}
+    fn drop(_: *const ()) {}
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    RawWaker::new(core::ptr::null(), &VTABLE)
+}
+
+fn dummy_waker() -> Waker {
+    unsafe { Waker::from_raw(dummy_raw_waker()) }
+}
+
+/// Synchronously wait for an async future.
+///
+/// This intentionally does **not** call into the Embassy executor (no re-entrant polling).
+/// It polls the future directly and calls [`poll()`] so `embassy_time::Timer`-based waits can
+/// complete even when invoked from synchronous code.
+pub fn block_on<F: Future>(mut fut: F) -> F::Output {
+    let waker = dummy_waker();
+    let mut cx = Context::from_waker(&waker);
+    // Safety: we never move `fut` after pinning.
+    let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
+
+    loop {
+        // Drive Embassy timers.
+        self::poll();
+
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => core::hint::spin_loop(),
+        }
+    }
 }
 
 fn init_once() {

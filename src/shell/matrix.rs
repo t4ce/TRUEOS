@@ -497,7 +497,7 @@ pub(crate) async fn install_matrix_job(
         .as_str(),
     );
 
-    let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk);
+    let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk).await;
     log_line(
         slot_id,
         &mut blob,
@@ -552,7 +552,7 @@ pub(crate) async fn install_matrix_job(
     );
     match result {
         Ok(()) => {
-            let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk);
+            let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk).await;
             log_line(
                 slot_id,
                 &mut blob,

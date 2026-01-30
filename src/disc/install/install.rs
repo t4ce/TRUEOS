@@ -35,25 +35,11 @@ impl Drop for AlignedBuf {
 }
 
 fn read_blocks_aligned(handle: block::DeviceHandle, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let bytes = bs.saturating_mul(blocks);
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
-    tmp.as_mut_slice().fill(0);
-    handle.read_blocks(lba, tmp.as_mut_slice())?;
-    Ok(tmp.as_mut_slice().to_vec())
+    crate::time::block_on(handle.read_blocks(lba, blocks))
 }
 
 fn write_blocks_aligned(handle: block::DeviceHandle, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
-    let info = handle.info();
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
-    tmp.as_mut_slice().copy_from_slice(buf);
-    handle.write_blocks(lba, tmp.as_mut_slice())
+    crate::time::block_on(handle.write_blocks(lba, buf))
 }
 
 fn write_bytes_at_lba(handle: block::DeviceHandle, start_lba: u64, bytes: &[u8]) -> Result<(), block::Error> {
@@ -95,10 +81,10 @@ fn write_bytes_at_lba(handle: block::DeviceHandle, start_lba: u64, bytes: &[u8])
             buf[..take].copy_from_slice(&bytes[off..off + take]);
         }
 
-        handle.write_blocks(lba, &buf[..this_bytes])?;
+        crate::time::block_on(handle.write_blocks(lba, &buf[..this_bytes]))?;
 
-        // Keep the system responsive while we do large synchronous transfers.
-        crate::time::poll_executor();
+        // Drive Embassy timers while we do large synchronous transfers.
+        crate::time::poll();
 
         lba = lba.saturating_add(this_blocks as u64);
         off = off.saturating_add(take);
@@ -152,7 +138,7 @@ pub fn install_bootable_uefi_gpt_with_log(
     };
 
     log("install: stage=probe_gpt");
-    let existing_parts = partition::read_gpt_partitions(disk).ok();
+    let existing_parts = crate::time::block_on(partition::read_gpt_partitions(disk)).ok();
 
     let mut preserve_trueosfs = false;
 

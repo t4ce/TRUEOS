@@ -178,7 +178,7 @@ fn print_install_disk_table(io: &dyn ShellIo) {
             continue;
         }
         let info = h.info();
-        let (status, err) = crate::disc::detect::detect_physical_disk_detail(h);
+        let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
         io.write_fmt(format_args!(
             "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
             info.id.raw(),
@@ -211,7 +211,7 @@ fn print_format_disk_table(io: &dyn ShellIo) {
             continue;
         }
         let info = h.info();
-        let (status, err) = crate::disc::detect::detect_physical_disk_detail(h);
+        let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
         io.write_fmt(format_args!(
             "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
             info.id.raw(),
@@ -361,7 +361,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
                             match crate::disc::trueosfs::format_blank_force(handle) {
                                 Ok(()) => {
-                                    let (status, err) = crate::disc::detect::detect_physical_disk_detail(handle);
+                                    let (status, err) = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(handle));
                                     io.write_fmt(format_args!(
                                         "format: ok (status now: {}{})\r\n",
                                         status.short(),
@@ -482,7 +482,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             };
 
                             let info = handle.info();
-                            let status = crate::disc::detect::detect_physical_disk(handle);
+                            let status = crate::time::block_on(crate::disc::detect::detect_physical_disk(handle));
                             io.write_fmt(format_args!(
                                 "\r\ninstall: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
                                 info.id.raw(),
@@ -536,7 +536,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             };
 
                             let info = handle.info();
-                            let status = crate::disc::detect::detect_physical_disk(handle);
+                            let status = crate::time::block_on(crate::disc::detect::detect_physical_disk(handle));
                             io.write_fmt(format_args!(
                                 "\r\nformat: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
                                 info.id.raw(),
