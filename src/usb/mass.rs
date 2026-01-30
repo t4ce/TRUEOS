@@ -11,6 +11,8 @@ use core::hint::spin_loop;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
+use alloc::boxed::Box;
+use alloc::vec::Vec as AllocVec;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -69,6 +71,18 @@ unsafe impl Send for MassRuntime {}
 unsafe impl Sync for MassRuntime {}
 
 static MASS_RUNTIMES: Mutex<Vec<MassRuntime, MAX_MASS_DEVICES>> = Mutex::new(Vec::new());
+
+fn take_runtime(controller_id: usize, slot_id: u32) -> Option<MassRuntime> {
+    let mut guard = MASS_RUNTIMES.lock();
+    let mut idx = 0usize;
+    while idx < guard.len() {
+        if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
+            return Some(guard.remove(idx));
+        }
+        idx += 1;
+    }
+    None
+}
 
 pub fn register_runtime(rt: MassRuntime) {
     let mut guard = MASS_RUNTIMES.lock();
@@ -549,57 +563,49 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
         self.block_count
     }
 
-    fn read_blocks(&mut self, lba: u64, buf: &mut [u8]) -> disc_block::Result<()> {
-        let block_size = self.block_size_bytes() as usize;
-        if block_size == 0 || buf.len() % block_size != 0 {
-            return Err(disc_block::Error::InvalidParam);
-        }
+    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> disc_block::BoxFuture<'a, disc_block::Result<AllocVec<u8>>> {
+        Box::pin(async move {
+            let block_size = self.block_size_bytes() as usize;
+            if block_size == 0 {
+                return Err(disc_block::Error::InvalidParam);
+            }
+            if blocks == 0 {
+                return Ok(AllocVec::new());
+            }
 
-        let blocks_total = (buf.len() / block_size) as u64;
-        if blocks_total == 0 {
-            return Ok(());
-        }
+            let blocks_total = blocks as u64;
+            let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(disc_block::Error::OutOfBounds);
+            }
 
-        // Bounds check.
-        let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
-        if end > self.block_count {
-            return Err(disc_block::Error::OutOfBounds);
-        }
+            let total_bytes = blocks
+                .checked_mul(block_size)
+                .ok_or(disc_block::Error::InvalidParam)?;
+            let mut out = alloc::vec![0u8; total_bytes];
 
-        // Copy-based DMA IO: xHCI requires DMA-safe buffers.
-        const MAX_IO_BYTES: usize = 64 * 1024;
-        let mut remaining = buf;
-        let mut cur_lba = lba;
+            // Copy-based DMA IO: xHCI requires DMA-safe buffers.
+            const MAX_IO_BYTES: usize = 64 * 1024;
+            let mut remaining = out.as_mut_slice();
+            let mut cur_lba = lba;
 
-        while !remaining.is_empty() {
-            let max_blocks = (MAX_IO_BYTES / block_size).max(1);
-            let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
-            let bytes_here = blocks_here * block_size;
+            let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
+            let ctx = rt.ctx;
+            let mut tag = rt.bot_tag;
 
-            // xHCI is 64-bit address capable on the platforms we target; avoid restricting
-            // transfers to <4GiB physical addresses to prevent spurious `DmaUnavailable`
-            // when low DMA space is fragmented/exhausted.
-            let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
-                .ok_or(disc_block::Error::DmaUnavailable)?;
-            unsafe { write_bytes(dma_virt, 0, bytes_here) };
+            while !remaining.is_empty() {
+                let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+                let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
+                let bytes_here = blocks_here * block_size;
 
-            let ok = {
-                let mut guard = MASS_RUNTIMES.lock();
-                let Some(rt) = guard
-                    .iter_mut()
-                    .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
-                else {
-                    dma::dealloc(dma_virt, bytes_here);
-                    return Err(disc_block::Error::NotReady);
-                };
-
-                let mut tag = rt.bot_tag;
-                let ctx = rt.ctx;
+                let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
+                    .ok_or(disc_block::Error::DmaUnavailable)?;
+                unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
                 let mut ok = false;
                 let mut attempts = 0u8;
                 while attempts < 10 {
-                    let c = bot::scsi_read_10_sync(
+                    let c = bot::scsi_read_10(
                         &ctx,
                         &mut rt.ring_out,
                         &mut rt.ring_in,
@@ -610,7 +616,8 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                         cur_lba as u32,
                         blocks_here as u16,
                         unsafe { core::slice::from_raw_parts_mut(dma_virt, bytes_here) },
-                    );
+                    )
+                    .await;
                     tag = tag.wrapping_add(1);
                     match c {
                         Ok(csw) if csw.status == bot::BotStatus::Passed => {
@@ -618,7 +625,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             break;
                         }
                         Ok(csw) => {
-                            if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                            if let Some(sense) = bot::scsi_request_sense_fixed_async(
                                 &ctx,
                                 &mut rt.ring_out,
                                 &mut rt.ring_in,
@@ -626,7 +633,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 rt.ep_out_target,
                                 rt.ep_in_target,
                                 tag,
-                            ) {
+                            )
+                            .await
+                            {
                                 tag = tag.wrapping_add(1);
                                 crate::log!(
                                     "usb: mass read csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
@@ -638,99 +647,88 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 );
                                 if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
-                                    spin_wait_ms(25);
+                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                     continue;
                                 }
                             } else {
                                 crate::log!("usb: mass read csw={:?} request-sense failed\n", csw.status);
                                 attempts = attempts.wrapping_add(1);
-                                spin_wait_ms(25);
+                                embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                 continue;
                             }
                             break;
                         }
                         Err(()) => {
                             attempts = attempts.wrapping_add(1);
-                            spin_wait_ms(25);
+                            embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;
                         }
                     }
                 }
 
-                rt.bot_tag = tag;
-                ok
-            };
+                if !ok {
+                    dma::dealloc(dma_virt, bytes_here);
+                    rt.bot_tag = tag;
+                    register_runtime(rt);
+                    return Err(disc_block::Error::Io);
+                }
 
-            if !ok {
+                unsafe {
+                    let src = core::slice::from_raw_parts(dma_virt, bytes_here);
+                    remaining[..bytes_here].copy_from_slice(src);
+                }
                 dma::dealloc(dma_virt, bytes_here);
-                return Err(disc_block::Error::Io);
+
+                remaining = &mut remaining[bytes_here..];
+                cur_lba += blocks_here as u64;
             }
 
-            unsafe {
-                let src = core::slice::from_raw_parts(dma_virt, bytes_here);
-                remaining[..bytes_here].copy_from_slice(src);
-            }
-            dma::dealloc(dma_virt, bytes_here);
-
-            // Keep the system responsive during long synchronous IO.
-            crate::time::poll_executor();
-
-            remaining = &mut remaining[bytes_here..];
-            cur_lba += blocks_here as u64;
-        }
-
-        Ok(())
+            rt.bot_tag = tag;
+            register_runtime(rt);
+            Ok(out)
+        })
     }
 
-    fn write_blocks(&mut self, lba: u64, buf: &[u8]) -> disc_block::Result<()> {
-        let block_size = self.block_size_bytes() as usize;
-        if block_size == 0 || buf.len() % block_size != 0 {
-            return Err(disc_block::Error::InvalidParam);
-        }
-
-        let blocks_total = (buf.len() / block_size) as u64;
-        if blocks_total == 0 {
-            return Ok(());
-        }
-
-        let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
-        if end > self.block_count {
-            return Err(disc_block::Error::OutOfBounds);
-        }
-
-        const MAX_IO_BYTES: usize = 64 * 1024;
-        let mut remaining = buf;
-        let mut cur_lba = lba;
-
-        while !remaining.is_empty() {
-            let max_blocks = (MAX_IO_BYTES / block_size).max(1);
-            let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
-            let bytes_here = blocks_here * block_size;
-
-            // See read path for rationale.
-            let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
-                .ok_or(disc_block::Error::DmaUnavailable)?;
-            unsafe {
-                core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
+    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
+        Box::pin(async move {
+            let block_size = self.block_size_bytes() as usize;
+            if block_size == 0 || buf.len() % block_size != 0 {
+                return Err(disc_block::Error::InvalidParam);
             }
 
-            let ok = {
-                let mut guard = MASS_RUNTIMES.lock();
-                let Some(rt) = guard
-                    .iter_mut()
-                    .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
-                else {
-                    dma::dealloc(dma_virt, bytes_here);
-                    return Err(disc_block::Error::NotReady);
-                };
+            let blocks_total = (buf.len() / block_size) as u64;
+            if blocks_total == 0 {
+                return Ok(());
+            }
 
-                let mut tag = rt.bot_tag;
-                let ctx = rt.ctx;
+            let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+            if end > self.block_count {
+                return Err(disc_block::Error::OutOfBounds);
+            }
+
+            const MAX_IO_BYTES: usize = 64 * 1024;
+            let mut remaining = buf;
+            let mut cur_lba = lba;
+
+            let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
+            let ctx = rt.ctx;
+            let mut tag = rt.bot_tag;
+
+            while !remaining.is_empty() {
+                let max_blocks = (MAX_IO_BYTES / block_size).max(1);
+                let blocks_here = core::cmp::min(max_blocks, remaining.len() / block_size);
+                let bytes_here = blocks_here * block_size;
+
+                let (_dma_phys, dma_virt) = dma::alloc_with_max(bytes_here, 64, None)
+                    .ok_or(disc_block::Error::DmaUnavailable)?;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
+                }
 
                 let mut ok = false;
                 let mut attempts = 0u8;
                 while attempts < 10 {
-                    let c = bot::scsi_write_10_sync(
+                    let c = bot::scsi_write_10(
                         &ctx,
                         &mut rt.ring_out,
                         &mut rt.ring_in,
@@ -741,7 +739,8 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                         cur_lba as u32,
                         blocks_here as u16,
                         unsafe { core::slice::from_raw_parts(dma_virt, bytes_here) },
-                    );
+                    )
+                    .await;
                     tag = tag.wrapping_add(1);
                     match c {
                         Ok(csw) if csw.status == bot::BotStatus::Passed => {
@@ -749,7 +748,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             break;
                         }
                         Ok(csw) => {
-                            if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                            if let Some(sense) = bot::scsi_request_sense_fixed_async(
                                 &ctx,
                                 &mut rt.ring_out,
                                 &mut rt.ring_in,
@@ -757,7 +756,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 rt.ep_out_target,
                                 rt.ep_in_target,
                                 tag,
-                            ) {
+                            )
+                            .await
+                            {
                                 tag = tag.wrapping_add(1);
                                 crate::log!(
                                     "usb: mass write csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
@@ -769,42 +770,40 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 );
                                 if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
-                                    spin_wait_ms(25);
+                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                     continue;
                                 }
                             } else {
                                 crate::log!("usb: mass write csw={:?} request-sense failed\n", csw.status);
                                 attempts = attempts.wrapping_add(1);
-                                spin_wait_ms(25);
+                                embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                 continue;
                             }
                             break;
                         }
                         Err(()) => {
                             attempts = attempts.wrapping_add(1);
-                            spin_wait_ms(25);
+                            embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;
                         }
                     }
                 }
 
-                rt.bot_tag = tag;
-                ok
-            };
+                dma::dealloc(dma_virt, bytes_here);
+                if !ok {
+                    rt.bot_tag = tag;
+                    register_runtime(rt);
+                    return Err(disc_block::Error::Io);
+                }
 
-            dma::dealloc(dma_virt, bytes_here);
-            if !ok {
-                return Err(disc_block::Error::Io);
+                remaining = &remaining[bytes_here..];
+                cur_lba += blocks_here as u64;
             }
 
-            remaining = &remaining[bytes_here..];
-            cur_lba += blocks_here as u64;
-
-            // Keep the system responsive during long synchronous IO.
-            crate::time::poll_executor();
-        }
-
-        Ok(())
+            rt.bot_tag = tag;
+            register_runtime(rt);
+            Ok(())
+        })
     }
 
     fn dma_alignment_bytes(&self) -> u32 {
@@ -818,17 +817,12 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
         true
     }
 
-    fn flush(&mut self) -> disc_block::Result<()> {
+    fn flush<'a>(&'a mut self) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
+        Box::pin(async move {
         // Best-effort cache flush for USB mass storage.
         // Many flash drives are fine without it, but some will not make data durable
         // across power-loss/reboot unless we issue SYNCHRONIZE CACHE.
-        let mut guard = MASS_RUNTIMES.lock();
-        let Some(rt) = guard
-            .iter_mut()
-            .find(|r| r.controller_id == self.controller_id && r.slot_id == self.slot_id)
-        else {
-            return Err(disc_block::Error::NotReady);
-        };
+        let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
 
         let ctx = rt.ctx;
         let mut tag = rt.bot_tag;
@@ -849,6 +843,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             match c {
                 Ok(csw) if csw.status == bot::BotStatus::Passed => {
                     rt.bot_tag = tag;
+                    register_runtime(rt);
                     return Ok(());
                 }
                 Ok(csw) => {
@@ -874,32 +869,36 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
 
                         if sense.sense_key == scsi::SenseKey::IllegalRequest {
                             rt.bot_tag = tag;
+                            register_runtime(rt);
                             return Ok(());
                         }
                         if sense_is_transient(sense.sense_key) {
                             attempts = attempts.wrapping_add(1);
-                            spin_wait_ms(25);
+                            embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;
                         }
                     } else {
                         crate::log!("usb: mass flush csw={:?} request-sense failed\n", csw.status);
                         attempts = attempts.wrapping_add(1);
-                        spin_wait_ms(25);
+                        embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                         continue;
                     }
 
                     rt.bot_tag = tag;
+                    register_runtime(rt);
                     return Err(disc_block::Error::Io);
                 }
                 Err(()) => {
                     attempts = attempts.wrapping_add(1);
-                    spin_wait_ms(25);
+                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                     continue;
                 }
             }
         }
 
         rt.bot_tag = tag;
+        register_runtime(rt);
         Err(disc_block::Error::Io)
+        })
     }
 }

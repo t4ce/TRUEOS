@@ -41,49 +41,6 @@ impl DiscStatus {
 }
 
 
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: alloc::alloc::Layout,
-}
-
-impl AlignedBuf {
-    fn new(len: usize, align: usize) -> Option<Self> {
-        let layout = alloc::alloc::Layout::from_size_align(len, align).ok()?;
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        if ptr.is_null() {
-            return None;
-        }
-        Some(Self { ptr, len, layout })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
-        }
-    }
-}
-
-fn read_blocks_aligned(handle: block::DeviceHandle, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let bytes = bs.saturating_mul(blocks);
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
-    tmp.as_mut_slice().fill(0);
-    handle.read_blocks(lba, tmp.as_mut_slice())?;
-    Ok(tmp.as_mut_slice().to_vec())
-}
-
 fn looks_like_ntfs(bs0: &[u8]) -> bool {
     bs0.len() >= 11 && &bs0[3..11] == b"NTFS    "
 }
@@ -97,13 +54,13 @@ fn looks_like_ext_superblock(sb: &[u8]) -> bool {
     sb.len() >= 58 && sb[56] == 0x53 && sb[57] == 0xEF
 }
 
-pub fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
-    detect_physical_disk_detail(handle).0
+pub async fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
+    detect_physical_disk_detail(handle).await.0
 }
 
 /// Like `detect_physical_disk`, but also returns a best-effort error reason when the
 /// result is `Unknown` due to an I/O or parse failure.
-pub fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, Option<block::Error>) {
+pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, Option<block::Error>) {
     // Only classify whole devices (not already-registered partitions).
     if handle.parent().is_some() {
         return (DiscStatus::Unknown, None);
@@ -118,7 +75,7 @@ pub fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, 
     }
 
     // Read MBR/boot sector.
-    let bs0 = match read_blocks_aligned(handle, 0, 1) {
+    let bs0 = match handle.read_blocks(0, 1).await {
         Ok(v) => v,
         Err(e) => return (DiscStatus::Unknown, Some(e)),
     };
@@ -145,14 +102,14 @@ pub fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, 
 
     // TRUEOSFS detection: the low-level placement logic decides whether this is
     // a bootable GPT layout (ESP + TRUEOS partition) or a data-only layout.
-    match crate::disc::trueosfs::locate(handle) {
+    match crate::disc::trueosfs::locate(handle).await {
         Ok(Some(loc)) => return (DiscStatus::Trueos { bootable: loc.bootable }, None),
         Ok(None) => {}
         Err(e) => return (DiscStatus::Unknown, Some(e)),
-    }
+    };
 
     // MBR-style FAT probe (superfloppy or partitioned) using the existing layout heuristic.
-    if crate::disc::layout::probe_fat_volume(handle).is_ok() {
+    if crate::disc::layout::probe_fat_volume(handle).await.is_ok() {
         return (
             DiscStatus::Detected {
                 fs: KnownFs::Fat,
@@ -163,7 +120,7 @@ pub fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, 
     }
 
     // ext probe: read from 1024-byte offset (LBA2) for 2 sectors.
-    match read_blocks_aligned(handle, 2, 2) {
+    match handle.read_blocks(2, 2).await {
         Ok(sb) => {
             if looks_like_ext_superblock(&sb) {
                 return (
