@@ -625,6 +625,96 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
     Ok(None)
 }
 
+async fn read_blocks_aligned_async(
+    handle: block::DeviceHandle,
+    lba: u64,
+    blocks: usize,
+) -> Result<Vec<u8>, block::Error> {
+    handle.read_blocks(lba, blocks).await
+}
+
+async fn read_blocks_aligned_retry_async(
+    handle: block::DeviceHandle,
+    lba: u64,
+    blocks: usize,
+    attempts: u8,
+) -> Result<Vec<u8>, block::Error> {
+    let mut last: Option<block::Error> = None;
+    let mut i = 0u8;
+    while i < attempts {
+        match read_blocks_aligned_async(handle, lba, blocks).await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_transient_io(e) => {
+                last = Some(e);
+                // Give USB storage some time to become ready after heavy writes.
+                Timer::after(EmbassyDuration::from_millis(10)).await;
+            }
+            Err(e) => return Err(e),
+        }
+        i = i.wrapping_add(1);
+    }
+    Err(last.unwrap_or(block::Error::Io))
+}
+
+/// Async variant of [`locate`].
+///
+/// This avoids `block_on` so it can be called from async installer jobs.
+pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, block::Error> {
+    if handle.parent().is_some() {
+        return Ok(None);
+    }
+
+    // Prefer GPT-partitioned layouts (bootable-capable).
+    {
+        let mut tries = 0u8;
+        while tries < 5 {
+            match partition::read_gpt_partitions(handle).await {
+                Ok(parts) => {
+                    let mut has_esp = false;
+                    for p in parts.iter() {
+                        if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
+                            has_esp = true;
+                        }
+
+                        // Our superblock is at the start of the TRUEOS data partition.
+                        if let Ok(p0) = read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await {
+                            if looks_like_trueos_superblock(&p0) {
+                                let super_lba = p.range.first_lba();
+                                let end_lba_exclusive = p.range.last_lba().saturating_add(1);
+                                return Ok(Some(TrueosFsPlacement {
+                                    bootable: has_esp,
+                                    super_lba,
+                                    data_lba: trueos_fs::data_lba_from_super(super_lba),
+                                    data_end_lba_exclusive: Some(end_lba_exclusive),
+                                }));
+                            }
+                        }
+                    }
+                    break;
+                }
+                Err(e) if is_transient_io(e) => {
+                    Timer::after(EmbassyDuration::from_millis(10)).await;
+                }
+                Err(e) => return Err(e),
+            }
+            tries = tries.wrapping_add(1);
+        }
+    }
+
+    // Fallback: superblock at LBA0 (data-only images/disks).
+    let bs0 = read_blocks_aligned_retry_async(handle, 0, 1, 3).await?;
+    if looks_like_trueos_superblock(&bs0) {
+        return Ok(Some(TrueosFsPlacement {
+            bootable: false,
+            super_lba: 0,
+            data_lba: trueos_fs::data_lba_from_super(0),
+            data_end_lba_exclusive: None,
+        }));
+    }
+
+    Ok(None)
+}
+
 pub fn format_blank(handle: block::DeviceHandle) -> Result<(), block::Error> {
     if handle.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -704,6 +794,81 @@ pub fn format_blank_partition(partition: block::DeviceHandle) -> Result<(), bloc
         return Err(block::Error::NotSupported);
     }
     format_blank_at(partition, 0)
+}
+
+/// Async variant of [`format_blank_partition`].
+pub async fn format_blank_partition_async(partition: block::DeviceHandle) -> Result<(), block::Error> {
+    if partition.parent().is_none() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !partition.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+    format_blank_at_async(partition, 0).await
+}
+
+async fn format_blank_at_async(handle: block::DeviceHandle, super_lba: u64) -> Result<(), block::Error> {
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let max_blocks = if info.max_transfer_bytes > 0 {
+        (info.max_transfer_bytes as usize / bs).max(1)
+    } else {
+        1
+    };
+    let blocks = core::cmp::min(8usize, max_blocks);
+    let bytes = bs.saturating_mul(blocks);
+
+    let align = info.dma_alignment.max(1) as usize;
+    let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
+    let buf = tmp.as_mut_slice();
+    buf.fill(0);
+
+    trueos_fs::write_blank_superblock(&mut buf[..bs]);
+
+    handle.write_blocks(super_lba, buf).await?;
+    handle.flush().await?;
+
+    // Verify the superblock write actually stuck (important for flaky USBMS media).
+    let verify0 = read_blocks_aligned_retry_async(handle, super_lba, 1, 10).await?;
+    if !looks_like_trueos_superblock(&verify0) {
+        return Err(block::Error::Corrupted);
+    }
+
+    // Best-effort end-to-end NVMe sanity check: write a tiny payload into the data region
+    // and read it back.
+    let info = handle.info();
+    if info.kind == block::DeviceKind::Nvme {
+        let data_lba = trueos_fs::data_lba_from_super(super_lba);
+        if data_lba.saturating_add(2) <= info.block_count {
+            let blocks_verify = core::cmp::min(2usize, max_blocks);
+            let bytes_verify = bs.saturating_mul(blocks_verify);
+            let mut tmp2 = AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
+            let w = tmp2.as_mut_slice();
+            w.fill(0);
+            let tag = b"TRUEOSFS-NVME-VERIFY";
+            let n = core::cmp::min(tag.len(), bs);
+            w[..n].copy_from_slice(&tag[..n]);
+            if blocks_verify > 1 {
+                for (i, b) in w[bs..(2 * bs)].iter_mut().enumerate() {
+                    *b = (i as u8).wrapping_mul(17).wrapping_add(0x5A);
+                }
+            }
+
+            handle.write_blocks(data_lba, w).await?;
+            handle.flush().await?;
+
+            let r = handle.read_blocks(data_lba, blocks_verify).await?;
+            if r.as_slice() != w {
+                return Err(block::Error::Corrupted);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), block::Error> {
