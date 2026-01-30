@@ -410,6 +410,20 @@ pub fn roots_len() -> usize {
     ROOTS.lock().len()
 }
 
+/// Returns the most recently mounted TRUEOSFS root disk id (best-effort).
+///
+/// This is used by higher layers (shell, C ABI helpers) that want a sensible
+/// default filesystem target without user-facing mount plumbing.
+pub fn primary_root_id() -> Option<block::DiscId> {
+    let roots = ROOTS.lock();
+    roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id)
+}
+
+/// Returns a handle for the most recently mounted TRUEOSFS root disk.
+pub fn primary_root_handle() -> Option<block::DeviceHandle> {
+    primary_root_id().and_then(block::device_handle)
+}
+
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
     roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)
