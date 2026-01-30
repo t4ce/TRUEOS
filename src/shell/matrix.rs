@@ -497,7 +497,7 @@ pub(crate) async fn install_matrix_job(
         .as_str(),
     );
 
-    let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk).await;
+    let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
     log_line(
         slot_id,
         &mut blob,
@@ -505,7 +505,7 @@ pub(crate) async fn install_matrix_job(
             "install: initial status: {}{}",
             status.short(),
             match (&status, err) {
-                (crate::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" (err={:?})", e),
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" (err={:?})", e),
                 _ => alloc::string::String::new(),
             }
         )
@@ -553,7 +553,7 @@ pub(crate) async fn install_matrix_job(
     .await;
     match result {
         Ok(()) => {
-            let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk).await;
+            let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
             log_line(
                 slot_id,
                 &mut blob,
@@ -561,7 +561,7 @@ pub(crate) async fn install_matrix_job(
                     "install: ok (status now: {}{})",
                     status.short(),
                     match (&status, err) {
-                        (crate::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
                             alloc::format!("; err={:?}", e)
                         }
                         _ => alloc::string::String::new(),

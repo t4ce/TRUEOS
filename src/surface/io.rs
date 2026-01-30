@@ -92,7 +92,7 @@ pub mod kfs {
 	}
 
 	fn root_disk() -> Result<block::DeviceHandle> {
-		crate::disc::trueosfs::primary_root_handle().ok_or(FsError::NoRoot)
+		crate::v::fs::trueosfs::primary_root_handle().ok_or(FsError::NoRoot)
 	}
 
 	fn normalize_rel(path: &str, allow_empty: bool) -> Result<String> {
@@ -125,7 +125,7 @@ pub mod kfs {
 	pub fn read_file(path: &str) -> Result<Vec<u8>> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		match crate::disc::trueosfs::file_out(disk, name.as_str())? {
+		match crate::v::fs::trueosfs::file_out(disk, name.as_str())? {
 			Some(bytes) => Ok(bytes),
 			None => Err(FsError::NotFound),
 		}
@@ -138,7 +138,7 @@ pub mod kfs {
 	) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let ok = crate::disc::trueosfs::file_in(disk, name.as_str(), data)?;
+		let ok = crate::v::fs::trueosfs::file_in(disk, name.as_str(), data)?;
 		if ok {
 			Ok(())
 		} else {
@@ -157,17 +157,17 @@ pub mod kfs {
 		if src == dst {
 			return Ok(());
 		}
-		if crate::disc::trueosfs::file_exists(disk, dst.as_str())? {
+		if crate::v::fs::trueosfs::file_exists(disk, dst.as_str())? {
 			return Err(FsError::AlreadyExists);
 		}
-		let Some(bytes) = crate::disc::trueosfs::file_out(disk, src.as_str())? else {
+		let Some(bytes) = crate::v::fs::trueosfs::file_out(disk, src.as_str())? else {
 			return Err(FsError::NotFound);
 		};
-		let ok = crate::disc::trueosfs::file_in(disk, dst.as_str(), bytes.as_slice())?;
+		let ok = crate::v::fs::trueosfs::file_in(disk, dst.as_str(), bytes.as_slice())?;
 		if !ok {
 			return Err(FsError::NoSpace);
 		}
-		let _ = crate::disc::trueosfs::file_delete(disk, src.as_str());
+		let _ = crate::v::fs::trueosfs::file_delete(disk, src.as_str());
 		Ok(())
 	}
 
@@ -175,7 +175,7 @@ pub mod kfs {
 	pub fn list_dir(path: &str) -> Result<String> {
 		let disk = root_disk()?;
 		let dir = normalize_rel(path, true)?;
-		match crate::disc::trueosfs::list_dir(disk, dir.as_str())? {
+		match crate::v::fs::trueosfs::list_dir(disk, dir.as_str())? {
 			Some(v) => Ok(v),
 			None => Err(FsError::NoRoot),
 		}
@@ -185,7 +185,7 @@ pub mod kfs {
 	pub fn remove(path: &str) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let ok = crate::disc::trueosfs::file_delete(disk, name.as_str())?;
+		let ok = crate::v::fs::trueosfs::file_delete(disk, name.as_str())?;
 		if ok {
 			Ok(())
 		} else {
@@ -206,7 +206,7 @@ pub mod kfs {
 	pub fn exists(path: &str) -> Result<bool> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		Ok(crate::disc::trueosfs::file_exists(disk, name.as_str())?)
+		Ok(crate::v::fs::trueosfs::file_exists(disk, name.as_str())?)
 	}
 
 	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
@@ -216,7 +216,7 @@ pub mod kfs {
 	) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(dst_path, false)?;
-		let ok = crate::disc::trueosfs::file_append(disk, name.as_str(), src)?;
+		let ok = crate::v::fs::trueosfs::file_append(disk, name.as_str(), src)?;
 		if ok {
 			Ok(())
 		} else {

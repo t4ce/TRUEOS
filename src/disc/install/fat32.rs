@@ -135,7 +135,6 @@ fn pick_fat32_geometry(
     total_sectors: u32,
     bootx64_len: usize,
     kernel_len: usize,
-    payload_len: usize,
     limine_conf_len: usize,
 ) -> Option<(u32, u16, u32, u32)> {
     // Return (sectors_per_cluster, reserved_sectors, fat_sectors, first_data_sector)
@@ -162,7 +161,6 @@ fn pick_fat32_geometry(
         let dir_clusters: u32 = 4;
         let need_bootx64 = clusters_for_bytes(bootx64_len, spc);
         let need_kernel = clusters_for_bytes(kernel_len, spc);
-        let need_payload = clusters_for_bytes(payload_len, spc);
         let need_conf = clusters_for_bytes(limine_conf_len, spc);
         let slack: u32 = 32;
 
@@ -172,7 +170,6 @@ fn pick_fat32_geometry(
             .saturating_add(need_bootx64)
             .saturating_add(need_kernel)
             .saturating_add(need_conf)
-            .saturating_add(need_payload)
             .saturating_add(slack);
 
         if needed < total_clusters {
@@ -183,112 +180,10 @@ fn pick_fat32_geometry(
     None
 }
 
-fn compute_fat16_layout(
-    total_sectors: u32,
-    sectors_per_cluster: u32,
-    root_entries: u16,
-) -> Option<(u16, u16, u16, u32, u32)> {
-    // Returns (reserved_sectors, root_entries, fat_sectors, first_data_sector, clusters)
-    let reserved: u16 = 1;
-    let fats: u32 = 2;
-    let root_dir_sectors: u32 = ((root_entries as u32)
-        .saturating_mul(32)
-        .saturating_add(511))
-        / 512;
-
-    // Tiny volumes are not useful as an ESP for TRUEOS.
-    if total_sectors < 2048 {
-        return None;
-    }
-
-    let mut fat_sectors: u16 = 1;
-    for _ in 0..16 {
-        let first_data_sector = (reserved as u32)
-            .saturating_add(fats.saturating_mul(fat_sectors as u32))
-            .saturating_add(root_dir_sectors);
-        if first_data_sector >= total_sectors {
-            return None;
-        }
-
-        let data_sectors = total_sectors - first_data_sector;
-        let clusters = data_sectors / sectors_per_cluster;
-
-        // FAT16 is valid for 4085..=65524 clusters.
-        if !(4085..=65524).contains(&clusters) {
-            return None;
-        }
-
-        let fat_bytes_needed = (clusters as u64 + 2).saturating_mul(2);
-        let fat_sectors_needed = ((fat_bytes_needed + 511) / 512) as u16;
-        if fat_sectors_needed == fat_sectors {
-            return Some((
-                reserved,
-                root_entries,
-                fat_sectors,
-                first_data_sector,
-                clusters,
-            ));
-        }
-        fat_sectors = fat_sectors_needed;
-    }
-
-    None
-}
-
-fn pick_fat16_geometry(
-    total_sectors: u32,
-    bootx64_len: usize,
-    kernel_len: usize,
-    payload_len: usize,
-    limine_conf_len: usize,
-) -> Option<(u32, u16, u16, u16, u32, u32)> {
-    // Return (sectors_per_cluster, reserved_sectors, root_entries, fat_sectors, first_data_sector, total_clusters)
-    const CANDIDATES: [u32; 7] = [1, 2, 4, 8, 16, 32, 64];
-
-    let root_entries: u16 = 512;
-
-    for spc in CANDIDATES {
-        let Some((reserved, root_entries, fat_sectors, first_data_sector, total_clusters)) =
-            compute_fat16_layout(total_sectors, spc, root_entries)
-        else {
-            continue;
-        };
-
-        // Directory clusters: EFI + BOOT + install.
-        let dir_clusters: u32 = 3;
-        let need_bootx64 = clusters_for_bytes(bootx64_len, spc);
-        let need_kernel = clusters_for_bytes(kernel_len, spc);
-        let need_payload = clusters_for_bytes(payload_len, spc);
-        let need_conf = clusters_for_bytes(limine_conf_len, spc);
-        let slack: u32 = 32;
-
-        let needed = dir_clusters
-            .saturating_add(need_bootx64)
-            .saturating_add(need_kernel)
-            .saturating_add(need_conf)
-            .saturating_add(need_payload)
-            .saturating_add(slack);
-
-        if needed < total_clusters {
-            return Some((
-                spc,
-                reserved,
-                root_entries,
-                fat_sectors,
-                first_data_sector,
-                total_clusters,
-            ));
-        }
-    }
-
-    None
-}
-
 #[derive(Clone, Copy)]
 pub struct EspImage<'a> {
     pub bootx64_efi: &'a [u8],
     pub kernel_elf: &'a [u8],
-    pub payload_iso: Option<&'a [u8]>,
     pub limine_conf: &'a [u8],
 }
 
@@ -296,7 +191,6 @@ pub struct EspImage<'a> {
 /// - /EFI/BOOT/BOOTX64.EFI
 /// - /TRUEOS.ELF
 /// - /limine.conf
-/// - /install/PAYLOAD.ISO (optional)
 ///
 /// This intentionally does NOT use the `fatfs` crate; it writes the on-disk structures directly.
 pub async fn format_and_populate_esp_fat32(
@@ -336,13 +230,11 @@ pub async fn format_and_populate_esp_fat32_with_log(
         .as_str(),
     );
 
-    let payload_len = image.payload_iso.map_or(0, |p| p.len());
     let limine_conf_len = image.limine_conf.len();
     let Some((sectors_per_cluster, reserved, fat_sectors, first_data_sector)) = pick_fat32_geometry(
         total_sectors,
         image.bootx64_efi.len(),
         image.kernel_elf.len(),
-        payload_len,
         limine_conf_len,
     ) else {
         log(
@@ -372,9 +264,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
     let cl_root: u32 = 2;
     let cl_efi: u32 = 3;
     let cl_boot: u32 = 4;
-    let cl_install: u32 = 5;
 
-    let mut next_cluster: u32 = 6;
+    let mut next_cluster: u32 = 5;
 
     let bootx64_clusters = clusters_for_bytes(image.bootx64_efi.len(), sectors_per_cluster);
     let bootx64_start = next_cluster;
@@ -387,10 +278,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
     let conf_clusters = clusters_for_bytes(image.limine_conf.len(), sectors_per_cluster);
     let conf_start = next_cluster;
     next_cluster = next_cluster.saturating_add(conf_clusters);
-
-    let payload_clusters = clusters_for_bytes(payload_len, sectors_per_cluster);
-    let payload_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(payload_clusters);
 
     // Cluster count check against data area.
     let data_sectors = total_sectors - first_data_sector;
@@ -415,7 +302,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     set_fat(1, 0x0FFFFFFF);
 
     // Directories (single cluster, EOC).
-    for &c in &[cl_root, cl_efi, cl_boot, cl_install] {
+    for &c in &[cl_root, cl_efi, cl_boot] {
         set_fat(c, 0x0FFFFFFF);
     }
 
@@ -434,7 +321,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
     chain(bootx64_start, bootx64_clusters);
     chain(kernel_start, kernel_clusters);
     chain(conf_start, conf_clusters);
-    chain(payload_start, payload_clusters);
 
     // --- Write reserved region: boot sector, FSInfo, backup ---
     let mut boot = [0u8; 512];
@@ -546,7 +432,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
         };
 
         push(&dir_entry(name83("EFI", ""), 0x10, cl_efi, 0));
-        push(&dir_entry(name83("INSTALL", ""), 0x10, cl_install, 0));
         push(&dir_entry(
             name83("TRUEOS", "ELF"),
             0x20,
@@ -596,27 +481,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
             off += 32;
         }
         write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_boot, &dir, log).await?;
-    }
-
-    // INSTALL dir
-    {
-        let mut dir = [0u8; 512];
-        let mut off = 0;
-        for e in [
-            dir_entry(name83(".", ""), 0x10, cl_install, 0),
-            dir_entry(name83("..", ""), 0x10, cl_root, 0),
-        ] {
-            dir[off..off + 32].copy_from_slice(&e);
-            off += 32;
-        }
-
-        if let Some(payload) = image.payload_iso {
-            if !payload.is_empty() {
-                let e = dir_entry(name83("PAYLOAD", "ISO"), 0x20, payload_start, payload.len() as u32);
-                dir[off..off + 32].copy_from_slice(&e);
-            }
-        }
-        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_install, &dir, log).await?;
     }
 
     // --- File data ---
@@ -690,22 +554,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
             log,
         )
         .await?;
-        if let Some(payload) = image.payload_iso {
-            if !payload.is_empty() {
-                write_file(
-                    esp,
-                    sectors_per_cluster,
-                    first_data_sector,
-                    bytes_per_cluster,
-                    &mut cluster_buf,
-                    payload_start,
-                    payload_clusters,
-                    payload,
-                    log,
-                )
-                .await?;
-            }
-        }
     }
 
     esp.flush().await?;
@@ -717,405 +565,5 @@ pub async fn format_and_populate_esp_with_log(
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
 ) -> Result<(), block::Error> {
-    // Prefer FAT32, but fall back to FAT16 for small ESPs.
-    let image_copy = EspImage {
-        bootx64_efi: image.bootx64_efi,
-        kernel_elf: image.kernel_elf,
-        payload_iso: image.payload_iso,
-        limine_conf: image.limine_conf,
-    };
-
-    match format_and_populate_esp_fat32_with_log(esp, image_copy, log).await {
-        Ok(()) => Ok(()),
-        Err(block::Error::OutOfBounds) => {
-            log("install: esp: falling back to FAT16");
-            format_and_populate_esp_fat16_with_log(esp, image_copy, log).await
-        }
-        Err(e) => Err(e),
-    }
-}
-
-async fn format_and_populate_esp_fat16_with_log(
-    esp: DeviceHandle,
-    image: EspImage<'_>,
-    log: &mut dyn FnMut(&str),
-) -> Result<(), block::Error> {
-    if esp.parent().is_none() {
-        return Err(block::Error::InvalidParam);
-    }
-    if !esp.supports_write() {
-        return Err(block::Error::NotSupported);
-    }
-    let info = esp.info();
-    if info.block_size != 512 {
-        return Err(block::Error::NotSupported);
-    }
-
-    let total_sectors = core::cmp::min(info.block_count, u32::MAX as u64) as u32;
-    log(
-        alloc::format!(
-            "install: esp: total_sectors={} (~{} MiB)",
-            total_sectors,
-            (total_sectors as u64 * 512 + (1024 * 1024 - 1)) / (1024 * 1024)
-        )
-        .as_str(),
-    );
-
-    let payload_len = image.payload_iso.map_or(0, |p| p.len());
-    let limine_conf_len = image.limine_conf.len();
-    let Some((sectors_per_cluster, reserved, root_entries, fat_sectors, first_data_sector, total_clusters)) =
-        pick_fat16_geometry(
-            total_sectors,
-            image.bootx64_efi.len(),
-            image.kernel_elf.len(),
-            payload_len,
-            limine_conf_len,
-        )
-    else {
-        log(
-            alloc::format!(
-                "install: esp: failed to pick FAT16 geometry (total_sectors={})",
-                total_sectors
-            )
-            .as_str(),
-        );
-        return Err(block::Error::OutOfBounds);
-    };
-
-    log(
-        alloc::format!(
-            "install: esp: fat16 geometry spc={} reserved={} root_entries={} fat_sectors={} first_data_sector={} clusters={}",
-            sectors_per_cluster,
-            reserved,
-            root_entries,
-            fat_sectors,
-            first_data_sector,
-            total_clusters
-        )
-        .as_str(),
-    );
-
-    let bytes_per_cluster = (sectors_per_cluster as usize) * 512;
-    let fats: u32 = 2;
-    let root_dir_sectors: u32 = ((root_entries as u32).saturating_mul(32).saturating_add(511)) / 512;
-    let fat1_lba: u64 = reserved as u64;
-    let fat2_lba: u64 = fat1_lba + fat_sectors as u64;
-    let root_dir_lba: u64 = (reserved as u64) + fats as u64 * fat_sectors as u64;
-    let first_data_lba: u64 = root_dir_lba + root_dir_sectors as u64;
-
-    // Cluster assignments.
-    let cl_efi: u32 = 2;
-    let cl_boot: u32 = 3;
-    let cl_install: u32 = 4;
-    let mut next_cluster: u32 = 5;
-
-    let bootx64_clusters = clusters_for_bytes(image.bootx64_efi.len(), sectors_per_cluster);
-    let bootx64_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(bootx64_clusters);
-
-    let kernel_clusters = clusters_for_bytes(image.kernel_elf.len(), sectors_per_cluster);
-    let kernel_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(kernel_clusters);
-
-    let conf_clusters = clusters_for_bytes(image.limine_conf.len(), sectors_per_cluster);
-    let conf_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(conf_clusters);
-
-    let payload_clusters = clusters_for_bytes(payload_len, sectors_per_cluster);
-    let payload_start = next_cluster;
-    next_cluster = next_cluster.saturating_add(payload_clusters);
-
-    if next_cluster >= (total_clusters + 2) {
-        return Err(block::Error::OutOfBounds);
-    }
-
-    // --- Boot sector (FAT16) ---
-    let mut boot = [0u8; 512];
-    boot[0..3].copy_from_slice(&[0xEB, 0x3C, 0x90]);
-    boot[3..11].copy_from_slice(b"MSWIN4.1");
-    boot[11..13].copy_from_slice(&512u16.to_le_bytes());
-    boot[13] = sectors_per_cluster as u8;
-    boot[14..16].copy_from_slice(&reserved.to_le_bytes());
-    boot[16] = 2;
-    boot[17..19].copy_from_slice(&root_entries.to_le_bytes());
-
-    if total_sectors <= u16::MAX as u32 {
-        boot[19..21].copy_from_slice(&(total_sectors as u16).to_le_bytes());
-        boot[32..36].copy_from_slice(&0u32.to_le_bytes());
-    } else {
-        boot[19..21].copy_from_slice(&0u16.to_le_bytes());
-        boot[32..36].copy_from_slice(&total_sectors.to_le_bytes());
-    }
-
-    boot[21] = 0xF8;
-    boot[22..24].copy_from_slice(&fat_sectors.to_le_bytes());
-    boot[24..26].copy_from_slice(&63u16.to_le_bytes());
-    boot[26..28].copy_from_slice(&255u16.to_le_bytes());
-    boot[28..32].copy_from_slice(&0u32.to_le_bytes());
-
-    // Extended BPB (FAT16)
-    boot[36] = 0x80;
-    boot[38] = 0x29;
-    let mut vol_id = [0u8; 4];
-    if !crate::rng::fill_bytes(&mut vol_id) {
-        vol_id = 0x12345678u32.to_le_bytes();
-    }
-    boot[39..43].copy_from_slice(&vol_id);
-    boot[43..54].copy_from_slice(b"TRUEOS ESP ");
-    boot[54..62].copy_from_slice(b"FAT16   ");
-    boot[510] = 0x55;
-    boot[511] = 0xAA;
-
-    write_blocks_aligned_with_log(esp, 0, &boot, log).await?;
-
-    // --- FAT tables (FAT16) ---
-    let fat_bytes = (fat_sectors as usize) * 512;
-    let mut fat = vec![0u8; fat_bytes];
-
-    let mut set_fat16 = |cluster: u32, val: u16| {
-        let off = (cluster as usize) * 2;
-        if off + 2 <= fat.len() {
-            fat[off..off + 2].copy_from_slice(&val.to_le_bytes());
-        }
-    };
-
-    // Reserved entries.
-    set_fat16(0, 0xFFF8);
-    set_fat16(1, 0xFFFF);
-    for &c in &[cl_efi, cl_boot, cl_install] {
-        set_fat16(c, 0xFFFF);
-    }
-
-    let mut chain16 = |start: u32, count: u32| {
-        if count == 0 {
-            return;
-        }
-        for i in 0..count {
-            let c = start + i;
-            let next = if i + 1 == count { 0xFFFF } else { (c + 1) as u16 };
-            set_fat16(c, next);
-        }
-    };
-
-    chain16(bootx64_start, bootx64_clusters);
-    chain16(kernel_start, kernel_clusters);
-    chain16(conf_start, conf_clusters);
-    chain16(payload_start, payload_clusters);
-
-    for i in 0..fat_sectors as u64 {
-        let start = (i as usize) * 512;
-        let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat1_lba + i, &fat[start..end], log).await?;
-    }
-    for i in 0..fat_sectors as u64 {
-        let start = (i as usize) * 512;
-        let end = start + 512;
-        write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log).await?;
-    }
-
-    // --- Root directory (fixed region) ---
-    let mut root_dir = vec![0u8; (root_dir_sectors as usize) * 512];
-    let mut off = 0usize;
-    let mut push_root = |e: &[u8; 32]| {
-        if off + 32 <= root_dir.len() {
-            root_dir[off..off + 32].copy_from_slice(e);
-            off += 32;
-        }
-    };
-
-    push_root(&dir_entry(name83("EFI", ""), 0x10, cl_efi, 0));
-    push_root(&dir_entry(name83("INSTALL", ""), 0x10, cl_install, 0));
-    push_root(&dir_entry(
-        name83("TRUEOS", "ELF"),
-        0x20,
-        kernel_start,
-        image.kernel_elf.len() as u32,
-    ));
-    push_root(&dir_entry(
-        name83("LIMINE", "CONF"),
-        0x20,
-        conf_start,
-        image.limine_conf.len() as u32,
-    ));
-
-    for s in 0..(root_dir_sectors as u64) {
-        let o = (s as usize) * 512;
-        write_blocks_aligned_with_log(esp, root_dir_lba + s, &root_dir[o..o + 512], log).await?;
-    }
-
-    // Helper to write a whole cluster.
-    let mut cluster_buf = vec![0u8; bytes_per_cluster];
-    async fn write_cluster(
-        esp: DeviceHandle,
-        sectors_per_cluster: u32,
-        first_data_lba: u64,
-        cluster_buf: &mut [u8],
-        cluster: u32,
-        data: &[u8],
-        log: &mut dyn FnMut(&str),
-    ) -> Result<(), block::Error> {
-        cluster_buf.fill(0);
-        let take = core::cmp::min(cluster_buf.len(), data.len());
-        cluster_buf[..take].copy_from_slice(&data[..take]);
-        let first_sector = first_data_lba + ((cluster - 2) as u64) * (sectors_per_cluster as u64);
-        for s in 0..(sectors_per_cluster as u64) {
-            let buf_off = (s as usize) * 512;
-            write_blocks_aligned_with_log(
-                esp,
-                first_sector + s,
-                &cluster_buf[buf_off..buf_off + 512],
-                log,
-            )
-            .await?;
-        }
-        Ok(())
-    }
-
-    // --- Directories (clusters) ---
-    {
-        let mut dir = [0u8; 512];
-        let mut o = 0;
-        for e in [
-            dir_entry(name83(".", ""), 0x10, cl_efi, 0),
-            dir_entry(name83("..", ""), 0x10, 0, 0),
-            dir_entry(name83("BOOT", ""), 0x10, cl_boot, 0),
-        ] {
-            dir[o..o + 32].copy_from_slice(&e);
-            o += 32;
-        }
-        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_efi, &dir, log).await?;
-    }
-
-    {
-        let mut dir = [0u8; 512];
-        let mut o = 0;
-        for e in [
-            dir_entry(name83(".", ""), 0x10, cl_boot, 0),
-            dir_entry(name83("..", ""), 0x10, cl_efi, 0),
-            dir_entry(
-                name83("BOOTX64", "EFI"),
-                0x20,
-                bootx64_start,
-                image.bootx64_efi.len() as u32,
-            ),
-        ] {
-            dir[o..o + 32].copy_from_slice(&e);
-            o += 32;
-        }
-        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_boot, &dir, log).await?;
-    }
-
-    {
-        let mut dir = [0u8; 512];
-        let mut o = 0;
-        for e in [
-            dir_entry(name83(".", ""), 0x10, cl_install, 0),
-            dir_entry(name83("..", ""), 0x10, 0, 0),
-        ] {
-            dir[o..o + 32].copy_from_slice(&e);
-            o += 32;
-        }
-        if let Some(payload) = image.payload_iso {
-            if !payload.is_empty() {
-                let e = dir_entry(
-                    name83("PAYLOAD", "ISO"),
-                    0x20,
-                    payload_start,
-                    payload.len() as u32,
-                );
-                dir[o..o + 32].copy_from_slice(&e);
-            }
-        }
-        write_cluster(esp, sectors_per_cluster, first_data_lba, &mut cluster_buf, cl_install, &dir, log).await?;
-    }
-
-    // --- File data ---
-    {
-        async fn write_file(
-            esp: DeviceHandle,
-            sectors_per_cluster: u32,
-            first_data_lba: u64,
-            bytes_per_cluster: usize,
-            cluster_buf: &mut Vec<u8>,
-            start_cluster: u32,
-            clusters: u32,
-            data: &[u8],
-            log: &mut dyn FnMut(&str),
-        ) -> Result<(), block::Error> {
-            let mut remaining = data;
-            for i in 0..clusters {
-                let c = start_cluster + i;
-                let take = core::cmp::min(bytes_per_cluster, remaining.len());
-                write_cluster(
-                    esp,
-                    sectors_per_cluster,
-                    first_data_lba,
-                    cluster_buf,
-                    c,
-                    &remaining[..take],
-                    log,
-                )
-                .await?;
-                remaining = &remaining[take..];
-                crate::time::poll_executor();
-            }
-            Ok(())
-        }
-
-        write_file(
-            esp,
-            sectors_per_cluster,
-            first_data_lba,
-            bytes_per_cluster,
-            &mut cluster_buf,
-            bootx64_start,
-            bootx64_clusters,
-            image.bootx64_efi,
-            log,
-        )
-        .await?;
-        write_file(
-            esp,
-            sectors_per_cluster,
-            first_data_lba,
-            bytes_per_cluster,
-            &mut cluster_buf,
-            kernel_start,
-            kernel_clusters,
-            image.kernel_elf,
-            log,
-        )
-        .await?;
-        write_file(
-            esp,
-            sectors_per_cluster,
-            first_data_lba,
-            bytes_per_cluster,
-            &mut cluster_buf,
-            conf_start,
-            conf_clusters,
-            image.limine_conf,
-            log,
-        )
-        .await?;
-        if let Some(payload) = image.payload_iso {
-            if !payload.is_empty() {
-                write_file(
-                    esp,
-                    sectors_per_cluster,
-                    first_data_lba,
-                    bytes_per_cluster,
-                    &mut cluster_buf,
-                    payload_start,
-                    payload_clusters,
-                    payload,
-                    log,
-                )
-                .await?;
-            }
-        }
-    }
-
-    esp.flush().await?;
-    Ok(())
+    format_and_populate_esp_fat32_with_log(esp, image, log).await
 }
