@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 
-use crate::disc::{block, partition};
+use crate::disc::block;
+use crate::v::disc::partition;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -978,10 +979,10 @@ pub fn bsp_smoke_test_once() {
             // Disks can briefly report transient I/O errors right after bring-up.
             // Retry a handful of times so BSP logs reflect the steady state.
             let (status, err) = {
-                let mut last = (crate::disc::detect::DiscStatus::Unknown, None);
+                let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
                 let mut tries = 0u8;
                 while tries < 10 {
-                    let r = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
+                    let r = crate::time::block_on(crate::v::disc::detect::detect_physical_disk_detail(h));
                     match r.1 {
                         Some(e) if is_transient_io(e) => {
                             last = r;
@@ -1008,7 +1009,7 @@ pub fn bsp_smoke_test_once() {
             }
 
             if trueos_disk.is_none() {
-                if let crate::disc::detect::DiscStatus::Trueos { .. } = status {
+                if let crate::v::disc::detect::DiscStatus::Trueos { .. } = status {
                     trueos_disk = Some(h);
                 }
             }

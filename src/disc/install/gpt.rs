@@ -1,7 +1,7 @@
 use alloc::vec;
 
 use crate::disc::block::{DeviceHandle, Error, Result};
-use crate::disc::partition::{
+use crate::v::disc::partition::{
     BlockRange, TrueosBootLayout, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES, GPT_TYPE_LINUX_FILESYSTEM_BYTES,
 };
 

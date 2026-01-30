@@ -551,7 +551,6 @@ pub(crate) async fn install_matrix_job(
         },
     )
     .await;
-    .await;
     match result {
         Ok(()) => {
             let (status, err) = crate::disc::detect::detect_physical_disk_detail(disk).await;

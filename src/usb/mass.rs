@@ -522,7 +522,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
         // Best-effort: if this disk contains TRUEOSFS, register it as a root.
         // This enables higher layers (shell I/O, C ABI helpers) to read/write files.
-        match crate::disc::trueosfs::mount_root(handle) {
+        match crate::v::fs::trueosfs::mount_root(handle) {
             Ok(Some(disk_id)) => {
                 crate::log!(
                     "usb: trueosfs: mounted root disk_id={}\n",
@@ -541,7 +541,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         // after USB mass storage has registered into the block registry.
         // This is intentionally deferred (see `bsp_smoke_service_task`) to avoid stalling
         // USB enumeration with synchronous filesystem I/O.
-        crate::disc::trueosfs::request_bsp_smoke_test();
+        crate::v::fs::trueosfs::request_bsp_smoke_test();
     }
 
     Ok(())

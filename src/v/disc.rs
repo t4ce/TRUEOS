@@ -3,8 +3,7 @@
 //! This module is the home for block-device virtualization/stacking:
 //! partitions, ramdisks, crypto, caching, etc.
 //!
-//! For now it wires in existing disk partition support.
+//! This is where block-device virtualization/stacking lives.
 
-pub mod partition {
-    pub use crate::disc::partition::*;
-}
+pub mod partition;
+pub mod detect;
