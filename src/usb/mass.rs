@@ -7,11 +7,34 @@ use super::bot;
 use super::scsi;
 use crate::pci::dma;
 use crate::disc::block as disc_block;
+use core::hint::spin_loop;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
 use heapless::Vec;
 use spin::Mutex;
+
+fn spin_wait_ms(ms: u64) {
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    let start = embassy_time_driver::now();
+    let delta_ticks = if hz == 0 {
+        0
+    } else {
+        // Round up to at least one tick when ms>0.
+        let ticks = (ms.saturating_mul(hz) + 999) / 1000;
+        if ms > 0 { ticks.max(1) } else { 0 }
+    };
+    let deadline = start.saturating_add(delta_ticks);
+    while embassy_time_driver::now() < deadline {
+        crate::time::poll_executor();
+        spin_loop();
+    }
+}
+
+#[inline]
+fn sense_is_transient(key: scsi::SenseKey) -> bool {
+    matches!(key, scsi::SenseKey::NotReady | scsi::SenseKey::UnitAttention | scsi::SenseKey::AbortedCommand)
+}
 
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
@@ -482,9 +505,11 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         // This is best-effort and simply schedules a rescan by the files service task.
         crate::disc::files::request_files_scan();
 
-        // If we're booting from a single USB pen drive, run the TrueOSFS BSP smoke test
-        // only after USB mass storage has registered into the block registry.
-        crate::disc::trueosfs::bsp_smoke_test_once();
+        // If we're booting from a single USB pen drive, trigger the TrueOSFS BSP smoke test
+        // after USB mass storage has registered into the block registry.
+        // This is intentionally deferred (see `bsp_smoke_service_task`) to avoid stalling
+        // USB enumeration with synchronous filesystem I/O.
+        crate::disc::trueosfs::request_bsp_smoke_test();
     }
 
     Ok(())
@@ -551,7 +576,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
 
                 let mut ok = false;
                 let mut attempts = 0u8;
-                while attempts < 3 {
+                while attempts < 10 {
                     let c = bot::scsi_read_10_sync(
                         &ctx,
                         &mut rt.ring_out,
@@ -589,16 +614,24 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                     sense.asc,
                                     sense.ascq
                                 );
-                                if sense.sense_key == scsi::SenseKey::NotReady {
+                                if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
+                                    spin_wait_ms(25);
                                     continue;
                                 }
                             } else {
                                 crate::log!("usb: mass read csw={:?} request-sense failed\n", csw.status);
+                                attempts = attempts.wrapping_add(1);
+                                spin_wait_ms(25);
+                                continue;
                             }
                             break;
                         }
-                        Err(()) => break,
+                        Err(()) => {
+                            attempts = attempts.wrapping_add(1);
+                            spin_wait_ms(25);
+                            continue;
+                        }
                     }
                 }
 
@@ -673,7 +706,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
 
                 let mut ok = false;
                 let mut attempts = 0u8;
-                while attempts < 3 {
+                while attempts < 10 {
                     let c = bot::scsi_write_10_sync(
                         &ctx,
                         &mut rt.ring_out,
@@ -711,16 +744,24 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                     sense.asc,
                                     sense.ascq
                                 );
-                                if sense.sense_key == scsi::SenseKey::NotReady {
+                                if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
+                                    spin_wait_ms(25);
                                     continue;
                                 }
                             } else {
                                 crate::log!("usb: mass write csw={:?} request-sense failed\n", csw.status);
+                                attempts = attempts.wrapping_add(1);
+                                spin_wait_ms(25);
+                                continue;
                             }
                             break;
                         }
-                        Err(()) => break,
+                        Err(()) => {
+                            attempts = attempts.wrapping_add(1);
+                            spin_wait_ms(25);
+                            continue;
+                        }
                     }
                 }
 
