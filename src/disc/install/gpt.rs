@@ -114,7 +114,7 @@ fn write_blocks_aligned_with_log(
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-    match device.write_blocks(lba, tmp.as_mut_slice()) {
+    match crate::time::block_on(device.write_blocks(lba, tmp.as_mut_slice())) {
         Ok(()) => Ok(()),
         Err(e) => {
             log(
@@ -296,7 +296,7 @@ pub fn write_trueos_bootable_gpt_layout_with_log(
     backup_header[16..20].copy_from_slice(&backup_crc.to_le_bytes());
     write_blocks_aligned_with_log(device, last_lba, &backup_header, log)?;
 
-    device.flush()?;
+    crate::time::block_on(device.flush())?;
 
     Ok(TrueosBootLayout {
         esp: BlockRange::from_bounds(esp_first, esp_last)?,

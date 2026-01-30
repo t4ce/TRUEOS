@@ -169,6 +169,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         if blocks == 0 {
             return Ok(Vec::new());
         }
+
         let info = self.handle.info();
         let bs = info.block_size as usize;
         if bs == 0 {
@@ -180,23 +181,18 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         } else {
             1
         };
-        let align = info.dma_alignment.max(1) as usize;
 
         let mut out = Vec::with_capacity(bs.saturating_mul(blocks));
         let mut cur_lba = lba;
         let mut remaining = blocks;
         while remaining > 0 {
             let blocks_here = core::cmp::min(remaining, max_blocks);
-            let bytes_here = blocks_here.saturating_mul(bs);
-            let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
-            tmp.as_mut_slice().fill(0);
-            self.handle.read_blocks(cur_lba, tmp.as_mut_slice())?;
-            out.extend_from_slice(tmp.as_mut_slice());
-
+            let tmp = crate::time::block_on(self.handle.read_blocks(cur_lba, blocks_here))?;
+            out.extend_from_slice(&tmp);
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining = remaining.saturating_sub(blocks_here);
-            crate::time::poll_executor();
         }
+
         Ok(out)
     }
 
@@ -215,7 +211,6 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         } else {
             1
         };
-        let align = info.dma_alignment.max(1) as usize;
 
         let mut cur_lba = lba;
         let mut off = 0usize;
@@ -223,13 +218,9 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             let remaining = buf.len() - off;
             let blocks_here = core::cmp::min(max_blocks, remaining / bs);
             let bytes_here = blocks_here * bs;
-            let mut tmp = AlignedBuf::new(bytes_here, align).ok_or(block::Error::DmaUnavailable)?;
-            tmp.as_mut_slice().copy_from_slice(&buf[off..off + bytes_here]);
-            self.handle.write_blocks(cur_lba, tmp.as_mut_slice())?;
-
+            crate::time::block_on(self.handle.write_blocks(cur_lba, &buf[off..off + bytes_here]))?;
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             off = off.saturating_add(bytes_here);
-            crate::time::poll_executor();
         }
 
         Ok(())
@@ -237,7 +228,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
 
     #[inline]
     fn flush(&self) -> Result<(), block::Error> {
-        self.handle.flush()
+        crate::time::block_on(self.handle.flush())
     }
 }
 
@@ -522,17 +513,7 @@ impl Drop for AlignedBuf {
 }
 
 fn read_blocks_aligned(handle: block::DeviceHandle, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-    let info = handle.info();
-    let bs = info.block_size as usize;
-    if bs == 0 {
-        return Err(block::Error::InvalidParam);
-    }
-    let bytes = bs.saturating_mul(blocks);
-    let align = info.dma_alignment.max(1) as usize;
-    let mut tmp = AlignedBuf::new(bytes, align).ok_or(block::Error::DmaUnavailable)?;
-    tmp.as_mut_slice().fill(0);
-    handle.read_blocks(lba, tmp.as_mut_slice())?;
-    Ok(tmp.as_mut_slice().to_vec())
+    crate::time::block_on(handle.read_blocks(lba, blocks))
 }
 
 fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
@@ -551,7 +532,7 @@ fn spin_wait_ms(ms: u64) {
     };
     let deadline = start.saturating_add(delta_ticks);
     while embassy_time_driver::now() < deadline {
-        crate::time::poll_executor();
+        crate::time::poll();
         spin_loop();
     }
 }
@@ -596,7 +577,7 @@ pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, 
     {
         let mut tries = 0u8;
         while tries < 5 {
-            match partition::read_gpt_partitions(handle) {
+            match crate::time::block_on(partition::read_gpt_partitions(handle)) {
                 Ok(parts) => {
                     let mut has_esp = false;
                     for p in parts.iter() {
@@ -654,7 +635,7 @@ pub fn format_blank(handle: block::DeviceHandle) -> Result<(), block::Error> {
 
     // If the disk is GPT-partitioned and has an ESP, do NOT clobber LBA0.
     // Only format an existing TRUEOS data partition (bootable layout).
-    if let Ok(parts) = partition::read_gpt_partitions(handle) {
+    if let Ok(parts) = crate::time::block_on(partition::read_gpt_partitions(handle)) {
         let has_esp = parts
             .iter()
             .any(|p| p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES);
@@ -701,11 +682,11 @@ pub fn format_blank_force(handle: block::DeviceHandle) -> Result<(), block::Erro
         z.fill(0);
 
         // Primary GPT header.
-        let _ = handle.write_blocks(1, z);
+        let _ = crate::time::block_on(handle.write_blocks(1, z));
         // Backup GPT header.
         let last_lba = info.block_count.saturating_sub(1);
-        let _ = handle.write_blocks(last_lba, z);
-        let _ = handle.flush();
+        let _ = crate::time::block_on(handle.write_blocks(last_lba, z));
+        let _ = crate::time::block_on(handle.flush());
     }
 
     format_blank_at(handle, 0)
@@ -748,8 +729,8 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
 
     trueos_fs::write_blank_superblock(&mut buf[..bs]);
 
-    handle.write_blocks(super_lba, buf)?;
-    handle.flush()?;
+    crate::time::block_on(handle.write_blocks(super_lba, buf))?;
+    crate::time::block_on(handle.flush())?;
 
     // Verify the superblock write actually stuck (important for flaky USBMS media).
     let verify0 = read_blocks_aligned_retry(handle, super_lba, 1, 10)?;
@@ -780,14 +761,11 @@ fn format_blank_at(handle: block::DeviceHandle, super_lba: u64) -> Result<(), bl
                 }
             }
 
-            handle.write_blocks(data_lba, w)?;
-            handle.flush()?;
+            crate::time::block_on(handle.write_blocks(data_lba, w))?;
+            crate::time::block_on(handle.flush())?;
 
-            let mut rtmp = AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
-            let r = rtmp.as_mut_slice();
-            r.fill(0);
-            handle.read_blocks(data_lba, r)?;
-            if r != w {
+            let r = crate::time::block_on(handle.read_blocks(data_lba, blocks_verify))?;
+            if r.as_slice() != w {
                 return Err(block::Error::Corrupted);
             }
         }
@@ -838,7 +816,7 @@ pub fn bsp_smoke_test_once() {
                 let mut last = (crate::disc::detect::DiscStatus::Unknown, None);
                 let mut tries = 0u8;
                 while tries < 10 {
-                    let r = crate::disc::detect::detect_physical_disk_detail(h);
+                    let r = crate::time::block_on(crate::disc::detect::detect_physical_disk_detail(h));
                     match r.1 {
                         Some(e) if is_transient_io(e) => {
                             last = r;
