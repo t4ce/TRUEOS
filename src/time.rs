@@ -23,6 +23,7 @@ static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
+static BLOCK_ON_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -67,6 +68,26 @@ pub fn poll_executor() {
     unsafe { (&*ptr).poll() };
 }
 
+/// Install a hook that is called from within [`block_on`] while it is spinning.
+///
+/// This is intended for low-level polling (e.g. draining hardware event rings)
+/// to keep I/O progressing when synchronous code needs to wait on an async
+/// operation.
+pub fn register_block_on_hook(hook: fn()) {
+    BLOCK_ON_HOOK.store(hook as *mut (), Ordering::Release);
+}
+
+#[inline]
+fn block_on_hook() {
+    let ptr = BLOCK_ON_HOOK.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return;
+    }
+    // Safety: only written via `register_block_on_hook`.
+    let f: fn() = unsafe { core::mem::transmute(ptr) };
+    f();
+}
+
 fn dummy_raw_waker() -> RawWaker {
     fn clone(_: *const ()) -> RawWaker {
         dummy_raw_waker()
@@ -97,6 +118,10 @@ pub fn block_on<F: Future>(mut fut: F) -> F::Output {
     loop {
         // Drive Embassy timers.
         self::poll();
+
+        // Allow synchronous callers to keep critical subsystems progressing
+        // (without polling the executor re-entrantly).
+        block_on_hook();
 
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(v) => return v,

@@ -243,6 +243,7 @@ pub extern "C" fn kmain() -> ! {
 
     power::init();
     usb::xhci::init_once();
+    usb::xhci::install_block_on_hook();
     usb::truekey::init();
 
     let resp = limine::smp_response().unwrap();

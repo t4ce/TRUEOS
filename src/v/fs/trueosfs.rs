@@ -62,6 +62,7 @@ struct RootMount {
     seq: u32,
     tree: Option<Box<TrueosFsTree>>,
     index: Option<Box<TrueosFsIndex>>,
+    writes_since_checkpoint: u32,
 }
 
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -329,7 +330,7 @@ pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, bl
         None => None,
     };
 
-    let index = build_root_index(disk, &placement).unwrap_or(None);
+    let (index, writes_since_checkpoint) = build_root_index(disk, &placement).unwrap_or((None, 0));
 
     let mut roots = ROOTS.lock();
     if roots.iter().any(|m| m.disk_id == disk_id) {
@@ -341,6 +342,7 @@ pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, bl
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         tree,
         index,
+        writes_since_checkpoint,
     });
 
     Ok(Some(disk_id))
@@ -386,7 +388,7 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         None => None,
     };
 
-    let index = build_root_index(disk, &placement).unwrap_or(None);
+    let (index, writes_since_checkpoint) = build_root_index(disk, &placement).unwrap_or((None, 0));
 
     let mut roots = ROOTS.lock();
     if roots.iter().any(|m| m.disk_id == disk_id) {
@@ -398,6 +400,7 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         tree,
         index,
+        writes_since_checkpoint,
     });
 
     Ok(Some(disk_id))
@@ -431,7 +434,10 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
     let ok = trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
-        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        if let Some(applied) = applied {
+            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+        }
     }
     Ok(ok)
 }
@@ -506,7 +512,10 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     let ok = trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
-        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        if let Some(applied) = applied {
+            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+        }
     }
     Ok(ok)
 }
@@ -589,7 +598,7 @@ pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, 
     let disk_id = disk.id();
 
     if root_mount_has_index(disk_id) {
-        if let Some(out) = list_dir_from_index(disk_id, dir) {
+        if let Some(out) = list_dir_from_index(&io, &params, disk_id, dir) {
             return Ok(Some(out));
         }
     }
@@ -624,7 +633,10 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
     let ok = trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
-        replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
+        if let Some(applied) = applied {
+            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+        }
     }
     Ok(ok)
 }
@@ -635,11 +647,14 @@ fn replay_tail_into_index(
     params: &trueos_fs::FsParams,
     start_rel: u64,
     end_rel: u64,
-) {
+) -> Option<u32> {
     if start_rel >= end_rel {
-        return;
+        return Some(0);
     }
-    let _ = trueos_fs::replay_log_range(io, params, start_rel, end_rel, |kind, name_bytes, entry_lba| {
+
+    let mut applied = 0u32;
+    trueos_fs::replay_log_range(io, params, start_rel, end_rel, |kind, name_bytes, entry_lba| {
+        applied = applied.saturating_add(1);
         root_index_insert_if_mounted(
             disk_id,
             name_bytes,
@@ -648,7 +663,50 @@ fn replay_tail_into_index(
                 entry_lba,
             },
         );
-    });
+    })
+    .ok()?;
+
+    Some(applied)
+}
+
+fn root_index_note_writes_and_maybe_checkpoint(
+    disk_id: block::DiscId,
+    io: &KernelBlockIo,
+    params: &trueos_fs::FsParams,
+    replay_from_rel_blocks: u64,
+    newly_applied: u32,
+) {
+    if newly_applied == 0 {
+        return;
+    }
+
+    // Update the counter and snapshot index entries under the lock.
+    // Do not do I/O while holding the lock.
+    let entries: Vec<(Vec<u8>, trueos_fs::LogKind, u64)> = {
+        let mut roots = ROOTS.lock();
+        let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
+            return;
+        };
+        let Some(idx) = m.index.as_deref() else {
+            return;
+        };
+
+        m.writes_since_checkpoint = m.writes_since_checkpoint.saturating_add(newly_applied);
+        if m.writes_since_checkpoint < 32 {
+            return;
+        }
+
+        idx.iter().map(|(k, v)| (k.clone(), v.kind, v.entry_lba)).collect()
+    };
+
+    // Attempt checkpoint write without holding ROOTS lock.
+    let ok = trueos_fs::write_index_checkpoint(io, params, replay_from_rel_blocks, entries.into_iter()).ok();
+    if ok == Some(true) {
+        let mut roots = ROOTS.lock();
+        if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+            m.writes_since_checkpoint = 0;
+        }
+    }
 }
 
 fn read_log_head_rel_blocks(
@@ -686,26 +744,73 @@ fn root_index_insert_if_mounted(disk_id: block::DiscId, key: Vec<u8>, r: IndexRe
     let _ = idx.insert(key, r);
 }
 
-fn list_dir_from_index(disk_id: block::DiscId, dir: &str) -> Option<String> {
-    let roots = ROOTS.lock();
-    let idx = roots.iter().find(|m| m.disk_id == disk_id)?.index.as_deref()?;
+fn normalize_rel_no_parent(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return Some(String::new());
+    }
+    let mut out = String::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    Some(out)
+}
 
-    let rel = dir.trim_matches('/');
+fn list_dir_from_index(
+    io: &KernelBlockIo,
+    params: &trueos_fs::FsParams,
+    disk_id: block::DiscId,
+    dir: &str,
+) -> Option<String> {
+    let Some(rel) = normalize_rel_no_parent(dir) else {
+        return Some(String::new());
+    };
     let prefix = if rel.is_empty() {
         Vec::new()
     } else {
-        let mut p = rel.as_bytes().to_vec();
+        let mut p = rel.into_bytes();
         p.push(b'/');
         p
     };
 
-    let mut live: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
-    for (k, v) in idx.iter_from(&prefix) {
-        if !k.as_slice().starts_with(prefix.as_slice()) {
-            break;
+    // Collect candidate full keys while holding the lock; do not do I/O under the lock.
+    let candidates: Vec<(Vec<u8>, IndexRef)> = {
+        let roots = ROOTS.lock();
+        let idx = roots.iter().find(|m| m.disk_id == disk_id)?.index.as_deref()?;
+
+        let mut out: Vec<(Vec<u8>, IndexRef)> = Vec::new();
+        for (k, v) in idx.iter_from(&prefix) {
+            if !k.as_slice().starts_with(prefix.as_slice()) {
+                break;
+            }
+            if v.kind != trueos_fs::LogKind::Put {
+                continue;
+            }
+            out.push((k.clone(), *v));
         }
-        if v.kind != trueos_fs::LogKind::Put {
-            continue;
+        out
+    };
+
+    let mut live: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+    for (k, v) in candidates.into_iter() {
+        // Validate against on-disk entry so a stale/corrupt index can't lie.
+        let Ok(kind_opt) = trueos_fs::read_entry_kind_at_named(io, params, v.entry_lba, k.as_slice()) else {
+            return None;
+        };
+        let Some(kind) = kind_opt else {
+            return None;
+        };
+        if kind != trueos_fs::LogKind::Put {
+            // Index says Put but disk disagrees: fall back to engine scan for correctness.
+            return None;
         }
 
         let rest = &k[prefix.len()..];
@@ -733,7 +838,7 @@ fn list_dir_from_index(disk_id: block::DiscId, dir: &str) -> Option<String> {
 fn build_root_index(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,
-) -> Result<Option<Box<TrueosFsIndex>>, block::Error> {
+) -> Result<(Option<Box<TrueosFsIndex>>, u32), block::Error> {
     let params = trueos_fs::FsParams {
         super_lba: placement.super_lba,
         data_lba: placement.data_lba,
@@ -747,6 +852,7 @@ fn build_root_index(
 
     let mut index = TrueosFsIndex::new();
     let mut replay_from_rel = 0u64;
+    let mut replayed = 0u32;
 
     match trueos_fs::read_index_checkpoint(&io, &params) {
         Ok(Some(ckpt)) => {
@@ -774,6 +880,7 @@ fn build_root_index(
         replay_from_rel,
         sb.log_head_rel_blocks,
         |kind, name_bytes, entry_lba| {
+            replayed = replayed.saturating_add(1);
             let _ = index.insert(
                 name_bytes,
                 IndexRef {
@@ -784,19 +891,33 @@ fn build_root_index(
         },
     );
 
-    // Best-effort: if no checkpoint exists yet, write one so next mount can be fast.
-    if disk.supports_write() && sb.checkpoint_rel_blocks == 0 {
-        let _ = trueos_fs::write_index_checkpoint(
+    // Best-effort checkpoint policy:
+    // - If no checkpoint exists, write one.
+    // - If we had to replay >=32 records, write a new checkpoint after replay.
+    let wrote_ckpt = if disk.supports_write() && (sb.checkpoint_rel_blocks == 0 || replayed >= 32) {
+        trueos_fs::write_index_checkpoint(
             &io,
             &params,
             sb.log_head_rel_blocks,
-            index
-                .iter()
-                .map(|(k, v)| (k.clone(), v.kind, v.entry_lba)),
-        );
-    }
+            index.iter().map(|(k, v)| (k.clone(), v.kind, v.entry_lba)),
+        )
+        .ok()
+        == Some(true)
+    } else {
+        false
+    };
 
-    Ok(Some(Box::new(index)))
+    // If we couldn't write a checkpoint but we replayed a lot, force the next write
+    // to try again.
+    let writes_since_checkpoint = if wrote_ckpt {
+        0
+    } else if replayed >= 32 {
+        32
+    } else {
+        0
+    };
+
+    Ok((Some(Box::new(index)), writes_since_checkpoint))
 }
 
 pub fn roots_len() -> usize {
