@@ -851,10 +851,16 @@ fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     let src = src.trim();
     if src.is_empty() {
         super::shellqjs::help(ctx.io);
+        super::CommandAction::None
     } else {
-        super::shellqjs::run(ctx.io, src);
+        let mut buf: heapless::String<192> = heapless::String::new();
+        for ch in src.chars() {
+            if buf.push(ch).is_err() {
+                break;
+            }
+        }
+        super::CommandAction::Qjs { src: buf }
     }
-    super::CommandAction::None
 }
 
 fn cmd_mv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
@@ -868,11 +874,21 @@ fn cmd_mv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
         ctx.io.write_str("mv: usage mv <src> <dst>\r\n");
         return super::CommandAction::None;
     }
-    match crate::surface::io::kfs::rename(src, dst) {
-        Ok(()) => ctx.io.write_str("mv: ok\r\n"),
-        Err(e) => ctx.io.write_fmt(format_args!("mv: failed ({:?})\r\n", e)),
+
+    fn path_160(s: &str) -> heapless::String<160> {
+        let mut out: heapless::String<160> = heapless::String::new();
+        for ch in s.chars() {
+            if out.push(ch).is_err() {
+                break;
+            }
+        }
+        out
     }
-    super::CommandAction::None
+
+    super::CommandAction::Mv {
+        src: path_160(src),
+        dst: path_160(dst),
+    }
 }
 
 fn cmd_reset(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

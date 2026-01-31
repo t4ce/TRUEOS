@@ -389,10 +389,10 @@ pub(crate) async fn boot_cache_pci_ids_task() {
 
     // Retry: USBMS/FAT may not be ready when the executor starts.
     for attempt in 1..=60u32 {
-        match crate::surface::io::kfs::exists(PATH) {
+        match crate::surface::io::kfs::exists_async(PATH).await {
             Ok(true) => {
                 crate::log!("pciids: cache hit path={}\n", PATH);
-                if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+                if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
                     log_pci_enumeration_with_cached_ids(&db);
                 }
                 return;
@@ -404,7 +404,7 @@ pub(crate) async fn boot_cache_pci_ids_task() {
         // One-time migration from old locations (avoid redownload after upgrades).
         // We also sanitize during migration so the persistent cache stays normalized.
         for old in OLD_PATHS {
-            match crate::surface::io::kfs::exists(old) {
+            match crate::surface::io::kfs::exists_async(old).await {
                 Ok(true) => {
                     if let Some((parent, _name)) = PATH.rsplit_once('/') {
                         if !parent.is_empty() {
@@ -412,13 +412,17 @@ pub(crate) async fn boot_cache_pci_ids_task() {
                         }
                     }
 
-                    if let Ok(raw) = crate::surface::io::kfs::read_file(old) {
+                    if let Ok(raw) = crate::surface::io::kfs::read_file_async(old).await {
                         let cleaned = sanitize_pci_ids(&raw);
                         let tmp = alloc::format!("{}.tmp", PATH);
-                        if crate::surface::io::kfs::write_file(tmp.as_str(), &cleaned).is_ok()
-                            && crate::surface::io::kfs::rename(tmp.as_str(), PATH).is_ok()
+                        if crate::surface::io::kfs::write_file_async(tmp.as_str(), &cleaned)
+                            .await
+                            .is_ok()
+                            && crate::surface::io::kfs::rename_async(tmp.as_str(), PATH)
+                                .await
+                                .is_ok()
                         {
-                            let _ = crate::surface::io::kfs::remove(old);
+                            let _ = crate::surface::io::kfs::remove_async(old).await;
                             crate::log!(
                                 "pciids: migrated+sanitized old={} new={} bytes_in={} bytes_out={}\n",
                                 old,
@@ -426,12 +430,12 @@ pub(crate) async fn boot_cache_pci_ids_task() {
                                 raw.len(),
                                 cleaned.len(),
                             );
-                            if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+                            if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
                                 log_pci_enumeration_with_cached_ids(&db);
                             }
                             return;
                         }
-                        let _ = crate::surface::io::kfs::remove(tmp.as_str());
+                        let _ = crate::surface::io::kfs::remove_async(tmp.as_str()).await;
                     }
                 }
                 Ok(false) => {}
@@ -475,8 +479,11 @@ pub(crate) async fn boot_cache_pci_ids_task() {
 
         let cleaned = sanitize_pci_ids(&raw);
         let tmp = alloc::format!("{}.tmp", PATH);
-        let write_res = crate::surface::io::kfs::write_file(tmp.as_str(), &cleaned);
-        let rename_res = write_res.and_then(|_| crate::surface::io::kfs::rename(tmp.as_str(), PATH));
+        let write_res = crate::surface::io::kfs::write_file_async(tmp.as_str(), &cleaned).await;
+        let rename_res = match write_res {
+            Ok(()) => crate::surface::io::kfs::rename_async(tmp.as_str(), PATH).await,
+            Err(e) => Err(e),
+        };
         if rename_res.is_ok() {
             crate::log!(
                 "pciids: downloaded+sanitized ok url={} path={} bytes_in={} bytes_out={}\n",
@@ -485,13 +492,13 @@ pub(crate) async fn boot_cache_pci_ids_task() {
                 raw.len(),
                 cleaned.len(),
             );
-            if let Ok(db) = crate::surface::io::kfs::read_file(PATH) {
+            if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
                 log_pci_enumeration_with_cached_ids(&db);
             }
             return;
         }
 
-        let _ = crate::surface::io::kfs::remove(tmp.as_str());
+        let _ = crate::surface::io::kfs::remove_async(tmp.as_str()).await;
         crate::log!(
             "pciids: attempt={} write_failed={:?} rename_failed={:?} url={} path={}\n",
             attempt,

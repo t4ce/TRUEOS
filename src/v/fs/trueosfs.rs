@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_fs::BlockIo;
-use trueos_math::{BPlusTree, Tree};
+use trueos_math::BPlusTree;
 
 const TRUEOSFS_INDEX_M: usize = 16;
 const TRUEOSFS_CHECKPOINT_EVERY: u32 = 32;
@@ -34,34 +34,9 @@ pub struct TrueosFsPlacement {
     pub data_end_lba_exclusive: Option<u64>,
 }
 
-/// TRUEOSFS per-disk root filetree cache.
-///
-/// This is intentionally limited in scope: it is *not* a page cache.
-/// It is meant to memoize directory/file listings once we implement them.
-const TRUEOSFS_TREE_CAP: usize = 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TrueosFsTreeKind {
-    Root,
-    Dir,
-    File,
-    /// Represents a nested TRUEOSFS inside the tree (future mountpoint concept).
-    TrueosFs,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrueosFsTreeEntry {
-    pub kind: TrueosFsTreeKind,
-    pub name: String,
-}
-
-pub type TrueosFsTree = Tree<TrueosFsTreeEntry, TRUEOSFS_TREE_CAP>;
-
 struct RootMount {
     disk_id: block::DiscId,
-    placement: TrueosFsPlacement,
     seq: u32,
-    tree: Option<Box<TrueosFsTree>>,
     index: Option<Box<TrueosFsIndex>>,
     writes_since_checkpoint: u32,
 }
@@ -314,25 +289,6 @@ pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, bl
         }
     }
 
-    // Seed an initial tree skeleton. Directory enumeration will fill this later.
-    let mut tree = TrueosFsTree::new();
-    let tree = match tree.add_root(TrueosFsTreeEntry {
-        kind: TrueosFsTreeKind::Root,
-        name: String::from("trueosfs"),
-    }) {
-        Some(root) => {
-            let _ = tree.add_child(
-                root,
-                TrueosFsTreeEntry {
-                    kind: TrueosFsTreeKind::Dir,
-                    name: String::from("/"),
-                },
-            );
-            Some(Box::new(tree))
-        }
-        None => None,
-    };
-
     let (index, writes_since_checkpoint) = build_root_index(disk, &placement).unwrap_or((None, 0));
 
     let mut roots = ROOTS.lock();
@@ -341,9 +297,7 @@ pub fn mount_root(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, bl
     }
     roots.push(RootMount {
         disk_id,
-        placement,
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
-        tree,
         index,
         writes_since_checkpoint,
     });
@@ -359,7 +313,7 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(placement) = locate_async(disk).await? else {
+    let Some(_placement) = locate_async(disk).await? else {
         return Ok(None);
     };
 
@@ -371,25 +325,6 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
             return Ok(Some(disk_id));
         }
     }
-
-    // Seed an initial tree skeleton. Directory enumeration will fill this later.
-    let mut tree = TrueosFsTree::new();
-    let tree = match tree.add_root(TrueosFsTreeEntry {
-        kind: TrueosFsTreeKind::Root,
-        name: String::from("trueosfs"),
-    }) {
-        Some(root) => {
-            let _ = tree.add_child(
-                root,
-                TrueosFsTreeEntry {
-                    kind: TrueosFsTreeKind::Dir,
-                    name: String::from("/"),
-                },
-            );
-            Some(Box::new(tree))
-        }
-        None => None,
-    };
 
     // IMPORTANT: do not call `build_root_index()` here.
     // `build_root_index()` uses the synchronous TRUEOSFS engine which calls into
@@ -409,9 +344,7 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
     }
     roots.push(RootMount {
         disk_id,
-        placement,
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
-        tree,
         index,
         writes_since_checkpoint,
     });
@@ -1139,14 +1072,6 @@ pub fn primary_root_handle() -> Option<block::DeviceHandle> {
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
     roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)
-}
-
-pub fn with_root_tree<R>(disk_id: block::DiscId, f: impl FnOnce(u32, &TrueosFsPlacement, &TrueosFsTree) -> R) -> Option<R> {
-    let roots = ROOTS.lock();
-    roots
-        .iter()
-        .find(|m| m.disk_id == disk_id)
-        .and_then(|m| m.tree.as_deref().map(|t| f(m.seq, &m.placement, t)))
 }
 
 struct AlignedBuf {
