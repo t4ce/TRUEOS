@@ -316,111 +316,56 @@ impl<T, const N: usize> Tree<T, N> {
     /// - The traversal is depth-first.
     /// - Sibling order is reverse insertion order (stack-based).
     /// - `max_entries` limits the number of printed nodes (including `start`).
-    pub fn write_ascii_tree<W, F>(
-        &self,
-        start: NodeId,
-        out: &mut W,
-        max_entries: usize,
-        mut render: F,
-    ) -> fmt::Result
+    pub fn write_ascii_tree<W, F>(&self, start: NodeId, out: &mut W, max_entries: usize, mut render: F) -> fmt::Result
     where
         W: Write,
         F: FnMut(&T, &mut W) -> fmt::Result,
     {
-        if max_entries == 0 {
+        use crate::ascii_tree::{write_ascii_tree, ArrayStack, AsciiStack, Frame};
+
+        if max_entries == 0 || !self.is_used(start) {
             return Ok(());
         }
-        if !self.is_used(start) {
-            return Ok(());
-        }
 
-        #[derive(Copy, Clone)]
-        struct Frame {
-            id: NodeId,
-            depth: usize,
-            is_last: bool,
-        }
-
-        let mut printed = 0usize;
-        let mut stack: [Frame; N] = [
-            Frame {
-                id: NodeId(usize::MAX),
-                depth: 0,
-                is_last: true,
-            };
-            N
-        ];
-        let mut sp = 0usize;
-
-        // `branches[d] == true` means: at depth `d` there are more siblings to come,
-        // so we need to draw a vertical continuation (`|   `) for descendants.
+        let mut stack: ArrayStack<Frame<NodeId>, N> = ArrayStack::new();
         let mut branches: [bool; N] = [false; N];
-
-        stack[sp] = Frame {
+        let _ = stack.push(Frame {
             id: start,
             depth: 0,
             is_last: true,
-        };
-        sp += 1;
+        });
 
-        while sp > 0 {
-            if printed >= max_entries {
-                writeln!(out, "... (max {} entries)", max_entries)?;
-                break;
-            }
+        write_ascii_tree(self, start, out, max_entries, &mut stack, &mut branches, "entries", |id, w| {
+            let v = &self.node(id).value;
+            render(v, w)
+        })
+    }
+}
 
-            sp -= 1;
-            let Frame { id, depth, is_last } = stack[sp];
+impl<T, const N: usize> crate::ascii_tree::AsciiTreeTraversal for Tree<T, N> {
+    type NodeId = NodeId;
 
-            if depth == 0 {
-                render(&self.node(id).value, out)?;
-                out.write_char('\n')?;
-            } else {
-                for d in 0..(depth - 1) {
-                    if branches[d] {
-                        out.write_str("|   ")?;
-                    } else {
-                        out.write_str("    ")?;
-                    }
-                }
+    fn is_valid(&self, id: Self::NodeId) -> bool {
+        self.is_used(id)
+    }
 
-                if is_last {
-                    out.write_str("`-- ")?;
-                } else {
-                    out.write_str("|-- ")?;
-                }
-
-                render(&self.node(id).value, out)?;
-                out.write_char('\n')?;
-            }
-
-            printed += 1;
-
-            if depth < N {
-                branches[depth] = !is_last;
-            }
-
-            // Push children onto the stack.
-            // This yields a reverse insertion order traversal of siblings, which is OK for diagnostics.
-            let mut child = self.node(id).first_child;
-            while let Some(ch) = child {
-                if sp >= N {
-                    break;
-                }
-
-                let child_is_last = self.node(ch).next_sibling.is_none();
-                stack[sp] = Frame {
-                    id: ch,
-                    depth: depth + 1,
-                    is_last: child_is_last,
-                };
-                sp += 1;
-
-                child = self.node(ch).next_sibling;
-            }
+    fn push_children_rev<S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>>(
+        &self,
+        parent: Self::NodeId,
+        child_depth: usize,
+        stack: &mut S,
+    ) {
+        // Push in sibling order; stack pop yields reverse insertion order.
+        let mut child = self.node(parent).first_child;
+        while let Some(ch) = child {
+            let child_is_last = self.node(ch).next_sibling.is_none();
+            let _ = stack.push(crate::ascii_tree::Frame {
+                id: ch,
+                depth: child_depth,
+                is_last: child_is_last,
+            });
+            child = self.node(ch).next_sibling;
         }
-
-        Ok(())
     }
 }
 
