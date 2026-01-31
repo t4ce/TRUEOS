@@ -14,7 +14,7 @@ QEMU_BIN = qemu-system-x86_64
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-QEMU_NET_FLAGS = -netdev user,id=net1,hostfwd=tcp::4245-:4245 -device e1000,netdev=net1 \
+QEMU_NET_FLAGS = -netdev user,id=net1,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 
@@ -23,30 +23,20 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
-USE_VFIO ?= 1
-VFIO_PCI_HOST ?= 0000:06:00.0
-ifeq ($(USE_VFIO),1)
-QEMU_VFIO_FLAGS = -device vfio-pci,host=$(VFIO_PCI_HOST)
-else
-QEMU_VFIO_FLAGS =
-endif
-
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
-	$(QEMU_VFIO_FLAGS) \
+	-device vfio-pci,host=0000:06:00.0 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
+	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=7,id=usbleds \
-	-drive file=disk.img,if=none,format=raw,id=usbdisk \
-	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=u
 
 #	-drive file=disk.img,if=none,format=raw,id=usbdisk 
 #	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 
 #	-drive file=nvme.img,if=none,format=raw,id=nvme0 \
 #	-device nvme,drive=nvme0,serial=t4ce
-#	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 
@@ -122,9 +112,10 @@ run: iso-debug
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
 
-DISK_IMG ?= disk.img
+# Boot the installed disk image directly (no installer ISO).
+# Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
-QEMU_DISK_DRIVE_FLAGS = -drive file=$(DISK_IMG),if=virtio,format=raw
+QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
-run-installed-uefi:
-	@test -f $(DISK_IMG) && ($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
+run-installed-uefi: iso-debug
+	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))

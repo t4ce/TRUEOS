@@ -199,6 +199,38 @@ async fn print_install_disk_table(io: &dyn ShellIo) {
     io.write_str("\r\n");
 }
 
+async fn print_update_disk_table(io: &dyn ShellIo) {
+    io.write_str("update: disk detection stage\r\n");
+    io.write_str("update: choose a disk id to continue (blank/q cancels)\r\n");
+    io.write_str("\r\n");
+
+    for h in crate::disc::block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+        let info = h.info();
+        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
+        io.write_fmt(format_args!(
+            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+            status.short(),
+            match (&status, err) {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                    alloc::format!(" (err={:?})", e)
+                }
+                _ => alloc::string::String::new(),
+            }
+        ));
+    }
+
+    io.write_str("\r\n");
+}
+
 async fn print_format_disk_table(io: &dyn ShellIo) {
     io.write_str("format: disk selection stage\r\n");
     io.write_str("format: enter a disk id (blank/q cancels)\r\n");
@@ -237,12 +269,14 @@ pub(crate) enum PendingAction {
     S5,
     FormatConfirm { disc_id: u32 },
     InstallConfirm { disc_id: u32 },
+    UpdateConfirm { disc_id: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallWizardStage {
     SelectDisk,
     FormatSelectDisk,
+    UpdateSelectDisk,
     FileSelectMount,
 }
 
@@ -251,6 +285,7 @@ pub(crate) enum CommandAction {
     Pending(PendingAction),
     ShowInstallDiskTable,
     ShowFormatDiskTable,
+    ShowUpdateDiskTable,
     ShowFileMountTable,
     EnterCube,
     EnterIco,
@@ -630,6 +665,47 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         continue;
                     }
 
+                    // Confirmation gate for `update` (network fetch + refresh installed boot files).
+                    if let Some(PendingAction::UpdateConfirm { disc_id }) = pending_action {
+                        let do_update = line.is_empty();
+                        line.clear();
+                        pending_action = None;
+                        pending_deadline = None;
+                        set_go_mode(io, &mut go_mode, false);
+
+                        if do_update {
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\nupdate: no such disk\r\n");
+                                write_prompt(io);
+                                continue;
+                            };
+
+                            io.write_str("\r\nupdate: starting...\r\n");
+                            match crate::matrix::alloc_slot(alloc::format!("update disc{:03}", disc_id).as_str()) {
+                                Some(slot) => {
+                                    let _ = spawner.spawn(crate::matrix::update_matrix_job(slot, handle));
+                                    io.write_fmt(format_args!(
+                                        "update: started §{} (dump logs with § {})\r\n",
+                                        slot + 1,
+                                        slot + 1
+                                    ));
+                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
+                                }
+                                None => {
+                                    io.write_str("update: matrix full\r\n");
+                                }
+                            }
+                        } else {
+                            io.write_str("\r\nupdate: cancelled\r\n");
+                        }
+
+                        write_prompt_for_state(io, pending_action, install_wizard);
+                        continue;
+                    }
+
                     // Interactive install wizard consumes whole-line input (including empty line).
                     if pending_action.is_none() {
                         if let Some(InstallWizardStage::SelectDisk) = install_wizard {
@@ -681,6 +757,73 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
                             install_wizard = None;
                             pending_action = Some(PendingAction::InstallConfirm { disc_id: raw_id });
+                            pending_deadline = None;
+                            write_prompt_for_state(io, pending_action, install_wizard);
+                            continue;
+                        }
+
+                        if let Some(InstallWizardStage::UpdateSelectDisk) = install_wizard {
+                            let mut s = line.as_str().trim();
+                            // Accept inputs like `update 1` as well as just `1`.
+                            if let Some(rest) = s.strip_prefix("update") {
+                                s = rest.trim();
+                            }
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\nupdate: cancelled\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                            line.clear();
+                            if raw_id == 0 {
+                                io.write_str("\r\nupdate: invalid id\r\n");
+                                io.write_str("update: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\nupdate: no such disk\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let info = handle.info();
+                            let status = crate::v::disc::detect::detect_physical_disk(handle).await;
+                            io.write_fmt(format_args!(
+                                "\r\nupdate: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                                info.id.raw(),
+                                info.id,
+                                info.block_count,
+                                info.block_size,
+                                info.writable,
+                                info.label,
+                                status.short(),
+                            ));
+
+                            // Safety: `update` is intended to refresh boot files on an already-installed TRUEOS disk.
+                            // Refuse to proceed if the disk doesn't already look like TRUEOSFS.
+                            if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+                                io.write_str("update: refused (selected disk is not a TRUEOS disk)\r\n");
+                                io.write_str("update: use `install` for a fresh install\r\n");
+                                io.write_str("update: choose another disk id (or 'q' to cancel)\r\n");
+                                print_update_disk_table(io).await;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            io.write_str("update: downloads BOOTX64.EFI + TRUEOS.elf and refreshes ESP boot files\r\n");
+                            io.write_str("update: will NOT repartition/format (refuses if TRUEOSFS is not detected)\r\n");
+                            io.write_str("update: press Enter to confirm (any other key cancels)\r\n");
+
+                            install_wizard = None;
+                            pending_action = Some(PendingAction::UpdateConfirm { disc_id: raw_id });
                             pending_deadline = None;
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
@@ -840,6 +983,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                     }
                                     PendingAction::FormatConfirm { .. } => None,
                                     PendingAction::InstallConfirm { .. } => None,
+                                    PendingAction::UpdateConfirm { .. } => None,
                                 };
                                 set_go_mode(
                                     io,
@@ -856,6 +1000,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             CommandAction::ShowFormatDiskTable => {
                                 set_go_mode(io, &mut go_mode, false);
                                 print_format_disk_table(io).await;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::ShowUpdateDiskTable => {
+                                set_go_mode(io, &mut go_mode, false);
+                                print_update_disk_table(io).await;
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::ShowFileMountTable => {
@@ -979,6 +1128,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         }
                         PendingAction::FormatConfirm { .. } => {}
                         PendingAction::InstallConfirm { .. } => {}
+                        PendingAction::UpdateConfirm { .. } => {}
                     }
                     continue;
                 }

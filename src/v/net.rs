@@ -1,8 +1,9 @@
-use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use trueos_v::vnet as api;
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::net::adapter::{self, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
@@ -204,4 +205,124 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
             len: len.min(u16::MAX as usize) as u16,
         },
     })
+}
+
+const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
+const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
+
+#[embassy_executor::task]
+pub async fn http_trueosfs_task() {
+    let Some(vnet) = VNet::open_primary() else {
+        crate::log!("http-trueosfs: disabled (no NIC)\n");
+        return;
+    };
+
+    if vnet.submit(api::Command::OpenTcpListen {
+        port: HTTP_TRUEOSFS_TCP_PORT,
+    }).is_err() {
+        crate::log!("http-trueosfs: listen submit failed\n");
+        return;
+    }
+
+    crate::log!(
+        "http-trueosfs: listening on tcp {} (hostfwd localhost:8080 -> guest:80)\n",
+        HTTP_TRUEOSFS_TCP_PORT
+    );
+
+    let mut listener_handle: Option<api::NetHandle> = None;
+    let mut active_handle: Option<api::NetHandle> = None;
+    let mut sent_for_active: bool = false;
+
+    loop {
+        while let Some(ev) = vnet.pop_event() {
+            match ev {
+                api::Event::Opened { handle, kind } => {
+                    if kind == api::SocketKind::Tcp {
+                        listener_handle = Some(handle);
+                    }
+                }
+                api::Event::TcpEstablished { handle } => {
+                    active_handle = Some(handle);
+                    sent_for_active = false;
+                }
+                api::Event::TcpData { handle, .. } => {
+                    if active_handle.is_none() {
+                        active_handle = Some(handle);
+                        sent_for_active = false;
+                    }
+                    if active_handle != Some(handle) {
+                        continue;
+                    }
+                    if sent_for_active {
+                        continue;
+                    }
+                    sent_for_active = true;
+
+                    // Build the HTML tree once per request (best-effort).
+                    let tree_html = match crate::v::fs::trueosfs::primary_root_handle() {
+                        None => None,
+                        Some(disk) => match crate::v::fs::trueosfs::html_tree_async(disk, HTTP_TRUEOSFS_MAX_ENTRIES).await {
+                            Ok(v) => v,
+                            Err(_) => None,
+                        },
+                    };
+
+                    let body = if let Some(tree) = tree_html {
+                        format!(
+                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title></head><body><h1>TRUEOSFS</h1>{}</body></html>",
+                            tree
+                        )
+                    } else {
+                        String::from(
+                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title></head><body><h1>TRUEOSFS</h1><p>(no TRUEOSFS mounted)</p></body></html>",
+                        )
+                    };
+
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.as_bytes().len()
+                    );
+
+                    // Send headers + body in MAX_MSG chunks.
+                    for chunk in header.as_bytes().chunks(api::MAX_MSG) {
+                        let _ = vnet.submit(api::Command::SendTcp {
+                            handle,
+                            data: api::ByteBuf::from_slice_trunc(chunk),
+                        });
+                        Timer::after(EmbassyDuration::from_millis(1)).await;
+                    }
+                    for chunk in body.as_bytes().chunks(api::MAX_MSG) {
+                        let _ = vnet.submit(api::Command::SendTcp {
+                            handle,
+                            data: api::ByteBuf::from_slice_trunc(chunk),
+                        });
+                        Timer::after(EmbassyDuration::from_millis(1)).await;
+                    }
+
+                    let _ = vnet.submit(api::Command::Close { handle });
+                }
+                api::Event::Closed { handle } => {
+                    if active_handle == Some(handle) {
+                        active_handle = None;
+                        sent_for_active = false;
+                    }
+
+                    // If the listener handle closes (or smoltcp collapses listen/conn handles), relisten.
+                    if listener_handle == Some(handle) {
+                        listener_handle = None;
+                        let _ = vnet.submit(api::Command::OpenTcpListen {
+                            port: HTTP_TRUEOSFS_TCP_PORT,
+                        });
+                    }
+                }
+                api::Event::Error { msg } => {
+                    crate::log!("http-trueosfs: error {}\n", msg);
+                }
+                api::Event::TcpSent { .. } => {}
+                api::Event::UdpPacket { .. } => {}
+            }
+        }
+
+        Timer::after(EmbassyDuration::from_millis(10)).await;
+    }
 }

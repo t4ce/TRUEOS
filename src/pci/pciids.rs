@@ -1,4 +1,5 @@
 use embassy_executor::task;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 fn is_hex(b: u8) -> bool {
     matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
@@ -248,7 +249,11 @@ pub fn lookup_vendor_name_from_db<'a>(db: &'a [u8], vid: u16) -> Option<&'a [u8]
             continue;
         }
         if id == vid {
-            return Some(&line[5..]);
+            let mut s = &line[5..];
+            while !s.is_empty() && (s[0] == b' ' || s[0] == b'\t') {
+                s = &s[1..];
+            }
+            return Some(s);
         }
     }
     None
@@ -365,6 +370,374 @@ fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
     crate::pci::log_devices_with_pci_ids(db);
 }
 
+static PCIIDS_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
+
+fn leak_str(s: alloc::string::String) -> &'static str {
+    alloc::boxed::Box::leak(s.into_boxed_str())
+}
+
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+}
+
+fn parse_http_status(headers: &[u8]) -> Option<u16> {
+    let line_end = headers.windows(2).position(|w| w == b"\r\n")?;
+    let line = &headers[..line_end];
+    let mut parts = line.split(|&b| b == b' ');
+    let _http = parts.next()?;
+    let code = parts.next()?;
+    core::str::from_utf8(code).ok()?.parse::<u16>().ok()
+}
+
+fn header_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    for line in headers.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        let Some(colon) = line.iter().position(|&b| b == b':') else { continue };
+        let (k, rest) = line.split_at(colon);
+        let Some(v) = rest.get(1..) else { continue };
+        if k.eq_ignore_ascii_case(name) {
+            let v = v.strip_prefix(b" ").unwrap_or(v);
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn is_chunked(headers: &[u8]) -> bool {
+    header_value(headers, b"transfer-encoding")
+    .map(|v: &[u8]| v.to_ascii_lowercase().windows(7).any(|w| w == b"chunked"))
+        .unwrap_or(false)
+}
+
+fn content_length(headers: &[u8]) -> Option<usize> {
+    let v = header_value(headers, b"content-length")?;
+    core::str::from_utf8(v).ok()?.trim().parse::<usize>().ok()
+}
+
+fn try_decode_chunked_body(body: &[u8], max_bytes: usize) -> Option<alloc::vec::Vec<u8>> {
+    let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    let mut i: usize = 0;
+    loop {
+        let line_end = body.get(i..)?.windows(2).position(|w| w == b"\r\n")?;
+        let line = &body[i..i + line_end];
+        let line = line.split(|&b| b == b';').next().unwrap_or(line);
+        let size = usize::from_str_radix(core::str::from_utf8(line).ok()?.trim(), 16).ok()?;
+        i = i.saturating_add(line_end + 2);
+        if size == 0 {
+            return Some(out);
+        }
+        if i + size + 2 > body.len() {
+            return None;
+        }
+        if out.len().saturating_add(size) > max_bytes {
+            return None;
+        }
+        out.extend_from_slice(&body[i..i + size]);
+        i += size;
+        if body.get(i..i + 2)? != b"\r\n" {
+            return None;
+        }
+        i += 2;
+    }
+}
+
+fn dns_query(id: u16, host: &str) -> alloc::vec::Vec<u8> {
+    let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(64);
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&0x0100u16.to_be_bytes()); // recursion desired
+    out.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+    out.extend_from_slice(&0u16.to_be_bytes()); // ancount
+    out.extend_from_slice(&0u16.to_be_bytes()); // nscount
+    out.extend_from_slice(&0u16.to_be_bytes()); // arcount
+
+    for label in host.split('.') {
+        let b = label.as_bytes();
+        let n = core::cmp::min(63, b.len());
+        out.push(n as u8);
+        out.extend_from_slice(&b[..n]);
+    }
+    out.push(0);
+    out.extend_from_slice(&1u16.to_be_bytes()); // A
+    out.extend_from_slice(&1u16.to_be_bytes()); // IN
+    out
+}
+
+fn dns_skip_name(pkt: &[u8], idx: &mut usize) -> bool {
+    let mut jumps: u8 = 0;
+    loop {
+        if *idx >= pkt.len() {
+            return false;
+        }
+        let b = pkt[*idx];
+        if b & 0xC0 == 0xC0 {
+            if *idx + 1 >= pkt.len() {
+                return false;
+            }
+            *idx += 2;
+            return true;
+        }
+        if b == 0 {
+            *idx += 1;
+            return true;
+        }
+        let n = b as usize;
+        *idx += 1;
+        if *idx + n > pkt.len() {
+            return false;
+        }
+        *idx += n;
+        jumps = jumps.saturating_add(1);
+        if jumps > 64 {
+            return false;
+        }
+    }
+}
+
+fn dns_parse_first_a(pkt: &[u8], id: u16) -> Option<[u8; 4]> {
+    if pkt.len() < 12 {
+        return None;
+    }
+    if u16::from_be_bytes([pkt[0], pkt[1]]) != id {
+        return None;
+    }
+    let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+    let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
+    let mut idx: usize = 12;
+
+    for _ in 0..qd {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 4 > pkt.len() {
+            return None;
+        }
+        idx += 4;
+    }
+
+    for _ in 0..an {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 10 > pkt.len() {
+            return None;
+        }
+        let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
+        let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
+        let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
+        idx += 10;
+        if idx + rdlen > pkt.len() {
+            return None;
+        }
+        if class == 1 && typ == 1 && rdlen == 4 {
+            return Some([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]);
+        }
+        idx += rdlen;
+    }
+    None
+}
+
+async fn resolve_ipv4_async(dev_idx: usize, host: &str, timeout_ms: u64) -> Result<[u8; 4], i32> {
+    use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+    use crate::surface::io::cabi::{NET_ERR_TIMEOUT_DNS};
+    use crate::v::net::VNet;
+    use trueos_v::vnet;
+
+    // Fast path: IPv4 literal.
+    if let Ok(ip) = host.parse::<core::net::Ipv4Addr>() {
+        return Ok(ip.octets());
+    }
+
+    const DNS_PORT: u16 = 53;
+    const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
+
+    let dns_id: u16 = 0xD500u16.wrapping_add(dev_idx as u16);
+    let net = VNet::open(dev_idx).ok_or(NET_ERR_TIMEOUT_DNS)?;
+
+    let local_port: u16 = 54000u16
+        .wrapping_add((dev_idx as u16).wrapping_mul(23))
+        .wrapping_add((dns_id as u16) & 0x3FF);
+    let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(250));
+    let mut udp: Option<vnet::NetHandle> = None;
+    let mut sent = false;
+
+    loop {
+        for _ in 0..64 {
+            let Some(ev) = net.pop_event() else {
+                break;
+            };
+            match ev {
+                vnet::Event::Opened { handle, kind } => {
+                    if kind == vnet::SocketKind::Udp {
+                        udp = Some(handle);
+                    }
+                }
+                vnet::Event::UdpPacket { handle, from, data } => {
+                    if udp != Some(handle) {
+                        continue;
+                    }
+                    if from.port == DNS_PORT {
+                        if let Some(ip) = dns_parse_first_a(data.as_slice(), dns_id) {
+                            let _ = net.submit(vnet::Command::Close { handle });
+                            return Ok(ip);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !sent {
+            if let Some(handle) = udp {
+                let q = dns_query(dns_id, host);
+                let _ = net.submit(vnet::Command::SendUdp {
+                    handle,
+                    remote: vnet::EndpointV4 { addr: SLIRP_DNS_IP, port: DNS_PORT },
+                    data: vnet::ByteBuf::from_slice_trunc(&q),
+                });
+                for &server in &[[1, 1, 1, 1], [8, 8, 8, 8]] {
+                    let _ = net.submit(vnet::Command::SendUdp {
+                        handle,
+                        remote: vnet::EndpointV4 { addr: server, port: DNS_PORT },
+                        data: vnet::ByteBuf::from_slice_trunc(&q),
+                    });
+                }
+                sent = true;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(handle) = udp {
+                let _ = net.submit(vnet::Command::Close { handle });
+            }
+            return Err(NET_ERR_TIMEOUT_DNS);
+        }
+
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+async fn fetch_https_body_async(url: &str, timeout_ms: u64, max_bytes: usize) -> Result<alloc::vec::Vec<u8>, i32> {
+    use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+    use crate::surface::io::cabi::{NET_ERR_BAD_URL, NET_ERR_HTTP, NET_ERR_TIMEOUT, NET_ERR_TLS};
+    use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+    use crate::net::tls::{TlsClientConfig, TlsRoots};
+    use crate::v::net::Queue;
+    use trueos_v::vnet;
+
+    let rest = url.strip_prefix("https://").ok_or(NET_ERR_BAD_URL)?;
+    let (host, path_rest) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(NET_ERR_BAD_URL);
+    }
+    let host_sni: &'static str = leak_str(alloc::string::String::from(host));
+    let path = alloc::format!("/{}", path_rest);
+
+    let dev_idx: usize = 0;
+    let ip = resolve_ipv4_async(dev_idx, host, core::cmp::min(timeout_ms, 20_000)).await?;
+
+    let seq = PCIIDS_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = leak_str(alloc::format!("pciids-https-{}@{}", seq, dev_idx));
+    let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+    let cmds = Queue::new_leaked(cmds_name, 512);
+    let events = Queue::new_leaked(evts_name, 512);
+    register_tls_app_queues(owner, cmds, events);
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1));
+    let mut tls_handle: Option<vnet::NetHandle> = None;
+    let mut sent_connect = false;
+    let mut http_sent = false;
+    let mut plaintext: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+
+    loop {
+        for ev in events.drain(64) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    tls_handle = Some(handle);
+                }
+                TlsEvent::Connected { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if !http_sent {
+                        let req = alloc::format!(
+                            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS pciids\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+                            path,
+                            host
+                        );
+                        let _ = cmds.push(TlsCommand::Send { handle, data: req.into_bytes() });
+                        http_sent = true;
+                    }
+                }
+                TlsEvent::Data { handle, data } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if plaintext.len() < max_bytes {
+                        let room = max_bytes - plaintext.len();
+                        let take = data.len().min(room);
+                        plaintext.extend_from_slice(&data[..take]);
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
+                        return Err(NET_ERR_HTTP);
+                    };
+                    let headers = &plaintext[..hdr_end];
+                    let status = parse_http_status(headers).unwrap_or(0);
+                    if status != 200 {
+                        return Err(NET_ERR_HTTP);
+                    }
+                    let body = &plaintext[hdr_end..];
+                    if is_chunked(headers) {
+                        if let Some(decoded) = try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+                            return Ok(decoded);
+                        }
+                        return Ok(body.to_vec());
+                    }
+                    if let Some(len) = content_length(headers) {
+                        return Ok(body.get(..len).unwrap_or(body).to_vec());
+                    }
+                    return Ok(body.to_vec());
+                }
+                TlsEvent::TlsError { .. } => return Err(NET_ERR_TLS),
+                TlsEvent::Error { .. } => {}
+            }
+        }
+
+        if !sent_connect {
+            let _ = cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 { addr: ip, port: 443 },
+                server_name: host_sni,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+            });
+            sent_connect = true;
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
+            }
+            return Err(NET_ERR_TIMEOUT);
+        }
+
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
 /// Fetch and cache the `pci.ids` database on the USBMS FAT filesystem.
 ///
 /// The download is skipped if the destination file already exists.
@@ -461,7 +834,7 @@ pub(crate) async fn boot_cache_pci_ids_task() {
             }
         }
 
-        let raw = match crate::surface::io::cabi::net_fetch_https_body_blocking(URL, 30_000, 4 * 1024 * 1024) {
+        let raw = match fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await {
             Ok(b) => b,
             Err(rc) => {
                 crate::log!(
