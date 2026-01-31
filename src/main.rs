@@ -316,11 +316,13 @@ pub extern "C" fn kmain() -> ! {
 
 	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
 	if net_ready {
-        //let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
+        // let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
         // NOTE: leave the heavier cheerio smoke test opt-in; it can add significant
         // DNS/TLS pressure during early boot and mask unrelated network issues.
-        let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
-        let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
+        // let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
+        if let Err(e) = spawner.spawn(pci::pciids::boot_cache_pci_ids_task()) {
+            crate::log!("pciids: spawn boot_cache_pci_ids_task failed: {:?}\n", e);
+        }
 	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
