@@ -84,7 +84,6 @@ impl Utf8Decoder {
 }
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
-const ERROR_RGB: (u8, u8, u8) = (255, 80, 80);
 const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;

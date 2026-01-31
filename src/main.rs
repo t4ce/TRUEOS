@@ -222,7 +222,6 @@ pub extern "C" fn kmain() -> ! {
 
     efi::acpi::ensure_tables();
     efi::acpi::log_once();
-
     efi::log_once();
     efi::acpi::hpet::ensure();
 

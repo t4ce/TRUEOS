@@ -1,5 +1,4 @@
 use alloc::vec;
-use alloc::vec::Vec;
 
 use crate::disc::block::{self, DeviceHandle};
 
@@ -31,6 +30,105 @@ impl Drop for AlignedBuf {
         if !self.ptr.is_null() {
             unsafe { alloc::alloc::dealloc(self.ptr, self.layout) };
         }
+    }
+}
+
+struct DmaWriter {
+    handle: DeviceHandle,
+    tmp: AlignedBuf,
+    chunk_bytes: usize,
+}
+
+impl DmaWriter {
+    fn new(handle: DeviceHandle) -> Result<Self, block::Error> {
+        let info = handle.info();
+        let align = info.dma_alignment.max(1) as usize;
+
+        // Prefer the device's hinted transfer size. If it's missing/unset, fall back to 256KiB.
+        let mut wanted = handle.max_transfer_bytes();
+        if wanted == 0 {
+            wanted = 256 * 1024;
+        }
+
+        // Ensure we allocate a multiple of 512 and at least one sector.
+        let mut chunk_bytes = (wanted as usize / 512).saturating_mul(512);
+        chunk_bytes = chunk_bytes.max(512);
+
+        // Best-effort allocation: if we can't allocate the full chunk, keep halving.
+        let mut tmp = None;
+        let mut attempt = chunk_bytes;
+        while attempt >= 512 {
+            if let Some(b) = AlignedBuf::new(attempt, align) {
+                tmp = Some(b);
+                chunk_bytes = attempt;
+                break;
+            }
+            attempt = (attempt / 2 / 512).saturating_mul(512);
+        }
+        let tmp = tmp.ok_or(block::Error::DmaUnavailable)?;
+
+        Ok(Self {
+            handle,
+            tmp,
+            chunk_bytes,
+        })
+    }
+
+    async fn write_blocks_with_log(
+        handle: DeviceHandle,
+        lba: u64,
+        buf: &[u8],
+        log: &mut dyn FnMut(&str),
+    ) -> Result<(), block::Error> {
+        match handle.write_blocks(lba, buf).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                log(
+                    alloc::format!(
+                        "install: fat32: write failed lba={} bytes={} err={:?}",
+                        lba,
+                        buf.len(),
+                        e
+                    )
+                    .as_str(),
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Writes exactly `total_bytes` starting at `lba`, taking bytes from `data` and padding
+    /// the remainder with zeros. `total_bytes` must be a multiple of 512.
+    async fn write_padded_at_lba(
+        &mut self,
+        mut lba: u64,
+        mut total_bytes: usize,
+        mut data: &[u8],
+        log: &mut dyn FnMut(&str),
+    ) -> Result<(), block::Error> {
+        if total_bytes % 512 != 0 {
+            return Err(block::Error::InvalidParam);
+        }
+
+        while total_bytes != 0 {
+            let handle = self.handle;
+            let chunk = core::cmp::min(self.chunk_bytes, total_bytes);
+            let tmp_slice = &mut self.tmp.as_mut_slice()[..chunk];
+            tmp_slice.fill(0);
+
+            let take = core::cmp::min(chunk, data.len());
+            tmp_slice[..take].copy_from_slice(&data[..take]);
+            data = &data[take..];
+
+            Self::write_blocks_with_log(handle, lba, tmp_slice, log).await?;
+            lba = lba.saturating_add((chunk / 512) as u64);
+            total_bytes -= chunk;
+
+            // Keep the executor responsive during long sequential I/O.
+            crate::time::poll_executor();
+        }
+
+        Ok(())
     }
 }
 
@@ -257,7 +355,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
         .as_str(),
     );
 
-    let bytes_per_cluster = (sectors_per_cluster as usize) * 512;
+    let mut writer = DmaWriter::new(esp)?;
 
     // Fixed directory cluster assignments.
     let cl_root: u32 = 2;
@@ -393,28 +491,21 @@ pub async fn format_and_populate_esp_fat32_with_log(
         write_blocks_aligned_with_log(esp, fat2_lba + i, &fat[start..end], log).await?;
     }
 
-    // Helper to write a whole cluster.
-    let mut cluster_buf = vec![0u8; bytes_per_cluster];
+    // Helper to write a whole cluster (or any contiguous extent) using max-transfer batching.
     async fn write_cluster(
-        esp: DeviceHandle,
+        writer: &mut DmaWriter,
         sectors_per_cluster: u32,
         first_data_sector: u32,
-        cluster_buf: &mut [u8],
         cluster: u32,
         data: &[u8],
         log: &mut dyn FnMut(&str),
     ) -> Result<(), block::Error> {
-        cluster_buf.fill(0);
-        let take = core::cmp::min(cluster_buf.len(), data.len());
-        cluster_buf[..take].copy_from_slice(&data[..take]);
         let first_sector =
             (cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
-        for s in 0..(sectors_per_cluster as u64) {
-            let off = (s as usize) * 512;
-            write_blocks_aligned_with_log(esp, first_sector + s, &cluster_buf[off..off + 512], log)
-                .await?;
-        }
-        Ok(())
+        let total_bytes = (sectors_per_cluster as usize).saturating_mul(512);
+        writer
+            .write_padded_at_lba(first_sector, total_bytes, data, log)
+            .await
     }
 
     // --- Directories ---
@@ -516,7 +607,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
             image.limine_conf.len() as u32,
         ));
 
-        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_root, &dir, log).await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_root, &dir, log)
+            .await?;
     }
 
     // EFI dir
@@ -531,7 +623,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
-        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_efi, &dir, log).await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_efi, &dir, log)
+            .await?;
     }
 
     // BOOT dir
@@ -567,50 +660,34 @@ pub async fn format_and_populate_esp_fat32_with_log(
         dir[off..off + 32].copy_from_slice(&de);
         off += 32;
 
-        write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_boot, &dir, log).await?;
+        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_boot, &dir, log)
+            .await?;
     }
 
     // --- File data ---
     {
         async fn write_file(
-            esp: DeviceHandle,
+            writer: &mut DmaWriter,
             sectors_per_cluster: u32,
             first_data_sector: u32,
-            bytes_per_cluster: usize,
-            cluster_buf: &mut Vec<u8>,
             start_cluster: u32,
             clusters: u32,
             data: &[u8],
             log: &mut dyn FnMut(&str),
         ) -> Result<(), block::Error> {
-            let mut remaining = data;
-            for i in 0..clusters {
-                let c = start_cluster + i;
-                let take = core::cmp::min(bytes_per_cluster, remaining.len());
-                write_cluster(
-                    esp,
-                    sectors_per_cluster,
-                    first_data_sector,
-                    cluster_buf,
-                    c,
-                    &remaining[..take],
-                    log,
-                )
-                .await?;
-                remaining = &remaining[take..];
-
-                // Formatting/writing the ESP can take a while; keep the shell responsive.
-                crate::time::poll_executor();
-            }
-            Ok(())
+            let first_sector =
+                (start_cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
+            let total_sectors = (clusters as u64).saturating_mul(sectors_per_cluster as u64);
+            let total_bytes = (total_sectors as usize).saturating_mul(512);
+            writer
+                .write_padded_at_lba(first_sector, total_bytes, data, log)
+                .await
         }
 
         write_file(
-            esp,
+            &mut writer,
             sectors_per_cluster,
             first_data_sector,
-            bytes_per_cluster,
-            &mut cluster_buf,
             bootx64_start,
             bootx64_clusters,
             image.bootx64_efi,
@@ -618,11 +695,9 @@ pub async fn format_and_populate_esp_fat32_with_log(
         )
         .await?;
         write_file(
-            esp,
+            &mut writer,
             sectors_per_cluster,
             first_data_sector,
-            bytes_per_cluster,
-            &mut cluster_buf,
             kernel_start,
             kernel_clusters,
             image.kernel_elf,
@@ -630,11 +705,9 @@ pub async fn format_and_populate_esp_fat32_with_log(
         )
         .await?;
         write_file(
-            esp,
+            &mut writer,
             sectors_per_cluster,
             first_data_sector,
-            bytes_per_cluster,
-            &mut cluster_buf,
             conf_start,
             conf_clusters,
             image.limine_conf,
