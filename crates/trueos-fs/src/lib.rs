@@ -587,14 +587,14 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         sha256,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).map_err(FsError::Device)?;
-    dev.flush().map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
 
     // 4) Update superblock: advance log head and point checkpoint pointer here.
     let ckpt_rel = entry_lba.saturating_sub(params.data_lba);
     sb.log_head_rel_blocks = sb.log_head_rel_blocks.saturating_add(blocks);
     sb.checkpoint_rel_blocks = ckpt_rel;
-    write_superblock_to_disk(dev, params, sb)?;
+    write_superblock_to_disk(dev, params, sb).await?;
     Ok(true)
 }
 
@@ -602,7 +602,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
 /// for each committed Put/Delete record.
 ///
 /// Checkpoint records are skipped.
-pub fn replay_log_range<D: BlockIo>(
+pub async fn replay_log_range<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     start_rel_blocks: u64,
@@ -618,7 +618,7 @@ pub fn replay_log_range<D: BlockIo>(
     let end_lba = params.data_lba.saturating_add(end_rel_blocks);
 
     while lba < end_lba {
-        let hdr_block = read_one_block(dev, lba)?;
+        let hdr_block = read_one_block(dev, lba).await?;
         let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
             break;
         };
@@ -657,7 +657,7 @@ pub fn replay_log_range<D: BlockIo>(
 
         let name_lba = lba.saturating_add(1);
         let mut name_bytes = vec![0u8; name_len];
-        read_exact_bytes(dev, name_lba, 0, &mut name_bytes)?;
+        read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
         apply(hdr.kind, name_bytes, lba);
 
         lba = lba.saturating_add(blocks);
