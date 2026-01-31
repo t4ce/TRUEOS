@@ -101,7 +101,7 @@ pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscSt
 
     // TRUEOSFS detection: the low-level placement logic decides whether this is
     // a bootable GPT layout (ESP + TRUEOS partition) or a data-only layout.
-    match crate::v::fs::trueosfs::locate(handle) {
+    match crate::v::fs::trueosfs::locate_async(handle).await {
         Ok(Some(loc)) => return (DiscStatus::Trueos { bootable: loc.bootable }, None),
         Ok(None) => {}
         Err(e) => return (DiscStatus::Unknown, Some(e)),

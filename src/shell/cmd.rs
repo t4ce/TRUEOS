@@ -838,14 +838,12 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
 
 fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::SelectDisk);
-    super::print_install_disk_table(ctx.io);
-    super::CommandAction::None
+    super::CommandAction::ShowInstallDiskTable
 }
 
 fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::FormatSelectDisk);
-    super::print_format_disk_table(ctx.io);
-    super::CommandAction::None
+    super::CommandAction::ShowFormatDiskTable
 }
 
 fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
