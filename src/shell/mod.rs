@@ -84,6 +84,7 @@ impl Utf8Decoder {
 }
 
 const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
+const ERROR_RGB: (u8, u8, u8) = (255, 80, 80);
 const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
@@ -495,21 +496,67 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 continue;
                             };
 
-                            io.write_str("\r\nformat: writing TRUEOSFS...\r\n");
-                            match crate::v::fs::trueosfs::format_blank_force_async(handle).await {
-                                Ok(()) => {
-                                    let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(handle).await;
-                                    io.write_fmt(format_args!(
-                                        "format: ok (status now: {}{})\r\n",
-                                        status.short(),
-                                        match (&status, err) {
-                                            (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
-                                            _ => alloc::string::String::new(),
+                            io.write_str("\r\nformat: creating 1 partition + TRUEOSFS...\r\n");
+
+                            let parts = [crate::disc::install::gpt::GptPartitionSpec {
+                                type_guid: crate::v::disc::partition::GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+                                name: "TRUEOS",
+                                size: crate::disc::install::gpt::PartitionSize::Remaining,
+                                attributes: 0,
+                            }];
+
+                            let mut log = |msg: &str| {
+                                io.write_str(msg);
+                                io.write_str("\r\n");
+                            };
+
+                            let gpt_result = crate::disc::install::gpt::write_gpt_layout_with_log(
+                                handle,
+                                &parts,
+                                &mut log,
+                            )
+                            .await;
+
+                            match gpt_result {
+                                Ok(_ranges) => {
+                                    match crate::v::disc::partition::register_gpt_partitions(handle).await {
+                                        Ok(reg) => {
+                                            let Some(first) = reg.first() else {
+                                                io.write_str("format: no partitions registered\r\n");
+                                                write_prompt(io);
+                                                continue;
+                                            };
+
+                                            let Some(part_handle) = crate::disc::block::device_handle(first.id) else {
+                                                io.write_str("format: partition handle lookup failed\r\n");
+                                                write_prompt(io);
+                                                continue;
+                                            };
+
+                                            match crate::v::fs::trueosfs::format_blank_partition_async(part_handle).await {
+                                                Ok(()) => {
+                                                    let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(handle).await;
+                                                    io.write_fmt(format_args!(
+                                                        "format: ok (status now: {}{})\r\n",
+                                                        status.short(),
+                                                        match (&status, err) {
+                                                            (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
+                                                            _ => alloc::string::String::new(),
+                                                        }
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    io.write_fmt(format_args!("format: TRUEOSFS failed ({:?})\r\n", e));
+                                                }
+                                            }
                                         }
-                                    ));
+                                        Err(e) => {
+                                            io.write_fmt(format_args!("format: partition register failed ({:?})\r\n", e));
+                                        }
+                                    }
                                 }
                                 Err(e) => {
-                                    io.write_fmt(format_args!("format: failed ({:?})\r\n", e));
+                                    io.write_fmt(format_args!("format: GPT write failed ({:?})\r\n", e));
                                 }
                             }
                         } else {

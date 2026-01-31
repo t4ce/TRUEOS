@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
+
 use crate::shell::{ShellBackend, ShellIo};
 
 static mut QJS_SHELL_IO: Option<&'static dyn ShellBackend> = None;
@@ -367,6 +369,50 @@ unsafe fn drain_pending_jobs(io: &dyn ShellIo, rt: *mut trueos_qjs::JSRuntime, f
     true
 }
 
+async fn drain_jobs_and_promises(
+    io: &dyn ShellIo,
+    rt: *mut trueos_qjs::JSRuntime,
+    ctx: *mut trueos_qjs::JSContext,
+    max_wait_ms: u64,
+) -> bool {
+    if rt.is_null() || ctx.is_null() {
+        return true;
+    }
+
+    let start = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    let max_ticks = if hz == 0 {
+        0
+    } else {
+        (max_wait_ms.saturating_mul(hz) + 999) / 1000
+    };
+    let deadline = start.saturating_add(max_ticks);
+
+    loop {
+        let _progress = unsafe { trueos_qjs::async_ops::pump(ctx) };
+
+        // Drain QuickJS microtasks (Promise continuations).
+        if !unsafe { drain_pending_jobs(io, rt, ctx) } {
+            return false;
+        }
+
+        let pending = unsafe { trueos_qjs::async_ops::has_pending(ctx) };
+        let jobs_pending = unsafe { trueos_qjs::JS_IsJobPending(rt) } > 0;
+        if !pending && !jobs_pending {
+            break;
+        }
+
+        if max_ticks != 0 && embassy_time_driver::now() >= deadline {
+            io.write_str("qjs: async wait timeout\r\n");
+            break;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+
+    true
+}
+
 fn split_first_token(s: &str) -> (&str, &str) {
     let s = s.trim_start();
     if s.is_empty() {
@@ -502,7 +548,7 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
                 let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
                 filename_buf.extend_from_slice(path.as_bytes());
                 filename_buf.push(0);
-                eval_bytes_opts(io, filename_buf.as_ptr() as *const c_char, &bytes, flags, print_result);
+                eval_bytes_opts_async(io, filename_buf.as_ptr() as *const c_char, &bytes, flags, print_result).await;
             }
             Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
         }
@@ -529,7 +575,7 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
     } else {
         b"<eval>\0".as_ptr() as *const c_char
     };
-    eval_bytes_opts(io, filename, source.as_bytes(), flags, print_result);
+    eval_bytes_opts_async(io, filename, source.as_bytes(), flags, print_result).await;
 }
 
 pub(crate) fn eval_bytes(
@@ -625,6 +671,91 @@ pub(crate) fn eval_bytes_opts(
 
         QJS_SHELL_IO = None;
 
+        trueos_qjs::JS_FreeContext(ctx);
+        trueos_qjs::JS_FreeRuntime(rt);
+    }
+}
+
+pub(crate) async fn eval_bytes_opts_async(
+    io: &'static dyn ShellBackend,
+    filename: *const c_char,
+    bytes: &[u8],
+    eval_flags: c_int,
+    print_result: bool,
+) {
+    unsafe {
+        let rt = trueos_qjs::JS_NewRuntime();
+        if rt.is_null() {
+            io.write_str("qjs: JS_NewRuntime failed\r\n");
+            return;
+        }
+
+        trueos_qjs::node::install(rt);
+
+        let ctx = trueos_qjs::JS_NewContext(rt);
+        if ctx.is_null() {
+            trueos_qjs::JS_FreeRuntime(rt);
+            io.write_str("qjs: JS_NewContext failed\r\n");
+            return;
+        }
+
+        QJS_SHELL_IO = Some(io);
+
+        // Install globalThis.print(...)
+        let global = trueos_qjs::JS_GetGlobalObject(ctx);
+        let name = b"print\0";
+        let func = trueos_qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_shell_print),
+            name.as_ptr() as *const c_char,
+            1,
+            trueos_qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
+        trueos_qjs::js_free_value(ctx, global);
+
+        trueos_qjs::node::install_globals(ctx);
+
+        let val = trueos_qjs::JS_Eval(
+            ctx,
+            bytes.as_ptr() as *const c_char,
+            bytes.len(),
+            filename,
+            eval_flags,
+        );
+
+        if val.is_exception() {
+            dump_exception(io, ctx);
+        } else {
+            // Drain microtasks + pump kernel async FS completions into JS Promises.
+            let _ = drain_jobs_and_promises(io, rt, ctx, 30_000).await;
+
+            if print_result && val.tag != trueos_qjs::JS_TAG_UNDEFINED {
+                let cstr = trueos_qjs::js_to_cstring(ctx, val);
+                io.write_str("qjs: => ");
+                if !cstr.is_null() {
+                    let bytes = CStr::from_ptr(cstr).to_bytes();
+                    if let Ok(s) = core::str::from_utf8(bytes) {
+                        io.write_str(s);
+                    } else {
+                        for &b in bytes {
+                            io.write_byte(b);
+                        }
+                    }
+                    trueos_qjs::JS_FreeCString(ctx, cstr);
+                } else {
+                    io.write_str("<toString failed>");
+                }
+                io.write_str("\r\n");
+            }
+        }
+        trueos_qjs::js_free_value(ctx, val);
+
+        // Best-effort: reject/cleanup any unresolved async fs ops.
+        trueos_qjs::async_ops::drain_all_for_context(ctx);
+
+        QJS_SHELL_IO = None;
         trueos_qjs::JS_FreeContext(ctx);
         trueos_qjs::JS_FreeRuntime(rt);
     }

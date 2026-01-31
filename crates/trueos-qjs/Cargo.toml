@@ -13,6 +13,7 @@ path = "src/lib.rs"
 cc = "1.0"
 
 [dependencies]
+spin = "0.10"
 embassy-time-driver = { version = "0.2.1", default-features = false, optional = true }
 libm = { version = "0.2", default-features = false, optional = true }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
