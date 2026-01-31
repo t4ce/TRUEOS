@@ -1,4 +1,5 @@
 use core::mem::MaybeUninit;
+use core::{fmt, fmt::Write};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
@@ -306,6 +307,121 @@ impl<T, const N: usize> Tree<T, N> {
     fn node_mut(&mut self, id: NodeId) -> &mut Node<T> {
         unsafe { self.nodes[id.0].assume_init_mut() }
     }
+
+    /// Writes a simple ASCII tree to `out`.
+    ///
+    /// This is intended for kernel/shell diagnostics and avoids allocation.
+    ///
+    /// Notes:
+    /// - The traversal is depth-first.
+    /// - Sibling order is reverse insertion order (stack-based).
+    /// - `max_entries` limits the number of printed nodes (including `start`).
+    pub fn write_ascii_tree<W, F>(
+        &self,
+        start: NodeId,
+        out: &mut W,
+        max_entries: usize,
+        mut render: F,
+    ) -> fmt::Result
+    where
+        W: Write,
+        F: FnMut(&T, &mut W) -> fmt::Result,
+    {
+        if max_entries == 0 {
+            return Ok(());
+        }
+        if !self.is_used(start) {
+            return Ok(());
+        }
+
+        #[derive(Copy, Clone)]
+        struct Frame {
+            id: NodeId,
+            depth: usize,
+            is_last: bool,
+        }
+
+        let mut printed = 0usize;
+        let mut stack: [Frame; N] = [
+            Frame {
+                id: NodeId(usize::MAX),
+                depth: 0,
+                is_last: true,
+            };
+            N
+        ];
+        let mut sp = 0usize;
+
+        // `branches[d] == true` means: at depth `d` there are more siblings to come,
+        // so we need to draw a vertical continuation (`|   `) for descendants.
+        let mut branches: [bool; N] = [false; N];
+
+        stack[sp] = Frame {
+            id: start,
+            depth: 0,
+            is_last: true,
+        };
+        sp += 1;
+
+        while sp > 0 {
+            if printed >= max_entries {
+                writeln!(out, "... (max {} entries)", max_entries)?;
+                break;
+            }
+
+            sp -= 1;
+            let Frame { id, depth, is_last } = stack[sp];
+
+            if depth == 0 {
+                render(&self.node(id).value, out)?;
+                out.write_char('\n')?;
+            } else {
+                for d in 0..(depth - 1) {
+                    if branches[d] {
+                        out.write_str("|   ")?;
+                    } else {
+                        out.write_str("    ")?;
+                    }
+                }
+
+                if is_last {
+                    out.write_str("`-- ")?;
+                } else {
+                    out.write_str("|-- ")?;
+                }
+
+                render(&self.node(id).value, out)?;
+                out.write_char('\n')?;
+            }
+
+            printed += 1;
+
+            if depth < N {
+                branches[depth] = !is_last;
+            }
+
+            // Push children onto the stack.
+            // This yields a reverse insertion order traversal of siblings, which is OK for diagnostics.
+            let mut child = self.node(id).first_child;
+            while let Some(ch) = child {
+                if sp >= N {
+                    break;
+                }
+
+                let child_is_last = self.node(ch).next_sibling.is_none();
+                stack[sp] = Frame {
+                    id: ch,
+                    depth: depth + 1,
+                    is_last: child_is_last,
+                };
+                sp += 1;
+
+                child = self.node(ch).next_sibling;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +451,38 @@ mod tests {
 
         assert!(!t.move_node(a, b), "should not allow moving a under its descendant");
         assert_eq!(t.parent(a), Some(root));
+    }
+
+    #[test]
+    fn write_ascii_tree_smoke() {
+        let mut t: Tree<&'static str, 16> = Tree::new();
+        let root = t.add_root("root").unwrap();
+        let a = t.add_child(root, "a").unwrap();
+        let _b = t.add_child(root, "b").unwrap();
+        let _c = t.add_child(a, "c").unwrap();
+
+        let mut out = String::new();
+        t.write_ascii_tree(root, &mut out, 64, |v, w| w.write_str(v)).unwrap();
+
+        assert!(out.starts_with("root\n"));
+        assert!(out.contains("|-- ") || out.contains("`-- "));
+    }
+
+    #[test]
+    fn write_ascii_tree_respects_max_entries() {
+        let mut t: Tree<&'static str, 32> = Tree::new();
+        let root = t.add_root("root").unwrap();
+        let a = t.add_child(root, "a").unwrap();
+        let b = t.add_child(root, "b").unwrap();
+        let _c = t.add_child(a, "c").unwrap();
+        let _d = t.add_child(b, "d").unwrap();
+
+        let mut out = String::new();
+        t.write_ascii_tree(root, &mut out, 2, |v, w| w.write_str(v)).unwrap();
+
+        // 2 entries printed, then truncation line.
+        assert!(out.lines().count() >= 3);
+        assert!(out.contains("... (max 2 entries)"));
     }
 }
 

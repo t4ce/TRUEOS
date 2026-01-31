@@ -459,6 +459,14 @@ pub fn log_system_table_once() -> bool {
     DID_DUMP_SYSTEM_TABLE.load(Ordering::Acquire)
 }
 
+pub fn log_once() {
+    // Prefer the actual UEFI System Table dump when Limine provides a mappable address.
+    // If that fails, fall back to the ACPI "UEFI" table decoder in `efi::tbl`.
+    if !log_system_table_once() {
+        tbl::log_once();
+    }
+}
+
 unsafe fn read_utf16z_lossy(ptr16: *const u16, max_units: usize) -> Option<alloc::string::String> {
     if ptr16.is_null() {
         return None;

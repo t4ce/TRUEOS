@@ -1185,6 +1185,12 @@ where
         if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
             return Some(evt);
         }
+
+        // If the async controller poll task is starved (e.g. because some code is
+        // synchronously `block_on`-polling a future), we may never see transfer events.
+        // Opportunistically drain one hardware event so waits can still complete.
+        let _ = pump_one_event(ctx);
+
         polls += 1;
         if polls > timeout_iters {
             return None;

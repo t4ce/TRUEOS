@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(async_fn_in_trait)]
 
 extern crate alloc;
 
@@ -132,14 +133,14 @@ pub trait BlockIo {
     /// Read `blocks` blocks at `lba`.
     ///
     /// The returned Vec is `blocks * block_size()` bytes.
-    fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, Self::Error>;
+    async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, Self::Error>;
 
     /// Write blocks starting at `lba`.
     ///
     /// `buf.len()` must be a multiple of `block_size()`.
-    fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), Self::Error>;
+    async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), Self::Error>;
 
-    fn flush(&self) -> Result<(), Self::Error>;
+    async fn flush(&self) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,11 +332,11 @@ fn entry_blocks(block_size: usize, name_len: usize, data_len: usize) -> u64 {
     (1 + name_blocks + data_blocks) as u64
 }
 
-fn read_one_block<D: BlockIo>(dev: &D, lba: u64) -> Result<Vec<u8>, FsError<D::Error>> {
-    dev.read_blocks(lba, 1).map_err(FsError::Device)
+async fn read_one_block<D: BlockIo>(dev: &D, lba: u64) -> Result<Vec<u8>, FsError<D::Error>> {
+    dev.read_blocks(lba, 1).await.map_err(FsError::Device)
 }
 
-fn read_exact_bytes<D: BlockIo>(
+async fn read_exact_bytes<D: BlockIo>(
     dev: &D,
     start_lba: u64,
     start_byte_off: usize,
@@ -354,7 +355,7 @@ fn read_exact_bytes<D: BlockIo>(
     while !remaining.is_empty() {
         let lba = start_lba.saturating_add((abs_byte / bs) as u64);
         let off = abs_byte % bs;
-        let scratch = read_one_block(dev, lba)?;
+        let scratch = read_one_block(dev, lba).await?;
         if scratch.len() < bs {
             return Err(FsError::Corrupted);
         }
@@ -366,7 +367,7 @@ fn read_exact_bytes<D: BlockIo>(
     Ok(())
 }
 
-fn compute_sha256_of_entry_data<D: BlockIo>(
+async fn compute_sha256_of_entry_data<D: BlockIo>(
     dev: &D,
     rec: &FileRecord,
 ) -> Result<[u8; 32], FsError<D::Error>> {
@@ -380,7 +381,7 @@ fn compute_sha256_of_entry_data<D: BlockIo>(
     while remaining > 0 {
         let lba = rec.data_lba.saturating_add((pos / bs) as u64);
         let off = pos % bs;
-        let scratch = read_one_block(dev, lba)?;
+        let scratch = read_one_block(dev, lba).await?;
         if scratch.len() < bs {
             return Err(FsError::Corrupted);
         }
@@ -395,7 +396,7 @@ fn compute_sha256_of_entry_data<D: BlockIo>(
     Ok(out)
 }
 
-fn check_space_for_put<D: BlockIo>(
+async fn check_space_for_put<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name_len: usize,
@@ -405,7 +406,7 @@ fn check_space_for_put<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -419,17 +420,17 @@ fn check_space_for_put<D: BlockIo>(
     Ok(Some((sb, entry_lba, total_blocks)))
 }
 
-fn advance_log_head<D: BlockIo>(
+async fn advance_log_head<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     mut sb: Superblock,
     delta_blocks: u64,
 ) -> Result<(), FsError<D::Error>> {
     sb.log_head_rel_blocks = sb.log_head_rel_blocks.saturating_add(delta_blocks);
-    write_superblock_to_disk(dev, params, sb)
+    write_superblock_to_disk(dev, params, sb).await
 }
 
-fn write_superblock_to_disk<D: BlockIo>(
+async fn write_superblock_to_disk<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     sb: Superblock,
@@ -440,8 +441,10 @@ fn write_superblock_to_disk<D: BlockIo>(
     }
     let mut tmp = vec![0u8; bs];
     write_superblock(&mut tmp, sb);
-    dev.write_blocks(params.super_lba, &tmp).map_err(FsError::Device)?;
-    dev.flush().map_err(FsError::Device)?;
+    dev.write_blocks(params.super_lba, &tmp)
+        .await
+        .map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
     Ok(())
 }
 
@@ -449,7 +452,7 @@ fn write_superblock_to_disk<D: BlockIo>(
 ///
 /// Returns `Ok(None)` if no checkpoint is recorded or if the referenced record
 /// is invalid (best-effort robustness for torn superblock updates).
-pub fn read_index_checkpoint<D: BlockIo>(
+pub async fn read_index_checkpoint<D: BlockIo>(
     dev: &D,
     params: &FsParams,
 ) -> Result<Option<IndexCheckpoint>, FsError<D::Error>> {
@@ -457,7 +460,7 @@ pub fn read_index_checkpoint<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -466,7 +469,7 @@ pub fn read_index_checkpoint<D: BlockIo>(
     }
 
     let entry_lba = params.data_lba.saturating_add(sb.checkpoint_rel_blocks);
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -483,7 +486,7 @@ pub fn read_index_checkpoint<D: BlockIo>(
     let payload_len = hdr.data_len as usize;
     let payload_lba = entry_lba.saturating_add(1);
     let mut payload = vec![0u8; payload_len];
-    read_exact_bytes(dev, payload_lba, 0, &mut payload)?;
+    read_exact_bytes(dev, payload_lba, 0, &mut payload).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&payload);
@@ -501,7 +504,7 @@ pub fn read_index_checkpoint<D: BlockIo>(
 /// `checkpoint_rel_blocks` pointer to it.
 ///
 /// Returns `Ok(false)` if there's no space.
-pub fn write_index_checkpoint<D: BlockIo>(
+pub async fn write_index_checkpoint<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     replay_from_rel_blocks: u64,
@@ -527,7 +530,7 @@ pub fn write_index_checkpoint<D: BlockIo>(
         buf
     };
 
-    let Some((mut sb, entry_lba, blocks)) = check_space_for_put(dev, params, 0, payload.len())? else {
+    let Some((mut sb, entry_lba, blocks)) = check_space_for_put(dev, params, 0, payload.len()).await? else {
         return Ok(false);
     };
 
@@ -541,7 +544,7 @@ pub fn write_index_checkpoint<D: BlockIo>(
         sha256: [0u8; 32],
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
 
     // 2) Payload blocks.
     let payload_blocks = (payload.len() + (bs - 1)) / bs;
@@ -557,9 +560,16 @@ pub fn write_index_checkpoint<D: BlockIo>(
         Ok(take)
     };
     if payload_bytes_rounded > 0 {
-        write_stream_at_lba(dev, entry_lba.saturating_add(1), payload.len(), payload_bytes_rounded, &mut src)?;
+        write_stream_at_lba(
+            dev,
+            entry_lba.saturating_add(1),
+            payload.len(),
+            payload_bytes_rounded,
+            &mut src,
+        )
+        .await?;
     }
-    dev.flush().map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
 
     // 3) Rewrite header committed=1 with sha of payload.
     let mut hasher = Sha256::new();
@@ -656,7 +666,7 @@ pub fn replay_log_range<D: BlockIo>(
     Ok(())
 }
 
-fn write_stream_at_lba<D: BlockIo>(
+async fn write_stream_at_lba<D: BlockIo>(
     dev: &D,
     start_lba: u64,
     exact_bytes: usize,
@@ -707,7 +717,7 @@ fn write_stream_at_lba<D: BlockIo>(
             written_exact = written_exact.saturating_add(n);
         }
 
-        dev.write_blocks(lba, &chunk).map_err(FsError::Device)?;
+        dev.write_blocks(lba, &chunk).await.map_err(FsError::Device)?;
         lba = lba.saturating_add(blocks_here as u64);
         written = written.saturating_add(bytes_here);
     }
@@ -717,7 +727,7 @@ fn write_stream_at_lba<D: BlockIo>(
     Ok(())
 }
 
-fn write_put_entry<D: BlockIo>(
+async fn write_put_entry<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
     total_blocks: u64,
@@ -753,13 +763,14 @@ fn write_put_entry<D: BlockIo>(
         sha256: [0u8; 32],
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
 
     // 2) Name blocks (padded).
     if name_bytes_rounded > 0 {
         let mut name_buf = vec![0u8; name_bytes_rounded];
         name_buf[..name_len].copy_from_slice(name.as_bytes());
         dev.write_blocks(entry_lba.saturating_add(1), &name_buf)
+            .await
             .map_err(FsError::Device)?;
     }
 
@@ -789,9 +800,10 @@ fn write_put_entry<D: BlockIo>(
             data_len as usize,
             data_bytes_rounded,
             &mut data_src,
-        )?;
+        )
+        .await?;
     }
-    dev.flush().map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
 
     // 4) Rewrite header committed=1 with sha.
     let digest = hasher.finalize();
@@ -806,13 +818,13 @@ fn write_put_entry<D: BlockIo>(
         sha256,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).map_err(FsError::Device)?;
-    dev.flush().map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
 
     Ok(())
 }
 
-fn write_delete_entry<D: BlockIo>(
+async fn write_delete_entry<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
     name: &str,
@@ -836,7 +848,7 @@ fn write_delete_entry<D: BlockIo>(
         sha256: deleted_sha256,
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
 
     let name_bytes = name.as_bytes();
     let name_blocks = (name_bytes.len() + (bs - 1)) / bs;
@@ -852,7 +864,14 @@ fn write_delete_entry<D: BlockIo>(
         Ok(take)
     };
     if payload_bytes_rounded > 0 {
-        write_stream_at_lba(dev, entry_lba.saturating_add(1), name_bytes.len(), payload_bytes_rounded, &mut src)?;
+        write_stream_at_lba(
+            dev,
+            entry_lba.saturating_add(1),
+            name_bytes.len(),
+            payload_bytes_rounded,
+            &mut src,
+        )
+        .await?;
     }
 
     // Data payload: referenced entry LBA (little-endian u64).
@@ -878,9 +897,10 @@ fn write_delete_entry<D: BlockIo>(
             DELETE_REF_BYTES,
             data_bytes_rounded,
             &mut ref_src,
-        )?;
+        )
+        .await?;
     }
-    dev.flush().map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
 
     // 2) Rewrite header committed=1 (after payload is durable).
     let mut hdr1 = vec![0u8; bs];
@@ -892,12 +912,12 @@ fn write_delete_entry<D: BlockIo>(
         sha256: deleted_sha256,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).map_err(FsError::Device)?;
-    dev.flush().map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
     Ok(blocks)
 }
 
-fn read_put_entry_data<D: BlockIo>(
+async fn read_put_entry_data<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
 ) -> Result<Option<(Vec<u8>, [u8; 32])>, FsError<D::Error>> {
@@ -906,7 +926,7 @@ fn read_put_entry_data<D: BlockIo>(
         return Err(FsError::InvalidParam);
     }
 
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -924,7 +944,7 @@ fn read_put_entry_data<D: BlockIo>(
     let data_lba = entry_lba.saturating_add(1).saturating_add(name_blocks as u64);
 
     let mut out = vec![0u8; data_len];
-    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+    read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
@@ -938,7 +958,7 @@ fn read_put_entry_data<D: BlockIo>(
     Ok(Some((out, sha)))
 }
 
-fn find_latest_delete_ref<D: BlockIo>(
+async fn find_latest_delete_ref<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -955,7 +975,7 @@ fn find_latest_delete_ref<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -965,7 +985,7 @@ fn find_latest_delete_ref<D: BlockIo>(
     let mut latest_delete: Option<(u64, [u8; 32])> = None;
 
     while lba < end_lba {
-        let hdr_block = read_one_block(dev, lba)?;
+        let hdr_block = read_one_block(dev, lba).await?;
         let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
             break;
         };
@@ -1005,7 +1025,7 @@ fn find_latest_delete_ref<D: BlockIo>(
         if hdr.kind != LogKind::IndexCheckpoint && name_len == name_bytes.len() {
             let name_lba = lba.saturating_add(1);
             let mut tmp_name = vec![0u8; name_len];
-            read_exact_bytes(dev, name_lba, 0, &mut tmp_name)?;
+            read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if tmp_name == name_bytes {
                 match hdr.kind {
                     LogKind::Put => {
@@ -1016,7 +1036,7 @@ fn find_latest_delete_ref<D: BlockIo>(
                             .saturating_add(1)
                             .saturating_add(name_blocks as u64);
                         let mut ref_bytes = [0u8; DELETE_REF_BYTES];
-                        read_exact_bytes(dev, ref_lba, 0, &mut ref_bytes)?;
+                        read_exact_bytes(dev, ref_lba, 0, &mut ref_bytes).await?;
                         let deleted_entry_lba = u64::from_le_bytes(ref_bytes);
                         latest_delete = Some((deleted_entry_lba, hdr.sha256));
                     }
@@ -1034,27 +1054,27 @@ fn find_latest_delete_ref<D: BlockIo>(
 /// Attempts to restore the most recently deleted version of `name`.
 ///
 /// Returns `true` if a restore was performed.
-pub fn undelete_file<D: BlockIo>(
+pub async fn undelete_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    let Some((deleted_entry_lba, expected_sha)) = find_latest_delete_ref(dev, params, name)? else {
+    let Some((deleted_entry_lba, expected_sha)) = find_latest_delete_ref(dev, params, name).await? else {
         return Ok(false);
     };
 
     // Restore from the referenced Put entry.
-    let Some((data, sha)) = read_put_entry_data(dev, deleted_entry_lba)? else {
+    let Some((data, sha)) = read_put_entry_data(dev, deleted_entry_lba).await? else {
         return Ok(false);
     };
     if sha != expected_sha {
         return Ok(false);
     }
 
-    write_file(dev, params, name, &data)
+    write_file(dev, params, name, &data).await
 }
 
-fn find_latest_record<D: BlockIo>(
+async fn find_latest_record<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -1071,7 +1091,7 @@ fn find_latest_record<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -1081,7 +1101,7 @@ fn find_latest_record<D: BlockIo>(
     let mut latest: Option<FileRecord> = None;
 
     while lba < end_lba {
-        let hdr_block = read_one_block(dev, lba)?;
+        let hdr_block = read_one_block(dev, lba).await?;
         let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
             break;
         };
@@ -1116,7 +1136,7 @@ fn find_latest_record<D: BlockIo>(
 
         if hdr.kind != LogKind::IndexCheckpoint && name_len == name_bytes.len() {
             let mut tmp_name = vec![0u8; name_len];
-            read_exact_bytes(dev, name_lba, 0, &mut tmp_name)?;
+            read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if tmp_name == name_bytes {
                 match hdr.kind {
                     LogKind::Put => {
@@ -1143,7 +1163,7 @@ fn find_latest_record<D: BlockIo>(
     Ok(latest)
 }
 
-pub fn write_file<D: BlockIo>(
+pub async fn write_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -1153,7 +1173,9 @@ pub fn write_file<D: BlockIo>(
         return Ok(false);
     }
 
-    let Some((sb, entry_lba, blocks)) = check_space_for_put(dev, params, name.as_bytes().len(), bytes.len())? else {
+    let Some((sb, entry_lba, blocks)) =
+        check_space_for_put(dev, params, name.as_bytes().len(), bytes.len()).await?
+    else {
         return Ok(false);
     };
 
@@ -1168,22 +1190,22 @@ pub fn write_file<D: BlockIo>(
         Ok(take)
     };
 
-    write_put_entry(dev, entry_lba, blocks, name, &mut src, bytes.len() as u64)?;
-    advance_log_head(dev, params, sb, blocks)?;
+    write_put_entry(dev, entry_lba, blocks, name, &mut src, bytes.len() as u64).await?;
+    advance_log_head(dev, params, sb, blocks).await?;
     Ok(true)
 }
 
-pub fn read_file<D: BlockIo>(
+pub async fn read_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
 ) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name)? else {
+    let Some(rec) = find_latest_record(dev, params, name).await? else {
         return Ok(None);
     };
 
     let mut out = vec![0u8; rec.data_len as usize];
-    read_exact_bytes(dev, rec.data_lba, 0, &mut out)?;
+    read_exact_bytes(dev, rec.data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
@@ -1202,7 +1224,7 @@ pub fn read_file<D: BlockIo>(
 /// index (e.g. via index checkpoints + tail replay).
 ///
 /// Returns `Ok(None)` if the entry is invalid, not committed, or not a Put.
-pub fn read_file_at<D: BlockIo>(
+pub async fn read_file_at<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     entry_lba: u64,
@@ -1221,7 +1243,7 @@ pub fn read_file_at<D: BlockIo>(
         return Ok(None);
     }
 
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -1244,7 +1266,7 @@ pub fn read_file_at<D: BlockIo>(
     }
 
     let mut out = vec![0u8; data_len];
-    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+    read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
@@ -1262,7 +1284,7 @@ pub fn read_file_at<D: BlockIo>(
 /// matches `expected_name`, and return its kind.
 ///
 /// Returns `Ok(None)` if the entry is invalid or the name does not match.
-pub fn read_entry_kind_at_named<D: BlockIo>(
+pub async fn read_entry_kind_at_named<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     entry_lba: u64,
@@ -1281,7 +1303,7 @@ pub fn read_entry_kind_at_named<D: BlockIo>(
         return Ok(None);
     }
 
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -1302,7 +1324,7 @@ pub fn read_entry_kind_at_named<D: BlockIo>(
 
     let name_lba = entry_lba.saturating_add(1);
     let mut name_bytes = vec![0u8; name_len];
-    read_exact_bytes(dev, name_lba, 0, &mut name_bytes)?;
+    read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
     if name_bytes != expected_name {
         return Ok(None);
     }
@@ -1315,7 +1337,7 @@ pub fn read_entry_kind_at_named<D: BlockIo>(
 ///
 /// Returns `Ok(None)` if the entry is invalid, not a Put, name mismatch, or
 /// fails integrity check.
-pub fn read_file_at_named<D: BlockIo>(
+pub async fn read_file_at_named<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     entry_lba: u64,
@@ -1334,7 +1356,7 @@ pub fn read_file_at_named<D: BlockIo>(
         return Ok(None);
     }
 
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -1354,7 +1376,7 @@ pub fn read_file_at_named<D: BlockIo>(
     // Verify name matches.
     let name_lba = entry_lba.saturating_add(1);
     let mut name_bytes = vec![0u8; name_len];
-    read_exact_bytes(dev, name_lba, 0, &mut name_bytes)?;
+    read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
     if name_bytes != expected_name {
         return Ok(None);
     }
@@ -1368,7 +1390,7 @@ pub fn read_file_at_named<D: BlockIo>(
     }
 
     let mut out = vec![0u8; data_len];
-    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+    read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
@@ -1387,7 +1409,7 @@ pub fn read_file_at_named<D: BlockIo>(
 ///
 /// This is meant for index-based lookups where a stale/corrupted index must not
 /// cause returning the wrong file's contents.
-pub fn read_file_at_for_name<D: BlockIo>(
+pub async fn read_file_at_for_name<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -1414,7 +1436,7 @@ pub fn read_file_at_for_name<D: BlockIo>(
         return Ok(None);
     }
 
-    let hdr_block = read_one_block(dev, entry_lba)?;
+    let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
@@ -1430,7 +1452,7 @@ pub fn read_file_at_for_name<D: BlockIo>(
     let name_blocks = (stored_name_len + (bs - 1)) / bs;
     let name_lba = entry_lba.saturating_add(1);
     let mut stored_name = vec![0u8; stored_name_len];
-    read_exact_bytes(dev, name_lba, 0, &mut stored_name)?;
+    read_exact_bytes(dev, name_lba, 0, &mut stored_name).await?;
     if stored_name != name_bytes {
         return Ok(None);
     }
@@ -1444,7 +1466,7 @@ pub fn read_file_at_for_name<D: BlockIo>(
 
     let data_len = hdr.data_len as usize;
     let mut out = vec![0u8; data_len];
-    read_exact_bytes(dev, data_lba, 0, &mut out)?;
+    read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
@@ -1458,7 +1480,7 @@ pub fn read_file_at_for_name<D: BlockIo>(
     Ok(Some(out))
 }
 
-pub fn delete_file<D: BlockIo>(
+pub async fn delete_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -1466,11 +1488,11 @@ pub fn delete_file<D: BlockIo>(
     if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(false);
     }
-    if find_latest_record(dev, params, name)?.is_none() {
+    if find_latest_record(dev, params, name).await?.is_none() {
         return Ok(false);
     }
 
-    let Some(base) = find_latest_record(dev, params, name)? else {
+    let Some(base) = find_latest_record(dev, params, name).await? else {
         return Ok(false);
     };
 
@@ -1478,7 +1500,7 @@ pub fn delete_file<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -1490,29 +1512,29 @@ pub fn delete_file<D: BlockIo>(
         return Ok(false);
     }
 
-    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba, base.sha256)?;
-    advance_log_head(dev, params, sb, written_blocks)?;
+    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba, base.sha256).await?;
+    advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
 }
 
-pub fn file_valid<D: BlockIo>(
+pub async fn file_valid<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name)? else {
+    let Some(rec) = find_latest_record(dev, params, name).await? else {
         return Ok(false);
     };
-    let sha = compute_sha256_of_entry_data(dev, &rec)?;
+    let sha = compute_sha256_of_entry_data(dev, &rec).await?;
     Ok(sha == rec.sha256)
 }
 
-pub fn file_exists<D: BlockIo>(
+pub async fn file_exists<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    Ok(find_latest_record(dev, params, name)?.is_some())
+    Ok(find_latest_record(dev, params, name).await?.is_some())
 }
 
 fn normalize_rel_no_parent(path: &str) -> Option<String> {
@@ -1538,7 +1560,7 @@ fn normalize_rel_no_parent(path: &str) -> Option<String> {
 /// List immediate children of a directory, treating stored keys as `/`-separated paths.
 ///
 /// Output is newline-separated entry names.
-pub fn list_dir<D: BlockIo>(
+pub async fn list_dir<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     dir: &str,
@@ -1558,7 +1580,7 @@ pub fn list_dir<D: BlockIo>(
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
-    let sb_block = read_one_block(dev, params.super_lba)?;
+    let sb_block = read_one_block(dev, params.super_lba).await?;
     let Some(sb) = parse_superblock(&sb_block) else {
         return Err(FsError::Corrupted);
     };
@@ -1568,7 +1590,7 @@ pub fn list_dir<D: BlockIo>(
     let mut live: BTreeSet<String> = BTreeSet::new();
 
     while lba < end_lba {
-        let hdr_block = read_one_block(dev, lba)?;
+        let hdr_block = read_one_block(dev, lba).await?;
         let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
             break;
         };
@@ -1603,7 +1625,7 @@ pub fn list_dir<D: BlockIo>(
         if hdr.kind != LogKind::IndexCheckpoint {
             let name_lba = lba.saturating_add(1);
             let mut tmp_name = vec![0u8; name_len];
-            read_exact_bytes(dev, name_lba, 0, &mut tmp_name)?;
+            read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if let Ok(name) = core::str::from_utf8(&tmp_name) {
                 match hdr.kind {
                     LogKind::Put => {
@@ -1657,7 +1679,7 @@ pub fn list_dir<D: BlockIo>(
     Ok(out)
 }
 
-pub fn append_file<D: BlockIo>(
+pub async fn append_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
@@ -1667,82 +1689,9 @@ pub fn append_file<D: BlockIo>(
         return Ok(true);
     }
 
-    let Some(base) = find_latest_record(dev, params, name)? else {
-        return write_file(dev, params, name, append_bytes);
+    let Some(mut base) = read_file(dev, params, name).await? else {
+        return write_file(dev, params, name, append_bytes).await;
     };
-
-    let bs = dev.block_size();
-    if bs == 0 {
-        return Err(FsError::InvalidParam);
-    }
-    let base_name_blocks = ((base.name_len as usize) + (bs - 1)) / bs;
-    let base_data_lba = base.entry_lba.saturating_add(1).saturating_add(base_name_blocks as u64);
-
-    let new_len = (base.data_len as usize).saturating_add(append_bytes.len());
-    let Some((sb, entry_lba, blocks)) = check_space_for_put(dev, params, name.as_bytes().len(), new_len)? else {
-        return Ok(false);
-    };
-
-    struct Src<'a, D: BlockIo> {
-        dev: &'a D,
-        bs: usize,
-        base_data_lba: u64,
-        base_len: usize,
-        base_pos: usize,
-        append: &'a [u8],
-        append_off: usize,
-        cache_lba: Option<u64>,
-        cache_block: Vec<u8>,
-    }
-
-    impl<'a, D: BlockIo> Src<'a, D> {
-        fn fill(&mut self, dst: &mut [u8]) -> Result<usize, FsError<D::Error>> {
-            if dst.is_empty() {
-                return Ok(0);
-            }
-            if self.base_pos < self.base_len {
-                let abs = self.base_pos;
-                let lba = self.base_data_lba.saturating_add((abs / self.bs) as u64);
-                let off = abs % self.bs;
-                if self.cache_lba != Some(lba) {
-                    self.cache_block = read_one_block(self.dev, lba)?;
-                    self.cache_lba = Some(lba);
-                }
-                if self.cache_block.len() < self.bs {
-                    return Err(FsError::Corrupted);
-                }
-                let remaining_base = self.base_len - self.base_pos;
-                let take = core::cmp::min(core::cmp::min(self.bs - off, remaining_base), dst.len());
-                dst[..take].copy_from_slice(&self.cache_block[off..off + take]);
-                self.base_pos = self.base_pos.saturating_add(take);
-                return Ok(take);
-            }
-
-            if self.append_off < self.append.len() {
-                let take = core::cmp::min(dst.len(), self.append.len() - self.append_off);
-                dst[..take].copy_from_slice(&self.append[self.append_off..self.append_off + take]);
-                self.append_off = self.append_off.saturating_add(take);
-                return Ok(take);
-            }
-
-            Ok(0)
-        }
-    }
-
-    let mut src = Src {
-        dev,
-        bs,
-        base_data_lba,
-        base_len: base.data_len as usize,
-        base_pos: 0,
-        append: append_bytes,
-        append_off: 0,
-        cache_lba: None,
-        cache_block: Vec::new(),
-    };
-
-    let mut src_fn = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> { src.fill(dst) };
-    write_put_entry(dev, entry_lba, blocks, name, &mut src_fn, new_len as u64)?;
-    advance_log_head(dev, params, sb, blocks)?;
-    Ok(true)
+    base.extend_from_slice(append_bytes);
+    write_file(dev, params, name, &base).await
 }

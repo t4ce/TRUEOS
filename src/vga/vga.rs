@@ -93,6 +93,11 @@ pub fn init_font_cache() {
     render_framebuffer_banner(BANNER_TEXT);
 }
 
+#[embassy_executor::task]
+pub(crate) async fn init_font_cache_task() {
+    init_font_cache();
+}
+
 pub fn current_colors() -> Option<(u32, u32, u32)> {
     with_framebuffer(|_| (DEFAULT_FG_COLOR, DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR))
 }

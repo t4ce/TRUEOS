@@ -31,6 +31,10 @@ sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger -s usb --action=add
 
 # VFIO USB CONTROLLER (persistent across reboot)
+sudo modprobe vfio-pci
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
+echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 sudo bash -lc '
 modprobe vfio vfio_pci vfio_iommu_type1
 
@@ -46,10 +50,7 @@ ls -l /dev/vfio || true
 lspci -nnk -s 06:00.0
 '
 # unbind all
-sudo modprobe vfio-pci
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+
 # 
 
 ## FIREWALL netboot auf interface alles erlauben ## enx047bcb669593
