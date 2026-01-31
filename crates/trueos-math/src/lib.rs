@@ -9,6 +9,9 @@ pub use tree::{Children, NodeId, Tree};
 pub(crate) mod ascii_tree;
 
 #[cfg(any(feature = "alloc", test))]
+pub(crate) mod html_tree;
+
+#[cfg(any(feature = "alloc", test))]
 pub mod pbltree;
 
 #[cfg(any(feature = "alloc", test))]

@@ -122,10 +122,9 @@ run: iso-debug
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
 
-# Boot the installed disk image directly (no installer ISO).
-# Useful for validating GPT+ESP+Limine stage installation.
+DISK_IMG ?= disk.img
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
-QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
+QEMU_DISK_DRIVE_FLAGS = -drive file=$(DISK_IMG),if=virtio,format=raw
 
-run-installed-uefi: iso-debug
-	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
+run-installed-uefi:
+	@test -f $(DISK_IMG) && ($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
