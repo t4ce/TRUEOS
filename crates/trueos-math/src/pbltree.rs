@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::{fmt, fmt::Write};
 
 /// A minimal B+tree mapping `K -> V`.
 ///
@@ -178,6 +179,143 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             leaf,
             pos,
         }
+    }
+
+    /// Writes a simple ASCII representation of the internal B+tree structure.
+    ///
+    /// This is intended for diagnostics (e.g. shell debug output).
+    ///
+    /// - `max_nodes` caps how many tree nodes will be printed.
+    /// - `render_key` controls how keys are printed without requiring `Debug`.
+    pub fn write_ascii_tree<W, F>(&self, out: &mut W, max_nodes: usize, mut render_key: F) -> fmt::Result
+    where
+        W: Write,
+        F: FnMut(&K, &mut W) -> fmt::Result,
+    {
+        if max_nodes == 0 {
+            return Ok(());
+        }
+        let Some(root) = self.root else {
+            return Ok(());
+        };
+
+        #[derive(Copy, Clone)]
+        struct Frame {
+            id: NodeId,
+            depth: usize,
+            is_last: bool,
+        }
+
+        let mut printed = 0usize;
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut branches: Vec<bool> = Vec::new();
+
+        stack.push(Frame {
+            id: root,
+            depth: 0,
+            is_last: true,
+        });
+
+        while let Some(Frame { id, depth, is_last }) = stack.pop() {
+            if printed >= max_nodes {
+                writeln!(out, "... (max {} nodes)", max_nodes)?;
+                break;
+            }
+
+            if depth > 0 {
+                for d in 0..(depth - 1) {
+                    if branches.get(d).copied().unwrap_or(false) {
+                        out.write_str("|   ")?;
+                    } else {
+                        out.write_str("    ")?;
+                    }
+                }
+
+                if is_last {
+                    out.write_str("`-- ")?;
+                } else {
+                    out.write_str("|-- ")?;
+                }
+            }
+
+            // Ensure branches array can track this depth.
+            if branches.len() <= depth {
+                branches.resize(depth + 1, false);
+            }
+
+            match &self.nodes[id] {
+                Node::Internal { keys, children } => {
+                    out.write_str("I ")?;
+                    write!(out, "keys={} children={}", keys.len(), children.len())?;
+                    if !keys.is_empty() {
+                        out.write_str(" [")?;
+                        let show = core::cmp::min(keys.len(), 4);
+                        if keys.len() <= 4 {
+                            for (i, k) in keys.iter().enumerate() {
+                                if i != 0 {
+                                    out.write_str(",")?;
+                                }
+                                render_key(k, out)?;
+                            }
+                        } else {
+                            // first two, ellipsis, last two
+                            render_key(&keys[0], out)?;
+                            out.write_str(",")?;
+                            render_key(&keys[1], out)?;
+                            out.write_str(" .. ")?;
+                            render_key(&keys[keys.len() - 2], out)?;
+                            out.write_str(",")?;
+                            render_key(&keys[keys.len() - 1], out)?;
+                        }
+                        let _ = show;
+                        out.write_str("]")?;
+                    }
+                    out.write_char('\n')?;
+
+                    // Push children in reverse so the leftmost prints first.
+                    for (i, ch) in children.iter().enumerate().rev() {
+                        stack.push(Frame {
+                            id: *ch,
+                            depth: depth + 1,
+                            is_last: i == children.len().saturating_sub(1),
+                        });
+                    }
+                }
+                Node::Leaf { keys, next, .. } => {
+                    out.write_str("L ")?;
+                    write!(out, "keys={}", keys.len())?;
+                    if !keys.is_empty() {
+                        out.write_str(" [")?;
+                        if keys.len() <= 4 {
+                            for (i, k) in keys.iter().enumerate() {
+                                if i != 0 {
+                                    out.write_str(",")?;
+                                }
+                                render_key(k, out)?;
+                            }
+                        } else {
+                            render_key(&keys[0], out)?;
+                            out.write_str(",")?;
+                            render_key(&keys[1], out)?;
+                            out.write_str(" .. ")?;
+                            render_key(&keys[keys.len() - 2], out)?;
+                            out.write_str(",")?;
+                            render_key(&keys[keys.len() - 1], out)?;
+                        }
+                        out.write_str("]")?;
+                    }
+                    if next.is_some() {
+                        out.write_str(" -> next")?;
+                    }
+                    out.write_char('\n')?;
+                }
+            }
+
+            printed += 1;
+            branches[depth] = !is_last;
+        }
+
+        Ok(())
     }
 
     fn seek_to_first_ge(&self, key: &K) -> (Option<NodeId>, usize) {
@@ -442,5 +580,31 @@ mod tests {
 
         let keys2: alloc::vec::Vec<u64> = t.iter_from(&20).map(|(k, _)| *k).collect();
         assert!(keys2.is_empty());
+    }
+
+    #[test]
+    fn write_ascii_tree_smoke() {
+        let mut t: BPlusTree<u64, u64, 4> = BPlusTree::new();
+        for i in 0..25u64 {
+            t.insert(i, i * 10);
+        }
+
+        let mut out = alloc::string::String::new();
+        t.write_ascii_tree(&mut out, 64, |k, w| write!(w, "{}", k)).unwrap();
+
+        assert!(out.contains("I ") || out.contains("L "));
+        assert!(out.lines().count() >= 1);
+    }
+
+    #[test]
+    fn write_ascii_tree_respects_max_nodes() {
+        let mut t: BPlusTree<u64, u64, 4> = BPlusTree::new();
+        for i in 0..50u64 {
+            t.insert(i, i);
+        }
+
+        let mut out = alloc::string::String::new();
+        t.write_ascii_tree(&mut out, 2, |k, w| write!(w, "{}", k)).unwrap();
+        assert!(out.contains("... (max 2 nodes)"));
     }
 }
