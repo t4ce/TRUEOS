@@ -834,7 +834,7 @@ pub(crate) async fn boot_cache_pci_ids_task() {
             }
         }
 
-        let raw = match fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await {
+        let raw = match crate::surface::io::cabi::net_fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await {
             Ok(b) => b,
             Err(rc) => {
                 crate::log!(

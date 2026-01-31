@@ -93,6 +93,18 @@ pub async fn install_bootable_uefi_gpt_with_log(
         (layout.esp, layout.trueos)
     };
 
+    log(
+        alloc::format!(
+            "install: preserve_trueosfs={} (esp lba={} blocks={}, trueos lba={} blocks={})",
+            preserve_trueosfs,
+            esp_range.first_lba(),
+            esp_range.block_count(),
+            trueos_range.first_lba(),
+            trueos_range.block_count(),
+        )
+        .as_str(),
+    );
+
     let esp_handle = {
         let mut d = block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
         d.label = Some("TRUEOS ESP".into());

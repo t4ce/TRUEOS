@@ -42,8 +42,6 @@ QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
-.PHONY: images
-
 images: disk.img nvme.img
 
 disk.img:
@@ -62,22 +60,15 @@ iso: kernel images
 	cp $(KERNEL_BIN) $(ISO_BOOT_DIR)/TRUEOS.elf
 	strip -s $(ISO_BOOT_DIR)/TRUEOS.elf || true
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
-	# Stage UEFI netboot files in $(ISO_DIR) for pxe.js (dnsmasq TFTP root).
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
-	# Also put a standard UEFI removable-media path in the ISO9660 tree as a
-	# fallback. Some firmware/OVMF builds will boot this path instead of (or
-	# before) the El Torito ESP image.
 	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/EFI/BOOT/limine.conf
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1M count=31
-	# NOTE: Keep this image < 65535*512 bytes to satisfy El Torito load-size limits.
-	# That size is too small to be a standards-compliant FAT32 volume (min 65525 clusters).
-	# Use FAT16 here so UEFI and Limine can reliably read limine.conf and the kernel.
 	mkfs.vfat -F 16 -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_BOOT_DIR)/limine.conf ::/limine.conf
@@ -108,6 +99,10 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
+
+# Run QEMU in the current terminal (useful for CI / remote shells).
+run-stdio: iso-debug
+	@$(QEMU_ISO_STDIO)
 
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))

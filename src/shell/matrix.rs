@@ -634,7 +634,20 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     // Safety: `update` is intended to refresh an existing TRUEOS install.
     // Refuse to proceed if TRUEOSFS is not detected.
     match crate::v::fs::trueosfs::locate_async(disk).await {
-        Ok(Some(_)) => {}
+        Ok(Some(loc)) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!(
+                    "update: TRUEOSFS detected (bootable={}, super_lba={}, data_lba={}, data_end={:?})",
+                    loc.bootable,
+                    loc.super_lba,
+                    loc.data_lba,
+                    loc.data_end_lba_exclusive,
+                )
+                .as_str(),
+            );
+        }
         Ok(None) => {
             log_line(slot_id, &mut blob, "update: refused (no TRUEOSFS detected on target disk)");
             log_line(slot_id, &mut blob, "update: use `install` for a fresh install");
