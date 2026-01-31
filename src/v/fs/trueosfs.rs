@@ -212,7 +212,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         if v == 0 { 256 * 1024 } else { v }
     }
 
-    fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
+    async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
         if blocks == 0 {
             return Ok(Vec::new());
         }
@@ -234,7 +234,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         let mut remaining = blocks;
         while remaining > 0 {
             let blocks_here = core::cmp::min(remaining, max_blocks);
-            let tmp = crate::time::block_on(self.handle.read_blocks(cur_lba, blocks_here))?;
+            let tmp = self.handle.read_blocks(cur_lba, blocks_here).await?;
             out.extend_from_slice(&tmp);
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             remaining = remaining.saturating_sub(blocks_here);
@@ -243,7 +243,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         Ok(out)
     }
 
-    fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
+    async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), block::Error> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -265,7 +265,9 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             let remaining = buf.len() - off;
             let blocks_here = core::cmp::min(max_blocks, remaining / bs);
             let bytes_here = blocks_here * bs;
-            crate::time::block_on(self.handle.write_blocks(cur_lba, &buf[off..off + bytes_here]))?;
+            self.handle
+                .write_blocks(cur_lba, &buf[off..off + bytes_here])
+                .await?;
             cur_lba = cur_lba.saturating_add(blocks_here as u64);
             off = off.saturating_add(bytes_here);
         }
@@ -274,8 +276,8 @@ impl trueos_fs::BlockIo for KernelBlockIo {
     }
 
     #[inline]
-    fn flush(&self) -> Result<(), block::Error> {
-        crate::time::block_on(self.handle.flush())
+    async fn flush(&self) -> Result<(), block::Error> {
+        self.handle.flush().await
     }
 }
 
@@ -417,6 +419,159 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
     Ok(Some(disk_id))
 }
 
+/// Async TRUEOSFS: write/replace a file.
+///
+/// Semantics match [`file_in`], but this avoids `block_on` and is safe to call from async contexts.
+pub async fn file_in_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::write_file(&io, &params, name, bytes)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: read a file.
+///
+/// Returns `Ok(None)` if missing or fails integrity check.
+pub async fn file_out_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<Vec<u8>>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::read_file(&io, &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: delete a file.
+pub async fn file_delete_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::delete_file(&io, &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: check whether a file exists.
+pub async fn file_exists_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::file_exists(&io, &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: list the immediate children of a directory.
+///
+/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
+pub async fn list_dir_async(
+    disk: block::DeviceHandle,
+    dir: &str,
+) -> Result<Option<String>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    let out = trueos_fs::list_dir(&io, &params, dir)
+        .await
+        .map_err(map_engine_err)?;
+    Ok(Some(out))
+}
+
+/// Async TRUEOSFS: append bytes by performing a full new write.
+pub async fn file_append_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    append_bytes: &[u8],
+) -> Result<bool, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(false);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::append_file(&io, &params, name, append_bytes)
+        .await
+        .map_err(map_engine_err)
+}
+
 /// TRUEOSFS: write/replace a file.
 ///
 /// Semantics:
@@ -442,7 +597,7 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
     let had_index = root_mount_has_index(disk_id);
     let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
-    let ok = trueos_fs::write_file(&io, &params, name, bytes).map_err(map_engine_err)?;
+    let ok = crate::time::block_on(trueos_fs::write_file(&io, &params, name, bytes)).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
@@ -480,15 +635,20 @@ pub fn file_out(disk: block::DeviceHandle, name: &str) -> Result<Option<Vec<u8>>
             if r.kind == trueos_fs::LogKind::Delete {
                 return Ok(None);
             }
-            if let Some(bytes) = trueos_fs::read_file_at_for_name(&io, &params, name, r.entry_lba)
-                .map_err(map_engine_err)?
+            if let Some(bytes) = crate::time::block_on(trueos_fs::read_file_at_for_name(
+                &io,
+                &params,
+                name,
+                r.entry_lba,
+            ))
+            .map_err(map_engine_err)?
             {
                 return Ok(Some(bytes));
             }
         }
     }
 
-    trueos_fs::read_file(&io, &params, name).map_err(map_engine_err)
+    crate::time::block_on(trueos_fs::read_file(&io, &params, name)).map_err(map_engine_err)
 }
 
 pub fn file_out_ok(disk: block::DeviceHandle, name: &str, out: &mut Vec<u8>) -> Result<bool, block::Error> {
@@ -522,7 +682,7 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
     let had_index = root_mount_has_index(disk_id);
     let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
-    let ok = trueos_fs::delete_file(&io, &params, name).map_err(map_engine_err)?;
+    let ok = crate::time::block_on(trueos_fs::delete_file(&io, &params, name)).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
@@ -550,7 +710,7 @@ pub fn file_valid(disk: block::DeviceHandle, name: &str) -> Result<bool, block::
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    trueos_fs::file_valid(&io, &params, name).map_err(map_engine_err)
+    crate::time::block_on(trueos_fs::file_valid(&io, &params, name)).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: check whether a file exists.
@@ -577,17 +737,22 @@ pub fn file_exists(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
                 return Ok(false);
             }
             // Validate against on-disk name so a stale index can't lie.
-            let Some(kind) = trueos_fs::read_entry_kind_at_named(&io, &params, r.entry_lba, key.as_slice())
-                .map_err(map_engine_err)?
+            let Some(kind) = crate::time::block_on(trueos_fs::read_entry_kind_at_named(
+                &io,
+                &params,
+                r.entry_lba,
+                key.as_slice(),
+            ))
+            .map_err(map_engine_err)?
             else {
                 // Fall back to engine scan.
-                return trueos_fs::file_exists(&io, &params, name).map_err(map_engine_err);
+                return crate::time::block_on(trueos_fs::file_exists(&io, &params, name)).map_err(map_engine_err);
             };
             return Ok(kind == trueos_fs::LogKind::Put);
         }
     }
 
-    trueos_fs::file_exists(&io, &params, name).map_err(map_engine_err)
+    crate::time::block_on(trueos_fs::file_exists(&io, &params, name)).map_err(map_engine_err)
 }
 
 /// TRUEOSFS: list the immediate children of a directory.
@@ -618,7 +783,7 @@ pub fn list_dir(disk: block::DeviceHandle, dir: &str) -> Result<Option<String>, 
         }
     }
 
-    let out = trueos_fs::list_dir(&io, &params, dir).map_err(map_engine_err)?;
+    let out = crate::time::block_on(trueos_fs::list_dir(&io, &params, dir)).map_err(map_engine_err)?;
     Ok(Some(out))
 }
 
@@ -645,7 +810,7 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
     let had_index = root_mount_has_index(disk_id);
     let old_head_rel = if had_index { read_log_head_rel_blocks(&io, &params)? } else { 0 };
 
-    let ok = trueos_fs::append_file(&io, &params, name, append_bytes).map_err(map_engine_err)?;
+    let ok = crate::time::block_on(trueos_fs::append_file(&io, &params, name, append_bytes)).map_err(map_engine_err)?;
     if ok && had_index {
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
@@ -670,17 +835,20 @@ fn replay_tail_into_index(
     }
 
     let mut applied = 0u32;
-    trueos_fs::replay_log_range(io, params, start_rel, end_rel, |kind, name_bytes, entry_lba| {
-        applied = applied.saturating_add(1);
-        root_index_insert_if_mounted(
-            disk_id,
-            name_bytes,
-            IndexRef {
-                kind,
-                entry_lba,
-            },
-        );
-    })
+    crate::time::block_on(trueos_fs::replay_log_range(
+        io,
+        params,
+        start_rel,
+        end_rel,
+        |kind, name_bytes, entry_lba| {
+            applied = applied.saturating_add(1);
+            root_index_insert_if_mounted(
+                disk_id,
+                name_bytes,
+                IndexRef { kind, entry_lba },
+            );
+        },
+    ))
     .ok()?;
 
     Some(applied)
@@ -717,7 +885,13 @@ fn root_index_note_writes_and_maybe_checkpoint(
     };
 
     // Attempt checkpoint write without holding ROOTS lock.
-    let ok = trueos_fs::write_index_checkpoint(io, params, replay_from_rel_blocks, entries.into_iter()).ok();
+    let ok = crate::time::block_on(trueos_fs::write_index_checkpoint(
+        io,
+        params,
+        replay_from_rel_blocks,
+        entries.into_iter(),
+    ))
+    .ok();
     if ok == Some(true) {
         let mut roots = ROOTS.lock();
         if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
@@ -730,7 +904,7 @@ fn read_log_head_rel_blocks(
     io: &KernelBlockIo,
     params: &trueos_fs::FsParams,
 ) -> Result<u64, block::Error> {
-    let sb_block = io.read_blocks(params.super_lba, 1)?;
+    let sb_block = crate::time::block_on(io.read_blocks(params.super_lba, 1))?;
     let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
         return Err(block::Error::Corrupted);
     };
@@ -819,8 +993,14 @@ fn list_dir_from_index(
     let mut live: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
     for (k, v) in candidates.into_iter() {
         // Validate against on-disk entry so a stale/corrupt index can't lie.
-        let Ok(kind_opt) = trueos_fs::read_entry_kind_at_named(io, params, v.entry_lba, k.as_slice()) else {
-            return None;
+        let kind_opt = match crate::time::block_on(trueos_fs::read_entry_kind_at_named(
+            io,
+            params,
+            v.entry_lba,
+            k.as_slice(),
+        )) {
+            Ok(v) => v,
+            Err(_) => return None,
         };
         let Some(kind) = kind_opt else {
             return None;
@@ -862,7 +1042,7 @@ fn build_root_index(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let sb_block = io.read_blocks(params.super_lba, 1)?;
+    let sb_block = crate::time::block_on(io.read_blocks(params.super_lba, 1))?;
     let Some(sb) = trueos_fs::parse_superblock(&sb_block) else {
         return Err(block::Error::Corrupted);
     };
@@ -872,7 +1052,7 @@ fn build_root_index(
     let mut replayed = 0u32;
     let mut post_replay_checkpoint_ok = false;
 
-    match trueos_fs::read_index_checkpoint(&io, &params) {
+    match crate::time::block_on(trueos_fs::read_index_checkpoint(&io, &params)) {
         Ok(Some(ckpt)) => {
             replay_from_rel = ckpt.replay_from_rel_blocks;
             for (k, kind, entry_lba) in ckpt.entries.into_iter() {
@@ -892,22 +1072,16 @@ fn build_root_index(
         }
     }
 
-    let _ = trueos_fs::replay_log_range(
+    let _ = crate::time::block_on(trueos_fs::replay_log_range(
         &io,
         &params,
         replay_from_rel,
         sb.log_head_rel_blocks,
         |kind, name_bytes, entry_lba| {
             replayed = replayed.saturating_add(1);
-            let _ = index.insert(
-                name_bytes,
-                IndexRef {
-                    kind,
-                    entry_lba,
-                },
-            );
+            let _ = index.insert(name_bytes, IndexRef { kind, entry_lba });
         },
-    );
+    ));
 
     // Optional best-effort checkpoint after replay:
     // - If no checkpoint exists, write one.
@@ -916,12 +1090,12 @@ fn build_root_index(
     let post_replay_checkpoint_attempted =
         disk.supports_write() && (sb.checkpoint_rel_blocks == 0 || replayed >= TRUEOSFS_CHECKPOINT_EVERY);
     if post_replay_checkpoint_attempted {
-        post_replay_checkpoint_ok = trueos_fs::write_index_checkpoint(
+        post_replay_checkpoint_ok = crate::time::block_on(trueos_fs::write_index_checkpoint(
             &io,
             &params,
             sb.log_head_rel_blocks,
             index.iter().map(|(k, v)| (k.clone(), v.kind, v.entry_lba)),
-        )
+        ))
         .is_ok();
     }
 
