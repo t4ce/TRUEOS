@@ -41,6 +41,15 @@ static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static NET_TX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static NET_TX_DROPPED: AtomicU64 = AtomicU64::new(0);
 
+// Console logging these counters too frequently can flood stdout and make it
+// look like the system is "stuck". Keep the default cadence very low.
+// (Mask form: log when `count & MASK == 0`.)
+#[cfg(debug_assertions)]
+const NET_FRAME_LOG_MASK: u64 = 0x0FFF; // 4096 frames
+
+#[cfg(not(debug_assertions))]
+const NET_FRAME_LOG_MASK: u64 = 0xFFFF; // 65536 frames
+
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 
 struct NetShellState {
@@ -240,7 +249,7 @@ impl Device for AdapterDeviceAt {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         crate::net::pop_rx_packet_at(self.index).map(|packet| {
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-            if (new_total & 0x3F) == 0 {
+            if (new_total & NET_FRAME_LOG_MASK) == 0 {
                 log!("net: rx frames={}\n", new_total);
             }
             (
@@ -294,11 +303,15 @@ impl TxToken for AdapterTxTokenAt {
         let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
         if crate::net::transmit_packet_at(self.index, &buf[..]).is_err() {
             let dropped = NET_TX_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-            log!("net: TX busy, dropping {}-byte frame.\n", len);
-            if (dropped & 0x3F) == 0 {
-                log!("net: tx frames={} dropped={}\n", new_total, dropped);
+            if (dropped & NET_FRAME_LOG_MASK) == 0 {
+                log!(
+                    "net: tx busy (drop) frames={} dropped={} last_len={}\n",
+                    new_total,
+                    dropped,
+                    len
+                );
             }
-        } else if (new_total & 0x3F) == 0 {
+        } else if (new_total & NET_FRAME_LOG_MASK) == 0 {
             log!(
                 "net: tx frames={} dropped={}\n",
                 new_total,

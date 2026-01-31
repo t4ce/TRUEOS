@@ -294,9 +294,20 @@ pub(crate) enum CommandAction {
     Qjs { src: String<192> },
 }
 
-fn print_trueosfs_mount_table(io: &dyn ShellIo) {
-    let roots = crate::v::fs::trueosfs::list_roots();
+async fn print_trueosfs_mount_table(io: &dyn ShellIo) {
     io.write_str("\r\nfile: TRUEOSFS mounts\r\n");
+
+    // `file` is user-facing and should be able to discover TRUEOSFS on already-present
+    // disks (e.g. boot disk), not only those that arrived via hotplug.
+    // Best-effort: probe all whole-disk devices and mount any TRUEOSFS roots we find.
+    for disk in crate::disc::block::device_handles()
+        .into_iter()
+        .filter(|h| h.parent().is_none())
+    {
+        let _ = crate::v::fs::trueosfs::mount_root_async(disk).await;
+    }
+
+    let roots = crate::v::fs::trueosfs::list_roots();
     if roots.is_empty() {
         io.write_str("file: (none)\r\n");
         return;
@@ -900,7 +911,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
                             if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
                                 line.clear();
-                                print_trueosfs_mount_table(io);
+                                print_trueosfs_mount_table(io).await;
                                 io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
                                 write_prompt_for_state(io, pending_action, install_wizard);
                                 continue;
@@ -1009,7 +1020,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                             CommandAction::ShowFileMountTable => {
                                 set_go_mode(io, &mut go_mode, false);
-                                print_trueosfs_mount_table(io);
+                                print_trueosfs_mount_table(io).await;
                                 io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
