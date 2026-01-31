@@ -67,6 +67,7 @@ pub struct MassRuntime {
     pub disc: Option<disc_block::DeviceHandle>,
     pub block_size: u32,
     pub block_count: u64,
+    pub sync_cache_unsupported: bool,
 }
 
 unsafe impl Send for MassRuntime {}
@@ -506,6 +507,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         disc: None,
         block_size: 512,
         block_count: 0,
+        sync_cache_unsupported: false,
     };
 
     // Prove the SCSI/BOT path early: attempt a basic INQUIRY + READ CAPACITY.
@@ -905,6 +907,14 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
         // across power-loss/reboot unless we issue SYNCHRONIZE CACHE.
         let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
 
+        // Some devices (notably many thumb drives) do not implement SYNCHRONIZE CACHE
+        // and will return IllegalRequest forever. Once detected, disable flush for
+        // this device to avoid repeated log spam.
+        if rt.sync_cache_unsupported {
+            register_runtime(rt);
+            return Ok(());
+        }
+
         let ctx = rt.ctx;
         let mut tag = rt.bot_tag;
 
@@ -939,6 +949,20 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                         tag,
                     ) {
                         tag = tag.wrapping_add(1);
+                        if sense.sense_key == scsi::SenseKey::IllegalRequest {
+                            crate::log!(
+                                "usb: mass: SYNCHRONIZE CACHE unsupported; disabling flush (slot={} csw={:?} asc={:#x} ascq={:#x})\n",
+                                self.slot_id,
+                                csw.status,
+                                sense.asc,
+                                sense.ascq
+                            );
+                            rt.sync_cache_unsupported = true;
+                            rt.bot_tag = tag;
+                            register_runtime(rt);
+                            return Ok(());
+                        }
+
                         crate::log!(
                             "usb: mass flush csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
                             csw.status,
@@ -947,12 +971,6 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             sense.asc,
                             sense.ascq
                         );
-
-                        if sense.sense_key == scsi::SenseKey::IllegalRequest {
-                            rt.bot_tag = tag;
-                            register_runtime(rt);
-                            return Ok(());
-                        }
                         if sense_is_transient(sense.sense_key) {
                             attempts = attempts.wrapping_add(1);
                             embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
