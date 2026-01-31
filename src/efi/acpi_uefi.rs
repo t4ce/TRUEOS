@@ -1,12 +1,15 @@
 use spin::Once;
 
-use crate::pci::mmio;
-
 use crate::efi::acpi::ensure_tables;
 use crate::efi::EfiGuid;
+use crate::pci::mmio;
 
 static LOG_ONCE: Once<()> = Once::new();
 
+/// Logs the ACPI table with signature "UEFI" (if present).
+///
+/// Note: This is not the UEFI System Table. It's an ACPI table container that
+/// typically embeds a GUID + payload.
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
         let Some(tables) = ensure_tables() else {

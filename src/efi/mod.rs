@@ -7,7 +7,7 @@ use spin::Once;
 use crate::limine;
 
 pub mod acpi;
-pub mod tbl;
+pub mod acpi_uefi;
 
 static LOG_ONCE: Once<()> = Once::new();
 static DID_DUMP_SYSTEM_TABLE: core::sync::atomic::AtomicBool =
@@ -461,9 +461,9 @@ pub fn log_system_table_once() -> bool {
 
 pub fn log_once() {
     // Prefer the actual UEFI System Table dump when Limine provides a mappable address.
-    // If that fails, fall back to the ACPI "UEFI" table decoder in `efi::tbl`.
+    // If that fails, fall back to the ACPI "UEFI" table decoder.
     if !log_system_table_once() {
-        tbl::log_once();
+        acpi_uefi::log_once();
     }
 }
 
