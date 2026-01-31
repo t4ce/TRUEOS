@@ -583,3 +583,191 @@ pub(crate) async fn install_matrix_job(
 
     let _ = set_blob_owned_with_preview(slot_id, blob);
 }
+
+#[embassy_executor::task]
+pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::DeviceHandle) {
+    use embassy_time::Timer;
+
+    // Give the shell a moment to print the prompt and update the header.
+    Timer::after(EmbassyDuration::from_millis(1)).await;
+
+    let mut blob: AVec<u8> = AVec::new();
+
+    // These URLs are expected to be hosted alongside the published installer artifacts.
+    // The server should serve the raw files (not inside a .7z) so the kernel doesn't need
+    // archive/ISO parsing just to update.
+    const BOOTX64_URL: &str = "https://trueos.eu/EFI/BOOT/BOOTX64.EFI";
+    const KERNEL_URL: &str = "https://trueos.eu/TRUEOS.elf";
+
+    let info = disk.info();
+    log_line(slot_id, &mut blob, "update: starting");
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+        )
+        .as_str(),
+    );
+
+    let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "update: initial status: {}{}",
+            status.short(),
+            match (&status, err) {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" (err={:?})", e),
+                _ => alloc::string::String::new(),
+            }
+        )
+        .as_str(),
+    );
+
+    // Safety: `update` is intended to refresh an existing TRUEOS install.
+    // Refuse to proceed if TRUEOSFS is not detected.
+    match crate::v::fs::trueosfs::locate_async(disk).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            log_line(slot_id, &mut blob, "update: refused (no TRUEOSFS detected on target disk)");
+            log_line(slot_id, &mut blob, "update: use `install` for a fresh install");
+            set_state(slot_id, SlotState::Failed);
+            let _ = set_blob_owned_with_preview(slot_id, blob);
+            return;
+        }
+        Err(e) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!("update: locate_async failed ({:?}); refusing", e).as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+            let _ = set_blob_owned_with_preview(slot_id, blob);
+            return;
+        }
+    }
+
+    log_line(slot_id, &mut blob, "update: fetching BOOTX64.EFI + TRUEOS.elf over HTTPS");
+    log_line(slot_id, &mut blob, alloc::format!("update: BOOTX64 url={}", BOOTX64_URL).as_str());
+    log_line(slot_id, &mut blob, alloc::format!("update: kernel url={}", KERNEL_URL).as_str());
+
+    let bootx64 = match crate::surface::io::cabi::net_fetch_https_body_blocking(
+        BOOTX64_URL,
+        60_000,
+        8 * 1024 * 1024,
+    ) {
+        Ok(b) => b,
+        Err(rc) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!(
+                    "update: BOOTX64 download failed rc={} ({})",
+                    rc,
+                    crate::surface::io::cabi::code_name(rc)
+                )
+                .as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+            let _ = set_blob_owned_with_preview(slot_id, blob);
+            return;
+        }
+    };
+
+    let kernel = match crate::surface::io::cabi::net_fetch_https_body_blocking(
+        KERNEL_URL,
+        60_000,
+        64 * 1024 * 1024,
+    ) {
+        Ok(b) => b,
+        Err(rc) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!(
+                    "update: kernel download failed rc={} ({})",
+                    rc,
+                    crate::surface::io::cabi::code_name(rc)
+                )
+                .as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+            let _ = set_blob_owned_with_preview(slot_id, blob);
+            return;
+        }
+    };
+
+    // Sanity checks to avoid obviously-bad installs.
+    let bootx64_ok = bootx64.get(0..2) == Some(b"MZ");
+    let kernel_ok = kernel.get(0..4) == Some(b"\x7FELF");
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "update: downloaded BOOTX64.EFI={} bytes (mz={}), TRUEOS.elf={} bytes (elf={})",
+            bootx64.len(),
+            bootx64_ok,
+            kernel.len(),
+            kernel_ok
+        )
+        .as_str(),
+    );
+    if !bootx64_ok || !kernel_ok {
+        log_line(slot_id, &mut blob, "update: refusing to install (payload format looks wrong)");
+        set_state(slot_id, SlotState::Failed);
+        let _ = set_blob_owned_with_preview(slot_id, blob);
+        return;
+    }
+
+    log_line(slot_id, &mut blob, "update: updating GPT + ESP + TRUEOSFS boot files");
+    log_line(slot_id, &mut blob, "update: existing TRUEOSFS will be preserved if detected");
+
+    let result = crate::disc::install::install_bootable_uefi_gpt_with_log(
+        disk,
+        &bootx64,
+        &kernel,
+        &mut |line| {
+            log_line(slot_id, &mut blob, line);
+        },
+    )
+    .await;
+
+    match result {
+        Ok(()) => {
+            let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!(
+                    "update: ok (status now: {}{})",
+                    status.short(),
+                    match (&status, err) {
+                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                            alloc::format!("; err={:?}", e)
+                        }
+                        _ => alloc::string::String::new(),
+                    }
+                )
+                .as_str(),
+            );
+            set_state(slot_id, SlotState::Done);
+        }
+        Err(e) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!("update: failed ({:?})", e).as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+        }
+    }
+
+    let _ = set_blob_owned_with_preview(slot_id, blob);
+}

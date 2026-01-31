@@ -277,6 +277,10 @@ pub extern "C" fn kmain() -> ! {
         if let Err(e) = spawner.spawn(net::adapter::net_shell_task()) {
             crate::log!("net-shell: spawn net_shell_task failed: {:?}\n", e);
         }
+
+        if let Err(e) = spawner.spawn(crate::v::net::http_trueosfs_task()) {
+            crate::log!("http-trueosfs: spawn http_trueosfs_task failed: {:?}\n", e);
+        }
     } else {
         crate::log!("net: skipping net tasks (no NIC)\n");
     }
@@ -316,7 +320,7 @@ pub extern "C" fn kmain() -> ! {
         // NOTE: leave the heavier cheerio smoke test opt-in; it can add significant
         // DNS/TLS pressure during early boot and mask unrelated network issues.
         // let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
-        // let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
+        let _ = spawner.spawn(pci::pciids::boot_cache_pci_ids_task());
 	}
 
     if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {

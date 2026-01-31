@@ -2422,6 +2422,482 @@ pub mod cabi {
 		Err(last_err)
 	}
 
+	async fn resolve_ipv4_via_doh_async_inner(
+		dev_idx: usize,
+		host: &str,
+		timeout_ms: u64,
+		cname_depth: u8,
+	) -> Option<[u8; 4]> {
+		use alloc::string::String as AString;
+		use crate::v::net::Queue;
+		use trueos_v::vnet as vnet;
+		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+		use crate::net::tls::{TlsClientConfig, TlsRoots};
+		use embassy_time::Instant;
+
+		const DOH_PORT: u16 = 443;
+		let dns_id: u16 = 0xEE00;
+		let max_bytes: usize = 64 * 1024;
+
+		let providers: &[([u8; 4], &'static str)] = &[
+			([1, 1, 1, 1], "cloudflare-dns.com"),
+			([8, 8, 8, 8], "dns.google"),
+		];
+
+		let mut current_host: AString = AString::from(host);
+		let mut cname_left: u8 = cname_depth;
+
+		loop {
+			if let Some(ip) = parse_ipv4_literal(current_host.as_str()) {
+				return Some(ip);
+			}
+
+			let t = core::cmp::max(6_000, core::cmp::min(timeout_ms, 25_000));
+			let query = dns_query(dns_id, current_host.as_str(), 1);
+			let mut next_cname: Option<AString> = None;
+
+			for &(server_ip, sni) in providers {
+			let seq = next_qjs_net_seq();
+			let owner = leak_str(alloc::format!("async-doh-{}@{}", seq, dev_idx));
+			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+			let cmds = Queue::new_leaked(cmds_name, 512);
+			let events = Queue::new_leaked(evts_name, 512);
+			register_tls_app_queues(owner, cmds, events);
+
+			let roots = TlsRoots::mozilla();
+			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+			let server_name = sni;
+
+			let deadline = Instant::now() + EmbassyDuration::from_millis(t);
+			let mut tls_handle: Option<vnet::NetHandle> = None;
+			let mut sent_connect = false;
+			let mut sent_query = false;
+			let mut plaintext: Vec<u8> = Vec::new();
+
+			let req = alloc::format!(
+				"POST /dns-query HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS async-doh\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+				sni,
+				query.len()
+			)
+			.into_bytes();
+
+			let mut cname_from_provider: Option<AString> = None;
+			'session: loop {
+				for ev in events.drain(256) {
+					match ev {
+						TlsEvent::Opened { handle } => tls_handle = Some(handle),
+						TlsEvent::Connected { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if !sent_query {
+								let mut out = Vec::with_capacity(req.len() + query.len());
+								out.extend_from_slice(&req);
+								out.extend_from_slice(&query);
+								if cmds.push(TlsCommand::Send { handle, data: out }).is_ok() {
+									sent_query = true;
+								}
+							}
+						}
+						TlsEvent::Data { handle, data } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if plaintext.len() < max_bytes {
+								let room = max_bytes - plaintext.len();
+								let take = data.len().min(room);
+								plaintext.extend_from_slice(&data[..take]);
+							}
+
+							if let Some(hdr_end) = find_http_header_end(&plaintext) {
+								let headers = &plaintext[..hdr_end];
+								let status = parse_http_status(headers).unwrap_or(0);
+								if status != 200 {
+									break;
+								}
+								let body = &plaintext[hdr_end..];
+								if is_chunked_encoding(headers) {
+									if let Ok(Some(decoded)) =
+										try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end))
+									{
+										match dns_parse_first_a_or_cname(&decoded, dns_id) {
+											Some(DnsResolution::A(ip)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												return Some(ip);
+											}
+											Some(DnsResolution::Cname(name)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												cname_from_provider = Some(name);
+												break 'session;
+											}
+											None => {}
+										}
+									}
+								} else if let Some(cl) = parse_content_length(headers) {
+									if body.len() >= cl {
+										let pkt = &body[..cl];
+										match dns_parse_first_a_or_cname(pkt, dns_id) {
+											Some(DnsResolution::A(ip)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												return Some(ip);
+											}
+											Some(DnsResolution::Cname(name)) => {
+												let _ = cmds.push(TlsCommand::Close { handle });
+												cname_from_provider = Some(name);
+												break 'session;
+											}
+											None => {}
+										}
+									}
+								}
+							}
+						}
+						TlsEvent::Closed { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							let Some(hdr_end) = find_http_header_end(&plaintext) else { break };
+							let headers = &plaintext[..hdr_end];
+							let status = parse_http_status(headers).unwrap_or(0);
+							if status != 200 {
+								break;
+							}
+							let body = &plaintext[hdr_end..];
+							let pkt: Vec<u8> = if is_chunked_encoding(headers) {
+								match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+									Ok(Some(decoded)) => decoded,
+									_ => break,
+								}
+							} else if let Some(cl) = parse_content_length(headers) {
+								if body.len() < cl {
+									break;
+								}
+								body[..cl].to_vec()
+							} else {
+								body.to_vec()
+							};
+							match dns_parse_first_a_or_cname(&pkt, dns_id) {
+								Some(DnsResolution::A(ip)) => return Some(ip),
+								Some(DnsResolution::Cname(name)) => {
+									cname_from_provider = Some(name);
+									break 'session;
+								}
+								None => {}
+							}
+							break;
+						}
+						TlsEvent::Error { .. } => break,
+						TlsEvent::TlsError { .. } => break,
+					}
+				}
+
+				if !sent_connect {
+					if cmds
+						.push(TlsCommand::OpenTcpConnect {
+							remote: vnet::EndpointV4 { addr: server_ip, port: DOH_PORT },
+							server_name,
+							cfg: cfg.clone(),
+							roots: roots.clone(),
+						})
+						.is_ok()
+					{
+						sent_connect = true;
+					}
+				}
+
+				if Instant::now() >= deadline {
+					if let Some(handle) = tls_handle {
+						let _ = cmds.push(TlsCommand::Close { handle });
+					}
+					break;
+				}
+
+				Timer::after(EmbassyDuration::from_millis(20)).await;
+			}
+
+			if let Some(name) = cname_from_provider.take() {
+				next_cname = Some(name);
+				break;
+			}
+		}
+
+			let Some(name) = next_cname.take() else {
+				return None;
+			};
+			if cname_left == 0 {
+				return None;
+			}
+			cname_left = cname_left.saturating_sub(1);
+			current_host = name;
+		}
+	}
+
+	async fn resolve_ipv4_async(dev_idx: usize, host: &str, timeout_ms: u64) -> Option<[u8; 4]> {
+		resolve_ipv4_via_doh_async_inner(dev_idx, host, timeout_ms, 4).await
+	}
+
+	async fn https_get_body_async(url: &ParsedUrl, timeout_ms: u64, max_bytes: usize) -> core::result::Result<Vec<u8>, i32> {
+		https_get_body_async_inner(url, timeout_ms, max_bytes, 4).await
+	}
+
+	async fn https_get_body_async_inner(
+		url: &ParsedUrl,
+		timeout_ms: u64,
+		max_bytes: usize,
+		redirects_left: u8,
+	) -> core::result::Result<Vec<u8>, i32> {
+		use crate::v::net::Queue;
+		use trueos_v::vnet as vnet;
+		use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+		use crate::net::tls::{TlsClientConfig, TlsRoots};
+		use embassy_time::Instant;
+
+		let mut current: ParsedUrl = url.clone();
+		let mut redirects_remaining: u8 = redirects_left;
+
+		'redirects: loop {
+			let dev_indices: [usize; 1] = [0];
+			let mut last_err: i32 = NET_ERR_TIMEOUT;
+			let mut redirected: Option<ParsedUrl> = None;
+
+			for dev_idx in dev_indices {
+				let dns_timeout_ms = core::cmp::max(5_000, core::cmp::min(timeout_ms, 20_000));
+				let Some(ip) = resolve_ipv4_async(dev_idx, current.host.as_str(), dns_timeout_ms).await else {
+					last_err = NET_ERR_TIMEOUT_DNS;
+					continue;
+				};
+
+			let seq = next_qjs_net_seq();
+			let owner = leak_str(alloc::format!("async-https-{}@{}", seq, dev_idx));
+			let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+			let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+			let cmds = Queue::new_leaked(cmds_name, 512);
+			let events = Queue::new_leaked(evts_name, 512);
+			register_tls_app_queues(owner, cmds, events);
+
+			let mut tls_handle: Option<vnet::NetHandle> = None;
+			let mut sent_connect = false;
+			let mut http_sent = false;
+			let mut plaintext: Vec<u8> = Vec::new();
+
+			let start = Instant::now();
+			let mut deadline = start + EmbassyDuration::from_millis(timeout_ms);
+			let hard_deadline = start + EmbassyDuration::from_millis(core::cmp::max(timeout_ms, 180_000));
+
+			let roots = TlsRoots::mozilla();
+			let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+			let server_name = leak_str(current.host.clone());
+
+			let mut redirect_to: Option<ParsedUrl> = None;
+
+			'session: loop {
+				for ev in events.drain(256) {
+					match ev {
+						TlsEvent::Opened { handle } => {
+							tls_handle = Some(handle);
+							deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+						}
+						TlsEvent::Connected { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							if !http_sent {
+								let req = alloc::format!(
+									"GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS async-fetch\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+									current.path,
+									current.host
+								);
+								if cmds.push(TlsCommand::Send { handle, data: req.into_bytes() }).is_ok() {
+									http_sent = true;
+									deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+								}
+							}
+						}
+						TlsEvent::Data { handle, data } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+							if plaintext.len() < max_bytes {
+								let room = max_bytes - plaintext.len();
+								let take = data.len().min(room);
+								plaintext.extend_from_slice(&data[..take]);
+							}
+
+							if let Some(hdr_end) = find_http_header_end(&plaintext) {
+								let headers = &plaintext[..hdr_end];
+								let status = parse_http_status(headers).unwrap_or(0);
+								if status == 200 {
+									let body = &plaintext[hdr_end..];
+									if is_chunked_encoding(headers) {
+										match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+											Ok(Some(decoded)) => return Ok(decoded),
+											Ok(None) => {}
+											Err(e) => {
+												last_err = e;
+												break 'session;
+											}
+										}
+									} else if let Some(cl) = parse_content_length(headers) {
+										if body.len() >= cl {
+											return Ok(body[..cl].to_vec());
+										}
+									}
+								} else if (status == 301
+									|| status == 302
+									|| status == 303
+									|| status == 307
+									|| status == 308)
+									&& redirects_remaining > 0
+								{
+									if let Some(loc) = parse_redirect_location(&current, headers) {
+										if let Some(handle) = tls_handle {
+											let _ = cmds.push(TlsCommand::Close { handle });
+										}
+										redirect_to = Some(parse_url(loc.as_str())?);
+										break 'session;
+									}
+									last_err = NET_ERR_HTTP;
+									break 'session;
+								}
+							}
+						}
+						TlsEvent::Closed { handle } => {
+							if tls_handle != Some(handle) {
+								continue;
+							}
+							let Some(hdr_end) = find_http_header_end(&plaintext) else {
+								last_err = NET_ERR_HTTP;
+								break 'session;
+							};
+							let headers = &plaintext[..hdr_end];
+							let status = parse_http_status(headers).unwrap_or(0);
+							if status != 200 {
+								last_err = NET_ERR_HTTP;
+								break 'session;
+							}
+							let body = &plaintext[hdr_end..];
+							if is_chunked_encoding(headers) {
+								match try_decode_chunked_body(body, max_bytes.saturating_sub(hdr_end)) {
+									Ok(Some(decoded)) => return Ok(decoded),
+									Ok(None) => {
+										last_err = NET_ERR_TIMEOUT_BODY;
+										break 'session;
+									}
+									Err(e) => {
+										last_err = e;
+										break 'session;
+									}
+								}
+							} else if let Some(cl) = parse_content_length(headers) {
+								if body.len() >= cl {
+									return Ok(body[..cl].to_vec());
+								}
+								last_err = NET_ERR_TIMEOUT_BODY;
+								break 'session;
+							}
+							return Ok(body.to_vec());
+						}
+						TlsEvent::Error { .. } => {
+							last_err = NET_ERR_HTTP;
+							break 'session;
+						}
+						TlsEvent::TlsError { .. } => {
+							last_err = NET_ERR_TLS;
+							break 'session;
+						}
+					}
+				}
+
+				if !sent_connect {
+					if cmds
+						.push(TlsCommand::OpenTcpConnect {
+							remote: vnet::EndpointV4 { addr: ip, port: url.port },
+							server_name,
+							cfg: cfg.clone(),
+							roots: roots.clone(),
+						})
+						.is_ok()
+					{
+						sent_connect = true;
+					}
+				}
+
+				let now = Instant::now();
+				if now >= deadline || now >= hard_deadline {
+					let hdr_end = find_http_header_end(&plaintext);
+					let have_hdr = hdr_end.is_some();
+					let (status, body_len) = if let Some(hdr_end) = hdr_end {
+						(
+							parse_http_status(&plaintext[..hdr_end]).unwrap_or(0) as u32,
+							plaintext.len().saturating_sub(hdr_end) as u32,
+						)
+					} else {
+						(0, 0)
+					};
+					crate::log!(
+						"async-fetch: timeout dev={} host={} port={} http_sent={} bytes={} have_hdr={} status={} body_bytes={}\n",
+						dev_idx,
+						url.host.as_str(),
+						url.port,
+						http_sent,
+						plaintext.len(),
+						have_hdr,
+						status,
+						body_len,
+					);
+
+					last_err = if tls_handle.is_none() || !http_sent {
+						NET_ERR_TIMEOUT_CONNECT
+					} else if !have_hdr {
+						NET_ERR_TIMEOUT_HEADERS
+					} else {
+						NET_ERR_TIMEOUT_BODY
+					};
+					break 'session;
+				}
+
+				Timer::after(EmbassyDuration::from_millis(10)).await;
+			}
+
+			if let Some(parsed) = redirect_to.take() {
+				redirected = Some(parsed);
+				break;
+			}
+		}
+
+			if let Some(parsed) = redirected.take() {
+				if redirects_remaining == 0 {
+					return Err(NET_ERR_HTTP);
+				}
+				redirects_remaining = redirects_remaining.saturating_sub(1);
+				current = parsed;
+				continue 'redirects;
+			}
+
+			return Err(last_err);
+		}
+	}
+
+	/// Async variant of `net_fetch_https_body_blocking`.
+	///
+	/// This is intended for kernel async tasks (it does not poll the executor re-entrantly).
+	pub async fn net_fetch_https_body_async(
+		url_s: &str,
+		timeout_ms: u64,
+		max_bytes: usize,
+	) -> core::result::Result<Vec<u8>, i32> {
+		let parsed = match parse_url(url_s) {
+			Ok(p) => p,
+			Err(e) => return Err(e),
+		};
+		if !parsed.scheme_https {
+			return Err(NET_ERR_BAD_URL);
+		}
+		https_get_body_async(&parsed, timeout_ms, max_bytes).await
+	}
+
 	/// Download the URL (currently expects HTTP/1.1 over TLS for https://) and write to `path`.
 	///
 	/// Behavior:

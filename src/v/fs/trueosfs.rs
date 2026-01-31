@@ -447,6 +447,130 @@ pub async fn list_dir_async(
     Ok(Some(out))
 }
 
+/// Best-effort: build an HTML `<ul>/<li>` tree of the TRUEOSFS directory structure.
+///
+/// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
+///
+/// Notes:
+/// - Traversal is capped (`max_entries`) to keep this usable for tiny HTTP responses.
+/// - Uses the same HTML escaping guarantees as `trueos_math::Tree::html_tree_string`.
+pub async fn html_tree_async(
+    disk: block::DeviceHandle,
+    max_entries: usize,
+) -> Result<Option<String>, block::Error> {
+    use alloc::string::String as AString;
+    use alloc::vec::Vec;
+    use trueos_math::{NodeId, Tree};
+
+    if max_entries == 0 {
+        return Ok(Some(String::from("<ul></ul>")));
+    }
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum FsKind {
+        Root,
+        Dir,
+        File,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct FsEntry {
+        kind: FsKind,
+        name: AString,
+    }
+
+    // Keep memory bounded: CAP is the allocation for nodes/edges, while max_entries
+    // constrains traversal and output size.
+    const CAP: usize = 1024;
+    let cap_limit = core::cmp::min(max_entries.saturating_add(1), CAP);
+
+    let mut tree: Tree<FsEntry, CAP> = Tree::new();
+    let Some(root) = tree.add_root(FsEntry {
+        kind: FsKind::Root,
+        name: AString::from("/"),
+    }) else {
+        return Ok(Some(String::from("<ul><li>alloc failed</li></ul>")));
+    };
+
+    // BFS-ish: keeps early siblings visible when we hit the cap.
+    let mut queue: Vec<(NodeId, AString)> = Vec::new();
+    queue.push((root, AString::new()));
+
+    while let Some((parent, path)) = queue.pop() {
+        if tree.len() >= cap_limit {
+            break;
+        }
+
+        let listing = trueos_fs::list_dir(&io, &params, path.as_str())
+            .await
+            .map_err(map_engine_err)?;
+
+        for name in listing.lines() {
+            if tree.len() >= cap_limit {
+                break;
+            }
+
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+
+            let child_path = if path.is_empty() {
+                AString::from(name)
+            } else {
+                let mut p = path.clone();
+                p.push('/');
+                p.push_str(name);
+                p
+            };
+
+            let is_file = trueos_fs::file_exists(&io, &params, child_path.as_str())
+                .await
+                .map_err(map_engine_err)?;
+            let kind = if is_file { FsKind::File } else { FsKind::Dir };
+
+            let Some(node) = tree.add_child(
+                parent,
+                FsEntry {
+                    kind: kind.clone(),
+                    name: AString::from(name),
+                },
+            ) else {
+                break;
+            };
+
+            if matches!(kind, FsKind::Dir) {
+                queue.insert(0, (node, child_path));
+            }
+        }
+    }
+
+    Ok(Some(tree.html_tree_string(root, |e, out| {
+        match e.kind {
+            FsKind::Root => out.push_str("/"),
+            FsKind::Dir => {
+                out.push_str(e.name.as_str());
+                out.push('/');
+            }
+            FsKind::File => out.push_str(e.name.as_str()),
+        }
+    })))
+}
+
 /// Async TRUEOSFS: append bytes by performing a full new write.
 pub async fn file_append_async(
     disk: block::DeviceHandle,

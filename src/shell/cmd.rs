@@ -602,6 +602,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd_ecma48);
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
+        let _ = REGSHCMD("update", &NO_ARGS, cmd_update);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
@@ -836,6 +837,11 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
     }
 
     super::CommandAction::None
+}
+
+fn cmd_update(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    *ctx.install_wizard = Some(super::InstallWizardStage::UpdateSelectDisk);
+    super::CommandAction::ShowUpdateDiskTable
 }
 
 fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
