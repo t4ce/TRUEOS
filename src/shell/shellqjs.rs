@@ -396,7 +396,7 @@ pub(crate) fn help(io: &dyn ShellIo) {
     io.write_str("qjs -m -e import * as path from 'path'; print(path.join('a','b'));\r\n");
 }
 
-pub(crate) fn run(io: &'static dyn ShellBackend, src: &str) {
+pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
     let src = src.trim();
     if src.is_empty() {
         help(io);
@@ -475,7 +475,7 @@ pub(crate) fn run(io: &'static dyn ShellBackend, src: &str) {
             let single = !remaining.is_empty() && !remaining.contains(char::is_whitespace);
             let looks_like_path = remaining.starts_with('/') || remaining.starts_with("./") || remaining.starts_with("../") || remaining.ends_with(".js") || remaining.ends_with(".mjs");
             if single && looks_like_path {
-                if crate::surface::io::kfs::read_file(remaining).is_ok() {
+                if matches!(crate::surface::io::kfs::exists_async(remaining).await, Ok(true)) {
                     file = Some(remaining);
                 }
             }
@@ -487,7 +487,7 @@ pub(crate) fn run(io: &'static dyn ShellBackend, src: &str) {
     }
 
     if let Some(path) = file {
-        match crate::surface::io::kfs::read_file(path) {
+        match crate::surface::io::kfs::read_file_async(path).await {
             Ok(bytes) => {
                 let flags = forced_flags.unwrap_or_else(|| {
                     if path.ends_with(".mjs") || looks_like_module_bytes(&bytes) {

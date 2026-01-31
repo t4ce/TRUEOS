@@ -253,6 +253,8 @@ pub(crate) enum CommandAction {
     EnterCube,
     EnterIco,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
+    Mv { src: String<160>, dst: String<160> },
+    Qjs { src: String<192> },
 }
 
 
@@ -605,6 +607,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             CommandAction::ShowFormatDiskTable => {
                                 set_go_mode(io, &mut go_mode, false);
                                 print_format_disk_table(io).await;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::Mv { src, dst } => {
+                                set_go_mode(io, &mut go_mode, false);
+                                match crate::surface::io::kfs::rename_async(src.as_str(), dst.as_str()).await {
+                                    Ok(()) => io.write_str("mv: ok\r\n"),
+                                    Err(e) => io.write_fmt(format_args!("mv: failed ({:?})\r\n", e)),
+                                }
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::Qjs { src } => {
+                                set_go_mode(io, &mut go_mode, false);
+                                crate::shell::shellqjs::run(io, src.as_str()).await;
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::EnterCube => {

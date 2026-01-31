@@ -132,6 +132,16 @@ pub mod kfs {
 	}
 
 	#[inline]
+	pub async fn read_file_async(path: &str) -> Result<Vec<u8>> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		match crate::v::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
+			Some(bytes) => Ok(bytes),
+			None => Err(FsError::NotFound),
+		}
+	}
+
+	#[inline]
 	pub fn write_file(
 		path: &str,
 		data: &[u8],
@@ -139,6 +149,18 @@ pub mod kfs {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
 		let ok = crate::v::fs::trueosfs::file_in(disk, name.as_str(), data)?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NoSpace)
+		}
+	}
+
+	#[inline]
+	pub async fn write_file_async(path: &str, data: &[u8]) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		let ok = crate::v::fs::trueosfs::file_in_async(disk, name.as_str(), data).await?;
 		if ok {
 			Ok(())
 		} else {
@@ -172,6 +194,28 @@ pub mod kfs {
 	}
 
 	#[inline]
+	pub async fn rename_async(src: &str, dst: &str) -> Result<()> {
+		let disk = root_disk()?;
+		let src = normalize_rel(src, false)?;
+		let dst = normalize_rel(dst, false)?;
+		if src == dst {
+			return Ok(());
+		}
+		if crate::v::fs::trueosfs::file_exists_async(disk, dst.as_str()).await? {
+			return Err(FsError::AlreadyExists);
+		}
+		let Some(bytes) = crate::v::fs::trueosfs::file_out_async(disk, src.as_str()).await? else {
+			return Err(FsError::NotFound);
+		};
+		let ok = crate::v::fs::trueosfs::file_in_async(disk, dst.as_str(), bytes.as_slice()).await?;
+		if !ok {
+			return Err(FsError::NoSpace);
+		}
+		let _ = crate::v::fs::trueosfs::file_delete_async(disk, src.as_str()).await;
+		Ok(())
+	}
+
+	#[inline]
 	pub fn list_dir(path: &str) -> Result<String> {
 		let disk = root_disk()?;
 		let dir = normalize_rel(path, true)?;
@@ -182,10 +226,32 @@ pub mod kfs {
 	}
 
 	#[inline]
+	pub async fn list_dir_async(path: &str) -> Result<String> {
+		let disk = root_disk()?;
+		let dir = normalize_rel(path, true)?;
+		match crate::v::fs::trueosfs::list_dir_async(disk, dir.as_str()).await? {
+			Some(v) => Ok(v),
+			None => Err(FsError::NoRoot),
+		}
+	}
+
+	#[inline]
 	pub fn remove(path: &str) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
 		let ok = crate::v::fs::trueosfs::file_delete(disk, name.as_str())?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NotFound)
+		}
+	}
+
+	#[inline]
+	pub async fn remove_async(path: &str) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
 		if ok {
 			Ok(())
 		} else {
@@ -209,6 +275,13 @@ pub mod kfs {
 		Ok(crate::v::fs::trueosfs::file_exists(disk, name.as_str())?)
 	}
 
+	#[inline]
+	pub async fn exists_async(path: &str) -> Result<bool> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
+	}
+
 	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
 	pub fn append_into_file(
 		dst_path: &str,
@@ -217,6 +290,18 @@ pub mod kfs {
 		let disk = root_disk()?;
 		let name = normalize_rel(dst_path, false)?;
 		let ok = crate::v::fs::trueosfs::file_append(disk, name.as_str(), src)?;
+		if ok {
+			Ok(())
+		} else {
+			Err(FsError::NoSpace)
+		}
+	}
+
+	/// Async variant of [`append_into_file`].
+	pub async fn append_into_file_async(dst_path: &str, src: &[u8]) -> Result<()> {
+		let disk = root_disk()?;
+		let name = normalize_rel(dst_path, false)?;
+		let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src).await?;
 		if ok {
 			Ok(())
 		} else {
@@ -352,7 +437,7 @@ pub mod shellcmd {
 	async fn io_matrix_job(slot_id: u8, src: IoArg, dst: IoArg) {
 		let src_bytes = match src {
 			IoArg::Slot(id) => crate::matrix::blob_snapshot(id).unwrap_or_default(),
-			IoArg::Path(path) => match kfs::read_file(path.as_str()) {
+			IoArg::Path(path) => match kfs::read_file_async(path.as_str()).await {
 				Ok(bytes) => bytes,
 				Err(e) => {
 					crate::matrix::clear_lines(slot_id);
@@ -393,7 +478,7 @@ pub mod shellcmd {
 				crate::matrix::push_line(slot_id, "io: ok");
 				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
 			}
-			IoArg::Path(path) => match kfs::append_into_file(path.as_str(), src_bytes.as_slice()) {
+			IoArg::Path(path) => match kfs::append_into_file_async(path.as_str(), src_bytes.as_slice()).await {
 				Ok(()) => {
 					crate::matrix::clear_lines(slot_id);
 					crate::matrix::push_line(slot_id, "io: ok");
@@ -412,7 +497,7 @@ pub mod shellcmd {
 
 	#[embassy_executor::task]
 	async fn out_matrix_job(slot_id: u8, path: String<160>) {
-		match kfs::read_file(path.as_str()) {
+		match kfs::read_file_async(path.as_str()).await {
 			Ok(bytes) => {
 				fill_slot_from_blob(slot_id, bytes);
 				crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
@@ -437,7 +522,7 @@ pub mod shellcmd {
 			return;
 		}
 
-		match kfs::write_file(path.as_str(), snapshot.as_slice()) {
+		match kfs::write_file_async(path.as_str(), snapshot.as_slice()).await {
 			Ok(()) => {
 				crate::matrix::clear_lines(slot_id);
 				crate::matrix::push_line(slot_id, "in: ok");
