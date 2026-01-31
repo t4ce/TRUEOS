@@ -200,17 +200,10 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
-    vga::init_font_cache();
-
     percpu::init_bsp();
 
     io::smoke_test();
     
-    let dumped_uefi_system_table = efi::log_system_table_once(); 
-    crate::log!(
-        "turbo: {:?}\n", turbo::local_state()
-    );
-
     pci::dma::init_from_limine();
     pci::dma::alloc_test_once();
     pci::enumerate_once();
@@ -228,17 +221,9 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
 
     efi::acpi::ensure_tables();
-    efi::acpi::facp::log_once();
-    efi::acpi::tpm2::log_once();
-    efi::acpi::dmar::log_once();
-    efi::acpi::fpdt::log_once();
-    efi::acpi::madt::log_once();
-    efi::acpi::dbg::log_once();
-    if !dumped_uefi_system_table {
-        efi::tbl::log_once();
-    }
-    efi::acpi::ssdt::log_once();
-    efi::acpi::bgrt::log_once();
+    efi::acpi::log_once();
+
+    efi::log_once();
     efi::acpi::hpet::ensure();
 
     power::init();
@@ -252,6 +237,12 @@ pub extern "C" fn kmain() -> ! {
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
+
+    // Defer font cache build; early boot can proceed without it.
+    // VGA text rendering will become active once the cache is ready.
+    if let Err(e) = spawner.spawn(vga::init_font_cache_task()) {
+        crate::log!("vga: spawn init_font_cache_task failed: {:?}\n", e);
+    }
 
     // Runs only after being requested (e.g. when USBMS registers).
     let _ = spawner.spawn(crate::v::fs::trueosfs::bsp_smoke_service_task());

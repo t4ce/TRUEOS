@@ -10,6 +10,7 @@ use trueos_fs::BlockIo;
 use trueos_math::{BPlusTree, Tree};
 
 const TRUEOSFS_INDEX_M: usize = 16;
+const TRUEOSFS_CHECKPOINT_EVERY: u32 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IndexRef {
@@ -388,7 +389,17 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         None => None,
     };
 
-    let (index, writes_since_checkpoint) = build_root_index(disk, &placement).unwrap_or((None, 0));
+    // IMPORTANT: do not call `build_root_index()` here.
+    // `build_root_index()` uses the synchronous TRUEOSFS engine which calls into
+    // `KernelBlockIo` and ultimately `crate::time::block_on(...)`. Doing that from
+    // an async task can starve other async tasks (notably the xHCI poll task), which
+    // can manifest as USB mass-storage transfers timing out due to missing completion
+    // events.
+    //
+    // Index building is an optional cache; we can populate it later via a dedicated
+    // async pipeline if needed.
+    let index = None;
+    let writes_since_checkpoint = 0;
 
     let mut roots = ROOTS.lock();
     if roots.iter().any(|m| m.disk_id == disk_id) {
@@ -436,7 +447,9 @@ pub fn file_in(disk: block::DeviceHandle, name: &str, bytes: &[u8]) -> Result<bo
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
         if let Some(applied) = applied {
-            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            if disk.supports_write() {
+                root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            }
         }
     }
     Ok(ok)
@@ -514,7 +527,9 @@ pub fn file_delete(disk: block::DeviceHandle, name: &str) -> Result<bool, block:
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
         if let Some(applied) = applied {
-            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            if disk.supports_write() {
+                root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            }
         }
     }
     Ok(ok)
@@ -635,7 +650,9 @@ pub fn file_append(disk: block::DeviceHandle, name: &str, append_bytes: &[u8]) -
         let new_head_rel = read_log_head_rel_blocks(&io, &params)?;
         let applied = replay_tail_into_index(disk_id, &io, &params, old_head_rel, new_head_rel);
         if let Some(applied) = applied {
-            root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            if disk.supports_write() {
+                root_index_note_writes_and_maybe_checkpoint(disk_id, &io, &params, new_head_rel, applied);
+            }
         }
     }
     Ok(ok)
@@ -692,7 +709,7 @@ fn root_index_note_writes_and_maybe_checkpoint(
         };
 
         m.writes_since_checkpoint = m.writes_since_checkpoint.saturating_add(newly_applied);
-        if m.writes_since_checkpoint < 32 {
+        if m.writes_since_checkpoint < TRUEOSFS_CHECKPOINT_EVERY {
             return;
         }
 
@@ -853,6 +870,7 @@ fn build_root_index(
     let mut index = TrueosFsIndex::new();
     let mut replay_from_rel = 0u64;
     let mut replayed = 0u32;
+    let mut post_replay_checkpoint_ok = false;
 
     match trueos_fs::read_index_checkpoint(&io, &params) {
         Ok(Some(ckpt)) => {
@@ -891,33 +909,39 @@ fn build_root_index(
         },
     );
 
-    // Best-effort checkpoint policy:
+    // Optional best-effort checkpoint after replay:
     // - If no checkpoint exists, write one.
-    // - If we had to replay >=32 records, write a new checkpoint after replay.
-    let wrote_ckpt = if disk.supports_write() && (sb.checkpoint_rel_blocks == 0 || replayed >= 32) {
-        trueos_fs::write_index_checkpoint(
+    // - If we had to replay >=N records, write a new checkpoint after replay.
+    // This does *not* seed the per-mount write counter; we always start at 0 after mount.
+    let post_replay_checkpoint_attempted =
+        disk.supports_write() && (sb.checkpoint_rel_blocks == 0 || replayed >= TRUEOSFS_CHECKPOINT_EVERY);
+    if post_replay_checkpoint_attempted {
+        post_replay_checkpoint_ok = trueos_fs::write_index_checkpoint(
             &io,
             &params,
             sb.log_head_rel_blocks,
             index.iter().map(|(k, v)| (k.clone(), v.kind, v.entry_lba)),
         )
-        .ok()
-        == Some(true)
-    } else {
-        false
-    };
+        .is_ok();
+    }
 
-    // If we couldn't write a checkpoint but we replayed a lot, force the next write
-    // to try again.
-    let writes_since_checkpoint = if wrote_ckpt {
-        0
-    } else if replayed >= 32 {
-        32
+    let post_replay_checkpoint_status = if !post_replay_checkpoint_attempted {
+        "skip"
+    } else if post_replay_checkpoint_ok {
+        "ok"
     } else {
-        0
+        "err"
     };
+    crate::log!(
+        "trueosfs: mount replayed={} rel={}..{} ckpt_rel={} post_ckpt={} writes_since_ckpt=0\n",
+        replayed,
+        replay_from_rel,
+        sb.log_head_rel_blocks,
+        sb.checkpoint_rel_blocks,
+        post_replay_checkpoint_status,
+    );
 
-    Ok((Some(Box::new(index)), writes_since_checkpoint))
+    Ok((Some(Box::new(index)), 0))
 }
 
 pub fn roots_len() -> usize {
@@ -1248,6 +1272,42 @@ pub fn format_blank_force(handle: block::DeviceHandle) -> Result<(), block::Erro
     }
 
     format_blank_at(handle, 0)
+}
+
+/// Async variant of [`format_blank_force`].
+///
+/// This avoids `block_on` so it can be used from async contexts (e.g. the shell task)
+/// without starving other services.
+pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    if handle.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if !handle.supports_write() {
+        return Err(block::Error::NotSupported);
+    }
+
+    // Best-effort: wipe GPT headers (LBA1 and backup header at last LBA).
+    // We do not try to wipe the whole partition array here.
+    let info = handle.info();
+    let bs = info.block_size as usize;
+    if bs == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    if info.block_count > 2 {
+        let align = info.dma_alignment.max(1) as usize;
+        let mut tmp = AlignedBuf::new(bs, align).ok_or(block::Error::DmaUnavailable)?;
+        let z = tmp.as_mut_slice();
+        z.fill(0);
+
+        // Primary GPT header.
+        let _ = handle.write_blocks(1, z).await;
+        // Backup GPT header.
+        let last_lba = info.block_count.saturating_sub(1);
+        let _ = handle.write_blocks(last_lba, z).await;
+        let _ = handle.flush().await;
+    }
+
+    format_blank_at_async(handle, 0).await
 }
 
 /// Format TRUEOSFS at the start of an already-created partition.
