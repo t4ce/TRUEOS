@@ -681,6 +681,8 @@ pub mod cabi {
 	use alloc::boxed::Box;
 	use alloc::string::{String, ToString};
 	use core::sync::atomic::{AtomicU32, Ordering};
+	use embassy_time::{Duration as EmbassyDuration, Timer};
+	use spin::Mutex;
 
 	static QJS_NET_SEQ: AtomicU32 = AtomicU32::new(1);
 
@@ -1001,6 +1003,263 @@ pub mod cabi {
 			Ok(()) => 0,
 			Err(e) => fs_error_to_code(e),
 		}
+	}
+
+	// ---- Async FS service (for Promise-based QuickJS APIs) ----
+
+	const QJS_ASYNC_FS_MAX_PATH: usize = 4096;
+	const QJS_ASYNC_FS_MAX_DATA: usize = 1024 * 1024;
+	const QJS_ASYNC_FS_MAX_QUEUE: usize = 64;
+
+	static QJS_ASYNC_FS_SEQ: AtomicU32 = AtomicU32::new(1);
+
+	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+	enum AsyncFsKind {
+		ReadFile,
+		WriteFile,
+	}
+
+	#[derive(Clone, Debug)]
+	struct AsyncFsRequest {
+		id: u32,
+		kind: AsyncFsKind,
+		path: String,
+		data: Vec<u8>,
+	}
+
+	#[derive(Clone, Debug)]
+	struct AsyncFsCompletion {
+		id: u32,
+		rc: i32,
+		data: Vec<u8>,
+	}
+
+	static ASYNC_FS_REQS: Mutex<Vec<AsyncFsRequest>> = Mutex::new(Vec::new());
+	static ASYNC_FS_DONE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+	static ASYNC_FS_RESULTS: Mutex<Vec<AsyncFsCompletion>> = Mutex::new(Vec::new());
+
+	#[inline]
+	fn next_async_fs_id() -> u32 {
+		QJS_ASYNC_FS_SEQ.fetch_add(1, Ordering::Relaxed)
+	}
+
+	fn push_async_fs_req(req: AsyncFsRequest) -> Result<(), i32> {
+		let mut q = ASYNC_FS_REQS.lock();
+		if q.len() >= QJS_ASYNC_FS_MAX_QUEUE {
+			return Err(FS_ERR_NO_SPACE);
+		}
+		q.push(req);
+		Ok(())
+	}
+
+	fn take_async_fs_req() -> Option<AsyncFsRequest> {
+		let mut q = ASYNC_FS_REQS.lock();
+		if q.is_empty() {
+			None
+		} else {
+			Some(q.remove(0))
+		}
+	}
+
+	fn push_async_fs_completion(done: AsyncFsCompletion) {
+		let id = done.id;
+		ASYNC_FS_RESULTS.lock().push(done);
+		ASYNC_FS_DONE.lock().push(id);
+	}
+
+	fn find_async_fs_completion(id: u32) -> Option<AsyncFsCompletion> {
+		let res = ASYNC_FS_RESULTS.lock();
+		res.iter().find(|c| c.id == id).cloned()
+	}
+
+	fn remove_async_fs_completion(id: u32) {
+		let mut res = ASYNC_FS_RESULTS.lock();
+		if let Some(pos) = res.iter().position(|c| c.id == id) {
+			res.remove(pos);
+		}
+	}
+
+	/// Background worker that executes async filesystem requests started via the C ABI.
+	///
+	/// Spawn this once at boot. It intentionally lives in the kernel (not the qjs crate)
+	/// so it can call `kfs::*_async` without introducing crate cycles.
+	#[embassy_executor::task]
+	pub async fn qjs_async_fs_service_task() {
+		loop {
+			let Some(req) = take_async_fs_req() else {
+				Timer::after(EmbassyDuration::from_millis(2)).await;
+				continue;
+			};
+
+			match req.kind {
+				AsyncFsKind::ReadFile => {
+					let out = super::kfs::read_file_async(req.path.as_str()).await;
+					match out {
+						Ok(bytes) => push_async_fs_completion(AsyncFsCompletion {
+							id: req.id,
+							rc: 0,
+							data: bytes,
+						}),
+						Err(e) => push_async_fs_completion(AsyncFsCompletion {
+							id: req.id,
+							rc: fs_error_to_code(e),
+							data: Vec::new(),
+						}),
+					}
+				}
+				AsyncFsKind::WriteFile => {
+					let out = super::kfs::write_file_async(req.path.as_str(), req.data.as_slice()).await;
+					match out {
+						Ok(()) => push_async_fs_completion(AsyncFsCompletion {
+							id: req.id,
+							rc: 0,
+							data: Vec::new(),
+						}),
+						Err(e) => push_async_fs_completion(AsyncFsCompletion {
+							id: req.id,
+							rc: fs_error_to_code(e),
+							data: Vec::new(),
+						}),
+					}
+				}
+			}
+		}
+	}
+
+	/// Start an async read-file operation.
+	///
+	/// Returns an operation id (>=0) or a negative `FS_ERR_*`.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_read_file_start(path_ptr: *const u8, path_len: usize) -> i32 {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		if path_len > QJS_ASYNC_FS_MAX_PATH {
+			return FS_ERR_TOO_LARGE;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+
+		let id = next_async_fs_id();
+		let req = AsyncFsRequest {
+			id,
+			kind: AsyncFsKind::ReadFile,
+			path: path.to_string(),
+			data: Vec::new(),
+		};
+		match push_async_fs_req(req) {
+			Ok(()) => id as i32,
+			Err(code) => code,
+		}
+	}
+
+	/// Start an async write-file operation.
+	///
+	/// Returns an operation id (>=0) or a negative `FS_ERR_*`.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_write_file_start(
+		path_ptr: *const u8,
+		path_len: usize,
+		data_ptr: *const u8,
+		data_len: usize,
+	) -> i32 {
+		if path_ptr.is_null() || path_len == 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		if data_ptr.is_null() && data_len != 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		if path_len > QJS_ASYNC_FS_MAX_PATH || data_len > QJS_ASYNC_FS_MAX_DATA {
+			return FS_ERR_TOO_LARGE;
+		}
+		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+		let Ok(path) = core::str::from_utf8(path_bytes) else {
+			return FS_ERR_BAD_UTF8;
+		};
+		let data = if data_len == 0 {
+			&[]
+		} else {
+			core::slice::from_raw_parts(data_ptr, data_len)
+		};
+
+		let id = next_async_fs_id();
+		let req = AsyncFsRequest {
+			id,
+			kind: AsyncFsKind::WriteFile,
+			path: path.to_string(),
+			data: data.to_vec(),
+		};
+		match push_async_fs_req(req) {
+			Ok(()) => id as i32,
+			Err(code) => code,
+		}
+	}
+
+	/// Pop one completed async fs operation id.
+	///
+	/// Returns 1 if an id was written to `out_id`, 0 if none.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_poll_completed(out_id: *mut u32) -> i32 {
+		if out_id.is_null() {
+			return 0;
+		}
+		let mut done = ASYNC_FS_DONE.lock();
+		let Some(id) = done.first().copied() else {
+			return 0;
+		};
+		done.remove(0);
+		*out_id = id;
+		1
+	}
+
+	/// Query the result length for an async fs op.
+	///
+	/// Returns:
+	/// - `>=0`: number of result bytes available (0 for ops with no data)
+	/// - `<0`: `FS_ERR_*` code if the op failed or id is unknown
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_result_len(op_id: u32) -> isize {
+		let Some(c) = find_async_fs_completion(op_id) else {
+			return FS_ERR_NOT_FOUND as isize;
+		};
+		if c.rc != 0 {
+			return c.rc as isize;
+		}
+		c.data.len() as isize
+	}
+
+	/// Read (and consume) the result bytes for an async fs op.
+	///
+	/// Mirrors the sync `trueos_cabi_fs_read_file` contract.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
+		let Some(c) = find_async_fs_completion(op_id) else {
+			return FS_ERR_NOT_FOUND as isize;
+		};
+		if c.rc != 0 {
+			remove_async_fs_completion(op_id);
+			return c.rc as isize;
+		}
+
+		if out_ptr.is_null() || out_cap == 0 {
+			return c.data.len() as isize;
+		}
+		if c.data.len() > out_cap {
+			return FS_ERR_NO_SPACE as isize;
+		}
+		core::ptr::copy_nonoverlapping(c.data.as_ptr(), out_ptr, c.data.len());
+		let n = c.data.len() as isize;
+		remove_async_fs_completion(op_id);
+		n
+	}
+
+	/// Discard a completed async fs op without reading its data.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_discard(op_id: u32) -> i32 {
+		remove_async_fs_completion(op_id);
+		0
 	}
 
 	fn leak_str(s: String) -> &'static str {

@@ -1470,6 +1470,7 @@ dependencies = [
  "cc",
  "embassy-time-driver",
  "libm",
+ "spin 0.10.0",
  "trueos-math",
 ]
 

@@ -443,6 +443,11 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
                                 "{}",
                                 crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
                             ));
+                        } else if *state == SlotState::Failed {
+                            io.write_fmt(format_args!(
+                                "{}",
+                                crate::ecma48::color(s.as_str(), super::ERROR_RGB)
+                            ));
                         } else {
                             io.write_str(s.as_str());
                         }
