@@ -6,6 +6,8 @@ extern crate alloc;
 pub mod tree;
 pub use tree::{Children, NodeId, Tree};
 
+pub(crate) mod ascii_tree;
+
 #[cfg(any(feature = "alloc", test))]
 pub mod pbltree;
 

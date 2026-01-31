@@ -243,6 +243,7 @@ pub(crate) enum PendingAction {
 pub(crate) enum InstallWizardStage {
     SelectDisk,
     FormatSelectDisk,
+    FileSelectMount,
 }
 
 pub(crate) enum CommandAction {
@@ -250,11 +251,145 @@ pub(crate) enum CommandAction {
     Pending(PendingAction),
     ShowInstallDiskTable,
     ShowFormatDiskTable,
+    ShowFileMountTable,
     EnterCube,
     EnterIco,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
     Mv { src: String<160>, dst: String<160> },
     Qjs { src: String<192> },
+}
+
+fn print_trueosfs_mount_table(io: &dyn ShellIo) {
+    let roots = crate::v::fs::trueosfs::list_roots();
+    io.write_str("\r\nfile: TRUEOSFS mounts\r\n");
+    if roots.is_empty() {
+        io.write_str("file: (none)\r\n");
+        return;
+    }
+    for (idx, r) in roots.iter().enumerate() {
+        io.write_fmt(format_args!(
+            "file: {:>2}: {} (raw={} seq={})\r\n",
+            idx,
+            r.disk_id,
+            r.disk_id.raw(),
+            r.seq
+        ));
+    }
+}
+
+async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::block::DeviceHandle) {
+    use alloc::string::String as AString;
+    use alloc::vec::Vec;
+    use core::fmt::Write;
+    use trueos_math::{NodeId, Tree};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum FsKind {
+        Root,
+        Dir,
+        File,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct FsEntry {
+        kind: FsKind,
+        name: AString,
+    }
+
+    struct IoWriter<'a>(&'a dyn ShellIo);
+    impl<'a> Write for IoWriter<'a> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            self.0.write_str(s);
+            Ok(())
+        }
+    }
+
+    const MAX_PRINT: usize = 25;
+    const CAP: usize = 128;
+
+    let mut tree: Tree<FsEntry, CAP> = Tree::new();
+    let Some(root) = tree.add_root(FsEntry {
+        kind: FsKind::Root,
+        name: AString::from("/"),
+    }) else {
+        io.write_str("file: tree alloc failed\r\n");
+        return;
+    };
+
+    // BFS-ish expansion so the output is useful when we hit the entry limit.
+    let mut queue: Vec<(NodeId, AString)> = Vec::new();
+    queue.push((root, AString::new()));
+
+    while let Some((parent, path)) = queue.pop() {
+        if tree.len() >= MAX_PRINT {
+            break;
+        }
+
+        let listing = match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                io.write_str("file: not a TRUEOSFS disk\r\n");
+                break;
+            }
+            Err(e) => {
+                io.write_fmt(format_args!("file: list_dir failed ({:?})\r\n", e));
+                break;
+            }
+        };
+
+        for name in listing.lines() {
+            if tree.len() >= MAX_PRINT {
+                break;
+            }
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+
+            let child_path = if path.is_empty() {
+                AString::from(name)
+            } else {
+                let mut p = path.clone();
+                p.push('/');
+                p.push_str(name);
+                p
+            };
+
+            let is_file = match crate::v::fs::trueosfs::file_exists_async(disk, child_path.as_str()).await {
+                Ok(v) => v,
+                Err(_) => false,
+            };
+            let kind = if is_file { FsKind::File } else { FsKind::Dir };
+
+            let Some(node) = tree.add_child(
+                parent,
+                FsEntry {
+                    kind: kind.clone(),
+                    name: AString::from(name),
+                },
+            ) else {
+                break;
+            };
+
+            if matches!(kind, FsKind::Dir) {
+                // Push last so earlier siblings tend to appear first.
+                queue.insert(0, (node, child_path));
+            }
+        }
+    }
+
+    let mut w = IoWriter(io);
+    let _ = tree.write_ascii_tree(root, &mut w, MAX_PRINT, |e, w| {
+        match e.kind {
+            FsKind::Root => w.write_str("/")?,
+            FsKind::Dir => {
+                w.write_str(e.name.as_str())?;
+                w.write_str("/")?;
+            }
+            FsKind::File => w.write_str(e.name.as_str())?,
+        }
+        Ok(())
+    });
 }
 
 
@@ -558,6 +693,74 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
+
+                        if let Some(InstallWizardStage::FileSelectMount) = install_wizard {
+                            let mut s = line.as_str().trim();
+                            // Accept inputs like `file 0` as well as just `0`.
+                            if let Some(rest) = s.strip_prefix("file") {
+                                s = rest.trim();
+                            }
+
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\nfile: cancelled\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                                line.clear();
+                                print_trueosfs_mount_table(io);
+                                io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let roots = crate::v::fs::trueosfs::list_roots();
+
+                            // Prefer the mount table index when it is in range.
+                            let (handle, shown_id) = if let Ok(idx) = s.parse::<usize>() {
+                                if let Some(r) = roots.get(idx) {
+                                    (
+                                        crate::disc::block::device_handle(r.disk_id),
+                                        Some(r.disk_id.raw()),
+                                    )
+                                } else {
+                                    (None, None)
+                                }
+                            } else {
+                                let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                                if raw_id == 0 {
+                                    (None, None)
+                                } else {
+                                    let target = crate::disc::block::device_handles()
+                                        .into_iter()
+                                        .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+                                    (target, Some(raw_id))
+                                }
+                            };
+
+                            line.clear();
+
+                            let Some(handle) = handle else {
+                                io.write_str("\r\nfile: invalid mount id (try 'ls')\r\n");
+                                io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            io.write_fmt(format_args!(
+                                "\r\nfile: printing tree for {} (raw={})\r\n",
+                                handle.id(),
+                                shown_id.unwrap_or(handle.id().raw())
+                            ));
+
+                            print_trueosfs_tree_25(io, handle).await;
+                            io.write_str("\r\nfile: enter another mount index/id, 'ls', or 'q'\r\n");
+                            write_prompt_for_state(io, pending_action, install_wizard);
+                            continue;
+                        }
                     }
 
                     if line.is_empty() && pending_action.is_none() && go_mode {
@@ -607,6 +810,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             CommandAction::ShowFormatDiskTable => {
                                 set_go_mode(io, &mut go_mode, false);
                                 print_format_disk_table(io).await;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::ShowFileMountTable => {
+                                set_go_mode(io, &mut go_mode, false);
+                                print_trueosfs_mount_table(io);
+                                io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::Mv { src, dst } => {

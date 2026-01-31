@@ -192,6 +192,8 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
         W: Write,
         F: FnMut(&K, &mut W) -> fmt::Result,
     {
+        use crate::ascii_tree::{write_ascii_tree, Frame};
+
         if max_nodes == 0 {
             return Ok(());
         }
@@ -199,123 +201,71 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             return Ok(());
         };
 
-        #[derive(Copy, Clone)]
-        struct Frame {
-            id: NodeId,
-            depth: usize,
-            is_last: bool,
-        }
-
-        let mut printed = 0usize;
-        let mut stack: Vec<Frame> = Vec::new();
+        let mut stack: Vec<Frame<NodeId>> = Vec::new();
         let mut branches: Vec<bool> = Vec::new();
-
         stack.push(Frame {
             id: root,
             depth: 0,
             is_last: true,
         });
 
-        while let Some(Frame { id, depth, is_last }) = stack.pop() {
-            if printed >= max_nodes {
-                writeln!(out, "... (max {} nodes)", max_nodes)?;
-                break;
-            }
-
-            if depth > 0 {
-                for d in 0..(depth - 1) {
-                    if branches.get(d).copied().unwrap_or(false) {
-                        out.write_str("|   ")?;
-                    } else {
-                        out.write_str("    ")?;
-                    }
-                }
-
-                if is_last {
-                    out.write_str("`-- ")?;
-                } else {
-                    out.write_str("|-- ")?;
-                }
-            }
-
-            // Ensure branches array can track this depth.
-            if branches.len() <= depth {
-                branches.resize(depth + 1, false);
-            }
-
+        write_ascii_tree(self, root, out, max_nodes, &mut stack, &mut branches, "nodes", |id, w| {
             match &self.nodes[id] {
                 Node::Internal { keys, children } => {
-                    out.write_str("I ")?;
-                    write!(out, "keys={} children={}", keys.len(), children.len())?;
+                    w.write_str("I ")?;
+                    write!(w, "keys={} children={}", keys.len(), children.len())?;
                     if !keys.is_empty() {
-                        out.write_str(" [")?;
-                        let show = core::cmp::min(keys.len(), 4);
+                        w.write_str(" [")?;
                         if keys.len() <= 4 {
                             for (i, k) in keys.iter().enumerate() {
                                 if i != 0 {
-                                    out.write_str(",")?;
+                                    w.write_str(",")?;
                                 }
-                                render_key(k, out)?;
+                                render_key(k, w)?;
                             }
                         } else {
-                            // first two, ellipsis, last two
-                            render_key(&keys[0], out)?;
-                            out.write_str(",")?;
-                            render_key(&keys[1], out)?;
-                            out.write_str(" .. ")?;
-                            render_key(&keys[keys.len() - 2], out)?;
-                            out.write_str(",")?;
-                            render_key(&keys[keys.len() - 1], out)?;
+                            render_key(&keys[0], w)?;
+                            w.write_str(",")?;
+                            render_key(&keys[1], w)?;
+                            w.write_str(" .. ")?;
+                            render_key(&keys[keys.len() - 2], w)?;
+                            w.write_str(",")?;
+                            render_key(&keys[keys.len() - 1], w)?;
                         }
-                        let _ = show;
-                        out.write_str("]")?;
+                        w.write_str("]")?;
                     }
-                    out.write_char('\n')?;
-
-                    // Push children in reverse so the leftmost prints first.
-                    for (i, ch) in children.iter().enumerate().rev() {
-                        stack.push(Frame {
-                            id: *ch,
-                            depth: depth + 1,
-                            is_last: i == children.len().saturating_sub(1),
-                        });
-                    }
+                    Ok(())
                 }
                 Node::Leaf { keys, next, .. } => {
-                    out.write_str("L ")?;
-                    write!(out, "keys={}", keys.len())?;
+                    w.write_str("L ")?;
+                    write!(w, "keys={}", keys.len())?;
                     if !keys.is_empty() {
-                        out.write_str(" [")?;
+                        w.write_str(" [")?;
                         if keys.len() <= 4 {
                             for (i, k) in keys.iter().enumerate() {
                                 if i != 0 {
-                                    out.write_str(",")?;
+                                    w.write_str(",")?;
                                 }
-                                render_key(k, out)?;
+                                render_key(k, w)?;
                             }
                         } else {
-                            render_key(&keys[0], out)?;
-                            out.write_str(",")?;
-                            render_key(&keys[1], out)?;
-                            out.write_str(" .. ")?;
-                            render_key(&keys[keys.len() - 2], out)?;
-                            out.write_str(",")?;
-                            render_key(&keys[keys.len() - 1], out)?;
+                            render_key(&keys[0], w)?;
+                            w.write_str(",")?;
+                            render_key(&keys[1], w)?;
+                            w.write_str(" .. ")?;
+                            render_key(&keys[keys.len() - 2], w)?;
+                            w.write_str(",")?;
+                            render_key(&keys[keys.len() - 1], w)?;
                         }
-                        out.write_str("]")?;
+                        w.write_str("]")?;
                     }
                     if next.is_some() {
-                        out.write_str(" -> next")?;
+                        w.write_str(" -> next")?;
                     }
-                    out.write_char('\n')?;
+                    Ok(())
                 }
             }
-
-            printed += 1;
-            branches[depth] = !is_last;
-        }
-
-        Ok(())
+        })
     }
 
     fn seek_to_first_ge(&self, key: &K) -> (Option<NodeId>, usize) {
@@ -441,6 +391,35 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
 impl<K: Ord + Clone, V, const M: usize> Default for BPlusTree<K, V, M> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K: Ord + Clone, V, const M: usize> crate::ascii_tree::AsciiTreeTraversal for BPlusTree<K, V, M> {
+    type NodeId = NodeId;
+
+    fn is_valid(&self, id: Self::NodeId) -> bool {
+        id < self.nodes.len()
+    }
+
+    fn push_children_rev<S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>>(
+        &self,
+        parent: Self::NodeId,
+        child_depth: usize,
+        stack: &mut S,
+    ) {
+        let Node::Internal { children, .. } = &self.nodes[parent] else {
+            return;
+        };
+
+        // Push in reverse so the leftmost prints first.
+        let last_idx = children.len().saturating_sub(1);
+        for (idx, ch) in children.iter().enumerate().rev() {
+            let _ = stack.push(crate::ascii_tree::Frame {
+                id: *ch,
+                depth: child_depth,
+                is_last: idx == last_idx,
+            });
+        }
     }
 }
 

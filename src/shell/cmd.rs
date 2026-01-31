@@ -592,6 +592,7 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static TFSDEMO_ARGS: [ArgSpec; 1] = [ArgSpec::new("diskid", ArgType::Str)];
+        static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
 
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
@@ -603,6 +604,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
+        let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
         let _ = REGSHCMD("reset", &[], cmd_reset);
@@ -844,6 +846,11 @@ fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) ->
 fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::FormatSelectDisk);
     super::CommandAction::ShowFormatDiskTable
+}
+
+fn cmd_file(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    *ctx.install_wizard = Some(super::InstallWizardStage::FileSelectMount);
+    super::CommandAction::ShowFileMountTable
 }
 
 fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

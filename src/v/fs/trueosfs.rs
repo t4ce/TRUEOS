@@ -2,11 +2,9 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::disc::block;
 use crate::v::disc::partition;
-use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
-use trueos_fs::BlockIo;
 use trueos_math::BPlusTree;
 
 const TRUEOSFS_INDEX_M: usize = 16;
@@ -485,6 +483,30 @@ pub fn roots_len() -> usize {
     ROOTS.lock().len()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RootInfo {
+    pub disk_id: block::DiscId,
+    pub seq: u32,
+}
+
+/// Returns a snapshot list of mounted TRUEOSFS roots.
+///
+/// Sorted by descending mount sequence (newest first).
+pub fn list_roots() -> Vec<RootInfo> {
+    use core::cmp::Reverse;
+
+    let roots = ROOTS.lock();
+    let mut out: Vec<RootInfo> = Vec::with_capacity(roots.len());
+    for m in roots.iter() {
+        out.push(RootInfo {
+            disk_id: m.disk_id,
+            seq: m.seq,
+        });
+    }
+    out.sort_by_key(|r| Reverse(r.seq));
+    out
+}
+
 /// Returns the most recently mounted TRUEOSFS root disk id (best-effort).
 ///
 /// This is used by higher layers (shell, C ABI helpers) that want a sensible
@@ -533,118 +555,16 @@ impl Drop for AlignedBuf {
     }
 }
 
-fn read_blocks_aligned(handle: block::DeviceHandle, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
-    crate::time::block_on(handle.read_blocks(lba, blocks))
-}
-
 fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
     block0.len() >= 8 && &block0[0..8] == &trueos_fs::MAGIC
-}
-
-fn spin_wait_ms(ms: u64) {
-    let hz = embassy_time_driver::TICK_HZ as u64;
-    let start = embassy_time_driver::now();
-    let delta_ticks = if hz == 0 {
-        0
-    } else {
-        // Round up to at least one tick when ms>0.
-        let ticks = (ms.saturating_mul(hz) + 999) / 1000;
-        if ms > 0 { ticks.max(1) } else { 0 }
-    };
-    let deadline = start.saturating_add(delta_ticks);
-    while embassy_time_driver::now() < deadline {
-        crate::time::poll();
-        spin_loop();
-    }
 }
 
 fn is_transient_io(e: block::Error) -> bool {
     matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io)
 }
 
-fn read_blocks_aligned_retry(
-    handle: block::DeviceHandle,
-    lba: u64,
-    blocks: usize,
-    attempts: u8,
-) -> Result<Vec<u8>, block::Error> {
-    let mut last: Option<block::Error> = None;
-    let mut i = 0u8;
-    while i < attempts {
-        match read_blocks_aligned(handle, lba, blocks) {
-            Ok(v) => return Ok(v),
-            Err(e) if is_transient_io(e) => {
-                last = Some(e);
-                // Give USB storage some time to become ready after heavy writes.
-                spin_wait_ms(10);
-            }
-            Err(e) => return Err(e),
-        }
-        i = i.wrapping_add(1);
-    }
-    Err(last.unwrap_or(block::Error::Io))
-}
-
-/// Find where TRUEOSFS lives on a whole disk.
-///
-/// - Bootable disks: TRUEOSFS is expected to live inside a GPT partition (ESP exists elsewhere).
-/// - Data-only disks: TRUEOSFS may live at LBA0 (superfloppy-style).
-pub fn locate(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, block::Error> {
-    if handle.parent().is_some() {
-        return Ok(None);
-    }
-
-    // Prefer GPT-partitioned layouts (bootable-capable).
-    {
-        let mut tries = 0u8;
-        while tries < 5 {
-            match crate::time::block_on(partition::read_gpt_partitions(handle)) {
-                Ok(parts) => {
-                    let mut has_esp = false;
-                    for p in parts.iter() {
-                        if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
-                            has_esp = true;
-                        }
-
-                        // Our superblock is at the start of the TRUEOS data partition.
-                        if let Ok(p0) = read_blocks_aligned_retry(handle, p.range.first_lba(), 1, 3) {
-                            if looks_like_trueos_superblock(&p0) {
-                                let super_lba = p.range.first_lba();
-                                let end_lba_exclusive = p.range.last_lba().saturating_add(1);
-                                return Ok(Some(TrueosFsPlacement {
-                                    bootable: has_esp,
-                                    super_lba,
-                                    data_lba: trueos_fs::data_lba_from_super(super_lba),
-                                    data_end_lba_exclusive: Some(end_lba_exclusive),
-                                }));
-                            }
-                        }
-                    }
-                    break;
-                }
-                Err(e) if is_transient_io(e) => {
-                    spin_wait_ms(10);
-                }
-                // If GPT parsing fails in a non-transient way, surface it so callers can log it.
-                Err(e) => return Err(e),
-            }
-            tries = tries.wrapping_add(1);
-        }
-    }
-
-    // Fallback: superblock at LBA0 (data-only images/disks).
-    let bs0 = read_blocks_aligned_retry(handle, 0, 1, 3)?;
-    if looks_like_trueos_superblock(&bs0) {
-        return Ok(Some(TrueosFsPlacement {
-            bootable: false,
-            super_lba: 0,
-            data_lba: trueos_fs::data_lba_from_super(0),
-            data_end_lba_exclusive: None,
-        }));
-    }
-
-    Ok(None)
-}
+// NOTE: the synchronous `locate` helper was removed.
+// Use `locate_async`.
 
 async fn read_blocks_aligned_async(
     handle: block::DeviceHandle,
@@ -677,9 +597,9 @@ async fn read_blocks_aligned_retry_async(
     Err(last.unwrap_or(block::Error::Io))
 }
 
-/// Async variant of [`locate`].
+/// Find where TRUEOSFS lives on a whole disk.
 ///
-/// This avoids `block_on` so it can be called from async installer jobs.
+/// This avoids `block_on` so it can be called from async contexts (e.g. installer jobs).
 pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, block::Error> {
     if handle.parent().is_some() {
         return Ok(None);
