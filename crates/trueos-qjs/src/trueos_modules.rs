@@ -685,6 +685,137 @@ unsafe extern "C" fn qjs_fs_remove(
     qjs::JSValue::undefined()
 }
 
+unsafe extern "C" fn qjs_fs_read_file_text_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+
+    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+    let path = core::slice::from_raw_parts(path_ptr, path_len);
+    let op_id = qjs::async_ops::start_read_file(path);
+
+    js_free_cstring(ctx, path_cstr);
+
+    match op_id {
+        Ok(id) => {
+            qjs::async_ops::register_promise(
+                ctx,
+                id,
+                qjs::async_ops::OpKind::ReadText,
+                resolve,
+                reject,
+            );
+        }
+        Err(code) => {
+            let arg = js_int32(code);
+            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+        }
+    }
+
+    qjs::js_free_value(ctx, resolve);
+    qjs::js_free_value(ctx, reject);
+    promise
+}
+
+unsafe extern "C" fn qjs_fs_read_file_bytes_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+
+    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+    let path = core::slice::from_raw_parts(path_ptr, path_len);
+    let op_id = qjs::async_ops::start_read_file(path);
+
+    js_free_cstring(ctx, path_cstr);
+
+    match op_id {
+        Ok(id) => {
+            qjs::async_ops::register_promise(
+                ctx,
+                id,
+                qjs::async_ops::OpKind::ReadBytes,
+                resolve,
+                reject,
+            );
+        }
+        Err(code) => {
+            let arg = js_int32(code);
+            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+        }
+    }
+
+    qjs::js_free_value(ctx, resolve);
+    qjs::js_free_value(ctx, reject);
+    promise
+}
+
+unsafe extern "C" fn qjs_fs_write_file_text_async(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+
+    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+    let Some((data_ptr, data_len, data_cstr)) = js_arg_to_utf8_bytes(ctx, args[1]) else {
+        js_free_cstring(ctx, path_cstr);
+        return qjs::JSValue::exception();
+    };
+
+    let (promise, resolve, reject) = qjs::async_ops::new_promise(ctx);
+
+    let path = core::slice::from_raw_parts(path_ptr, path_len);
+    let data = core::slice::from_raw_parts(data_ptr, data_len);
+    let op_id = qjs::async_ops::start_write_file(path, data);
+
+    js_free_cstring(ctx, path_cstr);
+    js_free_cstring(ctx, data_cstr);
+
+    match op_id {
+        Ok(id) => {
+            qjs::async_ops::register_promise(
+                ctx,
+                id,
+                qjs::async_ops::OpKind::WriteText,
+                resolve,
+                reject,
+            );
+        }
+        Err(code) => {
+            let arg = js_int32(code);
+            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+        }
+    }
+
+    qjs::js_free_value(ctx, resolve);
+    qjs::js_free_value(ctx, reject);
+    promise
+}
+
 unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
     let read_bytes_name = b"readFileBytes\0";
     let read_text_name = b"readFile\0";
@@ -692,6 +823,10 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
     let rename_name = b"rename\0";
     let list_dir_name = b"listDir\0";
     let remove_name = b"remove\0";
+
+    let read_text_async_name = b"readFileAsync\0";
+    let read_bytes_async_name = b"readFileBytesAsync\0";
+    let write_text_async_name = b"writeFileAsync\0";
 
     let read_bytes_fn = qjs::JS_NewCFunction2(
         ctx,
@@ -765,6 +900,42 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
         return -1;
     }
 
+    let read_text_async_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_fs_read_file_text_async),
+        read_text_async_name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, read_text_async_name.as_ptr() as *const c_char, read_text_async_fn) < 0 {
+        return -1;
+    }
+
+    let read_bytes_async_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_fs_read_file_bytes_async),
+        read_bytes_async_name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, read_bytes_async_name.as_ptr() as *const c_char, read_bytes_async_fn) < 0 {
+        return -1;
+    }
+
+    let write_text_async_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_fs_write_file_text_async),
+        write_text_async_name.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, write_text_async_name.as_ptr() as *const c_char, write_text_async_fn) < 0 {
+        return -1;
+    }
+
     0
 }
 
@@ -793,6 +964,9 @@ pub unsafe fn load_native_module(
                 b"rename\0",
                 b"listDir\0",
                 b"remove\0",
+				b"readFileAsync\0",
+				b"readFileBytesAsync\0",
+				b"writeFileAsync\0",
             ],
         )
     } else if name == b"process" || name == b"node:process" {

@@ -6,6 +6,9 @@ use core::ffi::{c_char, c_int, c_void};
 pub mod trueos_smoke;
 
 #[cfg(feature = "trueos")]
+pub mod async_ops;
+
+#[cfg(feature = "trueos")]
 pub mod trueos_modules;
 
 #[cfg(feature = "trueos")]
@@ -101,6 +104,20 @@ pub unsafe fn js_free_value(ctx: *mut JSContext, v: JSValue) {
             }
         }
     }
+}
+
+/// Mirrors the `JS_DupValue` inline in `quickjs.h` for the non-NAN-boxing (PTR64) ABI.
+///
+/// Safety: `v` must be a valid value for the given runtime.
+#[inline]
+pub unsafe fn js_dup_value(_ctx: *mut JSContext, v: JSValue) -> JSValue {
+    if v.tag >= JS_TAG_FIRST && v.tag < 0 {
+        let p = unsafe { v.u.ptr } as *mut JSRefCountHeader;
+        unsafe {
+            (*p).ref_count += 1;
+        }
+    }
+    v
 }
 
 /// Convenience wrapper for `JS_ToCStringLen2(..., cesu8=false)`.
@@ -230,6 +247,8 @@ extern "C" {
 
     pub fn JS_NewError(ctx: *mut JSContext) -> JSValue;
     pub fn JS_Throw(ctx: *mut JSContext, obj: JSValue) -> JSValue;
+
+    pub fn JS_NewPromiseCapability(ctx: *mut JSContext, resolving_funcs: *mut JSValue) -> JSValue;
     pub fn JS_IsJobPending(rt: *mut JSRuntime) -> c_int;
     pub fn JS_ExecutePendingJob(rt: *mut JSRuntime, pctx: *mut *mut JSContext) -> c_int;
 

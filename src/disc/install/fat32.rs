@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 
 use crate::disc::block::{self, DeviceHandle};
 
+const FAT32_MIN_CLUSTERS: u32 = 65_525;
+
 struct AlignedBuf {
     ptr: *mut u8,
     len: usize,
@@ -107,22 +109,27 @@ fn compute_fat32_layout(total_sectors: u32, sectors_per_cluster: u32) -> Option<
         return None;
     }
 
+    // Iteratively compute a self-consistent FAT size.
+    // Note: for small volumes, naive iteration can oscillate by 1 sector due to rounding.
+    // Bigger-than-min FAT sizes are still valid, so we only grow the FAT, never shrink.
     let mut fat_sectors: u32 = 1;
-    for _ in 0..16 {
+    for _ in 0..32 {
         let first_data_sector = (reserved as u32).saturating_add(fats.saturating_mul(fat_sectors));
         if first_data_sector >= total_sectors {
             return None;
         }
+
         let data_sectors = total_sectors - first_data_sector;
         let clusters = data_sectors / sectors_per_cluster;
-        if clusters < 65_536 {
+        if clusters < FAT32_MIN_CLUSTERS {
             // too small for FAT32
             return None;
         }
 
         let fat_bytes_needed = (clusters as u64 + 2).saturating_mul(4);
         let fat_sectors_needed = ((fat_bytes_needed + 511) / 512) as u32;
-        if fat_sectors_needed == fat_sectors {
+        if fat_sectors_needed <= fat_sectors {
+            // Current FAT is large enough; accept.
             return Some((reserved, fat_sectors, first_data_sector));
         }
         fat_sectors = fat_sectors_needed;
@@ -153,12 +160,12 @@ fn pick_fat32_geometry(
         }
         let data_sectors = total_sectors - first_data_sector;
         let total_clusters = data_sectors / spc;
-        if total_clusters < 65_536 {
+        if total_clusters < FAT32_MIN_CLUSTERS {
             continue;
         }
 
-        // Directory clusters: root + EFI + BOOT + install.
-        let dir_clusters: u32 = 4;
+        // Directory clusters: root + EFI + BOOT.
+        let dir_clusters: u32 = 3;
         let need_bootx64 = clusters_for_bytes(bootx64_len, spc);
         let need_kernel = clusters_for_bytes(kernel_len, spc);
         let need_conf = clusters_for_bytes(limine_conf_len, spc);
@@ -411,6 +418,74 @@ pub async fn format_and_populate_esp_fat32_with_log(
     }
 
     // --- Directories ---
+
+    fn lfn_checksum(short_name11: &[u8; 11]) -> u8 {
+        // Standard VFAT LFN checksum over the 11-byte short name.
+        let mut sum: u8 = 0;
+        for &b in short_name11.iter() {
+            sum = (((sum & 1) << 7) | (sum >> 1)).wrapping_add(b);
+        }
+        sum
+    }
+
+    fn lfn_entry_single(long_name: &str, short_name11: [u8; 11]) -> [u8; 32] {
+        // Single LFN entry (supports names up to 13 UTF-16 code units).
+        // This is sufficient for "limine.conf".
+        let mut e = [0u8; 32];
+        let mut u16s: heapless::Vec<u16, 13> = heapless::Vec::new();
+        for w in long_name.encode_utf16() {
+            if u16s.len() == 13 {
+                break;
+            }
+            let _ = u16s.push(w);
+        }
+
+        // Order: 1 (only entry) + LAST flag.
+        e[0] = 0x41;
+        e[11] = 0x0F; // attribute
+        e[12] = 0x00; // type
+        e[13] = lfn_checksum(&short_name11);
+        e[26] = 0;
+        e[27] = 0;
+
+        // Fill name fields with 0xFFFF by default.
+        for off in [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30] {
+            e[off..off + 2].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        }
+
+        // Write chars + terminator.
+        let mut chars: heapless::Vec<u16, 13> = heapless::Vec::new();
+        for &w in u16s.iter() {
+            let _ = chars.push(w);
+        }
+        if chars.len() < 13 {
+            let _ = chars.push(0);
+        }
+
+        let mut idx = 0usize;
+        let mut put = |field_off: usize| {
+            if idx >= chars.len() {
+                return;
+            }
+            let b = chars[idx].to_le_bytes();
+            e[field_off] = b[0];
+            e[field_off + 1] = b[1];
+            idx += 1;
+        };
+
+        for off in [1usize, 3, 5, 7, 9] {
+            put(off);
+        }
+        for off in [14usize, 16, 18, 20, 22, 24] {
+            put(off);
+        }
+        for off in [28usize, 30] {
+            put(off);
+        }
+
+        e
+    }
+
     // Root dir
     {
         let mut dir = [0u8; 512];
@@ -430,8 +505,12 @@ pub async fn format_and_populate_esp_fat32_with_log(
             kernel_start,
             image.kernel_elf.len() as u32,
         ));
+        // Limine expects an exact "limine.conf" filename. This does not fit in pure 8.3,
+        // so emit a single VFAT long filename entry + a short alias.
+        let limine_short = name83("LIMINE", "CON");
+        push(&lfn_entry_single("limine.conf", limine_short));
         push(&dir_entry(
-            name83("LIMINE", "CONF"),
+            limine_short,
             0x20,
             conf_start,
             image.limine_conf.len() as u32,
@@ -472,6 +551,22 @@ pub async fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
+
+        // For EFI-booted Limine, <EFI app path>/limine.conf is checked first.
+        // Since BOOTX64.EFI lives in /EFI/BOOT, also place limine.conf here.
+        let limine_short = name83("LIMINE", "CON");
+        let lfn = lfn_entry_single("limine.conf", limine_short);
+        dir[off..off + 32].copy_from_slice(&lfn);
+        off += 32;
+        let de = dir_entry(
+            limine_short,
+            0x20,
+            conf_start,
+            image.limine_conf.len() as u32,
+        );
+        dir[off..off + 32].copy_from_slice(&de);
+        off += 32;
+
         write_cluster(esp, sectors_per_cluster, first_data_sector, &mut cluster_buf, cl_boot, &dir, log).await?;
     }
 

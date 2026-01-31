@@ -249,6 +249,9 @@ pub extern "C" fn kmain() -> ! {
     // Handles deferred TRUEOSFS probing/mount requests from hotplug drivers.
     let _ = spawner.spawn(crate::v::fs::trueosfs::mount_service_task());
 
+	// Serves QuickJS Promise-based async filesystem operations.
+	let _ = spawner.spawn(io::cabi::qjs_async_fs_service_task());
+
     time::init(executor);
 
     net::init();

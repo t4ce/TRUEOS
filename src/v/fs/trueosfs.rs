@@ -833,6 +833,107 @@ pub async fn bsp_smoke_test_once_async() {
             continue;
         }
 
+        // Debug convenience: if we see a GPT disk with an ESP (FAT) and a *blank* data partition,
+        // auto-format TRUEOSFS into that partition so smoke testing works on fresh images.
+        //
+        // Safety properties:
+        // - Only in debug builds.
+        // - Only if the target partition's first LBA reads as all-zero.
+        // - Only if the whole disk is writable.
+        #[cfg(debug_assertions)]
+        if trueos_disk.is_none() {
+            for h in block::device_handles().into_iter() {
+                if h.parent().is_some() {
+                    continue;
+                }
+                if !h.supports_write() {
+                    continue;
+                }
+
+                let parts = match partition::read_gpt_partitions(h).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        if is_transient_io(e) {
+                            continue;
+                        }
+                        crate::log!(
+                            "trueosfs: smoke: gpt read failed dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                        continue;
+                    }
+                };
+                if parts.is_empty() {
+                    continue;
+                }
+
+                let mut candidate_super_lba: Option<u64> = None;
+                for p in parts.iter() {
+                    // Skip ESP.
+                    if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
+                        continue;
+                    }
+                    let p0 = match read_blocks_aligned_retry_async(h, p.range.first_lba(), 1, 3).await {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if p0.iter().all(|&b| b == 0) {
+                        candidate_super_lba = Some(p.range.first_lba());
+                        break;
+                    }
+                }
+
+                let Some(super_lba) = candidate_super_lba else {
+                    continue;
+                };
+
+                crate::log!(
+                    "trueosfs: smoke: blank GPT data partition detected dev={} super_lba={} -> formatting TRUEOSFS\n",
+                    h.id(),
+                    super_lba
+                );
+                match format_blank_at_async(h, super_lba).await {
+                    Ok(()) => {
+                        crate::log!(
+                            "trueosfs: smoke: format ok dev={} super_lba={} -> mounting\n",
+                            h.id(),
+                            super_lba
+                        );
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: format failed dev={} super_lba={} err={:?}\n",
+                            h.id(),
+                            super_lba,
+                            e
+                        );
+                        continue;
+                    }
+                }
+
+                match mount_root_async(h).await {
+                    Ok(Some(_)) => {
+                        trueos_disk = Some(h);
+                        break;
+                    }
+                    Ok(None) => {
+                        crate::log!(
+                            "trueosfs: smoke: format succeeded but mount_root_async returned none dev={}\n",
+                            h.id()
+                        );
+                    }
+                    Err(e) => {
+                        crate::log!(
+                            "trueosfs: smoke: mount_root_async failed after format dev={} err={:?}\n",
+                            h.id(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         // Disks can briefly report transient I/O errors right after bring-up.
         // Retry a handful of times so BSP logs reflect the steady state.
         let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
