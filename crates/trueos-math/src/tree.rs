@@ -340,6 +340,25 @@ impl<T, const N: usize> Tree<T, N> {
             render(v, w)
         })
     }
+
+    /// Returns an HTML `<ul>/<li>` representation of the tree.
+    ///
+    /// - Uses a single outer `<ul>`, with nested `<ul>` for children.
+    /// - Only `<ul>` and `<li>` tags are emitted.
+    /// - Node text is HTML-escaped.
+    /// - Caps traversal at 1000 nodes (then inserts a truncation `<li>`).
+    #[cfg(any(feature = "alloc", test))]
+    pub fn html_tree_string<F>(&self, start: NodeId, mut render: F) -> alloc::string::String
+    where
+        F: FnMut(&T, &mut alloc::string::String),
+    {
+        use crate::html_tree::{tree_to_html_string, DEFAULT_MAX_ITEMS};
+
+        tree_to_html_string(self, start, DEFAULT_MAX_ITEMS, |id, s| {
+            let v = &self.node(id).value;
+            render(v, s)
+        })
+    }
 }
 
 impl<T, const N: usize> crate::ascii_tree::AsciiTreeTraversal for Tree<T, N> {
@@ -428,6 +447,33 @@ mod tests {
         // 2 entries printed, then truncation line.
         assert!(out.lines().count() >= 3);
         assert!(out.contains("... (max 2 entries)"));
+    }
+
+    #[test]
+    fn html_tree_smoke() {
+        let mut t: Tree<&'static str, 16> = Tree::new();
+        let root = t.add_root("root").unwrap();
+        let a = t.add_child(root, "a").unwrap();
+        let _b = t.add_child(root, "b").unwrap();
+        let _c = t.add_child(a, "c").unwrap();
+
+        let html = t.html_tree_string(root, |v, s| s.push_str(v));
+
+        assert!(html.starts_with("<ul><li>root"));
+        assert!(html.contains("<ul>"));
+        assert!(html.contains("<li>a"));
+        assert!(html.contains("<li>b"));
+        assert!(html.contains("<li>c"));
+        assert!(html.ends_with("</ul>"));
+    }
+
+    #[test]
+    fn html_tree_escapes_text() {
+        let mut t: Tree<&'static str, 4> = Tree::new();
+        let root = t.add_root("<&>\"'").unwrap();
+        let html = t.html_tree_string(root, |v, s| s.push_str(v));
+
+        assert!(html.contains("&lt;&amp;&gt;&quot;&#39;"));
     }
 }
 
