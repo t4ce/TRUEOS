@@ -210,6 +210,89 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
 const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
 
+fn http_parse_target(req: &[u8]) -> Option<&str> {
+    let s = core::str::from_utf8(req).ok()?;
+    let line_end = s.find("\r\n").or_else(|| s.find('\n')).unwrap_or(s.len());
+    let line = s.get(..line_end)?;
+    let mut it = line.split_whitespace();
+    let method = it.next()?;
+    let target = it.next()?;
+    if method != "GET" {
+        return None;
+    }
+    Some(target)
+}
+
+fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
+    let (_, q) = target.split_once('?')?;
+    for part in q.split('&') {
+        if let Some((k, v)) = part.split_once('=') {
+            if k == key {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+fn http_url_decode(s: &str, max_len: usize) -> Option<String> {
+    if s.len() > max_len.saturating_mul(3) {
+        return None;
+    }
+
+    let mut out = String::new();
+    let mut i = 0usize;
+    let b = s.as_bytes();
+    while i < b.len() {
+        if out.len() >= max_len {
+            return None;
+        }
+        match b[i] {
+            b'+' => {
+                out.push(' ');
+                i += 1;
+            }
+            b'%' => {
+                if i + 2 >= b.len() {
+                    return None;
+                }
+                let hi = b[i + 1];
+                let lo = b[i + 2];
+                let hex = |c: u8| -> Option<u8> {
+                    match c {
+                        b'0'..=b'9' => Some(c - b'0'),
+                        b'a'..=b'f' => Some(c - b'a' + 10),
+                        b'A'..=b'F' => Some(c - b'A' + 10),
+                        _ => None,
+                    }
+                };
+                let v = (hex(hi)? << 4) | hex(lo)?;
+                out.push(char::from(v));
+                i += 3;
+            }
+            other => {
+                out.push(char::from(other));
+                i += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+fn http_sanitize_filename(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.chars() {
+        match ch {
+            '"' | '\\' | '\r' | '\n' => out.push('_'),
+            _ => out.push(ch),
+        }
+    }
+    if out.is_empty() {
+        out.push_str("download.bin");
+    }
+    out
+}
+
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
     let Some(vnet) = VNet::open_primary() else {
@@ -245,7 +328,7 @@ pub async fn http_trueosfs_task() {
                     active_handle = Some(handle);
                     sent_for_active = false;
                 }
-                api::Event::TcpData { handle, .. } => {
+                api::Event::TcpData { handle, data } => {
                     if active_handle.is_none() {
                         active_handle = Some(handle);
                         sent_for_active = false;
@@ -258,30 +341,181 @@ pub async fn http_trueosfs_task() {
                     }
                     sent_for_active = true;
 
-                    // Build the HTML tree once per request (best-effort).
-                    let tree_html = match crate::v::fs::trueosfs::primary_root_handle() {
-                        None => None,
-                        Some(disk) => match crate::v::fs::trueosfs::html_tree_async(disk, HTTP_TRUEOSFS_MAX_ENTRIES).await {
-                            Ok(v) => v,
-                            Err(_) => None,
-                        },
-                    };
+                    let target = http_parse_target(data.as_slice()).unwrap_or("/");
 
-                    let body = if let Some(tree) = tree_html {
-                        format!(
-                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title></head><body><h1>TRUEOSFS</h1>{}</body></html>",
-                            tree
-                        )
+                    // Best-effort: determine which disk to serve.
+                    let disk = crate::v::fs::trueosfs::primary_root_handle();
+
+                    let (status, content_type, extra_headers, body_bytes): (
+                        &'static str,
+                        &'static str,
+                        String,
+                        Vec<u8>,
+                    ) = if target.starts_with("/dl") {
+                        // Download endpoint: /dl?path=<urlencoded path>
+                        match disk {
+                            None => (
+                                "HTTP/1.1 503 Service Unavailable\r\n",
+                                "text/plain; charset=utf-8",
+                                String::new(),
+                                b"no TRUEOSFS mounted\n".to_vec(),
+                            ),
+                            Some(disk) => {
+                                let mut extra_headers = String::new();
+                                match http_query_param(target, "path") {
+                                    None => (
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"missing path\n".to_vec(),
+                                    ),
+                                    Some(enc_path) => match http_url_decode(enc_path, 240) {
+                                        None => (
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "text/plain; charset=utf-8",
+                                            extra_headers,
+                                            b"bad path\n".to_vec(),
+                                        ),
+                                        Some(mut path) => {
+                                            while path.starts_with('/') {
+                                                path.remove(0);
+                                            }
+                                            if path.is_empty() || path.contains("..") {
+                                                (
+                                                    "HTTP/1.1 400 Bad Request\r\n",
+                                                    "text/plain; charset=utf-8",
+                                                    extra_headers,
+                                                    b"bad path\n".to_vec(),
+                                                )
+                                            } else {
+                                                match crate::v::fs::trueosfs::file_out_async(disk, path.as_str()).await {
+                                                    Ok(Some(bytes)) => {
+                                                        let fname_raw = path.rsplit('/').next().unwrap_or("download.bin");
+                                                        let fname = http_sanitize_filename(fname_raw);
+                                                        extra_headers.push_str("Content-Disposition: attachment; filename=\"");
+                                                        extra_headers.push_str(fname.as_str());
+                                                        extra_headers.push_str("\"\r\n");
+                                                        (
+                                                            "HTTP/1.1 200 OK\r\n",
+                                                            "application/octet-stream",
+                                                            extra_headers,
+                                                            bytes,
+                                                        )
+                                                    }
+                                                    Ok(None) => (
+                                                        "HTTP/1.1 404 Not Found\r\n",
+                                                        "text/plain; charset=utf-8",
+                                                        extra_headers,
+                                                        b"not found\n".to_vec(),
+                                                    ),
+                                                    Err(_) => (
+                                                        "HTTP/1.1 500 Internal Server Error\r\n",
+                                                        "text/plain; charset=utf-8",
+                                                        extra_headers,
+                                                        b"read failed\n".to_vec(),
+                                                    ),
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                        }
                     } else {
-                        String::from(
-                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title></head><body><h1>TRUEOSFS</h1><p>(no TRUEOSFS mounted)</p></body></html>",
+                        // Build the HTML tree once per request (best-effort).
+                        let tree_html = match disk {
+                            None => None,
+                            Some(disk) => match crate::v::fs::trueosfs::html_tree_async(disk, HTTP_TRUEOSFS_MAX_ENTRIES).await {
+                                Ok(v) => v,
+                                Err(_) => None,
+                            },
+                        };
+
+                        let js = r#"<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem}
+ul{line-height:1.35}
+li{margin:0.15rem 0}
+a{color:#0b66ff;text-decoration:none}
+a:hover{text-decoration:underline}
+</style>
+<script>
+(()=>{
+  function labelForLi(li){
+    for(const n of li.childNodes){
+      if(n.nodeType===Node.TEXT_NODE){
+        const t=(n.textContent||"").trim();
+        if(t) return t;
+      }
+    }
+    return "";
+  }
+  function parentLi(li){
+    let p=li.parentElement;
+    while(p && p.tagName==="UL") p=p.parentElement;
+    return (p && p.tagName==="LI") ? p : null;
+  }
+  function buildPath(li){
+    const parts=[];
+    let cur=li;
+    while(cur){
+      const label=labelForLi(cur);
+      if(label && label!=="/"){
+        let seg=label;
+        if(seg.endsWith("/")) seg=seg.slice(0,-1);
+        if(seg) parts.push(seg);
+      }
+      cur=parentLi(cur);
+    }
+    return parts.reverse().join("/");
+  }
+  for(const li of document.querySelectorAll("ul li")){
+    if(li.querySelector("a")) continue;
+    const label=labelForLi(li);
+    if(!label || label==="/" || label.endsWith("/")) continue;
+    const path=buildPath(li);
+    if(!path) continue;
+    const a=document.createElement("a");
+    a.href="/dl?path="+encodeURIComponent(path);
+    a.textContent=label;
+    a.setAttribute("download", label);
+    const firstText=[...li.childNodes].find(n=>n.nodeType===Node.TEXT_NODE && (n.textContent||"").trim());
+    if(firstText){ li.insertBefore(a, firstText); li.removeChild(firstText); }
+    else { li.insertBefore(a, li.firstChild); }
+  }
+})();
+</script>"#;
+
+                        let body = if let Some(tree) = tree_html {
+                            format!(
+                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
+                                js, tree
+                            )
+                        } else {
+                            format!(
+                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>(no TRUEOSFS mounted)</p></body></html>",
+                                js
+                            )
+                        };
+
+                        (
+                            "HTTP/1.1 200 OK\r\n",
+                            "text/html; charset=utf-8",
+                            String::new(),
+                            body.into_bytes(),
                         )
                     };
 
-                    let header = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.as_bytes().len()
-                    );
+                    let mut header = String::new();
+                    header.push_str(status);
+                    header.push_str("Content-Type: ");
+                    header.push_str(content_type);
+                    header.push_str("\r\n");
+                    if !extra_headers.is_empty() {
+                        header.push_str(extra_headers.as_str());
+                    }
+                    header.push_str("Content-Length: ");
+                    header.push_str(format!("{}", body_bytes.len()).as_str());
+                    header.push_str("\r\nConnection: close\r\n\r\n");
 
                     // Send headers + body in MAX_MSG chunks.
                     for chunk in header.as_bytes().chunks(api::MAX_MSG) {
@@ -291,7 +525,7 @@ pub async fn http_trueosfs_task() {
                         });
                         Timer::after(EmbassyDuration::from_millis(1)).await;
                     }
-                    for chunk in body.as_bytes().chunks(api::MAX_MSG) {
+                    for chunk in body_bytes.as_slice().chunks(api::MAX_MSG) {
                         let _ = vnet.submit(api::Command::SendTcp {
                             handle,
                             data: api::ByteBuf::from_slice_trunc(chunk),
