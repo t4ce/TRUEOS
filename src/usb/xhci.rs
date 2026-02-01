@@ -142,11 +142,6 @@ fn register_xhc(mut info: XhcInfo) {
     let _ = list.push(info);
 }
 
-/// Returns cached information about the first detected xHC hardware block.
-pub fn xhc_info() -> Option<XhcInfo> {
-    FIRST_CONTROLLER.lock().clone()
-}
-
 /// Returns cached information about all detected xHC controllers.
 pub fn xhc_list() -> Vec<XhcInfo, MAX_XHCI_CONTROLLERS> {
     CONTROLLERS.lock().clone()
