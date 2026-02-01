@@ -233,7 +233,7 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 
 /// Minimal plaintext HTTP GET downloader.
 ///
-/// Downloads into the matrix slot blob so users can save it via `io` later.
+/// Downloads into the matrix slot blob so users can save it later.
 #[task]
 pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
     crate::matrix::push_line(slot_id, "get: starting");

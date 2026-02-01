@@ -50,7 +50,6 @@ pub struct IsochOutConfig {
 
 pub struct IsochOutPipe {
     pub ep_target: u32,
-    pub slot_id: u32,
     pub ring: TrbRing,
     pub max_packet: u16,
 }
@@ -220,7 +219,6 @@ impl IsochOutPipe {
 
         Ok(IsochOutPipe {
             ep_target,
-            slot_id,
             ring: ep_ring,
             max_packet: packet_bytes as u16,
         })

@@ -119,10 +119,6 @@ pub fn get_port_vidpid(controller_id: usize, port_id: u8) -> Option<(u16, u16)> 
     Some(((packed >> 16) as u16, (packed & 0xFFFF) as u16))
 }
 
-pub fn set_log_ports_on_init(enable: bool) {
-    LOG_PORTS_ON_INIT.store(enable, Ordering::Release);
-}
-
 fn register_xhc(mut info: XhcInfo) {
     let mut list = CONTROLLERS.lock();
     let id = list.len();
@@ -442,9 +438,6 @@ impl EventRingState {
         }
     }
 
-    fn has_ring(&self) -> bool {
-        self.ring.is_some() && !self.intr0.is_null()
-    }
 }
 
 static EVENT_RING_STATES: [Mutex<EventRingState>; MAX_XHCI_CONTROLLERS] =
@@ -453,8 +446,6 @@ static EVENT_RING_STATES: [Mutex<EventRingState>; MAX_XHCI_CONTROLLERS] =
 /// Software-side state for the xHCI (driver) view of the controller.
 #[derive(Copy, Clone, Debug)]
 pub struct XhciContext {
-    pub caplength: u8,
-    pub hci_version: u16,
     pub hcsparams1: u32,
     pub hcsparams2: u32,
     pub hccparams1: u32,
@@ -483,8 +474,6 @@ impl XhciContext {
         let port_count = ((hcsparams1 >> 24) & 0xFF) as u8;
 
         XhciContext {
-            caplength,
-            hci_version,
             hcsparams1,
             hcsparams2,
             hccparams1,
@@ -586,13 +575,10 @@ pub fn context_index(ep_addr: u8) -> u32 {
 
 // Endpoint context bit helpers (xHCI Rev 1.2, section 6.2.3.6).
 pub const EP_STATE_DISABLED: u32 = 0;
-pub const EP_STATE_RUNNING: u32 = 1;
-
 pub const EP_TYPE_ISOCH_OUT: u32 = 1;
 pub const EP_TYPE_BULK_OUT: u32 = 2;
 pub const EP_TYPE_INT_OUT: u32 = 3;
 pub const EP_TYPE_CONTROL: u32 = 4;
-pub const EP_TYPE_ISOCH_IN: u32 = 5;
 pub const EP_TYPE_BULK_IN: u32 = 6;
 pub const EP_TYPE_INT_IN: u32 = 7;
 
@@ -852,44 +838,6 @@ impl EventRing {
 
         self.update_erdp(intr0);
         Some(trb)
-    }
-
-    pub fn last_trb_phys(&self) -> u64 {
-        if self.count == 0 {
-            return self.phys;
-        }
-        let idx = if self.dequeue == 0 {
-            self.count - 1
-        } else {
-            self.dequeue - 1
-        };
-        self.phys + (idx as u64) * size_of::<Trb>() as u64
-    }
-
-    pub async fn wait_for_trb<F>(
-        &mut self,
-        ctx: &XhciContext,
-        mut predicate: F,
-        timeout_iters: usize,
-        delay: EmbassyDuration,
-    ) -> Option<Trb>
-    where
-        F: FnMut(Trb) -> Option<Trb>,
-    {
-        let intr0 = unsafe { ctx.runtime.add(0x20 / 4) };
-        let mut polls = 0usize;
-        loop {
-            if let Some(evt) = unsafe { self.pop(intr0) } {
-                if let Some(done) = predicate(evt) {
-                    return Some(done);
-                }
-            }
-            polls += 1;
-            if polls > timeout_iters {
-                return None;
-            }
-            Timer::after(delay).await;
-        }
     }
 }
 
@@ -1196,28 +1144,6 @@ where
             return None;
         }
         Timer::after(delay).await;
-    }
-}
-
-pub fn wait_for_event_spin<F>(ctx: &XhciContext, mut predicate: F, spin_iters: usize) -> Option<Trb>
-where
-    F: FnMut(&Trb) -> bool,
-{
-    let mut polls = 0usize;
-    loop {
-        if let Some(evt) = try_take_matching_event(ctx.controller_id, &mut predicate) {
-            return Some(evt);
-        }
-
-        // If we're in a synchronous/blocking context, the async controller poll task may not be
-        // getting scheduled. Actively drain the event ring so transfers can still complete.
-        let _ = pump_one_event(ctx);
-
-        polls += 1;
-        if polls > spin_iters {
-            return None;
-        }
-        core::hint::spin_loop();
     }
 }
 

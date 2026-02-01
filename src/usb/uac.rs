@@ -97,10 +97,6 @@ impl UacSink {
         self.pipe = Some(pipe);
         Ok(())
     }
-
-    fn pipe_mut(&mut self) -> Option<&mut IsochOutPipe> {
-        self.pipe.as_mut()
-    }
 }
 
 pub struct AttachParams<'a> {
@@ -117,7 +113,6 @@ pub struct AttachParams<'a> {
 }
 
 struct UacRuntime {
-    controller_id: usize,
     ctx: XhciContext,
     slot_id: u32,
     pipe_target: u32,
@@ -217,15 +212,6 @@ pub fn take_xfer_event_counters(controller_id: usize) -> (u32, u32, u32) {
     let err = UAC_XFER_ERR[controller_id].swap(0, Ordering::AcqRel);
     let last_cc = UAC_XFER_LAST_CC[controller_id].load(Ordering::Acquire);
     (ok, err, last_cc)
-}
-
-pub fn current_format(controller_id: usize) -> Option<PcmFormat> {
-    let guard = UAC_RUNTIME[controller_id].lock();
-    guard.as_ref().map(|rt| PcmFormat {
-        rate_hz: rt.rate_hz,
-        channels: rt.channels as u8,
-        bits_per_sample: rt.bits_per_sample,
-    })
 }
 
 pub fn demo_queue_depth(controller_id: usize) -> Option<(usize, usize)> {
@@ -737,7 +723,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     let controller_id = ctx.controller_id;
     *UAC_RUNTIME[controller_id].lock() = Some(UacRuntime {
-        controller_id,
         ctx: *ctx,
         slot_id,
         pipe_target,
@@ -818,8 +803,6 @@ pub struct DemoPacketReservation {
     pub buf_virt: *mut u8,
     pub packet_bytes: usize,
     pub payload_bytes: usize,
-    pub max_packet_bytes: usize,
-    pub tick_us: u64,
     pub rate_hz: u32,
     pub channels: u8,
 }
@@ -881,8 +864,6 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
         buf_virt: buf.virt,
         packet_bytes,
         payload_bytes,
-        max_packet_bytes,
-        tick_us,
         rate_hz: rt.rate_hz,
         channels: rt.channels as u8,
     })
