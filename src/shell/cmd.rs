@@ -1034,13 +1034,16 @@ fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
 
     if op.is_empty() || op.eq_ignore_ascii_case("status") {
         let armed = crate::turbo::armed();
-        let status = crate::turbo::local_status();
-        match status {
-            crate::turbo::TurboStatus::Unsupported => {
+        match crate::turbo::local_state() {
+            Ok(st) => {
+                ctx.io.write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
+            }
+            Err(crate::turbo::TurboSetError::Unsupported) => {
                 ctx.io.write_fmt(format_args!("turbo: unsupported (intel-only)\r\n"));
             }
-            crate::turbo::TurboStatus::State(st) => {
-                ctx.io.write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
+            Err(crate::turbo::TurboSetError::Disarmed) => {
+                // Reads should never require arming; keep for forward-compat.
+                ctx.io.write_fmt(format_args!("turbo: disarmed\r\n"));
             }
         }
         if !armed {
@@ -1112,7 +1115,7 @@ fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
         Ok(r) => {
             ctx.io.write_fmt(format_args!(
                 "turbo: requested={} ap_submitted={}/{} busy={} total_cpus={} seq={}\r\n",
-                if enable { "on" } else { "off" },
+                if r.requested_enable { "on" } else { "off" },
                 r.submitted_aps,
                 r.targeted_aps,
                 r.busy_aps,
