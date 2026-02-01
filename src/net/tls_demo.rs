@@ -10,7 +10,8 @@ use heapless::String as HString;
 
 use trueos_v::vnet as vnet;
 
-use crate::v::net::{Queue, VNet};
+use crate::v::net::dns::{self, DnsConfig};
+use crate::v::net::Queue;
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use super::tls::{TlsClientConfig, TlsRoots};
 
@@ -19,10 +20,6 @@ use super::tls::{TlsClientConfig, TlsRoots};
 // hard-coded IP issues and better reflects real HTTPS usage.
 const DEMO_HOST: &str = "example.com";
 const DEMO_PORT: u16 = 443;
-
-// QEMU slirp DNS.
-const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
-const DNS_PORT: u16 = 53;
 
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4)
@@ -403,188 +400,7 @@ fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
-    // Minimal DNS query for <qtype>/IN <host>.
-    let mut q: Vec<u8> = Vec::new();
-    q.extend_from_slice(&id.to_be_bytes());
-    q.extend_from_slice(&0x0100u16.to_be_bytes()); // flags: recursion desired
-    q.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT
-    q.extend_from_slice(&0u16.to_be_bytes()); // ANCOUNT
-    q.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
-    q.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
-
-    for label in host.split('.') {
-        let len = label.len().min(63);
-        q.push(len as u8);
-        q.extend_from_slice(&label.as_bytes()[..len]);
-    }
-    q.push(0);
-
-    // QTYPE, QCLASS=IN (1)
-    q.extend_from_slice(&qtype.to_be_bytes());
-    q.extend_from_slice(&1u16.to_be_bytes());
-    q
-}
-
-fn dns_skip_name(pkt: &[u8], idx: &mut usize) -> bool {
-    // Handles labels + compression pointers.
-    let mut i = *idx;
-    let mut guard = 0;
-    loop {
-        if i >= pkt.len() {
-            return false;
-        }
-        let b = pkt[i];
-        if b == 0 {
-            i += 1;
-            *idx = i;
-            return true;
-        }
-        // compression pointer
-        if (b & 0xC0) == 0xC0 {
-            if i + 1 >= pkt.len() {
-                return false;
-            }
-            i += 2;
-            *idx = i;
-            return true;
-        }
-        let len = b as usize;
-        i += 1 + len;
-        guard += 1;
-        if guard > 64 {
-            return false;
-        }
-    }
-}
-
-fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Result<Option<[u8; 4]>, &'static str> {
-    if pkt.len() < 12 {
-        return Err("dns too short");
-    }
-    let id = u16::from_be_bytes([pkt[0], pkt[1]]);
-    if id != want_id {
-        return Ok(None);
-    }
-    let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
-    let rcode = (flags & 0x000F) as u8;
-    if rcode != 0 {
-        return Err("dns rcode != 0");
-    }
-
-    let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
-    let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
-    let mut idx = 12usize;
-
-    for _ in 0..qd {
-        if !dns_skip_name(pkt, &mut idx) {
-            return Err("dns bad qname");
-        }
-        if idx + 4 > pkt.len() {
-            return Err("dns qtype/qclass truncated");
-        }
-        idx += 4;
-    }
-
-    for _ in 0..an {
-        if !dns_skip_name(pkt, &mut idx) {
-            return Err("dns bad aname");
-        }
-        if idx + 10 > pkt.len() {
-            return Err("dns answer hdr truncated");
-        }
-        let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
-        let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
-        let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
-        idx += 10;
-
-        if idx + rdlen > pkt.len() {
-            return Err("dns rdata truncated");
-        }
-        if typ == 1 && class == 1 && rdlen == 4 {
-            return Ok(Some([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]));
-        }
-        idx += rdlen;
-    }
-
-    Ok(None)
-}
-
-async fn resolve_ipv4_for_device(dev_idx: usize, host: &str) -> Option<[u8; 4]> {
-    let dns_id: u16 = 0xD000u16.wrapping_add(dev_idx as u16);
-
-    let net = VNet::open(dev_idx)?;
-
-    // Use a stable local UDP port (must be non-zero).
-    let local_port: u16 = 53000u16.wrapping_add(dev_idx as u16);
-    let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
-
-    let deadline = Instant::now() + EmbassyDuration::from_millis(1500);
-    let mut udp: Option<vnet::NetHandle> = None;
-    let mut sent = false;
-
-    loop {
-        for _ in 0..64 {
-            let Some(ev) = net.pop_event() else {
-                break;
-            };
-            match ev {
-                vnet::Event::Opened { handle, kind } => {
-                    if kind == vnet::SocketKind::Udp {
-                        udp = Some(handle);
-                    }
-                }
-                vnet::Event::UdpPacket { handle, from, data } => {
-                    if udp != Some(handle) {
-                        continue;
-                    }
-                    if from.port == DNS_PORT && from.addr == SLIRP_DNS_IP {
-                        match dns_parse_first_a(data.as_slice(), dns_id) {
-                            Ok(Some(ip)) => {
-                                let _ = net.submit(vnet::Command::Close { handle });
-                                return Some(ip);
-                            }
-                            Ok(None) => {}
-                            Err(_) => {
-                                let _ = net.submit(vnet::Command::Close { handle });
-                                return None;
-                            }
-                        }
-                    }
-                }
-                vnet::Event::Error { .. } => {}
-                _ => {}
-            }
-        }
-
-        if !sent {
-            if let Some(handle) = udp {
-                let q = dns_query(dns_id, host, 1);
-                let _ = net.submit(vnet::Command::SendUdp {
-                    handle,
-                    remote: vnet::EndpointV4 {
-                        addr: SLIRP_DNS_IP,
-                        port: DNS_PORT,
-                    },
-                    data: vnet::ByteBuf::from_slice_trunc(&q),
-                });
-                sent = true;
-            }
-        }
-
-        if Instant::now() >= deadline {
-            if let Some(handle) = udp {
-                let _ = net.submit(vnet::Command::Close { handle });
-            }
-            return None;
-        }
-
-        Timer::after(EmbassyDuration::from_millis(25)).await;
-    }
-}
-
 static TLS_DEMO_JOB_SEQ: AtomicU32 = AtomicU32::new(1);
-static TLS_DEMO_DNS_SEQ: AtomicU32 = AtomicU32::new(1);
 static TLS_DEMO_PREFERRED_DEV: AtomicU32 = AtomicU32::new(u32::MAX);
 
 fn leak_str(s: alloc::string::String) -> &'static str {
@@ -667,7 +483,7 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
     'redirects: loop {
         crate::matrix::push_line(slot_id, "https: opening tls/tcp");
 
-        let Some(ip) = resolve_ipv4_for_device(dev_idx, target.host).await else {
+        let Ok(ip) = dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::default()).await else {
             crate::log!("tls_demo: dns failed (device={})\n", dev_idx);
             break 'redirects;
         };
