@@ -289,6 +289,8 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         writes_since_checkpoint,
     });
 
+    crate::v::readiness::set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED);
+
     Ok(Some(disk_id))
 }
 

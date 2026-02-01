@@ -384,18 +384,32 @@ pub(crate) async fn boot_cache_pci_ids_task() {
     const URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
     const KEY: &str = "trueos/pci/pci.ids";
 
+    // Boot ordering: the network can come up before the TRUEOSFS root is mounted.
+    // Wait for a root so we can read/write the cache.
+    crate::v::readiness::wait_for(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        crate::log!("pciids: no root disk; skipping url={} key={}\n", URL, KEY);
+        crate::log!("pciids: no root disk after wait; skipping url={} key={}\n", URL, KEY);
         return;
     };
 
     match crate::v::fs::trueosfs::file_exists_async(disk, KEY).await {
         Ok(true) => {
             crate::log!("pciids: cache hit key={}\n", KEY);
-            if let Ok(Some(db)) = crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
-                log_pci_enumeration_with_cached_ids(&db);
+            match crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
+                Ok(Some(db)) => {
+                    log_pci_enumeration_with_cached_ids(&db);
+                    return;
+                }
+                Ok(None) => {
+                    crate::log!("pciids: cache invalid (integrity/read failed); will redownload key={}\n", KEY);
+                    let _ = crate::v::fs::trueosfs::file_delete_async(disk, KEY).await;
+                }
+                Err(e) => {
+                    crate::log!("pciids: cache read failed={:?} key={}\n", e, KEY);
+                    return;
+                }
             }
-            return;
         }
         Ok(false) => {}
         Err(e) => {
@@ -403,6 +417,9 @@ pub(crate) async fn boot_cache_pci_ids_task() {
             return;
         }
     }
+
+    // Only attempt HTTPS download once the network has proven connectivity.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
     let raw = match crate::v::net::https::fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await
     {
