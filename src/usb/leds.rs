@@ -30,10 +30,7 @@ struct LedIfaceInfo {
 pub struct LedRuntime {
     pub controller_id: usize,
     pub slot_id: u32,
-    pub interface: u8,
     pub ep_out_target: u32,
-    pub ep_out_addr: u8,
-    pub ep_out_mps: u16,
     pub ep_out_ring: TrbRing,
     pub out_ring_virt: *mut u8,
     pub out_ring_bytes: usize,
@@ -699,10 +696,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         let _ = guard.push(LedRuntime {
             controller_id: ctx.controller_id,
             slot_id,
-            interface: info.interface,
             ep_out_target: ep_out_target as u32,
-            ep_out_addr,
-            ep_out_mps,
             ep_out_ring,
             out_ring_virt,
             out_ring_bytes,

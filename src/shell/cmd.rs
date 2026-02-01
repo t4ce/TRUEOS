@@ -573,7 +573,6 @@ pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
 pub(crate) fn init_builtin_shell_commands() {
     BUILTINS_ONCE.call_once(|| {
         static ARGS_ARGS: [ArgSpec; 1] = [ArgSpec::new("command", ArgType::Str).mandatory()];
-        static REST_MANDATORY: [ArgSpec; 1] = [ArgSpec::new("rest", ArgType::Rest).mandatory()];
         static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Str)];
         static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
@@ -585,7 +584,6 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
         static PSTATE_ARGS: [ArgSpec; 1] = [ArgSpec::new("ratio", ArgType::U8)];
-        static TXT_ARGS: [ArgSpec; 1] = [ArgSpec::new("slot", ArgType::Str)];
         static SET_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("cols", ArgType::Usize).mandatory(),
             ArgSpec::new("rows", ArgType::Usize).mandatory(),
@@ -596,9 +594,6 @@ pub(crate) fn init_builtin_shell_commands() {
 
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
-        let _ = REGSHCMD("out", &REST_MANDATORY, cmd_out);
-        let _ = REGSHCMD("in", &REST_MANDATORY, cmd_in);
-        let _ = REGSHCMD("io", &REST_MANDATORY, cmd_io);
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd_ecma48);
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
@@ -618,7 +613,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd_pstate);
         let _ = REGSHCMD("cube", &[], cmd_cube);
         let _ = REGSHCMD("ico", &[], cmd_ico);
-        let _ = REGSHCMD("txt", &TXT_ARGS, cmd_txt);
+        let _ = REGSHCMD("txt", &NO_ARGS, cmd_txt);
         let _ = REGSHCMD("insane", &[], cmd_insane);
         let _ = REGSHCMD("usb", &[], cmd_usb);
         let _ = REGSHCMD("pci", &[], cmd_pci);
@@ -698,66 +693,6 @@ fn builtin_args(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) ->
 
     print_usage(ctx.io, cmd);
     print_schema(ctx.io, cmd);
-    super::CommandAction::None
-}
-
-fn cmd_out(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let rest = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
-    let resp = crate::surface::io::shellcmd::handle_out(ctx.spawner, rest);
-    match resp.print {
-        crate::surface::io::shellcmd::PrintAction::None => {}
-        crate::surface::io::shellcmd::PrintAction::One(a) => ctx.io.write_str(a),
-        crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-            ctx.io.write_str(a);
-            ctx.io.write_str(b);
-        }
-        crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-            ctx.io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-        }
-    }
-    if resp.refresh_symbols {
-        crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-    }
-    super::CommandAction::None
-}
-
-fn cmd_in(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let rest = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
-    let resp = crate::surface::io::shellcmd::handle_in(ctx.spawner, rest);
-    match resp.print {
-        crate::surface::io::shellcmd::PrintAction::None => {}
-        crate::surface::io::shellcmd::PrintAction::One(a) => ctx.io.write_str(a),
-        crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-            ctx.io.write_str(a);
-            ctx.io.write_str(b);
-        }
-        crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-            ctx.io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-        }
-    }
-    if resp.refresh_symbols {
-        crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-    }
-    super::CommandAction::None
-}
-
-fn cmd_io(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let rest = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
-    let resp = crate::surface::io::shellcmd::handle_io(ctx.spawner, rest);
-    match resp.print {
-        crate::surface::io::shellcmd::PrintAction::None => {}
-        crate::surface::io::shellcmd::PrintAction::One(a) => ctx.io.write_str(a),
-        crate::surface::io::shellcmd::PrintAction::Two(a, b) => {
-            ctx.io.write_str(a);
-            ctx.io.write_str(b);
-        }
-        crate::surface::io::shellcmd::PrintAction::Started(label, slot) => {
-            ctx.io.write_fmt(format_args!("{}: started §{}\r\n", label, slot + 1));
-        }
-    }
-    if resp.refresh_symbols {
-        crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-    }
     super::CommandAction::None
 }
 
@@ -1042,13 +977,7 @@ fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     let arg = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("").trim();
 
     if !arg.is_empty() {
-        if let Some(slot_id) = crate::surface::io::shellcmd::parse_slot_ref(arg) {
-            let mut filename: heapless::String<48> = heapless::String::new();
-            let _ = write!(filename, "§{}", slot_id + 1);
-            return super::CommandAction::EnterTxtEdt { filename, slot_id };
-        }
-
-        ctx.io.write_str("txt: argument is not a file path here; use `out <path>` then `txt §N`\r\n");
+        ctx.io.write_str("txt: argument no longer supported\r\n");
     }
 
     let Some(slot_id) = crate::matrix::alloc_slot("txt") else {
