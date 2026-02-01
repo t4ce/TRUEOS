@@ -790,48 +790,6 @@ pub async fn scsi_inquiry_basic(
     scsi::parse_inquiry_basic(&data).ok_or(())
 }
 
-pub fn scsi_inquiry_basic_sync(
-    ctx: &XhciContext,
-    ring_out: &mut TrbRing,
-    ring_in: &mut TrbRing,
-    slot_id: u32,
-    ep_out_target: u32,
-    ep_in_target: u32,
-    tag: u32,
-) -> Result<scsi::InquiryBasic, ()> {
-    let cdb = scsi::cdb_inquiry(36);
-    let mut data = [0u8; 64];
-
-    let csw = bot_command_sync(
-        ctx,
-        ring_out,
-        ring_in,
-        slot_id,
-        ep_out_target,
-        ep_in_target,
-        tag,
-        &cdb,
-        Some(&mut data),
-    )?;
-
-    if csw.status != BotStatus::Passed {
-        if let Some(sense) = scsi_request_sense_fixed_sync(
-            ctx,
-            ring_out,
-            ring_in,
-            slot_id,
-            ep_out_target,
-            ep_in_target,
-            tag.wrapping_add(1),
-        ) {
-            log_request_sense("inquiry", &sense);
-        }
-        return Err(());
-    }
-
-    scsi::parse_inquiry_basic(&data).ok_or(())
-}
-
 pub async fn scsi_read_capacity_10(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
@@ -871,74 +829,6 @@ pub async fn scsi_read_capacity_10(
     scsi::parse_read_capacity_10(&data).ok_or(())
 }
 
-pub fn scsi_read_capacity_10_sync(
-    ctx: &XhciContext,
-    ring_out: &mut TrbRing,
-    ring_in: &mut TrbRing,
-    slot_id: u32,
-    ep_out_target: u32,
-    ep_in_target: u32,
-    tag: u32,
-) -> Result<scsi::Capacity10, ()> {
-    let cdb = scsi::cdb_read_capacity_10();
-    let mut data = [0u8; 16];
-
-    let csw = bot_command_sync(
-        ctx,
-        ring_out,
-        ring_in,
-        slot_id,
-        ep_out_target,
-        ep_in_target,
-        tag,
-        &cdb,
-        Some(&mut data),
-    )?;
-
-    if csw.status != BotStatus::Passed {
-        if let Some(sense) = scsi_request_sense_fixed_sync(
-            ctx,
-            ring_out,
-            ring_in,
-            slot_id,
-            ep_out_target,
-            ep_in_target,
-            tag.wrapping_add(1),
-        ) {
-            log_request_sense("read-capacity", &sense);
-        }
-        return Err(());
-    }
-
-    scsi::parse_read_capacity_10(&data).ok_or(())
-}
-
-pub fn scsi_read_10_sync(
-    ctx: &XhciContext,
-    ring_out: &mut TrbRing,
-    ring_in: &mut TrbRing,
-    slot_id: u32,
-    ep_out_target: u32,
-    ep_in_target: u32,
-    tag: u32,
-    lba: u32,
-    blocks: u16,
-    out: &mut [u8],
-) -> Result<Csw, ()> {
-    let cdb = scsi::cdb_read_10(lba, blocks);
-    bot_command_sync(
-        ctx,
-        ring_out,
-        ring_in,
-        slot_id,
-        ep_out_target,
-        ep_in_target,
-        tag,
-        &cdb,
-        Some(out),
-    )
-}
-
 pub async fn scsi_read_10(
     ctx: &XhciContext,
     ring_out: &mut TrbRing,
@@ -964,32 +854,6 @@ pub async fn scsi_read_10(
         Some(out),
     )
     .await
-}
-
-pub fn scsi_write_10_sync(
-    ctx: &XhciContext,
-    ring_out: &mut TrbRing,
-    ring_in: &mut TrbRing,
-    slot_id: u32,
-    ep_out_target: u32,
-    ep_in_target: u32,
-    tag: u32,
-    lba: u32,
-    blocks: u16,
-    data: &[u8],
-) -> Result<Csw, ()> {
-    let cdb = scsi::cdb_write_10(lba, blocks);
-    bot_command_sync_out(
-        ctx,
-        ring_out,
-        ring_in,
-        slot_id,
-        ep_out_target,
-        ep_in_target,
-        tag,
-        &cdb,
-        data,
-    )
 }
 
 pub async fn scsi_write_10(
