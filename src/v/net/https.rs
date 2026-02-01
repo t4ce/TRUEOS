@@ -306,6 +306,10 @@ async fn fetch_on_device(
     let capture_cap = max_bytes.saturating_add(64 * 1024);
     let mut plaintext: Vec<u8> = Vec::new();
 
+    // Once we've seen complete headers, try to finish early (without waiting for TCP/TLS close)
+    // when the response body is complete (Content-Length or chunked terminator).
+    let mut hdr_end_cached: Option<usize> = None;
+
     loop {
         for ev in events.drain(64) {
             match ev {
@@ -349,6 +353,60 @@ async fn fetch_on_device(
                             }
                             return Err(FetchError::ResponseTooLarge);
                         }
+
+                        // If we have enough data to fully satisfy the response, finish now.
+                        let hdr_end = match hdr_end_cached {
+                            Some(v) => v,
+                            None => {
+                                let v = find_http_header_end(&plaintext);
+                                if let Some(v) = v {
+                                    hdr_end_cached = Some(v);
+                                }
+                                v.unwrap_or(0)
+                            }
+                        };
+                        if hdr_end != 0 {
+                            let headers = &plaintext[..hdr_end];
+                            let body = &plaintext[hdr_end..];
+
+                            let status = parse_http_status(&plaintext).unwrap_or(0);
+                            if status != 200 {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                return Err(FetchError::Http(status));
+                            }
+
+                            let is_chunked =
+                                header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            if is_chunked {
+                                if let Some(decoded) = decode_http_chunked(body) {
+                                    if decoded.len() > max_bytes {
+                                        if let Some(h) = tls_handle {
+                                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                                        }
+                                        return Err(FetchError::ResponseTooLarge);
+                                    }
+                                    if let Some(h) = tls_handle {
+                                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                                    }
+                                    return Ok(decoded);
+                                }
+                            } else if let Some(len) = header_parse_content_length(headers) {
+                                if body.len() >= len {
+                                    let mut out = body[..len].to_vec();
+                                    if out.len() > max_bytes {
+                                        if let Some(h) = tls_handle {
+                                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                                        }
+                                        return Err(FetchError::ResponseTooLarge);
+                                    }
+                                    if let Some(h) = tls_handle {
+                                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                                    }
+                                    return Ok(out);
+                                }
+                            }
                     }
                 }
                 TlsEvent::Closed { handle } => {
