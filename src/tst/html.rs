@@ -182,6 +182,7 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                     }
                     api::SocketKind::Udp => {}
                 },
+                api::Event::UdpPacket { .. } => {}
                 api::Event::TcpEstablished { handle } => {
                     if tcp_handle != Some(handle) {
                         continue;
