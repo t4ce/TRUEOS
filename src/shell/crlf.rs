@@ -40,8 +40,3 @@ pub(crate) fn write_bytes_crlf(
 
     last_was_cr.store(prev_cr, Ordering::Relaxed);
 }
-
-#[inline]
-pub(crate) fn reset_state(last_was_cr: &AtomicBool) {
-    last_was_cr.store(false, Ordering::Relaxed);
-}
