@@ -1,4 +1,4 @@
-use super::cdc::{self, CdcInterface};
+use super::cdc;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
@@ -16,7 +16,6 @@ use spin::Mutex;
 const MAX_CDC_DEVICES: usize = 2;
 const MAX_CDC_CALLBACKS: usize = 4;
 const CDC_TX_QUEUE_CAP: usize = 16 * 1024;
-const CDC_RX_QUEUE_CAP: usize = 2 * 1024;
 const CDC_DMA_CHUNK: usize = 512;
 
 #[repr(C, packed)]
@@ -38,7 +37,6 @@ pub struct AttachParams<'a> {
     pub dev_ctx_virt: *mut u8,
     pub ctx_stride_bytes: usize,
     pub ctx_stride_words: usize,
-    pub speed_code: u32,
     pub target_port: u8,
     pub desired_baud: u32,
 }
@@ -51,26 +49,8 @@ pub struct CdcAttachEvent {
     pub pid: u16,
 }
 
-/// Serial port handle for CDC-ACM transports.
-#[derive(Clone, Copy, Debug)]
-pub struct CdcSerialPort {
-    controller_id: usize,
-    slot_id: u32,
-}
-
-impl CdcSerialPort {
-    pub fn slot_id(&self) -> u32 {
-        self.slot_id
-    }
-
-    pub fn controller_id(&self) -> usize {
-        self.controller_id
-    }
-}
-
 struct CdcRuntime {
     controller_id: usize,
-    info: CdcInterface,
     slot_id: u32,
     vid: u16,
     pid: u16,
@@ -84,11 +64,9 @@ struct CdcRuntime {
     tx_dma_len: usize,
     tx_inflight: bool,
     rx_dma_phys: u64,
-    rx_dma_virt: *mut u8,
     rx_dma_len: usize,
     rx_posted: bool,
     tx_queue: Deque<u8, CDC_TX_QUEUE_CAP>,
-    rx_queue: Deque<u8, CDC_RX_QUEUE_CAP>,
     tx_waker: Option<Waker>,
 }
 
@@ -180,44 +158,15 @@ impl CdcRuntime {
                 self.slot_id
             );
         }
-        let requested = self.rx_dma_len as u32;
-        let consumed = requested.saturating_sub(residual.min(requested));
-        unsafe {
-            for idx in 0..(consumed as usize) {
-                let byte = *self.rx_dma_virt.add(idx);
-                let _ = self.rx_queue.push_back(byte);
-            }
-        }
+        let _ = residual;
         let _ = self.post_rx_locked();
     }
 }
 
 static CDC_RUNTIMES: Mutex<Vec<CdcRuntime, MAX_CDC_DEVICES>> = Mutex::new(Vec::new());
 
-static TX_COMPLETE_CALLBACK: Mutex<Option<fn(u32)>> = Mutex::new(None);
-
 static ATTACH_CALLBACKS: Mutex<Vec<fn(CdcAttachEvent), MAX_CDC_CALLBACKS>> = Mutex::new(Vec::new());
 static DETACH_CALLBACKS: Mutex<Vec<fn(CdcAttachEvent), MAX_CDC_CALLBACKS>> = Mutex::new(Vec::new());
-
-pub fn set_tx_complete_callback(cb: Option<fn(u32)>) {
-    *TX_COMPLETE_CALLBACK.lock() = cb;
-}
-
-pub fn set_attach_callback(cb: Option<fn(CdcAttachEvent)>) {
-    let mut guard = ATTACH_CALLBACKS.lock();
-    guard.clear();
-    if let Some(cb) = cb {
-        let _ = guard.push(cb);
-    }
-}
-
-pub fn set_detach_callback(cb: Option<fn(CdcAttachEvent)>) {
-    let mut guard = DETACH_CALLBACKS.lock();
-    guard.clear();
-    if let Some(cb) = cb {
-        let _ = guard.push(cb);
-    }
-}
 
 pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
     let mut guard = ATTACH_CALLBACKS.lock();
@@ -334,7 +283,7 @@ fn tx_queue_has_room(controller_id: usize, slot_id: u32) -> bool {
         .unwrap_or(false)
 }
 
-pub fn queue_tx_bytes(controller_id: usize, slot_id: u32, data: &[u8]) -> usize {
+fn queue_tx_bytes(controller_id: usize, slot_id: u32, data: &[u8]) -> usize {
     with_runtime_mut_by_slot(controller_id, slot_id, |runtime| {
         let mut written = 0usize;
         for &byte in data {
@@ -349,10 +298,6 @@ pub fn queue_tx_bytes(controller_id: usize, slot_id: u32, data: &[u8]) -> usize 
         written
     })
     .unwrap_or(0)
-}
-
-pub fn pop_rx_byte(controller_id: usize, slot_id: u32) -> Option<u8> {
-    with_runtime_mut_by_slot(controller_id, slot_id, |runtime| runtime.rx_queue.pop_front()).flatten()
 }
 
 pub(crate) async fn write_all(controller_id: usize, slot_id: u32, mut data: &[u8]) -> usize {
@@ -392,25 +337,6 @@ pub(crate) async fn write_all(controller_id: usize, slot_id: u32, mut data: &[u8
     total
 }
 
-pub fn device_ids(controller_id: usize, slot_id: u32) -> Option<(u16, u16)> {
-    let guard = CDC_RUNTIMES.lock();
-    guard
-        .iter()
-        .find(|rt| rt.controller_id == controller_id && rt.slot_id == slot_id)
-        .map(|rt| (rt.vid, rt.pid))
-}
-
-pub fn serial_port(controller_id: usize, slot_id: u32) -> Option<CdcSerialPort> {
-    if runtime_exists(controller_id, slot_id) {
-        Some(CdcSerialPort {
-            controller_id,
-            slot_id,
-        })
-    } else {
-        None
-    }
-}
-
 pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     let slot_id = ((evt.d3 >> 24) & 0xFF) as u32;
     let ep_target = (evt.d3 >> 16) & 0x1F;
@@ -433,9 +359,6 @@ pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     .unwrap_or(false);
 
     if handled && tx_complete {
-        if let Some(cb) = *TX_COMPLETE_CALLBACK.lock() {
-            cb(slot_id);
-        }
         wake_tx(controller_id, slot_id);
     }
 
@@ -620,7 +543,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     let runtime = CdcRuntime {
         controller_id: ctx.controller_id,
-        info: interface,
         slot_id,
         vid: dev_vid,
         pid: dev_pid,
@@ -638,7 +560,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         rx_dma_len: CDC_DMA_CHUNK,
         rx_posted: false,
         tx_queue: Deque::new(),
-        rx_queue: Deque::new(),
         tx_waker: None,
     };
 
