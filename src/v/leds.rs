@@ -41,6 +41,7 @@ enum LedCmd {
         data: Vec<Rgb8, LED_POOL_SIZE>,
     },
     SetEffect { owner: u32, effect: Effect },
+    #[allow(dead_code)]
     RawOut {
         owner: u32,
         report_id: u8,
@@ -200,6 +201,7 @@ impl VLed {
         });
     }
 
+    #[allow(dead_code)]
     pub(crate) fn send_raw_out(&self, report_id: u8, data: &[u8]) {
         let mut v: Vec<u8, 64> = Vec::new();
         let _ = v.extend_from_slice(&data[..core::cmp::min(data.len(), 64)]);
@@ -312,6 +314,7 @@ pub async fn task() {
     let mut last_offline: bool = true;
     let mut last_sent_rgb: Option<Rgb8> = None;
     let mut last_effect: Option<Effect> = None;
+    let mut last_effect_owner: Option<u32> = None;
 
     loop {
         let online = crate::usb::leds::is_online();
@@ -328,8 +331,11 @@ pub async fn task() {
                 LedCmd::SetData { owner, data } => {
                     apply_set_data(*owner, data.as_slice());
                 }
-                LedCmd::SetEffect { effect, .. } => {
-                    last_effect = Some(*effect);
+                LedCmd::SetEffect { owner, effect } => {
+                    if scope_range(*owner).is_some() {
+                        last_effect = Some(*effect);
+                        last_effect_owner = Some(*owner);
+                    }
                 }
                 LedCmd::RawOut {
                     report_id, data, ..
@@ -342,6 +348,13 @@ pub async fn task() {
         }
 
         if online {
+            let effect_ok = last_effect_owner
+                .and_then(|owner| scope_range(owner))
+                .is_some();
+            if !effect_ok {
+                last_effect = None;
+                last_effect_owner = None;
+            }
             let desired_rgb = mixed_rgb_from_pool();
             if last_offline || last_sent_rgb != Some(desired_rgb) {
                 let (rid, data) = encode_set_rgb(desired_rgb);
@@ -375,6 +388,8 @@ pub async fn color_cycle_task() {
         crate::log!("v_leds: alloc(5) failed\n");
         return;
     };
+
+    led_a.set_effect(Effect::Rainbow);
 
     loop {
         let t = crate::time::uptime_seconds();

@@ -584,6 +584,7 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
         static PSTATE_ARGS: [ArgSpec; 1] = [ArgSpec::new("ratio", ArgType::U8)];
+        static TURBO_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static SET_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("cols", ArgType::Usize).mandatory(),
             ArgSpec::new("rows", ArgType::Usize).mandatory(),
@@ -611,6 +612,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("set", &SET_ARGS, cmd_set);
         let _ = REGSHCMD("idle", &IDLE_ARGS, cmd_idle);
         let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd_pstate);
+        let _ = REGSHCMD("turbo", &TURBO_ARGS, cmd_turbo);
         let _ = REGSHCMD("cube", &[], cmd_cube);
         let _ = REGSHCMD("ico", &[], cmd_ico);
         let _ = REGSHCMD("txt", &NO_ARGS, cmd_txt);
@@ -960,6 +962,77 @@ fn cmd_pstate(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> s
     match crate::power::set_pstate_ratio(req) {
         Ok(applied) => ctx.io.write_fmt(format_args!("pstate: applied {}\r\n", applied)),
         Err(err) => ctx.io.write_fmt(format_args!("pstate: failed: {}\r\n", err)),
+    }
+
+    super::CommandAction::None
+}
+
+fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let op = args
+        .and_then(|a| a.get(0))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if op.is_empty() || op.eq_ignore_ascii_case("status") {
+        let armed = crate::turbo::armed();
+        let status = crate::turbo::local_status();
+        match status {
+            crate::turbo::TurboStatus::Unsupported => {
+                ctx.io.write_fmt(format_args!("turbo: unsupported (intel-only)\r\n"));
+            }
+            crate::turbo::TurboStatus::State(st) => {
+                ctx.io.write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
+            }
+        }
+        if !armed {
+            ctx.io.write_str("turbo: writes are disarmed (run 'turbo arm')\r\n");
+        }
+        return super::CommandAction::None;
+    }
+
+    if op.eq_ignore_ascii_case("arm") {
+        crate::turbo::set_armed(true);
+        ctx.io.write_str("turbo: armed\r\n");
+        return super::CommandAction::None;
+    }
+    if op.eq_ignore_ascii_case("disarm") {
+        crate::turbo::set_armed(false);
+        ctx.io.write_str("turbo: disarmed\r\n");
+        return super::CommandAction::None;
+    }
+
+    let enable = if op.eq_ignore_ascii_case("on") {
+        Some(true)
+    } else if op.eq_ignore_ascii_case("off") {
+        Some(false)
+    } else {
+        None
+    };
+
+    let Some(enable) = enable else {
+        ctx.io.write_str("turbo: usage turbo [status|arm|disarm|on|off]\r\n");
+        return super::CommandAction::None;
+    };
+
+    match crate::turbo::set_enabled_all(enable) {
+        Ok(r) => {
+            ctx.io.write_fmt(format_args!(
+                "turbo: requested={} ap_submitted={}/{} busy={} total_cpus={} seq={}\r\n",
+                if enable { "on" } else { "off" },
+                r.submitted_aps,
+                r.targeted_aps,
+                r.busy_aps,
+                r.total_cpus,
+                r.seq
+            ));
+        }
+        Err(crate::turbo::TurboSetError::Disarmed) => {
+            ctx.io.write_str("turbo: msr disarmed (run 'turbo arm')\r\n");
+        }
+        Err(crate::turbo::TurboSetError::Unsupported) => {
+            ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
+        }
     }
 
     super::CommandAction::None

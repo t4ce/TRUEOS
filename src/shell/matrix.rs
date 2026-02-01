@@ -2,7 +2,7 @@ use alloc::vec::Vec as AVec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String, Vec as HVec};
 use spin::Mutex;
 
