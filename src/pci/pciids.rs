@@ -421,7 +421,7 @@ pub(crate) async fn boot_cache_pci_ids_task() {
     // Only attempt HTTPS download once the network has proven connectivity.
     crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
-    let raw = match crate::v::net::https::fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await
+    let raw = match crate::v::net::https::fetch_https_body_async(URL, 120_000, 4 * 1024 * 1024).await
     {
         Ok(b) => b,
         Err(e) => {
