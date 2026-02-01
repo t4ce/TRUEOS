@@ -1,4 +1,5 @@
 pub mod html;
+pub mod smoke_fs;
 
 use embassy_executor::task;
 
@@ -45,29 +46,29 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
 
         let mut ok = false;
         for attempt in 1..=60u32 {
-            let rc = unsafe {
-                crate::surface::io::cabi::trueos_cabi_net_fetch_to_file(
-                    url_bytes.as_ptr(),
-                    url_bytes.len(),
-                    path.as_ptr(),
-                    path.len(),
-                )
-            };
-
-            if rc == 0 {
+            match crate::v::net::https::fetch_https_to_file_async(
+                url,
+                path_str,
+                30_000,
+                4 * 1024 * 1024,
+            )
+            .await
+            {
+            Ok(()) => {
                 crate::log!("fetch-smoke: ok url={} cache={}\n", url, path_str);
                 ok = true;
                 break;
             }
-
-            crate::log!(
-                "fetch-smoke: attempt={} rc={} ({}) url={} cache={}\n",
-                attempt,
-                rc,
-                crate::surface::io::cabi::code_name(rc),
-                url,
-                path_str
-            );
+            Err(rc) => {
+                crate::log!(
+                    "fetch-smoke: attempt={} rc={} url={} cache={}\n",
+                    attempt,
+                    rc,
+                    url,
+                    path_str
+                );
+            }
+            }
             Timer::after_millis(500).await;
         }
 

@@ -346,11 +346,20 @@ pub fn lookup_vendor_device_from_db<'a>(
 pub fn lookup_vendor_device_cached(
     vid: u16,
     did: u16,
-) -> Result<Option<(alloc::string::String, alloc::string::String)>, crate::surface::io::kfs::FsError> {
+) -> Result<
+    Option<(alloc::string::String, alloc::string::String)>,
+    crate::disc::block::Error,
+> {
     use alloc::string::String;
 
-    const PATH: &str = "/trueos/pci/pci.ids";
-    let db = crate::surface::io::kfs::read_file(PATH)?;
+    const KEY: &str = "trueos/pci/pci.ids";
+    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        return Ok(None);
+    };
+    let Some(db) = crate::time::block_on(crate::v::fs::trueosfs::file_out_async(disk, KEY))?
+    else {
+        return Ok(None);
+    };
 
     let Some((v, d)) = lookup_vendor_device_from_db(&db, vid, did) else {
         return Ok(None);
@@ -369,95 +378,76 @@ fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
     crate::pci::log_devices_with_pci_ids(db);
 }
 
-/// Fetch and cache the `pci.ids` database on the USBMS FAT filesystem.
-///
 /// The download is skipped if the destination file already exists.
 #[task]
 pub(crate) async fn boot_cache_pci_ids_task() {
-    use embassy_time::Timer;
-
     const URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
-    const PATH: &str = "/trueos/pci/pci.ids";
+    const KEY: &str = "trueos/pci/pci.ids";
 
-    for attempt in 1..=60u32 {
-        match crate::surface::io::kfs::exists_async(PATH).await {
-            Ok(true) => {
-                crate::log!("pciids: cache hit path={}\n", PATH);
-                if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
-                    log_pci_enumeration_with_cached_ids(&db);
-                }
-                return;
-            }
-            Ok(false) => {}
-            Err(_) => {}
-        }
+    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        crate::log!("pciids: no root disk; skipping url={} key={}\n", URL, KEY);
+        return;
+    };
 
-        // Ensure the cache directory exists before downloading.
-        // If USBMS/FAT isn't ready yet, don't waste network bandwidth.
-        if let Some((parent, _name)) = PATH.rsplit_once('/') {
-            if !parent.is_empty() {
-                if let Err(e) = crate::surface::io::kfs::create_dir_all(parent) {
-                    crate::log!(
-                        "pciids: attempt={} fs_not_ready={:?} url={} path={}\n",
-                        attempt,
-                        e,
-                        URL,
-                        PATH
-                    );
-                    Timer::after_millis(500).await;
-                    continue;
-                }
-            }
-        }
-
-        let raw = match crate::surface::io::cabi::net_fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await {
-            Ok(b) => b,
-            Err(rc) => {
-                crate::log!(
-                    "pciids: attempt={} rc={} ({}) url={} path={}\n",
-                    attempt,
-                    rc,
-                    crate::surface::io::cabi::code_name(rc),
-                    URL,
-                    PATH
-                );
-                Timer::after_millis(500).await;
-                continue;
-            }
-        };
-
-        let cleaned = sanitize_pci_ids(&raw);
-        let tmp = alloc::format!("{}.tmp", PATH);
-        let write_res = crate::surface::io::kfs::write_file_async(tmp.as_str(), &cleaned).await;
-        let rename_res = match write_res {
-            Ok(()) => crate::surface::io::kfs::rename_async(tmp.as_str(), PATH).await,
-            Err(e) => Err(e),
-        };
-        if rename_res.is_ok() {
-            crate::log!(
-                "pciids: downloaded+sanitized ok url={} path={} bytes_in={} bytes_out={}\n",
-                URL,
-                PATH,
-                raw.len(),
-                cleaned.len(),
-            );
-            if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
+    match crate::v::fs::trueosfs::file_exists_async(disk, KEY).await {
+        Ok(true) => {
+            crate::log!("pciids: cache hit key={}\n", KEY);
+            if let Ok(Some(db)) = crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
                 log_pci_enumeration_with_cached_ids(&db);
             }
             return;
         }
-
-        let _ = crate::surface::io::kfs::remove_async(tmp.as_str()).await;
-        crate::log!(
-            "pciids: attempt={} write_failed={:?} rename_failed={:?} url={} path={}\n",
-            attempt,
-            write_res.err(),
-            rename_res.err(),
-            URL,
-            PATH
-        );
-        Timer::after_millis(500).await;
+        Ok(false) => {}
+        Err(e) => {
+            crate::log!("pciids: exists check failed={:?} key={}\n", e, KEY);
+            return;
+        }
     }
 
-    crate::log!("pciids: giving up after retries url={} path={}\n", URL, PATH);
+    let raw = match crate::v::net::https::fetch_https_body_async(URL, 30_000, 4 * 1024 * 1024).await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            crate::log!("pciids: download failed={:?} url={}\n", e, URL);
+            return;
+        }
+    };
+
+    let cleaned = sanitize_pci_ids(&raw);
+    let tmp = alloc::format!("{}.tmp", KEY);
+
+    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &cleaned).await {
+        Ok(true) => {}
+        Ok(false) => {
+            crate::log!("pciids: write failed (no space?) tmp={}\n", tmp);
+            return;
+        }
+        Err(e) => {
+            crate::log!("pciids: write failed={:?} tmp={}\n", e, tmp);
+            return;
+        }
+    }
+
+    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), KEY).await {
+        Ok(true) => {
+            crate::log!(
+                "pciids: downloaded+sanitized ok url={} key={} bytes_in={} bytes_out={}\n",
+                URL,
+                KEY,
+                raw.len(),
+                cleaned.len(),
+            );
+            if let Ok(Some(db)) = crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
+                log_pci_enumeration_with_cached_ids(&db);
+            }
+        }
+        Ok(false) => {
+            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            crate::log!("pciids: rename failed tmp={} key={}\n", tmp, KEY);
+        }
+        Err(e) => {
+            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            crate::log!("pciids: rename failed={:?} tmp={} key={}\n", e, tmp, KEY);
+        }
+    }
 }

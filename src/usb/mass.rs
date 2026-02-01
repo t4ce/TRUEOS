@@ -614,11 +614,11 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         // Doing this synchronously here can stall USB enumeration and starve xHCI poll tasks.
         crate::v::fs::trueosfs::request_mount_root(handle);
 
-        // If we're booting from a single USB pen drive, trigger the TrueOSFS BSP smoke test
+        // If we're booting from a single USB pen drive, trigger the TrueOSFS smoke test
         // after USB mass storage has registered into the block registry.
-        // This is intentionally deferred (see `bsp_smoke_service_task`) to avoid stalling
+        // This is intentionally deferred (see `crate::tst::smoke_fs::bsp_smoke_service_task`) to avoid stalling
         // USB enumeration with synchronous filesystem I/O.
-        crate::v::fs::trueosfs::request_bsp_smoke_test();
+        crate::tst::smoke_fs::request_bsp_smoke_test();
     }
 
     Ok(())

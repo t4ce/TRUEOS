@@ -256,7 +256,7 @@ pub extern "C" fn kmain() -> ! {
     }
 
     // Runs only after being requested (e.g. when USBMS registers).
-    let _ = spawner.spawn(crate::v::fs::trueosfs::bsp_smoke_service_task());
+    let _ = spawner.spawn(crate::tst::smoke_fs::bsp_smoke_service_task());
     // Handles deferred TRUEOSFS probing/mount requests from hotplug drivers.
     let _ = spawner.spawn(crate::v::fs::trueosfs::mount_service_task());
 
@@ -434,7 +434,7 @@ unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
 fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
     let mut counter: u64 = 0;
     loop {
-        crate::smp::poll();
+        
         if counter % 10_000_000 == 0 {
             vga::draw_header_square(
                 total,
@@ -442,6 +442,7 @@ fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
                 vga::DEFAULT_SHADOW_COLOR,
                 (counter % 360) as u32,
             );
+            crate::smp::poll();
         }
         if counter % 100_000_000 == 0 {
             globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);

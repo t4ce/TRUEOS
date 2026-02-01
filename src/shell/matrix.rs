@@ -234,20 +234,6 @@ pub fn push_line(slot_id: u8, line: &str) {
     push_line_into_lines(&mut data.lines, line);
 }
 
-pub fn clear_lines(slot_id: u8) {
-    let Some(slot) = slot_ref(slot_id) else {
-        return;
-    };
-    if !slot.used.load(Ordering::Acquire) {
-        return;
-    }
-    let mut data = slot.data.lock();
-    if !slot.used.load(Ordering::Acquire) {
-        return;
-    }
-    data.lines.clear();
-}
-
 /// Overwrites the slot blob with `bytes` (no size cap).
 ///
 /// Returns `false` only if the slot is missing.
@@ -283,11 +269,6 @@ pub fn take_blob(slot_id: u8) -> Option<AVec<u8>> {
         return None;
     }
     Some(core::mem::take(&mut data.blob))
-}
-
-/// Clones the slot blob.
-pub fn blob_snapshot(slot_id: u8) -> Option<AVec<u8>> {
-    with_slot(slot_id, |s| s.blob.clone())
 }
 
 pub fn set_state(slot_id: u8, state: SlotState) {
@@ -671,22 +652,19 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     log_line(slot_id, &mut blob, alloc::format!("update: BOOTX64 url={}", BOOTX64_URL).as_str());
     log_line(slot_id, &mut blob, alloc::format!("update: kernel url={}", KERNEL_URL).as_str());
 
-    let bootx64 = match crate::surface::io::cabi::net_fetch_https_body_blocking(
+    let bootx64 = match crate::v::net::https::fetch_https_body_async(
         BOOTX64_URL,
         60_000,
         8 * 1024 * 1024,
-    ) {
+    )
+    .await
+    {
         Ok(b) => b,
-        Err(rc) => {
+        Err(e) => {
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!(
-                    "update: BOOTX64 download failed rc={} ({})",
-                    rc,
-                    crate::surface::io::cabi::code_name(rc)
-                )
-                .as_str(),
+                alloc::format!("update: BOOTX64 download failed ({:?})", e).as_str(),
             );
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);
@@ -694,22 +672,19 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         }
     };
 
-    let kernel = match crate::surface::io::cabi::net_fetch_https_body_blocking(
+    let kernel = match crate::v::net::https::fetch_https_body_async(
         KERNEL_URL,
         60_000,
         64 * 1024 * 1024,
-    ) {
+    )
+    .await
+    {
         Ok(b) => b,
-        Err(rc) => {
+        Err(e) => {
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!(
-                    "update: kernel download failed rc={} ({})",
-                    rc,
-                    crate::surface::io::cabi::code_name(rc)
-                )
-                .as_str(),
+                alloc::format!("update: kernel download failed ({:?})", e).as_str(),
             );
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);

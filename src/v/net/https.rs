@@ -1,0 +1,710 @@
+extern crate alloc;
+
+use alloc::{boxed::Box, format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+
+use trueos_v::vnet as vnet;
+
+use super::{Queue, VNet};
+use crate::net::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+
+/// Errors returned by [`fetch_https_body_async`].
+#[derive(Clone, Debug)]
+pub enum FetchError {
+    NoNic,
+    BadUrl,
+    DnsFailed,
+    Timeout,
+    Tls,
+    Http(u16),
+    ResponseTooLarge,
+}
+
+// Keep these return codes compatible with the existing TRUEOS C ABI (used by QJS).
+pub const FS_ERR_BAD_UTF8: i32 = -1;
+pub const FS_ERR_IO: i32 = -2;
+pub const FS_ERR_NO_SPACE: i32 = -3;
+pub const FS_ERR_BAD_PARAM: i32 = -4;
+pub const FS_ERR_USBMS_NOT_FOUND: i32 = -5;
+pub const FS_ERR_BAD_PATH: i32 = -6;
+pub const FS_ERR_TOO_LARGE: i32 = -7;
+pub const FS_ERR_NOT_FOUND: i32 = -8;
+pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
+
+pub const NET_ERR_BAD_URL: i32 = -10;
+pub const NET_ERR_TIMEOUT: i32 = -11;
+pub const NET_ERR_HTTP: i32 = -12;
+pub const NET_ERR_TLS: i32 = -13;
+
+#[inline]
+fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
+    use crate::disc::block::Error;
+    match err {
+        Error::InvalidParam | Error::OutOfBounds => FS_ERR_BAD_PARAM,
+        Error::NotReady => FS_ERR_USBMS_NOT_FOUND,
+        Error::Corrupted
+        | Error::Io
+        | Error::Timeout
+        | Error::NotSupported
+        | Error::DmaUnavailable
+        | Error::MmioMapFailed => FS_ERR_IO,
+    }
+}
+
+#[inline]
+fn fetch_error_to_code(err: FetchError) -> i32 {
+    match err {
+        FetchError::NoNic => NET_ERR_TIMEOUT,
+        FetchError::BadUrl => NET_ERR_BAD_URL,
+        FetchError::DnsFailed => NET_ERR_TIMEOUT,
+        FetchError::Timeout => NET_ERR_TIMEOUT,
+        FetchError::Tls => NET_ERR_TLS,
+        FetchError::Http(_) => NET_ERR_HTTP,
+        FetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
+    }
+}
+
+fn normalize_rel(path: &str, allow_empty: bool) -> Result<String, i32> {
+    let mut out = String::new();
+    let t = path.trim();
+    if t.is_empty() {
+        return if allow_empty { Ok(out) } else { Err(FS_ERR_BAD_PATH) };
+    }
+
+    for part in t.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return Err(FS_ERR_BAD_PATH);
+        }
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+
+    if out.is_empty() && !allow_empty {
+        return Err(FS_ERR_BAD_PATH);
+    }
+    Ok(out)
+}
+
+#[derive(Clone, Debug)]
+struct ParsedHttpsUrl {
+    host: String,
+    port: u16,
+    path: String,
+}
+
+fn parse_https_url(url: &str) -> Option<ParsedHttpsUrl> {
+    let url = url.strip_prefix("https://")?;
+
+    // Split authority and path.
+    let (authority, path) = match url.split_once('/') {
+        Some((a, p)) => (a, format!("/{}", p)),
+        None => (url, String::from("/")),
+    };
+
+    if authority.is_empty() {
+        return None;
+    }
+
+    // Parse optional ":port" in authority.
+    let (host, port) = if let Some((h, p)) = authority.rsplit_once(':') {
+        // Only treat as port if digits.
+        if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            let port = p.parse::<u16>().ok()?;
+            (String::from(h), port)
+        } else {
+            (String::from(authority), 443)
+        }
+    } else {
+        (String::from(authority), 443)
+    };
+
+    if host.is_empty() {
+        return None;
+    }
+
+    Some(ParsedHttpsUrl { host, port, path })
+}
+
+// QEMU slirp DNS.
+const SLIRP_DNS_IP: [u8; 4] = [10, 0, 2, 3];
+const DNS_PORT: u16 = 53;
+
+fn dns_query(id: u16, host: &str, qtype: u16) -> Vec<u8> {
+    // Minimal DNS query for <qtype>/IN <host>.
+    let mut q: Vec<u8> = Vec::new();
+    q.extend_from_slice(&id.to_be_bytes());
+    q.extend_from_slice(&0x0100u16.to_be_bytes()); // flags: recursion desired
+    q.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT
+    q.extend_from_slice(&0u16.to_be_bytes()); // ANCOUNT
+    q.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT
+    q.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT
+
+    for label in host.split('.') {
+        let len = label.len().min(63);
+        q.push(len as u8);
+        q.extend_from_slice(&label.as_bytes()[..len]);
+    }
+    q.push(0);
+
+    // QTYPE, QCLASS=IN (1)
+    q.extend_from_slice(&qtype.to_be_bytes());
+    q.extend_from_slice(&1u16.to_be_bytes());
+    q
+}
+
+fn dns_skip_name(pkt: &[u8], idx: &mut usize) -> bool {
+    // Handles labels + compression pointers.
+    let mut i = *idx;
+    let mut guard = 0;
+    loop {
+        if i >= pkt.len() {
+            return false;
+        }
+        let b = pkt[i];
+        if b == 0 {
+            i += 1;
+            *idx = i;
+            return true;
+        }
+        // compression pointer
+        if (b & 0xC0) == 0xC0 {
+            if i + 1 >= pkt.len() {
+                return false;
+            }
+            i += 2;
+            *idx = i;
+            return true;
+        }
+        let len = b as usize;
+        i += 1 + len;
+        guard += 1;
+        if guard > 64 {
+            return false;
+        }
+    }
+}
+
+fn dns_parse_first_a(pkt: &[u8], want_id: u16) -> Option<[u8; 4]> {
+    if pkt.len() < 12 {
+        return None;
+    }
+    let id = u16::from_be_bytes([pkt[0], pkt[1]]);
+    if id != want_id {
+        return None;
+    }
+    let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
+    let rcode = (flags & 0x000F) as u8;
+    if rcode != 0 {
+        return None;
+    }
+
+    let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+    let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
+    let mut idx = 12usize;
+
+    for _ in 0..qd {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 4 > pkt.len() {
+            return None;
+        }
+        idx += 4;
+    }
+
+    for _ in 0..an {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 10 > pkt.len() {
+            return None;
+        }
+        let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
+        let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
+        let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
+        idx += 10;
+
+        if idx + rdlen > pkt.len() {
+            return None;
+        }
+        if typ == 1 && class == 1 && rdlen == 4 {
+            return Some([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]);
+        }
+        idx += rdlen;
+    }
+
+    None
+}
+
+async fn resolve_ipv4_for_device(dev_idx: usize, host: &str) -> Option<[u8; 4]> {
+    let dns_id: u16 = 0xE000u16.wrapping_add(dev_idx as u16);
+
+    let net = VNet::open(dev_idx)?;
+
+    // Use a stable local UDP port (must be non-zero).
+    let local_port: u16 = 54000u16.wrapping_add(dev_idx as u16);
+    let _ = net.submit(vnet::Command::OpenUdp { port: local_port });
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(1500);
+    let mut udp: Option<vnet::NetHandle> = None;
+    let mut sent = false;
+
+    loop {
+        for _ in 0..64 {
+            let Some(ev) = net.pop_event() else {
+                break;
+            };
+            match ev {
+                vnet::Event::Opened { handle, kind } => {
+                    if kind == vnet::SocketKind::Udp {
+                        udp = Some(handle);
+                    }
+                }
+                vnet::Event::UdpPacket { handle, from, data } => {
+                    if udp != Some(handle) {
+                        continue;
+                    }
+                    if from.port == DNS_PORT && from.addr == SLIRP_DNS_IP {
+                        if let Some(ip) = dns_parse_first_a(data.as_slice(), dns_id) {
+                            let _ = net.submit(vnet::Command::Close { handle });
+                            return Some(ip);
+                        }
+                    }
+                }
+                vnet::Event::Error { .. } => {}
+                _ => {}
+            }
+        }
+
+        if !sent {
+            if let Some(handle) = udp {
+                let q = dns_query(dns_id, host, 1);
+                let _ = net.submit(vnet::Command::SendUdp {
+                    handle,
+                    remote: vnet::EndpointV4 {
+                        addr: SLIRP_DNS_IP,
+                        port: DNS_PORT,
+                    },
+                    data: vnet::ByteBuf::from_slice_trunc(&q),
+                });
+                sent = true;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(handle) = udp {
+                let _ = net.submit(vnet::Command::Close { handle });
+            }
+            return None;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+}
+
+fn parse_http_status(buf: &[u8]) -> Option<u16> {
+    // Expect: HTTP/1.1 200 ...\r\n
+    if !buf.starts_with(b"HTTP/") {
+        return None;
+    }
+    let mut i = 0;
+    while i < buf.len() && buf[i] != b' ' {
+        i += 1;
+    }
+    while i < buf.len() && buf[i] == b' ' {
+        i += 1;
+    }
+    if i + 3 > buf.len() {
+        return None;
+    }
+    let a = *buf.get(i)?;
+    let b = *buf.get(i + 1)?;
+    let c = *buf.get(i + 2)?;
+    if !a.is_ascii_digit() || !b.is_ascii_digit() || !c.is_ascii_digit() {
+        return None;
+    }
+    Some(((a - b'0') as u16) * 100 + ((b - b'0') as u16) * 10 + ((c - b'0') as u16))
+}
+
+fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    // Case-insensitive header match. Returns trimmed value bytes.
+    let mut i = 0;
+    while i < headers.len() {
+        let line_start = i;
+        while i < headers.len() && headers[i] != b'\n' {
+            i += 1;
+        }
+        let mut line = &headers[line_start..i];
+        if i < headers.len() && headers[i] == b'\n' {
+            i += 1;
+        }
+        if let Some((&b'\r', rest)) = line.split_last() {
+            line = rest;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
+        };
+        let (k, mut v) = line.split_at(colon);
+        // Skip ':'
+        v = v.get(1..).unwrap_or(&[]);
+        if k.len() != name.len() {
+            continue;
+        }
+        if !k.iter()
+            .zip(name.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+        {
+            continue;
+        }
+        while !v.is_empty() && (v[0] == b' ' || v[0] == b'\t') {
+            v = &v[1..];
+        }
+        return Some(v);
+    }
+    None
+}
+
+fn header_value_contains_token(value: &[u8], token: &[u8]) -> bool {
+    let v = value
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect::<Vec<u8>>();
+    let t = token
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect::<Vec<u8>>();
+
+    v.split(|b| *b == b',' || *b == b' ' || *b == b'\t')
+        .any(|part| part == t.as_slice())
+}
+
+fn header_contains_token(headers: &[u8], name: &[u8], token: &[u8]) -> bool {
+    let Some(v) = header_get_value(headers, name) else {
+        return false;
+    };
+    header_value_contains_token(v, token)
+}
+
+fn header_parse_content_length(headers: &[u8]) -> Option<usize> {
+    let v = header_get_value(headers, b"content-length")?;
+    let v = core::str::from_utf8(v).ok()?;
+    v.trim().parse::<usize>().ok()
+}
+
+fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
+    // Minimal chunked decoder. Returns decoded bytes if fully present.
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+
+    loop {
+        // Read chunk size line.
+        let line_end = body[i..].windows(2).position(|w| w == b"\r\n")?;
+        let line = &body[i..i + line_end];
+        i += line_end + 2;
+
+        // Strip extensions.
+        let line = line.split(|b| *b == b';').next().unwrap_or(line);
+        let line_str = core::str::from_utf8(line).ok()?;
+        let size = usize::from_str_radix(line_str.trim(), 16).ok()?;
+
+        if size == 0 {
+            // Ignore trailers; we're done.
+            return Some(out);
+        }
+
+        if i + size > body.len() {
+            return None;
+        }
+        out.extend_from_slice(&body[i..i + size]);
+        i += size;
+
+        // Expect CRLF after data.
+        if i + 2 > body.len() || &body[i..i + 2] != b"\r\n" {
+            return None;
+        }
+        i += 2;
+    }
+}
+
+static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
+
+async fn fetch_on_device(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let Some(ip) = resolve_ipv4_for_device(dev_idx, parsed.host.as_str()).await else {
+        return Err(FetchError::DnsFailed);
+    };
+
+    let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
+    // Suffix with "@<idx>" so tls-socket can pin the underlying TCP socket to the chosen NIC.
+    let owner = leak_str(format!("vhttps-{}@{}", seq, dev_idx));
+    let cmds_name = leak_str(format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(format!("{}-tls-evt", owner));
+
+    let cmds = Queue::new_leaked(cmds_name, 128);
+    let events = Queue::new_leaked(evts_name, 128);
+    register_tls_app_queues(owner, cmds, events);
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+
+    let mut tls_handle: Option<vnet::NetHandle> = None;
+    let mut sent_connect = false;
+    let mut http_sent = false;
+
+    // Capture plaintext up to (headers + body cap). We parse after close.
+    // Keep this bounded even if a server misbehaves.
+    let capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut plaintext: Vec<u8> = Vec::new();
+
+    loop {
+        for ev in events.drain(64) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    tls_handle = Some(handle);
+                }
+                TlsEvent::Connected { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if !http_sent {
+                        let req = format!(
+                            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                            parsed.path,
+                            parsed.host
+                        );
+                        let _ = cmds.push(TlsCommand::Send {
+                            handle,
+                            data: req.into_bytes(),
+                        });
+                        http_sent = true;
+                    }
+                }
+                TlsEvent::Data { handle, data } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if !data.is_empty() {
+                        let room = capture_cap.saturating_sub(plaintext.len());
+                        if room == 0 {
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Err(FetchError::ResponseTooLarge);
+                        }
+                        let take = data.len().min(room);
+                        plaintext.extend_from_slice(&data[..take]);
+                        if take < data.len() {
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Err(FetchError::ResponseTooLarge);
+                        }
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+
+                    let Some(hdr_end) = find_http_header_end(&plaintext) else {
+                        return Err(FetchError::Http(0));
+                    };
+                    let headers = &plaintext[..hdr_end];
+                    let body = &plaintext[hdr_end..];
+
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+                    if status != 200 {
+                        return Err(FetchError::Http(status));
+                    }
+
+                    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let mut decoded_body = if is_chunked {
+                        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                    } else if let Some(len) = header_parse_content_length(headers) {
+                        body.get(..len).unwrap_or(body).to_vec()
+                    } else {
+                        body.to_vec()
+                    };
+
+                    if decoded_body.len() > max_bytes {
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    // Trim any accidental leading/trailing whitespace? No: callers want exact bytes.
+                    return Ok(decoded_body);
+                }
+                TlsEvent::Error { .. } => {
+                    // Keep waiting; underlying net can emit transient errors.
+                }
+                TlsEvent::TlsError { .. } => {
+                    if let Some(h) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                    }
+                    return Err(FetchError::Tls);
+                }
+            }
+        }
+
+        if !sent_connect {
+            let _ = cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+            });
+            sent_connect = true;
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
+            }
+            return Err(FetchError::Timeout);
+        }
+
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+/// Fetch an HTTPS URL and return the response body.
+///
+/// Notes:
+/// - This is a minimal HTTP/1.1-over-TLS client intended for boot-time fetching.
+/// - Tries each NIC index once (useful when multiple devices exist but only one is wired).
+pub async fn fetch_https_body_async(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    if crate::net::mac_address().is_none() {
+        return Err(FetchError::NoNic);
+    }
+
+    let parsed = parse_https_url(url).ok_or(FetchError::BadUrl)?;
+
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return Err(FetchError::NoNic);
+    }
+
+    let mut last_err: Option<FetchError> = None;
+    for dev_idx in 0..dev_count {
+        match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes).await {
+            Ok(v) => return Ok(v),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    Err(last_err.unwrap_or(FetchError::DnsFailed))
+}
+
+/// Fetch a URL into a TRUEOSFS key (cache file).
+///
+/// Behavior matches the old surface `trueos_cabi_net_fetch_to_file`:
+/// - if `path` already exists: success
+/// - otherwise: download body (capped), write `path.tmp`, then rename into place
+pub async fn fetch_https_to_file_async(
+    url: &str,
+    path: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<(), i32> {
+    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        return Err(FS_ERR_USBMS_NOT_FOUND);
+    };
+
+    let key = normalize_rel(path, false)?;
+
+    match crate::v::fs::trueosfs::file_exists_async(disk, key.as_str()).await {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(e) => return Err(block_error_to_code(e)),
+    }
+
+    let body = fetch_https_body_async(url, timeout_ms, max_bytes)
+        .await
+        .map_err(fetch_error_to_code)?;
+
+    let tmp = format!("{}.tmp", key);
+    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &body).await {
+        Ok(true) => {}
+        Ok(false) => return Err(FS_ERR_NO_SPACE),
+        Err(e) => return Err(block_error_to_code(e)),
+    }
+
+    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            Err(FS_ERR_IO)
+        }
+        Err(e) => {
+            let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+            Err(block_error_to_code(e))
+        }
+    }
+}
+
+/// TRUEOS C ABI: fetch an HTTPS URL to a cache file.
+///
+/// This symbol is used by the QuickJS module loader.
+#[no_mangle]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
+    url_ptr: *const u8,
+    url_len: usize,
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    if url_ptr.is_null() || url_len == 0 || path_ptr.is_null() || path_len == 0 {
+        return FS_ERR_BAD_PARAM;
+    }
+
+    let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+    let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+        return FS_ERR_BAD_UTF8;
+    };
+    let Ok(path_s) = core::str::from_utf8(path_bytes) else {
+        return FS_ERR_BAD_UTF8;
+    };
+
+    // Match the old behavior: fixed limits and timeout.
+    const TIMEOUT_MS: u32 = 30_000;
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+
+    match crate::time::block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
+        Ok(()) => 0,
+        Err(rc) => rc,
+    }
+}
