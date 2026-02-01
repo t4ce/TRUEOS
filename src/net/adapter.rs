@@ -998,10 +998,8 @@ pub async fn net_shell_task() {
         return;
     }
 
-    if crate::net::mac_address().is_none() {
-        crate::log!("net-shell: disabled (no NIC)\n");
-        return;
-    }
+    // Permanent FSM gating: do not start until the network is actually usable.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
     const OWNER: &'static str = "net-shell";
 

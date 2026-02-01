@@ -573,6 +573,8 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     Timer::after(EmbassyDuration::from_millis(1)).await;
 
     let mut blob: AVec<u8> = AVec::new();
+    log_line(slot_id, &mut blob, "update: waiting for net");
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
     // These URLs are expected to be hosted alongside the published installer artifacts.
     // The server should serve the raw files (not inside a .7z) so the kernel doesn't need

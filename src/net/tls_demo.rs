@@ -419,18 +419,16 @@ pub async fn tls_demo_matrix_job(slot_id: u8, host_arg: HString<96>) {
 pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     crate::matrix::push_line(slot_id, "https: rustls demo starting");
 
-    if crate::net::mac_address().is_none() {
-        crate::matrix::push_line(slot_id, "https: disabled (no NIC)");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        return;
-    }
+    // Permanent FSM gating: do not run until the network is actually usable.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
-    let dev_count = crate::net::device_count();
-    if dev_count == 0 {
-        crate::matrix::push_line(slot_id, "https: disabled (no NIC)");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        return;
-    }
+    let dev_count = loop {
+        let c = crate::net::device_count();
+        if c > 0 {
+            break c;
+        }
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    };
 
     let initial_host: &'static str = if host_arg.is_empty() {
         DEMO_HOST

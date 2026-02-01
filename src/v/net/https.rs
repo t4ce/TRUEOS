@@ -8,7 +8,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use trueos_v::vnet as vnet;
 
 use super::dns::{self, DnsConfig};
-use super::{Queue, VNet};
+use super::Queue;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 

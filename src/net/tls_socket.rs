@@ -201,10 +201,8 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
 
 #[task]
 pub async fn tls_socket_service_task() {
-    if crate::net::mac_address().is_none() {
-        crate::log!("tls-socket: disabled (no NIC)\n");
-        return;
-    }
+    // Permanent FSM gating: do not run until the network is actually usable.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
     crate::log!("tls-socket: service running\n");
 

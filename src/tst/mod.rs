@@ -14,6 +14,13 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
     // prefetch any external polyfill here (which also avoids DNS flakes during early boot).
     const URLS: [&str; 1] = ["https://esm.sh/left-pad@1.3.0"];
 
+    // Permanent FSM gating: do not attempt network fetches or filesystem caching
+    // until both the network and the TRUEOSFS root are actually usable.
+    crate::v::readiness::wait_for(
+        crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
+
     // Retry: USBMS/FAT may not be ready yet when the executor starts.
     for &url in &URLS {
         let url_bytes = url.as_bytes();
@@ -44,41 +51,21 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
 
         let path_str = core::str::from_utf8(&path).unwrap_or("<non-utf8>");
 
-        let mut ok = false;
-        for attempt in 1..=60u32 {
-            match crate::v::net::https::fetch_https_to_file_async(
-                url,
-                path_str,
-                30_000,
-                4 * 1024 * 1024,
-            )
-            .await
-            {
+        match crate::v::net::https::fetch_https_to_file_async(
+            url,
+            path_str,
+            30_000,
+            4 * 1024 * 1024,
+        )
+        .await
+        {
             Ok(()) => {
                 crate::log!("fetch-smoke: ok url={} cache={}\n", url, path_str);
-                ok = true;
-                break;
             }
             Err(rc) => {
-                crate::log!(
-                    "fetch-smoke: attempt={} rc={} url={} cache={}\n",
-                    attempt,
-                    rc,
-                    url,
-                    path_str
-                );
+                crate::log!("fetch-smoke: failed rc={} url={} cache={}\n", rc, url, path_str);
+                return;
             }
-            }
-            Timer::after_millis(500).await;
-        }
-
-        if !ok {
-            crate::log!(
-                "fetch-smoke: giving up after retries url={} cache={}\n",
-                url,
-                path_str
-            );
-            return;
         }
     }
 
@@ -89,10 +76,12 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
 
 #[task]
 pub(crate) async fn boot_cheerio_smoke_task() {
-    use embassy_time::Timer;
-
-    // Give the network + USBMS/FAT some time to settle.
-    Timer::after_millis(1500).await;
+    // Permanent FSM gating: do not run until both the network and the TRUEOSFS root
+    // are actually usable.
+    crate::v::readiness::wait_for(
+        crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED,
+    )
+    .await;
 
     crate::log!("qjs-cheerio-smoke: starting\n");
     unsafe { trueos_qjs::trueos_smoke::run_cheerio_smoke() };

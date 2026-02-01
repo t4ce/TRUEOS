@@ -116,11 +116,8 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
     crate::matrix::push_line(slot_id, "get: starting");
 
-    if crate::net::mac_address().is_none() {
-        crate::matrix::push_line(slot_id, "get: disabled (no NIC)");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        return;
-    }
+    // Permanent FSM gating: do not run until the network is actually usable.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
     let parsed = match parse_http_url(url.as_str()) {
         Ok(p) => p,
@@ -150,10 +147,11 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
         crate::matrix::push_line(slot_id, line.as_str());
     }
 
-    let Some(net) = VNet::open_primary() else {
-        crate::matrix::push_line(slot_id, "get: disabled (no vnet)");
-        crate::matrix::set_state(slot_id, crate::matrix::SlotState::Failed);
-        return;
+    let net = loop {
+        if let Some(v) = VNet::open_primary() {
+            break v;
+        }
+        Timer::after(EmbassyDuration::from_millis(50)).await;
     };
 
     let _ = net.submit(api::Command::OpenTcpConnect {
