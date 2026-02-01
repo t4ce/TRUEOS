@@ -18,10 +18,6 @@ fn read_u32(base: *const u8, off: usize) -> u32 {
     unsafe { core::ptr::read_unaligned(base.add(off) as *const u32) }
 }
 
-fn read_u64(base: *const u8, off: usize) -> u64 {
-    unsafe { core::ptr::read_unaligned(base.add(off) as *const u64) }
-}
-
 pub fn log_once() {
     LOG_ONCE.call_once(|| {
         let Some(tables) = ensure_tables() else {
