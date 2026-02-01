@@ -658,7 +658,6 @@ pub async fn format_and_populate_esp_fat32_with_log(
             image.limine_conf.len() as u32,
         );
         dir[off..off + 32].copy_from_slice(&de);
-        off += 32;
 
         write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_boot, &dir, log)
             .await?;

@@ -43,6 +43,7 @@ mod tst;
 mod surface;
 mod tga;
 mod time;
+mod smp;
 mod turbo;
 mod efi;
 mod usb;
@@ -124,12 +125,16 @@ fn install_cpu_slot_table_owned(slots: Vec<CpuSlot>) {
 }
 
 fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) -> Vec<CpuSlot> {
-    let mut items: Vec<(u32, (u32, u32, u32))> = Vec::new();
+    // Important invariant for per-CPU mailboxes and other "slot indexed" data:
+    // BSP must always be slot 0.
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
-    items.push((bsp_lapic_id, topo.decode(bsp_lapic_id)));
 
+    let mut items: Vec<(u32, (u32, u32, u32))> = Vec::new();
     for cpu in resp.cpus() {
         let lapic_id = cpu.lapic_id as u32;
+        if lapic_id == bsp_lapic_id {
+            continue;
+        }
         items.push((lapic_id, topo.decode(lapic_id)));
     }
 
@@ -139,7 +144,12 @@ fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) 
         (a_pkg, a_core, a_smt, a_id).cmp(&(b_pkg, b_core, b_smt, b_id))
     });
 
-    let mut slots: Vec<CpuSlot> = Vec::with_capacity(items.len());
+    let mut slots: Vec<CpuSlot> = Vec::with_capacity(items.len() + 1);
+    slots.push(CpuSlot {
+        lapic_id: bsp_lapic_id,
+        slot: 0,
+    });
+
     for (lapic_id, _) in items {
         if slots.iter().any(|s| s.lapic_id == lapic_id) {
             continue;
@@ -233,6 +243,8 @@ pub extern "C" fn kmain() -> ! {
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
     log_cpu_topology_once(&resp);
+    smp::init(resp.cpus().len() + 1);
+    smp::mark_online();
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
@@ -412,6 +424,8 @@ unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     let total = TOTAL_SLOTS.load(Ordering::Acquire);
     let slot = slot_for_lapic_id(cpu.lapic_id as u32, total);
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
+    crate::smp::mark_online();
+    exceptions::load_this_cpu();
     ap_loop(cpu.lapic_id as u32, total, slot)
 }
 
@@ -420,6 +434,7 @@ unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
 fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
     let mut counter: u64 = 0;
     loop {
+        crate::smp::poll();
         if counter % 10_000_000 == 0 {
             vga::draw_header_square(
                 total,

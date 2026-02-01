@@ -462,7 +462,6 @@ impl XhciContext {
     pub unsafe fn new(info: XhcInfo) -> Self {
         let cap = info.mmio_base.as_ptr();
         let caplength = read_volatile(cap.add(0x00) as *const u8);
-        let hci_version = read_volatile(cap.add(0x02) as *const u16);
         let hcsparams1 = read_volatile(cap.add(0x04) as *const u32);
         let hcsparams2 = read_volatile(cap.add(0x08) as *const u32);
         let hccparams1 = read_volatile(cap.add(0x10) as *const u32);
