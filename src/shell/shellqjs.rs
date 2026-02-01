@@ -5,7 +5,10 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell::{ShellBackend, ShellIo};
 
-static mut QJS_SHELL_IO: Option<&'static dyn ShellBackend> = None;
+#[repr(C)]
+struct QjsShellOpaque {
+    io: &'static dyn ShellBackend,
+}
 
 unsafe extern "C" fn qjs_shell_print(
     ctx: *mut trueos_qjs::JSContext,
@@ -13,9 +16,11 @@ unsafe extern "C" fn qjs_shell_print(
     argc: c_int,
     argv: *const trueos_qjs::JSValueConst,
 ) -> trueos_qjs::JSValue {
-    let io = match unsafe { QJS_SHELL_IO } {
-        Some(io) => io,
-        None => return trueos_qjs::JSValue::undefined(),
+    let opaque = unsafe { trueos_qjs::JS_GetContextOpaque(ctx) } as *const QjsShellOpaque;
+    let io = if opaque.is_null() {
+        return trueos_qjs::JSValue::undefined();
+    } else {
+        unsafe { (*opaque).io }
     };
 
     io.write_str("qjs: ");
@@ -613,7 +618,9 @@ pub(crate) fn eval_bytes_opts(
             return;
         }
 
-        QJS_SHELL_IO = Some(io);
+        let opaque = Box::new(QjsShellOpaque { io });
+        let opaque_ptr = Box::into_raw(opaque);
+        trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
 
         // Install globalThis.print(...)
         let global = trueos_qjs::JS_GetGlobalObject(ctx);
@@ -669,7 +676,11 @@ pub(crate) fn eval_bytes_opts(
         }
         trueos_qjs::js_free_value(ctx, val);
 
-        QJS_SHELL_IO = None;
+        let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
+        if !opaque_ptr.is_null() {
+            trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+            drop(Box::from_raw(opaque_ptr));
+        }
 
         trueos_qjs::JS_FreeContext(ctx);
         trueos_qjs::JS_FreeRuntime(rt);
@@ -699,7 +710,9 @@ pub(crate) async fn eval_bytes_opts_async(
             return;
         }
 
-        QJS_SHELL_IO = Some(io);
+        let opaque = Box::new(QjsShellOpaque { io });
+        let opaque_ptr = Box::into_raw(opaque);
+        trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
 
         // Install globalThis.print(...)
         let global = trueos_qjs::JS_GetGlobalObject(ctx);
@@ -755,7 +768,11 @@ pub(crate) async fn eval_bytes_opts_async(
         // Best-effort: reject/cleanup any unresolved async fs ops.
         trueos_qjs::async_ops::drain_all_for_context(ctx);
 
-        QJS_SHELL_IO = None;
+        let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
+        if !opaque_ptr.is_null() {
+            trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+            drop(Box::from_raw(opaque_ptr));
+        }
         trueos_qjs::JS_FreeContext(ctx);
         trueos_qjs::JS_FreeRuntime(rt);
     }
