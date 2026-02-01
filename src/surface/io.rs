@@ -315,18 +315,10 @@ pub mod kfs {
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
 	use alloc::vec::Vec;
-	use alloc::boxed::Box;
 	use alloc::string::{String, ToString};
 	use core::sync::atomic::{AtomicU32, Ordering};
 	use embassy_time::{Duration as EmbassyDuration, Timer};
 	use spin::Mutex;
-
-	static QJS_NET_SEQ: AtomicU32 = AtomicU32::new(1);
-
-	#[inline]
-	fn next_qjs_net_seq() -> u32 {
-		QJS_NET_SEQ.fetch_add(1, Ordering::Relaxed)
-	}
 
 	#[repr(u32)]
 	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -344,18 +336,6 @@ pub mod cabi {
 	pub const FS_ERR_TOO_LARGE: i32 = -7;
 	pub const FS_ERR_NOT_FOUND: i32 = -8;
 	pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
-
-	pub const NET_ERR_BAD_URL: i32 = -10;
-	pub const NET_ERR_TIMEOUT: i32 = -11;
-	pub const NET_ERR_HTTP: i32 = -12;
-	pub const NET_ERR_TLS: i32 = -13;
-
-	// More granular timeout diagnostics (same “class” as NET_ERR_TIMEOUT).
-	// These intentionally live far from the base codes to avoid collisions.
-	pub const NET_ERR_TIMEOUT_DNS: i32 = -111;
-	pub const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
-	pub const NET_ERR_TIMEOUT_HEADERS: i32 = -113;
-	pub const NET_ERR_TIMEOUT_BODY: i32 = -114;
 
 	#[inline]
 	fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
@@ -380,33 +360,6 @@ pub mod cabi {
 		}
 	}
 
-	/// Best-effort symbolic name for a TRUEOS C ABI return code.
-	///
-	/// Intended for logs and error messages (stable string values help when triaging).
-	#[inline]
-	pub fn code_name(code: i32) -> &'static str {
-		match code {
-			0 => "OK",
-			FS_ERR_BAD_UTF8 => "FS_ERR_BAD_UTF8",
-			FS_ERR_IO => "FS_ERR_IO",
-			FS_ERR_NO_SPACE => "FS_ERR_NO_SPACE",
-			FS_ERR_BAD_PARAM => "FS_ERR_BAD_PARAM",
-			FS_ERR_USBMS_NOT_FOUND => "FS_ERR_USBMS_NOT_FOUND",
-			FS_ERR_BAD_PATH => "FS_ERR_BAD_PATH",
-			FS_ERR_TOO_LARGE => "FS_ERR_TOO_LARGE",
-			FS_ERR_NOT_FOUND => "FS_ERR_NOT_FOUND",
-			FS_ERR_ALREADY_EXISTS => "FS_ERR_ALREADY_EXISTS",
-			NET_ERR_BAD_URL => "NET_ERR_BAD_URL",
-			NET_ERR_TIMEOUT => "NET_ERR_TIMEOUT",
-			NET_ERR_HTTP => "NET_ERR_HTTP",
-			NET_ERR_TLS => "NET_ERR_TLS",
-			NET_ERR_TIMEOUT_DNS => "NET_ERR_TIMEOUT_DNS",
-			NET_ERR_TIMEOUT_CONNECT => "NET_ERR_TIMEOUT_CONNECT",
-			NET_ERR_TIMEOUT_HEADERS => "NET_ERR_TIMEOUT_HEADERS",
-			NET_ERR_TIMEOUT_BODY => "NET_ERR_TIMEOUT_BODY",
-			_ => "UNKNOWN",
-		}
-	}
 
 	#[inline]
 	pub fn write_bytes(stream: CStream, bytes: &[u8]) {
@@ -434,238 +387,6 @@ pub mod cabi {
 		if bytes.is_null() || len == 0 {
 			return;
 		}
-
-		let stream = match stream {
-			2 => CStream::Stderr,
-			_ => CStream::Stdout,
-		};
-
-		let slice = core::slice::from_raw_parts(bytes, len);
-		write_bytes(stream, slice);
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
-		if cstr.is_null() {
-			return;
-		}
-
-		// Best-effort cap to avoid pathological scans if the pointer is bogus.
-		// (This does not prevent faults if the pointer is invalid/unmapped.)
-		const MAX: usize = 16 * 1024;
-
-		let mut len = 0usize;
-		while len < MAX {
-			if *cstr.add(len) == 0 {
-				break;
-			}
-			len += 1;
-		}
-
-		if len == 0 {
-			return;
-		}
-
-		trueos_cabi_write(stream, cstr, len);
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_copy_cstr_into(
-		dst: *mut u8,
-		cap: usize,
-		cstr: *const u8,
-	) -> i32 {
-		if dst.is_null() || cap == 0 {
-			return 0;
-		}
-
-		if cstr.is_null() {
-			*dst = 0;
-			return 0;
-		}
-
-		let mut i = 0usize;
-		while i + 1 < cap {
-			let b = *cstr.add(i);
-			if b == 0 {
-				break;
-			}
-			*dst.add(i) = b;
-			i += 1;
-		}
-
-		*dst.add(i) = 0;
-		i as i32
-	}
-
-	/// Returns the Limine-provided boot timestamp (seconds since Unix epoch), or 0 if unavailable.
-	///
-	/// Exposed as a C ABI so embedded C/Rust subsystems (QuickJS shims) can obtain a best-effort
-	/// realtime base without depending on kernel-internal Rust modules.
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
-		crate::limine::boot_timestamp_secs().unwrap_or(0)
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_read_file(
-		path_ptr: *const u8,
-		path_len: usize,
-		out_ptr: *mut u8,
-		out_cap: usize,
-	) -> isize {
-		if path_ptr.is_null() || path_len == 0 {
-			return FS_ERR_BAD_PARAM as isize;
-		}
-		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
-		let Ok(path) = core::str::from_utf8(path_bytes) else {
-			return FS_ERR_BAD_UTF8 as isize;
-		};
-
-		let bytes: Vec<u8> = match super::kfs::read_file(path) {
-			Ok(v) => v,
-			Err(e) => return fs_error_to_code(e) as isize,
-		};
-
-		// Query mode: caller passes null/0 to obtain required size.
-		if out_ptr.is_null() || out_cap == 0 {
-			return bytes.len() as isize;
-		}
-		if bytes.len() > out_cap {
-			return FS_ERR_NO_SPACE as isize;
-		}
-		core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
-		bytes.len() as isize
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_write_file(
-		path_ptr: *const u8,
-		path_len: usize,
-		data_ptr: *const u8,
-		data_len: usize,
-	) -> i32 {
-		if path_ptr.is_null() || path_len == 0 {
-			return FS_ERR_BAD_PARAM;
-		}
-		if data_ptr.is_null() && data_len != 0 {
-			return FS_ERR_BAD_PARAM;
-		}
-		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
-		let Ok(path) = core::str::from_utf8(path_bytes) else {
-			return FS_ERR_BAD_UTF8;
-		};
-		let data = if data_len == 0 {
-			&[]
-		} else {
-			core::slice::from_raw_parts(data_ptr, data_len)
-		};
-
-		match super::kfs::write_file(path, data) {
-			Ok(()) => 0,
-			Err(e) => fs_error_to_code(e),
-		}
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_rename(
-		src_ptr: *const u8,
-		src_len: usize,
-		dst_ptr: *const u8,
-		dst_len: usize,
-	) -> i32 {
-		if src_ptr.is_null() || dst_ptr.is_null() || src_len == 0 || dst_len == 0 {
-			return FS_ERR_BAD_PARAM;
-		}
-		let src_bytes = core::slice::from_raw_parts(src_ptr, src_len);
-		let dst_bytes = core::slice::from_raw_parts(dst_ptr, dst_len);
-		let Ok(src) = core::str::from_utf8(src_bytes) else {
-			return FS_ERR_BAD_UTF8;
-		};
-		let Ok(dst) = core::str::from_utf8(dst_bytes) else {
-			return FS_ERR_BAD_UTF8;
-		};
-
-		match super::kfs::rename(src, dst) {
-			Ok(()) => 0,
-			Err(e) => fs_error_to_code(e),
-		}
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
-		path_ptr: *const u8,
-		path_len: usize,
-		out_ptr: *mut u8,
-		out_cap: usize,
-	) -> isize {
-		if path_ptr.is_null() || path_len == 0 {
-			return FS_ERR_BAD_PARAM as isize;
-		}
-		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
-		let Ok(path) = core::str::from_utf8(path_bytes) else {
-			return FS_ERR_BAD_UTF8 as isize;
-		};
-
-		let listing = match super::kfs::list_dir(path) {
-			Ok(v) => v,
-			Err(e) => return fs_error_to_code(e) as isize,
-		};
-		let bytes = listing.as_bytes();
-
-		if out_ptr.is_null() || out_cap == 0 {
-			return bytes.len() as isize;
-		}
-		if bytes.len() > out_cap {
-			return FS_ERR_NO_SPACE as isize;
-		}
-		core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
-		bytes.len() as isize
-	}
-
-	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_remove(
-		path_ptr: *const u8,
-		path_len: usize,
-	) -> i32 {
-		if path_ptr.is_null() || path_len == 0 {
-			return FS_ERR_BAD_PARAM;
-		}
-		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
-		let Ok(path) = core::str::from_utf8(path_bytes) else {
-			return FS_ERR_BAD_UTF8;
-		};
-
-		match super::kfs::remove(path) {
-			Ok(()) => 0,
-			Err(e) => fs_error_to_code(e),
-		}
-	}
-
-	// ---- Async FS service (for Promise-based QuickJS APIs) ----
-
-	const QJS_ASYNC_FS_MAX_PATH: usize = 4096;
-	const QJS_ASYNC_FS_MAX_DATA: usize = 1024 * 1024;
-	const QJS_ASYNC_FS_MAX_QUEUE: usize = 64;
-
-	static QJS_ASYNC_FS_SEQ: AtomicU32 = AtomicU32::new(1);
-
-	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-	enum AsyncFsKind {
-		ReadFile,
-		WriteFile,
-	}
-
-	#[derive(Clone, Debug)]
-	struct AsyncFsRequest {
-		id: u32,
-		kind: AsyncFsKind,
-		path: String,
-		data: Vec<u8>,
-	}
-
-	#[derive(Clone, Debug)]
-	struct AsyncFsCompletion {
 		id: u32,
 		rc: i32,
 		data: Vec<u8>,
