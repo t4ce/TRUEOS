@@ -376,22 +376,9 @@ fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
 pub(crate) async fn boot_cache_pci_ids_task() {
     use embassy_time::Timer;
 
-    // Source: pciutils/pciids
     const URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
-
-    // Persistent cache location on USBMS FAT.
-    //
-    // Requirement: keep this under the `/trueos/pci/` folder.
     const PATH: &str = "/trueos/pci/pci.ids";
 
-    // Previous cache locations we may have used in older builds.
-    const OLD_PATHS: [&str; 3] = [
-        "/trueos/src/pci/pci.ids",
-        "/trueos/pci.ids",
-        "/§/pci.ids",
-    ];
-
-    // Retry: USBMS/FAT may not be ready when the executor starts.
     for attempt in 1..=60u32 {
         match crate::surface::io::kfs::exists_async(PATH).await {
             Ok(true) => {
@@ -403,48 +390,6 @@ pub(crate) async fn boot_cache_pci_ids_task() {
             }
             Ok(false) => {}
             Err(_) => {}
-        }
-
-        // One-time migration from old locations (avoid redownload after upgrades).
-        // We also sanitize during migration so the persistent cache stays normalized.
-        for old in OLD_PATHS {
-            match crate::surface::io::kfs::exists_async(old).await {
-                Ok(true) => {
-                    if let Some((parent, _name)) = PATH.rsplit_once('/') {
-                        if !parent.is_empty() {
-                            let _ = crate::surface::io::kfs::create_dir_all(parent);
-                        }
-                    }
-
-                    if let Ok(raw) = crate::surface::io::kfs::read_file_async(old).await {
-                        let cleaned = sanitize_pci_ids(&raw);
-                        let tmp = alloc::format!("{}.tmp", PATH);
-                        if crate::surface::io::kfs::write_file_async(tmp.as_str(), &cleaned)
-                            .await
-                            .is_ok()
-                            && crate::surface::io::kfs::rename_async(tmp.as_str(), PATH)
-                                .await
-                                .is_ok()
-                        {
-                            let _ = crate::surface::io::kfs::remove_async(old).await;
-                            crate::log!(
-                                "pciids: migrated+sanitized old={} new={} bytes_in={} bytes_out={}\n",
-                                old,
-                                PATH,
-                                raw.len(),
-                                cleaned.len(),
-                            );
-                            if let Ok(db) = crate::surface::io::kfs::read_file_async(PATH).await {
-                                log_pci_enumeration_with_cached_ids(&db);
-                            }
-                            return;
-                        }
-                        let _ = crate::surface::io::kfs::remove_async(tmp.as_str()).await;
-                    }
-                }
-                Ok(false) => {}
-                Err(_) => {}
-            }
         }
 
         // Ensure the cache directory exists before downloading.
