@@ -287,8 +287,10 @@ async fn fetch_on_device(
     let cmds_name = leak_str(format!("{}-tls-cmd", owner));
     let evts_name = leak_str(format!("{}-tls-evt", owner));
 
-    let cmds = Queue::new_leaked(cmds_name, 128);
-    let events = Queue::new_leaked(evts_name, 128);
+    // These queues can see a burst of TCP segments (small `TlsEvent::Data` packets).
+    // If the consumer drains too slowly, events may be dropped and large downloads can stall.
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 4096);
     register_tls_app_queues(owner, cmds, events);
 
     let roots = TlsRoots::mozilla();
@@ -311,7 +313,7 @@ async fn fetch_on_device(
     let mut hdr_end_cached: Option<usize> = None;
 
     loop {
-        for ev in events.drain(64) {
+        for ev in events.drain(1024) {
             match ev {
                 TlsEvent::Opened { handle } => {
                     tls_handle = Some(handle);
@@ -407,6 +409,7 @@ async fn fetch_on_device(
                                     return Ok(out);
                                 }
                             }
+                        }
                     }
                 }
                 TlsEvent::Closed { handle } => {
@@ -473,7 +476,7 @@ async fn fetch_on_device(
             return Err(FetchError::Timeout);
         }
 
-        Timer::after(EmbassyDuration::from_millis(25)).await;
+        Timer::after(EmbassyDuration::from_millis(2)).await;
     }
 }
 
