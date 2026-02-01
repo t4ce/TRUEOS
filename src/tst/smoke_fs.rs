@@ -28,6 +28,16 @@ pub(crate) async fn bsp_smoke_service_task() {
         if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
             // Allow the USBMS device to settle after registration.
             Timer::after(EmbassyDuration::from_millis(100)).await;
+
+            // Prefer to run after the root has been mounted by the async mount service.
+            // Fall back after a short timeout so the smoke test can still format/mount
+            // fresh media in debug builds.
+            let _ = crate::v::readiness::wait_for_timeout(
+                crate::v::readiness::TRUEOSFS_ROOT_MOUNTED,
+                EmbassyDuration::from_secs(5),
+            )
+            .await;
+
             bsp_smoke_test_once_async().await;
             return;
         }

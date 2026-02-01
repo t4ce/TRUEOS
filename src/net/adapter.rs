@@ -812,7 +812,7 @@ impl NetService {
     }
 
     fn maybe_send_icmp_ping(&mut self, timestamp: Instant) {
-        if self.icmp_ping_pongs >= 3 {
+        if self.icmp_ping_pongs >= 1 {
             return;
         }
 
@@ -908,14 +908,14 @@ impl NetService {
                             );
                             self.icmp_ping_inflight = None;
 
-                            if self.icmp_ping_pongs < 3 {
-                                self.icmp_ping_pongs = self.icmp_ping_pongs.saturating_add(1);
-                                if self.icmp_ping_pongs == 3 {
-                                    crate::log!(
-                                        "net: icmp ok x3 dev={} (gateway reachable)\n",
-                                        self.device_index
-                                    );
-                                }
+                            // Consider the network reachable on the first successful pong.
+                            if self.icmp_ping_pongs == 0 {
+                                self.icmp_ping_pongs = 1;
+                                crate::log!(
+                                    "net: icmp ok dev={} (gateway reachable)\n",
+                                    self.device_index
+                                );
+                                crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
                             }
                         }
                     }

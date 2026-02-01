@@ -168,6 +168,9 @@ extern "C" {
     pub fn JS_NewContext(rt: *mut JSRuntime) -> *mut JSContext;
     pub fn JS_FreeContext(ctx: *mut JSContext);
 
+    pub fn JS_SetContextOpaque(ctx: *mut JSContext, opaque: *mut c_void);
+    pub fn JS_GetContextOpaque(ctx: *mut JSContext) -> *mut c_void;
+
     pub fn JS_Eval(
         ctx: *mut JSContext,
         input: *const c_char,
