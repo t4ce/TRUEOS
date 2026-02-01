@@ -10,6 +10,19 @@ use x86_64::{instructions::hlt, instructions::interrupts};
 static IDT: spin::Once<InterruptDescriptorTable> = spin::Once::new();
 static IN_HANDLER: AtomicUsize = AtomicUsize::new(0);
 
+#[inline(always)]
+fn idt() -> &'static InterruptDescriptorTable {
+    IDT.call_once(|| {
+        let mut idt = InterruptDescriptorTable::new();
+        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        idt.general_protection_fault
+            .set_handler_fn(general_protection_fault_handler);
+        idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.double_fault.set_handler_fn(double_fault_handler);
+        idt
+    })
+}
+
 struct DebugconWriter;
 
 impl fmt::Write for DebugconWriter {
@@ -33,17 +46,14 @@ macro_rules! dprintln {
 }
 
 pub(crate) fn init() {
-    let idt = IDT.call_once(|| {
-        let mut idt = InterruptDescriptorTable::new();
-        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
-        idt.general_protection_fault
-            .set_handler_fn(general_protection_fault_handler);
-        idt.page_fault.set_handler_fn(page_fault_handler);
-        idt.double_fault.set_handler_fn(double_fault_handler);
-        idt
-    });
+    load_this_cpu();
+}
 
-    idt.load();
+/// Load the exception IDT for the current CPU.
+///
+/// Note: `lidt` is per-CPU state, so APs must call this too.
+pub(crate) fn load_this_cpu() {
+    idt().load();
 }
 
 fn enter_handler_or_halt() {
