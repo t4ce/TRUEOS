@@ -36,6 +36,20 @@ pub struct TurboApplyReport {
     pub seq: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TurboVerifyReport {
+    pub total_cpus: usize,
+    pub online_aps: usize,
+    pub submitted_aps: usize,
+    pub busy_aps: usize,
+    pub completed_aps: usize,
+    pub turbo_cpus: usize,
+    pub noturbo_cpus: usize,
+    pub unknown_cpus: usize,
+    pub seq: u64,
+    pub timed_out: bool,
+}
+
 #[inline]
 pub fn armed() -> bool {
     TURBO_ARMED.load(Ordering::Acquire) != 0
@@ -76,6 +90,19 @@ fn local_state_raw() -> TurboState {
         TurboState::NoTurbo
     } else {
         TurboState::Turbo
+    }
+}
+
+const RET_TURBO: u64 = 10;
+const RET_NOTURBO: u64 = 11;
+
+fn smp_read_turbo(_arg: u64) -> u64 {
+    if !supported_cpuid() {
+        return RET_UNSUPPORTED;
+    }
+    match local_state_raw() {
+        TurboState::Turbo => RET_TURBO,
+        TurboState::NoTurbo => RET_NOTURBO,
     }
 }
 
@@ -139,5 +166,94 @@ pub fn set_enabled_all(enable: bool) -> Result<TurboApplyReport, TurboSetError> 
         submitted_aps: submit.submitted_aps,
         busy_aps: submit.busy_aps,
         seq: submit.seq,
+    })
+}
+
+pub fn verify_all(spins: usize) -> Result<TurboVerifyReport, TurboSetError> {
+    if !supported_cpuid() {
+        return Err(TurboSetError::Unsupported);
+    }
+
+    let total = crate::smp::cpu_count().max(1);
+
+    // Always include BSP state immediately.
+    let mut turbo_cpus: usize = 0;
+    let mut noturbo_cpus: usize = 0;
+    let mut unknown_cpus: usize = 0;
+
+    match local_status() {
+        TurboStatus::Unsupported => unknown_cpus += 1,
+        TurboStatus::State(TurboState::Turbo) => turbo_cpus += 1,
+        TurboStatus::State(TurboState::NoTurbo) => noturbo_cpus += 1,
+    }
+
+    let submit = crate::smp::submit_to_all_online_aps(smp_read_turbo, 0);
+
+    // Wait only for APs that actually received this request sequence.
+    // If some APs were busy and not overwritten, `wait_all_online_aps()` would
+    // never complete because those CPUs will retain an older `seq`.
+    let waited = if submit.seq == 0 {
+        true
+    } else {
+        let mut ok = false;
+        for _ in 0..spins {
+            let mut done = true;
+            for slot in 1..total {
+                let Some(r) = crate::smp::read(slot) else {
+                    done = false;
+                    break;
+                };
+                if !r.online {
+                    continue;
+                }
+                if r.seq != submit.seq {
+                    continue;
+                }
+                if r.state != crate::smp::STATE_DONE {
+                    done = false;
+                    break;
+                }
+            }
+            if done {
+                ok = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        ok
+    };
+
+    let mut completed_aps: usize = 0;
+
+    for slot in 1..total {
+        let Some(r) = crate::smp::read(slot) else {
+            continue;
+        };
+        if !r.online {
+            continue;
+        }
+        if r.seq != submit.seq || r.state != crate::smp::STATE_DONE {
+            continue;
+        }
+
+        completed_aps += 1;
+        match r.ret {
+            RET_TURBO => turbo_cpus += 1,
+            RET_NOTURBO => noturbo_cpus += 1,
+            _ => unknown_cpus += 1,
+        }
+    }
+
+    Ok(TurboVerifyReport {
+        total_cpus: total,
+        online_aps: submit.targeted_aps,
+        submitted_aps: submit.submitted_aps,
+        busy_aps: submit.busy_aps,
+        completed_aps,
+        turbo_cpus,
+        noturbo_cpus,
+        unknown_cpus,
+        seq: submit.seq,
+        timed_out: !waited,
     })
 }

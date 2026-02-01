@@ -556,7 +556,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         tx_dma_len: CDC_DMA_CHUNK,
         tx_inflight: false,
         rx_dma_phys: rx_phys,
-        rx_dma_virt: rx_virt,
         rx_dma_len: CDC_DMA_CHUNK,
         rx_posted: false,
         tx_queue: Deque::new(),

@@ -584,13 +584,16 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
         static PSTATE_ARGS: [ArgSpec; 1] = [ArgSpec::new("ratio", ArgType::U8)];
-        static TURBO_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
+        static TURBO_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("op", ArgType::Str),
+            ArgSpec::new("spins", ArgType::Usize),
+        ];
+        static SMP_ARGS: [ArgSpec; 1] = [ArgSpec::new("slot", ArgType::Usize)];
         static SET_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("cols", ArgType::Usize).mandatory(),
             ArgSpec::new("rows", ArgType::Usize).mandatory(),
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
-        static TFSDEMO_ARGS: [ArgSpec; 1] = [ArgSpec::new("diskid", ArgType::Str)];
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
 
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
@@ -613,6 +616,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("idle", &IDLE_ARGS, cmd_idle);
         let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd_pstate);
         let _ = REGSHCMD("turbo", &TURBO_ARGS, cmd_turbo);
+        let _ = REGSHCMD("smp", &SMP_ARGS, cmd_smp);
         let _ = REGSHCMD("cube", &[], cmd_cube);
         let _ = REGSHCMD("ico", &[], cmd_ico);
         let _ = REGSHCMD("txt", &NO_ARGS, cmd_txt);
@@ -967,6 +971,60 @@ fn cmd_pstate(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> s
     super::CommandAction::None
 }
 
+fn smp_state_name(st: u8) -> &'static str {
+    match st {
+        crate::smp::STATE_IDLE => "idle",
+        crate::smp::STATE_PENDING => "pending",
+        crate::smp::STATE_RUNNING => "running",
+        crate::smp::STATE_DONE => "done",
+        _ => "unknown",
+    }
+}
+
+fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    if !crate::smp::is_init() {
+        ctx.io.write_str("smp: not initialized\r\n");
+        return super::CommandAction::None;
+    }
+
+    let total = crate::smp::cpu_count();
+    ctx.io
+        .write_fmt(format_args!("smp: cpu_count={}\r\n", total));
+
+    let slot_opt = args.and_then(|a| a.get(0)).and_then(|v| v.as_usize());
+
+    let dump_slot = |slot: usize| {
+        let Some(r) = crate::smp::read(slot) else {
+            ctx.io
+                .write_fmt(format_args!("smp: slot={} <unavailable>\r\n", slot));
+            return;
+        };
+        ctx.io.write_fmt(format_args!(
+            "smp: slot={} online={} state={} seq={} ret=0x{:016X}\r\n",
+            slot,
+            if r.online { 1 } else { 0 },
+            smp_state_name(r.state),
+            r.seq,
+            r.ret
+        ));
+    };
+
+    if let Some(slot) = slot_opt {
+        if slot >= total {
+            ctx.io.write_str("smp: usage smp [slot]\r\n");
+            return super::CommandAction::None;
+        }
+        dump_slot(slot);
+        return super::CommandAction::None;
+    }
+
+    for slot in 0..total {
+        dump_slot(slot);
+    }
+
+    super::CommandAction::None
+}
+
 fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let op = args
         .and_then(|a| a.get(0))
@@ -1002,6 +1060,41 @@ fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
         return super::CommandAction::None;
     }
 
+    if op.eq_ignore_ascii_case("verify") {
+        let spins = args
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_usize())
+            .unwrap_or(200_000);
+
+        match crate::turbo::verify_all(spins) {
+            Ok(r) => {
+                ctx.io.write_fmt(format_args!(
+                    "turbo: verify spins={} turbo={} noturbo={} unknown={} completed_aps={}/{} online_aps={} busy={} total_cpus={} seq={}{}\r\n",
+                    spins,
+                    r.turbo_cpus,
+                    r.noturbo_cpus,
+                    r.unknown_cpus,
+                    r.completed_aps,
+                    r.submitted_aps,
+                    r.online_aps,
+                    r.busy_aps,
+                    r.total_cpus,
+                    r.seq,
+                    if r.timed_out { " TIMEOUT" } else { "" }
+                ));
+            }
+            Err(crate::turbo::TurboSetError::Disarmed) => {
+                // verify is read-only; keep for forward-compat and clarity.
+                ctx.io.write_str("turbo: msr disarmed (verify should not require arm)\r\n");
+            }
+            Err(crate::turbo::TurboSetError::Unsupported) => {
+                ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
+            }
+        }
+
+        return super::CommandAction::None;
+    }
+
     let enable = if op.eq_ignore_ascii_case("on") {
         Some(true)
     } else if op.eq_ignore_ascii_case("off") {
@@ -1011,7 +1104,7 @@ fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
     };
 
     let Some(enable) = enable else {
-        ctx.io.write_str("turbo: usage turbo [status|arm|disarm|on|off]\r\n");
+        ctx.io.write_str("turbo: usage turbo [status|arm|disarm|on|off|verify [spins]]\r\n");
         return super::CommandAction::None;
     };
 
