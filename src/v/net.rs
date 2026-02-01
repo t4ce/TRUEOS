@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, collections::VecDeque, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
+pub mod dns;
 pub mod https;
 
 use trueos_v::vnet as api;
