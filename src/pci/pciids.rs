@@ -386,7 +386,12 @@ pub(crate) async fn boot_cache_pci_ids_task() {
 
     // Boot ordering: the network can come up before the TRUEOSFS root is mounted.
     // Wait for a root so we can read/write the cache.
-    crate::v::readiness::wait_for(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    if !crate::v::readiness::is_set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED) {
+        crate::log!("pciids: waiting for TRUEOSFS_ROOT_MOUNTED\n");
+        crate::v::readiness::wait_for(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    }
+
+    crate::log!("pciids: TRUEOSFS_ROOT_MOUNTED; checking cache\n");
 
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
         crate::log!("pciids: no root disk after wait; skipping url={} key={}\n", URL, KEY);
@@ -419,7 +424,10 @@ pub(crate) async fn boot_cache_pci_ids_task() {
     }
 
     // Only attempt HTTPS download once the network has proven connectivity.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+    if !crate::v::readiness::is_set(crate::v::readiness::NET_GATEWAY_REACHABLE) {
+        crate::log!("pciids: waiting for NET_GATEWAY_REACHABLE\n");
+        crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+    }
 
     let raw = match crate::v::net::https::fetch_https_body_async(URL, 120_000, 4 * 1024 * 1024).await
     {

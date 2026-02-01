@@ -31,7 +31,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 struct AsyncMutex<T> {
     locked: core::sync::atomic::AtomicBool,
-    waiter: spin::Mutex<Option<Waker>>,
+    waiters: spin::Mutex<Vec<Waker>>,
     value: core::cell::UnsafeCell<T>,
 }
 
@@ -41,7 +41,7 @@ impl<T> AsyncMutex<T> {
     const fn new(value: T) -> Self {
         Self {
             locked: core::sync::atomic::AtomicBool::new(false),
-            waiter: spin::Mutex::new(None),
+            waiters: spin::Mutex::new(Vec::new()),
             value: core::cell::UnsafeCell::new(value),
         }
     }
@@ -59,13 +59,18 @@ impl<T> AsyncMutex<T> {
             return core::task::Poll::Ready(AsyncMutexGuard { m: self });
         }
 
-        *self.waiter.lock() = Some(cx.waker().clone());
+        let mut waiters = self.waiters.lock();
+        let waker = cx.waker();
+        if !waiters.iter().any(|w| w.will_wake(waker)) {
+            waiters.push(waker.clone());
+        }
         core::task::Poll::Pending
     }
 
     fn unlock(&self) {
         self.locked.store(false, Ordering::Release);
-        if let Some(w) = self.waiter.lock().take() {
+        let waiters = core::mem::take(&mut *self.waiters.lock());
+        for w in waiters {
             w.wake();
         }
     }
