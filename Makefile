@@ -100,17 +100,12 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-# Run QEMU in the current terminal (useful for CI / remote shells).
-run-stdio: iso-debug
-	@$(QEMU_ISO_STDIO)
-
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
 
-# Boot the installed disk image directly (no installer ISO).
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
-run-installed-uefi: iso-debug
+run-installed: iso-debug
 	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
