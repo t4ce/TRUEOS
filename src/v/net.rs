@@ -328,9 +328,18 @@ fn http_sanitize_filename(name: &str) -> String {
 
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
-    let Some(vnet) = VNet::open_primary() else {
-        crate::log!("http-trueosfs: disabled (no NIC)\n");
-        return;
+    // Permanent FSM gating: do not start until the network is actually usable.
+    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+
+    // Permanent FSM gating: do not serve until a root filesystem is mounted.
+    crate::v::readiness::wait_for(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+
+    // Once the network is reachable, `open_primary()` should succeed; keep it strict.
+    let vnet = loop {
+        if let Some(v) = VNet::open_primary() {
+            break v;
+        }
+        Timer::after(EmbassyDuration::from_millis(50)).await;
     };
 
     if vnet.submit(api::Command::OpenTcpListen {
@@ -376,7 +385,7 @@ pub async fn http_trueosfs_task() {
 
                     let target = http_parse_target(data.as_slice()).unwrap_or("/");
 
-                    // Best-effort: determine which disk to serve.
+                    // Under the permanent FSM model, a TRUEOSFS root must exist.
                     let disk = crate::v::fs::trueosfs::primary_root_handle();
 
                     let (status, content_type, extra_headers, body_bytes): (
