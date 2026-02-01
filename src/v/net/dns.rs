@@ -317,7 +317,7 @@ pub async fn resolve_ipv4_for_device(
         return Err(DnsError::Timeout);
     };
 
-    let mut current = host.trim().trim_end_matches('.').to_string();
+    let mut current: String = host.trim().trim_end_matches('.').into();
     if current.is_empty() {
         let _ = net.submit(vnet::Command::Close { handle: udp });
         return Err(DnsError::BadName);

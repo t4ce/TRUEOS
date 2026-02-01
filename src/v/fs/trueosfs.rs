@@ -8,7 +8,6 @@ use spin::Mutex;
 use trueos_math::BPlusTree;
 
 const TRUEOSFS_INDEX_M: usize = 16;
-const TRUEOSFS_CHECKPOINT_EVERY: u32 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IndexRef {
