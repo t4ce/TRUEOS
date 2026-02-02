@@ -271,7 +271,6 @@ pub(crate) async fn try_attach_device(
         dev_ctx_virt,
         ctx_stride_bytes,
         ctx_stride_words,
-        speed_code,
         target_port,
     })
     .await

@@ -6,7 +6,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 //
 // These are monotonic: once set, they are never cleared.
 // Consumers can `await` prerequisites instead of guessing boot ordering.
-
+#[allow(dead_code)]
 pub const USB_XHCI_ENUM_OK: u32 = 1 << 0;
 pub const HID_MOUSE_CLAIMED: u32 = 1 << 1;
 pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;

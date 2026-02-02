@@ -8,7 +8,6 @@ use super::bot;
 use super::scsi;
 use crate::pci::dma;
 use crate::disc::block as disc_block;
-use core::hint::spin_loop;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
@@ -16,23 +15,6 @@ use alloc::boxed::Box;
 use alloc::vec::Vec as AllocVec;
 use heapless::Vec;
 use spin::Mutex;
-
-fn spin_wait_ms(ms: u64) {
-    let hz = embassy_time_driver::TICK_HZ as u64;
-    let start = embassy_time_driver::now();
-    let delta_ticks = if hz == 0 {
-        0
-    } else {
-        // Round up to at least one tick when ms>0.
-        let ticks = (ms.saturating_mul(hz) + 999) / 1000;
-        if ms > 0 { ticks.max(1) } else { 0 }
-    };
-    let deadline = start.saturating_add(delta_ticks);
-    while embassy_time_driver::now() < deadline {
-        crate::time::poll_executor();
-        spin_loop();
-    }
-}
 
 #[inline]
 fn sense_is_transient(key: scsi::SenseKey) -> bool {
@@ -201,26 +183,12 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     removed
 }
 
-pub fn has_runtime() -> bool {
-    !MASS_RUNTIMES.lock().is_empty()
-}
-
-pub fn with_runtime_by_slot<R, F>(controller_id: usize, slot_id: u32, f: F) -> Option<R>
-where
-    F: FnOnce(&MassRuntime) -> R,
-{
-    MASS_RUNTIMES
-        .lock()
-        .iter()
-        .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
-        .map(f)
-}
-
 pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
     let mut idx = 0usize;
     let mut config_value: u8 = 1;
     let mut current_iface: Option<u8> = None;
     let mut current_alt: u8 = 0;
+    let mut current_class: u8 = 0;
     let mut current_subclass: u8 = 0;
     let mut current_proto: u8 = 0;
     let mut ep_in: Option<(u8, u16)> = None;
@@ -242,6 +210,7 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                 if len >= 9 {
                     current_iface = Some(cfg[idx + 2]);
                     current_alt = cfg[idx + 3];
+                    current_class = cfg[idx + 5];
                     current_subclass = cfg[idx + 6];
                     current_proto = cfg[idx + 7];
                     ep_in = None;
@@ -253,6 +222,7 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
             5 => {
                 if let Some(iface) = current_iface {
                     if current_alt == 0
+                        && current_class == USB_CLASS_MASS_STORAGE
                         && current_subclass == USB_SUBCLASS_SCSI
                         && current_proto == USB_PROTO_BULK_ONLY
                     {
@@ -303,7 +273,6 @@ pub struct AttachParams<'a> {
     pub dev_ctx_virt: *mut u8,
     pub ctx_stride_bytes: usize,
     pub ctx_stride_words: usize,
-    pub speed_code: u32,
     pub target_port: u8,
 }
 
@@ -317,7 +286,6 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         dev_ctx_virt,
         ctx_stride_bytes,
         ctx_stride_words,
-        speed_code: _,
         target_port,
     } = params;
 

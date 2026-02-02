@@ -429,6 +429,176 @@ fn split_first_token(s: &str) -> (&str, &str) {
     (first, rest)
 }
 
+async fn read_line(
+    io: &'static dyn ShellBackend,
+    buf: &mut Vec<u8>,
+    ignore_lf: &mut bool,
+) -> bool {
+    buf.clear();
+
+    loop {
+        match io.read_byte() {
+            Some(b) => {
+                if *ignore_lf {
+                    if b == b'\n' {
+                        *ignore_lf = false;
+                        continue;
+                    }
+                    *ignore_lf = false;
+                }
+
+                match b {
+                    b'\r' => {
+                        *ignore_lf = true;
+                        io.write_str("\r\n");
+                        return true;
+                    }
+                    b'\n' => {
+                        io.write_str("\r\n");
+                        return true;
+                    }
+                    0x04 => {
+                        return false;
+                    }
+                    0x08 | 0x7f => {
+                        if !buf.is_empty() {
+                            buf.pop();
+                            io.write_str("\x08 \x08");
+                        }
+                    }
+                    _ => {
+                        buf.push(b);
+                        io.write_byte(b);
+                    }
+                }
+            }
+            None => {
+                Timer::after(EmbassyDuration::from_millis(10)).await;
+            }
+        }
+    }
+}
+
+async fn repl(io: &'static dyn ShellBackend) {
+    unsafe {
+        let rt = trueos_qjs::JS_NewRuntime();
+        if rt.is_null() {
+            io.write_str("qjs: JS_NewRuntime failed\r\n");
+            return;
+        }
+
+        trueos_qjs::node::install(rt);
+
+        let ctx = trueos_qjs::JS_NewContext(rt);
+        if ctx.is_null() {
+            trueos_qjs::JS_FreeRuntime(rt);
+            io.write_str("qjs: JS_NewContext failed\r\n");
+            return;
+        }
+
+        let opaque = Box::new(QjsShellOpaque { io });
+        let opaque_ptr = Box::into_raw(opaque);
+        trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
+
+        // Install globalThis.print(...)
+        let global = trueos_qjs::JS_GetGlobalObject(ctx);
+        let name = b"print\0";
+        let func = trueos_qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_shell_print),
+            name.as_ptr() as *const c_char,
+            1,
+            trueos_qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
+        trueos_qjs::js_free_value(ctx, global);
+
+        trueos_qjs::node::install_globals(ctx);
+
+        let mut line: Vec<u8> = Vec::with_capacity(256);
+        let mut ignore_lf = false;
+
+        loop {
+            io.write_str("qjs> ");
+            if !read_line(io, &mut line, &mut ignore_lf).await {
+                break;
+            }
+
+            let src = match core::str::from_utf8(&line) {
+                Ok(s) => s.trim(),
+                Err(_) => {
+                    io.write_str("qjs: invalid UTF-8\r\n");
+                    continue;
+                }
+            };
+
+            if src.is_empty() {
+                continue;
+            }
+            if src == ".exit" || src == ".quit" {
+                break;
+            }
+
+            let flags = if looks_like_module_src(src) {
+                trueos_qjs::JS_EVAL_TYPE_MODULE
+            } else {
+                trueos_qjs::JS_EVAL_TYPE_GLOBAL
+            };
+
+            let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
+                b"<repl-module>\0".as_ptr() as *const c_char
+            } else {
+                b"<repl>\0".as_ptr() as *const c_char
+            };
+
+            let val = trueos_qjs::JS_Eval(
+                ctx,
+                src.as_ptr() as *const c_char,
+                src.len(),
+                filename,
+                flags,
+            );
+
+            if val.is_exception() {
+                dump_exception(io, ctx);
+            } else {
+                let _ = drain_jobs_and_promises(io, rt, ctx, 30_000).await;
+
+                if val.tag != trueos_qjs::JS_TAG_UNDEFINED {
+                    let cstr = trueos_qjs::js_to_cstring(ctx, val);
+                    io.write_str("qjs: => ");
+                    if !cstr.is_null() {
+                        let bytes = CStr::from_ptr(cstr).to_bytes();
+                        if let Ok(s) = core::str::from_utf8(bytes) {
+                            io.write_str(s);
+                        } else {
+                            for &b in bytes {
+                                io.write_byte(b);
+                            }
+                        }
+                        trueos_qjs::JS_FreeCString(ctx, cstr);
+                    } else {
+                        io.write_str("<toString failed>");
+                    }
+                    io.write_str("\r\n");
+                }
+            }
+            trueos_qjs::js_free_value(ctx, val);
+        }
+
+        trueos_qjs::async_ops::drain_all_for_context(ctx);
+
+        let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
+        if !opaque_ptr.is_null() {
+            trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+            drop(Box::from_raw(opaque_ptr));
+        }
+        trueos_qjs::JS_FreeContext(ctx);
+        trueos_qjs::JS_FreeRuntime(rt);
+    }
+}
+
 pub(crate) fn help(io: &dyn ShellIo) {
     io.write_str("qjs: usage\r\n");
     io.write_str("qjs <javascript>\r\n");
@@ -437,6 +607,7 @@ pub(crate) fn help(io: &dyn ShellIo) {
     io.write_str("qjs -e <javascript>\r\n");
     io.write_str("qjs -m -e <module javascript>\r\n");
     io.write_str("qjs -p <expr>\r\n");
+    io.write_str("qjs --repl\r\n");
     io.write_str("qjs: notes\r\n");
     io.write_str("- auto-detects modules (import/export/import.meta) unless forced\r\n");
     io.write_str("- drains the QuickJS job queue (Promises) after eval\r\n");
@@ -463,6 +634,7 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
     let mut explicit_print = false;
     let mut code: Option<&str> = None;
     let mut file: Option<&str> = None;
+    let mut use_repl = false;
 
     // Only treat leading '-' tokens as options.
     loop {
@@ -477,6 +649,10 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
             "-h" | "--help" => {
                 help(io);
                 return;
+            }
+            "--repl" => {
+                use_repl = true;
+                rest = r;
             }
             "-m" => {
                 forced_flags = Some(trueos_qjs::JS_EVAL_TYPE_MODULE);
@@ -511,6 +687,11 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
                 break;
             }
         }
+    }
+
+    if use_repl {
+        repl(io).await;
+        return;
     }
 
     let remaining = if code.is_some() { "" } else { rest.trim_start() };
