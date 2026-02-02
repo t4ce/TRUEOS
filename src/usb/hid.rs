@@ -128,6 +128,17 @@ pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
 }
 
 pub fn register_runtime(runtime: HidRuntime) {
+    // Signal v-layer readiness once we have a boot keyboard/mouse runtime.
+    // These flags are monotonic (set-only) by design.
+    let claimed_flags = match runtime.hid_kind {
+        1 => crate::v::readiness::HID_KEYBOARD_CLAIMED,
+        2 => crate::v::readiness::HID_MOUSE_CLAIMED,
+        _ => 0,
+    };
+    if claimed_flags != 0 {
+        crate::v::readiness::set(claimed_flags);
+    }
+
     let mut guard = HID_RUNTIMES.lock();
     if let Some(existing) = guard
         .iter_mut()
@@ -264,6 +275,14 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
 
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
+    // Permanent FSM gating: do not start logging until we have claimed at least
+    // one boot keyboard or boot mouse.
+    const HID_ANY_CLAIMED: u32 =
+        crate::v::readiness::HID_MOUSE_CLAIMED | crate::v::readiness::HID_KEYBOARD_CLAIMED;
+    while crate::v::readiness::mask() & HID_ANY_CLAIMED == 0 {
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+
     loop {
         if let Some(evt) = input::pop_event() {
             match evt {
