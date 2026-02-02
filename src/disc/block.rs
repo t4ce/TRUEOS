@@ -8,6 +8,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
     task::Waker,
 };
+use crate::wait;
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
@@ -61,9 +62,7 @@ impl<T> AsyncMutex<T> {
 
         let mut waiters = self.waiters.lock();
         let waker = cx.waker();
-        if !waiters.iter().any(|w| w.will_wake(waker)) {
-            waiters.push(waker.clone());
-        }
+        wait::register_waker_list(&mut waiters, waker);
         core::task::Poll::Pending
     }
 

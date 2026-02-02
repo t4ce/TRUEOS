@@ -1325,6 +1325,7 @@ pub fn probe_once() {
                 block_count: blocks,
             };
             let handle = block::register_device(desc, dev);
+            crate::v::fs::trueosfs::request_mount_root(handle.clone());
             crate::log!(
                 "nvme: registered {} id={} blocks={} bs={}\n",
                 pci_addr,

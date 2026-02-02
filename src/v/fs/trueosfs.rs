@@ -268,7 +268,7 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
 
     // IMPORTANT: do not call `build_root_index()` here.
     // `build_root_index()` uses the synchronous TRUEOSFS engine which calls into
-    // `KernelBlockIo` and ultimately `crate::time::block_on(...)`. Doing that from
+    // `KernelBlockIo` and ultimately `crate::wait::block_on(...)`. Doing that from
     // an async task can starve other async tasks (notably the xHCI poll task), which
     // can manifest as USB mass-storage transfers timing out due to missing completion
     // events.

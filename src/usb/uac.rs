@@ -10,6 +10,7 @@ use crate::audio::PcmFormat;
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
+use crate::wait;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec;
 use libm::sinf;
@@ -201,9 +202,7 @@ pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     if rt.in_flight > 0 {
         rt.in_flight -= 1;
     }
-    if let Some(w) = rt.fill_waker.take() {
-        w.wake();
-    }
+    wait::take_and_wake(&mut rt.fill_waker);
     true
 }
 
@@ -1012,7 +1011,7 @@ pub async fn sine_task() {
                 if rt.in_flight < target {
                     Poll::Ready(())
                 } else {
-                    rt.fill_waker = Some(cx.waker().clone());
+                    wait::register_waker_slot(&mut rt.fill_waker, cx.waker());
                     // Re-check after registration to avoid missing a wake.
                     if rt.in_flight < target
                         || UAC_SLOT[controller_id].load(Ordering::Acquire) == 0

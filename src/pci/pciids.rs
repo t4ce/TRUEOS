@@ -7,7 +7,7 @@ pub fn load_raw_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crat
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
         return Ok(None);
     };
-    crate::time::block_on(crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY))
+    crate::wait::block_on(crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY))
 }
 
 pub fn load_sanitized_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {

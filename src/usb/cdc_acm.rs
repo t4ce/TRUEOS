@@ -5,6 +5,7 @@ use super::xhci::{
     trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
+use crate::wait;
 use core::cmp;
 use core::future::poll_fn;
 use core::mem::size_of;
@@ -261,21 +262,12 @@ where
 
 fn register_tx_waker(controller_id: usize, slot_id: u32, waker: &Waker) {
     let _ = with_runtime_mut_by_slot(controller_id, slot_id, |rt| {
-        let should_replace = match rt.tx_waker.as_ref() {
-            Some(existing) => !existing.will_wake(waker),
-            None => true,
-        };
-        if should_replace {
-            rt.tx_waker = Some(waker.clone());
-        }
+        wait::register_waker_slot(&mut rt.tx_waker, waker);
     });
 }
 
 fn wake_tx(controller_id: usize, slot_id: u32) {
-    let waker = with_runtime_mut_by_slot(controller_id, slot_id, |rt| rt.tx_waker.take()).flatten();
-    if let Some(w) = waker {
-        w.wake();
-    }
+    let _ = with_runtime_mut_by_slot(controller_id, slot_id, |rt| wait::take_and_wake(&mut rt.tx_waker));
 }
 
 fn tx_queue_has_room(controller_id: usize, slot_id: u32) -> bool {

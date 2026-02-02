@@ -588,7 +588,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
     const TIMEOUT_MS: u32 = 3_000;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
-    match crate::time::block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
+    match crate::wait::block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
         Ok(()) => 0,
         Err(rc) => rc,
     }

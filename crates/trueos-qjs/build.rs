@@ -136,6 +136,7 @@ fn main() {
         .flag("-mno-red-zone")
         .flag("-msse2")
         .flag("-mcmodel=kernel")
+        .flag("-w")
         // Prevent QuickJS from enabling pthread-backed Atomics and stack checking.
         .define("EMSCRIPTEN", None)
         .define("CONFIG_VERSION", Some("\"TRUEOS\""))
