@@ -43,6 +43,7 @@ mod tst;
 mod surface;
 mod tga;
 mod time;
+mod wait;
 mod smp;
 mod turbo;
 mod efi;
