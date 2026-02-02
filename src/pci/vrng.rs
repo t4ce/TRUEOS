@@ -4,6 +4,7 @@
 //! when RDSEED/RDRAND are unavailable.
 
 use spin::{Mutex, Once};
+use crate::wait;
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Transitional (legacy) virtio-rng PCI device id.
@@ -310,7 +311,7 @@ impl VirtioRng {
                 return Ok(wrote);
             }
 
-            core::hint::spin_loop();
+            wait::spin_step();
         }
         Err(Error::Timeout)
     }

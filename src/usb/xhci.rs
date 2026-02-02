@@ -1,4 +1,5 @@
 use crate::pci::mmio;
+use crate::wait;
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicU32, fence, Ordering};
@@ -1177,7 +1178,7 @@ where
         if embassy_time_driver::now() >= deadline {
             return None;
         }
-        core::hint::spin_loop();
+        wait::spin_step();
     }
 }
 

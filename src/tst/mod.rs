@@ -1,5 +1,6 @@
 pub mod html;
 pub mod http_trueosfs;
+pub mod nalgebra_demo;
 pub mod smoke_fs;
 #[cfg(feature = "tst-challenge")]
 pub mod sched_challenge;
