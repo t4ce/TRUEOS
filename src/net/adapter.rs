@@ -1054,9 +1054,6 @@ pub async fn net_shell_task() {
         return;
     }
 
-    // Permanent FSM gating: do not start until the network is actually usable.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
-
     const OWNER: &'static str = "net-shell";
 
     let cmds = NetQueue::new_leaked("net-shell-cmd", 256);

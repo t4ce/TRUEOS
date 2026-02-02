@@ -275,14 +275,6 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
 
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
-    // Permanent FSM gating: do not start logging until we have claimed at least
-    // one boot keyboard or boot mouse.
-    const HID_ANY_CLAIMED: u32 =
-        crate::v::readiness::HID_MOUSE_CLAIMED | crate::v::readiness::HID_KEYBOARD_CLAIMED;
-    while crate::v::readiness::mask() & HID_ANY_CLAIMED == 0 {
-        Timer::after(EmbassyDuration::from_millis(25)).await;
-    }
-
     loop {
         if let Some(evt) = input::pop_event() {
             match evt {

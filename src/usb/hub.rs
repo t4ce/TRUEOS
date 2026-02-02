@@ -6,6 +6,7 @@ use super::xhci::{
 };
 use super::xhci::MAX_XHCI_CONTROLLERS;
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::pci::dma;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
@@ -58,6 +59,152 @@ impl HubTopology {
 
 static HUB_TOPOLOGIES: [Mutex<HubTopology>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(HubTopology::new()) }; MAX_XHCI_CONTROLLERS];
+
+static HUB_CHANGE_PENDING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+
+pub fn mark_hub_change_pending(controller_id: usize) {
+    if controller_id < MAX_XHCI_CONTROLLERS {
+        HUB_CHANGE_PENDING[controller_id].store(true, Ordering::Release);
+    }
+}
+
+pub fn take_hub_change_pending(controller_id: usize) -> bool {
+    if controller_id < MAX_XHCI_CONTROLLERS {
+        HUB_CHANGE_PENDING[controller_id].swap(false, Ordering::AcqRel)
+    } else {
+        false
+    }
+}
+
+struct HubInterruptRuntime {
+    controller_id: usize,
+    slot_id: u32,
+    ctx: XhciContext,
+    ep_target: u32,
+    ep_ring: TrbRing,
+    buf_phys: u64,
+    buf_virt: *mut u8,
+    buf_len: u32,
+}
+
+unsafe impl Send for HubInterruptRuntime {}
+unsafe impl Sync for HubInterruptRuntime {}
+
+static HUB_INTERRUPT_RUNTIMES: Mutex<Vec<HubInterruptRuntime, MAX_DEVICES>> =
+    Mutex::new(Vec::new());
+
+fn with_interrupt_runtime_mut_by_slot_and_target<F, R>(
+    controller_id: usize,
+    slot_id: u32,
+    ep_target: u32,
+    f: F,
+) -> Option<R>
+where
+    F: FnOnce(&mut HubInterruptRuntime) -> R,
+{
+    let mut guard = HUB_INTERRUPT_RUNTIMES.lock();
+    guard
+        .iter_mut()
+        .find(|r| {
+            r.controller_id == controller_id && r.slot_id == slot_id && r.ep_target == ep_target
+        })
+        .map(f)
+}
+
+pub fn interrupt_runtime_exists(controller_id: usize, slot_id: u32) -> bool {
+    let guard = HUB_INTERRUPT_RUNTIMES.lock();
+    guard
+        .iter()
+        .any(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+}
+
+pub fn unregister_interrupt_runtime(controller_id: usize, slot_id: u32) -> bool {
+    let mut guard = HUB_INTERRUPT_RUNTIMES.lock();
+    let mut removed = false;
+    let mut idx = 0usize;
+    while idx < guard.len() {
+        if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
+            let _ = guard.remove(idx);
+            removed = true;
+        } else {
+            idx += 1;
+        }
+    }
+    removed
+}
+
+fn register_interrupt_runtime(runtime: HubInterruptRuntime) {
+    let mut guard = HUB_INTERRUPT_RUNTIMES.lock();
+    if let Some(existing) = guard
+        .iter_mut()
+        .find(|r| r.controller_id == runtime.controller_id && r.slot_id == runtime.slot_id)
+    {
+        *existing = runtime;
+        return;
+    }
+    let _ = guard.push(runtime);
+}
+
+pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
+    let slot_id = ((evt.d3 >> 24) & 0xFF) as u32;
+    let ep_target = ((evt.d3 >> 16) & 0x1F) as u32;
+
+    let completion = (evt.d2 >> 24) & 0xFF;
+    let residual = evt.d2 & 0x00FF_FFFF;
+
+    with_interrupt_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        let requested = rt.buf_len;
+        let transferred = requested
+            .saturating_sub(residual)
+            .min(requested) as usize;
+
+        if completion == 1 || completion == 13 {
+            if transferred > 0 {
+                let data = unsafe { core::slice::from_raw_parts(rt.buf_virt, transferred) };
+                let mut any_change = false;
+                for &b in data.iter() {
+                    if b != 0 {
+                        any_change = true;
+                        break;
+                    }
+                }
+                if any_change {
+                    mark_hub_change_pending(controller_id);
+                }
+            }
+        } else {
+            // Still requeue so we keep consuming changes after transient errors.
+            if super::USB_LOG_VERBOSE {
+                crate::log!(
+                    "usb: hub int slot={} ep={} cc={} residual={}\n",
+                    rt.slot_id,
+                    rt.ep_target,
+                    completion,
+                    residual
+                );
+            }
+        }
+
+        let normal = Trb {
+            d0: super::xhci::lo(rt.buf_phys),
+            d1: super::xhci::hi(rt.buf_phys),
+            d2: rt.buf_len,
+            d3: trb_type(1) | (1 << 5),
+        };
+
+        if !rt.ep_ring.push(normal) {
+            crate::log!("usb: hub int ring full slot={}\n", rt.slot_id);
+            return true;
+        }
+
+        unsafe {
+            write_volatile(rt.ctx.doorbell.add(rt.slot_id as usize), rt.ep_target);
+        }
+        true
+    })
+    .unwrap_or(false)
+}
 
 pub fn init_topology(ctx: &XhciContext) {
     let controller_id = ctx.controller_id;
@@ -844,8 +991,54 @@ pub async fn configure_hub_interrupt(params: HubInterruptParams<'_>) -> Result<(
     )
     .await?;
     dma::dealloc(input_cfg_virt, 4096);
-    // Keep the ring memory alive by not deallocating; no runtime use yet.
-    let _ = dci;
+
+    let bitmap_bits = (port_count as usize) + 1; // bit0=hub status, bits1..=ports
+    let bitmap_bytes = (bitmap_bits + 7) / 8;
+    let mut buf_bytes = core::cmp::max(8usize, bitmap_bytes);
+    buf_bytes = core::cmp::min(buf_bytes, max_packet as usize);
+    buf_bytes = core::cmp::max(1usize, buf_bytes);
+
+    let (buf_phys, buf_virt) = dma::alloc(buf_bytes, 64).ok_or(())?;
+    unsafe { core::ptr::write_bytes(buf_virt, 0, buf_bytes) };
+
+    let ep_target = dci as u32;
+    register_interrupt_runtime(HubInterruptRuntime {
+        controller_id: ctx.controller_id,
+        slot_id,
+        ctx: *ctx,
+        ep_target,
+        ep_ring,
+        buf_phys,
+        buf_virt,
+        buf_len: buf_bytes as u32,
+    });
+
+    // Prime the interrupt-IN loop (handle_transfer_event will keep it alive).
+    let primed = with_interrupt_runtime_mut_by_slot_and_target(
+        ctx.controller_id,
+        slot_id,
+        ep_target,
+        |rt| {
+            let normal = Trb {
+                d0: super::xhci::lo(rt.buf_phys),
+                d1: super::xhci::hi(rt.buf_phys),
+                d2: rt.buf_len,
+                d3: trb_type(1) | (1 << 5),
+            };
+            if !rt.ep_ring.push(normal) {
+                return false;
+            }
+            unsafe {
+                write_volatile(rt.ctx.doorbell.add(rt.slot_id as usize), rt.ep_target);
+            }
+            true
+        },
+    )
+    .unwrap_or(false);
+
+    if !primed {
+        return Err(());
+    }
 
     Ok(())
 }

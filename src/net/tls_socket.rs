@@ -422,9 +422,6 @@ pub fn pump_block_on_hook() {
 
 #[task]
 pub async fn tls_socket_service_task() {
-    // Permanent FSM gating: do not run until the network is actually usable.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
-
     crate::log!("tls-socket: service running\n");
 
     loop {

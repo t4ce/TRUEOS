@@ -249,12 +249,6 @@ pub extern "C" fn kmain() -> ! {
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
-    // Centralized boot task orchestrator.
-    // This becomes the single registry for Embassy tasks and their readiness conditions.
-    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner)) {
-        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
-    }
-
     time::init(executor);
 
     net::init();
@@ -262,86 +256,16 @@ pub extern "C" fn kmain() -> ! {
     // can still progress the network stack.
     crate::time::register_block_on_hook(net::adapter::pump_block_on_hook);
     crate::time::register_block_on_hook(net::tls_socket::pump_block_on_hook);
-    // Some drivers may fail to report a MAC early; treat any detected NIC as usable.
-    let net_ready = net::device_count() > 0;
-    if net_ready {
-        let count = net::device_count();
-        for idx in 0..count {
-            if let Err(e) = spawner.spawn(net::adapter::net_poll_task(idx)) {
-                crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
-            }
-        }
 
-        if let Err(e) = spawner.spawn(net::adapter::net_service_task()) {
-            crate::log!("net: spawn net_service_task failed: {:?}\n", e);
-        }
-
-        if let Err(e) = spawner.spawn(net::tls_socket::tls_socket_service_task()) {
-            crate::log!("tls-socket: spawn tls_socket_service_task failed: {:?}\n", e);
-        }
-
-        // NOTE: Boot-time plaintext HTTP smoke probe removed.
-
-        crate::log!("net-shell: spawning tcp listener on 4245\n");
-        if let Err(e) = spawner.spawn(net::adapter::net_shell_task()) {
-            crate::log!("net-shell: spawn net_shell_task failed: {:?}\n", e);
-        }
-
-        if let Err(e) = spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task()) {
-            crate::log!("http-trueosfs: spawn http_trueosfs_task failed: {:?}\n", e);
-        }
-    } else {
-        crate::log!("net: skipping net tasks (no NIC)\n");
+    // Spawn all Embassy tasks via the centralized v-layer spawn service.
+    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner)) {
+        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
 
     // QuickJS smoke test (kept after net init so URL imports can work if used).
     unsafe { qjs::trueos_smoke::run() };
 
-    let _ = spawner.spawn(tga::blink_task());
-
-    for info in usb::xhci::xhc_list().iter().copied() {
-        // reads from hardware into dma buffs
-        let _ = spawner.spawn(usb::xhci::poll_task(info));
-
-        // reads from our dma buffs into usb rings
-        let _ = spawner.spawn(usb::poll_task(info));
-
-        // Single long-lived scout per controller. Rescans are triggered via a flag.
-        let _ = spawner.spawn(usb_scout_service(info));
-    }
-
-    let _ = spawner.spawn(usb::hid::input_logger());
-
-    let _ = spawner.spawn(usb::uac::sine_task());
-
-    // Virtual LED multiplexer/manager (best-effort; no-op when the controller is absent).
-    let _ = spawner.spawn(v::leds::task());
-
-    // Periodic LED color cycle (drives a virtual LED once per second).
-    let _ = spawner.spawn(v::leds::color_cycle_task());
-
-    // Continuously drains the TrueKey log cache when bound (requires truekey to be configured).
-    let _ = spawner.spawn(usb::truekey::drain_loop());
-
-	// Boot-time smoke test for the CDN fetch-to-file layer (prints rc + FS_ERR_*/NET_ERR_*).
-	if net_ready {
-         let _ = spawner.spawn(tst::boot_fetch_to_file_smoke_task());
-        // NOTE: leave the heavier cheerio smoke test opt-in; it can add significant
-        // DNS/TLS pressure during early boot and mask unrelated network issues.
-        // let _ = spawner.spawn(tst::boot_cheerio_smoke_task());
-        if let Err(e) = spawner.spawn(pci::pciids::boot_cache_pci_ids_task()) {
-            crate::log!("pciids: spawn boot_cache_pci_ids_task failed: {:?}\n", e);
-        }
-	}
-
-    if let Err(e) = spawner.spawn(shell::task(spawner, &shell::UART1_COM1_BACKEND)) {
-        crate::log!("shell: spawn UART shell failed: {:?}\n", e);
-    }
-    if net_ready {
-        if let Err(e) = spawner.spawn(shell::task(spawner, &shell::NET_TCP_SHELL_BACKEND)) {
-            crate::log!("shell: spawn net TCP shell failed: {:?}\n", e);
-        }
-    }
+    // NOTE: Remaining Embassy tasks are owned by v::spawn_service.
     
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {

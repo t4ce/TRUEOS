@@ -80,6 +80,8 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = cdc_acm::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Uac {
             let _ = uac::unregister_runtime(controller_id, slot_id);
+        } else if kind == DeviceKind::Hub {
+            let _ = hub::unregister_interrupt_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Leds {
             let _ = super::leds::unregister_runtime(controller_id, slot_id);
         }
@@ -486,6 +488,29 @@ pub async fn usb_scout_service(info: xhci::XhcInfo) {
     loop {
         Timer::after(EmbassyDuration::from_millis(POLL_MS)).await;
         elapsed_ms = elapsed_ms.saturating_add(POLL_MS);
+
+        // If any hub interrupt indicates port-change activity, rescan sooner than the
+        // fixed period. This keeps behavior close to the existing polling model while
+        // cutting latency on real hardware.
+        if hub::take_hub_change_pending(controller_id) {
+            if SCOUT_RUNNING[controller_id]
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                struct ScoutRunGuard {
+                    controller_id: usize,
+                }
+                impl Drop for ScoutRunGuard {
+                    fn drop(&mut self) {
+                        SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
+                    }
+                }
+                let _scout_guard = ScoutRunGuard { controller_id };
+                scout_pass(info).await;
+                elapsed_ms = 0;
+                continue;
+            }
+        }
 
         if elapsed_ms >= RESCAN_PERIOD_MS {
             if SCOUT_RUNNING[controller_id]
