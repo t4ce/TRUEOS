@@ -1,4 +1,5 @@
 pub mod html;
+pub mod http_trueosfs;
 pub mod smoke_fs;
 
 use embassy_executor::task;

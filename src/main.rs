@@ -290,7 +290,7 @@ pub extern "C" fn kmain() -> ! {
             crate::log!("net-shell: spawn net_shell_task failed: {:?}\n", e);
         }
 
-        if let Err(e) = spawner.spawn(crate::v::net::http_trueosfs_task()) {
+        if let Err(e) = spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task()) {
             crate::log!("http-trueosfs: spawn http_trueosfs_task failed: {:?}\n", e);
         }
     } else {
