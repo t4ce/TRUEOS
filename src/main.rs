@@ -249,19 +249,11 @@ pub extern "C" fn kmain() -> ! {
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
     let spawner = executor.spawner();
 
-    // Defer font cache build; early boot can proceed without it.
-    // VGA text rendering will become active once the cache is ready.
-    if let Err(e) = spawner.spawn(vga::init_font_cache_task()) {
-        crate::log!("vga: spawn init_font_cache_task failed: {:?}\n", e);
+    // Centralized boot task orchestrator.
+    // This becomes the single registry for Embassy tasks and their readiness conditions.
+    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner)) {
+        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
-
-    // Runs only after being requested (e.g. when USBMS registers).
-    let _ = spawner.spawn(crate::tst::smoke_fs::bsp_smoke_service_task());
-    // Handles deferred TRUEOSFS probing/mount requests from hotplug drivers.
-    let _ = spawner.spawn(crate::v::fs::trueosfs::mount_service_task());
-
-	// Serves QuickJS Promise-based async filesystem operations.
-	let _ = spawner.spawn(io::cabi::qjs_async_fs_service_task());
 
     time::init(executor);
 
