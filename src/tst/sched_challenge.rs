@@ -1,5 +1,3 @@
-#![cfg(feature = "tst-challenge")]
-
 use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};

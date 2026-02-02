@@ -770,7 +770,7 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
             }
             let _ = ctx
                 .spawner
-                .spawn(crate::net::tls_demo::tls_demo_matrix_job(slot, h));
+                .spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h));
             ctx.io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }

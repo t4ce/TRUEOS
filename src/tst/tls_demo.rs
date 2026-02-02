@@ -13,7 +13,7 @@ use trueos_v::vnet as vnet;
 use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::Queue;
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-use super::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 // Default host for the demo.
 // NOTE: We now resolve via the slirp DNS server so the demo is resilient to

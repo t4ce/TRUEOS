@@ -412,7 +412,22 @@ async fn drain_jobs_and_promises(
             break;
         }
 
-        Timer::after(EmbassyDuration::from_millis(1)).await;
+        if pending {
+            let remaining_ms = if max_ticks == 0 {
+                0
+            } else {
+                let now = embassy_time_driver::now();
+                let left = deadline.saturating_sub(now);
+                ((left.saturating_mul(1000)) / hz).max(1)
+            };
+            let ok = crate::surface::io::cabi::async_fs_wait_for_completion(remaining_ms).await;
+            if !ok {
+                io.write_str("qjs: async wait timeout\r\n");
+                break;
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
     }
 
     true

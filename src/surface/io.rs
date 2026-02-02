@@ -124,10 +124,12 @@ pub mod kfs {
 	pub fn read_file(path: &str) -> Result<Vec<u8>> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		match crate::wait::block_on(crate::v::fs::trueosfs::file_out_async(disk, name.as_str()))? {
-			Some(bytes) => Ok(bytes),
-			None => Err(FsError::NotFound),
-		}
+		crate::wait::spawn_and_wait_local(async move {
+			match crate::v::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
+				Some(bytes) => Ok(bytes),
+				None => Err(FsError::NotFound),
+			}
+		})
 	}
 
 	#[inline]
@@ -144,8 +146,11 @@ pub mod kfs {
 	pub fn write_file(path: &str, data: &[u8]) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let ok = crate::wait::block_on(crate::v::fs::trueosfs::file_in_async(disk, name.as_str(), data))?;
-		if ok { Ok(()) } else { Err(FsError::NoSpace) }
+		let data = data.to_vec();
+		crate::wait::spawn_and_wait_local(async move {
+			let ok = crate::v::fs::trueosfs::file_in_async(disk, name.as_str(), data.as_slice()).await?;
+			if ok { Ok(()) } else { Err(FsError::NoSpace) }
+		})
 	}
 
 	#[inline]
@@ -161,21 +166,23 @@ pub mod kfs {
 		let disk = root_disk()?;
 		let src = normalize_rel(src, false)?;
 		let dst = normalize_rel(dst, false)?;
-		if src == dst {
-			return Ok(());
-		}
-		if crate::wait::block_on(crate::v::fs::trueosfs::file_exists_async(disk, dst.as_str()))? {
-			return Err(FsError::AlreadyExists);
-		}
-		let Some(bytes) = crate::wait::block_on(crate::v::fs::trueosfs::file_out_async(disk, src.as_str()))? else {
-			return Err(FsError::NotFound);
-		};
-		let ok = crate::wait::block_on(crate::v::fs::trueosfs::file_in_async(disk, dst.as_str(), bytes.as_slice()))?;
-		if !ok {
-			return Err(FsError::NoSpace);
-		}
-		let _ = crate::wait::block_on(crate::v::fs::trueosfs::file_delete_async(disk, src.as_str()));
-		Ok(())
+		crate::wait::spawn_and_wait_local(async move {
+			if src == dst {
+				return Ok(());
+			}
+			if crate::v::fs::trueosfs::file_exists_async(disk, dst.as_str()).await? {
+				return Err(FsError::AlreadyExists);
+			}
+			let Some(bytes) = crate::v::fs::trueosfs::file_out_async(disk, src.as_str()).await? else {
+				return Err(FsError::NotFound);
+			};
+			let ok = crate::v::fs::trueosfs::file_in_async(disk, dst.as_str(), bytes.as_slice()).await?;
+			if !ok {
+				return Err(FsError::NoSpace);
+			}
+			let _ = crate::v::fs::trueosfs::file_delete_async(disk, src.as_str()).await;
+			Ok(())
+		})
 	}
 
 	#[inline]
@@ -204,10 +211,12 @@ pub mod kfs {
 	pub fn list_dir(path: &str) -> Result<String> {
 		let disk = root_disk()?;
 		let dir = normalize_rel(path, true)?;
-		match crate::wait::block_on(crate::v::fs::trueosfs::list_dir_async(disk, dir.as_str()))? {
-			Some(v) => Ok(v),
-			None => Err(FsError::NoRoot),
-		}
+		crate::wait::spawn_and_wait_local(async move {
+			match crate::v::fs::trueosfs::list_dir_async(disk, dir.as_str()).await? {
+				Some(v) => Ok(v),
+				None => Err(FsError::NoRoot),
+			}
+		})
 	}
 
 	#[inline]
@@ -224,8 +233,10 @@ pub mod kfs {
 	pub fn remove(path: &str) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let ok = crate::wait::block_on(crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()))?;
-		if ok { Ok(()) } else { Err(FsError::NotFound) }
+		crate::wait::spawn_and_wait_local(async move {
+			let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
+			if ok { Ok(()) } else { Err(FsError::NotFound) }
+		})
 	}
 
 	#[inline]
@@ -249,7 +260,9 @@ pub mod kfs {
 	pub fn exists(path: &str) -> Result<bool> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		Ok(crate::wait::block_on(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()))?)
+		crate::wait::spawn_and_wait_local(async move {
+			Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
+		})
 	}
 
 	#[inline]
@@ -263,8 +276,11 @@ pub mod kfs {
 	pub fn append_into_file(dst_path: &str, src: &[u8]) -> Result<()> {
 		let disk = root_disk()?;
 		let name = normalize_rel(dst_path, false)?;
-		let ok = crate::wait::block_on(crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src))?;
-		if ok { Ok(()) } else { Err(FsError::NoSpace) }
+		let src = src.to_vec();
+		crate::wait::spawn_and_wait_local(async move {
+			let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src.as_slice()).await?;
+			if ok { Ok(()) } else { Err(FsError::NoSpace) }
+		})
 	}
 
 	/// Async variant of [`append_into_file`].
@@ -283,6 +299,7 @@ pub mod cabi {
 	use core::sync::atomic::{AtomicU32, Ordering};
 	use embassy_time::{Duration as EmbassyDuration, Timer};
 	use spin::Mutex;
+	use crate::wait::WaitQueue;
 
 	include!("cabi_codes.rs");
 
@@ -565,6 +582,7 @@ pub mod cabi {
 	static ASYNC_FS_REQS: Mutex<Vec<AsyncFsRequest>> = Mutex::new(Vec::new());
 	static ASYNC_FS_DONE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 	static ASYNC_FS_RESULTS: Mutex<Vec<AsyncFsCompletion>> = Mutex::new(Vec::new());
+	static ASYNC_FS_WAIT: WaitQueue = WaitQueue::new();
 
 	#[inline]
 	fn next_async_fs_id() -> u32 {
@@ -589,6 +607,7 @@ pub mod cabi {
 		let id = done.id;
 		ASYNC_FS_RESULTS.lock().push(done);
 		ASYNC_FS_DONE.lock().push(id);
+		ASYNC_FS_WAIT.notify_all();
 	}
 
 	fn find_async_fs_completion(id: u32) -> Option<AsyncFsCompletion> {
@@ -601,6 +620,10 @@ pub mod cabi {
 		if let Some(pos) = res.iter().position(|c| c.id == id) {
 			res.remove(pos);
 		}
+	}
+
+	pub async fn async_fs_wait_for_completion(timeout_ms: u64) -> bool {
+		ASYNC_FS_WAIT.wait_for_event_timeout(timeout_ms).await
 	}
 
 	/// Background worker that executes async filesystem requests started via the C ABI.
