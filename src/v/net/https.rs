@@ -18,7 +18,10 @@ pub enum FetchError {
     NoNic,
     BadUrl,
     DnsFailed,
-    Timeout,
+    DnsTimeout,
+    ConnectTimeout,
+    TlsTimeout,
+    BodyTimeout,
     Tls,
     Http(u16),
     ResponseTooLarge,
@@ -37,6 +40,12 @@ pub const NET_ERR_BAD_URL: i32 = -10;
 pub const NET_ERR_TIMEOUT: i32 = -11;
 pub const NET_ERR_HTTP: i32 = -12;
 pub const NET_ERR_TLS: i32 = -13;
+
+// More specific timeout codes (QJS knows these names; return them to improve diagnostics).
+pub const NET_ERR_TIMEOUT_DNS: i32 = -111;
+pub const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
+pub const NET_ERR_TIMEOUT_TLS: i32 = -113;
+pub const NET_ERR_TIMEOUT_BODY: i32 = -114;
 
 #[inline]
 fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
@@ -58,8 +67,10 @@ fn fetch_error_to_code(err: FetchError) -> i32 {
     match err {
         FetchError::NoNic => NET_ERR_TIMEOUT,
         FetchError::BadUrl => NET_ERR_BAD_URL,
-        FetchError::DnsFailed => NET_ERR_TIMEOUT,
-        FetchError::Timeout => NET_ERR_TIMEOUT,
+        FetchError::DnsFailed | FetchError::DnsTimeout => NET_ERR_TIMEOUT_DNS,
+        FetchError::ConnectTimeout => NET_ERR_TIMEOUT_CONNECT,
+        FetchError::TlsTimeout => NET_ERR_TIMEOUT_TLS,
+        FetchError::BodyTimeout => NET_ERR_TIMEOUT_BODY,
         FetchError::Tls => NET_ERR_TLS,
         FetchError::Http(_) => NET_ERR_HTTP,
         FetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
@@ -277,8 +288,10 @@ async fn fetch_on_device(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
-    let Ok(ip) = dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await else {
-        return Err(FetchError::DnsFailed);
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+        Ok(ip) => ip,
+        Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
+        Err(_) => return Err(FetchError::DnsFailed),
     };
 
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -473,7 +486,17 @@ async fn fetch_on_device(
             if let Some(h) = tls_handle {
                 let _ = cmds.push(TlsCommand::Close { handle: h });
             }
-            return Err(FetchError::Timeout);
+            // Best-effort phase classification: we have a single overall deadline.
+            // - No handle => TCP connect never opened
+            // - Handle but no HTTP sent => TLS handshake didn't complete
+            // - HTTP sent => body stalled
+            return Err(if tls_handle.is_none() {
+                FetchError::ConnectTimeout
+            } else if !http_sent {
+                FetchError::TlsTimeout
+            } else {
+                FetchError::BodyTimeout
+            });
         }
 
         Timer::after(EmbassyDuration::from_millis(2)).await;
@@ -583,7 +606,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
     };
 
     // Match the old behavior: fixed limits and timeout.
-    const TIMEOUT_MS: u32 = 30_000;
+    const TIMEOUT_MS: u32 = 3_000;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
     match crate::time::block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
