@@ -935,6 +935,86 @@ fn now() -> Instant {
 
 pub const MAX_NET_DEVICES: usize = 8;
 
+static NET_BLOCK_ON_PUMP_LAST_TICK: AtomicU64 = AtomicU64::new(0);
+
+// Shared net service state so both the async service task and synchronous `time::block_on`
+// hooks can drive the stack without diverging socket/interface state.
+static NET_SERVICES: spin::Mutex<Option<Vec<NetService>>> = spin::Mutex::new(None);
+
+fn owner_device_index(owner: &str) -> Option<usize> {
+    let (base, suffix) = owner.rsplit_once('@')?;
+    if base.is_empty() || suffix.is_empty() {
+        return None;
+    }
+    if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<usize>().ok()
+}
+
+fn ensure_services(count: usize) {
+    let mut guard = NET_SERVICES.lock();
+    let needs_init = guard.as_ref().map(|v| v.len() != count).unwrap_or(true);
+    if needs_init {
+        *guard = Some((0..count).map(NetService::new).collect());
+    }
+}
+
+fn service_tick_once() {
+    let count = crate::net::device_count();
+    if count == 0 {
+        return;
+    }
+
+    ensure_services(count);
+
+    let mut guard = NET_SERVICES.lock();
+    let Some(services) = guard.as_mut() else {
+        return;
+    };
+
+    for svc in services.iter_mut() {
+        svc.tick();
+    }
+
+    let cmds = drain_commands();
+    for (owner, batch) in cmds {
+        let idx = owner_device_index(owner).unwrap_or(0);
+        let idx = idx.min(services.len().saturating_sub(1));
+        services[idx].handle_commands(vec![(owner, batch)]);
+    }
+
+    for svc in services.iter_mut() {
+        svc.poll_sockets();
+    }
+}
+
+/// Pump the network stack from synchronous contexts (e.g. inside `time::block_on`).
+///
+/// This is rate-limited to ~1kHz to keep tight spin loops from doing excessive work.
+pub fn pump_block_on_hook() {
+    let now = embassy_time_driver::now();
+    let last = NET_BLOCK_ON_PUMP_LAST_TICK.load(Ordering::Relaxed);
+    if last == now {
+        return;
+    }
+    if NET_BLOCK_ON_PUMP_LAST_TICK
+        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    // When synchronous code is running, async poll tasks may be starved; poll RX directly.
+    let count = crate::net::device_count();
+    for idx in 0..count {
+        crate::net::poll_at(idx);
+    }
+
+    // Drive the smoltcp/service loop once.
+    service_tick_once();
+}
+
 /// Per-NIC RX poll loop.
 ///
 /// This decouples device RX polling from the smoltcp/service loop so that
@@ -955,34 +1035,10 @@ pub async fn net_service_task() {
         return;
     }
 
-    fn owner_device_index(owner: &str) -> Option<usize> {
-        let (base, suffix) = owner.rsplit_once('@')?;
-        if base.is_empty() || suffix.is_empty() {
-            return None;
-        }
-        if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        suffix.parse::<usize>().ok()
-    }
-
-    let mut services: Vec<NetService> = (0..count).map(NetService::new).collect();
+    ensure_services(count);
 
     loop {
-        for svc in services.iter_mut() {
-            svc.tick();
-        }
-
-        let cmds = drain_commands();
-        for (owner, batch) in cmds {
-            let idx = owner_device_index(owner).unwrap_or(0);
-            let idx = idx.min(services.len().saturating_sub(1));
-            services[idx].handle_commands(vec![(owner, batch)]);
-        }
-
-        for svc in services.iter_mut() {
-            svc.poll_sockets();
-        }
+        service_tick_once();
         Timer::after(EmbassyDuration::from_millis(5)).await;
     }
 }

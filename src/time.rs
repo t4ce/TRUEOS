@@ -1,7 +1,7 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable};
 use core::task::Waker;
 
@@ -23,7 +23,15 @@ static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
-static BLOCK_ON_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static EXECUTOR_POLLING: AtomicBool = AtomicBool::new(false);
+
+const MAX_BLOCK_ON_HOOKS: usize = 4;
+static BLOCK_ON_HOOKS: [AtomicPtr<()>; MAX_BLOCK_ON_HOOKS] = [
+    AtomicPtr::new(core::ptr::null_mut()),
+    AtomicPtr::new(core::ptr::null_mut()),
+    AtomicPtr::new(core::ptr::null_mut()),
+    AtomicPtr::new(core::ptr::null_mut()),
+];
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -65,7 +73,14 @@ pub fn poll_executor() {
     if ptr.is_null() {
         return;
     }
+
+    // Avoid re-entrant executor polling (e.g. if `poll_executor` is used from within
+    // a `time::block_on` hook while the executor itself is polling futures).
+    if EXECUTOR_POLLING.swap(true, Ordering::AcqRel) {
+        return;
+    }
     unsafe { (&*ptr).poll() };
+    EXECUTOR_POLLING.store(false, Ordering::Release);
 }
 
 /// Install a hook that is called from within [`block_on`] while it is spinning.
@@ -74,18 +89,34 @@ pub fn poll_executor() {
 /// to keep I/O progressing when synchronous code needs to wait on an async
 /// operation.
 pub fn register_block_on_hook(hook: fn()) {
-    BLOCK_ON_HOOK.store(hook as *mut (), Ordering::Release);
+    let ptr = hook as *mut ();
+    for slot in &BLOCK_ON_HOOKS {
+        // Fill first empty slot.
+        if slot
+            .compare_exchange(
+                core::ptr::null_mut(),
+                ptr,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return;
+        }
+    }
 }
 
 #[inline]
 fn block_on_hook() {
-    let ptr = BLOCK_ON_HOOK.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return;
+    for slot in &BLOCK_ON_HOOKS {
+        let ptr = slot.load(Ordering::Acquire);
+        if ptr.is_null() {
+            continue;
+        }
+        // Safety: only written via `register_block_on_hook`.
+        let f: fn() = unsafe { core::mem::transmute(ptr) };
+        f();
     }
-    // Safety: only written via `register_block_on_hook`.
-    let f: fn() = unsafe { core::mem::transmute(ptr) };
-    f();
 }
 
 fn dummy_raw_waker() -> RawWaker {

@@ -4,6 +4,8 @@ use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use heapless::Vec as HVec;
+use spin::Mutex;
 
 use trueos_v::vnet as vnet;
 
@@ -60,6 +62,20 @@ pub const PUBLIC_DNS_SERVERS: [[u8; 4]; 3] = [
 ];
 
 const DNS_PORT: u16 = 53;
+
+const DNS_CACHE_CAP: usize = 8;
+// Keep this short; it's mainly to avoid repeated lookups during module loading.
+const DNS_CACHE_TTL_TICKS: u64 = 15 * embassy_time_driver::TICK_HZ as u64;
+
+#[derive(Clone, Debug)]
+struct DnsCacheEntry {
+    dev_idx: u8,
+    host: heapless::String<96>,
+    ip: [u8; 4],
+    expires_at: u64,
+}
+
+static DNS_CACHE: Mutex<HVec<DnsCacheEntry, DNS_CACHE_CAP>> = Mutex::new(HVec::new());
 
 static DNS_SEQ: AtomicU32 = AtomicU32::new(1);
 
@@ -324,18 +340,34 @@ pub async fn resolve_ipv4_for_device(
     host: &str,
     cfg: DnsConfig,
 ) -> Result<[u8; 4], DnsError> {
+    let host_trimmed = host.trim().trim_end_matches('.');
+    if host_trimmed.is_empty() {
+        return Err(DnsError::BadName);
+    }
+
+    // Fast path: small in-kernel DNS cache to avoid repeated lookups with short timeouts.
+    // This is especially helpful for QJS module loading (many imports hit the same host).
+    {
+        let now = embassy_time_driver::now();
+        let mut cache = DNS_CACHE.lock();
+        // Drop expired entries opportunistically.
+        cache.retain(|e| e.expires_at > now);
+        if let Some(e) = cache
+            .iter()
+            .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == host_trimmed)
+        {
+            return Ok(e.ip);
+        }
+    }
+
     let net = VNet::open(dev_idx).ok_or(DnsError::NoNic)?;
 
     let local_port = alloc_local_port();
-    let Some(udp) = open_udp(&net, local_port, cfg.timeout_ms.min(500)).await else {
+    let Some(udp) = open_udp(&net, local_port, cfg.timeout_ms).await else {
         return Err(DnsError::Timeout);
     };
 
-    let mut current: String = host.trim().trim_end_matches('.').into();
-    if current.is_empty() {
-        let _ = net.submit(vnet::Command::Close { handle: udp });
-        return Err(DnsError::BadName);
-    }
+    let mut current: String = host_trimmed.into();
 
     let total_deadline = Instant::now() + EmbassyDuration::from_millis(cfg.timeout_ms);
 
@@ -415,6 +447,32 @@ pub async fn resolve_ipv4_for_device(
         match answered.unwrap_or(DnsAnswer::None) {
             DnsAnswer::A(ip) => {
                 let _ = net.submit(vnet::Command::Close { handle: udp });
+                // Best-effort cache insert; ignore on overflow.
+                if let Ok(mut hs) = heapless::String::<96>::try_from(host_trimmed) {
+                    let mut cache = DNS_CACHE.lock();
+                    cache.retain(|e| e.expires_at > embassy_time_driver::now());
+                    // Replace existing entry if present.
+                    if let Some(e) = cache
+                        .iter_mut()
+                        .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == hs.as_str())
+                    {
+                        e.ip = ip;
+                        e.expires_at = embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS);
+                    } else {
+                        let dev = dev_idx.min(255) as u8;
+                        let _ = cache.push(DnsCacheEntry {
+                            dev_idx: dev,
+                            host: {
+                                // `hs` already contains the host; move it.
+                                let mut s = heapless::String::<96>::new();
+                                s.push_str(hs.as_str()).ok();
+                                s
+                            },
+                            ip,
+                            expires_at: embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS),
+                        });
+                    }
+                }
                 return Ok(ip);
             }
             DnsAnswer::Cname(next) => {

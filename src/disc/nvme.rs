@@ -107,11 +107,21 @@ impl NvmeQueue {
             .ok_or(block::Error::InvalidParam)?;
 
         let align = core::cmp::max(PAGE_SIZE, page_size_bytes);
-        let (sq_phys, sq_virt_u8) = dma::alloc(sq_bytes, align).ok_or(block::Error::DmaUnavailable)?;
-        let (cq_phys, cq_virt_u8) = dma::alloc(cq_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+        // Be conservative: allocate whole pages for queues. Some controllers/emulators
+        // assume queue memory is backed by full pages even when the effective queue
+        // size is smaller (e.g. CQ at 64*16=1024 bytes).
+        let sq_alloc_bytes = ((sq_bytes + align - 1) / align)
+            .checked_mul(align)
+            .ok_or(block::Error::InvalidParam)?;
+        let cq_alloc_bytes = ((cq_bytes + align - 1) / align)
+            .checked_mul(align)
+            .ok_or(block::Error::InvalidParam)?;
+
+        let (sq_phys, sq_virt_u8) = dma::alloc(sq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+        let (cq_phys, cq_virt_u8) = dma::alloc(cq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
         unsafe {
-            write_bytes(sq_virt_u8, 0, sq_bytes);
-            write_bytes(cq_virt_u8, 0, cq_bytes);
+            write_bytes(sq_virt_u8, 0, sq_alloc_bytes);
+            write_bytes(cq_virt_u8, 0, cq_alloc_bytes);
         }
 
         Ok(Self {
@@ -123,7 +133,10 @@ impl NvmeQueue {
             cq_virt: cq_virt_u8 as *mut NvmeCqe,
             sq_tail: 0,
             cq_head: 0,
-            cq_phase: true,
+            // Admin queue completions typically start with phase=1.
+            // Some controllers/emulators appear to start newly created IO CQs with phase=0.
+            // If we guess wrong, IO completions can be silently ignored and appear as timeouts.
+            cq_phase: qid == 0,
         })
     }
 
@@ -269,6 +282,21 @@ impl NvmeController {
         };
         self.db_write_sq_tail(0, tail % depth);
         self.admin_poll_cq_for_cid_sync(cid, timeout_ms)
+    }
+
+    fn io_submit_and_wait_sync(
+        &mut self,
+        sqe: NvmeSqe,
+        cid: u16,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let (tail, depth) = {
+            let q = &mut self.io;
+            let _ = q.sq_push(sqe)?;
+            (q.sq_tail, q.depth)
+        };
+        self.db_write_sq_tail(1, tail % depth);
+        self.poll_queue_cq_for_cid_sync(1, cid, timeout_ms)
     }
 
     async fn io_submit_and_wait_async(
@@ -802,6 +830,39 @@ impl NvmeController {
         }
         Ok(())
     }
+
+    fn io_rw_sync(
+        &mut self,
+        opcode: u8,
+        nsid: u32,
+        slba: u64,
+        nlb: u16,
+        buf_phys: u64,
+        buf_len: usize,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let cid = self.alloc_cid();
+
+        let mut sqe = NvmeSqe { d: [0; 16] };
+        sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
+        sqe.d[1] = nsid;
+        sqe.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
+        sqe.d[7] = (prp1 >> 32) as u32;
+        sqe.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
+        sqe.d[9] = (prp2 >> 32) as u32;
+        sqe.d[10] = (slba & 0xFFFF_FFFF) as u32;
+        sqe.d[11] = (slba >> 32) as u32;
+        sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
+
+        let cpl = self.io_submit_and_wait_sync(sqe, cid, timeout_ms);
+
+        if let Some((_lp, lv, lb)) = prp_list {
+            dma::dealloc(lv, lb);
+        }
+
+        cpl
+    }
 }
 
 struct NvmeBlockDevice {
@@ -1007,6 +1068,35 @@ pub fn probe_once() {
             if blocks == 0 || block_size == 0 {
                 crate::log!("nvme: {} namespace has invalid capacity\n", pci_addr);
                 continue;
+            }
+
+            // Early sanity check: verify the IO queue actually completes a tiny READ.
+            // If this times out, upper layers will see `block::Error::Timeout` on reads.
+            {
+                let bs = block_size as usize;
+                let bytes = bs.max(512);
+                if let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) {
+                    unsafe { write_bytes(dma_virt, 0, bytes) };
+                    match ctrl.io_rw_sync(NVME_NVM_READ, 1, 0, 1, dma_phys, bs, 2000) {
+                        Ok(cpl) => {
+                            if cpl.status_code() != 0 {
+                                crate::log!(
+                                    "nvme: {} io-selftest read failed status=0x{:04X} (sct={} sc={})\n",
+                                    pci_addr,
+                                    cpl.status,
+                                    cpl.status_type(),
+                                    cpl.status_code(),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            crate::log!("nvme: {} io-selftest read failed: {:?}\n", pci_addr, e);
+                        }
+                    }
+                    dma::dealloc(dma_virt, bytes);
+                } else {
+                    crate::log!("nvme: {} io-selftest: DMA alloc failed\n", pci_addr);
+                }
             }
 
             let label = if let Some(s) = ctrl.serial.as_deref() {

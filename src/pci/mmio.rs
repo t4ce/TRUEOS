@@ -1,4 +1,4 @@
-use core::{cmp, ptr::NonNull};
+use core::{cmp, ptr::NonNull, sync::atomic::{AtomicU64, Ordering}};
 
 use spin::Mutex;
 use x86_64::{
@@ -17,6 +17,21 @@ use super::dma;
 
 const DEFAULT_MMIO_WINDOW: usize = 0x10_000;
 const PAGE_SIZE: u64 = Size4KiB::SIZE;
+
+// Dedicated virtual address space for MMIO mappings.
+//
+// Rationale:
+// - Limine typically provides an HHDM direct map that may be backed by huge pages
+//   and/or cacheable mappings.
+// - Attempting to remap the same HHDM pages as uncached can fail (ParentEntryHugePage)
+//   or be ignored (PageAlreadyMapped), leaving devices accessed through cacheable aliases.
+// - Cacheable MMIO aliases can manifest as "device timeouts" (stale reads / posted writes).
+//
+// So we map MMIO into a separate, always-4KiB-mapped region with explicit flags.
+const MMIO_VIRT_BASE: u64 = 0xFFFF_FF00_0000_0000;
+const MMIO_VIRT_LIMIT: u64 = 0xFFFF_FF80_0000_0000;
+
+static MMIO_NEXT_VIRT: AtomicU64 = AtomicU64::new(MMIO_VIRT_BASE);
 
 static PAGING_LOCK: Mutex<()> = Mutex::new(());
 
@@ -86,15 +101,25 @@ pub fn map_mmio_region_exact(phys_base: u64, size: usize) -> Result<NonNull<u8>,
 
 fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>, MapError> {
     let requested = map_size;
-    let hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
+    // We still require HHDM to access the active page tables (CR3 walk uses it).
+    let _hhdm = limine::hhdm_offset().ok_or(MapError::NoHhdm)?;
 
     let phys_start = phys_base & !(PAGE_SIZE - 1);
     let offset = (phys_base - phys_start) as usize;
     let span = requested.checked_add(offset).ok_or(MapError::InvalidArgs)? as u64;
     let total = align_up(span, PAGE_SIZE);
 
+    let total = total as usize;
+
+    // Allocate a fresh virtual window for this MMIO mapping.
+    let total_u64 = total as u64;
+    let virt_start = MMIO_NEXT_VIRT.fetch_add(total_u64, Ordering::AcqRel);
+    if virt_start < MMIO_VIRT_BASE || virt_start.saturating_add(total_u64) > MMIO_VIRT_LIMIT {
+        return Err(MapError::FrameAllocationFailed);
+    }
+
     let _guard = PAGING_LOCK.lock();
-    let phys_offset = VirtAddr::new(hhdm);
+    let phys_offset = VirtAddr::new(_hhdm);
     let mut mapper = unsafe { active_mapper(phys_offset)? };
     let mut allocator = PageTableAllocator;
 
@@ -106,8 +131,8 @@ fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>
     let table_flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
 
     for delta in (0..total).step_by(PAGE_SIZE as usize) {
-        let phys_addr = phys_start + delta;
-        let virt_addr = phys_addr + hhdm;
+        let phys_addr = phys_start + delta as u64;
+        let virt_addr = virt_start + delta as u64;
 
         let page: Page<Size4KiB> = Page::containing_address(VirtAddr::new(virt_addr));
         let frame = PhysFrame::containing_address(PhysAddr::new(phys_addr));
@@ -124,7 +149,7 @@ fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>
         }
     }
 
-    let virt_ptr = (phys_base + hhdm) as *mut u8;
+    let virt_ptr = (virt_start + offset as u64) as *mut u8;
     NonNull::new(virt_ptr).ok_or(MapError::InvalidPointer)
 }
 

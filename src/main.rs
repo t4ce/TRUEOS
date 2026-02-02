@@ -266,7 +266,12 @@ pub extern "C" fn kmain() -> ! {
     time::init(executor);
 
     net::init();
-    let net_ready = net::mac_address().is_some();
+    // Ensure synchronous callers using `time::block_on` (e.g. QuickJS module loader)
+    // can still progress the network stack.
+    crate::time::register_block_on_hook(net::adapter::pump_block_on_hook);
+    crate::time::register_block_on_hook(net::tls_socket::pump_block_on_hook);
+    // Some drivers may fail to report a MAC early; treat any detected NIC as usable.
+    let net_ready = net::device_count() > 0;
     if net_ready {
         let count = net::device_count();
         for idx in 0..count {
