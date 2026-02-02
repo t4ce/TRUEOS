@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use crate::wait;
 
 pub type CpuCallFn = fn(u64) -> u64;
 
@@ -234,7 +235,7 @@ pub fn wait_all_online_aps(seq: u64, spins: usize) -> bool {
         if done {
             return true;
         }
-        core::hint::spin_loop();
+        wait::spin_step();
     }
 
     false

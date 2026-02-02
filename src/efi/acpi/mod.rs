@@ -1,6 +1,7 @@
 use core::{hint, ptr::NonNull};
 
 use acpi::{AcpiTables, Handler as AcpiHandler, PciAddress, PhysicalMapping};
+use crate::wait;
 use embassy_time_driver::TICK_HZ;
 use spin::Once;
 
@@ -234,7 +235,7 @@ impl AcpiHandler for AcpiIdentityHandler {
             .nanos_since_boot()
             .saturating_add(microseconds.saturating_mul(1_000));
         while self.nanos_since_boot() < target {
-            hint::spin_loop();
+            wait::spin_step();
         }
     }
 

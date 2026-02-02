@@ -9,6 +9,7 @@ use embassy_executor::raw::Executor as RawExecutor;
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
 use spin::{Mutex, Once};
+use crate::wait;
 
 struct WakeEntry {
     at: u64,
@@ -156,7 +157,7 @@ pub fn block_on<F: Future>(mut fut: F) -> F::Output {
 
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(v) => return v,
-            Poll::Pending => core::hint::spin_loop(),
+            Poll::Pending => wait::spin_step(),
         }
     }
 }

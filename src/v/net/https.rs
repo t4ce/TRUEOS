@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, format, string::String, vec::Vec};
+use core::future::Future;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -29,6 +30,11 @@ pub enum FetchError {
 
 // Keep these return codes compatible with the existing TRUEOS C ABI (used by QJS).
 include!("../../surface/cabi_codes.rs");
+
+#[inline]
+fn qjs_block_on<F: Future>(fut: F) -> F::Output {
+    crate::wait::block_on(fut)
+}
 
 #[inline]
 fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
@@ -588,7 +594,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
     const TIMEOUT_MS: u32 = 3_000;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
-    match crate::wait::block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
+    match qjs_block_on(fetch_https_to_file_async(url_s, path_s, TIMEOUT_MS, MAX_BYTES)) {
         Ok(()) => 0,
         Err(rc) => rc,
     }

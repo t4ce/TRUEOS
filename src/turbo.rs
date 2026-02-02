@@ -2,6 +2,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::Msr;
+use crate::wait;
 
 const MSR_IA32_MISC_ENABLE: u32 = 0x1A0;
 const TURBO_DISABLE_BIT: u64 = 1 << 38;
@@ -173,7 +174,6 @@ pub fn verify_all(spins: usize) -> Result<TurboVerifyReport, TurboSetError> {
     if !supported_cpuid() {
         return Err(TurboSetError::Unsupported);
     }
-
     let total = crate::smp::cpu_count().max(1);
 
     // Always include BSP state immediately.
@@ -218,7 +218,7 @@ pub fn verify_all(spins: usize) -> Result<TurboVerifyReport, TurboSetError> {
                 ok = true;
                 break;
             }
-            core::hint::spin_loop();
+            wait::spin_step();
         }
         ok
     };

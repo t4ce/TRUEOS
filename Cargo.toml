@@ -38,6 +38,7 @@ rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, feature
 webpki-roots = { version = "1.0", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
+nalgebra = { version = "0.33.2", default-features = false, features = ["alloc", "libm"] }
 
 [profile.dev]
 panic = "abort"
