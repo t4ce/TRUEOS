@@ -25,12 +25,18 @@ const NVME_REG_DBS: usize = 0x1000;
 const NVME_ADMIN_CREATE_IO_CQ: u8 = 0x05;
 const NVME_ADMIN_CREATE_IO_SQ: u8 = 0x01;
 const NVME_ADMIN_IDENTIFY: u8 = 0x06;
+const NVME_ADMIN_SET_FEATURES: u8 = 0x09;
+
+const NVME_FEAT_NUMBER_OF_QUEUES: u32 = 0x07;
 
 const NVME_NVM_FLUSH: u8 = 0x00;
 const NVME_NVM_WRITE: u8 = 0x01;
 const NVME_NVM_READ: u8 = 0x02;
 
 const PAGE_SIZE: usize = 4096;
+
+const IO_PENDING_SLOTS: usize = 128;
+const CID_BITMAP_WORDS: usize = 1024; // 65536 bits / 64
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -67,6 +73,12 @@ impl Completion {
     fn status_type(self) -> u8 {
         ((self.status >> 9) & 0x7) as u8
     }
+}
+
+#[derive(Copy, Clone)]
+struct PendingCompletion {
+    cid: u16,
+    cpl: Completion,
 }
 
 struct NvmeQueue {
@@ -133,10 +145,10 @@ impl NvmeQueue {
             cq_virt: cq_virt_u8 as *mut NvmeCqe,
             sq_tail: 0,
             cq_head: 0,
-            // Admin queue completions typically start with phase=1.
-            // Some controllers/emulators appear to start newly created IO CQs with phase=0.
-            // If we guess wrong, IO completions can be silently ignored and appear as timeouts.
-            cq_phase: qid == 0,
+            // CQ memory is zeroed, so the initial phase-bit in memory is 0.
+            // Per NVMe convention, software must start expecting phase=1 so it does not treat
+            // empty/zeroed entries as valid completions.
+            cq_phase: true,
         })
     }
 
@@ -171,6 +183,8 @@ struct NvmeController {
     admin: NvmeQueue,
     io: NvmeQueue,
     next_cid: u16,
+    io_inflight: [u64; CID_BITMAP_WORDS],
+    io_pending: [Option<PendingCompletion>; IO_PENDING_SLOTS],
     pci: block::PciAddress,
     serial: Option<String>,
 }
@@ -179,6 +193,67 @@ unsafe impl Send for NvmeController {}
 unsafe impl Sync for NvmeController {}
 
 impl NvmeController {
+    fn io_inflight_test(&self, cid: u16) -> bool {
+        let idx = (cid as usize) >> 6;
+        let bit = 1u64 << ((cid as usize) & 63);
+        (self.io_inflight[idx] & bit) != 0
+    }
+
+    fn io_inflight_set(&mut self, cid: u16) {
+        let idx = (cid as usize) >> 6;
+        let bit = 1u64 << ((cid as usize) & 63);
+        self.io_inflight[idx] |= bit;
+    }
+
+    fn io_inflight_clear(&mut self, cid: u16) {
+        let idx = (cid as usize) >> 6;
+        let bit = 1u64 << ((cid as usize) & 63);
+        self.io_inflight[idx] &= !bit;
+    }
+
+    fn io_pending_take(&mut self, cid: u16) -> Option<Completion> {
+        for slot in &mut self.io_pending {
+            if let Some(p) = slot {
+                if p.cid == cid {
+                    let cpl = p.cpl;
+                    *slot = None;
+                    return Some(cpl);
+                }
+            }
+        }
+        None
+    }
+
+    fn io_pending_put(&mut self, cpl: Completion) {
+        // Update existing slot first.
+        for slot in &mut self.io_pending {
+            if let Some(p) = slot {
+                if p.cid == cpl.cid {
+                    *slot = Some(PendingCompletion { cid: cpl.cid, cpl });
+                    return;
+                }
+            }
+        }
+
+        // Insert into a free slot.
+        for slot in &mut self.io_pending {
+            if slot.is_none() {
+                *slot = Some(PendingCompletion { cid: cpl.cid, cpl });
+                return;
+            }
+        }
+
+        // Buffer full; drop to avoid unbounded growth.
+        crate::log!(
+            "nvme: {} dropping buffered completion (buffer full) cid={} status=0x{:04X} (sct={} sc={})\n",
+            self.pci,
+            cpl.cid,
+            cpl.status,
+            cpl.status_type(),
+            cpl.status_code(),
+        );
+    }
+
     fn page_size_bytes(&self) -> usize {
         core::cmp::max(PAGE_SIZE, self.page_size_bytes)
     }
@@ -290,13 +365,16 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
+        self.io_inflight_set(cid);
         let (tail, depth) = {
             let q = &mut self.io;
             let _ = q.sq_push(sqe)?;
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(1, tail % depth);
-        self.poll_queue_cq_for_cid_sync(1, cid, timeout_ms)
+        let res = self.poll_queue_cq_for_cid_sync(1, cid, timeout_ms);
+        self.io_inflight_clear(cid);
+        res
     }
 
     async fn io_submit_and_wait_async(
@@ -305,13 +383,16 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
+        self.io_inflight_set(cid);
         let (tail, depth) = {
             let q = &mut self.io;
             let _ = q.sq_push(sqe)?;
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(1, tail % depth);
-        self.io_poll_cq_for_cid_async(cid, timeout_ms).await
+        let res = self.io_poll_cq_for_cid_async(cid, timeout_ms).await;
+        self.io_inflight_clear(cid);
+        res
     }
 
     fn admin_poll_cq_for_cid_sync(
@@ -346,17 +427,28 @@ impl NvmeController {
         let deadline = start.saturating_add(ticks);
 
         loop {
+            if qid == 1 {
+                if let Some(cpl) = self.io_pending_take(cid) {
+                    return Ok(cpl);
+                }
+            }
+
             let (maybe_cpl, new_head, depth) = if qid == 0 {
                 let q = &mut self.admin;
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                if phase == q.cq_phase {
-                    fence(Ordering::Acquire);
-                    let cqe = q.cq_peek();
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
+                fence(Ordering::Acquire);
+                let cqe = q.cq_peek();
+                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                let sq_id = (cqe.dw2 >> 16) as u16;
+                let looks_valid = got_cid != 0 && sq_id == qid;
+
+                if phase == q.cq_phase || looks_valid {
+                    if looks_valid {
+                        q.cq_phase = phase;
+                    }
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -376,12 +468,17 @@ impl NvmeController {
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                if phase == q.cq_phase {
-                    fence(Ordering::Acquire);
-                    let cqe = q.cq_peek();
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
+                fence(Ordering::Acquire);
+                let cqe = q.cq_peek();
+                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                let sq_id = (cqe.dw2 >> 16) as u16;
+                let looks_valid = got_cid != 0 && sq_id == qid;
+
+                if phase == q.cq_phase || looks_valid {
+                    if looks_valid {
+                        q.cq_phase = phase;
+                    }
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -403,6 +500,13 @@ impl NvmeController {
                 if cpl.cid == cid {
                     return Ok(cpl);
                 }
+
+                if qid == 1 && self.io_inflight_test(cpl.cid) {
+                    self.io_inflight_clear(cpl.cid);
+                    self.io_pending_put(cpl);
+                    continue;
+                }
+
                 crate::log!(
                     "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
                     self.pci,
@@ -438,17 +542,28 @@ impl NvmeController {
         let deadline = start.saturating_add(ticks);
 
         loop {
+            if qid == 1 {
+                if let Some(cpl) = self.io_pending_take(cid) {
+                    return Ok(cpl);
+                }
+            }
+
             let (maybe_cpl, new_head, depth) = if qid == 0 {
                 let q = &mut self.admin;
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                if phase == q.cq_phase {
-                    fence(Ordering::Acquire);
-                    let cqe = q.cq_peek();
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
+                fence(Ordering::Acquire);
+                let cqe = q.cq_peek();
+                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                let sq_id = (cqe.dw2 >> 16) as u16;
+                let looks_valid = got_cid != 0 && sq_id == qid;
+
+                if phase == q.cq_phase || looks_valid {
+                    if looks_valid {
+                        q.cq_phase = phase;
+                    }
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -468,12 +583,17 @@ impl NvmeController {
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                if phase == q.cq_phase {
-                    fence(Ordering::Acquire);
-                    let cqe = q.cq_peek();
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
+                fence(Ordering::Acquire);
+                let cqe = q.cq_peek();
+                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                let sq_id = (cqe.dw2 >> 16) as u16;
+                let looks_valid = got_cid != 0 && sq_id == qid;
+
+                if phase == q.cq_phase || looks_valid {
+                    if looks_valid {
+                        q.cq_phase = phase;
+                    }
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -495,6 +615,13 @@ impl NvmeController {
                 if cpl.cid == cid {
                     return Ok(cpl);
                 }
+
+                if qid == 1 && self.io_inflight_test(cpl.cid) {
+                    self.io_inflight_clear(cpl.cid);
+                    self.io_pending_put(cpl);
+                    continue;
+                }
+
                 crate::log!(
                     "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
                     self.pci,
@@ -554,6 +681,8 @@ impl NvmeController {
             admin: NvmeQueue::new(0, 64, page_size_bytes)?,
             io: NvmeQueue::new(1, 64, page_size_bytes)?,
             next_cid: 1,
+            io_inflight: [0u64; CID_BITMAP_WORDS],
+            io_pending: [None; IO_PENDING_SLOTS],
             pci,
             serial: None,
         };
@@ -572,6 +701,10 @@ impl NvmeController {
         let cc = (mps << 7) | (6u32 << 16) | (4u32 << 20) | 1;
         ctrl.write32(NVME_REG_CC, cc);
         ctrl.spin_wait_ready(true, 2000)?;
+
+        // Request at least one IO submission/completion queue pair.
+        // Some controllers/emulators require Set Features (Number of Queues) before IO queues work.
+        let _ = ctrl.admin_set_number_of_queues(1, 1);
 
         // Create IO completion queue (qid=1) and submission queue (qid=1).
         ctrl.admin_create_io_cq(1, ctrl.io.depth, ctrl.io.cq_phys)?;
@@ -594,7 +727,7 @@ impl NvmeController {
         sqe.d[4] = (cq_phys & 0xFFFF_FFFF) as u32;
         sqe.d[5] = (cq_phys >> 32) as u32;
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
-        // PC=1 (physically contiguous), IEN=0.
+        // PC=1 (physically contiguous), IEN=0 (polling).
         sqe.d[11] = 1;
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         if cpl.status_code() != 0 {
@@ -629,6 +762,32 @@ impl NvmeController {
         if cpl.status_code() != 0 {
             crate::log!(
                 "nvme: {} create_io_sq failed sct={} sc={} status=0x{:04X}\n",
+                self.pci,
+                cpl.status_type(),
+                cpl.status_code(),
+                cpl.status
+            );
+            return Err(block::Error::Io);
+        }
+        Ok(())
+    }
+
+    fn admin_set_number_of_queues(&mut self, num_io_sqs: u16, num_io_cqs: u16) -> core::result::Result<(), block::Error> {
+        // NVMe Set Features - Number of Queues (FID 0x07).
+        // Value: bits31:16 = NSQR (0-based), bits15:0 = NCQR (0-based).
+        let cid = self.alloc_cid();
+        let mut sqe = NvmeSqe { d: [0; 16] };
+        sqe.d[0] = (NVME_ADMIN_SET_FEATURES as u32) | ((cid as u32) << 16);
+        sqe.d[10] = NVME_FEAT_NUMBER_OF_QUEUES;
+
+        let nsqr = num_io_sqs.saturating_sub(1) as u32;
+        let ncqr = num_io_cqs.saturating_sub(1) as u32;
+        sqe.d[11] = (nsqr << 16) | (ncqr & 0xFFFF);
+
+        let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
+        if cpl.status_code() != 0 {
+            crate::log!(
+                "nvme: {} set_features(num_queues) failed sct={} sc={} status=0x{:04X}\n",
                 self.pci,
                 cpl.status_type(),
                 cpl.status_code(),
@@ -856,6 +1015,39 @@ impl NvmeController {
         sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
 
         let cpl = self.io_submit_and_wait_sync(sqe, cid, timeout_ms);
+
+        if let Some((_lp, lv, lb)) = prp_list {
+            dma::dealloc(lv, lb);
+        }
+
+        cpl
+    }
+
+    fn admin_rw_sync(
+        &mut self,
+        opcode: u8,
+        nsid: u32,
+        slba: u64,
+        nlb: u16,
+        buf_phys: u64,
+        buf_len: usize,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let cid = self.alloc_cid();
+
+        let mut sqe = NvmeSqe { d: [0; 16] };
+        sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
+        sqe.d[1] = nsid;
+        sqe.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
+        sqe.d[7] = (prp1 >> 32) as u32;
+        sqe.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
+        sqe.d[9] = (prp2 >> 32) as u32;
+        sqe.d[10] = (slba & 0xFFFF_FFFF) as u32;
+        sqe.d[11] = (slba >> 32) as u32;
+        sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
+
+        let cpl = self.admin_submit_and_wait_sync(sqe, cid, timeout_ms);
 
         if let Some((_lp, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
@@ -1091,6 +1283,23 @@ pub fn probe_once() {
                         }
                         Err(e) => {
                             crate::log!("nvme: {} io-selftest read failed: {:?}\n", pci_addr, e);
+
+                            // Diagnostic fallback: try the same NVM READ on the admin queue.
+                            // If this completes, it suggests IO queue bring-up is the issue.
+                            match ctrl.admin_rw_sync(NVME_NVM_READ, 1, 0, 1, dma_phys, bs, 2000) {
+                                Ok(cpl) => {
+                                    crate::log!(
+                                        "nvme: {} admin-read selftest status=0x{:04X} (sct={} sc={})\n",
+                                        pci_addr,
+                                        cpl.status,
+                                        cpl.status_type(),
+                                        cpl.status_code(),
+                                    );
+                                }
+                                Err(e2) => {
+                                    crate::log!("nvme: {} admin-read selftest failed: {:?}\n", pci_addr, e2);
+                                }
+                            }
                         }
                     }
                     dma::dealloc(dma_virt, bytes);
