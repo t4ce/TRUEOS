@@ -28,13 +28,27 @@ pub struct DnsConfig {
 impl Default for DnsConfig {
     fn default() -> Self {
         Self {
-            servers: &PUBLIC_DNS_SERVERS,
+            servers: &DEFAULT_DNS_SERVERS,
             timeout_ms: 1500,
             resend_ms: 350,
             cname_depth: 6,
         }
     }
 }
+
+// QEMU slirp provides a local DNS forwarder at 10.0.2.3.
+// Prefer it in defaults so slirp users don't depend on direct UDP/53 egress.
+pub const SLIRP_DNS_SERVER: [u8; 4] = [10, 0, 2, 3];
+
+pub const DEFAULT_DNS_SERVERS: [[u8; 4]; 4] = [
+    SLIRP_DNS_SERVER,
+    // Cloudflare
+    [1, 1, 1, 1],
+    // Google
+    [8, 8, 8, 8],
+    // Quad9
+    [9, 9, 9, 9],
+];
 
 pub const PUBLIC_DNS_SERVERS: [[u8; 4]; 3] = [
     // Cloudflare

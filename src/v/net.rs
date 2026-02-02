@@ -268,6 +268,13 @@ fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+fn http_path_only(target: &str) -> &str {
+    target
+        .split_once('?')
+        .map(|(p, _)| p)
+        .unwrap_or(target)
+}
+
 fn http_url_decode(s: &str, max_len: usize) -> Option<String> {
     if s.len() > max_len.saturating_mul(3) {
         return None;
@@ -385,16 +392,130 @@ pub async fn http_trueosfs_task() {
 
                     let target = http_parse_target(data.as_slice()).unwrap_or("/");
 
-                    // Under the permanent FSM model, a TRUEOSFS root must exist.
-                    let disk = crate::v::fs::trueosfs::primary_root_handle();
+                    let roots = crate::v::fs::trueosfs::list_roots();
+                    let primary_raw = crate::v::fs::trueosfs::primary_root_id().map(|v| v.raw());
 
                     let (status, content_type, extra_headers, body_bytes): (
                         &'static str,
                         &'static str,
                         String,
                         Vec<u8>,
-                    ) = if target.starts_with("/dl") {
-                        // Download endpoint: /dl?path=<urlencoded path>
+                    ) = if http_path_only(target).starts_with("/dl/") {
+                        // Download endpoint: /dl/<root_raw>/<path>
+                        // (where <root_raw> is the DiscId raw value as decimal)
+                        'resp: {
+                            let mut extra_headers = String::new();
+                            let path_only = http_path_only(target);
+                            let rest = path_only.strip_prefix("/dl/").unwrap_or("");
+
+                            let (root_raw_s, enc_path) = match rest.split_once('/') {
+                                Some(v) => v,
+                                None => {
+                                    break 'resp (
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"missing root/path\n".to_vec(),
+                                    )
+                                }
+                            };
+
+                            let root_raw = match root_raw_s.parse::<u32>() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    break 'resp (
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"bad root\n".to_vec(),
+                                    )
+                                }
+                            };
+
+                            let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
+                                Some(v) => v,
+                                None => {
+                                    break 'resp (
+                                        "HTTP/1.1 404 Not Found\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"unknown root\n".to_vec(),
+                                    )
+                                }
+                            };
+
+                            let disk = match crate::disc::block::device_handle(root.disk_id) {
+                                Some(v) => v,
+                                None => {
+                                    break 'resp (
+                                        "HTTP/1.1 503 Service Unavailable\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"root unavailable\n".to_vec(),
+                                    )
+                                }
+                            };
+
+                            let mut path = match http_url_decode(enc_path, 240) {
+                                Some(v) => v,
+                                None => {
+                                    break 'resp (
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"bad path\n".to_vec(),
+                                    )
+                                }
+                            };
+
+                            while path.starts_with('/') {
+                                path.remove(0);
+                            }
+                            if path.is_empty() || path.contains("..") {
+                                break 'resp (
+                                    "HTTP/1.1 400 Bad Request\r\n",
+                                    "text/plain; charset=utf-8",
+                                    extra_headers,
+                                    b"bad path\n".to_vec(),
+                                );
+                            }
+
+                            match crate::v::fs::trueosfs::file_out_async(disk, path.as_str()).await {
+                                Ok(Some(bytes)) => {
+                                    let fname_raw = path.rsplit('/').next().unwrap_or("download.bin");
+                                    let fname = http_sanitize_filename(fname_raw);
+                                    extra_headers.push_str("Content-Disposition: attachment; filename=\"");
+                                    extra_headers.push_str(fname.as_str());
+                                    extra_headers.push_str("\"\r\n");
+                                    break 'resp (
+                                        "HTTP/1.1 200 OK\r\n",
+                                        "application/octet-stream",
+                                        extra_headers,
+                                        bytes,
+                                    );
+                                }
+                                Ok(None) => {
+                                    break 'resp (
+                                        "HTTP/1.1 404 Not Found\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"not found\n".to_vec(),
+                                    )
+                                }
+                                Err(_) => {
+                                    break 'resp (
+                                        "HTTP/1.1 500 Internal Server Error\r\n",
+                                        "text/plain; charset=utf-8",
+                                        extra_headers,
+                                        b"read failed\n".to_vec(),
+                                    )
+                                }
+                            }
+                        }
+
+                    } else if target.starts_with("/dl") {
+                        // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
+                        let disk = crate::v::fs::trueosfs::primary_root_handle();
                         match disk {
                             None => (
                                 "HTTP/1.1 503 Service Unavailable\r\n",
@@ -464,14 +585,21 @@ pub async fn http_trueosfs_task() {
                             }
                         }
                     } else {
-                        // Build the HTML tree once per request (best-effort).
-                        let tree_html = match disk {
-                            None => None,
-                            Some(disk) => match crate::v::fs::trueosfs::html_tree_async(disk, HTTP_TRUEOSFS_MAX_ENTRIES).await {
-                                Ok(v) => v,
-                                Err(_) => None,
-                            },
-                        };
+                        // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
+                        let mut selected_raw = primary_raw;
+
+                        if let Some(enc_root) = http_query_param(target, "root") {
+                            if let Some(root_s) = http_url_decode(enc_root, 16) {
+                                if let Ok(v) = root_s.parse::<u32>() {
+                                    if roots.iter().any(|r| r.disk_id.raw() == v) {
+                                        selected_raw = Some(v);
+                                    }
+                                }
+                            }
+                        }
+                        if selected_raw.is_none() {
+                            selected_raw = roots.first().map(|r| r.disk_id.raw());
+                        }
 
                         let js = r#"<style>
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem}
@@ -479,9 +607,30 @@ ul{line-height:1.35}
 li{margin:0.15rem 0}
 a{color:#0b66ff;text-decoration:none}
 a:hover{text-decoration:underline}
+.bar{display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin:0.75rem 0 1rem}
+.tree{display:none}
+.muted{color:#666}
 </style>
 <script>
 (()=>{
+  const sel=document.getElementById("rootSel");
+  const trees=[...document.querySelectorAll(".tree")];
+  function show(root){
+    for(const t of trees){ t.style.display = (t.dataset.root===root) ? "block" : "none"; }
+    const url=new URL(location.href);
+    url.searchParams.set("root", root);
+    history.replaceState(null, "", url.toString());
+  }
+  if(sel){
+    const q=new URLSearchParams(location.search);
+    const want=q.get("root");
+    if(want && [...sel.options].some(o=>o.value===want)) sel.value=want;
+    sel.addEventListener("change", ()=>show(sel.value));
+    show(sel.value);
+  } else if(trees.length){
+    trees[0].style.display="block";
+  }
+
   function labelForLi(li){
     for(const n of li.childNodes){
       if(n.nodeType===Node.TEXT_NODE){
@@ -510,32 +659,83 @@ a:hover{text-decoration:underline}
     }
     return parts.reverse().join("/");
   }
-  for(const li of document.querySelectorAll("ul li")){
-    if(li.querySelector("a")) continue;
-    const label=labelForLi(li);
-    if(!label || label==="/" || label.endsWith("/")) continue;
-    const path=buildPath(li);
-    if(!path) continue;
-    const a=document.createElement("a");
-    a.href="/dl?path="+encodeURIComponent(path);
-    a.textContent=label;
-    a.setAttribute("download", label);
-    const firstText=[...li.childNodes].find(n=>n.nodeType===Node.TEXT_NODE && (n.textContent||"").trim());
-    if(firstText){ li.insertBefore(a, firstText); li.removeChild(firstText); }
-    else { li.insertBefore(a, li.firstChild); }
+  for(const tree of trees){
+    const root=tree.dataset.root;
+    if(!root) continue;
+    for(const li of tree.querySelectorAll("ul li")){
+      if(li.querySelector("a")) continue;
+      const label=labelForLi(li);
+      if(!label || label==="/" || label.endsWith("/")) continue;
+      const path=buildPath(li);
+      if(!path) continue;
+      const a=document.createElement("a");
+      a.href="/dl/"+root+"/"+encodeURIComponent(path);
+      a.textContent=label;
+      a.setAttribute("download", label);
+      const firstText=[...li.childNodes].find(n=>n.nodeType===Node.TEXT_NODE && (n.textContent||"").trim());
+      if(firstText){ li.insertBefore(a, firstText); li.removeChild(firstText); }
+      else { li.insertBefore(a, li.firstChild); }
+    }
   }
 })();
 </script>"#;
 
-                        let body = if let Some(tree) = tree_html {
+                        let mut options = String::new();
+                        let mut trees_html = String::new();
+                        for r in roots.iter() {
+                            let raw = r.disk_id.raw();
+                            let selected = selected_raw == Some(raw);
+                            options.push_str(
+                                format!(
+                                    "<option value=\"{}\"{}>{} (raw={} seq={})</option>",
+                                    raw,
+                                    if selected { " selected" } else { "" },
+                                    r.disk_id,
+                                    raw,
+                                    r.seq
+                                )
+                                .as_str(),
+                            );
+
+                            let tree = match crate::disc::block::device_handle(r.disk_id) {
+                                None => None,
+                                Some(disk) => match crate::v::fs::trueosfs::html_tree_async(
+                                    disk,
+                                    HTTP_TRUEOSFS_MAX_ENTRIES,
+                                )
+                                .await
+                                {
+                                    Ok(v) => v,
+                                    Err(_) => None,
+                                },
+                            };
+
+                            trees_html.push_str(format!("<div class=\"tree\" data-root=\"{}\">", raw).as_str());
+                            if let Some(t) = tree {
+                                trees_html.push_str(t.as_str());
+                            } else {
+                                trees_html.push_str("<p class=\"muted\">(tree unavailable)</p>");
+                            }
+                            trees_html.push_str("</div>");
+                        }
+
+                        let body = if roots.is_empty() {
+                            format!(
+                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p class=\"muted\">(no TRUEOSFS mounted)</p></body></html>",
+                                js
+                            )
+                        } else if roots.len() == 1 {
                             format!(
                                 "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
-                                js, tree
+                                js, trees_html
                             )
                         } else {
                             format!(
-                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>(no TRUEOSFS mounted)</p></body></html>",
-                                js
+                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><div class=\"bar\"><label for=\"rootSel\">Root:</label><select id=\"rootSel\">{}</select><span class=\"muted\">(showing {})</span></div><p>Click a file to download.</p>{}</body></html>",
+                                js,
+                                options,
+                                selected_raw.unwrap_or(0),
+                                trees_html
                             )
                         };
 
