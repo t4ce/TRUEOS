@@ -513,10 +513,6 @@ pub async fn fetch_https_body_async(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, FetchError> {
-    if crate::net::mac_address().is_none() {
-        return Err(FetchError::NoNic);
-    }
-
     let parsed = parse_https_url(url).ok_or(FetchError::BadUrl)?;
 
     let dev_count = crate::net::device_count();
