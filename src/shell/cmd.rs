@@ -1264,6 +1264,10 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
         crate::pci::enumerate_silent();
     }
 
+    // Optional enrichment via cached `pci.ids`.
+    // Keep this best-effort and preserve the existing output when missing.
+    let pci_ids_db = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten();
+
     crate::pci::with_devices(|list| {
         ctx.io.write_fmt(format_args!("pci: devices={}\r\n", list.len()));
         if list.is_empty() {
@@ -1334,9 +1338,25 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
             let subsys_did = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2E);
             let (has_msi, has_msix, pcie_link) = walk_caps(dev.bus, dev.slot, dev.function);
 
+            let name_suffix = if let Some(db) = pci_ids_db.as_deref() {
+                if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(
+                    db,
+                    dev.vendor,
+                    dev.device,
+                ) {
+                    let v = alloc::string::String::from(alloc::string::String::from_utf8_lossy(v).trim());
+                    let d = alloc::string::String::from(alloc::string::String::from_utf8_lossy(d).trim());
+                    alloc::format!(" name=\"{} {}\"", v, d)
+                } else {
+                    alloc::string::String::new()
+                }
+            } else {
+                alloc::string::String::new()
+            };
+
             if let Some(hi) = bar0_hi {
                 ctx.io.write_fmt(format_args!(
-                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X}{:08X} irq_line={} irq_pin={}\r\n",
+                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X}{:08X} irq_line={} irq_pin={}{}\r\n",
                     dev.bus,
                     dev.slot,
                     dev.function,
@@ -1354,11 +1374,12 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
                     hi,
                     bar0_lo,
                     irq_line,
-                    irq_pin
+                    irq_pin,
+                    name_suffix,
                 ));
             } else {
                 ctx.io.write_fmt(format_args!(
-                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X} irq_line={} irq_pin={}\r\n",
+                    "pci: {:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} subsys=0x{:04X}:0x{:04X} cls={:02X}/{:02X}/{:02X} rev=0x{:02X} msi={} msix={} pcie={:?} bar0=0x{:08X} irq_line={} irq_pin={}{}\r\n",
                     dev.bus,
                     dev.slot,
                     dev.function,
@@ -1375,7 +1396,8 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
                     pcie_link,
                     bar0_lo,
                     irq_line,
-                    irq_pin
+                    irq_pin,
+                    name_suffix,
                 ));
             }
         }

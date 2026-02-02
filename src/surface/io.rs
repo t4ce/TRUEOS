@@ -284,22 +284,14 @@ pub mod cabi {
 	use embassy_time::{Duration as EmbassyDuration, Timer};
 	use spin::Mutex;
 
+	include!("cabi_codes.rs");
+
 	#[repr(u32)]
 	#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 	pub enum CStream {
 		Stdout = 1,
 		Stderr = 2,
 	}
-
-	pub const FS_ERR_BAD_UTF8: i32 = -1;
-	pub const FS_ERR_IO: i32 = -2;
-	pub const FS_ERR_NO_SPACE: i32 = -3;
-	pub const FS_ERR_BAD_PARAM: i32 = -4;
-	pub const FS_ERR_USBMS_NOT_FOUND: i32 = -5;
-	pub const FS_ERR_BAD_PATH: i32 = -6;
-	pub const FS_ERR_TOO_LARGE: i32 = -7;
-	pub const FS_ERR_NOT_FOUND: i32 = -8;
-	pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
 
 	#[inline]
 	fn fs_error_to_code(err: super::kfs::FsError) -> i32 {

@@ -51,6 +51,8 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "tst-challenge")]
+static SCHED_CHALLENGE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -198,6 +200,14 @@ fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+#[cfg(feature = "tst-challenge")]
+fn spawn_sched_challenge(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::sched_challenge::sched_challenge_task(spawner)) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND)) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -339,6 +349,13 @@ static TASKS: &[TaskSpec] = &[
         required: NET_AND_ROOT_READY,
         started: &PCI_IDS_CACHE_STARTED,
         spawn: spawn_pci_ids_cache,
+    },
+    #[cfg(feature = "tst-challenge")]
+    TaskSpec {
+        name: "sched-challenge",
+        required: 0,
+        started: &SCHED_CHALLENGE_STARTED,
+        spawn: spawn_sched_challenge,
     },
 
     // Shell backends

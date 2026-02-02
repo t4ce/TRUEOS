@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String};
 use core::{
     hint::spin_loop,
     mem,
@@ -435,20 +435,18 @@ impl NvmeController {
 
             let (maybe_cpl, new_head, depth) = if qid == 0 {
                 let q = &mut self.admin;
+                fence(Ordering::Acquire);
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                let sq_id = (cqe.dw2 >> 16) as u16;
-                let looks_valid = got_cid != 0 && sq_id == qid;
 
-                if phase == q.cq_phase || looks_valid {
-                    if looks_valid {
-                        q.cq_phase = phase;
-                    }
+                if phase != q.cq_phase {
+                    (None, q.cq_head, q.depth)
+                } else {
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -460,25 +458,21 @@ impl NvmeController {
                         q.cq_head,
                         q.depth,
                     )
-                } else {
-                    (None, q.cq_head, q.depth)
                 }
             } else {
                 let q = &mut self.io;
+                fence(Ordering::Acquire);
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                let sq_id = (cqe.dw2 >> 16) as u16;
-                let looks_valid = got_cid != 0 && sq_id == qid;
 
-                if phase == q.cq_phase || looks_valid {
-                    if looks_valid {
-                        q.cq_phase = phase;
-                    }
+                if phase != q.cq_phase {
+                    (None, q.cq_head, q.depth)
+                } else {
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -490,8 +484,6 @@ impl NvmeController {
                         q.cq_head,
                         q.depth,
                     )
-                } else {
-                    (None, q.cq_head, q.depth)
                 }
             };
 
@@ -550,20 +542,18 @@ impl NvmeController {
 
             let (maybe_cpl, new_head, depth) = if qid == 0 {
                 let q = &mut self.admin;
+                fence(Ordering::Acquire);
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                let sq_id = (cqe.dw2 >> 16) as u16;
-                let looks_valid = got_cid != 0 && sq_id == qid;
 
-                if phase == q.cq_phase || looks_valid {
-                    if looks_valid {
-                        q.cq_phase = phase;
-                    }
+                if phase != q.cq_phase {
+                    (None, q.cq_head, q.depth)
+                } else {
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -575,25 +565,21 @@ impl NvmeController {
                         q.cq_head,
                         q.depth,
                     )
-                } else {
-                    (None, q.cq_head, q.depth)
                 }
             } else {
                 let q = &mut self.io;
+                fence(Ordering::Acquire);
                 let cqe = q.cq_peek();
                 let status = (cqe.dw3 >> 16) as u16;
                 let phase = (status & 0x1) != 0;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                let sq_id = (cqe.dw2 >> 16) as u16;
-                let looks_valid = got_cid != 0 && sq_id == qid;
 
-                if phase == q.cq_phase || looks_valid {
-                    if looks_valid {
-                        q.cq_phase = phase;
-                    }
+                if phase != q.cq_phase {
+                    (None, q.cq_head, q.depth)
+                } else {
+                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                    let sq_id = (cqe.dw2 >> 16) as u16;
+
                     q.cq_pop();
                     (
                         Some(Completion {
@@ -605,8 +591,6 @@ impl NvmeController {
                         q.cq_head,
                         q.depth,
                     )
-                } else {
-                    (None, q.cq_head, q.depth)
                 }
             };
 
@@ -704,11 +688,17 @@ impl NvmeController {
 
         // Request at least one IO submission/completion queue pair.
         // Some controllers/emulators require Set Features (Number of Queues) before IO queues work.
-        let _ = ctrl.admin_set_number_of_queues(1, 1);
+        if let Err(e) = ctrl.admin_set_number_of_queues(1, 1) {
+            crate::log!("nvme: {} set num-queues failed (continuing): {:?}\n", pci, e);
+        }
 
         // Create IO completion queue (qid=1) and submission queue (qid=1).
         ctrl.admin_create_io_cq(1, ctrl.io.depth, ctrl.io.cq_phys)?;
         ctrl.admin_create_io_sq(1, ctrl.io.depth, ctrl.io.sq_phys, 1)?;
+
+        // Initialize doorbells for IO queue pair (some emulators are picky about initial values).
+        ctrl.db_write_cq_head(1, 0);
+        ctrl.db_write_sq_tail(1, 0);
 
         // Identify controller once to grab a serial string (optional).
         if let Ok(serial) = ctrl.identify_controller_serial() {
@@ -724,8 +714,9 @@ impl NvmeController {
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
         sqe.d[0] = (NVME_ADMIN_CREATE_IO_CQ as u32) | ((cid as u32) << 16);
-        sqe.d[4] = (cq_phys & 0xFFFF_FFFF) as u32;
-        sqe.d[5] = (cq_phys >> 32) as u32;
+        // Queue base address goes in PRP1 (DW6/DW7).
+        sqe.d[6] = (cq_phys & 0xFFFF_FFFF) as u32;
+        sqe.d[7] = (cq_phys >> 32) as u32;
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
         // PC=1 (physically contiguous), IEN=0 (polling).
         sqe.d[11] = 1;
@@ -753,8 +744,9 @@ impl NvmeController {
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
         sqe.d[0] = (NVME_ADMIN_CREATE_IO_SQ as u32) | ((cid as u32) << 16);
-        sqe.d[4] = (sq_phys & 0xFFFF_FFFF) as u32;
-        sqe.d[5] = (sq_phys >> 32) as u32;
+        // Queue base address goes in PRP1 (DW6/DW7).
+        sqe.d[6] = (sq_phys & 0xFFFF_FFFF) as u32;
+        sqe.d[7] = (sq_phys >> 32) as u32;
         sqe.d[10] = (qid as u32) | (((depth as u32) - 1) << 16);
         // PC=1 (physically contiguous), QPRIO=0, CQID in bits31:16.
         sqe.d[11] = 1 | ((cqid as u32) << 16);

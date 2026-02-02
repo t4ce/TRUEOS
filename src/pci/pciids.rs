@@ -1,5 +1,23 @@
 use embassy_executor::task;
 
+pub const PCI_IDS_URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
+pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
+
+pub fn load_raw_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
+        return Ok(None);
+    };
+    crate::time::block_on(crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY))
+}
+
+pub fn load_sanitized_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+    let Some(raw) = load_raw_from_root_blocking()? else {
+        return Ok(None);
+    };
+    Ok(Some(sanitize_pci_ids(&raw)))
+}
+
+
 fn is_hex(b: u8) -> bool {
     matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
 }
@@ -62,7 +80,7 @@ fn collapse_ascii_ws_into(out: &mut alloc::vec::Vec<u8>, s: &[u8]) {
     }
 }
 
-fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
+pub fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
     // Goal: keep only vendor/device/subsystem entries with their indentation.
     // - drop blank lines and comments
     // - normalize indentation to 0/1/2 leading tabs
@@ -352,12 +370,7 @@ pub fn lookup_vendor_device_cached(
 > {
     use alloc::string::String;
 
-    const KEY: &str = "trueos/pci/pci.ids";
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        return Ok(None);
-    };
-    let Some(db) = crate::time::block_on(crate::v::fs::trueosfs::file_out_async(disk, KEY))?
-    else {
+    let Some(db) = load_sanitized_from_root_blocking()? else {
         return Ok(None);
     };
 
@@ -371,62 +384,28 @@ pub fn lookup_vendor_device_cached(
     Ok(Some((v, d)))
 }
 
-fn log_pci_enumeration_with_cached_ids(db: &[u8]) {
-    // Re-enumerate here so the list reflects the system state after init.
-    // (Enumeration is cheap and uses the same static cache the shell relies on.)
-    crate::pci::enumerate_silent();
-    crate::pci::log_devices_with_pci_ids(db);
-}
-
-/// The download is skipped if the destination file already exists.
+/// Download the upstream `pci.ids` database and store it on the TRUEOSFS root.
+///
+/// This task does not parse or apply the database. Consumers (e.g. the `pci`
+/// shell command) can optionally load+sanitize it to enrich PCI enumeration.
 #[task]
 pub(crate) async fn boot_cache_pci_ids_task() {
-    const URL: &str = "https://raw.githubusercontent.com/pciutils/pciids/master/pci.ids";
-    const KEY: &str = "trueos/pci/pci.ids";
-
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        crate::log!("pciids: no root disk; skipping url={} key={}\n", URL, KEY);
+        crate::log!("pciids: no root disk; skipping url={} key={}\n", PCI_IDS_URL, PCI_IDS_KEY);
         return;
     };
 
-    match crate::v::fs::trueosfs::file_exists_async(disk, KEY).await {
-        Ok(true) => {
-            crate::log!("pciids: cache hit key={}\n", KEY);
-            match crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
-                Ok(Some(db)) => {
-                    log_pci_enumeration_with_cached_ids(&db);
-                    return;
-                }
-                Ok(None) => {
-                    crate::log!("pciids: cache invalid (integrity/read failed); will redownload key={}\n", KEY);
-                    let _ = crate::v::fs::trueosfs::file_delete_async(disk, KEY).await;
-                }
-                Err(e) => {
-                    crate::log!("pciids: cache read failed={:?} key={}\n", e, KEY);
-                    return;
-                }
-            }
-        }
-        Ok(false) => {}
-        Err(e) => {
-            crate::log!("pciids: exists check failed={:?} key={}\n", e, KEY);
-            return;
-        }
-    }
-
-    let raw = match crate::v::net::https::fetch_https_body_async(URL, 120_000, 4 * 1024 * 1024).await
+    let raw = match crate::v::net::https::fetch_https_body_async(PCI_IDS_URL, 120_000, 4 * 1024 * 1024).await
     {
         Ok(b) => b,
         Err(e) => {
-            crate::log!("pciids: download failed={:?} url={}\n", e, URL);
+            crate::log!("pciids: download failed={:?} url={}\n", e, PCI_IDS_URL);
             return;
         }
     };
+    let tmp = alloc::format!("{}.tmp", PCI_IDS_KEY);
 
-    let cleaned = sanitize_pci_ids(&raw);
-    let tmp = alloc::format!("{}.tmp", KEY);
-
-    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &cleaned).await {
+    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &raw).await {
         Ok(true) => {}
         Ok(false) => {
             crate::log!("pciids: write failed (no space?) tmp={}\n", tmp);
@@ -438,26 +417,25 @@ pub(crate) async fn boot_cache_pci_ids_task() {
         }
     }
 
-    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), KEY).await {
+    // Overwrite any previous cache.
+    let _ = crate::v::fs::trueosfs::file_delete_async(disk, PCI_IDS_KEY).await;
+
+    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), PCI_IDS_KEY).await {
         Ok(true) => {
             crate::log!(
-                "pciids: downloaded+sanitized ok url={} key={} bytes_in={} bytes_out={}\n",
-                URL,
-                KEY,
+                "pciids: downloaded ok url={} key={} bytes={}\n",
+                PCI_IDS_URL,
+                PCI_IDS_KEY,
                 raw.len(),
-                cleaned.len(),
             );
-            if let Ok(Some(db)) = crate::v::fs::trueosfs::file_out_async(disk, KEY).await {
-                log_pci_enumeration_with_cached_ids(&db);
-            }
         }
         Ok(false) => {
             let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            crate::log!("pciids: rename failed tmp={} key={}\n", tmp, KEY);
+            crate::log!("pciids: rename failed tmp={} key={}\n", tmp, PCI_IDS_KEY);
         }
         Err(e) => {
             let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
-            crate::log!("pciids: rename failed={:?} tmp={} key={}\n", e, tmp, KEY);
+            crate::log!("pciids: rename failed={:?} tmp={} key={}\n", e, tmp, PCI_IDS_KEY);
         }
     }
 }

@@ -28,24 +28,7 @@ pub enum FetchError {
 }
 
 // Keep these return codes compatible with the existing TRUEOS C ABI (used by QJS).
-pub const FS_ERR_BAD_UTF8: i32 = -1;
-pub const FS_ERR_IO: i32 = -2;
-pub const FS_ERR_NO_SPACE: i32 = -3;
-pub const FS_ERR_BAD_PARAM: i32 = -4;
-pub const FS_ERR_USBMS_NOT_FOUND: i32 = -5;
-pub const FS_ERR_BAD_PATH: i32 = -6;
-pub const FS_ERR_TOO_LARGE: i32 = -7;
-
-pub const NET_ERR_BAD_URL: i32 = -10;
-pub const NET_ERR_TIMEOUT: i32 = -11;
-pub const NET_ERR_HTTP: i32 = -12;
-pub const NET_ERR_TLS: i32 = -13;
-
-// More specific timeout codes (QJS knows these names; return them to improve diagnostics).
-pub const NET_ERR_TIMEOUT_DNS: i32 = -111;
-pub const NET_ERR_TIMEOUT_CONNECT: i32 = -112;
-pub const NET_ERR_TIMEOUT_TLS: i32 = -113;
-pub const NET_ERR_TIMEOUT_BODY: i32 = -114;
+include!("../../surface/cabi_codes.rs");
 
 #[inline]
 fn block_error_to_code(err: crate::disc::block::Error) -> i32 {

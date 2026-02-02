@@ -1,6 +1,8 @@
 pub mod html;
 pub mod http_trueosfs;
 pub mod smoke_fs;
+#[cfg(feature = "tst-challenge")]
+pub mod sched_challenge;
 
 use embassy_executor::task;
 
