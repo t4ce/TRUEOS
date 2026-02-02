@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::task::Waker;
+use embassy_time_driver::{now, TICK_HZ};
 
 /// Update a stored waker if it differs from the current one.
 #[inline]
@@ -25,6 +26,48 @@ pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
     }
     list.push(waker.clone());
     true
+}
+
+/// Return whether the current context may block.
+#[inline]
+pub fn can_block() -> bool {
+    true
+}
+
+/// Single spin step that can be swapped for parking later.
+#[inline]
+pub fn spin_step() {
+    core::hint::spin_loop();
+}
+
+/// Spin until `condition` is true.
+#[inline]
+pub fn spin_until<F: FnMut() -> bool>(mut condition: F) {
+    while !condition() {
+        spin_step();
+    }
+}
+
+/// Spin until `condition` is true or the timeout expires.
+#[inline]
+pub fn spin_until_timeout<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F) -> bool {
+    let hz = TICK_HZ as u64;
+    let ticks = if hz == 0 {
+        0
+    } else {
+        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+    };
+    let deadline = now().saturating_add(ticks);
+
+    loop {
+        if condition() {
+            return true;
+        }
+        if now() >= deadline {
+            return false;
+        }
+        spin_step();
+    }
 }
 
 /// Take a waker from a slot and wake it.

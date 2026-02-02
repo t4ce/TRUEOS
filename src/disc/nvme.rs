@@ -1,12 +1,12 @@
 use alloc::{boxed::Box, string::String};
 use core::{
-    hint::spin_loop,
     mem,
     ptr::{read_volatile, write_bytes, write_volatile, NonNull},
     sync::atomic::{fence, Ordering},
 };
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use crate::wait;
 
 use crate::{
     disc::block,
@@ -289,25 +289,12 @@ impl NvmeController {
     }
 
     fn spin_wait_ready(&self, want_ready: bool, timeout_ms: u64) -> core::result::Result<(), block::Error> {
-        let hz = embassy_time_driver::TICK_HZ as u64;
-        let start = embassy_time_driver::now();
-        let ticks = if hz == 0 {
-            0
-        } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
-        };
-        let deadline = start.saturating_add(ticks);
-        loop {
+        let ok = wait::spin_until_timeout(timeout_ms, || {
             let csts = self.reg32(NVME_REG_CSTS);
             let rdy = (csts & 0x1) != 0;
-            if rdy == want_ready {
-                return Ok(());
-            }
-            if embassy_time_driver::now() >= deadline {
-                return Err(block::Error::Timeout);
-            }
-            spin_loop();
-        }
+            rdy == want_ready
+        });
+        if ok { Ok(()) } else { Err(block::Error::Timeout) }
     }
 
     async fn wait_ready(&self, want_ready: bool, timeout_ms: u64) -> core::result::Result<(), block::Error> {
@@ -514,7 +501,7 @@ impl NvmeController {
             if embassy_time_driver::now() >= deadline {
                 return Err(block::Error::Timeout);
             }
-            spin_loop();
+            wait::spin_step();
         }
     }
 

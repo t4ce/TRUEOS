@@ -5,6 +5,7 @@ use spin::Once;
 
 #[cfg(feature = "power-msr")]
 use x86_64::registers::model_specific::Msr;
+use crate::wait;
 
 #[cfg(feature = "power-msr")]
 const IA32_MSR_PLATFORM_INFO: u32 = 0xCE;
@@ -154,7 +155,7 @@ pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
 #[inline(always)]
 pub fn idle_hint() {
     match idle_policy() {
-        IdlePolicy::Spin => core::hint::spin_loop(),
+        IdlePolicy::Spin => wait::spin_step(),
         IdlePolicy::Halt => x86_64::instructions::hlt(),
     }
 }

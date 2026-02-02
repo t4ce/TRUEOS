@@ -50,6 +50,7 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "tst-challenge")]
 static SCHED_CHALLENGE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -188,6 +189,13 @@ fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::boot_fetch_to_file_smoke_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::nalgebra_demo::boot_nalgebra_demo_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -343,6 +351,12 @@ static TASKS: &[TaskSpec] = &[
         required: NET_AND_ROOT_READY,
         started: &BOOT_FETCH_SMOKE_STARTED,
         spawn: spawn_boot_fetch_smoke,
+    },
+    TaskSpec {
+        name: "boot-nalgebra-demo",
+        required: 0,
+        started: &NALGEBRA_DEMO_STARTED,
+        spawn: spawn_nalgebra_demo,
     },
     TaskSpec {
         name: "pciids-boot-cache",
