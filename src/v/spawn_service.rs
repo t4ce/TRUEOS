@@ -52,7 +52,6 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "tst-challenge")]
 static SCHED_CHALLENGE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -208,7 +207,6 @@ fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-#[cfg(feature = "tst-challenge")]
 fn spawn_sched_challenge(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::sched_challenge::sched_challenge_task(spawner)) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -364,7 +362,6 @@ static TASKS: &[TaskSpec] = &[
         started: &PCI_IDS_CACHE_STARTED,
         spawn: spawn_pci_ids_cache,
     },
-    #[cfg(feature = "tst-challenge")]
     TaskSpec {
         name: "sched-challenge",
         required: 0,
