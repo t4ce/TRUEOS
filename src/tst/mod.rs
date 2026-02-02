@@ -6,8 +6,6 @@ use embassy_executor::task;
 
 #[task]
 pub(crate) async fn boot_fetch_to_file_smoke_task() {
-    use embassy_time::Timer;
-
     // Keep these as concrete URLs (not bare specifiers) so this directly validates
     // the CDN fetch-to-file + persistence layer.
     //
