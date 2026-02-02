@@ -55,4 +55,3 @@ trueos-limloader = { path = "crates/trueos-limloader" }
 
 [features]
 power-msr = []
-tst-challenge = []

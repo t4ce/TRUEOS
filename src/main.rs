@@ -252,6 +252,10 @@ pub extern "C" fn kmain() -> ! {
 
     time::init(executor);
 
+    if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
+        crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
+    }
+
     net::init();
     // Ensure synchronous callers using `time::block_on` (e.g. QuickJS module loader)
     // can still progress the network stack.

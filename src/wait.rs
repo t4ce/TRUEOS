@@ -1,9 +1,15 @@
 extern crate alloc;
 
+use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
-use core::task::Waker;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicU32, Ordering};
+use core::task::{Context, Poll, Waker};
+use embassy_executor::task;
 use embassy_time_driver::{now, TICK_HZ};
+use spin::Mutex;
 
 /// Update a stored waker if it differs from the current one.
 #[inline]
@@ -80,8 +86,204 @@ pub fn take_and_wake(slot: &mut Option<Waker>) -> bool {
     false
 }
 
-/// Synchronously wait for an async future using the kernel's current strategy.
-#[inline]
-pub fn block_on<F: Future>(fut: F) -> F::Output {
-    crate::time::block_on(fut)
+/// A minimal wait-queue for task-context wakeups.
+pub struct WaitQueue {
+    seq: AtomicU32,
+    wakers: Mutex<Vec<Waker>>,
+}
+
+impl WaitQueue {
+    pub const fn new() -> Self {
+        Self {
+            seq: AtomicU32::new(0),
+            wakers: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[inline]
+    pub fn notify_one(&self) -> bool {
+        self.seq.fetch_add(1, Ordering::Release);
+        let waker = {
+            let mut wakers = self.wakers.lock();
+            if wakers.is_empty() {
+                None
+            } else {
+                Some(wakers.remove(0))
+            }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+            return true;
+        }
+        false
+    }
+
+    #[inline]
+    pub fn notify_all(&self) -> usize {
+        self.seq.fetch_add(1, Ordering::Release);
+        let wakers = {
+            let mut wakers = self.wakers.lock();
+            core::mem::take(&mut *wakers)
+        };
+        let count = wakers.len();
+        for waker in wakers {
+            waker.wake();
+        }
+        count
+    }
+
+    #[inline]
+    pub async fn wait_for_event(&self) {
+        let _ = self.wait_for_event_timeout(0).await;
+    }
+
+    #[inline]
+    pub async fn wait_for_event_timeout(&self, timeout_ms: u64) -> bool {
+        let hz = TICK_HZ as u64;
+        let ticks = if hz == 0 || timeout_ms == 0 {
+            0
+        } else {
+            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        };
+        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
+        let mut observed = self.seq.load(Ordering::Acquire);
+
+        core::future::poll_fn(|cx: &mut Context<'_>| {
+            if ticks != 0 && now() >= deadline {
+                return Poll::Ready(false);
+            }
+
+            let current = self.seq.load(Ordering::Acquire);
+            if current != observed {
+                observed = current;
+                return Poll::Ready(true);
+            }
+
+            {
+                let mut wakers = self.wakers.lock();
+                register_waker_list(&mut *wakers, cx.waker());
+            }
+
+            let current = self.seq.load(Ordering::Acquire);
+            if current != observed {
+                observed = current;
+                return Poll::Ready(true);
+            }
+
+            Poll::Pending
+        })
+        .await
+    }
+}
+
+type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type LocalJobFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+static JOBS: Mutex<Vec<JobFuture>> = Mutex::new(Vec::new());
+static JOBS_WAIT: WaitQueue = WaitQueue::new();
+
+struct LocalJobQueue {
+    jobs: Mutex<Vec<LocalJobFuture>>,
+}
+
+unsafe impl Sync for LocalJobQueue {}
+
+static LOCAL_JOBS: LocalJobQueue = LocalJobQueue {
+    jobs: Mutex::new(Vec::new()),
+};
+
+#[task]
+pub async fn job_runner_task() {
+    loop {
+        let job = {
+            let mut jobs = LOCAL_JOBS.jobs.lock();
+            if jobs.is_empty() {
+                None
+            } else {
+                Some(jobs.remove(0))
+            }
+        };
+
+        match job {
+            Some(job) => job.await,
+            None => {
+                let job = {
+                    let mut jobs = JOBS.lock();
+                    if jobs.is_empty() {
+                        None
+                    } else {
+                        Some(jobs.remove(0))
+                    }
+                };
+
+                match job {
+                    Some(job) => job.await,
+                    None => JOBS_WAIT.wait_for_event().await,
+                }
+            }
+        }
+    }
+}
+
+fn enqueue_job(job: JobFuture) {
+    JOBS.lock().push(job);
+    JOBS_WAIT.notify_one();
+}
+
+fn enqueue_local_job(job: LocalJobFuture) {
+    LOCAL_JOBS.jobs.lock().push(job);
+    JOBS_WAIT.notify_one();
+}
+
+struct WaitState<T> {
+    value: Mutex<Option<T>>,
+    wait: WaitQueue,
+}
+
+/// Run a future on the async executor and wait synchronously for its result.
+pub fn spawn_and_wait<F, T>(fut: F) -> T
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let state = Arc::new(WaitState {
+        value: Mutex::new(None),
+        wait: WaitQueue::new(),
+    });
+    let state_task = state.clone();
+
+    enqueue_job(Box::pin(async move {
+        let out = fut.await;
+        *state_task.value.lock() = Some(out);
+        state_task.wait.notify_all();
+    }));
+
+    crate::time::block_on(state.wait.wait_for_event());
+    let mut value = state.value.lock();
+    value.take().expect("spawn_and_wait missing value")
+}
+
+/// Run a future on the async executor and wait synchronously for its result.
+///
+/// This accepts non-Send futures and must only be used on the single executor thread.
+pub fn spawn_and_wait_local<F, T>(fut: F) -> T
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    let state = Arc::new(WaitState {
+        value: Mutex::new(None),
+        wait: WaitQueue::new(),
+    });
+    let state_task = state.clone();
+
+    enqueue_local_job(Box::pin(async move {
+        let out = fut.await;
+        *state_task.value.lock() = Some(out);
+        state_task.wait.notify_all();
+    }));
+
+    crate::time::block_on(state.wait.wait_for_event());
+    let mut value = state.value.lock();
+    value.take().expect("spawn_and_wait_local missing value")
 }
