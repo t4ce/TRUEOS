@@ -38,6 +38,17 @@ pub(crate) fn setup_set_address(address: u8) -> Trb {
     }
 }
 
+pub(crate) fn setup_clear_endpoint_halt(ep_addr: u8) -> Trb {
+    // bmRequestType=0x02 (OUT|Standard|Endpoint), bRequest=0x01 (CLEAR_FEATURE)
+    // wValue=0 (ENDPOINT_HALT), wIndex=endpoint address
+    Trb {
+        d0: (0x02u32) | (0x01u32 << 8) | ((0u32) << 16),
+        d1: (ep_addr as u32),
+        d2: 8,
+        d3: trb_type(2) | (1 << 6),
+    }
+}
+
 fn setup_get_string_descriptor(desc_index: u8, langid: u16, length: u16) -> Trb {
     // bmRequestType=0x80 (IN|Standard|Device), bRequest=0x06 (GET_DESCRIPTOR)
     // wValue = (STRING << 8) | index, wIndex = langid
@@ -60,80 +71,107 @@ pub(crate) async fn control_in(
     what: &'static str,
     timeout_iters: usize,
 ) -> Result<(u32, u16), ()> {
-    let data = Trb {
-        d0: lo(buf_phys),
-        d1: hi(buf_phys),
-        d2: length as u32,
-        d3: trb_type(3) | (1 << 16), // Data Stage, DIR=IN, no IOC
-    };
+    // xHCI Completion Code 6 = Stall Error. Some devices/hubs require an explicit
+    // CLEAR_FEATURE(ENDPOINT_HALT) on EP0 to recover.
+    const CC_STALL: u32 = 6;
+    let mut attempt: u8 = 0;
+    loop {
+        let data = Trb {
+            d0: lo(buf_phys),
+            d1: hi(buf_phys),
+            d2: length as u32,
+            d3: trb_type(3) | (1 << 16), // Data Stage, DIR=IN, no IOC
+        };
 
-    let status = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-        d3: trb_type(4) | (1 << 5), // Status Stage, IOC, DIR=OUT
-    };
+        let status = Trb {
+            d0: 0,
+            d1: 0,
+            d2: 0,
+            d3: trb_type(4) | (1 << 5), // Status Stage, IOC, DIR=OUT
+        };
 
-    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
-        usbv!("usb: {}: ep0 ring full\n", what);
-        return Err(());
-    };
-    let Some(data_trb_phys) = ep0_ring.push_with_phys(data) else {
-        usbv!("usb: {}: ep0 ring full\n", what);
-        return Err(());
-    };
+        let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
+            usbv!("usb: {}: ep0 ring full\n", what);
+            return Err(());
+        };
+        let Some(data_trb_phys) = ep0_ring.push_with_phys(data) else {
+            usbv!("usb: {}: ep0 ring full\n", what);
+            return Err(());
+        };
 
-    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
-        usbv!("usb: {}: ep0 ring full\n", what);
-        return Err(());
-    };
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+        let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
+            usbv!("usb: {}: ep0 ring full\n", what);
+            return Err(());
+        };
+        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-    let evt = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_slot != slot_id {
-                return false;
-            }
+        let evt = xhci::wait_for_event(
+            ctx,
+            |evt| {
+                let evt_type = (evt.d3 >> 10) & 0x3F;
+                if evt_type != 32 {
+                    return false;
+                }
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                if evt_slot != slot_id {
+                    return false;
+                }
 
-            let evt_target = (evt.d3 >> 16) & 0x1F;
-            if evt_target != 1 {
-                return false;
-            }
+                let evt_target = (evt.d3 >> 16) & 0x1F;
+                if evt_target != 1 {
+                    return false;
+                }
 
-            // On success, the controller usually reports the status-stage TRB.
-            // On error, some controllers report the TRB that faulted (setup/data).
-            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            let evt_ptr = evt_ptr & !0xFu64;
-            evt_ptr == (setup_trb_phys & !0xFu64)
-                || evt_ptr == (data_trb_phys & !0xFu64)
-                || evt_ptr == (status_trb_phys & !0xFu64)
-        },
-        timeout_iters,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    .ok_or(())
-    .map_err(|_| {
-        usbv!("usb: {}: timeout waiting for transfer event\n", what);
-    })?;
+                // On success, the controller usually reports the status-stage TRB.
+                // On error, some controllers report the TRB that faulted (setup/data).
+                let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+                let evt_ptr = evt_ptr & !0xFu64;
+                evt_ptr == (setup_trb_phys & !0xFu64)
+                    || evt_ptr == (data_trb_phys & !0xFu64)
+                    || evt_ptr == (status_trb_phys & !0xFu64)
+            },
+            timeout_iters,
+            EmbassyDuration::from_millis(5),
+        )
+        .await
+        .ok_or(())
+        .map_err(|_| {
+            usbv!("usb: {}: timeout waiting for transfer event\n", what);
+        })?;
 
-    let completion = trb_cc(&evt);
-    let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
-    let requested = length as u32;
-    let transferred = requested.saturating_sub(remaining).min(requested) as u16;
+        let completion = trb_cc(&evt);
+        let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
+        let requested = length as u32;
+        let transferred = requested.saturating_sub(remaining).min(requested) as u16;
 
-    // CC=13 is a normal short packet completion on control-IN reads.
-    if completion == 1 || completion == 13 {
-        Ok((completion, transferred))
-    } else {
+        // CC=13 is a normal short packet completion on control-IN reads.
+        if completion == 1 || completion == 13 {
+            return Ok((completion, transferred));
+        }
+
+        if completion == CC_STALL
+            && attempt == 0
+            && what != "ep0-clear-halt"
+            && control_out_cc(
+                ctx,
+                ep0_ring,
+                slot_id,
+                setup_clear_endpoint_halt(0),
+                None,
+                0,
+                "ep0-clear-halt",
+                200,
+            )
+            .await
+            .ok()
+            == Some(1)
+        {
+            attempt = 1;
+            continue;
+        }
+
         usbv!("usb: {}: transfer failed cc={}\n", what, completion);
-        Err(())
+        return Err(());
     }
 }
 
@@ -147,85 +185,110 @@ pub(crate) async fn control_out(
     what: &'static str,
     timeout_iters: usize,
 ) -> Result<(), ()> {
-    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
-        usbv!("usb: {}: ep0 ring full (setup)\n", what);
-        return Err(());
-    };
-
-    let mut data_trb_phys: Option<u64> = None;
-
-    if let Some(phys) = buf_phys {
-        let data = Trb {
-            d0: lo(phys),
-            d1: hi(phys),
-            d2: length as u32,
-            d3: trb_type(3),
-        };
-        let Some(data_phys) = ep0_ring.push_with_phys(data) else {
-            usbv!("usb: {}: ep0 ring full (data)\n", what);
+    const CC_STALL: u32 = 6;
+    let mut attempt: u8 = 0;
+    loop {
+        let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
+            usbv!("usb: {}: ep0 ring full (setup)\n", what);
             return Err(());
         };
-        data_trb_phys = Some(data_phys);
-    }
 
-    let status = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-        d3: trb_type(4) | (1 << 5) | (1 << 16),
-    };
+        let mut data_trb_phys: Option<u64> = None;
 
-    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
-        usbv!("usb: {}: ep0 ring full (status)\n", what);
-        return Err(());
-    };
+        if let Some(phys) = buf_phys {
+            let data = Trb {
+                d0: lo(phys),
+                d1: hi(phys),
+                d2: length as u32,
+                d3: trb_type(3),
+            };
+            let Some(data_phys) = ep0_ring.push_with_phys(data) else {
+                usbv!("usb: {}: ep0 ring full (data)\n", what);
+                return Err(());
+            };
+            data_trb_phys = Some(data_phys);
+        }
 
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
+        let status = Trb {
+            d0: 0,
+            d1: 0,
+            d2: 0,
+            d3: trb_type(4) | (1 << 5) | (1 << 16),
+        };
 
-    let evt = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_slot != slot_id {
-                return false;
-            }
+        let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
+            usbv!("usb: {}: ep0 ring full (status)\n", what);
+            return Err(());
+        };
 
-            let evt_target = (evt.d3 >> 16) & 0x1F;
-            if evt_target != 1 {
-                return false;
-            }
+        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
-            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            let evt_ptr = evt_ptr & !0xFu64;
-            if evt_ptr == (setup_trb_phys & !0xFu64) {
-                return true;
-            }
-            if let Some(data_phys) = data_trb_phys {
-                if evt_ptr == (data_phys & !0xFu64) {
+        let evt = xhci::wait_for_event(
+            ctx,
+            |evt| {
+                let evt_type = (evt.d3 >> 10) & 0x3F;
+                if evt_type != 32 {
+                    return false;
+                }
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                if evt_slot != slot_id {
+                    return false;
+                }
+
+                let evt_target = (evt.d3 >> 16) & 0x1F;
+                if evt_target != 1 {
+                    return false;
+                }
+
+                let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+                let evt_ptr = evt_ptr & !0xFu64;
+                if evt_ptr == (setup_trb_phys & !0xFu64) {
                     return true;
                 }
-            }
-            evt_ptr == (status_trb_phys & !0xFu64)
-        },
-        timeout_iters,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    .ok_or(())
-    .map_err(|_| {
-        usbv!("usb: {}: timeout waiting for transfer event\n", what);
-    })?;
+                if let Some(data_phys) = data_trb_phys {
+                    if evt_ptr == (data_phys & !0xFu64) {
+                        return true;
+                    }
+                }
+                evt_ptr == (status_trb_phys & !0xFu64)
+            },
+            timeout_iters,
+            EmbassyDuration::from_millis(5),
+        )
+        .await
+        .ok_or(())
+        .map_err(|_| {
+            usbv!("usb: {}: timeout waiting for transfer event\n", what);
+        })?;
 
-    let completion = trb_cc(&evt);
-    if completion == 1 {
-        Ok(())
-    } else {
+        let completion = trb_cc(&evt);
+        if completion == 1 {
+            return Ok(());
+        }
+
+        if completion == CC_STALL
+            && attempt == 0
+            && what != "ep0-clear-halt"
+            && control_out_cc(
+                ctx,
+                ep0_ring,
+                slot_id,
+                setup_clear_endpoint_halt(0),
+                None,
+                0,
+                "ep0-clear-halt",
+                200,
+            )
+            .await
+            .ok()
+            == Some(1)
+        {
+            attempt = 1;
+            continue;
+        }
+
         usbv!("usb: {}: transfer failed cc={}\n", what, completion);
-        Err(())
+        return Err(());
     }
 }
 

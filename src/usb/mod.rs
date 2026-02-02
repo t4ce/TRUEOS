@@ -258,6 +258,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     // will time out waiting for completions.
                     Some(DeviceKind::Hid) | Some(DeviceKind::Cdc) | Some(DeviceKind::Uac) => true,
                     Some(DeviceKind::Mass) => false,
+                    Some(DeviceKind::Hub) => hub::interrupt_runtime_exists(controller_id, evt_slot),
                     Some(_) => false,
                     // During attach, transfers can complete before `register_device()` sets the
                     // final kind. Only consume events for slots that already have a CDC runtime.
@@ -369,7 +370,12 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 let _ = uac::handle_transfer_event(controller_id, &evt);
             }
             Some(DeviceKind::Hub) => {
-                // Hub class driver not implemented yet.
+                if !hub::handle_transfer_event(controller_id, &evt) {
+                    usbv!(
+                        "usb: ignoring transfer event slot={} (no HUB runtime)\n",
+                        evt_slot
+                    );
+                }
             }
             Some(DeviceKind::Printer) => {}
             Some(DeviceKind::Pen) => {}
