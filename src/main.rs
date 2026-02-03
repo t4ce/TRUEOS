@@ -238,7 +238,6 @@ pub extern "C" fn kmain() -> ! {
 
     power::init();
     usb::xhci::init_once();
-    usb::xhci::install_block_on_hook();
     usb::truekey::init();
 
     let resp = limine::smp_response().unwrap();
@@ -257,10 +256,6 @@ pub extern "C" fn kmain() -> ! {
     }
 
     net::init();
-    // Ensure synchronous callers using `time::block_on` (e.g. QuickJS module loader)
-    // can still progress the network stack.
-    crate::time::register_block_on_hook(net::adapter::pump_block_on_hook);
-    crate::time::register_block_on_hook(net::tls_socket::pump_block_on_hook);
 
     // Spawn all Embassy tasks via the centralized v-layer spawn service.
     if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner)) {

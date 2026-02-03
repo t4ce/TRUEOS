@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 /// Virtual networking surface API.
 ///
 /// This is meant to be stable and portable for higher layers (e.g. containers).

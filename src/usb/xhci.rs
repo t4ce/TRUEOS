@@ -148,23 +148,6 @@ pub fn xhc_list() -> Vec<XhcInfo, MAX_XHCI_CONTROLLERS> {
     CONTROLLERS.lock().clone()
 }
 
-/// Drain at most one event from each registered xHC controller.
-///
-/// This is safe to call from synchronous contexts (e.g. inside `time::block_on`)
-/// to ensure Transfer Events still get enqueued even when the async poll task is
-/// temporarily starved.
-pub fn pump_events_once_all() {
-    for info in xhc_list().iter().copied() {
-        let ctx = unsafe { XhciContext::new(info) };
-        let _ = pump_one_event(&ctx);
-    }
-}
-
-/// Install the xHCI event-ring pump as the global `time::block_on` hook.
-pub fn install_block_on_hook() {
-    crate::time::register_block_on_hook(pump_events_once_all);
-}
-
 pub fn init_once() {
     if crate::limine::hhdm_offset().is_none() {
         crate::log!("xhci: no HHDM\n");

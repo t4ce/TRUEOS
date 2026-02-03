@@ -3,17 +3,10 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use spin::Once;
 
-#[cfg(feature = "power-msr")]
 use x86_64::registers::model_specific::Msr;
-use crate::wait;
-
-#[cfg(feature = "power-msr")]
 const IA32_MSR_PLATFORM_INFO: u32 = 0xCE;
-#[cfg(feature = "power-msr")]
 const IA32_MSR_PERF_STATUS: u32 = 0x198;
-#[cfg(feature = "power-msr")]
 const IA32_MSR_PERF_CTL: u32 = 0x199;
-#[cfg(feature = "power-msr")]
 const IA32_MSR_HWP_CAPABILITIES: u32 = 0x771;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,7 +33,6 @@ impl IdlePolicy {
 
 static IDLE_POLICY: AtomicU8 = AtomicU8::new(IdlePolicy::Spin as u8);
 
-#[cfg(feature = "power-msr")]
 static MSR_ARMED: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Clone, Copy, Debug)]
@@ -61,7 +53,6 @@ pub struct PowerMsrDetails {
     pub hwp_highest: Option<u8>,
 }
 
-#[cfg(feature = "power-msr")]
 static MSR_DETAILS: Once<Option<PowerMsrDetails>> = Once::new();
 
 pub fn init() {
@@ -104,27 +95,11 @@ pub fn caps() -> Option<&'static PowerCaps> {
 }
 
 pub fn msr_armed() -> bool {
-    #[cfg(feature = "power-msr")]
-    {
-        MSR_ARMED.load(Ordering::Acquire) != 0
-    }
-
-    #[cfg(not(feature = "power-msr"))]
-    {
-        false
-    }
+    MSR_ARMED.load(Ordering::Acquire) != 0
 }
 
 pub fn msr_details() -> Option<&'static PowerMsrDetails> {
-    #[cfg(feature = "power-msr")]
-    {
-        MSR_DETAILS.get().and_then(|d| d.as_ref())
-    }
-
-    #[cfg(not(feature = "power-msr"))]
-    {
-        None
-    }
+    MSR_DETAILS.get().and_then(|d| d.as_ref())
 }
 
 /// Probes Intel MSR-only detail fields (platform ratios, HWP caps).
@@ -133,7 +108,6 @@ pub fn msr_details() -> Option<&'static PowerMsrDetails> {
 /// If the MSRs being probed are not implemented by the CPU/firmware, the reads
 /// will raise #GP. If your exception path is not safe, this can reboot the
 /// machine. Keep this opt-in and only call when you're prepared.
-#[cfg(feature = "power-msr")]
 pub unsafe fn probe_msr_details() -> Option<&'static PowerMsrDetails> {
     if !msr_armed() {
         return None;
@@ -161,32 +135,15 @@ pub fn idle_hint() {
 }
 
 pub fn current_ratio() -> Option<u8> {
-    #[cfg(not(feature = "power-msr"))]
-    {
-        let _ = caps()?;
-        return None;
-    }
-
-    #[cfg(feature = "power-msr")]
-    {
     let caps = caps()?;
     if !msr_armed() || !caps.has_msr || !caps.has_eist {
         return None;
     }
     let value = unsafe { Msr::new(IA32_MSR_PERF_STATUS).read() };
     Some(((value >> 8) & 0xff) as u8)
-    }
 }
 
 pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
-    #[cfg(not(feature = "power-msr"))]
-    {
-        let _ = requested;
-        return Err("MSR support disabled at build time");
-    }
-
-    #[cfg(feature = "power-msr")]
-    {
     let caps = caps().ok_or("no power caps")?;
     if !msr_armed() || !caps.has_msr || !caps.has_eist {
         return Err("EIST/MSR unsupported");
@@ -199,7 +156,6 @@ pub fn set_pstate_ratio(requested: u8) -> Result<u8, &'static str> {
     let value = (ratio as u64) << 8;
     unsafe { Msr::new(IA32_MSR_PERF_CTL).write(value) };
     Ok(ratio)
-    }
 }
 
 fn detect_caps_cpuid_only() -> Option<PowerCaps> {
@@ -227,7 +183,6 @@ fn detect_caps_cpuid_only() -> Option<PowerCaps> {
     })
 }
 
-#[cfg(feature = "power-msr")]
 fn detect_msr_details() -> Option<PowerMsrDetails> {
     let caps = caps()?;
     if !caps.vendor_intel || !caps.has_msr {

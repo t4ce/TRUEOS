@@ -201,7 +201,6 @@ impl WaitQueue {
 
             let current = self.seq.load(Ordering::Acquire);
             if current != observed {
-                observed = current;
                 return true;
             }
 

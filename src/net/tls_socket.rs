@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -15,7 +15,6 @@ use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoo
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
-static TLS_BLOCK_ON_PUMP_LAST_TICK: AtomicU64 = AtomicU64::new(0);
 
 struct TlsAppQueues {
     name: &'static str,
@@ -403,23 +402,6 @@ fn tls_socket_tick_once() {
     }
 }
 
-/// Pump TLS socket service from synchronous contexts (e.g. inside `time::block_on`).
-///
-/// Rate-limited to ~1kHz.
-pub fn pump_block_on_hook() {
-    let now = embassy_time_driver::now();
-    let last = TLS_BLOCK_ON_PUMP_LAST_TICK.load(Ordering::Relaxed);
-    if last == now {
-        return;
-    }
-    if TLS_BLOCK_ON_PUMP_LAST_TICK
-        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    tls_socket_tick_once();
-}
 
 #[task]
 pub async fn tls_socket_service_task() {
