@@ -576,6 +576,10 @@ pub(crate) fn init_builtin_shell_commands() {
         static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Str)];
         static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
+        static NET_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("op", ArgType::Str).mandatory(),
+            ArgSpec::new("target", ArgType::Str).mandatory(),
+        ];
         static NO_ARGS: [ArgSpec; 0] = [];
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
         static MV_ARGS: [ArgSpec; 2] = [
@@ -601,6 +605,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd_ecma48);
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
+        let _ = REGSHCMD("net", &NET_ARGS, cmd_net);
         let _ = REGSHCMD("update", &NO_ARGS, cmd_update);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
@@ -775,6 +780,52 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
         None => ctx.io.write_str("https: matrix full\r\n"),
+    }
+
+    super::CommandAction::None
+}
+
+fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let Some(args) = args else {
+        ctx.io.write_str("net: usage net ping <host>\r\n");
+        return super::CommandAction::None;
+    };
+
+    let op = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    let target = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
+
+    if op != "ping" || target.is_empty() {
+        ctx.io.write_str("net: usage net ping <host>\r\n");
+        return super::CommandAction::None;
+    }
+
+    ctx.io.write_fmt(format_args!("net: ping {}\r\n", target));
+    let res = crate::time::block_on(crate::v::net::ping::ping_once(target));
+    match res {
+        Ok(result) => {
+            let [a, b, c, d] = result.ip;
+            ctx.io.write_fmt(format_args!(
+                "net: reply from {}.{}.{}.{} rtt={}ms\r\n",
+                a, b, c, d, result.rtt_ms
+            ));
+        }
+        Err(err) => match err {
+            crate::v::net::ping::PingError::NoNic => {
+                ctx.io.write_str("net: ping failed (no nic)\r\n");
+            }
+            crate::v::net::ping::PingError::BadHost => {
+                ctx.io.write_str("net: ping failed (bad host)\r\n");
+            }
+            crate::v::net::ping::PingError::DnsFailed => {
+                ctx.io.write_str("net: ping failed (dns)\r\n");
+            }
+            crate::v::net::ping::PingError::Timeout => {
+                ctx.io.write_str("net: ping timeout\r\n");
+            }
+            crate::v::net::ping::PingError::SendFailed => {
+                ctx.io.write_str("net: ping failed (send)\r\n");
+            }
+        },
     }
 
     super::CommandAction::None

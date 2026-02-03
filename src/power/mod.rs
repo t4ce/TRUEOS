@@ -155,7 +155,7 @@ pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
 #[inline(always)]
 pub fn idle_hint() {
     match idle_policy() {
-        IdlePolicy::Spin => wait::spin_step(),
+        IdlePolicy::Spin => core::hint::spin_loop(),
         IdlePolicy::Halt => x86_64::instructions::hlt(),
     }
 }

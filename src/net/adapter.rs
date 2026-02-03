@@ -21,6 +21,8 @@ use crate::log;
 const MAX_SOCKETS: usize = 128;
 const MAX_DRAIN_PER_LOOP: usize = 32;
 const ICMP_IDENT: u16 = 0x1234;
+const ICMP_VNET_MAX_INFLIGHT: usize = 32;
+const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
 
 // QEMU slirp defaults we use today.
 // NOTE: We may have multiple NICs. Using the same static IP on all of them
@@ -108,6 +110,11 @@ pub enum NetCommand {
         handle: NetHandle,
         data: Vec<u8>,
     },
+    IcmpEcho {
+        target: [u8; 4],
+        seq: u16,
+        data: Vec<u8>,
+    },
     Close {
         handle: NetHandle,
     },
@@ -140,6 +147,12 @@ pub enum NetEvent {
     TcpSent {
         handle: NetHandle,
         len: usize,
+    },
+    IcmpReply {
+        from: [u8; 4],
+        seq: u16,
+        rtt_ms: u32,
+        data: Vec<u8>,
     },
 }
 
@@ -334,6 +347,12 @@ struct SocketRecord {
     last_tcp_state: Option<tcp::State>,
 }
 
+struct IcmpInflight {
+    owner: &'static str,
+    seq: u16,
+    sent_at: Instant,
+}
+
 struct NetService {
     device_index: usize,
     iface: Interface,
@@ -347,6 +366,7 @@ struct NetService {
     icmp_ping_inflight: Option<(u16, Instant)>,
     icmp_ping_last_sent: Option<Instant>,
     icmp_ping_pongs: u8,
+    icmp_vnet_inflight: Vec<IcmpInflight>,
 
     tcp_next_ephemeral: u16,
 }
@@ -394,6 +414,7 @@ impl NetService {
             icmp_ping_inflight: None,
             icmp_ping_last_sent: None,
             icmp_ping_pongs: 0,
+            icmp_vnet_inflight: Vec::new(),
 
             tcp_next_ephemeral: 49152,
         }
@@ -569,6 +590,45 @@ impl NetService {
         }
     }
 
+    fn send_icmp_echo(&mut self, owner: &'static str, target: [u8; 4], seq: u16, data: Vec<u8>) {
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        if !socket.can_send() {
+            let _ = push_event(owner, NetEvent::Error { msg: "icmp send blocked" });
+            return;
+        }
+
+        let req = Icmpv4Repr::EchoRequest {
+            ident: ICMP_IDENT,
+            seq_no: seq,
+            data: &data,
+        };
+        let mut out = vec![0u8; req.buffer_len()];
+        req.emit(
+            &mut Icmpv4Packet::new_unchecked(&mut out),
+            &ChecksumCapabilities::default(),
+        );
+
+        let target = IpAddress::Ipv4(Ipv4Address::from_octets(target));
+        if socket.send_slice(&out, target).is_ok() {
+            if self.icmp_vnet_inflight.len() >= ICMP_VNET_MAX_INFLIGHT {
+                self.icmp_vnet_inflight.remove(0);
+            }
+            self.icmp_vnet_inflight.push(IcmpInflight {
+                owner,
+                seq,
+                sent_at: now(),
+            });
+        } else {
+            let _ = push_event(owner, NetEvent::Error { msg: "icmp send fail" });
+        }
+    }
+
+    fn prune_icmp_inflight(&mut self, timestamp: Instant) {
+        let timeout = SmolDuration::from_millis(ICMP_VNET_TIMEOUT_MS);
+        self.icmp_vnet_inflight
+            .retain(|p| timestamp < p.sent_at + timeout);
+    }
+
     fn handle_commands(&mut self, commands: Vec<(&'static str, Vec<NetCommand>)>) {
         for (owner, cmds) in commands.into_iter() {
             for cmd in cmds {
@@ -658,6 +718,9 @@ impl NetService {
                         } else {
                             let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                         }
+                    }
+                    NetCommand::IcmpEcho { target, seq, data } => {
+                        self.send_icmp_echo(owner, target, seq, data);
                     }
                     NetCommand::Close { handle } => {
                         self.remove_record(handle);
@@ -806,6 +869,7 @@ impl NetService {
         let _ = self.iface.poll(timestamp, &mut device, &mut self.sockets);
 
         self.poll_icmp();
+        self.prune_icmp_inflight(timestamp);
 
         // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
         self.maybe_send_icmp_ping(timestamp);
@@ -839,7 +903,10 @@ impl NetService {
             return;
         }
 
-        self.icmp_ping_seq = self.icmp_ping_seq.wrapping_add(1);
+        self.icmp_ping_seq = self.icmp_ping_seq.wrapping_add(1) & 0x7FFF;
+        if self.icmp_ping_seq == 0 {
+            self.icmp_ping_seq = 1;
+        }
         let seq_no = self.icmp_ping_seq;
         let payload: &[u8] = b"TRUEOS-ping";
         let req = Icmpv4Repr::EchoRequest {
@@ -894,6 +961,23 @@ impl NetService {
                 }
                 Icmpv4Repr::EchoReply { ident, seq_no, .. } => {
                     if ident != ICMP_IDENT {
+                        continue;
+                    }
+
+                    if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
+                        let inflight = self.icmp_vnet_inflight.remove(pos);
+                        let rtt = now() - inflight.sent_at;
+                        if let IpAddress::Ipv4(addr) = from {
+                            let _ = push_event(
+                                inflight.owner,
+                                NetEvent::IcmpReply {
+                                    from: addr.octets(),
+                                    seq: seq_no,
+                                    rtt_ms: rtt.total_millis() as u32,
+                                    data: buf[..len].to_vec(),
+                                },
+                            );
+                        }
                         continue;
                     }
 
@@ -1182,6 +1266,7 @@ pub async fn net_shell_task() {
                     }
                 }
                 NetEvent::UdpPacket { .. } => {}
+                NetEvent::IcmpReply { .. } => {}
             }
         }
 

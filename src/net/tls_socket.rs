@@ -391,6 +391,7 @@ fn tls_socket_tick_once() {
                 }
                 vnet::Event::TcpSent { .. } => {}
                 vnet::Event::UdpPacket { .. } => {}
+                vnet::Event::IcmpReply { .. } => {}
             }
         }
 

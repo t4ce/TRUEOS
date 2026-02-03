@@ -43,7 +43,15 @@ pub fn can_block() -> bool {
 /// Single spin step that can be swapped for parking later.
 #[inline]
 pub fn spin_step() {
-    core::hint::spin_loop();
+    park_step();
+}
+
+/// Single parking step that drives async work and idles the BSP.
+#[inline]
+pub fn park_step() {
+    crate::time::poll();
+    crate::time::poll_executor();
+    crate::power::idle_hint();
 }
 
 /// Spin until `condition` is true.
@@ -174,6 +182,32 @@ impl WaitQueue {
         })
         .await
     }
+
+    #[inline]
+    pub fn wait_for_event_blocking(&self, timeout_ms: u64) -> bool {
+        let hz = TICK_HZ as u64;
+        let ticks = if hz == 0 || timeout_ms == 0 {
+            0
+        } else {
+            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        };
+        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
+        let mut observed = self.seq.load(Ordering::Acquire);
+
+        loop {
+            if ticks != 0 && now() >= deadline {
+                return false;
+            }
+
+            let current = self.seq.load(Ordering::Acquire);
+            if current != observed {
+                observed = current;
+                return true;
+            }
+
+            park_step();
+        }
+    }
 }
 
 type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -258,9 +292,12 @@ where
         state_task.wait.notify_all();
     }));
 
-    crate::time::block_on(state.wait.wait_for_event());
-    let mut value = state.value.lock();
-    value.take().expect("spawn_and_wait missing value")
+    loop {
+        if let Some(out) = state.value.lock().take() {
+            return out;
+        }
+        state.wait.wait_for_event_blocking(0);
+    }
 }
 
 /// Run a future on the async executor and wait synchronously for its result.
@@ -283,7 +320,10 @@ where
         state_task.wait.notify_all();
     }));
 
-    crate::time::block_on(state.wait.wait_for_event());
-    let mut value = state.value.lock();
-    value.take().expect("spawn_and_wait_local missing value")
+    loop {
+        if let Some(out) = state.value.lock().take() {
+            return out;
+        }
+        state.wait.wait_for_event_blocking(0);
+    }
 }

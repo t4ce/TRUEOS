@@ -576,7 +576,8 @@ a:hover{text-decoration:underline}
                     crate::log!("http-trueosfs: error {}\n", msg);
                 }
                 api::Event::TcpSent { .. } => {}
-                api::Event::UdpPacket { .. } => {}
+                api::Event::UdpPacket { .. } => {},
+                api::Event::IcmpReply { .. } => {},
             }
         }
 
