@@ -215,13 +215,6 @@ fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_sched_challenge(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::sched_challenge::sched_challenge_task(spawner)) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND)) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -376,14 +369,6 @@ static TASKS: &[TaskSpec] = &[
         started: &PCI_IDS_CACHE_STARTED,
         spawn: spawn_pci_ids_cache,
     },
-    TaskSpec {
-        name: "sched-challenge",
-        required: 0,
-        started: &SCHED_CHALLENGE_STARTED,
-        spawn: spawn_sched_challenge,
-    },
-
-    // Shell backends
     TaskSpec {
         name: "uart-shell",
         required: 0,
