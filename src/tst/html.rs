@@ -180,8 +180,9 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                     }
                     api::SocketKind::Udp => {}
                 },
-                api::Event::UdpPacket { .. } => {}
-                api::Event::TcpEstablished { handle } => {
+                api::Event::UdpPacket { .. } => {},
+                api::Event::TcpSent { .. } => {},
+                api::Event::IcmpReply { .. } => {},
                     if tcp_handle != Some(handle) {
                         continue;
                     }
