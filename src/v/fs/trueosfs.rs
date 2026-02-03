@@ -7,6 +7,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_math::BPlusTree;
 
+pub use trueos_fs::FileInfo;
+
 const TRUEOSFS_INDEX_M: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,6 +345,56 @@ pub async fn file_out_async(
     let io = KernelBlockIo::new(disk);
 
     trueos_fs::read_file(&io, &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: read file metadata.
+pub async fn file_info_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<FileInfo>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::read_file_info(&io, &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Async TRUEOSFS: read a file range into a caller-provided buffer.
+pub async fn file_read_range_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<Option<usize>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+
+    trueos_fs::read_file_range(&io, &params, name, offset, out)
         .await
         .map_err(map_engine_err)
 }

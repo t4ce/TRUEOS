@@ -1,15 +1,18 @@
 extern crate alloc;
 
 use alloc::{format, string::String, vec::Vec};
+use alloc::vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use trueos_v::vnet as api;
 
 use crate::v::net::VNet;
+use crate::disc::block::DeviceHandle;
 
 const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
+const HTTP_TRUEOSFS_STREAM_CHUNK: usize = 32 * 1024;
 
 fn http_parse_target(req: &[u8]) -> Option<&str> {
     let s = core::str::from_utf8(req).ok()?;
@@ -101,6 +104,298 @@ fn http_sanitize_filename(name: &str) -> String {
     out
 }
 
+#[derive(Clone, Debug)]
+struct MultipartPart {
+    start: u64,
+    end: u64,
+    header: String,
+}
+
+enum HttpBodyPlan {
+    Bytes(Vec<u8>),
+    File {
+        disk: DeviceHandle,
+        path: String,
+        offset: u64,
+        len: u64,
+    },
+    Multipart {
+        disk: DeviceHandle,
+        path: String,
+        parts: Vec<MultipartPart>,
+        boundary: String,
+        total_len: u64,
+    },
+    None,
+}
+
+struct HttpResponsePlan {
+    status: &'static str,
+    content_type: &'static str,
+    extra_headers: String,
+    body_len: u64,
+    body: HttpBodyPlan,
+}
+
+fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponsePlan {
+    let body = msg.as_bytes().to_vec();
+    HttpResponsePlan {
+        status,
+        content_type: "text/plain; charset=utf-8",
+        extra_headers: String::new(),
+        body_len: body.len() as u64,
+        body: HttpBodyPlan::Bytes(body),
+    }
+}
+
+fn http_find_header<'a>(req: &'a [u8], key: &str) -> Option<&'a str> {
+    let s = core::str::from_utf8(req).ok()?;
+    let mut lines = s.split('\n');
+    let _ = lines.next()?;
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(key) {
+                return Some(v.trim());
+            }
+        }
+    }
+    None
+}
+
+fn http_etag_from_sha(sha: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(sha.len() * 2 + 2);
+    out.push('"');
+    for b in sha.iter().copied() {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out.push('"');
+    out
+}
+
+fn http_etag_matches(value: &str, etag: &str) -> bool {
+    let etag_trim = etag.trim();
+    let etag_unquoted = etag_trim.trim_matches('"');
+    for raw in value.split(',') {
+        let mut tag = raw.trim();
+        if tag == "*" {
+            return true;
+        }
+        if let Some(stripped) = tag.strip_prefix("W/") {
+            tag = stripped.trim();
+        }
+        if tag == etag_trim {
+            return true;
+        }
+        let tag_unquoted = tag.trim_matches('"');
+        if tag_unquoted == etag_unquoted {
+            return true;
+        }
+    }
+    false
+}
+
+fn http_parse_range_header(value: &str, total_len: u64) -> Option<Vec<(u64, u64)>> {
+    if total_len == 0 {
+        return None;
+    }
+    let value = value.trim();
+    let value = value.strip_prefix("bytes=")?;
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (start_s, end_s) = part.split_once('-')?;
+        if start_s.is_empty() {
+            let suffix = end_s.parse::<u64>().ok()?;
+            if suffix == 0 {
+                return None;
+            }
+            let start = if suffix >= total_len {
+                0
+            } else {
+                total_len.saturating_sub(suffix)
+            };
+            let end = total_len.saturating_sub(1);
+            out.push((start, end));
+        } else {
+            let start = start_s.parse::<u64>().ok()?;
+            let end = if end_s.is_empty() {
+                total_len.saturating_sub(1)
+            } else {
+                end_s.parse::<u64>().ok()?
+            };
+            if start > end {
+                return None;
+            }
+            if start >= total_len {
+                return None;
+            }
+            let end = end.min(total_len.saturating_sub(1));
+            out.push((start, end));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+async fn http_prepare_file_response(
+    disk: DeviceHandle,
+    path: String,
+    req: &[u8],
+) -> HttpResponsePlan {
+    let info = match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
+        Err(_) => return http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "read failed\n"),
+    };
+
+    let etag = http_etag_from_sha(&info.sha256);
+    let mut extra_headers = String::new();
+    extra_headers.push_str("Accept-Ranges: bytes\r\n");
+    extra_headers.push_str("ETag: ");
+    extra_headers.push_str(etag.as_str());
+    extra_headers.push_str("\r\n");
+
+    let fname_raw = path.rsplit('/').next().unwrap_or("download.bin");
+    let fname = http_sanitize_filename(fname_raw);
+    extra_headers.push_str("Content-Disposition: attachment; filename=\"");
+    extra_headers.push_str(fname.as_str());
+    extra_headers.push_str("\"\r\n");
+
+    let range_hdr = http_find_header(req, "Range");
+    let if_range = http_find_header(req, "If-Range");
+    let if_none_match = http_find_header(req, "If-None-Match");
+
+    if range_hdr.is_none() {
+        if let Some(inm) = if_none_match {
+            if http_etag_matches(inm, etag.as_str()) {
+                return HttpResponsePlan {
+                    status: "HTTP/1.1 304 Not Modified\r\n",
+                    content_type: "application/octet-stream",
+                    extra_headers,
+                    body_len: 0,
+                    body: HttpBodyPlan::None,
+                };
+            }
+        }
+    }
+
+    let mut range_ignored = false;
+    let ranges = if let Some(rh) = range_hdr {
+        if let Some(ir) = if_range {
+            if !http_etag_matches(ir, etag.as_str()) {
+                range_ignored = true;
+                None
+            } else {
+                http_parse_range_header(rh, info.data_len)
+            }
+        } else {
+            http_parse_range_header(rh, info.data_len)
+        }
+    } else {
+        None
+    };
+
+    if range_hdr.is_some() && !range_ignored && ranges.is_none() {
+        let mut extra = extra_headers;
+        extra.push_str("Content-Range: bytes */");
+        extra.push_str(format!("{}", info.data_len).as_str());
+        extra.push_str("\r\n");
+        let body = b"range not satisfiable\n".to_vec();
+        return HttpResponsePlan {
+            status: "HTTP/1.1 416 Range Not Satisfiable\r\n",
+            content_type: "text/plain; charset=utf-8",
+            extra_headers: extra,
+            body_len: body.len() as u64,
+            body: HttpBodyPlan::Bytes(body),
+        };
+    }
+
+    if let Some(ranges) = ranges {
+        if ranges.len() == 1 {
+            let (start, end) = ranges[0];
+            let len = end.saturating_sub(start).saturating_add(1);
+            let mut extra = extra_headers;
+            extra.push_str("Content-Range: bytes ");
+            extra.push_str(format!("{}-{}", start, end).as_str());
+            extra.push_str("/");
+            extra.push_str(format!("{}", info.data_len).as_str());
+            extra.push_str("\r\n");
+            return HttpResponsePlan {
+                status: "HTTP/1.1 206 Partial Content\r\n",
+                content_type: "application/octet-stream",
+                extra_headers: extra,
+                body_len: len,
+                body: HttpBodyPlan::File {
+                    disk,
+                    path,
+                    offset: start,
+                    len,
+                },
+            };
+        }
+
+        let boundary = String::from("trueosfs-boundary");
+        let mut parts: Vec<MultipartPart> = Vec::new();
+        let mut total_len = 0u64;
+        for (start, end) in ranges.iter().copied() {
+            let header = format!(
+                "--{}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
+                boundary,
+                start,
+                end,
+                info.data_len
+            );
+            let part_len = end.saturating_sub(start).saturating_add(1);
+            total_len = total_len
+                .saturating_add(header.len() as u64)
+                .saturating_add(part_len)
+                .saturating_add(2);
+            parts.push(MultipartPart { start, end, header });
+        }
+        let closing = format!("--{}--\r\n", boundary);
+        total_len = total_len.saturating_add(closing.len() as u64);
+
+        return HttpResponsePlan {
+            status: "HTTP/1.1 206 Partial Content\r\n",
+            content_type: "multipart/byteranges; boundary=trueosfs-boundary",
+            extra_headers,
+            body_len: total_len,
+            body: HttpBodyPlan::Multipart {
+                disk,
+                path,
+                parts,
+                boundary,
+                total_len,
+            },
+        };
+    }
+
+    HttpResponsePlan {
+        status: "HTTP/1.1 200 OK\r\n",
+        content_type: "application/octet-stream",
+        extra_headers,
+        body_len: info.data_len,
+        body: HttpBodyPlan::File {
+            disk,
+            path,
+            offset: 0,
+            len: info.data_len,
+        },
+    }
+}
+
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
     // Once the network is reachable, `open_primary()` should succeed; keep it strict.
@@ -129,6 +424,9 @@ pub async fn http_trueosfs_task() {
     let mut listener_handle: Option<api::NetHandle> = None;
     let mut active_handle: Option<api::NetHandle> = None;
     let mut sent_for_active: bool = false;
+    let mut active_pending: usize = 0;
+    let mut active_sent: usize = 0;
+    let mut active_close: bool = false;
 
     loop {
         while let Some(ev) = vnet.pop_event() {
@@ -141,6 +439,9 @@ pub async fn http_trueosfs_task() {
                 api::Event::TcpEstablished { handle } => {
                     active_handle = Some(handle);
                     sent_for_active = false;
+                    active_pending = 0;
+                    active_sent = 0;
+                    active_close = false;
                 }
                 api::Event::TcpData { handle, data } => {
                     if active_handle.is_none() {
@@ -160,27 +461,21 @@ pub async fn http_trueosfs_task() {
                     let roots = crate::v::fs::trueosfs::list_roots();
                     let primary_raw = crate::v::fs::trueosfs::primary_root_id().map(|v| v.raw());
 
-                    let (status, content_type, extra_headers, body_bytes): (
-                        &'static str,
-                        &'static str,
-                        String,
-                        Vec<u8>,
-                    ) = if http_path_only(target).starts_with("/dl/") {
+                    let response = if http_path_only(target).starts_with("/dl/") {
                         // Download endpoint: /dl/<root_raw>/<path>
                         // (where <root_raw> is the DiscId raw value as decimal)
                         'resp: {
-                            let mut extra_headers = String::new();
                             let path_only = http_path_only(target);
                             let rest = path_only.strip_prefix("/dl/").unwrap_or("");
 
                             let (root_raw_s, enc_path) = match rest.split_once('/') {
                                 Some(v) => v,
                                 None => {
-                                    break 'resp (
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"missing root/path\n".to_vec(),
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 400 Bad Request
+",
+                                        "missing root/path
+",
                                     )
                                 }
                             };
@@ -188,11 +483,11 @@ pub async fn http_trueosfs_task() {
                             let root_raw = match root_raw_s.parse::<u32>() {
                                 Ok(v) => v,
                                 Err(_) => {
-                                    break 'resp (
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"bad root\n".to_vec(),
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 400 Bad Request
+",
+                                        "bad root
+",
                                     )
                                 }
                             };
@@ -200,11 +495,11 @@ pub async fn http_trueosfs_task() {
                             let root = match roots.iter().find(|r| r.disk_id.raw() == root_raw) {
                                 Some(v) => v,
                                 None => {
-                                    break 'resp (
-                                        "HTTP/1.1 404 Not Found\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"unknown root\n".to_vec(),
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 404 Not Found
+",
+                                        "unknown root
+",
                                     )
                                 }
                             };
@@ -212,11 +507,11 @@ pub async fn http_trueosfs_task() {
                             let disk = match crate::disc::block::device_handle(root.disk_id) {
                                 Some(v) => v,
                                 None => {
-                                    break 'resp (
-                                        "HTTP/1.1 503 Service Unavailable\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"root unavailable\n".to_vec(),
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 503 Service Unavailable
+",
+                                        "root unavailable
+",
                                     )
                                 }
                             };
@@ -224,11 +519,11 @@ pub async fn http_trueosfs_task() {
                             let mut path = match http_url_decode(enc_path, 240) {
                                 Some(v) => v,
                                 None => {
-                                    break 'resp (
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"bad path\n".to_vec(),
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 400 Bad Request
+",
+                                        "bad path
+",
                                     )
                                 }
                             };
@@ -237,130 +532,57 @@ pub async fn http_trueosfs_task() {
                                 path.remove(0);
                             }
                             if path.is_empty() || path.contains("..") {
-                                break 'resp (
-                                    "HTTP/1.1 400 Bad Request\r\n",
-                                    "text/plain; charset=utf-8",
-                                    extra_headers,
-                                    b"bad path\n".to_vec(),
+                                break 'resp http_plain_response(
+                                    "HTTP/1.1 400 Bad Request
+",
+                                    "bad path
+",
                                 );
                             }
 
-                            match crate::v::fs::trueosfs::file_out_async(disk, path.as_str()).await {
-                                Ok(Some(bytes)) => {
-                                    let fname_raw =
-                                        path.rsplit('/').next().unwrap_or("download.bin");
-                                    let fname = http_sanitize_filename(fname_raw);
-                                    extra_headers.push_str(
-                                        "Content-Disposition: attachment; filename=\"",
-                                    );
-                                    extra_headers.push_str(fname.as_str());
-                                    extra_headers.push_str("\"\r\n");
-                                    break 'resp (
-                                        "HTTP/1.1 200 OK\r\n",
-                                        "application/octet-stream",
-                                        extra_headers,
-                                        bytes,
-                                    );
-                                }
-                                Ok(None) => {
-                                    break 'resp (
-                                        "HTTP/1.1 404 Not Found\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"not found\n".to_vec(),
-                                    )
-                                }
-                                Err(_) => {
-                                    break 'resp (
-                                        "HTTP/1.1 500 Internal Server Error\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"read failed\n".to_vec(),
-                                    )
-                                }
-                            }
+                            break 'resp http_prepare_file_response(disk, path, data.as_slice()).await;
                         }
                     } else if target.starts_with("/dl") {
                         // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
                         let disk = crate::v::fs::trueosfs::primary_root_handle();
                         match disk {
-                            None => (
-                                "HTTP/1.1 503 Service Unavailable\r\n",
-                                "text/plain; charset=utf-8",
-                                String::new(),
-                                b"no TRUEOSFS mounted\n".to_vec(),
+                            None => http_plain_response(
+                                "HTTP/1.1 503 Service Unavailable
+",
+                                "no TRUEOSFS mounted
+",
                             ),
-                            Some(disk) => {
-                                let mut extra_headers = String::new();
-                                match http_query_param(target, "path") {
-                                    None => (
-                                        "HTTP/1.1 400 Bad Request\r\n",
-                                        "text/plain; charset=utf-8",
-                                        extra_headers,
-                                        b"missing path\n".to_vec(),
+                            Some(disk) => match http_query_param(target, "path") {
+                                None => http_plain_response(
+                                    "HTTP/1.1 400 Bad Request
+",
+                                    "missing path
+",
+                                ),
+                                Some(enc_path) => match http_url_decode(enc_path, 240) {
+                                    None => http_plain_response(
+                                        "HTTP/1.1 400 Bad Request
+",
+                                        "bad path
+",
                                     ),
-                                    Some(enc_path) => match http_url_decode(enc_path, 240) {
-                                        None => (
-                                            "HTTP/1.1 400 Bad Request\r\n",
-                                            "text/plain; charset=utf-8",
-                                            extra_headers,
-                                            b"bad path\n".to_vec(),
-                                        ),
-                                        Some(mut path) => {
-                                            while path.starts_with('/') {
-                                                path.remove(0);
-                                            }
-                                            if path.is_empty() || path.contains("..") {
-                                                (
-                                                    "HTTP/1.1 400 Bad Request\r\n",
-                                                    "text/plain; charset=utf-8",
-                                                    extra_headers,
-                                                    b"bad path\n".to_vec(),
-                                                )
-                                            } else {
-                                                match crate::v::fs::trueosfs::file_out_async(
-                                                    disk,
-                                                    path.as_str(),
-                                                )
-                                                .await
-                                                {
-                                                    Ok(Some(bytes)) => {
-                                                        let fname_raw = path
-                                                            .rsplit('/')
-                                                            .next()
-                                                            .unwrap_or("download.bin");
-                                                        let fname =
-                                                            http_sanitize_filename(fname_raw);
-                                                        extra_headers.push_str(
-                                                            "Content-Disposition: attachment; filename=\"",
-                                                        );
-                                                        extra_headers.push_str(fname.as_str());
-                                                        extra_headers.push_str("\"\r\n");
-                                                        (
-                                                            "HTTP/1.1 200 OK\r\n",
-                                                            "application/octet-stream",
-                                                            extra_headers,
-                                                            bytes,
-                                                        )
-                                                    }
-                                                    Ok(None) => (
-                                                        "HTTP/1.1 404 Not Found\r\n",
-                                                        "text/plain; charset=utf-8",
-                                                        extra_headers,
-                                                        b"not found\n".to_vec(),
-                                                    ),
-                                                    Err(_) => (
-                                                        "HTTP/1.1 500 Internal Server Error\r\n",
-                                                        "text/plain; charset=utf-8",
-                                                        extra_headers,
-                                                        b"read failed\n".to_vec(),
-                                                    ),
-                                                }
-                                            }
+                                    Some(mut path) => {
+                                        while path.starts_with('/') {
+                                            path.remove(0);
                                         }
-                                    },
-                                }
-                            }
+                                        if path.is_empty() || path.contains("..") {
+                                            http_plain_response(
+                                                "HTTP/1.1 400 Bad Request
+",
+                                                "bad path
+",
+                                            )
+                                        } else {
+                                            http_prepare_file_response(disk, path, data.as_slice()).await
+                                        }
+                                    }
+                                },
+                            },
                         }
                     } else {
                         // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
@@ -379,84 +601,7 @@ pub async fn http_trueosfs_task() {
                             selected_raw = roots.first().map(|r| r.disk_id.raw());
                         }
 
-                        let js = r#"<style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:980px;margin:2rem auto;padding:0 1rem}
-ul{line-height:1.35}
-li{margin:0.15rem 0}
-a{color:#0b66ff;text-decoration:none}
-a:hover{text-decoration:underline}
-.bar{display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin:0.75rem 0 1rem}
-.tree{display:none}
-.muted{color:#666}
-</style>
-<script>
-(()=>{
-  const sel=document.getElementById("rootSel");
-  const trees=[...document.querySelectorAll(".tree")];
-  function show(root){
-    for(const t of trees){ t.style.display = (t.dataset.root===root) ? "block" : "none"; }
-    const url=new URL(location.href);
-    url.searchParams.set("root", root);
-    history.replaceState(null, "", url.toString());
-  }
-  if(sel){
-    const q=new URLSearchParams(location.search);
-    const want=q.get("root");
-    if(want && [...sel.options].some(o=>o.value===want)) sel.value=want;
-    sel.addEventListener("change", ()=>show(sel.value));
-    show(sel.value);
-  } else if(trees.length){
-    trees[0].style.display="block";
-  }
-
-  function labelForLi(li){
-    for(const n of li.childNodes){
-      if(n.nodeType===Node.TEXT_NODE){
-        const t=(n.textContent||"").trim();
-        if(t) return t;
-      }
-    }
-    return "";
-  }
-  function parentLi(li){
-    let p=li.parentElement;
-    while(p && p.tagName==="UL") p=p.parentElement;
-    return (p && p.tagName==="LI") ? p : null;
-  }
-  function buildPath(li){
-    const parts=[];
-    let cur=li;
-    while(cur){
-      const label=labelForLi(cur);
-      if(label && label!=="/"){
-        let seg=label;
-        if(seg.endsWith("/")) seg=seg.slice(0,-1);
-        if(seg) parts.push(seg);
-      }
-      cur=parentLi(cur);
-    }
-    return parts.reverse().join("/");
-  }
-  for(const tree of trees){
-    const root=tree.dataset.root;
-    if(!root) continue;
-    for(const li of tree.querySelectorAll("ul li")){
-      if(li.querySelector("a")) continue;
-      const label=labelForLi(li);
-      if(!label || label==="/" || label.endsWith("/")) continue;
-      const path=buildPath(li);
-      if(!path) continue;
-      const a=document.createElement("a");
-      a.href="/dl/"+root+"/"+encodeURIComponent(path);
-      a.textContent=label;
-      a.setAttribute("download", label);
-      const firstText=[...li.childNodes].find(n=>n.nodeType===Node.TEXT_NODE && (n.textContent||"").trim());
-      if(firstText){ li.insertBefore(a, firstText); li.removeChild(firstText); }
-      else { li.insertBefore(a, li.firstChild); }
-    }
-  }
-})();
-</script>"#;
+                        let js =    r#"<style>li{cursor:pointer}</style><script>(function(){function labelOf(li){var n=li.firstChild;return n&&n.nodeType===3?n.textContent:"";}function pathFor(li){var parts=[];var cur=li;while(cur){var t=labelOf(cur).trim();if(t==="/"){t="";}if(t.endsWith("/")){t=t.slice(0,-1);}if(t){parts.push(t);}var p=cur.parentElement;cur=p&&p.closest("li");}parts.reverse();return parts.join("/");}document.addEventListener("click",function(e){var li=e.target.closest("li");if(!li){return;}var tree=li.closest(".tree");if(!tree){return;}var root=tree.getAttribute("data-root")||"";var path=pathFor(li);if(!root||!path){return;}var segs=path.split("/").map(function(s){return encodeURIComponent(s);}).join("/");window.location.href="/dl/"+root+"/"+segs;});})();</script>"#;
 
                         let mut options = String::new();
                         let mut trees_html = String::new();
@@ -520,13 +665,23 @@ a:hover{text-decoration:underline}
                             )
                         };
 
-                        (
-                            "HTTP/1.1 200 OK\r\n",
-                            "text/html; charset=utf-8",
-                            String::new(),
-                            body.into_bytes(),
-                        )
-                    };
+                        let body_bytes = body.into_bytes();
+                        HttpResponsePlan {
+                            status: "HTTP/1.1 200 OK\r\n",
+                            content_type: "text/html; charset=utf-8",
+                            extra_headers: String::new(),
+                            body_len: body_bytes.len() as u64,
+                            body: HttpBodyPlan::Bytes(body_bytes),
+                        }
+};
+
+                    let HttpResponsePlan {
+                        status,
+                        content_type,
+                        extra_headers,
+                        body_len,
+                        body,
+                    } = response;
 
                     let mut header = String::new();
                     header.push_str(status);
@@ -537,8 +692,13 @@ a:hover{text-decoration:underline}
                         header.push_str(extra_headers.as_str());
                     }
                     header.push_str("Content-Length: ");
-                    header.push_str(format!("{}", body_bytes.len()).as_str());
+                    header.push_str(format!("{}", body_len).as_str());
                     header.push_str("\r\nConnection: close\r\n\r\n");
+
+                    let body_len_usize = body_len.min(usize::MAX as u64) as usize;
+                    active_pending = header.as_bytes().len().saturating_add(body_len_usize);
+                    active_sent = 0;
+                    active_close = true;
 
                     // Send headers + body in MAX_MSG chunks.
                     for chunk in header.as_bytes().chunks(api::MAX_MSG) {
@@ -546,22 +706,120 @@ a:hover{text-decoration:underline}
                             handle,
                             data: api::ByteBuf::from_slice_trunc(chunk),
                         });
-                        Timer::after(EmbassyDuration::from_millis(1)).await;
-                    }
-                    for chunk in body_bytes.as_slice().chunks(api::MAX_MSG) {
-                        let _ = vnet.submit(api::Command::SendTcp {
-                            handle,
-                            data: api::ByteBuf::from_slice_trunc(chunk),
-                        });
-                        Timer::after(EmbassyDuration::from_millis(1)).await;
                     }
 
-                    let _ = vnet.submit(api::Command::Close { handle });
+                    match body {
+                        HttpBodyPlan::Bytes(bytes) => {
+                            for chunk in bytes.as_slice().chunks(api::MAX_MSG) {
+                                let _ = vnet.submit(api::Command::SendTcp {
+                                    handle,
+                                    data: api::ByteBuf::from_slice_trunc(chunk),
+                                });
+                            }
+                        }
+                        HttpBodyPlan::File {
+                            disk,
+                            path,
+                            offset,
+                            len,
+                        } => {
+                            let mut buf = vec![0u8; HTTP_TRUEOSFS_STREAM_CHUNK];
+                            let mut remaining = len;
+                            let mut off = offset;
+                            while remaining > 0 {
+                                let want = core::cmp::min(remaining, buf.len() as u64) as usize;
+                                let read = match crate::v::fs::trueosfs::file_read_range_async(
+                                    disk,
+                                    path.as_str(),
+                                    off,
+                                    &mut buf[..want],
+                                )
+                                .await
+                                {
+                                    Ok(Some(n)) => n,
+                                    _ => 0,
+                                };
+                                if read == 0 {
+                                    break;
+                                }
+                                for chunk in buf[..read].chunks(api::MAX_MSG) {
+                                    let _ = vnet.submit(api::Command::SendTcp {
+                                        handle,
+                                        data: api::ByteBuf::from_slice_trunc(chunk),
+                                    });
+                                }
+                                off = off.saturating_add(read as u64);
+                                remaining = remaining.saturating_sub(read as u64);
+                            }
+                        }
+                        HttpBodyPlan::Multipart {
+                            disk,
+                            path,
+                            parts,
+                            boundary,
+                            total_len: _,
+                        } => {
+                            let mut buf = vec![0u8; HTTP_TRUEOSFS_STREAM_CHUNK];
+                            for part in parts {
+                                for chunk in part.header.as_bytes().chunks(api::MAX_MSG) {
+                                    let _ = vnet.submit(api::Command::SendTcp {
+                                        handle,
+                                        data: api::ByteBuf::from_slice_trunc(chunk),
+                                    });
+                                }
+                                let mut remaining = part.end.saturating_sub(part.start).saturating_add(1);
+                                let mut off = part.start;
+                                while remaining > 0 {
+                                    let want = core::cmp::min(remaining, buf.len() as u64) as usize;
+                                    let read = match crate::v::fs::trueosfs::file_read_range_async(
+                                        disk,
+                                        path.as_str(),
+                                        off,
+                                        &mut buf[..want],
+                                    )
+                                    .await
+                                    {
+                                        Ok(Some(n)) => n,
+                                        _ => 0,
+                                    };
+                                    if read == 0 {
+                                        break;
+                                    }
+                                    for chunk in buf[..read].chunks(api::MAX_MSG) {
+                                        let _ = vnet.submit(api::Command::SendTcp {
+                                            handle,
+                                            data: api::ByteBuf::from_slice_trunc(chunk),
+                                        });
+                                    }
+                                    off = off.saturating_add(read as u64);
+                                    remaining = remaining.saturating_sub(read as u64);
+                                }
+                                for chunk in b"\r\n".chunks(api::MAX_MSG) {
+                                    let _ = vnet.submit(api::Command::SendTcp {
+                                        handle,
+                                        data: api::ByteBuf::from_slice_trunc(chunk),
+                                    });
+                                }
+                            }
+                            let closing = format!("--{}--\r\n", boundary);
+                            for chunk in closing.as_bytes().chunks(api::MAX_MSG) {
+                                let _ = vnet.submit(api::Command::SendTcp {
+                                    handle,
+                                    data: api::ByteBuf::from_slice_trunc(chunk),
+                                });
+                            }
+                        }
+                        HttpBodyPlan::None => {}
+                    }
+
                 }
                 api::Event::Closed { handle } => {
                     if active_handle == Some(handle) {
                         active_handle = None;
                         sent_for_active = false;
+                        active_pending = 0;
+                        active_sent = 0;
+                        active_close = false;
                     }
 
                     // If the listener handle closes (or smoltcp collapses listen/conn handles), relisten.
@@ -573,9 +831,21 @@ a:hover{text-decoration:underline}
                     }
                 }
                 api::Event::Error { msg } => {
-                    crate::log!("http-trueosfs: error {}\n", msg);
+                    if msg != "bad handle" {
+                        crate::log!("http-trueosfs: error {}\n", msg);
+                    }
                 }
-                api::Event::TcpSent { .. } => {}
+                api::Event::TcpSent { handle, len } => {
+                    if active_close && active_handle == Some(handle) && active_pending != 0 {
+                        active_sent = active_sent.saturating_add(len as usize);
+                        if active_sent >= active_pending {
+                            active_close = false;
+                            active_pending = 0;
+                            active_sent = 0;
+                            let _ = vnet.submit(api::Command::Close { handle });
+                        }
+                    }
+                }
                 api::Event::UdpPacket { .. } => {},
                 api::Event::IcmpReply { .. } => {},
             }
