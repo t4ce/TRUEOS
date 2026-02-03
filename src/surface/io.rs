@@ -631,7 +631,10 @@ pub mod cabi {
 	/// Returns 1 if a completion occurred before timeout, 0 on timeout.
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_async_fs_wait_for_completion_blocking(timeout_ms: u64) -> i32 {
-		if ASYNC_FS_WAIT.wait_for_event_blocking(timeout_ms) { 1 } else { 0 }
+		crate::log!("qjs-async-fs: wait start timeout_ms={}\n", timeout_ms);
+		let ok = ASYNC_FS_WAIT.wait_for_event_blocking(timeout_ms);
+		crate::log!("qjs-async-fs: wait done ok={}\n", ok as u8);
+		if ok { 1 } else { 0 }
 	}
 
 	/// Background worker that executes async filesystem requests started via the C ABI.
@@ -645,6 +648,13 @@ pub mod cabi {
 				Timer::after(EmbassyDuration::from_millis(2)).await;
 				continue;
 			};
+
+			crate::log!(
+				"qjs-async-fs: dequeued id={} kind={:?} path={}\n",
+				req.id,
+				req.kind,
+				req.path
+			);
 
 			match req.kind {
 				AsyncFsKind::ReadFile => {
@@ -704,6 +714,7 @@ pub mod cabi {
 			path: path.to_string(),
 			data: Vec::new(),
 		};
+		crate::log!("qjs-async-fs: enqueue read id={} path={}\n", id, path);
 		match push_async_fs_req(req) {
 			Ok(()) => id as i32,
 			Err(code) => code,
@@ -742,6 +753,12 @@ pub mod cabi {
 			path: path.to_string(),
 			data: data.to_vec(),
 		};
+		crate::log!(
+			"qjs-async-fs: enqueue write id={} path={} bytes={}\n",
+			id,
+			path,
+			data.len()
+		);
 		match push_async_fs_req(req) {
 			Ok(()) => id as i32,
 			Err(code) => code,
@@ -775,6 +792,12 @@ pub mod cabi {
 		let Some(c) = find_async_fs_completion(op_id) else {
 			return FS_ERR_NOT_FOUND as isize;
 		};
+		crate::log!(
+			"qjs-async-fs: result_len id={} rc={} bytes={}\n",
+			op_id,
+			c.rc,
+			c.data.len()
+		);
 		if c.rc != 0 {
 			return c.rc as isize;
 		}
@@ -790,6 +813,7 @@ pub mod cabi {
 			return FS_ERR_NOT_FOUND as isize;
 		};
 		if c.rc != 0 {
+			crate::log!("qjs-async-fs: read_result id={} rc={}\n", op_id, c.rc);
 			remove_async_fs_completion(op_id);
 			return c.rc as isize;
 		}
@@ -802,6 +826,7 @@ pub mod cabi {
 		}
 		core::ptr::copy_nonoverlapping(c.data.as_ptr(), out_ptr, c.data.len());
 		let n = c.data.len() as isize;
+		crate::log!("qjs-async-fs: read_result id={} bytes={}\n", op_id, n);
 		remove_async_fs_completion(op_id);
 		n
 	}
@@ -809,6 +834,7 @@ pub mod cabi {
 	/// Discard a completed async fs op without reading its data.
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_async_fs_discard(op_id: u32) -> i32 {
+		crate::log!("qjs-async-fs: discard id={}\n", op_id);
 		remove_async_fs_completion(op_id);
 		0
 	}
