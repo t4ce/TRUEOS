@@ -1,15 +1,11 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
-use core::future::Future;
-use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
-use core::task::{Context, Poll, RawWaker, RawWakerVTable};
 use core::task::Waker;
 
 use embassy_executor::raw::Executor as RawExecutor;
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
 use spin::{Mutex, Once};
-use crate::wait;
 
 struct WakeEntry {
     at: u64,
@@ -25,14 +21,6 @@ static INIT: Once<()> = Once::new();
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
 static EXECUTOR_POLLING: AtomicBool = AtomicBool::new(false);
-
-const MAX_BLOCK_ON_HOOKS: usize = 4;
-static BLOCK_ON_HOOKS: [AtomicPtr<()>; MAX_BLOCK_ON_HOOKS] = [
-    AtomicPtr::new(core::ptr::null_mut()),
-    AtomicPtr::new(core::ptr::null_mut()),
-    AtomicPtr::new(core::ptr::null_mut()),
-    AtomicPtr::new(core::ptr::null_mut()),
-];
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -84,83 +72,6 @@ pub fn poll_executor() {
     EXECUTOR_POLLING.store(false, Ordering::Release);
 }
 
-/// Install a hook that is called from within [`block_on`] while it is spinning.
-///
-/// This is intended for low-level polling (e.g. draining hardware event rings)
-/// to keep I/O progressing when synchronous code needs to wait on an async
-/// operation.
-pub fn register_block_on_hook(hook: fn()) {
-    let ptr = hook as *mut ();
-    for slot in &BLOCK_ON_HOOKS {
-        // Fill first empty slot.
-        if slot
-            .compare_exchange(
-                core::ptr::null_mut(),
-                ptr,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-        {
-            return;
-        }
-    }
-}
-
-#[inline]
-fn block_on_hook() {
-    for slot in &BLOCK_ON_HOOKS {
-        let ptr = slot.load(Ordering::Acquire);
-        if ptr.is_null() {
-            continue;
-        }
-        // Safety: only written via `register_block_on_hook`.
-        let f: fn() = unsafe { core::mem::transmute(ptr) };
-        f();
-    }
-}
-
-fn dummy_raw_waker() -> RawWaker {
-    fn clone(_: *const ()) -> RawWaker {
-        dummy_raw_waker()
-    }
-    fn wake(_: *const ()) {}
-    fn wake_by_ref(_: *const ()) {}
-    fn drop(_: *const ()) {}
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-    RawWaker::new(core::ptr::null(), &VTABLE)
-}
-
-fn dummy_waker() -> Waker {
-    unsafe { Waker::from_raw(dummy_raw_waker()) }
-}
-
-/// Synchronously wait for an async future.
-///
-/// This intentionally does **not** call into the Embassy executor (no re-entrant polling).
-/// It polls the future directly and calls [`poll()`] so `embassy_time::Timer`-based waits can
-/// complete even when invoked from synchronous code.
-pub fn block_on<F: Future>(mut fut: F) -> F::Output {
-    let waker = dummy_waker();
-    let mut cx = Context::from_waker(&waker);
-    // Safety: we never move `fut` after pinning.
-    let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
-
-    loop {
-        // Drive Embassy timers.
-        self::poll();
-
-        // Allow synchronous callers to keep critical subsystems progressing
-        // (without polling the executor re-entrantly).
-        block_on_hook();
-
-        match fut.as_mut().poll(&mut cx) {
-            Poll::Ready(v) => return v,
-            Poll::Pending => wait::park_step(),
-        }
-    }
-}
 
 fn init_once() {
     INIT.call_once(|| {
