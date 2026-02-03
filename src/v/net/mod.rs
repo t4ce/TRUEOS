@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod dns;
 pub mod https;
+pub mod ping;
 
 use trueos_v::vnet as api;
 
@@ -193,6 +194,11 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
     api::Command::Close { handle } => NetCommand::Close {
       handle: NetHandle(handle.0),
     },
+    api::Command::IcmpEcho { target, seq, data } => NetCommand::IcmpEcho {
+      target,
+      seq,
+      data: Vec::from(data.as_slice()),
+    },
   })
 }
 
@@ -231,6 +237,17 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
     NetEvent::TcpSent { handle, len } => api::Event::TcpSent {
       handle: api::NetHandle(handle.0),
       len: len.min(u16::MAX as usize) as u16,
+    },
+    NetEvent::IcmpReply {
+      from,
+      seq,
+      rtt_ms,
+      data,
+    } => api::Event::IcmpReply {
+      from,
+      seq,
+      rtt_ms,
+      data: api::ByteBuf::from_slice_trunc(&data[..]),
     },
   })
 }

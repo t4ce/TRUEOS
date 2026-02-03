@@ -157,7 +157,7 @@ pub fn block_on<F: Future>(mut fut: F) -> F::Output {
 
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(v) => return v,
-            Poll::Pending => wait::spin_step(),
+            Poll::Pending => wait::park_step(),
         }
     }
 }

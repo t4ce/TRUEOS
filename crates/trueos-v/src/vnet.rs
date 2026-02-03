@@ -80,6 +80,11 @@ pub enum Command {
         data: ByteBuf<MAX_MSG>,
     },
     Close { handle: NetHandle },
+    IcmpEcho {
+        target: [u8; 4],
+        seq: u16,
+        data: ByteBuf<MAX_MSG>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -95,4 +100,10 @@ pub enum Event {
     TcpEstablished { handle: NetHandle },
     TcpData { handle: NetHandle, data: ByteBuf<MAX_MSG> },
     TcpSent { handle: NetHandle, len: u16 },
+    IcmpReply {
+        from: [u8; 4],
+        seq: u16,
+        rtt_ms: u32,
+        data: ByteBuf<MAX_MSG>,
+    },
 }
