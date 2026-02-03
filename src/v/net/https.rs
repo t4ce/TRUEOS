@@ -277,6 +277,16 @@ async fn fetch_on_device(
         Err(_) => return Err(FetchError::DnsFailed),
     };
 
+    crate::log!(
+        "vhttps: host={} dev={} ip={}.{}.{}.{}\n",
+        parsed.host,
+        dev_idx,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+    );
+
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
     // Suffix with "@<idx>" so tls-socket can pin the underlying TCP socket to the chosen NIC.
     let owner = leak_str(format!("vhttps-{}@{}", seq, dev_idx));

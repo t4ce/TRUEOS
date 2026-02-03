@@ -350,16 +350,39 @@ async fn read_exact_bytes<D: BlockIo>(
         return Err(FsError::InvalidParam);
     }
 
+    const MAX_BLOCKS_PER_READ: usize = 128;
+    let max_bytes = dev.max_transfer_bytes();
+    let safe_bytes = if max_bytes == 0 {
+        256 * 1024
+    } else {
+        max_bytes.saturating_mul(9) / 10
+    };
+    let max_blocks_by_bytes = core::cmp::max(1, safe_bytes / bs);
     let mut remaining = out;
     let mut abs_byte = start_byte_off;
     while !remaining.is_empty() {
         let lba = start_lba.saturating_add((abs_byte / bs) as u64);
         let off = abs_byte % bs;
-        let scratch = read_one_block(dev, lba).await?;
-        if scratch.len() < bs {
+        let bytes_needed = remaining.len().saturating_add(off);
+        let mut blocks = (bytes_needed + (bs - 1)) / bs;
+        if blocks == 0 {
+            blocks = 1;
+        }
+        if blocks > max_blocks_by_bytes {
+            blocks = max_blocks_by_bytes;
+        }
+        if blocks > MAX_BLOCKS_PER_READ {
+            blocks = MAX_BLOCKS_PER_READ;
+        }
+
+        let scratch = dev.read_blocks(lba, blocks).await.map_err(FsError::Device)?;
+        let need_bytes = blocks.saturating_mul(bs);
+        if scratch.len() < need_bytes {
             return Err(FsError::Corrupted);
         }
-        let take = core::cmp::min(bs - off, remaining.len());
+
+        let avail = scratch.len().saturating_sub(off);
+        let take = core::cmp::min(remaining.len(), avail);
         remaining[..take].copy_from_slice(&scratch[off..off + take]);
         remaining = &mut remaining[take..];
         abs_byte = abs_byte.saturating_add(take);

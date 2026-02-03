@@ -202,7 +202,7 @@ pub extern "C" fn kmain() -> ! {
 
     vga::init(limine::framebuffer_response());
 
-    limstats::log_limine_markers(); //limstats::log_memmap_once();
+    //limstats::log_limine_markers(); //limstats::log_memmap_once();
 
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
@@ -232,8 +232,8 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
 
     efi::acpi::ensure_tables();
-    efi::acpi::log_once();
-    efi::log_once();
+    //efi::acpi::log_once();
+    //efi::log_once();
     efi::acpi::hpet::ensure();
 
     power::init();
@@ -242,7 +242,7 @@ pub extern "C" fn kmain() -> ! {
 
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
-    log_cpu_topology_once(&resp);
+    //log_cpu_topology_once(&resp);
     smp::init(resp.cpus().len() + 1);
     smp::mark_online();
 
