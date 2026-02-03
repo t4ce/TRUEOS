@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 
 use spin::{Mutex, Once};
+use embassy_executor::task;
 
 use crate::shell::{ShellBackend, ShellIo};
 
@@ -800,35 +801,48 @@ fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     }
 
     ctx.io.write_fmt(format_args!("net: ping {}\r\n", target));
-    let res = crate::time::block_on(crate::v::net::ping::ping_once(target));
+    let mut t: heapless::String<64> = heapless::String::new();
+    for ch in target.chars() {
+        if t.push(ch).is_err() {
+            break;
+        }
+    }
+    if ctx.spawner.spawn(net_ping_task(ctx.io, t)).is_err() {
+        ctx.io.write_str("net: ping spawn failed\r\n");
+    }
+
+    super::CommandAction::None
+}
+
+#[task]
+async fn net_ping_task(io: &'static dyn ShellBackend, target: heapless::String<64>) {
+    let res = crate::v::net::ping::ping_once(target.as_str()).await;
     match res {
         Ok(result) => {
             let [a, b, c, d] = result.ip;
-            ctx.io.write_fmt(format_args!(
+            io.write_fmt(format_args!(
                 "net: reply from {}.{}.{}.{} rtt={}ms\r\n",
                 a, b, c, d, result.rtt_ms
             ));
         }
         Err(err) => match err {
             crate::v::net::ping::PingError::NoNic => {
-                ctx.io.write_str("net: ping failed (no nic)\r\n");
+                io.write_str("net: ping failed (no nic)\r\n");
             }
             crate::v::net::ping::PingError::BadHost => {
-                ctx.io.write_str("net: ping failed (bad host)\r\n");
+                io.write_str("net: ping failed (bad host)\r\n");
             }
             crate::v::net::ping::PingError::DnsFailed => {
-                ctx.io.write_str("net: ping failed (dns)\r\n");
+                io.write_str("net: ping failed (dns)\r\n");
             }
             crate::v::net::ping::PingError::Timeout => {
-                ctx.io.write_str("net: ping timeout\r\n");
+                io.write_str("net: ping timeout\r\n");
             }
             crate::v::net::ping::PingError::SendFailed => {
-                ctx.io.write_str("net: ping failed (send)\r\n");
+                io.write_str("net: ping failed (send)\r\n");
             }
         },
     }
-
-    super::CommandAction::None
 }
 
 fn cmd_update(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

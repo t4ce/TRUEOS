@@ -53,5 +53,3 @@ debug = false
 [build-dependencies]
 trueos-limloader = { path = "crates/trueos-limloader" }
 
-[features]
-power-msr = []

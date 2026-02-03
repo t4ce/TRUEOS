@@ -3,9 +3,13 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll, Waker};
 
+use alloc::boxed::Box;
+
 use embassy_executor::{task, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+
+use crate::wait::WaitQueue;
 
 const TIMEOUT_MS: u64 = 400;
 const TICK_MS: u64 = 1;
@@ -16,6 +20,7 @@ const RUN_DEADLOCK: bool = false;
 
 static LOST_WAKEUP_DONE: AtomicBool = AtomicBool::new(false);
 static DEADLOCK_DONE: AtomicBool = AtomicBool::new(false);
+static PARK_DONE: AtomicBool = AtomicBool::new(false);
 
 static DEADLOCK_LOCK: Mutex<LockState> = Mutex::new(LockState {
     ready: false,
@@ -32,6 +37,7 @@ pub(crate) async fn sched_challenge_task(spawner: Spawner) {
         TIMEOUT_MS,
     ));
     let _ = spawner.spawn(timeout_task(&DEADLOCK_DONE, "deadlock", TIMEOUT_MS));
+    let _ = spawner.spawn(timeout_task(&PARK_DONE, "park", TIMEOUT_MS));
 
     run_lost_wakeup().await;
     LOST_WAKEUP_DONE.store(true, Ordering::Release);
@@ -40,6 +46,10 @@ pub(crate) async fn sched_challenge_task(spawner: Spawner) {
     run_deadlock(spawner).await;
     DEADLOCK_DONE.store(true, Ordering::Release);
     crate::log!("sched-challenge: deadlock ok\n");
+
+    run_park_validation(spawner).await;
+    PARK_DONE.store(true, Ordering::Release);
+    crate::log!("sched-challenge: park ok\n");
 
     crate::log!("sched-challenge: done\n");
 }
@@ -80,6 +90,26 @@ async fn run_deadlock(spawner: Spawner) {
     }
 
     wait_without_lock().await;
+}
+
+async fn run_park_validation(spawner: Spawner) {
+    let wait = Box::leak(Box::new(WaitQueue::new()));
+
+    if wait.wait_for_event_blocking(5) {
+        panic!("sched-challenge: park returned without wake");
+    }
+
+    let _ = spawner.spawn(park_waker_task(wait, 5));
+
+    if !wait.wait_for_event_blocking(50) {
+        panic!("sched-challenge: park timed out with wake");
+    }
+}
+
+#[task]
+async fn park_waker_task(wait: &'static WaitQueue, delay_ms: u64) {
+    Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
+    wait.notify_all();
 }
 
 #[task]

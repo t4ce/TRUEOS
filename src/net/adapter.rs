@@ -624,7 +624,7 @@ impl NetService {
     }
 
     fn prune_icmp_inflight(&mut self, timestamp: Instant) {
-        let timeout = SmolDuration::from_millis(ICMP_VNET_TIMEOUT_MS);
+        let timeout = SmolDuration::from_millis(ICMP_VNET_TIMEOUT_MS as u64);
         self.icmp_vnet_inflight
             .retain(|p| timestamp < p.sent_at + timeout);
     }
@@ -1019,7 +1019,6 @@ fn now() -> Instant {
 
 pub const MAX_NET_DEVICES: usize = 8;
 
-static NET_BLOCK_ON_PUMP_LAST_TICK: AtomicU64 = AtomicU64::new(0);
 
 // Shared net service state so both the async service task and synchronous `time::block_on`
 // hooks can drive the stack without diverging socket/interface state.
@@ -1073,31 +1072,6 @@ fn service_tick_once() {
     }
 }
 
-/// Pump the network stack from synchronous contexts (e.g. inside `time::block_on`).
-///
-/// This is rate-limited to ~1kHz to keep tight spin loops from doing excessive work.
-pub fn pump_block_on_hook() {
-    let now = embassy_time_driver::now();
-    let last = NET_BLOCK_ON_PUMP_LAST_TICK.load(Ordering::Relaxed);
-    if last == now {
-        return;
-    }
-    if NET_BLOCK_ON_PUMP_LAST_TICK
-        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-
-    // When synchronous code is running, async poll tasks may be starved; poll RX directly.
-    let count = crate::net::device_count();
-    for idx in 0..count {
-        crate::net::poll_at(idx);
-    }
-
-    // Drive the smoltcp/service loop once.
-    service_tick_once();
-}
 
 /// Per-NIC RX poll loop.
 ///

@@ -180,9 +180,10 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                     }
                     api::SocketKind::Udp => {}
                 },
-                api::Event::UdpPacket { .. } => {},
-                api::Event::TcpSent { .. } => {},
-                api::Event::IcmpReply { .. } => {},
+                api::Event::UdpPacket { .. } => {}
+                api::Event::TcpSent { .. } => {}
+                api::Event::IcmpReply { .. } => {}
+                api::Event::TcpEstablished { handle } => {
                     if tcp_handle != Some(handle) {
                         continue;
                     }
@@ -256,7 +257,6 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
                 api::Event::Error { msg } => {
                     let _ = msg;
                 }
-                api::Event::TcpSent { .. } => {}
             }
         }
 

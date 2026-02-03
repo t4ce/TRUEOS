@@ -194,7 +194,6 @@ fn notify_queue(io_base: u16, queue: u16) {
     unsafe { crate::portio::outw(io_base + VIRTIO_PCI_REG_QUEUE_NOTIFY, queue) };
 }
 
-#[allow(unused)]
 fn read_isr(io_base: u16) -> u8 {
     unsafe { crate::portio::inb(io_base + VIRTIO_PCI_REG_ISR_STATUS) }
 }
