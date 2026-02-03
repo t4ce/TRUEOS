@@ -61,7 +61,7 @@ impl<const N: usize> ByteBuf<N> {
     }
 }
 
-pub const MAX_MSG: usize = 2048;
+pub const MAX_MSG: usize = 8192;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {

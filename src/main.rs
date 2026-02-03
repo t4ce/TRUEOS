@@ -53,7 +53,6 @@ mod x2apic;
 pub(crate) use shell::ecma48;
 pub(crate) use shell::matrix;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-use crate::usb::usb_scout_service;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use ::limine::mp::Cpu as LimineCpu;
 use core::panic::PanicInfo;
@@ -202,7 +201,7 @@ pub extern "C" fn kmain() -> ! {
 
     vga::init(limine::framebuffer_response());
 
-    //limstats::log_limine_markers(); //limstats::log_memmap_once();
+    limstats::log_limine_markers(); 
 
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
@@ -232,8 +231,8 @@ pub extern "C" fn kmain() -> ! {
     tga::init_once();
 
     efi::acpi::ensure_tables();
-    //efi::acpi::log_once();
-    //efi::log_once();
+    efi::acpi::log_once();
+    efi::log_once();
     efi::acpi::hpet::ensure();
 
     power::init();
@@ -242,7 +241,7 @@ pub extern "C" fn kmain() -> ! {
 
     let resp = limine::smp_response().unwrap();
     TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
-    //log_cpu_topology_once(&resp);
+    log_cpu_topology_once(&resp);
     smp::init(resp.cpus().len() + 1);
     smp::mark_online();
 
@@ -265,8 +264,6 @@ pub extern "C" fn kmain() -> ! {
     // QuickJS smoke test (kept after net init so URL imports can work if used).
     unsafe { qjs::trueos_smoke::run() };
 
-    // NOTE: Remaining Embassy tasks are owned by v::spawn_service.
-    
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
         if cpu.lapic_id as u32 == bsp_lapic_id {
