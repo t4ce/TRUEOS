@@ -626,6 +626,14 @@ pub mod cabi {
 		ASYNC_FS_WAIT.wait_for_event_timeout(timeout_ms).await
 	}
 
+	/// Blocking wait for any async fs completion (C ABI).
+	///
+	/// Returns 1 if a completion occurred before timeout, 0 on timeout.
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_async_fs_wait_for_completion_blocking(timeout_ms: u64) -> i32 {
+		if ASYNC_FS_WAIT.wait_for_event_blocking(timeout_ms) { 1 } else { 0 }
+	}
+
 	/// Background worker that executes async filesystem requests started via the C ABI.
 	///
 	/// Spawn this once at boot. It intentionally lives in the kernel (not the qjs crate)
