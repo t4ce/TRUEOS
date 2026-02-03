@@ -300,3 +300,62 @@ globalThis.print('cheerio ok', t);\n\
     qjs::JS_FreeContext(ctx);
     qjs::JS_FreeRuntime(rt);
 }
+
+/// Temporary boot-time smoke for parse5 HTML parsing.
+///
+/// Goal: validate esm.sh ESM imports and DOM-like output parsing via parse5.
+pub unsafe fn run_parse5_smoke() {
+    let rt = qjs::JS_NewRuntime();
+    if rt.is_null() {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    }
+
+    qjs::node::install(rt);
+
+    let ctx = qjs::JS_NewContext(rt);
+    if ctx.is_null() {
+        log_str("quickjs: JS_NewContext failed\n");
+        qjs::JS_FreeRuntime(rt);
+        return;
+    }
+
+    install_print(ctx);
+    qjs::node::install_globals(ctx);
+
+    let mod_filename = b"<smoke-parse5>\0";
+    let mod_script = b"import * as parse5 from 'parse5@7.1.2';\n\
+const html = '<!doctype html><html><head><title>x</title></head><body><div id=\\\"x\\\"><span class=\\\"y\\\">hi</span></div></body></html>';\n\
+const doc = parse5.parse(html);\n\
+function countNodes(node) {\n\
+  let n = 1;\n\
+  if (node && node.childNodes) {\n\
+    for (const c of node.childNodes) n += countNodes(c);\n\
+  }\n\
+  return n;\n\
+}\n\
+const root = (doc.childNodes || []).find(n => n.nodeName === 'html') || doc;\n\
+const count = countNodes(doc);\n\
+globalThis.print('parse5 ok', root.nodeName, count);\n\
+0\n\
+\0";
+
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        mod_script.as_ptr() as *const c_char,
+        mod_script.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if mod_ret.is_exception() {
+        log_str("quickjs: parse5 JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: parse5 eval ok\n");
+    }
+
+    qjs::JS_FreeContext(ctx);
+    qjs::JS_FreeRuntime(rt);
+}

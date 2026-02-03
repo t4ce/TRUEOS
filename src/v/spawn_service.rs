@@ -50,6 +50,7 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
 static SCHED_CHALLENGE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -188,6 +189,13 @@ fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::boot_fetch_to_file_smoke_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_parse5_smoke_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -349,6 +357,12 @@ static TASKS: &[TaskSpec] = &[
         required: NET_AND_ROOT_READY,
         started: &BOOT_FETCH_SMOKE_STARTED,
         spawn: spawn_boot_fetch_smoke,
+    },
+    TaskSpec {
+        name: "boot-parse5-smoke",
+        required: NET_AND_ROOT_READY,
+        started: &BOOT_PARSE5_SMOKE_STARTED,
+        spawn: spawn_boot_parse5_smoke,
     },
     TaskSpec {
         name: "boot-nalgebra-demo",

@@ -1195,6 +1195,26 @@ pub async fn write_file<D: BlockIo>(
     Ok(true)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileInfo {
+    pub data_len: u64,
+    pub sha256: [u8; 32],
+}
+
+pub async fn read_file_info<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<FileInfo>, FsError<D::Error>> {
+    let Some(rec) = find_latest_record(dev, params, name).await? else {
+        return Ok(None);
+    };
+    Ok(Some(FileInfo {
+        data_len: rec.data_len,
+        sha256: rec.sha256,
+    }))
+}
+
 pub async fn read_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -1216,6 +1236,32 @@ pub async fn read_file<D: BlockIo>(
         return Ok(None);
     }
     Ok(Some(out))
+}
+
+pub async fn read_file_range<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<Option<usize>, FsError<D::Error>> {
+    let Some(rec) = find_latest_record(dev, params, name).await? else {
+        return Ok(None);
+    };
+    if out.is_empty() {
+        return Ok(Some(0));
+    }
+    if offset >= rec.data_len {
+        return Ok(Some(0));
+    }
+    let offset_usize = match usize::try_from(offset) {
+        Ok(v) => v,
+        Err(_) => return Err(FsError::InvalidParam),
+    };
+    let remaining = rec.data_len.saturating_sub(offset);
+    let want = core::cmp::min(out.len() as u64, remaining) as usize;
+    read_exact_bytes(dev, rec.data_lba, offset_usize, &mut out[..want]).await?;
+    Ok(Some(want))
 }
 
 /// Read a file's data from a specific log entry LBA.

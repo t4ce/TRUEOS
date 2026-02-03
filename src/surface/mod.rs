@@ -6,4 +6,3 @@ pub mod pat {
 
 pub mod io;
 pub mod path;
-pub mod strings;
