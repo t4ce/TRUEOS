@@ -37,8 +37,6 @@ mod rng;
 mod power;
 mod globalog;
 mod shell;
-pub(crate) use shell::ecma48;
-pub(crate) use shell::matrix;
 mod tst;
 mod surface;
 mod tga;
@@ -52,6 +50,8 @@ mod v;
 mod vga;
 mod x2apic;
 
+pub(crate) use shell::ecma48;
+pub(crate) use shell::matrix;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::usb::usb_scout_service;
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
@@ -63,7 +63,7 @@ use alloc::vec::Vec;
 use embassy_executor::{raw::Executor, Spawner};
 use trueos_qjs as qjs;
 pub use surface::pat as pattern;
-pub use surface::{io, path, strings};
+pub use surface::{io, path};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 

@@ -75,3 +75,10 @@ pub(crate) async fn boot_cheerio_smoke_task() {
     unsafe { trueos_qjs::trueos_smoke::run_cheerio_smoke() };
     crate::log!("qjs-cheerio-smoke: done\n");
 }
+
+#[task]
+pub(crate) async fn boot_parse5_smoke_task() {
+    crate::log!("qjs-parse5-smoke: starting\n");
+    unsafe { trueos_qjs::trueos_smoke::run_parse5_smoke() };
+    crate::log!("qjs-parse5-smoke: done\n");
+}
