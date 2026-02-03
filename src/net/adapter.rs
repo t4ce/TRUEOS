@@ -575,7 +575,7 @@ impl NetService {
 
         // Bound work per tick to keep other sockets responsive.
         let mut total_sent = 0usize;
-        for _ in 0..32 {
+        for _ in 0..64 {
             let (a, b) = self.records[idx].tcp_tx.as_slices();
             let chunk = if !a.is_empty() { a } else { b };
             if chunk.is_empty() {

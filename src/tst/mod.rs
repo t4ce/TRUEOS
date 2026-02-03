@@ -3,7 +3,6 @@ pub mod http_trueosfs;
 pub mod nalgebra_demo;
 pub mod smoke_fs;
 pub mod tls_demo;
-pub mod sched_challenge;
 
 use embassy_executor::task;
 
