@@ -15,7 +15,7 @@ const TIMEOUT_MS: u64 = 400;
 const TICK_MS: u64 = 1;
 
 // Flip these to true to demonstrate the failure modes.
-const RUN_RACY_LOST_WAKEUP: bool = true;
+const RUN_RACY_LOST_WAKEUP: bool = false;
 const RUN_DEADLOCK: bool = false;
 
 static LOST_WAKEUP_DONE: AtomicBool = AtomicBool::new(false);

@@ -512,9 +512,27 @@ impl NetService {
             IpAddress::Ipv4(local_ip),
             local_port,
         );
+        let remote_addr = remote.addr;
+        let remote_port = remote.port;
         let remote = IpEndpoint::new(
-            IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
-            remote.port,
+            IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)),
+            remote_port,
+        );
+
+        let local_octets = local_ip.octets();
+        crate::log!(
+            "net: tcp connect owner={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{}\n",
+            owner,
+            local_octets[0],
+            local_octets[1],
+            local_octets[2],
+            local_octets[3],
+            local_port,
+            remote_addr[0],
+            remote_addr[1],
+            remote_addr[2],
+            remote_addr[3],
+            remote_port
         );
 
         socket

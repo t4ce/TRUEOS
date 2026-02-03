@@ -12,7 +12,23 @@ use crate::disc::block::DeviceHandle;
 
 const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
-const HTTP_TRUEOSFS_STREAM_CHUNK: usize = 32 * 1024;
+
+fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
+    let mut base = disk.max_transfer_bytes() as usize;
+    if base == 0 {
+        base = 256 * 1024;
+    }
+    let mut safe = base.saturating_mul(9) / 10;
+    const MIN: usize = 16 * 1024;
+    const MAX: usize = 512 * 1024;
+    if safe < MIN {
+        safe = MIN;
+    }
+    if safe > MAX {
+        safe = MAX;
+    }
+    safe
+}
 
 fn http_parse_target(req: &[u8]) -> Option<&str> {
     let s = core::str::from_utf8(req).ok()?;
@@ -723,7 +739,7 @@ pub async fn http_trueosfs_task() {
                             offset,
                             len,
                         } => {
-                            let mut buf = vec![0u8; HTTP_TRUEOSFS_STREAM_CHUNK];
+                            let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
                             let mut remaining = len;
                             let mut off = offset;
                             while remaining > 0 {
@@ -759,7 +775,7 @@ pub async fn http_trueosfs_task() {
                             boundary,
                             total_len: _,
                         } => {
-                            let mut buf = vec![0u8; HTTP_TRUEOSFS_STREAM_CHUNK];
+                            let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
                             for part in parts {
                                 for chunk in part.header.as_bytes().chunks(api::MAX_MSG) {
                                     let _ = vnet.submit(api::Command::SendTcp {

@@ -356,6 +356,15 @@ pub async fn resolve_ipv4_for_device(
             .iter()
             .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == host_trimmed)
         {
+            crate::log!(
+                "dns: cache hit host={} dev={} ip={}.{}.{}.{}\n",
+                host_trimmed,
+                dev_idx,
+                e.ip[0],
+                e.ip[1],
+                e.ip[2],
+                e.ip[3]
+            );
             return Ok(e.ip);
         }
     }
@@ -446,6 +455,15 @@ pub async fn resolve_ipv4_for_device(
 
         match answered.unwrap_or(DnsAnswer::None) {
             DnsAnswer::A(ip) => {
+                crate::log!(
+                    "dns: resolved host={} dev={} ip={}.{}.{}.{}\n",
+                    host_trimmed,
+                    dev_idx,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3]
+                );
                 let _ = net.submit(vnet::Command::Close { handle: udp });
                 // Best-effort cache insert; ignore on overflow.
                 if let Ok(mut hs) = heapless::String::<96>::try_from(host_trimmed) {
