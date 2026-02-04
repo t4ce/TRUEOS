@@ -868,49 +868,52 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: XhcInfo) {
-    crate::log!(
-        "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
-        info.bus,
-        info.slot,
-        info.function
-    );
+    crate::v::taskmon::run("usb-xhci-poll", async move {
+        crate::log!(
+            "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
+            info.bus,
+            info.slot,
+            info.function
+        );
 
-    let ctx = unsafe { XhciContext::new(info) };
-    let controller_id = ctx.controller_id;
+        let ctx = unsafe { XhciContext::new(info) };
+        let controller_id = ctx.controller_id;
 
-    loop {
-        let evt_opt = {
-            let mut state = EVENT_RING_STATES[controller_id].lock();
-            let intr0 = state.intr0;
-            if let Some(ring) = state.ring.as_mut() {
-                if !intr0.is_null() {
-                    unsafe { ring.pop(intr0) }
+        loop {
+            let evt_opt = {
+                let mut state = EVENT_RING_STATES[controller_id].lock();
+                let intr0 = state.intr0;
+                if let Some(ring) = state.ring.as_mut() {
+                    if !intr0.is_null() {
+                        unsafe { ring.pop(intr0) }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
+            };
+
+            if let Some(evt) = evt_opt {
+                let evt_type = (evt.d3 >> 10) & 0x3F;
+                if evt_type == 34 {
+                    // Port Status Change Event: must be acked by clearing PORTSC change bits,
+                    // otherwise the controller can keep generating the same event forever.
+                    let port_id = (evt.d0 >> 24) as u8;
+
+                    // (debug log removed)
+                    unsafe { clear_port_change_bits(&ctx, port_id) };
+                    // Drop it; higher layers currently rescan via PORTSC anyway.
+                    continue;
+                }
+
+                enqueue_event(controller_id, evt);
             } else {
-                None
+                Timer::after(EmbassyDuration::from_millis(1)).await;
             }
-        };
-
-        if let Some(evt) = evt_opt {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type == 34 {
-                // Port Status Change Event: must be acked by clearing PORTSC change bits,
-                // otherwise the controller can keep generating the same event forever.
-                let port_id = (evt.d0 >> 24) as u8;
-
-                // (debug log removed)
-                unsafe { clear_port_change_bits(&ctx, port_id) };
-                // Drop it; higher layers currently rescan via PORTSC anyway.
-                continue;
-            }
-
-            enqueue_event(controller_id, evt);
-        } else {
-            Timer::after(EmbassyDuration::from_millis(1)).await;
         }
-    }
+    })
+    .await;
 }
 
 fn enqueue_event(controller_id: usize, evt: Trb) {

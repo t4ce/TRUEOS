@@ -1092,7 +1092,7 @@ fn spec_is_url(spec: &[u8]) -> bool {
 
 const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
 const CDN_DIR: &[u8] = b"/qjs/cdn/";
-const CACHE_READ_TIMEOUT_MS: u64 = 3000;
+const CACHE_READ_TIMEOUT_MS: u64 = 8000;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {

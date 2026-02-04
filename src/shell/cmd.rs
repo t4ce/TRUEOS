@@ -742,9 +742,11 @@ fn cmd_get(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
                     break;
                 }
             }
-            let _ = ctx
-                .spawner
-                .spawn(crate::tst::html::http_get_matrix_job(slot, u));
+                let _ = crate::v::taskmon::spawn(
+                    ctx.spawner,
+                    "html-get-matrix",
+                    crate::tst::html::http_get_matrix_job(slot, u),
+                );
             ctx.io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
@@ -774,9 +776,11 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
                     break;
                 }
             }
-            let _ = ctx
-                .spawner
-                .spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h));
+                let _ = crate::v::taskmon::spawn(
+                    ctx.spawner,
+                    "tls-demo-matrix",
+                    crate::tst::tls_demo::tls_demo_matrix_job(slot, h),
+                );
             ctx.io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
@@ -807,8 +811,8 @@ fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
             break;
         }
     }
-    if ctx.spawner.spawn(net_ping_task(ctx.io, t)).is_err() {
-        ctx.io.write_str("net: ping spawn failed\r\n");
+        if crate::v::taskmon::spawn(ctx.spawner, "net-ping", net_ping_task(ctx.io, t)).is_err() {
+            ctx.io.write_str("net: ping spawn failed\r\n");
     }
 
     super::CommandAction::None
