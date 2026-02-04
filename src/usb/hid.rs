@@ -719,7 +719,14 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         let report_len = ep.max_packet as u32;
 
         if ep.report_desc_len > 0 {
-            let _ = fetch_report_descriptor(ctx, &mut *ep0_ring, slot_id, ep.interface, ep.report_desc_len as usize).await;
+            let _ = fetch_report_descriptor(
+                ctx,
+                &mut *ep0_ring,
+                slot_id,
+                ep.interface,
+                ep.report_desc_len as usize,
+            )
+            .await;
         }
 
         let normal = Trb {
@@ -758,15 +765,23 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum FetchReportError {
+    Alloc,
+    RingOverflow,
+    Timeout,
+    Completion(u8),
+}
+
 pub(crate) async fn fetch_report_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
     iface: u8,
     len: usize,
-) -> Option<Vec<u8, MAX_REPORT_DESC>> {
+) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
     let want_len = core::cmp::min(len, MAX_REPORT_DESC);
-    let (phys, virt) = dma::alloc(want_len, 64)?;
+    let (phys, virt) = dma::alloc(want_len, 64).ok_or(FetchReportError::Alloc)?;
     unsafe { write_bytes(virt, 0, want_len) };
 
     let setup = Trb {
@@ -793,8 +808,7 @@ pub(crate) async fn fetch_report_descriptor(
 
     if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
         dma::dealloc(virt, want_len);
-        hidlog!("[hid] ep0 ring overflow for report descriptor fetch\n");
-        return None;
+        return Err(FetchReportError::RingOverflow);
     }
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -815,27 +829,20 @@ pub(crate) async fn fetch_report_descriptor(
     .await
     else {
         dma::dealloc(virt, want_len);
-        hidlog!("[hid] timeout waiting for report descriptor\n");
-        return None;
+        return Err(FetchReportError::Timeout);
     };
 
-    let completion = (evt.d2 >> 24) & 0xFF;
+    let completion = ((evt.d2 >> 24) & 0xFF) as u8;
     if completion != 1 {
         dma::dealloc(virt, want_len);
-        hidlog!(
-            "[hid] report descriptor fetch cc={} iface={} len={}\n",
-            completion,
-            iface,
-            want_len
-        );
-        return None;
+        return Err(FetchReportError::Completion(completion));
     }
 
     let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
     let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
     let _ = out.extend_from_slice(data_slice);
     dma::dealloc(virt, want_len);
-    Some(out)
+    Ok(out)
 }
 
 pub(crate) fn log_report_descriptor(slot_id: u32, iface: u8, desc: &[u8]) {
@@ -1128,7 +1135,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         let report_len = ep.max_packet as u32;
 
         if hid_kind == 1 && ep.report_desc_len > 0 {
-            if let Some(desc) = fetch_report_descriptor(
+            match fetch_report_descriptor(
                 ctx,
                 &mut *ep0_ring,
                 slot_id,
@@ -1137,21 +1144,31 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             )
             .await
             {
-                if let Some((rid, bits)) = analyze_keyboard_report_descriptor(&desc) {
+                Ok(desc) => {
+                    if let Some((rid, bits)) = analyze_keyboard_report_descriptor(&desc) {
+                        hidlog!(
+                            "[hid] iface={} slot={} keyboard report descriptor len={} nkro_bits={} report_id={:?}\n",
+                            ep.interface,
+                            slot_id,
+                            desc.len(),
+                            bits,
+                            rid
+                        );
+                    } else {
+                        hidlog!(
+                            "[hid] iface={} slot={} keyboard report descriptor len={} no bitmap nkro found\n",
+                            ep.interface,
+                            slot_id,
+                            desc.len()
+                        );
+                    }
+                }
+                Err(err) => {
                     hidlog!(
-                        "[hid] iface={} slot={} keyboard report descriptor len={} nkro_bits={} report_id={:?}\n",
+                        "[hid] report descriptor fetch failed iface={} slot={} err={:?}\n",
                         ep.interface,
                         slot_id,
-                        desc.len(),
-                        bits,
-                        rid
-                    );
-                } else {
-                    hidlog!(
-                        "[hid] iface={} slot={} keyboard report descriptor len={} no bitmap nkro found\n",
-                        ep.interface,
-                        slot_id,
-                        desc.len()
+                        err
                     );
                 }
             }
