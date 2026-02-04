@@ -226,58 +226,59 @@ fn any_hid_registered(controller_id: usize) -> bool {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: xhci::XhcInfo) {
-    let ctx = unsafe { XhciContext::new(info) };
-    let controller_id = ctx.controller_id;
-    let mut heartbeat: u32 = 0;
-    let mut idle_timeouts: u32 = 0;
+    crate::v::taskmon::run("usb-poll", async move {
+        let ctx = unsafe { XhciContext::new(info) };
+        let controller_id = ctx.controller_id;
+        let mut heartbeat: u32 = 0;
+        let mut idle_timeouts: u32 = 0;
 
-    loop {
-        if !ENUM_READY[controller_id].load(Ordering::Acquire) {
-            Timer::after(EmbassyDuration::from_millis(5)).await;
-            continue;
-        }
+        loop {
+            if !ENUM_READY[controller_id].load(Ordering::Acquire) {
+                Timer::after(EmbassyDuration::from_millis(5)).await;
+                continue;
+            }
 
-        heartbeat = heartbeat.wrapping_add(1);
+            heartbeat = heartbeat.wrapping_add(1);
 
-        let evt_opt = xhci::wait_for_event(
-            &ctx,
-            |evt| {
-                let evt_type = (evt.d3 >> 10) & 0x3F;
-                if evt_type != 32 {
-                    return false;
-                }
-                let ep_target = (evt.d3 >> 16) & 0x1F;
-                if ep_target == 0 {
-                    return false;
-                }
-                let evt_slot = (evt.d3 >> 24) as u32;
-                match device_kind_for_slot(controller_id, evt_slot) {
-                    // We only consume transfer events here for device kinds whose runtimes are
-                    // driven by this dispatcher task. Mass storage is driven by the mass driver
-                    // (BOT) which waits for its own transfer events; if we consume them here, BOT
-                    // will time out waiting for completions.
-                    Some(DeviceKind::Hid) | Some(DeviceKind::Cdc) | Some(DeviceKind::Uac) => true,
-                    Some(DeviceKind::Mass) => false,
-                    Some(DeviceKind::Hub) => hub::interrupt_runtime_exists(controller_id, evt_slot),
-                    Some(_) => false,
-                    // During attach, transfers can complete before `register_device()` sets the
-                    // final kind. Only consume events for slots that already have a CDC runtime.
-                    None => cdc_acm::runtime_exists(controller_id, evt_slot),
-                }
-            },
-            400,
-            EmbassyDuration::from_millis(5),
-        )
-        .await;
+            let evt_opt = xhci::wait_for_event(
+                &ctx,
+                |evt| {
+                    let evt_type = (evt.d3 >> 10) & 0x3F;
+                    if evt_type != 32 {
+                        return false;
+                    }
+                    let ep_target = (evt.d3 >> 16) & 0x1F;
+                    if ep_target == 0 {
+                        return false;
+                    }
+                    let evt_slot = (evt.d3 >> 24) as u32;
+                    match device_kind_for_slot(controller_id, evt_slot) {
+                        // We only consume transfer events here for device kinds whose runtimes are
+                        // driven by this dispatcher task. Mass storage is driven by the mass driver
+                        // (BOT) which waits for its own transfer events; if we consume them here, BOT
+                        // will time out waiting for completions.
+                        Some(DeviceKind::Hid) | Some(DeviceKind::Cdc) | Some(DeviceKind::Uac) => true,
+                        Some(DeviceKind::Mass) => false,
+                        Some(DeviceKind::Hub) => hub::interrupt_runtime_exists(controller_id, evt_slot),
+                        Some(_) => false,
+                        // During attach, transfers can complete before `register_device()` sets the
+                        // final kind. Only consume events for slots that already have a CDC runtime.
+                        None => cdc_acm::runtime_exists(controller_id, evt_slot),
+                    }
+                },
+                400,
+                EmbassyDuration::from_millis(5),
+            )
+            .await;
 
-        let Some(evt) = evt_opt else {
-            idle_timeouts = idle_timeouts.wrapping_add(1);
-            continue;
-        };
+            let Some(evt) = evt_opt else {
+                idle_timeouts = idle_timeouts.wrapping_add(1);
+                continue;
+            };
 
-        idle_timeouts = 0;
+            idle_timeouts = 0;
 
-        let evt_slot = (evt.d3 >> 24) as u32;
+            let evt_slot = (evt.d3 >> 24) as u32;
 
         match device_kind_for_slot(controller_id, evt_slot) {
             Some(DeviceKind::Hid) => {

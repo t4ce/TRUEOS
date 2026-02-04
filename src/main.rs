@@ -250,14 +250,18 @@ pub extern "C" fn kmain() -> ! {
 
     time::init(executor);
 
-    if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
+    if let Err(e) = crate::v::taskmon::spawn(&spawner, "job-runner", crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
 
     net::init();
 
     // Spawn all Embassy tasks via the centralized v-layer spawn service.
-    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner)) {
+    if let Err(e) = crate::v::taskmon::spawn(
+        &spawner,
+        "spawn-service",
+        crate::v::spawn_service::spawn_service_task(spawner),
+    ) {
         crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
 

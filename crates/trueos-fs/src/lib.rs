@@ -1006,6 +1006,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
     let mut lba = params.data_lba;
     let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
     let mut latest_delete: Option<(u64, [u8; 32])> = None;
+    let mut tmp_name: Vec<u8> = Vec::new();
 
     while lba < end_lba {
         let hdr_block = read_one_block(dev, lba).await?;
@@ -1047,7 +1048,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
 
         if hdr.kind != LogKind::IndexCheckpoint && name_len == name_bytes.len() {
             let name_lba = lba.saturating_add(1);
-            let mut tmp_name = vec![0u8; name_len];
+            tmp_name.resize(name_len, 0);
             read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if tmp_name == name_bytes {
                 match hdr.kind {
@@ -1122,6 +1123,7 @@ async fn find_latest_record<D: BlockIo>(
     let mut lba = params.data_lba;
     let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
     let mut latest: Option<FileRecord> = None;
+    let mut tmp_name: Vec<u8> = Vec::new();
 
     while lba < end_lba {
         let hdr_block = read_one_block(dev, lba).await?;
@@ -1158,7 +1160,7 @@ async fn find_latest_record<D: BlockIo>(
         let name_lba = lba.saturating_add(1);
 
         if hdr.kind != LogKind::IndexCheckpoint && name_len == name_bytes.len() {
-            let mut tmp_name = vec![0u8; name_len];
+            tmp_name.resize(name_len, 0);
             read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if tmp_name == name_bytes {
                 match hdr.kind {
@@ -1224,6 +1226,14 @@ pub struct FileInfo {
     pub sha256: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileRecordRef {
+    pub entry_lba: u64,
+    pub data_lba: u64,
+    pub data_len: u64,
+    pub sha256: [u8; 32],
+}
+
 pub async fn read_file_info<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -1238,6 +1248,30 @@ pub async fn read_file_info<D: BlockIo>(
     }))
 }
 
+pub async fn lookup_file_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
+    let Some(rec) = find_latest_record(dev, params, name).await? else {
+        return Ok(None);
+    };
+    Ok(Some(FileRecordRef {
+        entry_lba: rec.entry_lba,
+        data_lba: rec.data_lba,
+        data_len: rec.data_len,
+        sha256: rec.sha256,
+    }))
+}
+
+#[inline]
+pub fn file_info_from_record(record: &FileRecordRef) -> FileInfo {
+    FileInfo {
+        data_len: record.data_len,
+        sha256: record.sha256,
+    }
+}
+
 pub async fn read_file<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -1247,15 +1281,48 @@ pub async fn read_file<D: BlockIo>(
         return Ok(None);
     };
 
-    let mut out = vec![0u8; rec.data_len as usize];
-    read_exact_bytes(dev, rec.data_lba, 0, &mut out).await?;
+    let rec = FileRecordRef {
+        entry_lba: rec.entry_lba,
+        data_lba: rec.data_lba,
+        data_len: rec.data_len,
+        sha256: rec.sha256,
+    };
+
+    read_file_at_record(dev, params, &rec).await
+}
+
+pub async fn read_file_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    record: &FileRecordRef,
+) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    if record.data_len == 0 {
+        return Ok(Some(Vec::new()));
+    }
+
+    // Basic bounds check (best-effort).
+    if record.entry_lba < params.data_lba {
+        return Ok(None);
+    }
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if record.entry_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let mut out = vec![0u8; record.data_len as usize];
+    read_exact_bytes(dev, record.data_lba, 0, &mut out).await?;
 
     let mut hasher = Sha256::new();
     hasher.update(&out);
     let digest = hasher.finalize();
     let mut sha = [0u8; 32];
     sha.copy_from_slice(&digest[..]);
-    if sha != rec.sha256 {
+    if sha != record.sha256 {
         return Ok(None);
     }
     Ok(Some(out))
@@ -1271,19 +1338,44 @@ pub async fn read_file_range<D: BlockIo>(
     let Some(rec) = find_latest_record(dev, params, name).await? else {
         return Ok(None);
     };
+    let rec = FileRecordRef {
+        entry_lba: rec.entry_lba,
+        data_lba: rec.data_lba,
+        data_len: rec.data_len,
+        sha256: rec.sha256,
+    };
+    read_file_range_at(dev, params, &rec, offset, out).await
+}
+
+pub async fn read_file_range_at<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    record: &FileRecordRef,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<Option<usize>, FsError<D::Error>> {
     if out.is_empty() {
         return Ok(Some(0));
     }
-    if offset >= rec.data_len {
+    if offset >= record.data_len {
         return Ok(Some(0));
     }
+    if record.entry_lba < params.data_lba {
+        return Ok(None);
+    }
+
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if record.entry_lba >= end_lba {
+        return Ok(None);
+    }
+
     let offset_usize = match usize::try_from(offset) {
         Ok(v) => v,
         Err(_) => return Err(FsError::InvalidParam),
     };
-    let remaining = rec.data_len.saturating_sub(offset);
+    let remaining = record.data_len.saturating_sub(offset);
     let want = core::cmp::min(out.len() as u64, remaining) as usize;
-    read_exact_bytes(dev, rec.data_lba, offset_usize, &mut out[..want]).await?;
+    read_exact_bytes(dev, record.data_lba, offset_usize, &mut out[..want]).await?;
     Ok(Some(want))
 }
 

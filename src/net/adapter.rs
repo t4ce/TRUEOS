@@ -1097,26 +1097,32 @@ fn service_tick_once() {
 /// adding NICs doesn't make a single task heavier.
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_poll_task(index: usize) {
-    loop {
-        crate::net::poll_at(index);
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
+    crate::v::taskmon::run("net-poll", async move {
+        loop {
+            crate::net::poll_at(index);
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    })
+    .await;
 }
 
 #[task]
 pub async fn net_service_task() {
-    let count = crate::net::device_count();
-    if count == 0 {
-        crate::log!("net: service disabled (no NIC)\n");
-        return;
-    }
+    crate::v::taskmon::run("net-service", async move {
+        let count = crate::net::device_count();
+        if count == 0 {
+            crate::log!("net: service disabled (no NIC)\n");
+            return;
+        }
 
-    ensure_services(count);
+        ensure_services(count);
 
-    loop {
-        service_tick_once();
-        Timer::after(EmbassyDuration::from_millis(5)).await;
-    }
+        loop {
+            service_tick_once();
+            Timer::after(EmbassyDuration::from_millis(5)).await;
+        }
+    })
+    .await;
 }
 
 /// TCP-backed shell I/O bridge.
@@ -1126,39 +1132,40 @@ pub async fn net_service_task() {
 /// - Buffers shell output from `net_shell_write_bytes()` and flushes it over TCP.
 #[task]
 pub async fn net_shell_task() {
-    if NET_SHELL_STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
+    crate::v::taskmon::run("net-shell", async move {
+        if NET_SHELL_STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
 
-    const OWNER: &'static str = "net-shell";
+        const OWNER: &'static str = "net-shell";
 
-    let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
-    let events = NetQueue::new_leaked("net-shell-evt", 256);
-    register_app_queues(OWNER, cmds, events);
+        let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
+        let events = NetQueue::new_leaked("net-shell-evt", 256);
+        register_app_queues(OWNER, cmds, events);
 
-    let _ = cmds.push(NetCommand::OpenTcpListen {
-        port: NET_SHELL_TCP_PORT,
-    });
-    crate::log!("net-shell: listening on tcp {} (hostfwd localhost:{} -> guest)\n", NET_SHELL_TCP_PORT, NET_SHELL_TCP_PORT);
+        let _ = cmds.push(NetCommand::OpenTcpListen {
+            port: NET_SHELL_TCP_PORT,
+        });
+        crate::log!("net-shell: listening on tcp {} (hostfwd localhost:{} -> guest)\n", NET_SHELL_TCP_PORT, NET_SHELL_TCP_PORT);
 
-    let mut ticks: u32 = 0;
-    let mut logged_first_rx: bool = false;
-    let mut pending: Option<Vec<u8>> = None;
-    let mut pending_handle: Option<NetHandle> = None;
-    let mut pending_ticks: u32 = 0;
-    let mut pending_len: usize = 0;
-    let mut tx_log_budget: u32 = 16;
-    let mut tcp_handle: Option<NetHandle> = None;
+        let mut ticks: u32 = 0;
+        let mut logged_first_rx: bool = false;
+        let mut pending: Option<Vec<u8>> = None;
+        let mut pending_handle: Option<NetHandle> = None;
+        let mut pending_ticks: u32 = 0;
+        let mut pending_len: usize = 0;
+        let mut tx_log_budget: u32 = 16;
+        let mut tcp_handle: Option<NetHandle> = None;
 
-    loop {
-        for ev in events.drain(32) {
-            match ev {
-                NetEvent::Opened { handle, kind } => {
-                    if kind == SocketKind::Tcp {
-                        tcp_handle = Some(handle);
-                        crate::log!("net-shell: opened tcp handle={}\n", handle.0);
+        loop {
+            for ev in events.drain(32) {
+                match ev {
+                    NetEvent::Opened { handle, kind } => {
+                        if kind == SocketKind::Tcp {
+                            tcp_handle = Some(handle);
+                            crate::log!("net-shell: opened tcp handle={}\n", handle.0);
+                        }
                     }
-                }
                 NetEvent::TcpEstablished { handle } => {
                     {
                         let mut st = NET_SHELL_STATE.lock();

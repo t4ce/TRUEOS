@@ -18,38 +18,41 @@ pub fn init() {
 
 #[embassy_executor::task]
 pub async fn drain_loop() {
-	const CHUNK: usize = 1024;
-	const IDLE_SLEEP_MS: u64 = 100;
+	crate::v::taskmon::run("truekey-drain", async move {
+		const CHUNK: usize = 1024;
+		const IDLE_SLEEP_MS: u64 = 100;
 
-	let mut buf = [0u8; CHUNK];
-	loop {
-		let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
-		let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire);
-		if slot == 0 {
-			Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
-			continue;
-		}
-
-		let n = {
-			let mut q = LOG_CACHE.lock();
-			let mut i = 0usize;
-			while i < CHUNK {
-				match q.pop_front() {
-					Some(b) => {
-						buf[i] = b;
-						i += 1;
-					}
-					None => break,
-				}
+		let mut buf = [0u8; CHUNK];
+		loop {
+			let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
+			let controller_id = TRUEKEY_CONTROLLER.load(Ordering::Acquire);
+			if slot == 0 {
+				Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
+				continue;
 			}
-			i
-		};
-		if n == 0 {
-			Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
-			continue;
+
+			let n = {
+				let mut q = LOG_CACHE.lock();
+				let mut i = 0usize;
+				while i < CHUNK {
+					match q.pop_front() {
+						Some(b) => {
+							buf[i] = b;
+							i += 1;
+						}
+						None => break,
+					}
+				}
+				i
+			};
+			if n == 0 {
+				Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
+				continue;
+			}
+			let _ = cdc_acm::write_all(controller_id as usize, slot, &buf[..n]).await;
 		}
-		let _ = cdc_acm::write_all(controller_id as usize, slot, &buf[..n]).await;
-	}
+	})
+	.await;
 }
 
 pub fn push_bytes(data: &[u8]) {

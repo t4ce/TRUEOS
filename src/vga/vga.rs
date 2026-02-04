@@ -95,7 +95,10 @@ pub fn init_font_cache() {
 
 #[embassy_executor::task]
 pub(crate) async fn init_font_cache_task() {
-    init_font_cache();
+    crate::v::taskmon::run("vga-font-cache", async move {
+        init_font_cache();
+    })
+    .await;
 }
 
 pub fn current_colors() -> Option<(u32, u32, u32)> {
