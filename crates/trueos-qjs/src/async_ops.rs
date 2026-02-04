@@ -8,20 +8,7 @@ use spin::Mutex;
 
 use crate as qjs;
 
-extern "C" {
-    fn trueos_cabi_async_fs_read_file_start(path_ptr: *const u8, path_len: usize) -> i32;
-    fn trueos_cabi_async_fs_write_file_start(
-        path_ptr: *const u8,
-        path_len: usize,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-
-    fn trueos_cabi_async_fs_poll_completed(out_id: *mut u32) -> i32;
-    fn trueos_cabi_async_fs_result_len(op_id: u32) -> isize;
-    fn trueos_cabi_async_fs_read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_async_fs_discard(op_id: u32) -> i32;
-}
+use crate::async_fs;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpKind {
@@ -45,6 +32,17 @@ unsafe impl Send for PendingOp {}
 
 static PENDING: Mutex<Vec<PendingOp>> = Mutex::new(Vec::new());
 
+#[derive(Clone, Copy)]
+struct CompletedOp {
+    ctx_owner: *mut qjs::JSContext,
+    op_id: u32,
+}
+
+// QuickJS execution is expected to remain within a single owning task.
+unsafe impl Send for CompletedOp {}
+
+static COMPLETED: Mutex<Vec<CompletedOp>> = Mutex::new(Vec::new());
+
 #[inline]
 fn js_int32(v: i32) -> qjs::JSValue {
     qjs::JSValue {
@@ -54,23 +52,11 @@ fn js_int32(v: i32) -> qjs::JSValue {
 }
 
 pub unsafe fn start_read_file(path: &[u8]) -> Result<u32, i32> {
-    let rc = unsafe { trueos_cabi_async_fs_read_file_start(path.as_ptr(), path.len()) };
-    if rc < 0 {
-        Err(rc)
-    } else {
-        Ok(rc as u32)
-    }
+    async_fs::start_read_file(path)
 }
 
 pub unsafe fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
-    let rc = unsafe {
-        trueos_cabi_async_fs_write_file_start(path.as_ptr(), path.len(), data.as_ptr(), data.len())
-    };
-    if rc < 0 {
-        Err(rc)
-    } else {
-        Ok(rc as u32)
-    }
+    async_fs::start_write_file(path, data)
 }
 
 pub unsafe fn register_promise(
@@ -98,6 +84,20 @@ unsafe fn take_pending(ctx: *mut qjs::JSContext, op_id: u32) -> Option<PendingOp
     let mut pending = PENDING.lock();
     let pos = pending.iter().position(|p| p.ctx_owner == ctx && p.op_id == op_id)?;
     Some(pending.remove(pos))
+}
+
+fn find_pending_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
+    PENDING.lock().iter().find(|p| p.op_id == op_id).map(|p| p.ctx_owner)
+}
+
+fn push_completed(ctx: *mut qjs::JSContext, op_id: u32) {
+    COMPLETED.lock().push(CompletedOp { ctx_owner: ctx, op_id });
+}
+
+fn take_completed_for_ctx(ctx: *mut qjs::JSContext) -> Option<u32> {
+    let mut completed = COMPLETED.lock();
+    let pos = completed.iter().position(|c| c.ctx_owner == ctx)?;
+    Some(completed.remove(pos).op_id)
 }
 
 unsafe fn reject_with_code(ctx: *mut qjs::JSContext, op: &PendingOp, code: i32) {
@@ -146,20 +146,40 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
     let mut progress = false;
 
     loop {
-        let mut done_id: u32 = 0;
-        let has = unsafe { trueos_cabi_async_fs_poll_completed(&mut done_id as *mut u32) };
-        if has <= 0 {
-            break;
-        }
-        progress = true;
+        let done_id = match take_completed_for_ctx(ctx) {
+            Some(id) => {
+                progress = true;
+                id
+            }
+            None => {
+                let mut id: u32 = 0;
+                let has = async_fs::poll_completed(&mut id as *mut u32);
+                if has <= 0 {
+                    break;
+                }
+                progress = true;
+
+                let owner = find_pending_owner(id);
+                if let Some(owner) = owner {
+                    if owner != ctx {
+                        push_completed(owner, id);
+                        continue;
+                    }
+                } else {
+                    let _ = async_fs::discard(id);
+                    continue;
+                }
+                id
+            }
+        };
 
 		let Some(op) = (unsafe { take_pending(ctx, done_id) }) else {
             // Unknown/expired op id: drop completion to avoid leaks.
-            let _ = unsafe { trueos_cabi_async_fs_discard(done_id) };
+            let _ = async_fs::discard(done_id);
             continue;
         };
 
-        let len = unsafe { trueos_cabi_async_fs_result_len(done_id) };
+        let len = async_fs::result_len(done_id);
         if len < 0 {
             unsafe { reject_with_code(ctx, &op, len as i32) };
             unsafe { qjs::js_free_value(ctx, op.resolve) };
@@ -170,7 +190,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
         match op.kind {
             OpKind::WriteText => {
                 // Consume completion payload (if any) and resolve.
-                let _ = unsafe { trueos_cabi_async_fs_read_result(done_id, core::ptr::null_mut(), 0) };
+                let _ = async_fs::read_result(done_id, core::ptr::null_mut(), 0);
                 unsafe { resolve_undefined(ctx, &op) };
             }
             OpKind::ReadBytes => {
@@ -178,7 +198,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let mut buf: Vec<u8> = Vec::with_capacity(n);
                 buf.resize(n, 0);
 
-                let got = unsafe { trueos_cabi_async_fs_read_result(done_id, buf.as_mut_ptr(), buf.len()) };
+                let got = async_fs::read_result(done_id, buf.as_mut_ptr(), buf.len());
                 if got < 0 {
                     unsafe { reject_with_code(ctx, &op, got as i32) };
                 } else {
@@ -191,7 +211,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let mut buf: Vec<u8> = Vec::with_capacity(n);
                 buf.resize(n, 0);
 
-                let got = unsafe { trueos_cabi_async_fs_read_result(done_id, buf.as_mut_ptr(), buf.len()) };
+                let got = async_fs::read_result(done_id, buf.as_mut_ptr(), buf.len());
                 if got < 0 {
                     unsafe { reject_with_code(ctx, &op, got as i32) };
                 } else {
@@ -232,6 +252,30 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
         reject_with_code(ctx, &op, -2);
         qjs::js_free_value(ctx, op.resolve);
         qjs::js_free_value(ctx, op.reject);
-        let _ = trueos_cabi_async_fs_discard(op.op_id);
+        let _ = async_fs::discard(op.op_id);
     }
+
+    let mut discard_ids: Vec<u32> = Vec::new();
+    {
+        let mut completed = COMPLETED.lock();
+        let mut j = 0usize;
+        while j < completed.len() {
+            if completed[j].ctx_owner == ctx {
+                discard_ids.push(completed.remove(j).op_id);
+            } else {
+                j += 1;
+            }
+        }
+    }
+    for op_id in discard_ids {
+        let _ = async_fs::discard(op_id);
+    }
+}
+
+pub async fn wait_for_completion(timeout_ms: u64) -> bool {
+    async_fs::wait_for_completion(timeout_ms).await
+}
+
+pub fn wait_for_completion_blocking(timeout_ms: u64) -> bool {
+    async_fs::wait_for_completion_blocking(timeout_ms)
 }

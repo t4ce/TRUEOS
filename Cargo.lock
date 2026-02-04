@@ -1523,6 +1523,8 @@ name = "trueos-qjs"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "embassy-executor",
+ "embassy-time",
  "embassy-time-driver",
  "libm",
  "spin 0.10.0",

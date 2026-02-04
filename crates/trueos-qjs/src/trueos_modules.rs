@@ -11,11 +11,6 @@ extern "C" {
     fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
     fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
-    fn trueos_cabi_async_fs_read_file_start(path_ptr: *const u8, path_len: usize) -> i32;
-    fn trueos_cabi_async_fs_result_len(op_id: u32) -> isize;
-    fn trueos_cabi_async_fs_read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_async_fs_discard(op_id: u32) -> i32;
-    fn trueos_cabi_async_fs_wait_for_completion_blocking(timeout_ms: u64) -> i32;
     fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
@@ -1150,37 +1145,36 @@ unsafe fn read_file_js_malloc_rc_async(
     path: &[u8],
     timeout_ms: u64,
 ) -> Result<(*mut u8, usize), isize> {
-    let op_id = trueos_cabi_async_fs_read_file_start(path.as_ptr(), path.len());
-    if op_id < 0 {
-        return Err(op_id as isize);
-    }
-    let op_id = op_id as u32;
+    let op_id = match qjs::async_fs::start_read_file(path) {
+        Ok(id) => id,
+        Err(code) => return Err(code as isize),
+    };
 
     loop {
-        let len = trueos_cabi_async_fs_result_len(op_id);
+        let len = qjs::async_fs::result_len(op_id);
         if len == FS_ERR_NOT_FOUND as isize {
-            let ok = trueos_cabi_async_fs_wait_for_completion_blocking(timeout_ms);
-            if ok == 0 {
-                let _ = trueos_cabi_async_fs_discard(op_id);
+            let ok = qjs::async_ops::wait_for_completion_blocking(timeout_ms);
+            if !ok {
+                let _ = qjs::async_fs::discard(op_id);
                 log_str("qjs: async fs read timeout (treat miss)\n");
                 return Err(FS_ERR_NOT_FOUND as isize);
             }
             continue;
         }
         if len < 0 {
-            let _ = trueos_cabi_async_fs_discard(op_id);
+            let _ = qjs::async_fs::discard(op_id);
             return Err(len);
         }
 
         let len = len as usize;
         let buf = qjs::js_malloc(ctx, len + 1) as *mut u8;
         if buf.is_null() {
-            let _ = trueos_cabi_async_fs_discard(op_id);
+            let _ = qjs::async_fs::discard(op_id);
             return Err(FS_ERR_NO_SPACE as isize);
         }
         *buf.add(len) = 0;
 
-        let got = trueos_cabi_async_fs_read_result(op_id, buf, len);
+        let got = qjs::async_fs::read_result(op_id, buf, len);
         if got < 0 {
             qjs::js_free(ctx, buf as *mut core::ffi::c_void);
             return Err(got);
