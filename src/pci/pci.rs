@@ -358,19 +358,24 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     f(lock.as_slice())
 }
 
-pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
-    let bar_lo = config_read_u32(bus, slot, function, 0x10);
+pub fn read_bar_raw(bus: u8, slot: u8, function: u8, index: u8) -> (u32, Option<u32>) {
+    let off = 0x10u16 + (index as u16) * 4;
+    let bar_lo = config_read_u32(bus, slot, function, off);
     if (bar_lo & 0x1) != 0 {
         return (bar_lo, None);
     }
 
     let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
     if is_64 {
-        let bar_hi = config_read_u32(bus, slot, function, 0x14);
+        let bar_hi = config_read_u32(bus, slot, function, off + 4);
         (bar_lo, Some(bar_hi))
     } else {
         (bar_lo, None)
     }
+}
+
+pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
+    read_bar_raw(bus, slot, function, 0)
 }
 
 pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
@@ -467,34 +472,41 @@ pub fn config_write_u32(bus: u8, slot: u8, function: u8, offset: u16, value: u32
     let off = normalize_offset(offset);
     write_u32(bus, slot, function, off, value);
 }
-pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
-    let orig_lo = config_read_u32(bus, slot, function, 0x10);
+pub fn bar_size_bytes(bus: u8, slot: u8, function: u8, index: u8) -> Option<u64> {
+    if index >= 6 {
+        return None;
+    }
+    let off = 0x10u16 + (index as u16) * 4;
+    let orig_lo = config_read_u32(bus, slot, function, off);
     if (orig_lo & 0x1) != 0 {
         return None;
     }
 
     let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
+    if is_64 && index >= 5 {
+        return None;
+    }
     let orig_hi = if is_64 {
-        config_read_u32(bus, slot, function, 0x14)
+        config_read_u32(bus, slot, function, off + 4)
     } else {
         0
     };
 
-    config_write_u32(bus, slot, function, 0x10, 0xFFFF_FFF0);
+    config_write_u32(bus, slot, function, off, 0xFFFF_FFF0);
     if is_64 {
-        config_write_u32(bus, slot, function, 0x14, 0xFFFF_FFFF);
+        config_write_u32(bus, slot, function, off + 4, 0xFFFF_FFFF);
     }
 
-    let mask_lo = config_read_u32(bus, slot, function, 0x10);
+    let mask_lo = config_read_u32(bus, slot, function, off);
     let mask_hi = if is_64 {
-        config_read_u32(bus, slot, function, 0x14)
+        config_read_u32(bus, slot, function, off + 4)
     } else {
         0
     };
 
-    config_write_u32(bus, slot, function, 0x10, orig_lo);
+    config_write_u32(bus, slot, function, off, orig_lo);
     if is_64 {
-        config_write_u32(bus, slot, function, 0x14, orig_hi);
+        config_write_u32(bus, slot, function, off + 4, orig_hi);
     }
 
     let mask = if is_64 {
@@ -517,6 +529,10 @@ pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         }
         Some((!size_mask).wrapping_add(1) as u64)
     }
+}
+
+pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
+    bar_size_bytes(bus, slot, function, 0)
 }
 
 #[inline(always)]

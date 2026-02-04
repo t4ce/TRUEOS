@@ -140,27 +140,54 @@ impl R8125Adapter {
 
     fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+        let cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
+        crate::log!("net/r8125: pci cmd=0x{:04x}\n", cmd);
 
-        let bar_phys = read_bar0_phys(&dev)?;
-        let mapped = pci::mmio::map_mmio_region_exact(bar_phys, 0x1000).map_err(|_| ())?;
+        let (bar_index, bar_phys) = find_mmio_bar_phys(&dev)?;
+        let bar_size = pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_index)
+            .unwrap_or(0);
+        let map_size = match usize::try_from(bar_size) {
+            Ok(size) if size != 0 => size,
+            _ => {
+                crate::log!("net/r8125: bar{} size unknown; using 0x1000\n", bar_index);
+                0x1000
+            }
+        };
+        if bar_size != 0 {
+            crate::log!("net/r8125: bar{} size=0x{:x}\n", bar_index, bar_size);
+        }
+        let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
+            Ok(mapped) => mapped,
+            Err(err) => {
+                crate::log!(
+                    "net/r8125: bar{} mmio map failed: {:?}\n",
+                    bar_index,
+                    err
+                );
+                return Err(());
+            }
+        };
         let mmio = Mmio { base: mapped };
 
         crate::log!(
-            "net/r8125: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar0=0x{:x}\n",
+            "net/r8125: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar{}=0x{:x}\n",
             dev.bus,
             dev.slot,
             dev.function,
             dev.vendor,
             dev.device,
+            bar_index,
             bar_phys
         );
 
         // Reset
         let mut reset_done = false;
+        let mut last_cmd: u8 = 0;
         unsafe {
             mmio.write_u8(REG_CMD, CMD_RST);
             for _ in 0..1_000_000 {
-                if (mmio.read_u8(REG_CMD) & CMD_RST) == 0 {
+                last_cmd = mmio.read_u8(REG_CMD);
+                if (last_cmd & CMD_RST) == 0 {
                     reset_done = true;
                     break;
                 }
@@ -171,7 +198,7 @@ impl R8125Adapter {
             mmio.write_u16(REG_ISR, 0xFFFF);
         }
         if !reset_done {
-            crate::log!("net/r8125: reset timeout\n");
+            crate::log!("net/r8125: reset timeout cmd=0x{:02x}\n", last_cmd);
             return Err(());
         }
 
@@ -184,15 +211,18 @@ impl R8125Adapter {
         };
 
         // Allocate descriptor rings
-        let rx_desc_mem = DmaRegion::alloc(core::mem::size_of::<RxDesc>() * RX_DESC_COUNT, 16)
-            .ok_or(())?;
-        let tx_desc_mem = DmaRegion::alloc(core::mem::size_of::<TxDesc>() * TX_DESC_COUNT, 16)
-            .ok_or(())?;
+        let rx_desc_bytes = core::mem::size_of::<RxDesc>() * RX_DESC_COUNT;
+        let tx_desc_bytes = core::mem::size_of::<TxDesc>() * TX_DESC_COUNT;
+        crate::log!("net/r8125: alloc rx_desc bytes=0x{:x}\n", rx_desc_bytes);
+        let rx_desc_mem = DmaRegion::alloc(rx_desc_bytes, 16).ok_or(())?;
+        crate::log!("net/r8125: alloc tx_desc bytes=0x{:x}\n", tx_desc_bytes);
+        let tx_desc_mem = DmaRegion::alloc(tx_desc_bytes, 16).ok_or(())?;
 
         let rx_desc = rx_desc_mem.virt() as *mut RxDesc;
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
 
         // Allocate buffers and initialize descriptors
+        crate::log!("net/r8125: alloc rx bufs count={} size=0x{:x}\n", RX_DESC_COUNT, RX_BUF_SIZE);
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_DESC_COUNT);
         for i in 0..RX_DESC_COUNT {
             let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
@@ -210,6 +240,7 @@ impl R8125Adapter {
             rx_bufs.push(buf);
         }
 
+        crate::log!("net/r8125: alloc tx bufs count={} size=0x{:x}\n", TX_DESC_COUNT, TX_BUF_SIZE);
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
@@ -454,13 +485,39 @@ fn find_r8125_devices() -> alloc::vec::Vec<pci::PciDevice> {
     out
 }
 
-fn read_bar0_phys(dev: &pci::PciDevice) -> Result<u64, ()> {
-    let (bar_lo, bar_hi) = pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-    if (bar_lo & 0x1) != 0 {
-        // IO BAR unsupported for this driver.
-        return Err(());
+fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
+    let mut i = 0u8;
+    while i < 6 {
+        let (bar_lo, bar_hi) = pci::read_bar_raw(dev.bus, dev.slot, dev.function, i);
+        if bar_lo == 0 {
+            i += 1;
+            continue;
+        }
+        if (bar_lo & 0x1) != 0 {
+            crate::log!("net/r8125: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
+            i += 1;
+            continue;
+        }
+
+        let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+        let lo = (bar_lo as u64) & !0xFu64;
+        let hi = bar_hi.unwrap_or(0) as u64;
+        let phys = lo | (hi << 32);
+        if phys == 0 {
+            crate::log!("net/r8125: bar{} is zero\n", i);
+            i += 1;
+            continue;
+        }
+
+        crate::log!(
+            "net/r8125: bar{} mmio raw=0x{:08x}{} => 0x{:x}\n",
+            i,
+            bar_lo,
+            if is_64 { " (64)" } else { "" },
+            phys
+        );
+
+        return Ok((i, phys));
     }
-    let lo = (bar_lo as u64) & !0xFu64;
-    let hi = bar_hi.unwrap_or(0) as u64;
-    Ok(lo | (hi << 32))
+    Err(())
 }

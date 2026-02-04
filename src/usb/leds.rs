@@ -1,3 +1,4 @@
+use super::hid;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
@@ -13,9 +14,6 @@ use spin::Mutex;
 
 const LED_VID: u16 = 0x0416;
 const LED_PID: u16 = 0xA125;
-
-// Keep this fairly small; report descriptors can be large but this device's cfg_len is tiny.
-const MAX_REPORT_DESC: usize = 1024;
 
 #[derive(Copy, Clone, Debug)]
 struct LedIfaceInfo {
@@ -339,76 +337,6 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
     best
 }
 
-async fn fetch_hid_report_descriptor(
-    ctx: &XhciContext,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    iface: u8,
-    len: usize,
-) -> Option<Vec<u8, MAX_REPORT_DESC>> {
-    let want_len = core::cmp::min(len, MAX_REPORT_DESC);
-    let (phys, virt) = dma::alloc(want_len, 64)?;
-    unsafe { write_bytes(virt, 0, want_len) };
-
-    // bmRequestType=0x81 (IN|Standard|Interface), bRequest=GET_DESCRIPTOR,
-    // wValue=(REPORT<<8)|0, wIndex=interface.
-    let setup = Trb {
-        d0: (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16),
-        d1: iface as u32,
-        d2: want_len as u32,
-        d3: trb_type(2) | (1 << 6),
-    };
-    let data = Trb {
-        d0: lo(phys),
-        d1: hi(phys),
-        d2: want_len as u32,
-        d3: trb_type(3) | (1 << 16),
-    };
-    let status = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-        d3: trb_type(4) | (1 << 5),
-    };
-
-    if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
-        dma::dealloc(virt, want_len);
-        return None;
-    }
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-
-    let Some(evt) = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
-        },
-        400,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    else {
-        dma::dealloc(virt, want_len);
-        return None;
-    };
-
-    let completion = (evt.d2 >> 24) & 0xFF;
-    if completion != 1 {
-        dma::dealloc(virt, want_len);
-        return None;
-    }
-
-    let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
-    let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
-    let _ = out.extend_from_slice(data_slice);
-    dma::dealloc(virt, want_len);
-    Some(out)
-}
-
 async fn set_configuration(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
@@ -676,19 +604,29 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
 
     if info.report_desc_len > 0 {
-        if let Some(desc) =
-            fetch_hid_report_descriptor(ctx, ep0_ring, slot_id, info.interface, info.report_desc_len as usize).await
+        match hid::fetch_report_descriptor(
+            ctx,
+            ep0_ring,
+            slot_id,
+            info.interface,
+            info.report_desc_len as usize,
+        )
+        .await
         {
-            let n = core::cmp::min(desc.len(), 64);
-            crate::log!(
-                "usb: leds: report-desc iface={} len={} head={:02X?}\n",
-                info.interface,
-                desc.len(),
-                &desc[..n]
-            );
-        } else {
-            crate::log!("usb: leds: report-desc fetch failed iface={}\n", info.interface);
+            Ok(desc) => {
+                hid::log_report_descriptor(slot_id, info.interface, &desc);
+            }
+            Err(err) => {
+                crate::log!(
+                    "usb: leds: report-desc fetch failed iface={} len={} err={:?}\n",
+                    info.interface,
+                    info.report_desc_len,
+                    err
+                );
+            }
         }
+    } else {
+        crate::log!("usb: leds: report-desc len=0 iface={}\n", info.interface);
     }
 
     {
