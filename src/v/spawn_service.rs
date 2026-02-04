@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_executor::{Spawner, SpawnError};
+use embassy_executor::{SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
@@ -48,6 +48,7 @@ static UAC_SINE_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
+static TASKMON_REPORTER_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -60,32 +61,39 @@ static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 
 // --- spawn wrappers (keep per-task logic out of main.rs) ---
 
-fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::vga::init_font_cache_task()) {
+fn spawn_monitored<T>(spawner: Spawner, name: &'static str, token: SpawnToken<T>) -> SpawnAttempt {
+    match crate::v::taskmon::spawn(&spawner, name, token) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
+}
+
+fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
+    spawn_monitored(spawner, "vga-font-cache", crate::vga::init_font_cache_task())
 }
 
 fn spawn_bsp_smoke_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::smoke_fs::bsp_smoke_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "bsp-smoke-service",
+        crate::tst::smoke_fs::bsp_smoke_service_task(),
+    )
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::v::fs::trueosfs::mount_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "trueosfs-mount-service",
+        crate::v::fs::trueosfs::mount_service_task(),
+    )
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::io::cabi::qjs_async_fs_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "qjs-async-fs-service",
+        crate::io::cabi::qjs_async_fs_service_task(),
+    )
 }
 
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -95,7 +103,11 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
     for idx in 0..count {
-        if let Err(e) = spawner.spawn(crate::net::adapter::net_poll_task(idx)) {
+        if let Err(e) = crate::v::taskmon::spawn(
+            &spawner,
+            "net-poll",
+            crate::net::adapter::net_poll_task(idx),
+        ) {
             crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
         }
     }
@@ -106,127 +118,127 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
     if crate::net::device_count() == 0 {
         return SpawnAttempt::Skipped;
     }
-    match spawner.spawn(crate::net::adapter::net_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "net-service", crate::net::adapter::net_service_task())
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::net::tls_socket::tls_socket_service_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "tls-socket-service",
+        crate::net::tls_socket::tls_socket_service_task(),
+    )
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::net::adapter::net_shell_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "net-shell", crate::net::adapter::net_shell_task())
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "http-trueosfs",
+        crate::tst::http_trueosfs::http_trueosfs_task(),
+    )
 }
 
 fn spawn_tga_blink(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tga::blink_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "tga-blink", crate::tga::blink_task())
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
-        let _ = spawner.spawn(crate::usb::xhci::poll_task(info));
+        let _ = crate::v::taskmon::spawn(
+            &spawner,
+            "usb-xhci-poll",
+            crate::usb::xhci::poll_task(info),
+        );
         // reads from our dma buffs into usb rings
-        let _ = spawner.spawn(crate::usb::poll_task(info));
+        let _ = crate::v::taskmon::spawn(&spawner, "usb-poll", crate::usb::poll_task(info));
         // Single long-lived scout per controller. Rescans are triggered via a flag.
-        let _ = spawner.spawn(crate::usb::usb_scout_service(info));
+        let _ = crate::v::taskmon::spawn(
+            &spawner,
+            "usb-scout",
+            crate::usb::usb_scout_service(info),
+        );
     }
     SpawnAttempt::Spawned
 }
 
 fn spawn_hid_input_logger(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usb::hid::input_logger()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "hid-input-logger", crate::usb::hid::input_logger())
 }
 
 fn spawn_uac_sine(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usb::uac::sine_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "uac-sine", crate::usb::uac::sine_task())
 }
 
 fn spawn_vleds_mux(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::v::leds::task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "vleds-mux", crate::v::leds::task())
 }
 
 fn spawn_vleds_cycle(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::v::leds::color_cycle_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "vleds-cycle", crate::v::leds::color_cycle_task())
 }
 
 fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usb::truekey::drain_loop()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(spawner, "truekey-drain", crate::usb::truekey::drain_loop())
 }
 
 fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_fetch_to_file_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "boot-fetch-smoke",
+        crate::tst::boot_fetch_to_file_smoke_task(),
+    )
 }
 
 fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_parse5_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "boot-parse5-smoke",
+        crate::tst::boot_parse5_smoke_task(),
+    )
 }
 
 fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::nalgebra_demo::boot_nalgebra_demo_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "boot-nalgebra-demo",
+        crate::tst::nalgebra_demo::boot_nalgebra_demo_task(),
+    )
 }
 
 fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::pci::pciids::boot_cache_pci_ids_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "pciids-boot-cache",
+        crate::pci::pciids::boot_cache_pci_ids_task(),
+    )
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND)) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "uart-shell",
+        crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND),
+    )
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(spawner, &crate::shell::NET_TCP_SHELL_BACKEND)) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    spawn_monitored(
+        spawner,
+        "net-tcp-shell",
+        crate::shell::task(spawner, &crate::shell::NET_TCP_SHELL_BACKEND),
+    )
+}
+
+fn spawn_taskmon_reporter(spawner: Spawner) -> SpawnAttempt {
+    spawn_monitored(
+        spawner,
+        "taskmon-reporter",
+        crate::v::taskmon::taskmon_reporter_task(),
+    )
 }
 
 // --- registry ---
@@ -262,6 +274,12 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &QJS_ASYNC_FS_SERVICE_STARTED,
         spawn: spawn_qjs_async_fs_service,
+    },
+    TaskSpec {
+        name: "taskmon-reporter",
+        required: 0,
+        started: &TASKMON_REPORTER_STARTED,
+        spawn: spawn_taskmon_reporter,
     },
 
     // Network producers (may no-op if no NIC exists)
@@ -385,57 +403,60 @@ static TASKS: &[TaskSpec] = &[
 
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
-    // Poll quickly until we have started everything; then back off.
-    loop {
-        let ready = crate::v::readiness::mask();
-        let mut pending = 0usize;
-        let mut started_any = false;
+    crate::v::taskmon::run("spawn-service", async move {
+        // Poll quickly until we have started everything; then back off.
+        loop {
+            let ready = crate::v::readiness::mask();
+            let mut pending = 0usize;
+            let mut started_any = false;
 
-        for spec in TASKS {
-            if (ready & spec.required) != spec.required {
-                pending += 1;
-                continue;
-            }
-
-            if spec
-                .started
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                continue;
-            }
-
-            match (spec.spawn)(spawner) {
-                SpawnAttempt::Spawned => {
-                    started_any = true;
-                    crate::log!(
-                        "spawn-svc: started {} (mask=0x{:08X})\n",
-                        spec.name,
-                        spec.required
-                    );
-                }
-                SpawnAttempt::Skipped => {
-                    // Not applicable right now (e.g. no NIC). Allow re-attempt later.
-                    spec.started.store(false, Ordering::Release);
+            for spec in TASKS {
+                if (ready & spec.required) != spec.required {
                     pending += 1;
+                    continue;
                 }
-                SpawnAttempt::Failed(e) => {
-                    // Allow retry.
-                    spec.started.store(false, Ordering::Release);
-                    pending += 1;
-                    crate::log!(
-                        "spawn-svc: failed to start {} (mask=0x{:08X}) err={:?}\n",
-                        spec.name,
-                        spec.required,
-                        e
-                    );
+
+                if spec
+                    .started
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    continue;
+                }
+
+                match (spec.spawn)(spawner) {
+                    SpawnAttempt::Spawned => {
+                        started_any = true;
+                        crate::log!(
+                            "spawn-svc: started {} (mask=0x{:08X})\n",
+                            spec.name,
+                            spec.required
+                        );
+                    }
+                    SpawnAttempt::Skipped => {
+                        // Not applicable right now (e.g. no NIC). Allow re-attempt later.
+                        spec.started.store(false, Ordering::Release);
+                        pending += 1;
+                    }
+                    SpawnAttempt::Failed(e) => {
+                        // Allow retry.
+                        spec.started.store(false, Ordering::Release);
+                        pending += 1;
+                        crate::log!(
+                            "spawn-svc: failed to start {} (mask=0x{:08X}) err={:?}\n",
+                            spec.name,
+                            spec.required,
+                            e
+                        );
+                    }
                 }
             }
+
+            // If we made progress, poll again quickly so chains of dependent tasks start promptly.
+            // If nothing changed, back off to reduce idle overhead.
+            let sleep_ms = if started_any { 10 } else if pending == 0 { 250 } else { 50 };
+            Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
         }
-
-        // If we made progress, poll again quickly so chains of dependent tasks start promptly.
-        // If nothing changed, back off to reduce idle overhead.
-        let sleep_ms = if started_any { 10 } else if pending == 0 { 250 } else { 50 };
-        Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
-    }
+    })
+    .await;
 }

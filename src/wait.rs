@@ -192,7 +192,7 @@ impl WaitQueue {
             ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
         };
         let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
-        let mut observed = self.seq.load(Ordering::Acquire);
+        let observed = self.seq.load(Ordering::Acquire);
 
         loop {
             if ticks != 0 && now() >= deadline {
@@ -205,6 +205,33 @@ impl WaitQueue {
             }
 
             park_step();
+        }
+    }
+
+    #[inline]
+    pub fn wait_for_event_blocking_pump(&self, timeout_ms: u64) -> bool {
+        let hz = TICK_HZ as u64;
+        let ticks = if hz == 0 || timeout_ms == 0 {
+            0
+        } else {
+            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        };
+        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
+        let observed = self.seq.load(Ordering::Acquire);
+
+        loop {
+            if ticks != 0 && now() >= deadline {
+                return false;
+            }
+
+            let current = self.seq.load(Ordering::Acquire);
+            if current != observed {
+                return true;
+            }
+
+            crate::time::poll();
+            crate::time::poll_executor_allow_reentry();
+            crate::power::idle_hint();
         }
     }
 }

@@ -133,11 +133,33 @@ pub mod kfs {
 	}
 
 	#[inline]
+	pub fn read_file_len(path: &str) -> Result<usize> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		crate::wait::spawn_and_wait_local(async move {
+			match crate::v::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
+				Some(info) => Ok(info.data_len as usize),
+				None => Err(FsError::NotFound),
+			}
+		})
+	}
+
+	#[inline]
 	pub async fn read_file_async(path: &str) -> Result<Vec<u8>> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
 		match crate::v::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
 			Some(bytes) => Ok(bytes),
+			None => Err(FsError::NotFound),
+		}
+	}
+
+	#[inline]
+	pub async fn read_file_len_async(path: &str) -> Result<usize> {
+		let disk = root_disk()?;
+		let name = normalize_rel(path, false)?;
+		match crate::v::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
+			Some(info) => Ok(info.data_len as usize),
 			None => Err(FsError::NotFound),
 		}
 	}
@@ -294,6 +316,7 @@ pub mod kfs {
 
 /// Console routing + C ABI entrypoints used by embedded C code (QuickJS etc).
 pub mod cabi {
+	use alloc::collections::VecDeque;
 	use alloc::string::{String, ToString};
 	use alloc::vec::Vec;
 	use core::sync::atomic::{AtomicU32, Ordering};
@@ -431,11 +454,15 @@ pub mod cabi {
 			return FS_ERR_BAD_UTF8 as isize;
 		};
 
+		if out_ptr.is_null() || out_cap == 0 {
+			return match super::kfs::read_file_len(path) {
+				Ok(len) => len as isize,
+				Err(e) => fs_error_to_code(e) as isize,
+			};
+		}
+
 		match super::kfs::read_file(path) {
 			Ok(bytes) => {
-				if out_ptr.is_null() || out_cap == 0 {
-					return bytes.len() as isize;
-				}
 				if bytes.len() > out_cap {
 					return FS_ERR_NO_SPACE as isize;
 				}
@@ -579,9 +606,9 @@ pub mod cabi {
 		data: Vec<u8>,
 	}
 
-	static ASYNC_FS_REQS: Mutex<Vec<AsyncFsRequest>> = Mutex::new(Vec::new());
-	static ASYNC_FS_DONE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-	static ASYNC_FS_RESULTS: Mutex<Vec<AsyncFsCompletion>> = Mutex::new(Vec::new());
+	static ASYNC_FS_REQS: Mutex<VecDeque<AsyncFsRequest>> = Mutex::new(VecDeque::new());
+	static ASYNC_FS_DONE: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+	static ASYNC_FS_RESULTS: Mutex<VecDeque<AsyncFsCompletion>> = Mutex::new(VecDeque::new());
 	static ASYNC_FS_WAIT: WaitQueue = WaitQueue::new();
 
 	#[inline]
@@ -594,19 +621,19 @@ pub mod cabi {
 		if q.len() >= QJS_ASYNC_FS_MAX_QUEUE {
 			return Err(FS_ERR_NO_SPACE);
 		}
-		q.push(req);
+		q.push_back(req);
 		Ok(())
 	}
 
 	fn take_async_fs_req() -> Option<AsyncFsRequest> {
 		let mut q = ASYNC_FS_REQS.lock();
-		if q.is_empty() { None } else { Some(q.remove(0)) }
+		q.pop_front()
 	}
 
 	fn push_async_fs_completion(done: AsyncFsCompletion) {
 		let id = done.id;
-		ASYNC_FS_RESULTS.lock().push(done);
-		ASYNC_FS_DONE.lock().push(id);
+		ASYNC_FS_RESULTS.lock().push_back(done);
+		ASYNC_FS_DONE.lock().push_back(id);
 		ASYNC_FS_WAIT.notify_all();
 	}
 
@@ -632,7 +659,7 @@ pub mod cabi {
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_async_fs_wait_for_completion_blocking(timeout_ms: u64) -> i32 {
 		crate::log!("qjs-async-fs: wait start timeout_ms={}\n", timeout_ms);
-		let ok = ASYNC_FS_WAIT.wait_for_event_blocking(timeout_ms);
+		let ok = ASYNC_FS_WAIT.wait_for_event_blocking_pump(timeout_ms);
 		crate::log!("qjs-async-fs: wait done ok={}\n", ok as u8);
 		if ok { 1 } else { 0 }
 	}
@@ -643,52 +670,66 @@ pub mod cabi {
 	/// so it can call `kfs::*_async` without introducing crate cycles.
 	#[embassy_executor::task]
 	pub async fn qjs_async_fs_service_task() {
-		loop {
-			let Some(req) = take_async_fs_req() else {
-				Timer::after(EmbassyDuration::from_millis(2)).await;
-				continue;
-			};
+		crate::v::taskmon::run("qjs-async-fs-service", async move {
+			loop {
+				let mut processed = 0usize;
+				loop {
+					let Some(req) = take_async_fs_req() else {
+						break;
+					};
 
-			crate::log!(
-				"qjs-async-fs: dequeued id={} kind={:?} path={}\n",
-				req.id,
-				req.kind,
-				req.path
-			);
+					crate::log!(
+						"qjs-async-fs: dequeued id={} kind={:?} path={}\n",
+						req.id,
+						req.kind,
+						req.path
+					);
 
-			match req.kind {
-				AsyncFsKind::ReadFile => {
-					let out = super::kfs::read_file_async(req.path.as_str()).await;
-					match out {
-						Ok(bytes) => push_async_fs_completion(AsyncFsCompletion {
-							id: req.id,
-							rc: 0,
-							data: bytes,
-						}),
-						Err(e) => push_async_fs_completion(AsyncFsCompletion {
-							id: req.id,
-							rc: fs_error_to_code(e),
-							data: Vec::new(),
-						}),
+					match req.kind {
+						AsyncFsKind::ReadFile => {
+							let out = super::kfs::read_file_async(req.path.as_str()).await;
+							match out {
+								Ok(bytes) => push_async_fs_completion(AsyncFsCompletion {
+									id: req.id,
+									rc: 0,
+									data: bytes,
+								}),
+								Err(e) => push_async_fs_completion(AsyncFsCompletion {
+									id: req.id,
+									rc: fs_error_to_code(e),
+									data: Vec::new(),
+								}),
+							}
+						}
+						AsyncFsKind::WriteFile => {
+							let out = super::kfs::write_file_async(req.path.as_str(), req.data.as_slice()).await;
+							match out {
+								Ok(()) => push_async_fs_completion(AsyncFsCompletion {
+									id: req.id,
+									rc: 0,
+									data: Vec::new(),
+								}),
+								Err(e) => push_async_fs_completion(AsyncFsCompletion {
+									id: req.id,
+									rc: fs_error_to_code(e),
+									data: Vec::new(),
+								}),
+							}
+						}
+					}
+
+					processed = processed.saturating_add(1);
+					if processed >= QJS_ASYNC_FS_MAX_QUEUE {
+						break;
 					}
 				}
-				AsyncFsKind::WriteFile => {
-					let out = super::kfs::write_file_async(req.path.as_str(), req.data.as_slice()).await;
-					match out {
-						Ok(()) => push_async_fs_completion(AsyncFsCompletion {
-							id: req.id,
-							rc: 0,
-							data: Vec::new(),
-						}),
-						Err(e) => push_async_fs_completion(AsyncFsCompletion {
-							id: req.id,
-							rc: fs_error_to_code(e),
-							data: Vec::new(),
-						}),
-					}
+
+				if processed == 0 {
+					Timer::after(EmbassyDuration::from_millis(1)).await;
 				}
 			}
-		}
+		})
+		.await;
 	}
 
 	/// Start an async read-file operation.
@@ -774,10 +815,9 @@ pub mod cabi {
 			return 0;
 		}
 		let mut done = ASYNC_FS_DONE.lock();
-		let Some(id) = done.first().copied() else {
+		let Some(id) = done.pop_front() else {
 			return 0;
 		};
-		done.remove(0);
 		*out_id = id;
 		1
 	}

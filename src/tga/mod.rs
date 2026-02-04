@@ -112,24 +112,27 @@ pub fn tga_led_off() {
 
 #[embassy_executor::task]
 pub(crate) async fn blink_task() {
-    let mut offline_ticks: u32 = 0;
-    loop {
-        if !is_online() {
-            // Retry strategy: periodically rescan PCI and attempt bring-up.
-            // This supports the (rare) case where PCI devices appear after boot.
-            offline_ticks = offline_ticks.wrapping_add(1);
-            if (offline_ticks % 10) == 0 {
-                crate::pci::enumerate_silent();
-                let _ = try_init();
+    crate::v::taskmon::run("tga-blink", async move {
+        let mut offline_ticks: u32 = 0;
+        loop {
+            if !is_online() {
+                // Retry strategy: periodically rescan PCI and attempt bring-up.
+                // This supports the (rare) case where PCI devices appear after boot.
+                offline_ticks = offline_ticks.wrapping_add(1);
+                if (offline_ticks % 10) == 0 {
+                    crate::pci::enumerate_silent();
+                    let _ = try_init();
+                }
+                Timer::after(EmbassyDuration::from_millis(500)).await;
+                continue;
             }
-            Timer::after(EmbassyDuration::from_millis(500)).await;
-            continue;
-        }
 
-        tga_led_on();
-        Timer::after(EmbassyDuration::from_millis(500)).await;
-        tga_led_off();
-        Timer::after(EmbassyDuration::from_millis(500)).await;
-        crate::log!("tga heartbeat on/off once.\n");
-    }
+            tga_led_on();
+            Timer::after(EmbassyDuration::from_millis(500)).await;
+            tga_led_off();
+            Timer::after(EmbassyDuration::from_millis(500)).await;
+            crate::log!("tga heartbeat on/off once.\n");
+        }
+    })
+    .await;
 }

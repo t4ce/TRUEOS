@@ -309,105 +309,111 @@ fn mixed_rgb_from_pool() -> Rgb8 {
 
 #[embassy_executor::task]
 pub async fn task() {
-    crate::log!("v_leds: service online\n");
+    crate::v::taskmon::run("vleds-mux", async move {
+        crate::log!("v_leds: service online\n");
 
-    let mut last_offline: bool = true;
-    let mut last_sent_rgb: Option<Rgb8> = None;
-    let mut last_effect: Option<Effect> = None;
-    let mut last_effect_owner: Option<u32> = None;
+        let mut last_offline: bool = true;
+        let mut last_sent_rgb: Option<Rgb8> = None;
+        let mut last_effect: Option<Effect> = None;
+        let mut last_effect_owner: Option<u32> = None;
 
-    loop {
-        let online = crate::usb::leds::is_online();
-        let cmds = drain_cmds(16);
-        if cmds.is_empty() {
-            Timer::after(EmbassyDuration::from_millis(20)).await;
-        }
+        loop {
+            let online = crate::usb::leds::is_online();
+            let cmds = drain_cmds(16);
+            if cmds.is_empty() {
+                Timer::after(EmbassyDuration::from_millis(20)).await;
+            }
 
-        for cmd in cmds.iter() {
-            match cmd {
-                LedCmd::SetRgb { owner, rgb } => {
-                    apply_set_rgb(*owner, *rgb);
-                }
-                LedCmd::SetData { owner, data } => {
-                    apply_set_data(*owner, data.as_slice());
-                }
-                LedCmd::SetEffect { owner, effect } => {
-                    if scope_range(*owner).is_some() {
-                        last_effect = Some(*effect);
-                        last_effect_owner = Some(*owner);
+            for cmd in cmds.iter() {
+                match cmd {
+                    LedCmd::SetRgb { owner, rgb } => {
+                        apply_set_rgb(*owner, *rgb);
+                    }
+                    LedCmd::SetData { owner, data } => {
+                        apply_set_data(*owner, data.as_slice());
+                    }
+                    LedCmd::SetEffect { owner, effect } => {
+                        if scope_range(*owner).is_some() {
+                            last_effect = Some(*effect);
+                            last_effect_owner = Some(*owner);
+                        }
+                    }
+                    LedCmd::RawOut {
+                        report_id, data, ..
+                    } => {
+                        if online {
+                            let _ = crate::usb::leds::send_output_report_first(*report_id, data).await;
+                        }
                     }
                 }
-                LedCmd::RawOut {
-                    report_id, data, ..
-                } => {
-                    if online {
-                        let _ = crate::usb::leds::send_output_report_first(*report_id, data).await;
-                    }
+            }
+
+            if online {
+                let effect_ok = last_effect_owner
+                    .and_then(|owner| scope_range(owner))
+                    .is_some();
+                if !effect_ok {
+                    last_effect = None;
+                    last_effect_owner = None;
                 }
-            }
-        }
-
-        if online {
-            let effect_ok = last_effect_owner
-                .and_then(|owner| scope_range(owner))
-                .is_some();
-            if !effect_ok {
-                last_effect = None;
-                last_effect_owner = None;
-            }
-            let desired_rgb = mixed_rgb_from_pool();
-            if last_offline || last_sent_rgb != Some(desired_rgb) {
-                let (rid, data) = encode_set_rgb(desired_rgb);
-                let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
-                last_sent_rgb = Some(desired_rgb);
-            }
-
-            if last_offline {
-                if let Some(effect) = last_effect {
-                    let (rid, data) = encode_set_effect(effect);
+                let desired_rgb = mixed_rgb_from_pool();
+                if last_offline || last_sent_rgb != Some(desired_rgb) {
+                    let (rid, data) = encode_set_rgb(desired_rgb);
                     let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                    last_sent_rgb = Some(desired_rgb);
+                }
+
+                if last_offline {
+                    if let Some(effect) = last_effect {
+                        let (rid, data) = encode_set_effect(effect);
+                        let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                    }
                 }
             }
+
+            last_offline = !online;
+
+            Timer::after(EmbassyDuration::from_millis(1)).await;
         }
-
-        last_offline = !online;
-
-        Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
+    })
+    .await;
 }
 
 #[embassy_executor::task]
 pub async fn color_cycle_task() {
-    crate::log!("v_leds: color cycle online (1000ms)\n");
+    crate::v::taskmon::run("vleds-cycle", async move {
+        crate::log!("v_leds: color cycle online (1000ms)\n");
 
-    let Some(led_a) = alloc(5) else {
-        crate::log!("v_leds: alloc(5) failed\n");
-        return;
-    };
-    let Some(led_b) = alloc(5) else {
-        crate::log!("v_leds: alloc(5) failed\n");
-        return;
-    };
-
-    led_a.set_effect(Effect::Rainbow);
-
-    loop {
-        let t = crate::time::uptime_seconds();
-        let rgb = match t % 6 {
-            0 => Rgb8::new(255, 0, 0),
-            1 => Rgb8::new(0, 255, 0),
-            2 => Rgb8::new(0, 0, 255),
-            3 => Rgb8::new(255, 255, 0),
-            4 => Rgb8::new(0, 255, 255),
-            _ => Rgb8::new(255, 0, 255),
+        let Some(led_a) = alloc(5) else {
+            crate::log!("v_leds: alloc(5) failed\n");
+            return;
+        };
+        let Some(led_b) = alloc(5) else {
+            crate::log!("v_leds: alloc(5) failed\n");
+            return;
         };
 
-        led_a.set_rgb(rgb);
+        led_a.set_effect(Effect::Rainbow);
 
-        let mut data = [Rgb8::new(0, 0, 0); 5];
-        data[(t as usize) % data.len()] = rgb;
-        led_b.set_leds(&data);
+        loop {
+            let t = crate::time::uptime_seconds();
+            let rgb = match t % 6 {
+                0 => Rgb8::new(255, 0, 0),
+                1 => Rgb8::new(0, 255, 0),
+                2 => Rgb8::new(0, 0, 255),
+                3 => Rgb8::new(255, 255, 0),
+                4 => Rgb8::new(0, 255, 255),
+                _ => Rgb8::new(255, 0, 255),
+            };
 
-        Timer::after(EmbassyDuration::from_millis(1000)).await;
-    }
+            led_a.set_rgb(rgb);
+
+            let mut data = [Rgb8::new(0, 0, 0); 5];
+            data[(t as usize) % data.len()] = rgb;
+            led_b.set_leds(&data);
+
+            Timer::after(EmbassyDuration::from_millis(1000)).await;
+        }
+    })
+    .await;
 }

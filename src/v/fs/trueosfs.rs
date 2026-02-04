@@ -2,7 +2,7 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::disc::block;
 use crate::v::disc::partition;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_math::BPlusTree;
@@ -18,6 +18,16 @@ struct IndexRef {
 }
 
 type TrueosFsIndex = BPlusTree<Vec<u8>, IndexRef, TRUEOSFS_INDEX_M>;
+
+const FILE_RECORD_CACHE_CAP: usize = 64;
+
+struct FileRecordCacheEntry {
+    disk_id: block::DiscId,
+    path: String,
+    record: trueos_fs::FileRecordRef,
+    gen: u32,
+    last_use: u64,
+}
 
 // Standard EFI System Partition type GUID.
 // C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -38,10 +48,14 @@ struct RootMount {
     seq: u32,
     index: Option<Box<TrueosFsIndex>>,
     writes_since_checkpoint: u32,
+    cache_gen: u32,
 }
 
 static ROOT_SEQ: AtomicU32 = AtomicU32::new(0);
 static ROOTS: Mutex<Vec<RootMount>> = Mutex::new(Vec::new());
+
+static FILE_RECORD_CACHE_SEQ: AtomicU64 = AtomicU64::new(1);
+static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new());
 
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
@@ -69,35 +83,38 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
 /// Background task that performs deferred TRUEOSFS probing/mounting.
 #[embassy_executor::task]
 pub async fn mount_service_task() {
-    loop {
-        if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
-            // Allow the device to settle after registration.
-            Timer::after(EmbassyDuration::from_millis(100)).await;
+    crate::v::taskmon::run("trueosfs-mount-service", async move {
+        loop {
+            if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
+                // Allow the device to settle after registration.
+                Timer::after(EmbassyDuration::from_millis(100)).await;
 
-            let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
-            {
-                let mut q = MOUNT_QUEUE.lock();
-                while let Some(d) = q.pop() {
-                    let _ = local.push(d);
+                let mut local: heapless::Vec<block::DeviceHandle, 8> = heapless::Vec::new();
+                {
+                    let mut q = MOUNT_QUEUE.lock();
+                    while let Some(d) = q.pop() {
+                        let _ = local.push(d);
+                    }
+                }
+
+                for disk in local.iter().copied() {
+                    // Best-effort: only log when we actually mount or error.
+                    match mount_root_async(disk).await {
+                        Ok(Some(disk_id)) => {
+                            crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            crate::log!("trueosfs: mount error {:?}\n", e);
+                        }
+                    }
                 }
             }
 
-            for disk in local.iter().copied() {
-                // Best-effort: only log when we actually mount or error.
-                match mount_root_async(disk).await {
-                    Ok(Some(disk_id)) => {
-                        crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        crate::log!("trueosfs: mount error {:?}\n", e);
-                    }
-                }
-            }
+            Timer::after(EmbassyDuration::from_millis(50)).await;
         }
-
-        Timer::after(EmbassyDuration::from_millis(50)).await;
-    }
+    })
+    .await;
 }
 
 /// Async variant of [`format_blank`].
@@ -289,11 +306,103 @@ pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block:
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         index,
         writes_since_checkpoint,
+        cache_gen: 0,
     });
+
+    file_record_cache_invalidate_disk(disk_id);
 
     crate::v::readiness::set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED);
 
     Ok(Some(disk_id))
+}
+
+fn root_cache_gen(disk_id: block::DiscId) -> u32 {
+    let roots = ROOTS.lock();
+    roots
+        .iter()
+        .find(|m| m.disk_id == disk_id)
+        .map(|m| m.cache_gen)
+        .unwrap_or(0)
+}
+
+fn bump_root_cache_gen(disk_id: block::DiscId) {
+    let mut roots = ROOTS.lock();
+    if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
+        m.cache_gen = m.cache_gen.wrapping_add(1);
+    }
+}
+
+fn file_record_cache_lookup(
+    disk_id: block::DiscId,
+    path: &str,
+) -> Option<trueos_fs::FileRecordRef> {
+    let gen = root_cache_gen(disk_id);
+    let mut cache = FILE_RECORD_CACHE.lock();
+    let mut idx = None;
+    for (i, entry) in cache.iter().enumerate() {
+        if entry.disk_id == disk_id && entry.path == path {
+            idx = Some(i);
+            break;
+        }
+    }
+
+    let Some(i) = idx else {
+        return None;
+    };
+
+    if cache[i].gen != gen {
+        cache.remove(i);
+        return None;
+    }
+
+    let seq = FILE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
+    cache[i].last_use = seq;
+    Some(cache[i].record)
+}
+
+fn file_record_cache_insert(
+    disk_id: block::DiscId,
+    path: &str,
+    record: trueos_fs::FileRecordRef,
+) {
+    let gen = root_cache_gen(disk_id);
+    let seq = FILE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut cache = FILE_RECORD_CACHE.lock();
+
+    if let Some(pos) = cache
+        .iter()
+        .position(|entry| entry.disk_id == disk_id && entry.path == path)
+    {
+        cache.remove(pos);
+    }
+
+    if cache.len() >= FILE_RECORD_CACHE_CAP {
+        if let Some((evict_idx, _)) = cache
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, entry)| entry.last_use)
+        {
+            cache.remove(evict_idx);
+        }
+    }
+
+    cache.push(FileRecordCacheEntry {
+        disk_id,
+        path: path.into(),
+        record,
+        gen,
+        last_use: seq,
+    });
+}
+
+fn file_record_cache_invalidate_path(disk_id: block::DiscId, path: &str) {
+    let mut cache = FILE_RECORD_CACHE.lock();
+    cache.retain(|entry| !(entry.disk_id == disk_id && entry.path == path));
+}
+
+fn file_record_cache_invalidate_disk(disk_id: block::DiscId) {
+    let mut cache = FILE_RECORD_CACHE.lock();
+    cache.retain(|entry| entry.disk_id != disk_id);
 }
 
 /// Async TRUEOSFS: write/replace a file.
@@ -318,9 +427,15 @@ pub async fn file_in_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::write_file(&io, &params, name, bytes)
+    let ok = trueos_fs::write_file(&io, &params, name, bytes)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?;
+    if ok {
+        let disk_id = disk.id();
+        bump_root_cache_gen(disk_id);
+        file_record_cache_invalidate_path(disk_id, name);
+    }
+    Ok(ok)
 }
 
 /// Async TRUEOSFS: read a file.
@@ -344,9 +459,30 @@ pub async fn file_out_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::read_file(&io, &params, name)
-        .await
-        .map_err(map_engine_err)
+    let disk_id = disk.id();
+    let record = file_record_cache_lookup(disk_id, name);
+    let record = match record {
+        Some(v) => Some(v),
+        None => {
+            let rec = trueos_fs::lookup_file_record(&io, &params, name)
+                .await
+                .map_err(map_engine_err)?;
+            if let Some(r) = rec {
+                file_record_cache_insert(disk_id, name, r);
+                Some(r)
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(rec) = record {
+        return trueos_fs::read_file_at_record(&io, &params, &rec)
+            .await
+            .map_err(map_engine_err);
+    }
+
+    Ok(None)
 }
 
 /// Async TRUEOSFS: read file metadata.
@@ -368,9 +504,21 @@ pub async fn file_info_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::read_file_info(&io, &params, name)
+    let disk_id = disk.id();
+    let record = file_record_cache_lookup(disk_id, name);
+    if let Some(rec) = record {
+        return Ok(Some(trueos_fs::file_info_from_record(&rec)));
+    }
+
+    let rec = trueos_fs::lookup_file_record(&io, &params, name)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?;
+    if let Some(r) = rec {
+        file_record_cache_insert(disk_id, name, r);
+        return Ok(Some(trueos_fs::file_info_from_record(&r)));
+    }
+
+    Ok(None)
 }
 
 /// Async TRUEOSFS: read a file range into a caller-provided buffer.
@@ -394,9 +542,30 @@ pub async fn file_read_range_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::read_file_range(&io, &params, name, offset, out)
-        .await
-        .map_err(map_engine_err)
+    let disk_id = disk.id();
+    let record = file_record_cache_lookup(disk_id, name);
+    let record = match record {
+        Some(v) => Some(v),
+        None => {
+            let rec = trueos_fs::lookup_file_record(&io, &params, name)
+                .await
+                .map_err(map_engine_err)?;
+            if let Some(r) = rec {
+                file_record_cache_insert(disk_id, name, r);
+                Some(r)
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(rec) = record {
+        return trueos_fs::read_file_range_at(&io, &params, &rec, offset, out)
+            .await
+            .map_err(map_engine_err);
+    }
+
+    Ok(None)
 }
 
 /// Async TRUEOSFS: delete a file.
@@ -418,9 +587,15 @@ pub async fn file_delete_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::delete_file(&io, &params, name)
+    let ok = trueos_fs::delete_file(&io, &params, name)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?;
+    if ok {
+        let disk_id = disk.id();
+        bump_root_cache_gen(disk_id);
+        file_record_cache_invalidate_path(disk_id, name);
+    }
+    Ok(ok)
 }
 
 /// Async TRUEOSFS: best-effort rename (copy + delete).
@@ -656,9 +831,15 @@ pub async fn file_append_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::append_file(&io, &params, name, append_bytes)
+    let ok = trueos_fs::append_file(&io, &params, name, append_bytes)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?;
+    if ok {
+        let disk_id = disk.id();
+        bump_root_cache_gen(disk_id);
+        file_record_cache_invalidate_path(disk_id, name);
+    }
+    Ok(ok)
 }
 
 // NOTE: synchronous TRUEOSFS file operations (`file_in`, `file_out`, etc.) were removed.

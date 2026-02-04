@@ -275,50 +275,53 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
 
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
-    loop {
-        if let Some(evt) = input::pop_event() {
-            match evt {
-                input::InputEvent::Keyboard(kbd) => {
-                    if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
-                        let show = |b: u8| -> char {
-                            if b == 0 {
-                                '.'
-                            } else if (b as char).is_ascii_graphic() || b == b' ' {
-                                b as char
-                            } else {
-                                '?'
-                            }
-                        };
-                        crate::log!(
-                            "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
-                            kbd.slot_id,
-                            kbd.modifiers,
-                            show(kbd.ascii[0]),
-                            show(kbd.ascii[1]),
-                            show(kbd.ascii[2]),
-                            show(kbd.ascii[3]),
-                            show(kbd.ascii[4]),
-                            show(kbd.ascii[5])
-                        );
+    crate::v::taskmon::run("hid-input-logger", async move {
+        loop {
+            if let Some(evt) = input::pop_event() {
+                match evt {
+                    input::InputEvent::Keyboard(kbd) => {
+                        if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
+                            let show = |b: u8| -> char {
+                                if b == 0 {
+                                    '.'
+                                } else if (b as char).is_ascii_graphic() || b == b' ' {
+                                    b as char
+                                } else {
+                                    '?'
+                                }
+                            };
+                            crate::log!(
+                                "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
+                                kbd.slot_id,
+                                kbd.modifiers,
+                                show(kbd.ascii[0]),
+                                show(kbd.ascii[1]),
+                                show(kbd.ascii[2]),
+                                show(kbd.ascii[3]),
+                                show(kbd.ascii[4]),
+                                show(kbd.ascii[5])
+                            );
+                        }
+                    }
+                    input::InputEvent::Mouse(mouse) => {
+                        if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
+                            crate::log!(
+                                "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
+                                mouse.slot_id,
+                                mouse.dx,
+                                mouse.dy,
+                                mouse.buttons,
+                                mouse.wheel
+                            );
+                        }
                     }
                 }
-                input::InputEvent::Mouse(mouse) => {
-                    if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
-                        crate::log!(
-                            "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
-                            mouse.slot_id,
-                            mouse.dx,
-                            mouse.dy,
-                            mouse.buttons,
-                            mouse.wheel
-                        );
-                    }
-                }
+            } else {
+                Timer::after(EmbassyDuration::from_millis(5)).await;
             }
-        } else {
-            Timer::after(EmbassyDuration::from_millis(5)).await;
         }
-    }
+    })
+    .await;
 }
 
 // NOTE: No synthetic HID injections; reports now only reflect real device data.

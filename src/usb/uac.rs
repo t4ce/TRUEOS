@@ -892,48 +892,49 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
 
 #[embassy_executor::task]
 pub async fn sine_task() {
-    const FREQ_HZ: f32 = 440.0;
-    const AMP: f32 = (i16::MAX as f32) * 0.20;
-    const TWO_PI: f32 = core::f32::consts::PI * 2.0;
-    const PREFILL_TARGET: usize = 48;
-    const PREFILL_BURST: usize = 24;
+    crate::v::taskmon::run("uac-sine", async move {
+        const FREQ_HZ: f32 = 440.0;
+        const AMP: f32 = (i16::MAX as f32) * 0.20;
+        const TWO_PI: f32 = core::f32::consts::PI * 2.0;
+        const PREFILL_TARGET: usize = 48;
+        const PREFILL_BURST: usize = 24;
 
-    let mut phase: f32 = 0.0;
-    let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
-    let mut channels: usize = crate::audio::DEFAULT_CHANNELS as usize;
-    let mut phase_step: f32 = if rate_hz == 0 {
-        0.0
-    } else {
-        TWO_PI * FREQ_HZ / (rate_hz as f32)
-    };
-
-    let mut last_status = Instant::now();
-    let mut no_device: u64 = 0;
-    let mut no_runtime: u64 = 0;
-    let mut no_packet: u64 = 0;
-    let mut fmt_mismatch: u64 = 0;
-
-    loop {
-        // If we have a UAC runtime, keep the isoch ring fed ahead of time.
-        // This is intentionally Timer-free for pacing: the controller schedules packets
-        // at the correct microframe cadence; we just avoid letting the ring run dry.
-        let mut in_flight = 0usize;
-        let mut cap = 0usize;
-        let controller_id = match first_active_controller() {
-            Some(id) => id,
-            None => {
-                no_device = no_device.saturating_add(1);
-                Timer::after(EmbassyDuration::from_millis(50)).await;
-                continue;
-            }
+        let mut phase: f32 = 0.0;
+        let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
+        let mut channels: usize = crate::audio::DEFAULT_CHANNELS as usize;
+        let mut phase_step: f32 = if rate_hz == 0 {
+            0.0
+        } else {
+            TWO_PI * FREQ_HZ / (rate_hz as f32)
         };
-        {
-            let guard = UAC_RUNTIME[controller_id].lock();
-            if let Some(rt) = guard.as_ref() {
-                in_flight = rt.in_flight;
-                cap = rt.bufs.len();
+
+        let mut last_status = Instant::now();
+        let mut no_device: u64 = 0;
+        let mut no_runtime: u64 = 0;
+        let mut no_packet: u64 = 0;
+        let mut fmt_mismatch: u64 = 0;
+
+        loop {
+            // If we have a UAC runtime, keep the isoch ring fed ahead of time.
+            // This is intentionally Timer-free for pacing: the controller schedules packets
+            // at the correct microframe cadence; we just avoid letting the ring run dry.
+            let mut in_flight = 0usize;
+            let mut cap = 0usize;
+            let controller_id = match first_active_controller() {
+                Some(id) => id,
+                None => {
+                    no_device = no_device.saturating_add(1);
+                    Timer::after(EmbassyDuration::from_millis(50)).await;
+                    continue;
+                }
+            };
+            {
+                let guard = UAC_RUNTIME[controller_id].lock();
+                if let Some(rt) = guard.as_ref() {
+                    in_flight = rt.in_flight;
+                    cap = rt.bufs.len();
+                }
             }
-        }
 
         if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
             no_device = no_device.saturating_add(1);

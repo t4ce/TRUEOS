@@ -651,12 +651,16 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\ninstall: starting...\r\n");
                             match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", disc_id).as_str()) {
                                 Some(slot) => {
-                                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
-                                        slot,
-                                        handle,
-                                        bootx64,
-                                        kernel,
-                                    ));
+                                    let _ = crate::v::taskmon::spawn(
+                                        &spawner,
+                                        "matrix-install",
+                                        crate::matrix::install_matrix_job(
+                                            slot,
+                                            handle,
+                                            bootx64,
+                                            kernel,
+                                        ),
+                                    );
                                     io.write_fmt(format_args!(
                                         "install: started §{} (dump logs with § {})\r\n",
                                         slot + 1,
@@ -697,7 +701,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\nupdate: starting...\r\n");
                             match crate::matrix::alloc_slot(alloc::format!("update disc{:03}", disc_id).as_str()) {
                                 Some(slot) => {
-                                    let _ = spawner.spawn(crate::matrix::update_matrix_job(slot, handle));
+                                    let _ = crate::v::taskmon::spawn(
+                                        &spawner,
+                                        "matrix-update",
+                                        crate::matrix::update_matrix_job(slot, handle),
+                                    );
                                     io.write_fmt(format_args!(
                                         "update: started §{} (dump logs with § {})\r\n",
                                         slot + 1,

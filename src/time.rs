@@ -72,6 +72,21 @@ pub fn poll_executor() {
     EXECUTOR_POLLING.store(false, Ordering::Release);
 }
 
+/// Poll the Embassy executor even if already inside a poll.
+///
+/// This is a best-effort escape hatch for blocking waits invoked from
+/// within async contexts (e.g. QuickJS module loading) so other tasks
+/// can still make progress.
+#[inline]
+pub fn poll_executor_allow_reentry() {
+    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return;
+    }
+
+    unsafe { (&*ptr).poll() };
+}
+
 
 fn init_once() {
     INIT.call_once(|| {
