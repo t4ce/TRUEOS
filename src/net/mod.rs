@@ -3,6 +3,8 @@ pub mod core;
 pub mod device;
 pub mod e1000;
 pub mod ring;
+pub mod r8125;
+pub mod r8168;
 pub mod r8169;
 pub mod tls_socket;
 pub mod vio;
@@ -13,6 +15,8 @@ use spin::Mutex;
 use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
 use crate::net::ring::NetRing;
+use crate::net::r8125::R8125Adapter;
+use crate::net::r8168::R8168Adapter;
 use crate::net::r8169::R8169Adapter;
 use crate::net::vio::VirtioNetAdapter;
 use crate::net::e1000::E1000Adapter;
@@ -25,6 +29,8 @@ enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
     E1000(NetCore<E1000Adapter>),
     R8169(NetCore<R8169Adapter>),
+    R8125(NetCore<R8125Adapter>),
+    R8168(NetCore<R8168Adapter>),
 }
 
 impl NetDevice for ActiveDevice {
@@ -33,6 +39,8 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.mac(),
             ActiveDevice::E1000(dev) => dev.mac(),
             ActiveDevice::R8169(dev) => dev.mac(),
+            ActiveDevice::R8125(dev) => dev.mac(),
+            ActiveDevice::R8168(dev) => dev.mac(),
         }
     }
 
@@ -41,6 +49,8 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.poll_rx(),
             ActiveDevice::E1000(dev) => dev.poll_rx(),
             ActiveDevice::R8169(dev) => dev.poll_rx(),
+            ActiveDevice::R8125(dev) => dev.poll_rx(),
+            ActiveDevice::R8168(dev) => dev.poll_rx(),
         }
     }
 
@@ -49,6 +59,8 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.pop_rx(),
             ActiveDevice::E1000(dev) => dev.pop_rx(),
             ActiveDevice::R8169(dev) => dev.pop_rx(),
+            ActiveDevice::R8125(dev) => dev.pop_rx(),
+            ActiveDevice::R8168(dev) => dev.pop_rx(),
         }
     }
 
@@ -57,6 +69,8 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
             ActiveDevice::E1000(dev) => dev.transmit(frame),
             ActiveDevice::R8169(dev) => dev.transmit(frame),
+            ActiveDevice::R8125(dev) => dev.transmit(frame),
+            ActiveDevice::R8168(dev) => dev.transmit(frame),
         }
     }
 }
@@ -94,6 +108,20 @@ pub fn init() {
         let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
         guard.push(ActiveDevice::R8169(NetCore::new(adapter, ring)));
+        added += 1;
+    }
+
+    for adapter in R8125Adapter::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::R8125(NetCore::new(adapter, ring)));
+        added += 1;
+    }
+
+    for adapter in R8168Adapter::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::R8168(NetCore::new(adapter, ring)));
         added += 1;
     }
 

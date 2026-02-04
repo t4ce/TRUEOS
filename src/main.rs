@@ -266,7 +266,7 @@ pub extern "C" fn kmain() -> ! {
     }
 
     // QuickJS smoke test (kept after net init so URL imports can work if used).
-    unsafe { qjs::trueos_smoke::run() };
+    // unsafe { qjs::trueos_smoke::run() };
 
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
