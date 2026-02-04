@@ -280,119 +280,121 @@ pub async fn poll_task(info: xhci::XhcInfo) {
 
             let evt_slot = (evt.d3 >> 24) as u32;
 
-        match device_kind_for_slot(controller_id, evt_slot) {
-            Some(DeviceKind::Hid) => {
-                if !any_hid_registered(controller_id) {
-                    continue;
-                }
+            match device_kind_for_slot(controller_id, evt_slot) {
+                Some(DeviceKind::Hid) => {
+                    if !any_hid_registered(controller_id) {
+                        continue;
+                    }
 
-                let ep_target = (evt.d3 >> 16) & 0x1F;
-                if ep_target == 0 {
-                    continue;
-                }
+                    let ep_target = (evt.d3 >> 16) & 0x1F;
+                    if ep_target == 0 {
+                        continue;
+                    }
 
-                let handled = hid::with_runtime_mut_by_slot_and_target(
-                    controller_id,
-                    evt_slot,
-                    ep_target,
-                    |runtime| {
-                        let completion = (evt.d2 >> 24) & 0xFF;
-                        let residual = evt.d2 & 0x00FF_FFFF;
-                        let data_len =
-                            runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
-                        let data = unsafe {
-                            core::slice::from_raw_parts(runtime.report_virt, data_len)
-                        };
-                        hid::handle_report(runtime, completion, data, residual);
+                    let handled = hid::with_runtime_mut_by_slot_and_target(
+                        controller_id,
+                        evt_slot,
+                        ep_target,
+                        |runtime| {
+                            let completion = (evt.d2 >> 24) & 0xFF;
+                            let residual = evt.d2 & 0x00FF_FFFF;
+                            let data_len =
+                                runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
+                            let data = unsafe {
+                                core::slice::from_raw_parts(runtime.report_virt, data_len)
+                            };
+                            hid::handle_report(runtime, completion, data, residual);
 
-                        let normal = Trb {
-                            d0: lo(runtime.report_phys),
-                            d1: hi(runtime.report_phys),
-                            d2: runtime.report_len,
-                            d3: trb_type(1) | (1 << 5),
-                        };
+                            let normal = Trb {
+                                d0: lo(runtime.report_phys),
+                                d1: hi(runtime.report_phys),
+                                d2: runtime.report_len,
+                                d3: trb_type(1) | (1 << 5),
+                            };
 
-                        let before = runtime.ep_ring.state_snapshot();
-                        if !runtime.ep_ring.push(normal) {
-                            crate::log!(
-                                "usb: failed to requeue HID interrupt IN transfer\n"
-                            );
-                        } else {
-                            let after = runtime.ep_ring.state_snapshot();
-                            if hid::HID_LOGS {
+                            let before = runtime.ep_ring.state_snapshot();
+                            if !runtime.ep_ring.push(normal) {
                                 crate::log!(
-                                    "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
-                                    runtime.slot_id,
-                                    runtime.ep_target,
-                                    before.0,
-                                    before.1 as u8,
-                                    after.0,
-                                    after.1 as u8
+                                    "usb: failed to requeue HID interrupt IN transfer\n"
                                 );
+                            } else {
+                                let after = runtime.ep_ring.state_snapshot();
+                                if hid::HID_LOGS {
+                                    crate::log!(
+                                        "[hid] requeue slot={} target={} ring_before=({}, {}) ring_after=({}, {})\n",
+                                        runtime.slot_id,
+                                        runtime.ep_target,
+                                        before.0,
+                                        before.1 as u8,
+                                        after.0,
+                                        after.1 as u8
+                                    );
+                                }
+                                unsafe {
+                                    write_volatile(
+                                        ctx.doorbell.add(runtime.slot_id as usize),
+                                        runtime.ep_target
+                                    );
+                                }
+                                if hid::HID_LOGS {
+                                    crate::log!(
+                                        "[hid] doorbell slot={} target={} rung\n",
+                                        runtime.slot_id,
+                                        runtime.ep_target
+                                    );
+                                }
                             }
-                            unsafe {
-                                write_volatile(
-                                    ctx.doorbell.add(runtime.slot_id as usize),
-                                    runtime.ep_target
-                                );
-                            }
-                            if hid::HID_LOGS {
-                                crate::log!(
-                                    "[hid] doorbell slot={} target={} rung\n",
-                                    runtime.slot_id,
-                                    runtime.ep_target
-                                );
-                            }
-                        }
-                        true
-                    },
-                )
-                .unwrap_or(false);
+                            true
+                        },
+                    )
+                    .unwrap_or(false);
 
-                if !handled {
-                    usbv!(
-                        "usb: ignoring transfer event slot={} (no HID runtime)\n",
-                        evt_slot
-                    );
+                    if !handled {
+                        usbv!(
+                            "usb: ignoring transfer event slot={} (no HID runtime)\n",
+                            evt_slot
+                        );
+                    }
                 }
-            }
-            Some(DeviceKind::Mass) => {
-                // Mass storage transfers are driven by the mass driver; nothing to do here yet.
-            }
-            Some(DeviceKind::Cdc) => {
-                if !cdc_acm::handle_transfer_event(controller_id, &evt) {
-                    usbv!(
-                        "usb: ignoring transfer event slot={} (no CDC runtime)\n",
-                        evt_slot
-                    );
+                Some(DeviceKind::Mass) => {
+                    // Mass storage transfers are driven by the mass driver; nothing to do here yet.
                 }
-            }
-            Some(DeviceKind::Uac) => {
-                let _ = uac::handle_transfer_event(controller_id, &evt);
-            }
-            Some(DeviceKind::Hub) => {
-                if !hub::handle_transfer_event(controller_id, &evt) {
-                    usbv!(
-                        "usb: ignoring transfer event slot={} (no HUB runtime)\n",
-                        evt_slot
-                    );
+                Some(DeviceKind::Cdc) => {
+                    if !cdc_acm::handle_transfer_event(controller_id, &evt) {
+                        usbv!(
+                            "usb: ignoring transfer event slot={} (no CDC runtime)\n",
+                            evt_slot
+                        );
+                    }
                 }
-            }
-            Some(DeviceKind::Printer) => {}
-            Some(DeviceKind::Pen) => {}
-            Some(DeviceKind::Leds) => {
-                // LED controller endpoints are configured, but no periodic transfers are driven yet.
-            }
-            Some(DeviceKind::Unknown) => {
-                // Unclaimed devices keep a slot assigned so we don't thrash.
-                // No transfers should complete for them because no endpoints are configured.
-            }
-            None => {
-                // A device may complete transfers during attach (while the enum path is still
-                // running) before `register_device()` marks the slot kind. Handle CDC events
-                // opportunistically so TX/RX doesn't stall.
-                let _ = cdc_acm::handle_transfer_event(controller_id, &evt);
+                Some(DeviceKind::Uac) => {
+                    let _ = uac::handle_transfer_event(controller_id, &evt);
+                }
+                Some(DeviceKind::Hub) => {
+                    if !hub::handle_transfer_event(controller_id, &evt) {
+                        usbv!(
+                            "usb: ignoring transfer event slot={} (no HUB runtime)\n",
+                            evt_slot
+                        );
+                    }
+                }
+                Some(DeviceKind::Printer) => {}
+                Some(DeviceKind::Pen) => {}
+                Some(DeviceKind::Leds) => {
+                    // LED controller endpoints are configured, but no periodic transfers are driven yet.
+                }
+                Some(DeviceKind::Unknown) => {
+                    // Unclaimed devices keep a slot assigned so we don't thrash.
+                    // No transfers should complete for them because no endpoints are configured.
+                }
+                None => {
+                    // A device may complete transfers during attach (while the enum path is still
+                    // running) before `register_device()` marks the slot kind. Handle CDC events
+                    // opportunistically so TX/RX doesn't stall.
+                    let _ = cdc_acm::handle_transfer_event(controller_id, &evt);
+                }
             }
         }
-    }
+    })
+    .await;
 }
