@@ -1166,106 +1166,107 @@ pub async fn net_shell_task() {
                             crate::log!("net-shell: opened tcp handle={}\n", handle.0);
                         }
                     }
-                NetEvent::TcpEstablished { handle } => {
-                    {
-                        let mut st = NET_SHELL_STATE.lock();
-                        let is_new_conn = st.handle != Some(handle);
-                        st.handle = Some(handle);
-                        if is_new_conn {
-                            st.rx.clear();
+                    NetEvent::TcpEstablished { handle } => {
+                        {
+                            let mut st = NET_SHELL_STATE.lock();
+                            let is_new_conn = st.handle != Some(handle);
+                            st.handle = Some(handle);
+                            if is_new_conn {
+                                st.rx.clear();
+                            }
+                        }
+                        pending = None;
+                        pending_handle = Some(handle);
+                        pending_ticks = 0;
+                        pending_len = 0;
+                        logged_first_rx = false;
+                        tx_log_budget = 16;
+                        crate::log!("net-shell: tcp established handle={}\n", handle.0);
+                    }
+                    NetEvent::TcpData { handle, data } => {
+                        // Only accept bytes from the active connection.
+                        // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
+                        // so treat the first inbound bytes as selecting the active handle.
+                        {
+                            let mut st = NET_SHELL_STATE.lock();
+                            if st.handle.is_none() {
+                                st.handle = Some(handle);
+                            }
+                            if st.handle != Some(handle) {
+                                continue;
+                            }
+
+                            if !logged_first_rx {
+                                logged_first_rx = true;
+                                crate::log!(
+                                    "net-shell: first rx {} bytes (including {:?})\n",
+                                    data.len(),
+                                    data.get(0).copied()
+                                );
+                            }
+
+                            const MAX_RX: usize = 8 * 1024;
+                            for b in data {
+                                if st.rx.len() >= MAX_RX {
+                                    let _ = st.rx.pop_front();
+                                }
+                                st.rx.push_back(b);
+                            }
                         }
                     }
-                    pending = None;
-                    pending_handle = Some(handle);
-                    pending_ticks = 0;
-                    pending_len = 0;
-                    logged_first_rx = false;
-                    tx_log_budget = 16;
-                    crate::log!("net-shell: tcp established handle={}\n", handle.0);
-                }
-                NetEvent::TcpData { handle, data } => {
-                    // Only accept bytes from the active connection.
-                    // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
-                    // so treat the first inbound bytes as selecting the active handle.
-                    {
-                        let mut st = NET_SHELL_STATE.lock();
-                        if st.handle.is_none() {
-                            st.handle = Some(handle);
-                        }
-                        if st.handle != Some(handle) {
+                    NetEvent::TcpSent { handle, len } => {
+                        if pending_handle != Some(handle) {
                             continue;
                         }
 
-                        if !logged_first_rx {
-                            logged_first_rx = true;
+                        if tx_log_budget > 0 {
+                            tx_log_budget -= 1;
                             crate::log!(
-                                "net-shell: first rx {} bytes (including {:?})\n",
-                                data.len(),
-                                data.get(0).copied()
+                                "net-shell: tx accepted handle={} len={} (pending_len={})\n",
+                                handle.0,
+                                len,
+                                pending_len
                             );
                         }
 
-                        const MAX_RX: usize = 8 * 1024;
-                        for b in data {
-                            if st.rx.len() >= MAX_RX {
-                                let _ = st.rx.pop_front();
-                            }
-                            st.rx.push_back(b);
+                        // Drop the bytes we now know were accepted by smoltcp.
+                        // NOTE: smoltcp may accept only a prefix of the buffer; keep the rest queued.
+                        let mut st = NET_SHELL_STATE.lock();
+                        for _ in 0..len {
+                            let _ = st.tx.pop_front();
                         }
-                    }
-                }
-                NetEvent::TcpSent { handle, len } => {
-                    if pending_handle != Some(handle) {
-                        continue;
-                    }
-
-                    if tx_log_budget > 0 {
-                        tx_log_budget -= 1;
-                        crate::log!(
-                            "net-shell: tx accepted handle={} len={} (pending_len={})\n",
-                            handle.0,
-                            len,
-                            pending_len
-                        );
-                    }
-
-                    // Drop the bytes we now know were accepted by smoltcp.
-                    // NOTE: smoltcp may accept only a prefix of the buffer; keep the rest queued.
-                    let mut st = NET_SHELL_STATE.lock();
-                    for _ in 0..len {
-                        let _ = st.tx.pop_front();
-                    }
-                    pending = None;
-                    pending_ticks = 0;
-                    pending_len = 0;
-                }
-                NetEvent::Closed { handle } => {
-                    let mut st = NET_SHELL_STATE.lock();
-                    if st.handle == Some(handle) {
-                        st.handle = None;
-                        st.rx.clear();
                         pending = None;
-                        pending_handle = None;
                         pending_ticks = 0;
                         pending_len = 0;
                     }
+                    NetEvent::Closed { handle } => {
+                        let mut st = NET_SHELL_STATE.lock();
+                        if st.handle == Some(handle) {
+                            st.handle = None;
+                            st.rx.clear();
+                            pending = None;
+                            pending_handle = None;
+                            pending_ticks = 0;
+                            pending_len = 0;
+                        }
 
-                    if tcp_handle == Some(handle) {
-                        tcp_handle = None;
-                        crate::log!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
-                        let _ = cmds.push(NetCommand::OpenTcpListen {
-                            port: NET_SHELL_TCP_PORT,
-                        });
+                        if tcp_handle == Some(handle) {
+                            tcp_handle = None;
+                            crate::log!("net-shell: tcp closed handle={} (relisten)\n", handle.0);
+                            let _ = cmds.push(NetCommand::OpenTcpListen {
+                                port: NET_SHELL_TCP_PORT,
+                            });
+                        }
                     }
-                }
-                NetEvent::Error { msg } => {
-                    // These are useful during bring-up; keep them visible but not too spammy.
-                    if (ticks % 100) == 0 {
-                        crate::log!("net-shell: error {}\n", msg);
+                    NetEvent::Error { msg } => {
+                        // These are useful during bring-up; keep them visible but not too spammy.
+                        if (ticks % 100) == 0 {
+                            crate::log!("net-shell: error {}\n", msg);
+                        }
                     }
+                    NetEvent::UdpPacket { .. } => {}
+                    NetEvent::IcmpReply { .. } => {}
                 }
-                NetEvent::UdpPacket { .. } => {}
-                NetEvent::IcmpReply { .. } => {}
             }
         }
 
@@ -1335,5 +1336,6 @@ pub async fn net_shell_task() {
         ticks = ticks.wrapping_add(1);
         Timer::after(EmbassyDuration::from_millis(10)).await;
         let _ = ticks;
-    }
+    })
+    .await;
 }
