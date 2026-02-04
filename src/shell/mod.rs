@@ -1042,6 +1042,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                             CommandAction::Qjs { src } => {
                                 set_go_mode(io, &mut go_mode, false);
+                                trueos_qjs::async_fs::ensure_service_started(&spawner);
                                 crate::shell::shellqjs::run(io, src.as_str()).await;
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }

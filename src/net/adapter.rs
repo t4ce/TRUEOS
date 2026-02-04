@@ -1268,7 +1268,6 @@ pub async fn net_shell_task() {
                     NetEvent::IcmpReply { .. } => {}
                 }
             }
-        }
 
         // Flush buffered TX to the active TCP connection.
         // Use an explicit ack event (`TcpSent`) so we only pop on success.
@@ -1336,6 +1335,7 @@ pub async fn net_shell_task() {
         ticks = ticks.wrapping_add(1);
         Timer::after(EmbassyDuration::from_millis(10)).await;
         let _ = ticks;
+        }
     })
     .await;
 }

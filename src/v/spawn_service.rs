@@ -33,7 +33,6 @@ enum SpawnAttempt {
 static VGA_FONT_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
 static BSP_SMOKE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOSFS_MOUNT_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
-static QJS_ASYNC_FS_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static NET_POLL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -88,13 +87,6 @@ fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     )
 }
 
-fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_monitored(
-        spawner,
-        "qjs-async-fs-service",
-        crate::io::cabi::qjs_async_fs_service_task(),
-    )
-}
 
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
     // Some drivers may fail to report a MAC early; treat any detected NIC as usable.
@@ -268,12 +260,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn: spawn_trueosfs_mount_service,
-    },
-    TaskSpec {
-        name: "qjs-async-fs-service",
-        required: 0,
-        started: &QJS_ASYNC_FS_SERVICE_STARTED,
-        spawn: spawn_qjs_async_fs_service,
     },
     TaskSpec {
         name: "taskmon-reporter",

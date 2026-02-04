@@ -420,7 +420,7 @@ async fn drain_jobs_and_promises(
                 let left = deadline.saturating_sub(now);
                 ((left.saturating_mul(1000)) / hz).max(1)
             };
-            let ok = crate::surface::io::cabi::async_fs_wait_for_completion(remaining_ms).await;
+            let ok = trueos_qjs::async_ops::wait_for_completion(remaining_ms).await;
             if !ok {
                 io.write_str("qjs: async wait timeout\r\n");
                 break;

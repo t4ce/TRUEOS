@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, string::String, string::ToString, vec::Vec};
 use alloc::vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
