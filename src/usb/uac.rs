@@ -936,121 +936,124 @@ pub async fn sine_task() {
                 }
             }
 
-        if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
-            no_device = no_device.saturating_add(1);
-            Timer::after(EmbassyDuration::from_millis(50)).await;
-            continue;
-        }
-        if cap == 0 {
-            no_runtime = no_runtime.saturating_add(1);
-            Timer::after(EmbassyDuration::from_millis(10)).await;
-            continue;
-        }
-
-        let target = core::cmp::min(PREFILL_TARGET, cap);
-        if in_flight < target {
-            let budget = core::cmp::min(PREFILL_BURST, target - in_flight);
-            for _ in 0..budget {
-                let res = match reserve_demo_packet() {
-                    Ok(res) => res,
-                    Err(DemoQueueError::NoDevice) => {
-                        no_device = no_device.saturating_add(1);
-                        break;
-                    }
-                    Err(DemoQueueError::NoRuntime) => {
-                        no_runtime = no_runtime.saturating_add(1);
-                        break;
-                    }
-                    Err(DemoQueueError::FormatMismatch) => {
-                        fmt_mismatch = fmt_mismatch.saturating_add(1);
-                        break;
-                    }
-                    Err(DemoQueueError::NoPacket) => {
-                        no_packet = no_packet.saturating_add(1);
-                        break;
-                    }
-                };
-
-                if res.rate_hz != 0 && res.rate_hz != rate_hz {
-                    rate_hz = res.rate_hz;
-                    phase_step = TWO_PI * FREQ_HZ / (rate_hz as f32);
-                }
-                channels = core::cmp::max(1, res.channels as usize);
-
-                unsafe {
-                    let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
-                    let (payload, pad) = out.split_at_mut(res.payload_bytes);
-                    let frame_bytes = channels * 2;
-                    for frame in payload.chunks_exact_mut(frame_bytes) {
-                        let sample = (sinf(phase) * AMP) as i16;
-                        phase += phase_step;
-                        if phase >= TWO_PI {
-                            phase -= TWO_PI;
-                        }
-                        for ch in 0..channels {
-                            let off = ch * 2;
-                            frame[off..off + 2].copy_from_slice(&sample.to_le_bytes());
-                        }
-                    }
-                    pad.fill(0);
-                }
-
-                let _ = submit_demo_packet(res);
+            if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
+                no_device = no_device.saturating_add(1);
+                Timer::after(EmbassyDuration::from_millis(50)).await;
+                continue;
             }
-        } else {
-            // Wait until transfer events free up budget (no Timer-based pacing).
-            poll_fn(|cx| {
-                if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
-                    return Poll::Ready(());
+            if cap == 0 {
+                no_runtime = no_runtime.saturating_add(1);
+                Timer::after(EmbassyDuration::from_millis(10)).await;
+                continue;
+            }
+
+            let target = core::cmp::min(PREFILL_TARGET, cap);
+            if in_flight < target {
+                let budget = core::cmp::min(PREFILL_BURST, target - in_flight);
+                for _ in 0..budget {
+                    let res = match reserve_demo_packet() {
+                        Ok(res) => res,
+                        Err(DemoQueueError::NoDevice) => {
+                            no_device = no_device.saturating_add(1);
+                            break;
+                        }
+                        Err(DemoQueueError::NoRuntime) => {
+                            no_runtime = no_runtime.saturating_add(1);
+                            break;
+                        }
+                        Err(DemoQueueError::FormatMismatch) => {
+                            fmt_mismatch = fmt_mismatch.saturating_add(1);
+                            break;
+                        }
+                        Err(DemoQueueError::NoPacket) => {
+                            no_packet = no_packet.saturating_add(1);
+                            break;
+                        }
+                    };
+
+                    if res.rate_hz != 0 && res.rate_hz != rate_hz {
+                        rate_hz = res.rate_hz;
+                        phase_step = TWO_PI * FREQ_HZ / (rate_hz as f32);
+                    }
+                    channels = core::cmp::max(1, res.channels as usize);
+
+                    unsafe {
+                        let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
+                        let (payload, pad) = out.split_at_mut(res.payload_bytes);
+                        let frame_bytes = channels * 2;
+                        for frame in payload.chunks_exact_mut(frame_bytes) {
+                            let sample = (sinf(phase) * AMP) as i16;
+                            phase += phase_step;
+                            if phase >= TWO_PI {
+                                phase -= TWO_PI;
+                            }
+                            for ch in 0..channels {
+                                let off = ch * 2;
+                                frame[off..off + 2].copy_from_slice(&sample.to_le_bytes());
+                            }
+                        }
+                        pad.fill(0);
+                    }
+
+                    let _ = submit_demo_packet(res);
                 }
-                let mut guard = UAC_RUNTIME[controller_id].lock();
-                let Some(rt) = guard.as_mut() else {
-                    return Poll::Ready(());
-                };
-                let cap = rt.bufs.len();
-                let target = core::cmp::min(PREFILL_TARGET, cap);
-                if rt.in_flight < target {
-                    Poll::Ready(())
-                } else {
-                    wait::register_waker_slot(&mut rt.fill_waker, cx.waker());
-                    // Re-check after registration to avoid missing a wake.
-                    if rt.in_flight < target
-                        || UAC_SLOT[controller_id].load(Ordering::Acquire) == 0
-                    {
+            } else {
+                // Wait until transfer events free up budget (no Timer-based pacing).
+                poll_fn(|cx| {
+                    if UAC_SLOT[controller_id].load(Ordering::Acquire) == 0 {
+                        return Poll::Ready(());
+                    }
+                    let mut guard = UAC_RUNTIME[controller_id].lock();
+                    let Some(rt) = guard.as_mut() else {
+                        return Poll::Ready(());
+                    };
+                    let cap = rt.bufs.len();
+                    let target = core::cmp::min(PREFILL_TARGET, cap);
+                    if rt.in_flight < target {
                         Poll::Ready(())
                     } else {
-                        Poll::Pending
+                        wait::register_waker_slot(&mut rt.fill_waker, cx.waker());
+                        // Re-check after registration to avoid missing a wake.
+                        if rt.in_flight < target
+                            || UAC_SLOT[controller_id].load(Ordering::Acquire) == 0
+                        {
+                            Poll::Ready(())
+                        } else {
+                            Poll::Pending
+                        }
                     }
-                }
-            })
-            .await;
-        }
+                })
+                .await;
+            }
 
-        if UAC_SINE_HEARTBEAT_LOG
-            && Instant::now().duration_since(last_status) >= EmbassyDuration::from_secs(2)
-        {
-            let (evt_ok, evt_err, last_cc) = take_xfer_event_counters(controller_id);
-            let in_flight_now = demo_queue_depth(controller_id).map(|(cur, _cap)| cur).unwrap_or(0);
-            crate::log!(
-                "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
-                rate_hz,
-                channels,
-                in_flight_now,
-                evt_ok,
-                evt_err,
-                last_cc,
-                no_device,
-                no_runtime,
-                no_packet,
-                fmt_mismatch
-            );
-            last_status = Instant::now();
-            no_device = 0;
-            no_runtime = 0;
-            no_packet = 0;
-            fmt_mismatch = 0;
-        }
+            if UAC_SINE_HEARTBEAT_LOG
+                && Instant::now().duration_since(last_status) >= EmbassyDuration::from_secs(2)
+            {
+                let (evt_ok, evt_err, last_cc) = take_xfer_event_counters(controller_id);
+                let in_flight_now =
+                    demo_queue_depth(controller_id).map(|(cur, _cap)| cur).unwrap_or(0);
+                crate::log!(
+                    "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
+                    rate_hz,
+                    channels,
+                    in_flight_now,
+                    evt_ok,
+                    evt_err,
+                    last_cc,
+                    no_device,
+                    no_runtime,
+                    no_packet,
+                    fmt_mismatch
+                );
+                last_status = Instant::now();
+                no_device = 0;
+                no_runtime = 0;
+                no_packet = 0;
+                fmt_mismatch = 0;
+            }
 
-        // No Timer-based microframe pacing here on purpose.
-    }
+            // No Timer-based microframe pacing here on purpose.
+        }
+    })
+    .await;
 }

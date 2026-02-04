@@ -154,85 +154,49 @@ where
 #[embassy_executor::task]
 pub async fn taskmon_reporter_task() {
     init_once();
-        run("taskmon-reporter", async move {
-            loop {
-                Timer::after(EmbassyDuration::from_secs(10)).await;
-            
-                let hz = TSC_HZ.load(Ordering::Relaxed).max(1);
-                let tsc_per_ms = hz / 1000;
-                let mut lines = Vec::new();
-                {
-                    let stats = stats().lock();
-                    for s in stats.iter() {
-                        let avg_tsc = if s.polls == 0 {
-                            0
-                        } else {
-                            s.total_tsc / s.polls
-                        };
-                        let last_ms = if tsc_per_ms == 0 {
-                            0
-                        } else {
-                            s.last_tsc / tsc_per_ms
-                        };
-                        let avg_ms = if tsc_per_ms == 0 {
-                            0
-                        } else {
-                            avg_tsc / tsc_per_ms
-                        };
-                        lines.push(alloc::format!(
-                            "taskmon: {:<24} polls={} last_ms={} avg_ms={}\n",
-                            s.name,
-                            s.polls,
-                            last_ms,
-                            avg_ms
-                        ));
-                    }
-                }
-            
-                if lines.is_empty() {
-                    crate::log!("taskmon: no stats\n");
-                } else {
-                    for line in lines {
-                        crate::log!("{}", line.as_str());
-                    }
-                }
-            }
-        })
-        .await;
-        {
-            let stats = stats().lock();
-            for s in stats.iter() {
-                let avg_tsc = if s.polls == 0 {
-                    0
-                } else {
-                    s.total_tsc / s.polls
-                };
-                let last_ms = if tsc_per_ms == 0 {
-                    0
-                } else {
-                    s.last_tsc / tsc_per_ms
-                };
-                let avg_ms = if tsc_per_ms == 0 {
-                    0
-                } else {
-                    avg_tsc / tsc_per_ms
-                };
-                lines.push(alloc::format!(
-                    "taskmon: {:<24} polls={} last_ms={} avg_ms={}\n",
-                    s.name,
-                    s.polls,
-                    last_ms,
-                    avg_ms
-                ));
-            }
-        }
+    run("taskmon-reporter", async move {
+        loop {
+            Timer::after(EmbassyDuration::from_secs(10)).await;
 
-        if lines.is_empty() {
-            crate::log!("taskmon: no stats\n");
-        } else {
-            for line in lines {
-                crate::log!("{}", line.as_str());
+            let hz = TSC_HZ.load(Ordering::Relaxed).max(1);
+            let tsc_per_ms = hz / 1000;
+            let mut lines = Vec::new();
+            {
+                let stats = stats().lock();
+                for s in stats.iter() {
+                    let avg_tsc = if s.polls == 0 {
+                        0
+                    } else {
+                        s.total_tsc / s.polls
+                    };
+                    let last_ms = if tsc_per_ms == 0 {
+                        0
+                    } else {
+                        s.last_tsc / tsc_per_ms
+                    };
+                    let avg_ms = if tsc_per_ms == 0 {
+                        0
+                    } else {
+                        avg_tsc / tsc_per_ms
+                    };
+                    lines.push(alloc::format!(
+                        "taskmon: {:<24} polls={} last_ms={} avg_ms={}\n",
+                        s.name,
+                        s.polls,
+                        last_ms,
+                        avg_ms
+                    ));
+                }
+            }
+
+            if lines.is_empty() {
+                crate::log!("taskmon: no stats\n");
+            } else {
+                for line in lines {
+                    crate::log!("{}", line.as_str());
+                }
             }
         }
-    }
+    })
+    .await;
 }
