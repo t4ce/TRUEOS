@@ -53,7 +53,6 @@ static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
-static SCHED_CHALLENGE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -225,13 +224,15 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     )
 }
 
-fn spawn_taskmon_reporter(spawner: Spawner) -> SpawnAttempt {
+fn spawn_taskmon_reporter(_: Spawner) -> SpawnAttempt { SpawnAttempt::Skipped }
+/*
+fn spawn_taskmon_reporter(spawner: Spawner) -> SpawnAttempt { 
     spawn_monitored(
         spawner,
         "taskmon-reporter",
         crate::v::taskmon::taskmon_reporter_task(),
     )
-}
+}*/
 
 // --- registry ---
 

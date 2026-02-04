@@ -6,7 +6,7 @@ use super::xhci::{
     EP_TYPE_CONTROL,
 };
 use super::{
-    attach, control, hub, mass, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
+    attach, control, hid, hub, mass, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -1229,9 +1229,11 @@ pub(crate) async fn enumerate_with_params(
 
     let mut first_if: Option<(u8, u8, u8, u8)> = None;
     let mut first_if_hid_report_len: Option<u16> = None;
+    let mut hid_ifaces: heapless::Vec<(u8, u16), 8> = heapless::Vec::new();
     {
         let mut idx = 0usize;
         let mut current_alt: u8 = 0;
+        let mut current_iface: Option<u8> = None;
         let mut current_iface_is_first: bool = false;
         while idx + 2 <= cfg_slice.len() {
             let len = cfg_slice[idx] as usize;
@@ -1245,6 +1247,7 @@ pub(crate) async fn enumerate_with_params(
                 let if_sub = cfg_slice[idx + 6];
                 let if_prot = cfg_slice[idx + 7];
                 current_alt = cfg_slice[idx + 3];
+                current_iface = Some(if_num);
 
                 if first_if.is_none() {
                     first_if = Some((if_num, if_cls, if_sub, if_prot));
@@ -1258,8 +1261,40 @@ pub(crate) async fn enumerate_with_params(
                     first_if_hid_report_len =
                         Some(u16::from_le_bytes([cfg_slice[idx + 7], cfg_slice[idx + 8]]));
                 }
+                if current_alt == 0 {
+                    if let Some(iface) = current_iface {
+                        let report_len =
+                            u16::from_le_bytes([cfg_slice[idx + 7], cfg_slice[idx + 8]]);
+                        if report_len != 0
+                            && !hid_ifaces.iter().any(|(existing, _)| *existing == iface)
+                        {
+                            let _ = hid_ifaces.push((iface, report_len));
+                        }
+                    }
+                }
             }
             idx += len;
+        }
+    }
+
+    for (iface, report_len) in hid_ifaces.iter() {
+        if let Some(desc) = hid::fetch_report_descriptor(
+            &ctx,
+            &mut ep0_ring,
+            slot_id,
+            *iface,
+            *report_len as usize,
+        )
+        .await
+        {
+            hid::log_report_descriptor(slot_id, *iface, &desc);
+        } else {
+            crate::log!(
+                "usb: hid report descriptor fetch failed slot={} iface={} len={}\n",
+                slot_id,
+                iface,
+                report_len
+            );
         }
     }
 

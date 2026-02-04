@@ -758,7 +758,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     }
 }
 
-async fn fetch_report_descriptor(
+pub(crate) async fn fetch_report_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
@@ -792,6 +792,7 @@ async fn fetch_report_descriptor(
     };
 
     if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
+        dma::dealloc(virt, want_len);
         hidlog!("[hid] ep0 ring overflow for report descriptor fetch\n");
         return None;
     }
@@ -813,12 +814,14 @@ async fn fetch_report_descriptor(
     )
     .await
     else {
+        dma::dealloc(virt, want_len);
         hidlog!("[hid] timeout waiting for report descriptor\n");
         return None;
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
     if completion != 1 {
+        dma::dealloc(virt, want_len);
         hidlog!(
             "[hid] report descriptor fetch cc={} iface={} len={}\n",
             completion,
@@ -831,7 +834,29 @@ async fn fetch_report_descriptor(
     let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
     let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
     let _ = out.extend_from_slice(data_slice);
+    dma::dealloc(virt, want_len);
     Some(out)
+}
+
+pub(crate) fn log_report_descriptor(slot_id: u32, iface: u8, desc: &[u8]) {
+    crate::log!(
+        "usb: hid report descriptor slot={} iface={} len={}\n",
+        slot_id,
+        iface,
+        desc.len()
+    );
+
+    let mut idx: usize = 0;
+    while idx < desc.len() {
+        let end = core::cmp::min(idx + 16, desc.len());
+        crate::log!(
+            "usb: hid report desc {:03}..{:03} {:02X?}\n",
+            idx,
+            end.saturating_sub(1),
+            &desc[idx..end]
+        );
+        idx = end;
+    }
 }
 
 fn analyze_keyboard_report_descriptor(desc: &[u8]) -> Option<(Option<u8>, u16)> {

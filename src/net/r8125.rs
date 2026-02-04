@@ -8,16 +8,15 @@ use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
 
 const REALTEK_VENDOR_ID: u16 = 0x10EC;
-
-// Common RTL81xx IDs. (QEMU's rtl8139 is *not* this family, but real hw is.)
-const RTL8169_DEVICE_IDS: &[u16] = &[0x8169, 0x8136, 0x8167, 0x8161];
+const RTL8125_DEVICE_ID: u16 = 0x8125;
 
 const RX_DESC_COUNT: usize = 64;
 const TX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
 const TX_BUF_SIZE: usize = 2048;
+const RX_POLL_BUDGET: usize = 32;
 
-// MMIO registers (RTL8169/8168 family)
+// MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
 const REG_TNPDS: u16 = 0x20; // Tx desc start addr (low)
 const REG_TNPDS_HI: u16 = 0x24;
@@ -42,6 +41,9 @@ const CPLUS_ENABLE: u16 = 1 << 0;
 // Descriptor bits
 const DESC_OWN: u32 = 1 << 31;
 const DESC_EOR: u32 = 1 << 30;
+const RX_FS: u32 = 1 << 29;
+const RX_LS: u32 = 1 << 28;
+const RX_ERR_SUM: u32 = 1 << 27;
 
 const TX_FS: u32 = 1 << 29;
 const TX_LS: u32 = 1 << 28;
@@ -96,7 +98,7 @@ impl Mmio {
     }
 }
 
-pub struct R8169Adapter {
+pub struct R8125Adapter {
     mmio: Mmio,
     mac: [u8; 6],
     ring: Option<*mut NetRing>,
@@ -114,18 +116,18 @@ pub struct R8169Adapter {
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
-unsafe impl Send for R8169Adapter {}
+unsafe impl Send for R8125Adapter {}
 
-impl R8169Adapter {
+impl R8125Adapter {
     pub fn init_all() -> alloc::vec::Vec<Self> {
         let mut out = alloc::vec::Vec::new();
-        let devs = find_r8169_devices();
+        let devs = find_r8125_devices();
         for dev in devs {
             match Self::init_from_device(dev) {
                 Ok(adapter) => out.push(adapter),
                 Err(()) => {
                     crate::log!(
-                        "net/r8169: init failed for {:02x}:{:02x}.{}\n",
+                        "net/r8125: init failed for {:02x}:{:02x}.{}\n",
                         dev.bus,
                         dev.slot,
                         dev.function
@@ -144,7 +146,7 @@ impl R8169Adapter {
         let mmio = Mmio { base: mapped };
 
         crate::log!(
-            "net/r8169: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar0=0x{:x}\n",
+            "net/r8125: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar0=0x{:x}\n",
             dev.bus,
             dev.slot,
             dev.function,
@@ -154,10 +156,12 @@ impl R8169Adapter {
         );
 
         // Reset
+        let mut reset_done = false;
         unsafe {
             mmio.write_u8(REG_CMD, CMD_RST);
             for _ in 0..1_000_000 {
                 if (mmio.read_u8(REG_CMD) & CMD_RST) == 0 {
+                    reset_done = true;
                     break;
                 }
             }
@@ -165,6 +169,10 @@ impl R8169Adapter {
             // Mask interrupts
             mmio.write_u16(REG_IMR, 0);
             mmio.write_u16(REG_ISR, 0xFFFF);
+        }
+        if !reset_done {
+            crate::log!("net/r8125: reset timeout\n");
+            return Err(());
         }
 
         let mac = unsafe {
@@ -242,7 +250,7 @@ impl R8169Adapter {
         }
 
         crate::log!(
-            "net/r8169: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            "net/r8125: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
         );
 
@@ -280,7 +288,11 @@ impl R8169Adapter {
             return;
         };
 
+        let mut processed = 0usize;
         loop {
+            if processed >= RX_POLL_BUDGET {
+                break;
+            }
             let idx = self.rx_idx;
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
 
@@ -288,7 +300,42 @@ impl R8169Adapter {
                 break;
             }
 
+            if (desc.opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS)
+                || (desc.opts1 & RX_ERR_SUM) != 0
+            {
+                let eor = desc.opts1 & DESC_EOR;
+                unsafe {
+                    write_volatile(
+                        self.rx_desc.add(idx),
+                        RxDesc {
+                            opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                            opts2: 0,
+                            addr: self.rx_bufs[idx].phys(),
+                        },
+                    );
+                }
+                self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+                processed += 1;
+                continue;
+            }
+
             let raw_len = (desc.opts1 & 0x3FFF) as usize;
+            if raw_len == 0 || raw_len > RX_BUF_SIZE {
+                let eor = desc.opts1 & DESC_EOR;
+                unsafe {
+                    write_volatile(
+                        self.rx_desc.add(idx),
+                        RxDesc {
+                            opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                            opts2: 0,
+                            addr: self.rx_bufs[idx].phys(),
+                        },
+                    );
+                }
+                self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+                processed += 1;
+                continue;
+            }
             let mut len = raw_len;
             if len >= 4 {
                 // Strip CRC if present
@@ -318,6 +365,7 @@ impl R8169Adapter {
             }
 
             self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+            processed += 1;
         }
 
         self.reclaim_tx();
@@ -365,7 +413,7 @@ impl R8169Adapter {
     }
 }
 
-impl VendorAdapter for R8169Adapter {
+impl VendorAdapter for R8125Adapter {
     fn mac(&self) -> [u8; 6] {
         self.mac
     }
@@ -387,14 +435,14 @@ impl VendorAdapter for R8169Adapter {
     }
 }
 
-fn find_r8169_devices() -> alloc::vec::Vec<pci::PciDevice> {
+fn find_r8125_devices() -> alloc::vec::Vec<pci::PciDevice> {
     let mut out = alloc::vec::Vec::new();
     pci::with_devices(|list| {
         for dev in list {
             if dev.vendor != REALTEK_VENDOR_ID {
                 continue;
             }
-            if !RTL8169_DEVICE_IDS.contains(&dev.device) {
+            if dev.device != RTL8125_DEVICE_ID {
                 continue;
             }
             if dev.class != 0x02 {
