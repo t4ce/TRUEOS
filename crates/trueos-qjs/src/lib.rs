@@ -9,6 +9,9 @@ pub mod trueos_smoke;
 pub mod async_ops;
 
 #[cfg(feature = "trueos")]
+pub mod async_fs;
+
+#[cfg(feature = "trueos")]
 pub mod trueos_modules;
 
 #[cfg(feature = "trueos")]
