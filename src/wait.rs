@@ -254,35 +254,38 @@ static LOCAL_JOBS: LocalJobQueue = LocalJobQueue {
 
 #[task]
 pub async fn job_runner_task() {
-    loop {
-        let job = {
-            let mut jobs = LOCAL_JOBS.jobs.lock();
-            if jobs.is_empty() {
-                None
-            } else {
-                Some(jobs.remove(0))
-            }
-        };
+    crate::v::taskmon::run("job-runner", async move {
+        loop {
+            let job = {
+                let mut jobs = LOCAL_JOBS.jobs.lock();
+                if jobs.is_empty() {
+                    None
+                } else {
+                    Some(jobs.remove(0))
+                }
+            };
 
-        match job {
-            Some(job) => job.await,
-            None => {
-                let job = {
-                    let mut jobs = JOBS.lock();
-                    if jobs.is_empty() {
-                        None
-                    } else {
-                        Some(jobs.remove(0))
+            match job {
+                Some(job) => job.await,
+                None => {
+                    let job = {
+                        let mut jobs = JOBS.lock();
+                        if jobs.is_empty() {
+                            None
+                        } else {
+                            Some(jobs.remove(0))
+                        }
+                    };
+
+                    match job {
+                        Some(job) => job.await,
+                        None => JOBS_WAIT.wait_for_event().await,
                     }
-                };
-
-                match job {
-                    Some(job) => job.await,
-                    None => JOBS_WAIT.wait_for_event().await,
                 }
             }
         }
-    }
+    })
+    .await;
 }
 
 fn enqueue_job(job: JobFuture) {

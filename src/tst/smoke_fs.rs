@@ -24,6 +24,7 @@ pub(crate) fn request_bsp_smoke_test() {
 /// the BSP TrueOSFS smoke test exactly once.
 #[embassy_executor::task]
 pub(crate) async fn bsp_smoke_service_task() {
+    crate::v::taskmon::run("smoke-fs", async move {
     loop {
         if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
             // Allow the USBMS device to settle after registration.
@@ -43,6 +44,8 @@ pub(crate) async fn bsp_smoke_service_task() {
         }
         Timer::after(EmbassyDuration::from_millis(50)).await;
     }
+    })
+    .await;
 }
 
 #[inline]

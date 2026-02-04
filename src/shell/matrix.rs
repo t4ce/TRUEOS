@@ -456,6 +456,7 @@ pub(crate) async fn install_matrix_job(
     bootx64: &'static [u8],
     kernel: &'static [u8],
 ) {
+    crate::v::taskmon::run("matrix-install", async move {
     // Give the shell a moment to print the prompt and update the header.
     Timer::after(EmbassyDuration::from_millis(1)).await;
 
@@ -563,10 +564,13 @@ pub(crate) async fn install_matrix_job(
     }
 
     let _ = set_blob_owned_with_preview(slot_id, blob);
+    })
+    .await;
 }
 
 #[embassy_executor::task]
 pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::DeviceHandle) {
+    crate::v::taskmon::run("matrix-update", async move {
     use embassy_time::Timer;
 
     // Give the shell a moment to print the prompt and update the header.
@@ -760,4 +764,6 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     }
 
     let _ = set_blob_owned_with_preview(slot_id, blob);
+    })
+    .await;
 }

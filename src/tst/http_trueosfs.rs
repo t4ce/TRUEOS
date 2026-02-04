@@ -59,6 +59,10 @@ impl HttpPerf {
 
 const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
+const HTTP_OCTET_STREAM: &str = "application/octet-stream";
+const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
+const HTTP_MULTIPART_CONTENT_TYPE: &str =
+    "multipart/byteranges; boundary=trueosfs-boundary";
 
 fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
     let mut base = disk.max_transfer_bytes() as usize;
@@ -318,6 +322,134 @@ async fn http_prepare_file_response(
     req: &[u8],
 ) -> HttpResponsePlan {
     let info = match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n")
+        }
+        Err(_) => {
+            return http_plain_response(
+                "HTTP/1.1 500 Internal Server Error\r\n",
+                "read error\n",
+            )
+        }
+    };
+
+    let total_len = info.data_len;
+    let etag = http_etag_from_sha(&info.sha256);
+    let mut extra_headers = String::new();
+    extra_headers.push_str("Accept-Ranges: bytes\r\n");
+    extra_headers.push_str(format!("ETag: {}\r\n", etag).as_str());
+
+    if let Some(value) = http_find_header(req, "If-None-Match") {
+        if http_etag_matches(value, etag.as_str()) {
+            return HttpResponsePlan {
+                status: "HTTP/1.1 304 Not Modified\r\n",
+                content_type: "text/plain; charset=utf-8",
+                extra_headers,
+                body_len: 0,
+                body: HttpBodyPlan::None,
+            };
+        }
+    }
+
+    let mut allow_ranges = true;
+    if let Some(value) = http_find_header(req, "If-Range") {
+        if !http_etag_matches(value, etag.as_str()) {
+            allow_ranges = false;
+        }
+    }
+
+    let mut ranges: Option<Vec<(u64, u64)>> = None;
+    if allow_ranges {
+        if let Some(value) = http_find_header(req, "Range") {
+            ranges = http_parse_range_header(value, total_len);
+            if ranges.is_none() {
+                let mut headers = extra_headers.clone();
+                headers.push_str(format!("Content-Range: bytes */{}\r\n", total_len).as_str());
+                return HttpResponsePlan {
+                    status: "HTTP/1.1 416 Range Not Satisfiable\r\n",
+                    content_type: "text/plain; charset=utf-8",
+                    extra_headers: headers,
+                    body_len: 0,
+                    body: HttpBodyPlan::None,
+                };
+            }
+        }
+    }
+
+    if let Some(ranges) = ranges {
+        if ranges.len() == 1 {
+            let (start, end) = ranges[0];
+            let len = end.saturating_sub(start).saturating_add(1);
+            let mut headers = extra_headers;
+            headers.push_str(
+                format!("Content-Range: bytes {}-{}/{}\r\n", start, end, total_len).as_str(),
+            );
+            return HttpResponsePlan {
+                status: "HTTP/1.1 206 Partial Content\r\n",
+                content_type: HTTP_OCTET_STREAM,
+                extra_headers: headers,
+                body_len: len,
+                body: HttpBodyPlan::File {
+                    disk,
+                    path,
+                    offset: start,
+                    len,
+                },
+            };
+        }
+
+        let mut parts: Vec<MultipartPart> = Vec::new();
+        let mut total_len_out: u64 = 0;
+        for (start, end) in ranges.into_iter() {
+            let header = format!(
+                "--{}\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
+                HTTP_MULTIPART_BOUNDARY,
+                HTTP_OCTET_STREAM,
+                start,
+                end,
+                total_len
+            );
+            let len = end.saturating_sub(start).saturating_add(1);
+            total_len_out = total_len_out.saturating_add(header.as_bytes().len() as u64);
+            total_len_out = total_len_out.saturating_add(len);
+            total_len_out = total_len_out.saturating_add(2); // trailing CRLF
+            parts.push(MultipartPart { start, end, header });
+        }
+        let closing = format!("--{}--\r\n", HTTP_MULTIPART_BOUNDARY);
+        total_len_out = total_len_out.saturating_add(closing.as_bytes().len() as u64);
+
+        return HttpResponsePlan {
+            status: "HTTP/1.1 206 Partial Content\r\n",
+            content_type: HTTP_MULTIPART_CONTENT_TYPE,
+            extra_headers,
+            body_len: total_len_out,
+            body: HttpBodyPlan::Multipart {
+                disk,
+                path,
+                parts,
+                boundary: HTTP_MULTIPART_BOUNDARY.to_string(),
+                total_len: total_len_out,
+            },
+        };
+    }
+
+    HttpResponsePlan {
+        status: "HTTP/1.1 200 OK\r\n",
+        content_type: HTTP_OCTET_STREAM,
+        extra_headers,
+        body_len: total_len,
+        body: HttpBodyPlan::File {
+            disk,
+            path,
+            offset: 0,
+            len: total_len,
+        },
+    }
+}
+
+#[embassy_executor::task]
+pub async fn http_trueosfs_task() {
     crate::v::taskmon::run("http-trueosfs", async move {
         // Once the network is reachable, `open_primary()` should succeed; keep it strict.
         let vnet = loop {
@@ -576,168 +708,6 @@ async fn http_prepare_file_response(
                                 body: HttpBodyPlan::Bytes(body_bytes),
                             }
                         };
-                                    )
-                                }
-                            };
-
-                            let mut path = match http_url_decode(enc_path, 240) {
-                                Some(v) => v,
-                                None => {
-                                    break 'resp http_plain_response(
-                                        "HTTP/1.1 400 Bad Request
-",
-                                        "bad path
-",
-                                    )
-                                }
-                            };
-
-                            while path.starts_with('/') {
-                                path.remove(0);
-                            }
-                            if path.is_empty() || path.contains("..") {
-                                break 'resp http_plain_response(
-                                    "HTTP/1.1 400 Bad Request
-",
-                                    "bad path
-",
-                                );
-                            }
-
-                            break 'resp http_prepare_file_response(disk, path, data.as_slice()).await;
-                        }
-                    } else if target.starts_with("/dl") {
-                        // Back-compat download endpoint: /dl?path=<urlencoded path> (uses primary root)
-                        let disk = crate::v::fs::trueosfs::primary_root_handle();
-                        match disk {
-                            None => http_plain_response(
-                                "HTTP/1.1 503 Service Unavailable
-",
-                                "no TRUEOSFS mounted
-",
-                            ),
-                            Some(disk) => match http_query_param(target, "path") {
-                                None => http_plain_response(
-                                    "HTTP/1.1 400 Bad Request
-",
-                                    "missing path
-",
-                                ),
-                                Some(enc_path) => match http_url_decode(enc_path, 240) {
-                                    None => http_plain_response(
-                                        "HTTP/1.1 400 Bad Request
-",
-                                        "bad path
-",
-                                    ),
-                                    Some(mut path) => {
-                                        while path.starts_with('/') {
-                                            path.remove(0);
-                                        }
-                                        if path.is_empty() || path.contains("..") {
-                                            http_plain_response(
-                                                "HTTP/1.1 400 Bad Request
-",
-                                                "bad path
-",
-                                            )
-                                        } else {
-                                            http_prepare_file_response(disk, path, data.as_slice()).await
-                                        }
-                                    }
-                                },
-                            },
-                        }
-                    } else {
-                        // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
-                        let mut selected_raw = primary_raw;
-
-                        if let Some(enc_root) = http_query_param(target, "root") {
-                            if let Some(root_s) = http_url_decode(enc_root, 16) {
-                                if let Ok(v) = root_s.parse::<u32>() {
-                                    if roots.iter().any(|r| r.disk_id.raw() == v) {
-                                        selected_raw = Some(v);
-                                    }
-                                }
-                            }
-                        }
-                        if selected_raw.is_none() {
-                            selected_raw = roots.first().map(|r| r.disk_id.raw());
-                        }
-
-                        let js =    r#"<style>li{cursor:pointer}</style><script>(function(){function labelOf(li){var n=li.firstChild;return n&&n.nodeType===3?n.textContent:"";}function pathFor(li){var parts=[];var cur=li;while(cur){var t=labelOf(cur).trim();if(t==="/"){t="";}if(t.endsWith("/")){t=t.slice(0,-1);}if(t){parts.push(t);}var p=cur.parentElement;cur=p&&p.closest("li");}parts.reverse();return parts.join("/");}document.addEventListener("click",function(e){var li=e.target.closest("li");if(!li){return;}var tree=li.closest(".tree");if(!tree){return;}var root=tree.getAttribute("data-root")||"";var path=pathFor(li);if(!root||!path){return;}var segs=path.split("/").map(function(s){return encodeURIComponent(s);}).join("/");window.location.href="/dl/"+root+"/"+segs;});})();</script>"#;
-
-                        let mut options = String::new();
-                        let mut trees_html = String::new();
-                        for r in roots.iter() {
-                            let raw = r.disk_id.raw();
-                            let selected = selected_raw == Some(raw);
-                            options.push_str(
-                                format!(
-                                    "<option value=\"{}\"{}>{} (raw={} seq={})</option>",
-                                    raw,
-                                    if selected { " selected" } else { "" },
-                                    r.disk_id,
-                                    raw,
-                                    r.seq
-                                )
-                                .as_str(),
-                            );
-
-                            let tree = match crate::disc::block::device_handle(r.disk_id) {
-                                None => None,
-                                Some(disk) => match crate::v::fs::trueosfs::html_tree_async(
-                                    disk,
-                                    HTTP_TRUEOSFS_MAX_ENTRIES,
-                                )
-                                .await
-                                {
-                                    Ok(v) => v,
-                                    Err(_) => None,
-                                },
-                            };
-
-                            trees_html.push_str(
-                                format!("<div class=\"tree\" data-root=\"{}\">", raw)
-                                    .as_str(),
-                            );
-                            if let Some(t) = tree {
-                                trees_html.push_str(t.as_str());
-                            } else {
-                                trees_html.push_str("<p class=\"muted\">(tree unavailable)</p>");
-                            }
-                            trees_html.push_str("</div>");
-                        }
-
-                        let body = if roots.is_empty() {
-                            format!(
-                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p class=\"muted\">(no TRUEOSFS mounted)</p></body></html>",
-                                js
-                            )
-                        } else if roots.len() == 1 {
-                            format!(
-                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
-                                js, trees_html
-                            )
-                        } else {
-                            format!(
-                                "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><div class=\"bar\"><label for=\"rootSel\">Root:</label><select id=\"rootSel\">{}</select><span class=\"muted\">(showing {})</span></div><p>Click a file to download.</p>{}</body></html>",
-                                js,
-                                options,
-                                selected_raw.unwrap_or(0),
-                                trees_html
-                            )
-                        };
-
-                        let body_bytes = body.into_bytes();
-                        HttpResponsePlan {
-                            status: "HTTP/1.1 200 OK\r\n",
-                            content_type: "text/html; charset=utf-8",
-                            extra_headers: String::new(),
-                            body_len: body_bytes.len() as u64,
-                            body: HttpBodyPlan::Bytes(body_bytes),
-                        }
-};
 
                     let HttpResponsePlan {
                         status,
@@ -933,4 +903,6 @@ async fn http_prepare_file_response(
 
         Timer::after(EmbassyDuration::from_millis(10)).await;
     }
+    })
+    .await;
 }
