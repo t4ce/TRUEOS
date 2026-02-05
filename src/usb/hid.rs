@@ -773,11 +773,12 @@ pub(crate) enum FetchReportError {
     Completion(u8),
 }
 
-pub(crate) async fn fetch_report_descriptor(
+async fn fetch_control_in(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
-    iface: u8,
+    setup_d0: u32,
+    setup_d1: u32,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
     let want_len = core::cmp::min(len, MAX_REPORT_DESC);
@@ -785,8 +786,8 @@ pub(crate) async fn fetch_report_descriptor(
     unsafe { write_bytes(virt, 0, want_len) };
 
     let setup = Trb {
-        d0: (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16), // bmRequestType=IN, GET_DESCRIPTOR, wValue type=0x22 id=0
-        d1: iface as u32,                                     // wIndex = interface
+        d0: setup_d0,
+        d1: setup_d1,
         d2: want_len as u32,                                  // wLength
         d3: trb_type(2) | (1 << 6),
     };
@@ -843,6 +844,49 @@ pub(crate) async fn fetch_report_descriptor(
     let _ = out.extend_from_slice(data_slice);
     dma::dealloc(virt, want_len);
     Ok(out)
+}
+
+pub(crate) async fn fetch_report_descriptor(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    iface: u8,
+    len: usize,
+) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
+    // bmRequestType=IN|Standard|Interface, bRequest=GET_DESCRIPTOR,
+    // wValue=(REPORT<<8)|0, wIndex=interface.
+    let setup_d0 = (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
+    let setup_d1 = iface as u32;
+    fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
+}
+
+pub(crate) async fn fetch_report_descriptor_device(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    len: usize,
+) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
+    // bmRequestType=IN|Standard|Device, bRequest=GET_DESCRIPTOR,
+    // wValue=(REPORT<<8)|0, wIndex=0.
+    let setup_d0 = (0x80u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
+    let setup_d1 = 0;
+    fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
+}
+
+pub(crate) async fn fetch_hid_get_report(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    iface: u8,
+    report_type: u8,
+    report_id: u8,
+    len: usize,
+) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
+    // bmRequestType=IN|Class|Interface, bRequest=GET_REPORT (0x01),
+    // wValue=(report_type<<8)|report_id, wIndex=interface.
+    let setup_d0 = (0xA1u32) | ((0x01u32) << 8) | (((report_type as u32) << 8) | (report_id as u32)) << 16;
+    let setup_d1 = iface as u32;
+    fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
 }
 
 pub(crate) fn log_report_descriptor(slot_id: u32, iface: u8, desc: &[u8]) {
