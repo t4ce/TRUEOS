@@ -604,15 +604,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
 
     if info.report_desc_len > 0 {
-        match hid::fetch_report_descriptor(
-            ctx,
-            ep0_ring,
-            slot_id,
-            info.interface,
-            info.report_desc_len as usize,
-        )
-        .await
-        {
+        let full_len = info.report_desc_len as usize;
+        match hid::fetch_report_descriptor(ctx, ep0_ring, slot_id, info.interface, full_len).await {
             Ok(desc) => {
                 hid::log_report_descriptor(slot_id, info.interface, &desc);
             }
@@ -623,6 +616,110 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                     info.report_desc_len,
                     err
                 );
+
+                let mut recovered = false;
+                let short_len = core::cmp::min(full_len, 64);
+                if short_len < full_len {
+                    match hid::fetch_report_descriptor(
+                        ctx,
+                        ep0_ring,
+                        slot_id,
+                        info.interface,
+                        short_len,
+                    )
+                    .await
+                    {
+                        Ok(desc) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback short len={} iface={}\n",
+                                short_len,
+                                info.interface
+                            );
+                            hid::log_report_descriptor(slot_id, info.interface, &desc);
+                            recovered = true;
+                        }
+                        Err(err2) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback short failed iface={} len={} err={:?}\n",
+                                info.interface,
+                                short_len,
+                                err2
+                            );
+                        }
+                    }
+                }
+
+                if !recovered && info.interface != 0 {
+                    match hid::fetch_report_descriptor(ctx, ep0_ring, slot_id, 0, full_len).await {
+                        Ok(desc) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback iface=0 len={}\n",
+                                full_len
+                            );
+                            hid::log_report_descriptor(slot_id, 0, &desc);
+                            recovered = true;
+                        }
+                        Err(err2) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback iface=0 failed len={} err={:?}\n",
+                                full_len,
+                                err2
+                            );
+                        }
+                    }
+                }
+
+                if !recovered {
+                    match hid::fetch_report_descriptor_device(ctx, ep0_ring, slot_id, full_len).await {
+                        Ok(desc) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback device len={}\n",
+                                full_len
+                            );
+                            hid::log_report_descriptor(slot_id, 0, &desc);
+                            recovered = true;
+                        }
+                        Err(err2) => {
+                            crate::log!(
+                                "usb: leds: report-desc fallback device failed len={} err={:?}\n",
+                                full_len,
+                                err2
+                            );
+                        }
+                    }
+                }
+
+                if !recovered {
+                    let get_report_len = core::cmp::min(full_len, 64);
+                    match hid::fetch_hid_get_report(
+                        ctx,
+                        ep0_ring,
+                        slot_id,
+                        info.interface,
+                        3,
+                        0,
+                        get_report_len,
+                    )
+                    .await
+                    {
+                        Ok(desc) => {
+                            crate::log!(
+                                "usb: leds: get-report feature iface={} len={}\n",
+                                info.interface,
+                                get_report_len
+                            );
+                            hid::log_report_descriptor(slot_id, info.interface, &desc);
+                        }
+                        Err(err2) => {
+                            crate::log!(
+                                "usb: leds: get-report feature failed iface={} len={} err={:?}\n",
+                                info.interface,
+                                get_report_len,
+                                err2
+                            );
+                        }
+                    }
+                }
             }
         }
     } else {
