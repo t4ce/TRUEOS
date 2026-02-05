@@ -5,3 +5,4 @@ pub mod fs;
 pub mod readiness;
 pub mod spawn_service;
 pub mod taskmon;
+pub mod mode;

@@ -49,6 +49,9 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static TASKMON_REPORTER_STARTED: AtomicBool = AtomicBool::new(false);
 
+static BENCH_NETWORK_STARTED: AtomicBool = AtomicBool::new(false);
+static BENCH_FILESYSTEM_STARTED: AtomicBool = AtomicBool::new(false);
+
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -67,10 +70,16 @@ fn spawn_monitored<T>(spawner: Spawner, name: &'static str, token: SpawnToken<T>
 }
 
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "vga-font-cache", crate::vga::init_font_cache_task())
 }
 
 fn spawn_bsp_smoke_service(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "bsp-smoke-service",
@@ -113,6 +122,9 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "tls-socket-service",
@@ -121,10 +133,16 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "net-shell", crate::net::adapter::net_shell_task())
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "http-trueosfs",
@@ -133,10 +151,16 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tga_blink(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "tga-blink", crate::tga::blink_task())
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
         let _ = crate::v::taskmon::spawn(
@@ -157,26 +181,44 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_hid_input_logger(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "hid-input-logger", crate::usb::hid::input_logger())
 }
 
 fn spawn_uac_sine(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "uac-sine", crate::usb::uac::sine_task())
 }
 
 fn spawn_vleds_mux(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "vleds-mux", crate::v::leds::task())
 }
 
 fn spawn_vleds_cycle(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "vleds-cycle", crate::v::leds::color_cycle_task())
 }
 
 fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(spawner, "truekey-drain", crate::usb::truekey::drain_loop())
 }
 
 fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "boot-fetch-smoke",
@@ -185,6 +227,9 @@ fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "boot-parse5-smoke",
@@ -193,6 +238,9 @@ fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "boot-nalgebra-demo",
@@ -201,6 +249,9 @@ fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "pciids-boot-cache",
@@ -209,6 +260,9 @@ fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "uart-shell",
@@ -217,6 +271,9 @@ fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
     spawn_monitored(
         spawner,
         "net-tcp-shell",
@@ -233,6 +290,28 @@ fn spawn_taskmon_reporter(spawner: Spawner) -> SpawnAttempt {
         crate::v::taskmon::taskmon_reporter_task(),
     )
 }*/
+
+fn spawn_bench_network(spawner: Spawner) -> SpawnAttempt {
+    if !crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
+    spawn_monitored(
+        spawner,
+        "bench-network",
+        crate::tst::bench::raw_network_bench_task(),
+    )
+}
+
+fn spawn_bench_filesystem(spawner: Spawner) -> SpawnAttempt {
+    if !crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
+    spawn_monitored(
+        spawner,
+        "bench-filesystem",
+        crate::tst::bench::raw_filesystem_bench_task(),
+    )
+}
 
 // --- registry ---
 
@@ -385,6 +464,20 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::NET_GATEWAY_REACHABLE,
         started: &NET_TCP_SHELL_STARTED,
         spawn: spawn_net_tcp_shell,
+    },
+
+    // Benchmark mode tasks (only spawn when SystemMode::Benchmark is active)
+    TaskSpec {
+        name: "bench-network",
+        required: 0,
+        started: &BENCH_NETWORK_STARTED,
+        spawn: spawn_bench_network,
+    },
+    TaskSpec {
+        name: "bench-filesystem",
+        required: crate::v::readiness::TRUEOSFS_ROOT_MOUNTED,
+        started: &BENCH_FILESYSTEM_STARTED,
+        spawn: spawn_bench_filesystem,
     },
 ];
 

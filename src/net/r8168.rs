@@ -30,6 +30,7 @@ const REG_RDSAR: u16 = 0xE4; // Rx desc start addr (low)
 const REG_RDSAR_HI: u16 = 0xE8;
 const REG_CPLUS_CMD: u16 = 0xE0;
 const REG_RX_MAX_SIZE: u16 = 0xDA;
+const REG_PHYSTAT: u16 = 0x6C;
 
 const CMD_RX_EN: u8 = 1 << 3;
 const CMD_TX_EN: u8 = 1 << 2;
@@ -284,6 +285,14 @@ impl R8168Adapter {
             "net/r8168: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
         );
+
+        crate::log!(
+            "net/r8168: caps speeds=10/100/1000 duplex=full/half flow=tx/rx ring=rx{} tx{} mtu=1500\n",
+            RX_DESC_COUNT,
+            TX_DESC_COUNT
+        );
+        let phy = unsafe { mmio.read_u8(REG_PHYSTAT) };
+        crate::log!("net/r8168: phystat=0x{:02x} (raw)\n", phy);
 
         Ok(Self {
             mmio,
