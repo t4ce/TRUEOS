@@ -63,12 +63,47 @@ fn is_tga(dev: &PciDevice) -> bool {
 }
 
 fn bring_online(dev: &PciDevice) -> Option<Tga> {
+    crate::log!(
+        "tga: claiming dev {:02X}:{:02X}.{} vid={:04X} did={:04X}\n",
+        dev.bus,
+        dev.slot,
+        dev.function,
+        dev.vendor,
+        dev.device
+    );
+
+    let cmd_before = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
     crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+    let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
+    crate::log!(
+        "tga: pci cmd before=0x{:04X} after=0x{:04X}\n",
+        cmd_before,
+        cmd_after
+    );
 
     let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
     if (bar_lo & 0x1) != 0 {
         crate::log!("tga: BAR0 is IO; unsupported\n");
         return None;
+    }
+
+    let bar_is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    let bar_prefetch = ((bar_lo >> 3) & 0x1) != 0;
+    if let Some(hi) = bar_hi {
+        crate::log!(
+            "tga: bar0 raw lo=0x{:08X} hi=0x{:08X} (is64={} prefetch={})\n",
+            bar_lo,
+            hi,
+            bar_is_64,
+            bar_prefetch
+        );
+    } else {
+        crate::log!(
+            "tga: bar0 raw lo=0x{:08X} hi=<none> (is64={} prefetch={})\n",
+            bar_lo,
+            bar_is_64,
+            bar_prefetch
+        );
     }
 
     let bar_phys = {
@@ -82,7 +117,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_REG_OFF;
 
-    crate::log!("tga online: bar0=0x{:X}\n", bar_phys);
+    crate::log!(
+        "tga online: bar0_phys=0x{:X} (page_off=0x{:X}) mmio_virt=0x{:X} led_reg=0x{:X}\n",
+        bar_phys,
+        (bar_phys as usize) & 0xFFF,
+        base,
+        led_reg
+    );
 
     let tga = Tga { led_reg };
     tga.write_led(TGA_LED_OFF);
