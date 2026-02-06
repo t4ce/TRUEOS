@@ -497,7 +497,7 @@ fn find_r8125_devices() -> alloc::vec::Vec<pci::PciDevice> {
 fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
     let mut i = 0u8;
     while i < 6 {
-        let (bar_lo, bar_hi) = pci::read_bar_raw(dev.bus, dev.slot, dev.function, i);
+        let (mut bar_lo, mut bar_hi) = pci::read_bar_raw(dev.bus, dev.slot, dev.function, i);
         if bar_lo == 0 {
             i += 1;
             continue;

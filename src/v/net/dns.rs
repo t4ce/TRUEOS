@@ -21,7 +21,8 @@ pub enum DnsError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DnsConfig {
-    pub servers: &'static [[u8; 4]],
+    pub servers: [[u8; 4]; 4],
+    pub server_count: u8,
     pub timeout_ms: u64,
     pub resend_ms: u64,
     pub cname_depth: u8,
@@ -29,28 +30,27 @@ pub struct DnsConfig {
 
 impl Default for DnsConfig {
     fn default() -> Self {
+        let (dhcp_servers, dhcp_count) = crate::net::adapter::primary_dhcp_dns_snapshot();
+        let (servers, server_count) = if dhcp_count > 0 {
+            (dhcp_servers, dhcp_count)
+        } else {
+            let mut out = [[0u8; 4]; 4];
+            let mut n: u8 = 0;
+            for (i, s) in PUBLIC_DNS_SERVERS.iter().take(4).enumerate() {
+                out[i] = *s;
+                n = (i as u8) + 1;
+            }
+            (out, n)
+        };
         Self {
-            servers: &DEFAULT_DNS_SERVERS,
+            servers,
+            server_count,
             timeout_ms: 1500,
             resend_ms: 350,
             cname_depth: 6,
         }
     }
 }
-
-// QEMU slirp provides a local DNS forwarder at 10.0.2.3.
-// Prefer it in defaults so slirp users don't depend on direct UDP/53 egress.
-pub const SLIRP_DNS_SERVER: [u8; 4] = [10, 0, 2, 3];
-
-pub const DEFAULT_DNS_SERVERS: [[u8; 4]; 4] = [
-    SLIRP_DNS_SERVER,
-    // Cloudflare
-    [1, 1, 1, 1],
-    // Google
-    [8, 8, 8, 8],
-    // Quad9
-    [9, 9, 9, 9],
-];
 
 pub const PUBLIC_DNS_SERVERS: [[u8; 4]; 3] = [
     // Cloudflare
@@ -392,7 +392,8 @@ pub async fn resolve_ipv4_for_device(
 
         let mut answered: Option<DnsAnswer> = None;
 
-        for &server in cfg.servers.iter() {
+        for idx in 0..(cfg.server_count as usize).min(cfg.servers.len()) {
+            let server = cfg.servers[idx];
             let mut attempt = 0u8;
             while attempt < 3 {
                 let _ = net.submit(vnet::Command::SendUdp {
