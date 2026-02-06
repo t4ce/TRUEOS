@@ -1,0 +1,254 @@
+#!/usr/bin/env node
+/*
+  TRUEOS PXE (Router LAN) - ProxyDHCP + TFTP
+
+  - Keeps your router (e.g. FRITZ!Box) as the only DHCP server for IP leases
+  - This script only provides PXE boot info (ProxyDHCP) + TFTP service via dnsmasq
+  - Does NOT modify interface IP configuration
+
+  Usage:
+    sudo node pxe2.js
+    sudo node pxe2.js --iface <dev>
+    sudo node pxe2.js --tftp-root ./bld
+
+  Notes:
+    - Requires UEFI x86_64 PXE clients (arch=7)
+    - Ensure firewall allows UDP 67, 69, 4011 (plus TFTP data UDP ports)
+*/
+
+const fs = require("fs");
+const path = require("path");
+const { spawn, spawnSync } = require("child_process");
+
+const BOOTFILE = "EFI/BOOT/BOOTX64.EFI";
+const LEASES = "/tmp/trueos-pxe2.leases";
+
+// (UEFI x86_64 client arch code is 7 per RFC 4578.)
+const UEFI_X86_64_ARCH = 7;
+
+function die(msg) {
+  process.stderr.write(String(msg).trimEnd() + "\n");
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const out = {
+    iface: null,
+    tftpRoot: path.resolve(__dirname, "bld"),
+    dryRun: false,
+    verbose: false,
+  };
+
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--iface" && i + 1 < argv.length) {
+      out.iface = argv[++i];
+    } else if (a === "--tftp-root" && i + 1 < argv.length) {
+      out.tftpRoot = path.resolve(process.cwd(), argv[++i]);
+    } else if (a === "--dry-run") {
+      out.dryRun = true;
+    } else if (a === "--verbose") {
+      out.verbose = true;
+    } else if (a === "-h" || a === "--help") {
+      process.stdout.write(
+        "Usage: sudo node pxe2.js [--iface <dev>] [--tftp-root <path>] [--dry-run] [--verbose]\n"
+      );
+      process.exit(0);
+    } else {
+      die(`Unknown arg: ${a}\nTry: --help`);
+    }
+  }
+  return out;
+}
+
+function runJson(cmd, args, label) {
+  const r = spawnSync(cmd, args, { encoding: "utf8" });
+  if (r.error) die(`${label}: ${r.error.message}`);
+  if (r.status !== 0) {
+    const stderr = (r.stderr || "").trim();
+    die(`${label} failed (${r.status})${stderr ? `\n${stderr}` : ""}`);
+  }
+  const s = (r.stdout || "").trim();
+  if (!s) die(`${label}: empty output`);
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    die(`${label}: invalid JSON output`);
+  }
+}
+
+function ipv4ToInt(ip) {
+  const parts = ip.split(".").map((x) => Number(x));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+    throw new Error(`Invalid IPv4 address: ${ip}`);
+  }
+  return (
+    ((parts[0] << 24) >>> 0) |
+    ((parts[1] << 16) >>> 0) |
+    ((parts[2] << 8) >>> 0) |
+    (parts[3] >>> 0)
+  ) >>> 0;
+}
+
+function intToIpv4(n) {
+  return [
+    (n >>> 24) & 255,
+    (n >>> 16) & 255,
+    (n >>> 8) & 255,
+    n & 255,
+  ].join(".");
+}
+
+function prefixToNetmask(prefix) {
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+    throw new Error(`Invalid IPv4 prefix: ${prefix}`);
+  }
+  if (prefix === 0) return "0.0.0.0";
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  return intToIpv4(mask);
+}
+
+function networkAddress(ip, prefix) {
+  const ipInt = ipv4ToInt(ip);
+  const maskInt = ipv4ToInt(prefixToNetmask(prefix));
+  return intToIpv4((ipInt & maskInt) >>> 0);
+}
+
+function detectDefaultInterface() {
+  const routes = runJson("ip", ["-j", "route", "show", "default"], "ip route");
+  if (!Array.isArray(routes) || routes.length === 0) {
+    die("Could not detect default route interface (no default route)");
+  }
+  const dev = routes[0] && routes[0].dev;
+  if (!dev) die("Could not detect default route interface (missing dev)");
+  return dev;
+}
+
+function detectInterfaceIPv4(iface) {
+  const addrs = runJson("ip", ["-j", "-4", "addr", "show", "dev", iface], "ip addr");
+  if (!Array.isArray(addrs) || addrs.length === 0) {
+    die(`No IPv4 address info for interface ${iface}`);
+  }
+
+  const info = addrs[0];
+  const addrInfo = Array.isArray(info.addr_info) ? info.addr_info : [];
+  const candidate = addrInfo.find((a) => a.family === "inet" && a.scope === "global" && a.local);
+  if (!candidate) {
+    die(`Interface ${iface} has no global IPv4 address (is it connected / DHCP ok?)`);
+  }
+  const ip = candidate.local;
+  const prefix = Number(candidate.prefixlen);
+  if (!ip || !Number.isFinite(prefix)) {
+    die(`Failed to parse IPv4/prefix for interface ${iface}`);
+  }
+  return { ip, prefix };
+}
+
+function ensureTftpFiles(tftpRoot) {
+  const bootPath = path.join(tftpRoot, BOOTFILE);
+  const limineConfPath = path.join(tftpRoot, "EFI/BOOT/limine.conf");
+  const kernelPath = path.join(tftpRoot, "TRUEOS.elf");
+
+  for (const p of [bootPath, limineConfPath, kernelPath]) {
+    if (!fs.existsSync(p)) {
+      die(
+        `Missing required TFTP file: ${p}\n` +
+          `Hint: run \`make iso\` first to stage UEFI netboot files into ${tftpRoot}.`
+      );
+    }
+  }
+}
+
+function buildDnsmasqArgs({ iface, tftpRoot, serverIp, lanNetwork, lanNetmask }) {
+  // ProxyDHCP: do not hand out leases, only PXE boot info.
+  // We restrict to the vendor-class prefix the firmware actually sends.
+  // Example observed: "PXEClient:Arch:00007:UNDI:..." (UEFI x86_64).
+  return [
+    "--no-daemon",
+    "--port=0",
+    `--interface=${iface}`,
+    "--bind-interfaces",
+    "--enable-tftp",
+    `--tftp-root=${tftpRoot}`,
+
+    // ProxyDHCP range uses network+netmask; dnsmasq will respond to PXE clients without leasing addresses.
+    `--dhcp-range=${lanNetwork},proxy,${lanNetmask}`,
+
+    // Tag UEFI x86_64 PXE clients by vendor-class prefix.
+    // (This avoids depending on DHCP option 93 client-arch, which some firmwares omit.)
+    "--dhcp-vendorclass=set:efi64,PXEClient:Arch:00007",
+
+    // Secondary match for firmwares that do send option 93.
+    `--dhcp-match=set:efi64,option:client-arch,${UEFI_X86_64_ARCH}`,
+
+    // ProxyDHCP/PXE service advertisement.
+    // This often makes the difference for UEFI PXE clients on ProxyDHCP.
+    `--pxe-service=tag:efi64,X86-64_EFI,TRUEOS (UEFI),${BOOTFILE}`,
+
+    // Serve bootfile only for tagged UEFI x86_64 clients.
+    `--dhcp-boot=tag:efi64,${BOOTFILE},,${serverIp}`,
+    "--dhcp-ignore=tag:!efi64",
+
+    // Logging
+    "--log-dhcp",
+
+    // Keep a lease file path (mostly irrelevant in proxy mode, but dnsmasq may want it present)
+    `--dhcp-leasefile=${LEASES}`,
+  ];
+}
+
+(async () => {
+  try {
+    if (process.getuid && process.getuid() !== 0) {
+      die("Run as root (needs to bind DHCP/TFTP/ProxyDHCP ports)");
+    }
+
+    const opts = parseArgs(process.argv);
+    const iface = opts.iface || detectDefaultInterface();
+    const tftpRoot = opts.tftpRoot;
+
+    ensureTftpFiles(tftpRoot);
+
+    const { ip: serverIp, prefix } = detectInterfaceIPv4(iface);
+    const lanNetmask = prefixToNetmask(prefix);
+    const lanNetwork = networkAddress(serverIp, prefix);
+
+    const args = buildDnsmasqArgs({
+      iface,
+      tftpRoot,
+      serverIp,
+      lanNetwork,
+      lanNetmask,
+    });
+
+    process.stdout.write(
+      `TRUEOS PXE ProxyDHCP iface=${iface} ip=${serverIp}/${prefix} tftp=${tftpRoot} boot=${BOOTFILE}\n`
+    );
+
+    if (opts.verbose) {
+      process.stdout.write(
+        [
+          `lan-network=${lanNetwork} netmask=${lanNetmask}`,
+          "Firewall (typical): allow UDP 67, 69, 4011 (+ TFTP data high UDP ports)",
+          "Note: ProxyDHCP usually requires same L2/VLAN broadcast domain.",
+          "",
+          "dnsmasq argv:",
+          ...args.map((a) => "  " + a),
+          "",
+        ].join("\n")
+      );
+    }
+
+    if (opts.dryRun) {
+      process.stdout.write("Dry-run: dnsmasq argv:\n" + args.map((a) => "  " + a).join("\n") + "\n");
+      process.exit(0);
+    }
+
+    const child = spawn("dnsmasq", args, { stdio: "inherit" });
+    child.on("exit", (code, signal) => {
+      process.exitCode = code ?? (signal ? 1 : 0);
+    });
+  } catch (err) {
+    die(String(err && err.stack ? err.stack : err));
+  }
+})();

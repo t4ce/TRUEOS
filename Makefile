@@ -14,7 +14,8 @@ QEMU_BIN = qemu-system-x86_64
 # QEMU uses a firmware image for UEFI boot. This is OVMF (not legacy BIOS/SeaBIOS).
 QEMU_UEFI_FIRMWARE = $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd))
 
-QEMU_NET_FLAGS = -netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
+QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=off -device e1000,netdev=net1 \
+	#-netdev user,id=net1,net=10.0.2.0/24,dhcpstart=10.0.2.15,hostfwd=tcp::4245-:4245,hostfwd=tcp::8080-:80 -device e1000,netdev=net1 \
 	#-netdev user,id=net0,hostfwd=tcp::4243-:4243 -device e1000,netdev=net0 \
 	#-netdev user,id=net2,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net2,disable-modern=off
 

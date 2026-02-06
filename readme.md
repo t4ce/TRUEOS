@@ -66,6 +66,18 @@ sudo ip addr add 192.168.55.1/24 dev enx047bcb669593
 sudo ip addr replace 192.168.55.1/24 dev enx047bcb669593
 ip -4 -br addr show dev enx047bcb669593
 
+new way
+
+sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 67
+sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 4011
+sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 69
+sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 1024:65535
+
+sudo ufw allow in on enp5s0 proto udp to any port 67
+sudo ufw allow in on enp5s0 proto udp to any port 4011
+
+sudo node pxe2.js
+
 # Stage UEFI netboot files into ./bld (TFTP root)
 make iso
 sudo node pxe.js 
@@ -101,3 +113,10 @@ mdir -i disk.img@@$((2048*512)) ::/qjs/cdn
 
 
 qjs @/qjs/main.mjs
+
+
+
+
+
+sudo ip tuntap add dev tap0 mode tap user $USER group $USER
+sudo ip link set tap0 up
