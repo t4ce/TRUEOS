@@ -18,7 +18,7 @@ cargo outdated -R
 cargo upgrade
 cargo update
 
-konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 192.168.55.88 4244; stty sane'
+konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 192.168.178.94 4244; stty sane'
 
 check disc files after install
 // mdir -i disk.img@@$((2048*512)) ::
@@ -120,3 +120,8 @@ qjs @/qjs/main.mjs
 
 sudo ip tuntap add dev tap0 mode tap user $USER group $USER
 sudo ip link set tap0 up
+sudo ip link set enp5s0 down
+sudo ip link set enp5s0 master br0
+sudo ip link set tap0 master br0
+sudo ip link set enp5s0 up
+sudo ip link set br0 up

@@ -163,7 +163,7 @@ fn enumerate_impl(log: bool) {
         crate::log!("pci: enumerate\n");
     }
 
-    DEVICES.lock().clear();
+    let mut new_devices: Vec<PciDevice, MAX_PCI_DEVICES> = Vec::new();
 
     for bus in 0u8..=255 {
         for slot in 0u8..32 {
@@ -177,7 +177,23 @@ fn enumerate_impl(log: bool) {
             let subclass0 = config_read_u8(bus, slot, 0, 0x0A);
             let prog_if0 = config_read_u8(bus, slot, 0, 0x09);
             let header0 = config_read_u8(bus, slot, 0, 0x0E);
-            record_device(bus, slot, 0, vendor0, device0, class0, subclass0, prog_if0);
+
+            if new_devices
+                .push(PciDevice {
+                    bus,
+                    slot,
+                    function: 0,
+                    vendor: vendor0,
+                    device: device0,
+                    class: class0,
+                    subclass: subclass0,
+                    prog_if: prog_if0,
+                })
+                .is_err()
+            {
+                crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+                break;
+            }
 
             let functions = if (header0 & 0x80) != 0 { 8 } else { 1 };
             for function in 1..functions {
@@ -189,12 +205,27 @@ fn enumerate_impl(log: bool) {
                 let class = config_read_u8(bus, slot, function, 0x0B);
                 let subclass = config_read_u8(bus, slot, function, 0x0A);
                 let prog_if = config_read_u8(bus, slot, function, 0x09);
-                record_device(
-                    bus, slot, function, vendor, device, class, subclass, prog_if,
-                );
+                if new_devices
+                    .push(PciDevice {
+                        bus,
+                        slot,
+                        function,
+                        vendor,
+                        device,
+                        class,
+                        subclass,
+                        prog_if,
+                    })
+                    .is_err()
+                {
+                    crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
+                    break;
+                }
             }
         }
     }
+
+    *DEVICES.lock() = new_devices;
 
     if log {
         crate::log!("pci: done\n");
