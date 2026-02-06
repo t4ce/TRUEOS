@@ -6,10 +6,10 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::phy::ChecksumCapabilities;
-use smoltcp::socket::{icmp, tcp, udp};
+use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
     Icmpv4Packet, Icmpv4Repr,
 };
 
@@ -23,20 +23,17 @@ const MAX_DRAIN_PER_LOOP: usize = 32;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = 32;
 const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
-
-// QEMU slirp defaults we use today.
-// NOTE: We may have multiple NICs. Using the same static IP on all of them
-// causes ARP flapping and extremely confusing failures (DNS timeouts, TCP
-// connects that immediately close, etc). Assign a stable per-device address.
-const SLIRP_GUEST_IP_BASE_LAST_OCTET: u8 = 15;
-const SLIRP_PREFIX: u8 = 24;
-const SLIRP_GATEWAY_IP: Ipv4Address = Ipv4Address::new(10, 0, 2, 2);
 const NET_SHELL_TCP_PORT: u16 = 4245;
 
-fn slirp_guest_ip_for_device(device_index: usize) -> Ipv4Address {
-    let idx = device_index.min(200) as u8;
-    let last = SLIRP_GUEST_IP_BASE_LAST_OCTET.saturating_add(idx).min(254);
-    Ipv4Address::new(10, 0, 2, last)
+const DHCP_DNS_MAX: usize = 4;
+
+// Best-effort primary DNS server snapshot (used by v-layer defaults).
+// Kept intentionally simple: we record only what DHCP reports for NIC 0.
+static PRIMARY_DHCP_DNS: spin::Mutex<([[u8; 4]; DHCP_DNS_MAX], u8)> =
+    spin::Mutex::new(([[0u8; 4]; DHCP_DNS_MAX], 0));
+
+pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
+    *PRIMARY_DHCP_DNS.lock()
 }
 
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -361,6 +358,13 @@ struct NetService {
     next_handle: AtomicU32,
     icmp: SocketHandle,
 
+    dhcp: SocketHandle,
+    local_ipv4: Option<Ipv4Address>,
+    router_ipv4: Option<Ipv4Address>,
+    dhcp_dns: [[u8; 4]; DHCP_DNS_MAX],
+    dhcp_dns_count: u8,
+    dhcp_last_wait_log: Option<Instant>,
+
     // Minimal ICMP reachability probe (ping gateway).
     icmp_ping_seq: u16,
     icmp_ping_inflight: Option<(u16, Instant)>,
@@ -380,15 +384,9 @@ impl NetService {
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
         let mut device = AdapterDeviceAt { index: device_index };
         let mut iface = Interface::new(cfg, &mut device, now());
-        let guest_ip = slirp_guest_ip_for_device(device_index);
-        iface.update_ip_addrs(|addrs| {
-            let _ = addrs.push(IpCidr::Ipv4(Ipv4Cidr::new(
-                guest_ip,
-                SLIRP_PREFIX,
-            )));
-        });
-        let routes = iface.routes_mut();
-        let _ = routes.add_default_ipv4_route(SLIRP_GATEWAY_IP);
+        // IPv4 is configured via DHCPv4.
+        iface.update_ip_addrs(|addrs| addrs.clear());
+        iface.routes_mut().remove_default_ipv4_route();
 
         let rx_meta = vec![icmp::PacketMetadata::EMPTY; 8];
         let rx_buf = vec![0u8; 2048];
@@ -402,6 +400,9 @@ impl NetService {
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
 
+        let dhcp_socket = dhcpv4::Socket::new();
+        let dhcp = sockets.add(dhcp_socket);
+
         Self {
             device_index,
             iface,
@@ -409,6 +410,13 @@ impl NetService {
             records: Vec::new(),
             next_handle: AtomicU32::new(1),
             icmp,
+
+            dhcp,
+            local_ipv4: None,
+            router_ipv4: None,
+            dhcp_dns: [[0u8; 4]; DHCP_DNS_MAX],
+            dhcp_dns_count: 0,
+            dhcp_last_wait_log: None,
 
             icmp_ping_seq: 0,
             icmp_ping_inflight: None,
@@ -506,7 +514,7 @@ impl NetService {
         let local_port = self.tcp_next_ephemeral;
         self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
 
-        let local_ip = slirp_guest_ip_for_device(self.device_index);
+        let local_ip = self.local_ipv4.ok_or("no ipv4 configured")?;
 
         let local = IpEndpoint::new(
             IpAddress::Ipv4(local_ip),
@@ -886,6 +894,92 @@ impl NetService {
         };
         let _ = self.iface.poll(timestamp, &mut device, &mut self.sockets);
 
+        let dhcp_event = self
+            .sockets
+            .get_mut::<dhcpv4::Socket>(self.dhcp)
+            .poll();
+        match dhcp_event {
+            None => {}
+            Some(dhcpv4::Event::Configured(config)) => {
+                let ip = config.address.address();
+                let ip_o = ip.octets();
+                crate::log!(
+                    "net: dhcp configured dev={} ip={}.{}.{}.{}\n",
+                    self.device_index,
+                    ip_o[0],
+                    ip_o[1],
+                    ip_o[2],
+                    ip_o[3]
+                );
+
+                self.local_ipv4 = Some(config.address.address());
+                self.router_ipv4 = config.router;
+
+                self.iface.update_ip_addrs(|addrs| {
+                    addrs.clear();
+                    let _ = addrs.push(IpCidr::Ipv4(config.address));
+                });
+
+                let routes = self.iface.routes_mut();
+                routes.remove_default_ipv4_route();
+                if let Some(router) = config.router {
+                    let r = router.octets();
+                    crate::log!(
+                        "net: dhcp router dev={} gw={}.{}.{}.{}\n",
+                        self.device_index,
+                        r[0],
+                        r[1],
+                        r[2],
+                        r[3]
+                    );
+                    let _ = routes.add_default_ipv4_route(router);
+                } else {
+                    crate::log!(
+                        "net: dhcp router dev={} gw=none (readiness will not trip)\n",
+                        self.device_index
+                    );
+                }
+
+                self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
+                self.dhcp_dns_count = 0;
+                for (i, s) in config.dns_servers.iter().take(DHCP_DNS_MAX).enumerate() {
+                    self.dhcp_dns[i] = s.octets();
+                    self.dhcp_dns_count = (i as u8) + 1;
+                }
+
+                if self.device_index == 0 {
+                    *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
+                }
+
+                self.dhcp_last_wait_log = None;
+            }
+            Some(dhcpv4::Event::Deconfigured) => {
+                crate::log!("net: dhcp deconfigured dev={}\n", self.device_index);
+                self.local_ipv4 = None;
+                self.router_ipv4 = None;
+                self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
+                self.dhcp_dns_count = 0;
+
+                self.iface.update_ip_addrs(|addrs| addrs.clear());
+                self.iface.routes_mut().remove_default_ipv4_route();
+
+                if self.device_index == 0 {
+                    *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
+                }
+            }
+        }
+
+        if self.local_ipv4.is_none() {
+            let should_log = self
+                .dhcp_last_wait_log
+                .map(|t| timestamp >= t + SmolDuration::from_secs(2))
+                .unwrap_or(true);
+            if should_log {
+                crate::log!("net: dhcp waiting dev={}\n", self.device_index);
+                self.dhcp_last_wait_log = Some(timestamp);
+            }
+        }
+
         self.poll_icmp();
         self.prune_icmp_inflight(timestamp);
 
@@ -898,8 +992,9 @@ impl NetService {
             return;
         }
 
-        // QEMU user-net (slirp) default gateway.
-        let target = Ipv4Address::new(10, 0, 2, 2);
+        let Some(target) = self.router_ipv4 else {
+            return;
+        };
 
         if let Some((_, sent_at)) = self.icmp_ping_inflight {
             if timestamp >= sent_at + SmolDuration::from_millis(2000) {
