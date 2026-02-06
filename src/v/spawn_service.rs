@@ -473,12 +473,6 @@ static TASKS: &[TaskSpec] = &[
         started: &BENCH_NETWORK_STARTED,
         spawn: spawn_bench_network,
     },
-    TaskSpec {
-        name: "bench-filesystem",
-        required: crate::v::readiness::TRUEOSFS_ROOT_MOUNTED,
-        started: &BENCH_FILESYSTEM_STARTED,
-        spawn: spawn_bench_filesystem,
-    },
 ];
 
 #[embassy_executor::task]
