@@ -629,13 +629,6 @@ impl NetService {
             data: &data,
         };
         let mut out = vec![0u8; req.buffer_len()];
-        req.emit(
-            &mut Icmpv4Packet::new_unchecked(&mut out),
-            &ChecksumCapabilities::default(),
-        );
-
-        let target = IpAddress::Ipv4(Ipv4Address::from_octets(target));
-        if socket.send_slice(&out, target).is_ok() {
             if self.icmp_vnet_inflight.len() >= ICMP_VNET_MAX_INFLIGHT {
                 self.icmp_vnet_inflight.remove(0);
             }
@@ -975,7 +968,13 @@ impl NetService {
                 .map(|t| timestamp >= t + SmolDuration::from_secs(2))
                 .unwrap_or(true);
             if should_log {
-                crate::log!("net: dhcp waiting dev={}\n", self.device_index);
+                crate::log!(
+                    "net: dhcp waiting dev={} (frames rx={} tx={} tx_dropped={})\n",
+                    self.device_index,
+                    NET_RX_FRAMES.load(Ordering::Relaxed),
+                    NET_TX_FRAMES.load(Ordering::Relaxed),
+                    NET_TX_DROPPED.load(Ordering::Relaxed)
+                );
                 self.dhcp_last_wait_log = Some(timestamp);
             }
         }
@@ -996,7 +995,7 @@ impl NetService {
             return;
         };
 
-        if let Some((_, sent_at)) = self.icmp_ping_inflight {
+        if let Some((_seq_no, sent_at)) = self.icmp_ping_inflight {
             if timestamp >= sent_at + SmolDuration::from_millis(2000) {
                 self.icmp_ping_inflight = None;
             } else {

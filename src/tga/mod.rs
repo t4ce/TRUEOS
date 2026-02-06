@@ -284,11 +284,13 @@ pub fn tga_led_off() {
 pub(crate) async fn blink_task() {
     crate::v::taskmon::run("tga-blink", async move {
         let mut offline_ticks: u32 = 0;
+        let mut ctr: u32 = 0;
         loop {
             if !is_online() {
                 // Retry strategy: periodically rescan PCI and attempt bring-up.
                 // This supports the (rare) case where PCI devices appear after boot.
                 offline_ticks = offline_ticks.wrapping_add(1);
+                ctr = 0;
                 if (offline_ticks % 10) == 0 {
                     crate::pci::enumerate_silent();
                     let _ = try_init();
@@ -314,9 +316,9 @@ pub(crate) async fn blink_task() {
                 }
             }
 
-            tga_led_on();
-            Timer::after(EmbassyDuration::from_millis(500)).await;
-            tga_led_off();
+            let value = ctr & 0x3F;
+            let _ = with_tga(|tga| tga.write_led(value));
+            ctr = ctr.wrapping_add(1);
             Timer::after(EmbassyDuration::from_millis(500)).await;
         }
     })
