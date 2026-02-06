@@ -68,19 +68,21 @@ ip -4 -br addr show dev enx047bcb669593
 
 new way
 
-sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 67
-sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 4011
-sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 69
-sudo ufw allow in on enp5s0 proto udp from 192.168.178.0/24 to any port 1024:65535
+# IMPORTANT: allow on the interface that actually has the host's LAN IP.
+# - If using the bridge setup below, this is usually `br0` (NOT `enp5s0`).
+# - If not using a bridge, this is usually `enp5s0`.
+PXE_IF=br0
 
-sudo ufw allow in on enp5s0 proto udp to any port 67
-sudo ufw allow in on enp5s0 proto udp to any port 4011
+sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
+sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 4011
+sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 69
+sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 1024:65535
 
-sudo node pxe2.js
+sudo node pxe2.js --iface "$PXE_IF" --verbose
 
 # Stage UEFI netboot files into ./bld (TFTP root)
 make iso
-sudo node pxe.js 
+sudo node pxe2.js --iface "$PXE_IF" --verbose
 
 /*
 ConPink 	FF_55_FF 
@@ -115,13 +117,30 @@ mdir -i disk.img@@$((2048*512)) ::/qjs/cdn
 qjs @/qjs/main.mjs
 
 
+## LAN bridge for QEMU (rerunnable)
 
-
-
-sudo ip tuntap add dev tap0 mode tap user $USER group $USER
-sudo ip link set tap0 up
-sudo ip link set enp5s0 down
-sudo ip link set enp5s0 master br0
-sudo ip link set tap0 master br0
-sudo ip link set enp5s0 up
-sudo ip link set br0 up
+UPLINK=enp5s0
+WIRED_CON="Kabelgebundene Verbindung 1"
+BR=br0
+TAP=tap0
+SLAVE_CON="$BR-$UPLINK"   # -> br0-enp5s0
+nmcli -t -f NAME con show | grep -Fxq "$BR" \
+  || sudo nmcli con add type bridge ifname "$BR" con-name "$BR" ipv4.method auto ipv6.method ignore
+sudo nmcli con mod "$BR" bridge.stp no bridge.forward-delay 0
+nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
+  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
+sudo nmcli con mod "$WIRED_CON" connection.autoconnect no 2>/dev/null || true
+sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
+sudo nmcli con up "$SLAVE_CON"
+sudo nmcli con up "$BR"
+sudo nmcli con delete "$TAP" 2>/dev/null || true
+if ! ip link show "$TAP" >/dev/null 2>&1; then
+  sudo ip tuntap add dev "$TAP" mode tap user "$USER" group "$USER"
+fi
+sudo nmcli dev set "$TAP" managed no 2>/dev/null || true
+sudo ip link set "$TAP" master "$BR"
+sudo ip link set "$TAP" up
+bridge link show
+ip -4 -br addr show "$BR" "$UPLINK" "$TAP" 2>/dev/null || true
+ip -4 route show default
+ip -4 -br addr show | egrep "^($BR|$UPLINK|$TAP)\\b" || true

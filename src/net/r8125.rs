@@ -114,6 +114,18 @@ pub struct R8125Adapter {
     tx_bufs: Vec<DmaRegion>,
     tx_head: usize,
     tx_tail: usize,
+
+    // Bring-up instrumentation (kept lightweight; no high-rate logging)
+    dbg_tx_submitted: u64,
+    dbg_tx_reclaimed: u64,
+    dbg_tx_ring_full: u64,
+    dbg_rx_ok: u64,
+    dbg_rx_ring_full: u64,
+    dbg_rx_bad_flags: u64,
+    dbg_rx_len_bad: u64,
+    dbg_last_phystat: u8,
+    dbg_logged_first_tx: bool,
+    dbg_logged_first_rx: bool,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
@@ -307,6 +319,17 @@ impl R8125Adapter {
             tx_bufs,
             tx_head: 0,
             tx_tail: 0,
+
+            dbg_tx_submitted: 0,
+            dbg_tx_reclaimed: 0,
+            dbg_tx_ring_full: 0,
+            dbg_rx_ok: 0,
+            dbg_rx_ring_full: 0,
+            dbg_rx_bad_flags: 0,
+            dbg_rx_len_bad: 0,
+            dbg_last_phystat: phy,
+            dbg_logged_first_tx: false,
+            dbg_logged_first_rx: false,
         })
     }
 
@@ -318,10 +341,22 @@ impl R8125Adapter {
                 break;
             }
             self.tx_head = (self.tx_head + 1) % TX_DESC_COUNT;
+
+            self.dbg_tx_reclaimed = self.dbg_tx_reclaimed.saturating_add(1);
+            if self.dbg_tx_reclaimed == 1 {
+                crate::log!("net/r8125: first tx reclaim\n");
+            }
         }
     }
 
     fn poll_rx_ring(&mut self) {
+        // Track PHY/link changes without spamming: only log on change.
+        let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+        if phy != self.dbg_last_phystat {
+            self.dbg_last_phystat = phy;
+            crate::log!("net/r8125: phystat=0x{:02x} (changed)\n", phy);
+        }
+
         let Some(ring_ptr) = self.ring else {
             // Still reclaim TX even if not bound yet.
             self.reclaim_tx();
@@ -340,9 +375,13 @@ impl R8125Adapter {
                 break;
             }
 
-            if (desc.opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS)
-                || (desc.opts1 & RX_ERR_SUM) != 0
-            {
+            // Some Realtek variants do not reliably expose FS/LS as we expect.
+            // For bring-up, only drop frames when the HW reports an error.
+            if (desc.opts1 & RX_ERR_SUM) != 0 {
+                self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
+                if self.dbg_rx_bad_flags == 1 {
+                    crate::log!("net/r8125: rx error opts1=0x{:08x}\n", desc.opts1);
+                }
                 let eor = desc.opts1 & DESC_EOR;
                 unsafe {
                     write_volatile(
@@ -359,8 +398,22 @@ impl R8125Adapter {
                 continue;
             }
 
+            if (desc.opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
+                if self.dbg_rx_bad_flags == 0 {
+                    crate::log!("net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n", desc.opts1);
+                }
+            }
+
             let raw_len = (desc.opts1 & 0x3FFF) as usize;
             if raw_len == 0 || raw_len > RX_BUF_SIZE {
+                self.dbg_rx_len_bad = self.dbg_rx_len_bad.saturating_add(1);
+                if self.dbg_rx_len_bad == 1 {
+                    crate::log!(
+                        "net/r8125: rx bad len raw_len={} opts1=0x{:08x}\n",
+                        raw_len,
+                        desc.opts1
+                    );
+                }
                 let eor = desc.opts1 & DESC_EOR;
                 unsafe {
                     write_volatile(
@@ -388,7 +441,23 @@ impl R8125Adapter {
 
             unsafe {
                 let ring = &mut *ring_ptr;
-                let _ = ring.push_rx_packet(data);
+                if ring.push_rx_packet(data).is_err() {
+                    self.dbg_rx_ring_full = self.dbg_rx_ring_full.saturating_add(1);
+                    if self.dbg_rx_ring_full == 1 {
+                        crate::log!("net/r8125: rx ring full (dropping)\n");
+                    }
+                } else {
+                    self.dbg_rx_ok = self.dbg_rx_ok.saturating_add(1);
+                    if !self.dbg_logged_first_rx {
+                        self.dbg_logged_first_rx = true;
+                        crate::log!(
+                            "net/r8125: first rx len={} raw_len={} opts1=0x{:08x}\n",
+                            len,
+                            raw_len,
+                            desc.opts1
+                        );
+                    }
+                }
             }
 
             // Re-arm descriptor
@@ -419,12 +488,17 @@ impl R8125Adapter {
         let len = min(frame.len(), TX_BUF_SIZE);
         let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
         if next_tail == self.tx_head {
+            self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
+            if self.dbg_tx_ring_full == 1 {
+                crate::log!("net/r8125: tx ring full\n");
+            }
             return Err(());
         }
 
         let idx = self.tx_tail;
         let cur = unsafe { read_volatile(self.tx_desc.add(idx)) };
         if (cur.opts1 & DESC_OWN) != 0 {
+            self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
             return Err(());
         }
 
@@ -449,6 +523,16 @@ impl R8125Adapter {
         }
 
         self.tx_tail = next_tail;
+        self.dbg_tx_submitted = self.dbg_tx_submitted.saturating_add(1);
+        if !self.dbg_logged_first_tx {
+            self.dbg_logged_first_tx = true;
+            crate::log!(
+                "net/r8125: first tx len={} head={} tail={}\n",
+                len,
+                self.tx_head,
+                self.tx_tail
+            );
+        }
         Ok(())
     }
 }
