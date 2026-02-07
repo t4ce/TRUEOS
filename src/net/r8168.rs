@@ -39,6 +39,13 @@ const CMD_RST: u8 = 1 << 4;
 const CPLUS_RX_CHKSUM: u16 = 1 << 1;
 const CPLUS_ENABLE: u16 = 1 << 0;
 
+// Bring-up toggles.
+// `RX_ERR_SUM` is often raised for checksum-offload reporting; dropping all such
+// frames can prevent DHCP from ever seeing offers/acks.
+const ENABLE_RX_CHKSUM_OFFLOAD: bool = false;
+const ACCEPT_RX_ERR_SUM_FRAMES: bool = true;
+const STRIP_RX_CRC: bool = false;
+
 // Descriptor bits
 const DESC_OWN: u32 = 1 << 31;
 const DESC_EOR: u32 = 1 << 30;
@@ -97,6 +104,11 @@ impl Mmio {
     unsafe fn write_u32(&self, off: u16, val: u32) {
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u32, val);
     }
+
+    #[inline]
+    unsafe fn read_u32(&self, off: u16) -> u32 {
+        read_volatile(self.base.as_ptr().add(off as usize) as *const u32)
+    }
 }
 
 pub struct R8168Adapter {
@@ -122,10 +134,13 @@ pub struct R8168Adapter {
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
+    dbg_rx_errsum: u64,
     dbg_rx_len_zero: u64,
     dbg_last_phystat: u8,
     dbg_logged_first_tx: bool,
     dbg_logged_first_rx: bool,
+    dbg_logged_cfg: bool,
+    dbg_idle_polls: u64,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
@@ -275,7 +290,11 @@ impl R8168Adapter {
         unsafe {
             // C+ mode on (descriptor mode). Keep it minimal.
             let cplus = mmio.read_u16(REG_CPLUS_CMD);
-            mmio.write_u16(REG_CPLUS_CMD, cplus | CPLUS_ENABLE | CPLUS_RX_CHKSUM);
+            let mut cplus_new = cplus | CPLUS_ENABLE;
+            if ENABLE_RX_CHKSUM_OFFLOAD {
+                cplus_new |= CPLUS_RX_CHKSUM;
+            }
+            mmio.write_u16(REG_CPLUS_CMD, cplus_new);
             mmio.write_u16(REG_RX_MAX_SIZE, RX_BUF_SIZE as u16);
 
             // Descriptor ring addresses
@@ -326,10 +345,13 @@ impl R8168Adapter {
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
+            dbg_rx_errsum: 0,
             dbg_rx_len_zero: 0,
             dbg_last_phystat: phy,
             dbg_logged_first_tx: false,
             dbg_logged_first_rx: false,
+            dbg_logged_cfg: false,
+            dbg_idle_polls: 0,
         })
     }
 
@@ -350,11 +372,32 @@ impl R8168Adapter {
     }
 
     fn poll_rx_ring(&mut self) {
+        if !self.dbg_logged_cfg {
+            self.dbg_logged_cfg = true;
+            let cmd = unsafe { self.mmio.read_u8(REG_CMD) };
+            let rcr = unsafe { self.mmio.read_u32(REG_RCR) };
+            let tcr = unsafe { self.mmio.read_u32(REG_TCR) };
+            let cplus = unsafe { self.mmio.read_u16(REG_CPLUS_CMD) };
+            let rms = unsafe { self.mmio.read_u16(REG_RX_MAX_SIZE) };
+            crate::log!(
+                "net/r8168: cfg cmd=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rx_max=0x{:04x}\n",
+                cmd,
+                rcr,
+                tcr,
+                cplus,
+                rms
+            );
+        }
+
         // Track PHY/link changes without spamming: only log on change.
         let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
         if phy != self.dbg_last_phystat {
             self.dbg_last_phystat = phy;
-            crate::log!("net/r8168: phystat=0x{:02x} (changed)\n", phy);
+            crate::log!(
+                "net/r8168: phystat=0x{:02x} (changed) link_bit0={}\n",
+                phy,
+                ((phy & 0x01) != 0) as u8
+            );
         }
 
         let Some(ring_ptr) = self.ring else {
@@ -364,6 +407,7 @@ impl R8168Adapter {
         };
 
         let mut processed = 0usize;
+        let mut did_rx = false;
         loop {
             if processed >= RX_POLL_BUDGET {
                 break;
@@ -371,46 +415,93 @@ impl R8168Adapter {
             let idx = self.rx_idx;
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
 
-            if (desc.opts1 & DESC_OWN) != 0 {
+            let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts2)) };
+
+            if (opts1 & DESC_OWN) != 0 {
                 break;
             }
 
-            // Some Realtek variants do not reliably expose FS/LS as we expect.
-            // For bring-up, only drop frames when the HW reports an error.
-            if (desc.opts1 & RX_ERR_SUM) != 0 {
-                self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
-                if self.dbg_rx_bad_flags == 1 {
-                    crate::log!("net/r8168: rx error opts1=0x{:08x}\n", desc.opts1);
-                }
-                let eor = desc.opts1 & DESC_EOR;
-                unsafe {
-                    write_volatile(
-                        self.rx_desc.add(idx),
-                        RxDesc {
-                            opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                            opts2: 0,
-                            addr: self.rx_bufs[idx].phys(),
-                        },
-                    );
-                }
-                self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
-                processed += 1;
-                continue;
-            }
+            did_rx = true;
 
-            if (desc.opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
+            let had_errsum = (opts1 & RX_ERR_SUM) != 0;
+
+            if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
                 // Log once but continue anyway.
                 if self.dbg_rx_bad_flags == 0 {
-                    crate::log!("net/r8168: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n", desc.opts1);
+                    crate::log!(
+                        "net/r8168: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
+                        opts1
+                    );
                 }
             }
 
-            let raw_len = (desc.opts1 & 0x3FFF) as usize;
+            let raw_len = (opts1 & 0x3FFF) as usize;
+
+            if had_errsum {
+                self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
+                // Log the first few errsum frames with minimal decoding.
+                if self.dbg_rx_errsum <= 8 {
+                    let buf_ptr = self.rx_bufs[idx].virt();
+                    let peek_len = core::cmp::min(raw_len, 64);
+                    let peek = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, peek_len) };
+
+                    let (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
+                        let et = u16::from_be_bytes([peek[12], peek[13]]);
+                        if et == 0x0800 && peek_len >= 14 + 20 {
+                            let ihl = (peek[14] & 0x0f) as usize * 4;
+                            let proto = peek.get(23).copied().unwrap_or(0);
+                            if proto == 17 && peek_len >= 14 + ihl + 8 {
+                                let u = 14 + ihl;
+                                let s = u16::from_be_bytes([peek[u], peek[u + 1]]);
+                                let d = u16::from_be_bytes([peek[u + 2], peek[u + 3]]);
+                                (et, proto, s, d)
+                            } else {
+                                (et, proto, 0, 0)
+                            }
+                        } else {
+                            (et, 0, 0, 0)
+                        }
+                    } else {
+                        (0u16, 0u8, 0u16, 0u16)
+                    };
+
+                    crate::log!(
+                        "net/r8168: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
+                        self.dbg_rx_errsum,
+                        opts1,
+                        opts2,
+                        raw_len,
+                        ethertype,
+                        ip_proto,
+                        udp_src,
+                        udp_dst
+                    );
+                }
+
+                if !ACCEPT_RX_ERR_SUM_FRAMES {
+                    let eor = opts1 & DESC_EOR;
+                    unsafe {
+                        write_volatile(
+                            self.rx_desc.add(idx),
+                            RxDesc {
+                                opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                                opts2: 0,
+                                addr: self.rx_bufs[idx].phys(),
+                            },
+                        );
+                    }
+                    self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+                    processed += 1;
+                    continue;
+                }
+            }
+
             if raw_len == 0 {
                 self.dbg_rx_len_zero = self.dbg_rx_len_zero.saturating_add(1);
             }
             if raw_len == 0 || raw_len > RX_BUF_SIZE {
-                let eor = desc.opts1 & DESC_EOR;
+                let eor = opts1 & DESC_EOR;
                 unsafe {
                     write_volatile(
                         self.rx_desc.add(idx),
@@ -426,8 +517,7 @@ impl R8168Adapter {
                 continue;
             }
             let mut len = raw_len;
-            if len >= 4 {
-                // Strip CRC if present
+            if STRIP_RX_CRC && len >= 4 {
                 len -= 4;
             }
             len = min(len, RX_BUF_SIZE);
@@ -450,14 +540,14 @@ impl R8168Adapter {
                             "net/r8168: first rx len={} raw_len={} opts1=0x{:08x}\n",
                             len,
                             raw_len,
-                            desc.opts1
+                            opts1
                         );
                     }
                 }
             }
 
             // Re-arm descriptor
-            let eor = desc.opts1 & DESC_EOR;
+            let eor = opts1 & DESC_EOR;
             unsafe {
                 write_volatile(
                     self.rx_desc.add(idx),
@@ -471,6 +561,24 @@ impl R8168Adapter {
 
             self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
             processed += 1;
+        }
+
+        if !did_rx {
+            // If RX never produces any completed descriptors, log very rarely
+            // to distinguish "no traffic" from "ring not advancing".
+            self.dbg_idle_polls = self.dbg_idle_polls.saturating_add(1);
+            if self.dbg_idle_polls == 10_000 {
+                let d0 = unsafe { read_volatile(self.rx_desc) };
+                let o0 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(d0.opts1)) };
+                let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+                crate::log!(
+                    "net/r8168: rx idle (10s) desc0_opts1=0x{:08x} phystat=0x{:02x}\n",
+                    o0,
+                    phy
+                );
+            }
+        } else {
+            self.dbg_idle_polls = 0;
         }
 
         self.reclaim_tx();

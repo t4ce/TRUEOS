@@ -40,7 +40,8 @@ static TLS_SOCKET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static HTTP_TRUEOSFS_STARTED: AtomicBool = AtomicBool::new(false);
 
-static TGA_BLINK_STARTED: AtomicBool = AtomicBool::new(false);
+static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SINE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -50,7 +51,6 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static TASKMON_REPORTER_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BENCH_NETWORK_STARTED: AtomicBool = AtomicBool::new(false);
-static BENCH_FILESYSTEM_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -150,12 +150,13 @@ fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
     )
 }
 
-fn spawn_tga_blink(spawner: Spawner) -> SpawnAttempt {
+fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     if crate::v::mode::is_benchmark() {
         return SpawnAttempt::Skipped;
     }
-    spawn_monitored(spawner, "tga-blink", crate::tga::blink_task())
+    spawn_monitored(spawner, "tga", crate::tga::tga_task())
 }
+
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     if crate::v::mode::is_benchmark() {
@@ -302,16 +303,6 @@ fn spawn_bench_network(spawner: Spawner) -> SpawnAttempt {
     )
 }
 
-fn spawn_bench_filesystem(spawner: Spawner) -> SpawnAttempt {
-    if !crate::v::mode::is_benchmark() {
-        return SpawnAttempt::Skipped;
-    }
-    spawn_monitored(
-        spawner,
-        "bench-filesystem",
-        crate::tst::bench::raw_filesystem_bench_task(),
-    )
-}
 
 // --- registry ---
 
@@ -382,15 +373,14 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_http_trueosfs,
     },
 
-    // UI / misc
+    // USB core + peripherals
     TaskSpec {
-        name: "tga-blink",
+        name: "tga",
         required: 0,
-        started: &TGA_BLINK_STARTED,
-        spawn: spawn_tga_blink,
+        started: &TGA_TASK_STARTED,
+        spawn: spawn_tga_task,
     },
 
-    // USB core + peripherals
     TaskSpec {
         name: "usb-controller-tasks",
         required: 0,

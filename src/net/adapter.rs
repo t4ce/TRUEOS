@@ -26,6 +26,7 @@ const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
 const NET_SHELL_TCP_PORT: u16 = 4245;
 
 const DHCP_DNS_MAX: usize = 4;
+pub const MAX_NET_DEVICES: usize = 8;
 
 // Best-effort primary DNS server snapshot (used by v-layer defaults).
 // Kept intentionally simple: we record only what DHCP reports for NIC 0.
@@ -39,6 +40,48 @@ pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static NET_TX_FRAMES: AtomicU64 = AtomicU64::new(0);
 static NET_TX_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+static NET_RX_FRAMES_AT: [AtomicU64; MAX_NET_DEVICES] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+static NET_TX_FRAMES_AT: [AtomicU64; MAX_NET_DEVICES] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+static NET_TX_DROPPED_AT: [AtomicU64; MAX_NET_DEVICES] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+static NET_DHCP_OFFERS_RX_AT: [AtomicU64; MAX_NET_DEVICES] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
 
 // Console logging these counters too frequently can flood stdout and make it
 // look like the system is "stuck". Keep the default cadence very low.
@@ -259,8 +302,110 @@ impl Device for AdapterDeviceAt {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         crate::net::pop_rx_packet_at(self.index).map(|packet| {
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+            let new_dev_total = NET_RX_FRAMES_AT
+                .get(self.index)
+                .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
+                .unwrap_or(new_total);
             if (new_total & NET_FRAME_LOG_MASK) == 0 {
                 log!("net: rx frames={}\n", new_total);
+            }
+
+            // DHCP offer detector (UDP 67 -> 68). Rate-limited so we can leave
+            // it enabled while debugging without flooding logs.
+            if packet.len() >= 14 {
+                let mut et = u16::from_be_bytes([packet[12], packet[13]]);
+                let mut l2_off = 14usize;
+                if et == 0x8100 && packet.len() >= 18 {
+                    et = u16::from_be_bytes([packet[16], packet[17]]);
+                    l2_off = 18;
+                }
+
+                if et == 0x0800 && packet.len() >= l2_off + 20 {
+                    let ver_ihl = packet[l2_off];
+                    let ihl = ((ver_ihl & 0x0f) as usize) * 4;
+                    if (ver_ihl >> 4) == 4 && packet.len() >= l2_off + ihl + 8 {
+                        let proto = packet[l2_off + 9];
+                        if proto == 17 {
+                            let udp_off = l2_off + ihl;
+                            let sport = u16::from_be_bytes([packet[udp_off], packet[udp_off + 1]]);
+                            let dport = u16::from_be_bytes([packet[udp_off + 2], packet[udp_off + 3]]);
+                            if sport == 67 && dport == 68 {
+                                let offer_count = NET_DHCP_OFFERS_RX_AT
+                                    .get(self.index)
+                                    .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
+                                    .unwrap_or(1);
+
+                                if offer_count <= 4 || (offer_count & 0x3F) == 0 {
+                                    let ip_src = [
+                                        packet[l2_off + 12],
+                                        packet[l2_off + 13],
+                                        packet[l2_off + 14],
+                                        packet[l2_off + 15],
+                                    ];
+                                    let ip_dst = [
+                                        packet[l2_off + 16],
+                                        packet[l2_off + 17],
+                                        packet[l2_off + 18],
+                                        packet[l2_off + 19],
+                                    ];
+                                    crate::log!(
+                                        "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={}\n",
+                                        self.index,
+                                        offer_count,
+                                        ip_src[0],
+                                        ip_src[1],
+                                        ip_src[2],
+                                        ip_src[3],
+                                        ip_dst[0],
+                                        ip_dst[1],
+                                        ip_dst[2],
+                                        ip_dst[3],
+                                        packet.len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cheap RX tap for bring-up: log the first few frames per NIC.
+            if new_dev_total <= 8 {
+                if packet.len() >= 14 {
+                    let dst = &packet[0..6];
+                    let src = &packet[6..12];
+                    let mut et = u16::from_be_bytes([packet[12], packet[13]]);
+                    if et == 0x8100 && packet.len() >= 18 {
+                        et = u16::from_be_bytes([packet[16], packet[17]]);
+                    }
+
+                    let self_mac = crate::net::mac_address_at(self.index);
+                    let src_is_self = self_mac
+                        .map(|m| m == [src[0], src[1], src[2], src[3], src[4], src[5]])
+                        .unwrap_or(false);
+
+                    crate::log!(
+                        "net: rx-tap dev={} len={} et=0x{:04x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} self_src={}\n",
+                        self.index,
+                        packet.len(),
+                        et,
+                        dst[0],
+                        dst[1],
+                        dst[2],
+                        dst[3],
+                        dst[4],
+                        dst[5],
+                        src[0],
+                        src[1],
+                        src[2],
+                        src[3],
+                        src[4],
+                        src[5],
+                        src_is_self as u8
+                    );
+                } else {
+                    crate::log!("net: rx-tap dev={} len={} (short)\n", self.index, packet.len());
+                }
             }
             (
                 AdapterRxToken { buffer: packet },
@@ -311,8 +456,200 @@ impl TxToken for AdapterTxTokenAt {
         let mut buf = vec![0u8; len];
         let result = f(&mut buf[..]);
         let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+        let new_dev_total = NET_TX_FRAMES_AT
+            .get(self.index)
+            .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
+            .unwrap_or(new_total);
+
+        // TX tap: log only the first few frames per NIC so we can verify
+        // DHCP is actually being emitted on the wire.
+        if new_dev_total <= 8 {
+            if buf.len() >= 14 {
+                let dst = &buf[0..6];
+                let src = &buf[6..12];
+                let mut et = u16::from_be_bytes([buf[12], buf[13]]);
+                let mut l2_off = 14usize;
+                if et == 0x8100 && buf.len() >= 18 {
+                    et = u16::from_be_bytes([buf[16], buf[17]]);
+                    l2_off = 18;
+                }
+
+                crate::log!(
+                    "net: tx-tap dev={} len={} et=0x{:04x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                    self.index,
+                    buf.len(),
+                    et,
+                    dst[0],
+                    dst[1],
+                    dst[2],
+                    dst[3],
+                    dst[4],
+                    dst[5],
+                    src[0],
+                    src[1],
+                    src[2],
+                    src[3],
+                    src[4],
+                    src[5]
+                );
+
+                if et == 0x0800 && buf.len() >= l2_off + 20 {
+                    let ver_ihl = buf[l2_off];
+                    let ihl = ((ver_ihl & 0x0f) as usize) * 4;
+                    if (ver_ihl >> 4) == 4 && buf.len() >= l2_off + ihl + 8 {
+                        let proto = buf[l2_off + 9];
+                        if proto == 17 {
+                            let udp_off = l2_off + ihl;
+                            let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
+                            let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
+                            if sport == 68 && dport == 67 {
+                                crate::log!(
+                                    "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
+                                    self.index
+                                );
+
+                                // Extra DHCP sanity: log header fields and a few DHCP options.
+                                // This is intentionally minimal and only runs for the first few
+                                // frames per NIC.
+                                let ip_src = [
+                                    buf[l2_off + 12],
+                                    buf[l2_off + 13],
+                                    buf[l2_off + 14],
+                                    buf[l2_off + 15],
+                                ];
+                                let ip_dst = [
+                                    buf[l2_off + 16],
+                                    buf[l2_off + 17],
+                                    buf[l2_off + 18],
+                                    buf[l2_off + 19],
+                                ];
+                                let ip_tot_len = u16::from_be_bytes([buf[l2_off + 2], buf[l2_off + 3]]);
+                                let ip_hdr_csum = u16::from_be_bytes([buf[l2_off + 10], buf[l2_off + 11]]);
+                                let udp_len = u16::from_be_bytes([buf[udp_off + 4], buf[udp_off + 5]]);
+                                let udp_csum = u16::from_be_bytes([buf[udp_off + 6], buf[udp_off + 7]]);
+
+                                // Verify IPv4 header checksum.
+                                let mut sum: u32 = 0;
+                                let mut i = 0usize;
+                                while i + 1 < ihl {
+                                    if i == 10 {
+                                        i += 2;
+                                        continue;
+                                    }
+                                    let w = u16::from_be_bytes([
+                                        buf[l2_off + i],
+                                        buf[l2_off + i + 1],
+                                    ]) as u32;
+                                    sum = sum.wrapping_add(w);
+                                    i += 2;
+                                }
+                                while (sum >> 16) != 0 {
+                                    sum = (sum & 0xFFFF) + (sum >> 16);
+                                }
+                                let ip_hdr_csum_calc = !(sum as u16);
+
+                                crate::log!(
+                                    "net: dhcp-tx dev={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} ip_len={} ip_csum=0x{:04x} calc=0x{:04x} udp_len={} udp_csum=0x{:04x}\n",
+                                    self.index,
+                                    ip_src[0],
+                                    ip_src[1],
+                                    ip_src[2],
+                                    ip_src[3],
+                                    ip_dst[0],
+                                    ip_dst[1],
+                                    ip_dst[2],
+                                    ip_dst[3],
+                                    ip_tot_len,
+                                    ip_hdr_csum,
+                                    ip_hdr_csum_calc,
+                                    udp_len,
+                                    udp_csum
+                                );
+
+                                // DHCP/BOOTP minimal parse (RFC2131): UDP payload starts after 8 bytes.
+                                let dhcp_off = udp_off + 8;
+                                if buf.len() >= dhcp_off + 240 {
+                                    let op = buf[dhcp_off + 0];
+                                    let htype = buf[dhcp_off + 1];
+                                    let hlen = buf[dhcp_off + 2];
+                                    let flags = u16::from_be_bytes([
+                                        buf[dhcp_off + 10],
+                                        buf[dhcp_off + 11],
+                                    ]);
+                                    let xid = u32::from_be_bytes([
+                                        buf[dhcp_off + 4],
+                                        buf[dhcp_off + 5],
+                                        buf[dhcp_off + 6],
+                                        buf[dhcp_off + 7],
+                                    ]);
+                                    let chaddr = &buf[dhcp_off + 28..dhcp_off + 44];
+                                    let cookie = &buf[dhcp_off + 236..dhcp_off + 240];
+                                    let cookie_ok = cookie == [99, 130, 83, 99];
+
+                                    // Scan options for message type (53).
+                                    let mut msg_type: u8 = 0;
+                                    let mut opt_i = dhcp_off + 240;
+                                    while opt_i < buf.len() {
+                                        let code = buf[opt_i];
+                                        opt_i += 1;
+                                        if code == 0 {
+                                            continue;
+                                        }
+                                        if code == 255 {
+                                            break;
+                                        }
+                                        if opt_i >= buf.len() {
+                                            break;
+                                        }
+                                        let olen = buf[opt_i] as usize;
+                                        opt_i += 1;
+                                        if opt_i + olen > buf.len() {
+                                            break;
+                                        }
+                                        if code == 53 && olen >= 1 {
+                                            msg_type = buf[opt_i];
+                                            break;
+                                        }
+                                        opt_i += olen;
+                                    }
+
+                                    crate::log!(
+                                        "net: dhcp-tx dev={} op={} htype={} hlen={} flags=0x{:04x} xid=0x{:08x} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} cookie_ok={} msg_type={}\n",
+                                        self.index,
+                                        op,
+                                        htype,
+                                        hlen,
+                                        flags,
+                                        xid,
+                                        chaddr[0],
+                                        chaddr[1],
+                                        chaddr[2],
+                                        chaddr[3],
+                                        chaddr[4],
+                                        chaddr[5],
+                                        cookie_ok as u8,
+                                        msg_type
+                                    );
+                                } else {
+                                    crate::log!(
+                                        "net: dhcp-tx dev={} dhcp payload too short (len={})\n",
+                                        self.index,
+                                        buf.len().saturating_sub(dhcp_off)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                crate::log!("net: tx-tap dev={} len={} (short)\n", self.index, buf.len());
+            }
+        }
         if crate::net::transmit_packet_at(self.index, &buf[..]).is_err() {
             let dropped = NET_TX_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = NET_TX_DROPPED_AT
+                .get(self.index)
+                .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1);
             if (dropped & NET_FRAME_LOG_MASK) == 0 {
                 log!(
                     "net: tx busy (drop) frames={} dropped={} last_len={}\n",
@@ -363,7 +700,6 @@ struct NetService {
     router_ipv4: Option<Ipv4Address>,
     dhcp_dns: [[u8; 4]; DHCP_DNS_MAX],
     dhcp_dns_count: u8,
-    dhcp_last_wait_log: Option<Instant>,
 
     // Minimal ICMP reachability probe (ping gateway).
     icmp_ping_seq: u16,
@@ -416,7 +752,6 @@ impl NetService {
             router_ipv4: None,
             dhcp_dns: [[0u8; 4]; DHCP_DNS_MAX],
             dhcp_dns_count: 0,
-            dhcp_last_wait_log: None,
 
             icmp_ping_seq: 0,
             icmp_ping_inflight: None,
@@ -629,6 +964,14 @@ impl NetService {
             data: &data,
         };
         let mut out = vec![0u8; req.buffer_len()];
+        req.emit(
+            &mut Icmpv4Packet::new_unchecked(&mut out),
+            &ChecksumCapabilities::default(),
+        );
+
+        let [a, b, c, d] = target;
+        let target = Ipv4Address::new(a, b, c, d);
+        if socket.send_slice(&out, IpAddress::Ipv4(target)).is_ok() {
             if self.icmp_vnet_inflight.len() >= ICMP_VNET_MAX_INFLIGHT {
                 self.icmp_vnet_inflight.remove(0);
             }
@@ -943,8 +1286,6 @@ impl NetService {
                 if self.device_index == 0 {
                     *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
                 }
-
-                self.dhcp_last_wait_log = None;
             }
             Some(dhcpv4::Event::Deconfigured) => {
                 crate::log!("net: dhcp deconfigured dev={}\n", self.device_index);
@@ -959,23 +1300,6 @@ impl NetService {
                 if self.device_index == 0 {
                     *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
                 }
-            }
-        }
-
-        if self.local_ipv4.is_none() {
-            let should_log = self
-                .dhcp_last_wait_log
-                .map(|t| timestamp >= t + SmolDuration::from_secs(2))
-                .unwrap_or(true);
-            if should_log {
-                crate::log!(
-                    "net: dhcp waiting dev={} (frames rx={} tx={} tx_dropped={})\n",
-                    self.device_index,
-                    NET_RX_FRAMES.load(Ordering::Relaxed),
-                    NET_TX_FRAMES.load(Ordering::Relaxed),
-                    NET_TX_DROPPED.load(Ordering::Relaxed)
-                );
-                self.dhcp_last_wait_log = Some(timestamp);
             }
         }
 
@@ -1128,9 +1452,6 @@ fn now() -> Instant {
     let ms = (ticks as u128 * 1000u128 / (TICK_HZ as u128)) as i64;
     Instant::from_millis(ms)
 }
-
-pub const MAX_NET_DEVICES: usize = 8;
-
 
 // Shared net service state so both the async service task and synchronous `time::block_on`
 // hooks can drive the stack without diverging socket/interface state.

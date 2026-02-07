@@ -39,6 +39,13 @@ const CMD_RST: u8 = 1 << 4;
 const CPLUS_RX_CHKSUM: u16 = 1 << 1;
 const CPLUS_ENABLE: u16 = 1 << 0;
 
+// Bring-up toggles.
+// `RX_ERR_SUM` is often raised for checksum-offload reporting; dropping all such
+// frames can prevent DHCP from ever seeing offers/acks.
+const ENABLE_RX_CHKSUM_OFFLOAD: bool = false;
+const ACCEPT_RX_ERR_SUM_FRAMES: bool = true;
+const STRIP_RX_CRC: bool = false;
+
 // Descriptor bits
 const DESC_OWN: u32 = 1 << 31;
 const DESC_EOR: u32 = 1 << 30;
@@ -122,6 +129,7 @@ pub struct R8125Adapter {
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
+    dbg_rx_errsum: u64,
     dbg_rx_len_bad: u64,
     dbg_last_phystat: u8,
     dbg_logged_first_tx: bool,
@@ -275,7 +283,11 @@ impl R8125Adapter {
         unsafe {
             // C+ mode on (descriptor mode). Keep it minimal.
             let cplus = mmio.read_u16(REG_CPLUS_CMD);
-            mmio.write_u16(REG_CPLUS_CMD, cplus | CPLUS_ENABLE | CPLUS_RX_CHKSUM);
+            let mut cplus_new = cplus | CPLUS_ENABLE;
+            if ENABLE_RX_CHKSUM_OFFLOAD {
+                cplus_new |= CPLUS_RX_CHKSUM;
+            }
+            mmio.write_u16(REG_CPLUS_CMD, cplus_new);
             mmio.write_u16(REG_RX_MAX_SIZE, RX_BUF_SIZE as u16);
 
             // Descriptor ring addresses
@@ -326,6 +338,7 @@ impl R8125Adapter {
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
+            dbg_rx_errsum: 0,
             dbg_rx_len_bad: 0,
             dbg_last_phystat: phy,
             dbg_logged_first_tx: false,
@@ -371,50 +384,95 @@ impl R8125Adapter {
             let idx = self.rx_idx;
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
 
-            if (desc.opts1 & DESC_OWN) != 0 {
+            let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts2)) };
+
+            if (opts1 & DESC_OWN) != 0 {
                 break;
             }
 
-            // Some Realtek variants do not reliably expose FS/LS as we expect.
-            // For bring-up, only drop frames when the HW reports an error.
-            if (desc.opts1 & RX_ERR_SUM) != 0 {
-                self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
-                if self.dbg_rx_bad_flags == 1 {
-                    crate::log!("net/r8125: rx error opts1=0x{:08x}\n", desc.opts1);
-                }
-                let eor = desc.opts1 & DESC_EOR;
-                unsafe {
-                    write_volatile(
-                        self.rx_desc.add(idx),
-                        RxDesc {
-                            opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                            opts2: 0,
-                            addr: self.rx_bufs[idx].phys(),
-                        },
+            let had_errsum = (opts1 & RX_ERR_SUM) != 0;
+
+            if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
+                if self.dbg_rx_bad_flags == 0 {
+                    crate::log!(
+                        "net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
+                        opts1
                     );
                 }
-                self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
-                processed += 1;
-                continue;
             }
 
-            if (desc.opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
-                if self.dbg_rx_bad_flags == 0 {
-                    crate::log!("net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n", desc.opts1);
+            let raw_len = (opts1 & 0x3FFF) as usize;
+
+            if had_errsum {
+                self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
+                // Log the first few errsum frames with minimal decoding.
+                if self.dbg_rx_errsum <= 8 {
+                    let buf_ptr = self.rx_bufs[idx].virt();
+                    let peek_len = core::cmp::min(raw_len, 64);
+                    let peek = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, peek_len) };
+
+                    let (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
+                        let et = u16::from_be_bytes([peek[12], peek[13]]);
+                        if et == 0x0800 && peek_len >= 14 + 20 {
+                            let ihl = (peek[14] & 0x0f) as usize * 4;
+                            let proto = peek.get(23).copied().unwrap_or(0);
+                            if proto == 17 && peek_len >= 14 + ihl + 8 {
+                                let u = 14 + ihl;
+                                let s = u16::from_be_bytes([peek[u], peek[u + 1]]);
+                                let d = u16::from_be_bytes([peek[u + 2], peek[u + 3]]);
+                                (et, proto, s, d)
+                            } else {
+                                (et, proto, 0, 0)
+                            }
+                        } else {
+                            (et, 0, 0, 0)
+                        }
+                    } else {
+                        (0u16, 0u8, 0u16, 0u16)
+                    };
+
+                    crate::log!(
+                        "net/r8125: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
+                        self.dbg_rx_errsum,
+                        opts1,
+                        opts2,
+                        raw_len,
+                        ethertype,
+                        ip_proto,
+                        udp_src,
+                        udp_dst
+                    );
+                }
+
+                if !ACCEPT_RX_ERR_SUM_FRAMES {
+                    let eor = opts1 & DESC_EOR;
+                    unsafe {
+                        write_volatile(
+                            self.rx_desc.add(idx),
+                            RxDesc {
+                                opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                                opts2: 0,
+                                addr: self.rx_bufs[idx].phys(),
+                            },
+                        );
+                    }
+                    self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+                    processed += 1;
+                    continue;
                 }
             }
 
-            let raw_len = (desc.opts1 & 0x3FFF) as usize;
             if raw_len == 0 || raw_len > RX_BUF_SIZE {
                 self.dbg_rx_len_bad = self.dbg_rx_len_bad.saturating_add(1);
                 if self.dbg_rx_len_bad == 1 {
                     crate::log!(
                         "net/r8125: rx bad len raw_len={} opts1=0x{:08x}\n",
                         raw_len,
-                        desc.opts1
+                        opts1
                     );
                 }
-                let eor = desc.opts1 & DESC_EOR;
+                let eor = opts1 & DESC_EOR;
                 unsafe {
                     write_volatile(
                         self.rx_desc.add(idx),
@@ -430,8 +488,7 @@ impl R8125Adapter {
                 continue;
             }
             let mut len = raw_len;
-            if len >= 4 {
-                // Strip CRC if present
+            if STRIP_RX_CRC && len >= 4 {
                 len -= 4;
             }
             len = min(len, RX_BUF_SIZE);
@@ -454,14 +511,14 @@ impl R8125Adapter {
                             "net/r8125: first rx len={} raw_len={} opts1=0x{:08x}\n",
                             len,
                             raw_len,
-                            desc.opts1
+                            opts1
                         );
                     }
                 }
             }
 
             // Re-arm descriptor
-            let eor = desc.opts1 & DESC_EOR;
+            let eor = opts1 & DESC_EOR;
             unsafe {
                 write_volatile(
                     self.rx_desc.add(idx),
