@@ -10,6 +10,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 pub const USB_XHCI_ENUM_OK: u32 = 1 << 0;
 pub const HID_MOUSE_CLAIMED: u32 = 1 << 1;
 pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;
+pub const PIANO_CLAIMED: u32 = 1 << 3;
 
 pub const NET_GATEWAY_REACHABLE: u32 = 1 << 8;
 

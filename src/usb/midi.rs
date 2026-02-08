@@ -7,7 +7,9 @@ use crate::pci::dma;
 use core::cmp;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use embassy_time::Duration as EmbassyDuration;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use embassy_time::{Duration as EmbassyDuration, Timer};
+use heapless::Deque;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -21,6 +23,113 @@ macro_rules! usbv {
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_MIDISTREAMING: u8 = 0x03;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum MidiAdapterKind {
+    Generic,
+    CasioCtk3500,
+}
+
+fn select_adapter(dev_vid: u16, dev_pid: u16) -> MidiAdapterKind {
+    // Casio CTK-3500: 07cf:6803 (class-compliant USB MIDI)
+    if dev_vid == 0x07CF && dev_pid == 0x6803 {
+        MidiAdapterKind::CasioCtk3500
+    } else {
+        MidiAdapterKind::Generic
+    }
+}
+
+static PIANO_SLOT: AtomicU32 = AtomicU32::new(0);
+static PIANO_CONTROLLER: AtomicU32 = AtomicU32::new(0);
+static PIANO_LAST_HEARTBEAT_SECS: AtomicU64 = AtomicU64::new(u64::MAX);
+const PIANO_QUEUE_PKTS: usize = 512;
+static PIANO_QUEUE: Mutex<Deque<[u8; 4], PIANO_QUEUE_PKTS>> = Mutex::new(Deque::new());
+
+#[inline]
+fn is_active_sensing_heartbeat(pkt: &[u8; 4]) -> bool {
+    // USB-MIDI Active Sensing is a single-byte MIDI message (0xFE).
+    // It is typically carried as CIN=0xF with one MIDI byte payload.
+    (pkt[0] & 0x0F) == 0x0F && pkt[1] == 0xFE && pkt[2] == 0 && pkt[3] == 0
+}
+
+#[inline]
+fn secs_to_hms(secs: u64) -> (u64, u64, u64) {
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    (h, m, s)
+}
+
+fn piano_set_connected(controller_id: usize, slot_id: u32) {
+    PIANO_CONTROLLER.store(controller_id as u32, Ordering::Release);
+    PIANO_SLOT.store(slot_id, Ordering::Release);
+}
+
+fn piano_set_disconnected(controller_id: usize, slot_id: u32) {
+    let cur_slot = PIANO_SLOT.load(Ordering::Acquire);
+    let cur_ctrl = PIANO_CONTROLLER.load(Ordering::Acquire) as usize;
+    if cur_slot == slot_id && cur_ctrl == controller_id {
+        PIANO_SLOT.store(0, Ordering::Release);
+        PIANO_CONTROLLER.store(0, Ordering::Release);
+        PIANO_LAST_HEARTBEAT_SECS.store(u64::MAX, Ordering::Release);
+        let mut q = PIANO_QUEUE.lock();
+        while q.pop_front().is_some() {}
+    }
+}
+
+fn piano_push_packet(pkt: [u8; 4]) {
+    let mut q = PIANO_QUEUE.lock();
+    if q.push_back(pkt).is_err() {
+        let _ = q.pop_front();
+        let _ = q.push_back(pkt);
+    }
+}
+
+#[embassy_executor::task]
+pub async fn piano_drain_loop() {
+    crate::v::taskmon::run("piano-drain", async move {
+        const IDLE_SLEEP_MS: u64 = 25;
+
+        loop {
+            let slot = PIANO_SLOT.load(Ordering::Acquire);
+            if slot == 0 {
+                Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
+                continue;
+            }
+
+            let pkt_opt = { PIANO_QUEUE.lock().pop_front() };
+            let Some(pkt) = pkt_opt else {
+                Timer::after(EmbassyDuration::from_millis(IDLE_SLEEP_MS)).await;
+                continue;
+            };
+
+            // Prefix log lines with last heartbeat time.
+            let hb = PIANO_LAST_HEARTBEAT_SECS.load(Ordering::Acquire);
+            if hb == u64::MAX {
+                crate::log!(
+                    "piano: --:--:-- ~ {}.{}.{}.{}\n",
+                    pkt[0],
+                    pkt[1],
+                    pkt[2],
+                    pkt[3]
+                );
+            } else {
+                let (h, m, s) = secs_to_hms(hb);
+                crate::log!(
+                    "piano: {:02}:{:02}:{:02} ~ {}.{}.{}.{}\n",
+                    h,
+                    m,
+                    s,
+                    pkt[0],
+                    pkt[1],
+                    pkt[2],
+                    pkt[3]
+                );
+            }
+        }
+    })
+    .await;
+}
 
 #[derive(Copy, Clone, Debug)]
 struct MidiEp {
@@ -164,11 +273,12 @@ pub fn has_midi_streaming_interface(cfg: &[u8]) -> bool {
     parse_midi_interface(cfg).is_some()
 }
 
-#[derive(Copy, Clone, Debug)]
 struct MidiRuntime {
     controller_id: usize,
     slot_id: u32,
     ctx: XhciContext,
+
+    adapter: MidiAdapterKind,
 
     interface: u8,
     alt_setting: u8,
@@ -203,6 +313,10 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     while idx < guard.len() {
         if guard[idx].controller_id == controller_id && guard[idx].slot_id == slot_id {
             let rt = guard.remove(idx);
+
+            if rt.adapter == MidiAdapterKind::CasioCtk3500 {
+                piano_set_disconnected(controller_id, slot_id);
+            }
 
             if let Some(v) = rt.ring_in_virt {
                 dma::dealloc(v, rt.ring_in_bytes);
@@ -287,6 +401,20 @@ impl MidiRuntime {
 
         if rx_actual >= 4 {
             let data = unsafe { core::slice::from_raw_parts(self.rx_dma_virt, rx_actual) };
+
+            if self.adapter == MidiAdapterKind::CasioCtk3500 {
+                for chunk in data.chunks_exact(4) {
+                    let pkt = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                    if is_active_sensing_heartbeat(&pkt) {
+                        let now = crate::time::unix_time_seconds()
+                            .unwrap_or_else(|| crate::time::uptime_seconds());
+                        PIANO_LAST_HEARTBEAT_SECS.store(now, Ordering::Release);
+                        continue;
+                    }
+                    piano_push_packet(pkt);
+                }
+            }
+
             // USB-MIDI Event Packets are 4 bytes each.
             let packets = rx_actual / 4;
             if packets > 0 {
@@ -444,6 +572,8 @@ pub struct AttachParams<'a> {
     pub ctx_stride_bytes: usize,
     pub ctx_stride_words: usize,
     pub target_port: u8,
+    pub dev_vid: u16,
+    pub dev_pid: u16,
 }
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
@@ -457,6 +587,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ctx_stride_bytes,
         ctx_stride_words,
         target_port,
+        dev_vid,
+        dev_pid,
     } = params;
 
     let info = parse_midi_interface(cfg).ok_or(())?;
@@ -492,19 +624,19 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     )
     .await?;
 
-    // Prepare add-flags for whichever endpoints exist.
-    let mut add_flags_bits: u32 = 0;
+    // Prepare context indices for whichever endpoints exist.
     let mut highest_ep_ctx: u32 = 1;
 
     let ep_in_ctx = info.ep_in.map(|ep| context_index(ep.addr));
     let ep_out_ctx = info.ep_out.map(|ep| context_index(ep.addr));
 
+    let add_flags_in: u32 = ep_in_ctx.map(|ci| 1 << (ci - 1)).unwrap_or(0);
+    let add_flags_out: u32 = ep_out_ctx.map(|ci| 1 << (ci - 1)).unwrap_or(0);
+
     if let Some(ci) = ep_in_ctx {
-        add_flags_bits |= 1 << (ci - 1);
         highest_ep_ctx = cmp::max(highest_ep_ctx, ci);
     }
     if let Some(co) = ep_out_ctx {
-        add_flags_bits |= 1 << (co - 1);
         highest_ep_ctx = cmp::max(highest_ep_ctx, co);
     }
 
@@ -519,7 +651,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let mut ring_out_bytes: usize = 0;
 
     // Configure endpoints. Each call submits a Configure Endpoint command, but we pass the
-    // combined add-flags and final Context Entries so the slot context stays consistent.
+    // final Context Entries so the slot context stays consistent.
     if let Some(ep) = info.ep_in {
         let (target, ring, virt, bytes) = configure_bulk_endpoint(
             ctx,
@@ -533,7 +665,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             ep.max_packet,
             EP_TYPE_BULK_IN,
             highest_ep_ctx,
-            add_flags_bits,
+            add_flags_in,
         )
         .await?;
         ep_in_target = Some(target);
@@ -555,7 +687,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             ep.max_packet,
             EP_TYPE_BULK_OUT,
             highest_ep_ctx,
-            add_flags_bits,
+            add_flags_out,
         )
         .await?;
         ep_out_target = Some(target);
@@ -573,10 +705,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let (rx_dma_phys, rx_dma_virt) = dma::alloc(rx_len, 64).ok_or(())?;
     unsafe { write_bytes(rx_dma_virt, 0, rx_len) };
 
+    let adapter = select_adapter(dev_vid, dev_pid);
     let runtime = MidiRuntime {
         controller_id: ctx.controller_id,
         slot_id,
         ctx: *ctx,
+        adapter,
         interface: info.interface,
         alt_setting: info.alt_setting,
         ep_in_target,
@@ -604,15 +738,24 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
     drop(guard);
 
-    let _: Option<bool> = with_runtime_mut_by_slot(ctx.controller_id, slot_id, |rt| rt.post_rx_locked());
+    if adapter == MidiAdapterKind::CasioCtk3500 {
+        piano_set_connected(ctx.controller_id, slot_id);
+        crate::v::readiness::set(crate::v::readiness::PIANO_CLAIMED);
+    }
+
+    let posted = with_runtime_mut_by_slot(ctx.controller_id, slot_id, |rt| rt.post_rx_locked());
+    if posted != Some(true) {
+        crate::log!("usb: midi warn: failed to post initial rx slot={} ep_in={:?}\n", slot_id, info.ep_in.map(|e| e.addr));
+    }
 
     crate::log!(
-        "usb: midi attached slot={} if={} alt={} ep_in={:?} ep_out={:?}\n",
+        "usb: midi attached slot={} if={} alt={} ep_in={:?} ep_out={:?} adapter={:?}\n",
         slot_id,
         info.interface,
         info.alt_setting,
         info.ep_in.map(|e| e.addr),
         info.ep_out.map(|e| e.addr),
+        adapter,
     );
 
     Ok(())

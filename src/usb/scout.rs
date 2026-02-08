@@ -5,7 +5,7 @@ use super::xhci::{
 };
 use super::{
     cdc_acm, disable_slot, enable_slot, enumerate_port, enumerate_with_params, hid, hub, mass,
-    uac, DeviceKind, UsbControllerState, DEVICES, ENUM_READY, USB_LOG_VERBOSE,
+    midi, uac, DeviceKind, UsbControllerState, DEVICES, ENUM_READY, USB_LOG_VERBOSE,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -80,6 +80,8 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = cdc_acm::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Uac {
             let _ = uac::unregister_runtime(controller_id, slot_id);
+        } else if kind == DeviceKind::Midi {
+            let _ = midi::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Hub {
             let _ = hub::unregister_interrupt_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Leds {
