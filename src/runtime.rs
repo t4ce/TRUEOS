@@ -28,21 +28,6 @@ pub fn poll_local_executor() {
     cpu.leave_executor_poll();
 }
 
-/// Poll the current CPU's executor even if already inside a poll.
-#[inline]
-pub fn poll_local_executor_allow_reentry() {
-    let cpu_ptr = local_cpu_ptr();
-    if cpu_ptr.is_null() {
-        return;
-    }
-
-    let ex_ptr = unsafe { (&*cpu_ptr).executor_ptr() };
-    if ex_ptr.is_null() {
-        return;
-    }
-    unsafe { (&*ex_ptr).poll() };
-}
-
 pub fn run_ap_forever() -> ! {
     let mut counter: u64 = 0;
     loop {
