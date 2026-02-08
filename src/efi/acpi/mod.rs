@@ -1,4 +1,4 @@
-use core::{hint, ptr::NonNull};
+use core::ptr::NonNull;
 
 use acpi::{AcpiTables, Handler as AcpiHandler, PciAddress, PhysicalMapping};
 use crate::wait;

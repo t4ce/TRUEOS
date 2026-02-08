@@ -128,19 +128,19 @@ const CLOCK_REALTIME: c_int = 0;
 const CLOCK_MONOTONIC: c_int = 1;
 
 #[repr(C)]
-struct TimeVal {
+pub struct TimeVal {
     tv_sec: i64,
     tv_usec: i64,
 }
 
 #[repr(C)]
-struct TimeSpec {
+pub struct TimeSpec {
     tv_sec: i64,
     tv_nsec: i64,
 }
 
 #[repr(C)]
-struct Tm {
+pub struct Tm {
     tm_sec: c_int,
     tm_min: c_int,
     tm_hour: c_int,
@@ -586,7 +586,7 @@ pub unsafe extern "C" fn gmtime(timep: *const i64) -> *mut Tm {
         tm_yday: yday as c_int,
         tm_isdst: 0,
     };
-    &mut TM_BUF as *mut Tm
+    &raw mut TM_BUF as *mut Tm
 }
 
 #[no_mangle]

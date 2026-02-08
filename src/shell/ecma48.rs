@@ -8,6 +8,9 @@ pub const HIDE_CURSOR: &str = "\x1b[?25l";
 pub const SHOW_CURSOR: &str = "\x1b[?25h";
 pub const CLEAR_SCREEN: &str = "\x1b[2J";
 pub const CLEAR_LINE: &str = "\x1b[2K";
+pub const CLEAR_TO_EOL: &str = "\x1b[K";
+pub const CLEAR_TO_BOL: &str = "\x1b[1K";
+pub const CLEAR_DOWN: &str = "\x1b[J";
 pub const HOME: &str = "\x1b[H";
 
 struct Wrapped<'a> {
@@ -19,6 +22,14 @@ struct Wrapped<'a> {
 impl fmt::Display for Wrapped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}{}", self.prefix, self.text, self.suffix)
+    }
+}
+
+fn wrap<'a>(prefix: &'static str, text: &'a str) -> Wrapped<'a> {
+    Wrapped {
+        prefix,
+        text,
+        suffix: RESET,
     }
 }
 
@@ -46,6 +57,28 @@ impl fmt::Display for BgRgb<'_> {
     }
 }
 
+struct FgAnsi<'a> {
+    text: &'a str,
+    idx: u8,
+}
+
+impl fmt::Display for FgAnsi<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\x1b[38;5;{}m{}{}", self.idx, self.text, RESET)
+    }
+}
+
+struct BgAnsi<'a> {
+    text: &'a str,
+    idx: u8,
+}
+
+impl fmt::Display for BgAnsi<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\x1b[48;5;{}m{}{}", self.idx, self.text, RESET)
+    }
+}
+
 /// Truecolor foreground (24-bit RGB).
 pub fn color(text: &str, rgb: (u8, u8, u8)) -> impl fmt::Display + '_ {
     FgRgb { text, rgb }
@@ -56,36 +89,42 @@ pub fn bg_color(text: &str, rgb: (u8, u8, u8)) -> impl fmt::Display + '_ {
     BgRgb { text, rgb }
 }
 
+/// 8/16/256-color foreground via ANSI palette index.
+pub fn fg_ansi(text: &str, idx: u8) -> impl fmt::Display + '_ {
+    FgAnsi { text, idx }
+}
+
+/// 8/16/256-color background via ANSI palette index.
+pub fn bg_ansi(text: &str, idx: u8) -> impl fmt::Display + '_ {
+    BgAnsi { text, idx }
+}
+
 pub fn bold(text: &str) -> impl fmt::Display + '_ {
-    Wrapped {
-        prefix: "\x1b[1m",
-        text,
-        suffix: RESET,
-    }
+    wrap("\x1b[1m", text)
 }
 
 pub fn dim(text: &str) -> impl fmt::Display + '_ {
-    Wrapped {
-        prefix: "\x1b[2m",
-        text,
-        suffix: RESET,
-    }
+    wrap("\x1b[2m", text)
 }
 
 pub fn underline(text: &str) -> impl fmt::Display + '_ {
-    Wrapped {
-        prefix: "\x1b[4m",
-        text,
-        suffix: RESET,
-    }
+    wrap("\x1b[4m", text)
+}
+
+pub fn italic(text: &str) -> impl fmt::Display + '_ {
+    wrap("\x1b[3m", text)
+}
+
+pub fn blink(text: &str) -> impl fmt::Display + '_ {
+    wrap("\x1b[5m", text)
+}
+
+pub fn strike(text: &str) -> impl fmt::Display + '_ {
+    wrap("\x1b[9m", text)
 }
 
 pub fn invert(text: &str) -> impl fmt::Display + '_ {
-    Wrapped {
-        prefix: "\x1b[7m",
-        text,
-        suffix: RESET,
-    }
+    wrap("\x1b[7m", text)
 }
 
 struct Cup {
@@ -164,33 +203,257 @@ pub fn left(n: usize) -> impl fmt::Display {
     Cub { n }
 }
 
+pub struct CursorGuard<'a> {
+    io: &'a dyn super::ShellBackend,
+}
+
+impl Drop for CursorGuard<'_> {
+    fn drop(&mut self) {
+        self.io.write_str(SHOW_CURSOR);
+    }
+}
+
+pub fn hide_cursor_guard(io: &'static dyn super::ShellBackend) -> CursorGuard<'static> {
+    io.write_str(HIDE_CURSOR);
+    CursorGuard { io }
+}
+
+#[derive(Copy, Clone)]
+pub struct Style<'a> {
+    text: &'a str,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    blink: bool,
+    strike: bool,
+    invert: bool,
+    fg_rgb: Option<(u8, u8, u8)>,
+    bg_rgb: Option<(u8, u8, u8)>,
+    fg_ansi: Option<u8>,
+    bg_ansi: Option<u8>,
+}
+
+impl fmt::Display for Style<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[inline]
+        fn emit_code(f: &mut fmt::Formatter<'_>, first: &mut bool, code: &str) -> fmt::Result {
+            if !*first {
+                write!(f, ";")?;
+            }
+            *first = false;
+            write!(f, "{}", code)
+        }
+
+        write!(f, "\x1b[")?;
+        let mut first = true;
+
+        if self.bold {
+            emit_code(f, &mut first, "1")?;
+        }
+        if self.dim {
+            emit_code(f, &mut first, "2")?;
+        }
+        if self.italic {
+            emit_code(f, &mut first, "3")?;
+        }
+        if self.underline {
+            emit_code(f, &mut first, "4")?;
+        }
+        if self.blink {
+            emit_code(f, &mut first, "5")?;
+        }
+        if self.invert {
+            emit_code(f, &mut first, "7")?;
+        }
+        if self.strike {
+            emit_code(f, &mut first, "9")?;
+        }
+        if let Some((r, g, b)) = self.fg_rgb {
+            emit_code(f, &mut first, "38")?;
+            emit_code(f, &mut first, "2")?;
+            emit_code(f, &mut first, &alloc::format!("{}", r))?;
+            emit_code(f, &mut first, &alloc::format!("{}", g))?;
+            emit_code(f, &mut first, &alloc::format!("{}", b))?;
+        } else if let Some(c) = self.fg_ansi {
+            emit_code(f, &mut first, "38")?;
+            emit_code(f, &mut first, "5")?;
+            emit_code(f, &mut first, &alloc::format!("{}", c))?;
+        }
+        if let Some((r, g, b)) = self.bg_rgb {
+            emit_code(f, &mut first, "48")?;
+            emit_code(f, &mut first, "2")?;
+            emit_code(f, &mut first, &alloc::format!("{}", r))?;
+            emit_code(f, &mut first, &alloc::format!("{}", g))?;
+            emit_code(f, &mut first, &alloc::format!("{}", b))?;
+        } else if let Some(c) = self.bg_ansi {
+            emit_code(f, &mut first, "48")?;
+            emit_code(f, &mut first, "5")?;
+            emit_code(f, &mut first, &alloc::format!("{}", c))?;
+        }
+        if first {
+            emit_code(f, &mut first, "0")?;
+        }
+        write!(f, "m{}{}", self.text, RESET)
+    }
+}
+
+impl<'a> Style<'a> {
+    pub fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+    pub fn dim(mut self) -> Self {
+        self.dim = true;
+        self
+    }
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
+        self
+    }
+    pub fn blink(mut self) -> Self {
+        self.blink = true;
+        self
+    }
+    pub fn strike(mut self) -> Self {
+        self.strike = true;
+        self
+    }
+    pub fn invert(mut self) -> Self {
+        self.invert = true;
+        self
+    }
+    pub fn fg(mut self, rgb: (u8, u8, u8)) -> Self {
+        self.fg_rgb = Some(rgb);
+        self.fg_ansi = None;
+        self
+    }
+    pub fn bg(mut self, rgb: (u8, u8, u8)) -> Self {
+        self.bg_rgb = Some(rgb);
+        self.bg_ansi = None;
+        self
+    }
+    pub fn fg8(mut self, idx: u8) -> Self {
+        self.fg_ansi = Some(idx);
+        self.fg_rgb = None;
+        self
+    }
+    pub fn bg8(mut self, idx: u8) -> Self {
+        self.bg_ansi = Some(idx);
+        self.bg_rgb = None;
+        self
+    }
+}
+
+pub fn style(text: &str) -> Style<'_> {
+    Style {
+        text,
+        bold: false,
+        dim: false,
+        italic: false,
+        underline: false,
+        blink: false,
+        strike: false,
+        invert: false,
+        fg_rgb: None,
+        bg_rgb: None,
+        fg_ansi: None,
+        bg_ansi: None,
+    }
+}
+
+struct Sanitized<'a> {
+    text: &'a str,
+}
+
+impl fmt::Display for Sanitized<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in self.text.as_bytes().iter().copied() {
+            match b {
+                b'\r' => write!(f, "\\r")?,
+                b'\n' => write!(f, "\\n")?,
+                b'\t' => write!(f, "\\t")?,
+                0x20..=0x7E => write!(f, "{}", b as char)?,
+                _ => write!(f, "\\x{:02X}", b)?,
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn sanitize(text: &str) -> impl fmt::Display + '_ {
+    Sanitized { text }
+}
+
 pub(crate) fn handle_ecma48(io: &'static dyn super::ShellBackend, rest: &str) {
     let arg = rest.trim();
+    if arg.eq_ignore_ascii_case("help") {
+        io.write_str("ecma48: usage\r\n");
+        io.write_str("  ecma48 demo\r\n");
+        io.write_str("  ecma48 sanitize <text>\r\n");
+        io.write_str("  ecma48 clear\r\n");
+        return;
+    }
+
+    if let Some(text) = arg.strip_prefix("sanitize ") {
+        io.write_fmt(format_args!("ecma48: sanitize => {}\r\n", sanitize(text)));
+        return;
+    }
+
+    if arg.eq_ignore_ascii_case("clear") {
+        io.write_str(CLEAR_TO_BOL);
+        io.write_str(CLEAR_TO_EOL);
+        io.write_str(CLEAR_DOWN);
+        io.write_str(CLEAR_LINE);
+        io.write_str("ecma48: clear sequences emitted\r\n");
+        return;
+    }
+
     if !arg.is_empty() && !arg.eq_ignore_ascii_case("demo") {
-        io.write_str("ecma48: usage ecma48 | ecma48 demo\r\n");
+        io.write_str("ecma48: usage ecma48 demo | ecma48 sanitize <text> | ecma48 clear\r\n");
         return;
     }
 
     io.write_str("ecma48: demo (ANSI sequences)\r\n");
+    io.write_fmt(format_args!("  {}\r\n", dim("dim text (SGR 2)")));
+    io.write_fmt(format_args!("  {}\r\n", italic("italic text (SGR 3)")));
+    io.write_fmt(format_args!("  {}\r\n", underline("underline text (SGR 4)")));
+    io.write_fmt(format_args!("  {}\r\n", blink("blink text (SGR 5)")));
+    io.write_fmt(format_args!("  {}\r\n", invert("invert text (SGR 7)")));
+    io.write_fmt(format_args!("  {}\r\n", strike("strike text (SGR 9)")));
     io.write_fmt(format_args!(
         "  {}\r\n",
-        crate::ecma48::dim("dim text (SGR 2)")
+        bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
     ));
+    io.write_fmt(format_args!("  {}\r\n", fg_ansi("foreground ANSI idx 196", 196)));
+    io.write_fmt(format_args!("  {}\r\n", bg_ansi("background ANSI idx 24", 24)));
     io.write_fmt(format_args!(
         "  {}\r\n",
-        crate::ecma48::bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
+        style("composed style builder")
+            .bold()
+            .underline()
+            .fg((255, 255, 0))
+            .bg8(52)
     ));
+    io.write_fmt(format_args!("  sanitize: {}\r\n", sanitize("\x1b[31mraw\x07")));
     io.write_str("  cursor edits: [ABCDE]\r\n");
 
     // Demonstrate cursor moves without disrupting where the shell continues printing.
-    io.write_str(crate::ecma48::SAVE_CURSOR);
-    io.write_fmt(format_args!("{}", crate::ecma48::up(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::right(18)));
-    io.write_fmt(format_args!("{}", crate::ecma48::bg_color("X", (255, 0, 0))));
-    io.write_fmt(format_args!("{}", crate::ecma48::left(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::right(1)));
-    io.write_fmt(format_args!("{}", crate::ecma48::down(1)));
-    io.write_str(crate::ecma48::RESTORE_CURSOR);
+    {
+        let _cursor = hide_cursor_guard(io);
+        io.write_str(SAVE_CURSOR);
+        io.write_fmt(format_args!("{}", up(1)));
+        io.write_fmt(format_args!("{}", right(18)));
+        io.write_fmt(format_args!("{}", bg_color("X", (255, 0, 0))));
+        io.write_fmt(format_args!("{}", left(1)));
+        io.write_fmt(format_args!("{}", right(1)));
+        io.write_fmt(format_args!("{}", down(1)));
+        io.write_str(RESTORE_CURSOR);
+    }
 
     io.write_str("ecma48: done\r\n");
 }
