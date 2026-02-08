@@ -4,8 +4,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
-use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::phy::ChecksumCapabilities;
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
@@ -82,6 +82,165 @@ static NET_DHCP_OFFERS_RX_AT: [AtomicU64; MAX_NET_DEVICES] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
 ];
+
+// DHCP bring-up interoperability toggles.
+//
+// Some DHCP servers/routers only reply properly when the client requests
+// broadcast replies (BOOTP flags bit15). For bring-up, we force this bit.
+const DHCP_FORCE_BROADCAST_FLAG: bool = true;
+// As a compatibility experiment, force UDP checksum to 0 (IPv4 allows this).
+// Useful if we're accidentally producing an invalid checksum due to offload or
+// descriptor behavior.
+const DHCP_FORCE_UDP_CHECKSUM_ZERO: bool = true;
+
+fn is_dhcp_client_udp(buf: &[u8]) -> bool {
+    if buf.len() < 14 {
+        return false;
+    }
+
+    let mut et = u16::from_be_bytes([buf[12], buf[13]]);
+    let mut l2_off = 14usize;
+    if et == 0x8100 {
+        if buf.len() < 18 {
+            return false;
+        }
+        et = u16::from_be_bytes([buf[16], buf[17]]);
+        l2_off = 18;
+    }
+    if et != 0x0800 || buf.len() < l2_off + 20 {
+        return false;
+    }
+
+    let ver_ihl = buf[l2_off];
+    if (ver_ihl >> 4) != 4 {
+        return false;
+    }
+    let ihl = ((ver_ihl & 0x0f) as usize) * 4;
+    if ihl < 20 || buf.len() < l2_off + ihl + 8 {
+        return false;
+    }
+    if buf[l2_off + 9] != 17 {
+        return false;
+    }
+    let udp_off = l2_off + ihl;
+    let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
+    let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
+    sport == 68 && dport == 67
+}
+
+fn dhcp_fixup_broadcast_and_udp_checksum(buf: &mut [u8]) {
+    if buf.len() < 14 {
+        return;
+    }
+
+    let mut et = u16::from_be_bytes([buf[12], buf[13]]);
+    let mut l2_off = 14usize;
+    if et == 0x8100 {
+        if buf.len() < 18 {
+            return;
+        }
+        et = u16::from_be_bytes([buf[16], buf[17]]);
+        l2_off = 18;
+    }
+    if et != 0x0800 || buf.len() < l2_off + 20 {
+        return;
+    }
+
+    let ver_ihl = buf[l2_off];
+    if (ver_ihl >> 4) != 4 {
+        return;
+    }
+    let ihl = ((ver_ihl & 0x0f) as usize) * 4;
+    if ihl < 20 || buf.len() < l2_off + ihl + 8 {
+        return;
+    }
+    if buf[l2_off + 9] != 17 {
+        return;
+    }
+
+    let udp_off = l2_off + ihl;
+    let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
+    let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
+    if !(sport == 68 && dport == 67) {
+        return;
+    }
+
+    let udp_len = u16::from_be_bytes([buf[udp_off + 4], buf[udp_off + 5]]) as usize;
+    let dhcp_off = udp_off + 8;
+    if udp_len < 8 + 240 || buf.len() < udp_off + udp_len {
+        return;
+    }
+
+    let flags_off = dhcp_off + 10;
+    let old_flags = u16::from_be_bytes([buf[flags_off], buf[flags_off + 1]]);
+    let mut mutated = false;
+    if DHCP_FORCE_BROADCAST_FLAG && (old_flags & 0x8000) == 0 {
+        buf[flags_off] = 0x80;
+        buf[flags_off + 1] = 0x00;
+        mutated = true;
+    }
+
+    // If we changed DHCP payload bytes, recompute UDP checksum (unless forcing it to 0).
+    if mutated && !DHCP_FORCE_UDP_CHECKSUM_ZERO {
+        let ip_src = [
+            buf[l2_off + 12],
+            buf[l2_off + 13],
+            buf[l2_off + 14],
+            buf[l2_off + 15],
+        ];
+        let ip_dst = [
+            buf[l2_off + 16],
+            buf[l2_off + 17],
+            buf[l2_off + 18],
+            buf[l2_off + 19],
+        ];
+
+        // Zero checksum field while computing.
+        buf[udp_off + 6] = 0;
+        buf[udp_off + 7] = 0;
+
+        let mut sum: u32 = 0;
+        let add16 = |sum: &mut u32, w: u16| {
+            *sum = sum.wrapping_add(w as u32);
+        };
+
+        add16(&mut sum, u16::from_be_bytes([ip_src[0], ip_src[1]]));
+        add16(&mut sum, u16::from_be_bytes([ip_src[2], ip_src[3]]));
+        add16(&mut sum, u16::from_be_bytes([ip_dst[0], ip_dst[1]]));
+        add16(&mut sum, u16::from_be_bytes([ip_dst[2], ip_dst[3]]));
+        add16(&mut sum, 0x0011); // protocol UDP
+        add16(&mut sum, udp_len as u16);
+
+        let udp_bytes = &buf[udp_off..udp_off + udp_len];
+        let mut i = 0usize;
+        while i + 1 < udp_bytes.len() {
+            add16(&mut sum, u16::from_be_bytes([udp_bytes[i], udp_bytes[i + 1]]));
+            i += 2;
+        }
+        if (udp_bytes.len() & 1) != 0 {
+            add16(
+                &mut sum,
+                u16::from_be_bytes([udp_bytes[udp_bytes.len() - 1], 0]),
+            );
+        }
+
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        let mut udp_csum = !(sum as u16);
+        if udp_csum == 0 {
+            udp_csum = 0xFFFF;
+        }
+        let c = udp_csum.to_be_bytes();
+        buf[udp_off + 6] = c[0];
+        buf[udp_off + 7] = c[1];
+    }
+
+    if DHCP_FORCE_UDP_CHECKSUM_ZERO {
+        buf[udp_off + 6] = 0;
+        buf[udp_off + 7] = 0;
+    }
+}
 
 // Console logging these counters too frequently can flood stdout and make it
 // look like the system is "stuck". Keep the default cadence very low.
@@ -348,8 +507,65 @@ impl Device for AdapterDeviceAt {
                                         packet[l2_off + 18],
                                         packet[l2_off + 19],
                                     ];
+
+                                    // Minimal BOOTP/DHCP parse. Payload begins after UDP header.
+                                    let udp_len = u16::from_be_bytes([
+                                        packet[udp_off + 4],
+                                        packet[udp_off + 5],
+                                    ]) as usize;
+                                    let dhcp_off = udp_off + 8;
+
+                                    let mut op: u8 = 0;
+                                    let mut xid: u32 = 0;
+                                    let mut yiaddr = [0u8; 4];
+                                    let mut cookie_ok: u8 = 0;
+                                    let mut msg_type: u8 = 0;
+                                    if udp_len >= 8 + 240 && packet.len() >= udp_off + udp_len {
+                                        op = packet[dhcp_off + 0];
+                                        xid = u32::from_be_bytes([
+                                            packet[dhcp_off + 4],
+                                            packet[dhcp_off + 5],
+                                            packet[dhcp_off + 6],
+                                            packet[dhcp_off + 7],
+                                        ]);
+                                        yiaddr = [
+                                            packet[dhcp_off + 16],
+                                            packet[dhcp_off + 17],
+                                            packet[dhcp_off + 18],
+                                            packet[dhcp_off + 19],
+                                        ];
+                                        cookie_ok = (packet[dhcp_off + 236..dhcp_off + 240]
+                                            == [99, 130, 83, 99]) as u8;
+
+                                        // Options: scan for message type (53)
+                                        let mut opt_i = dhcp_off + 240;
+                                        let end = udp_off + udp_len;
+                                        while opt_i < end {
+                                            let code = packet[opt_i];
+                                            opt_i += 1;
+                                            if code == 0 {
+                                                continue;
+                                            }
+                                            if code == 255 {
+                                                break;
+                                            }
+                                            if opt_i >= end {
+                                                break;
+                                            }
+                                            let olen = packet[opt_i] as usize;
+                                            opt_i += 1;
+                                            if opt_i + olen > end {
+                                                break;
+                                            }
+                                            if code == 53 && olen >= 1 {
+                                                msg_type = packet[opt_i];
+                                                break;
+                                            }
+                                            opt_i += olen;
+                                        }
+                                    }
                                     crate::log!(
-                                        "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={}\n",
+                                        "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} cookie_ok={} msg_type={}\n",
                                         self.index,
                                         offer_count,
                                         ip_src[0],
@@ -360,7 +576,15 @@ impl Device for AdapterDeviceAt {
                                         ip_dst[1],
                                         ip_dst[2],
                                         ip_dst[3],
-                                        packet.len()
+                                        packet.len(),
+                                        op,
+                                        xid,
+                                        yiaddr[0],
+                                        yiaddr[1],
+                                        yiaddr[2],
+                                        yiaddr[3],
+                                        cookie_ok,
+                                        msg_type
                                     );
                                 }
                             }
@@ -455,6 +679,11 @@ impl TxToken for AdapterTxTokenAt {
     {
         let mut buf = vec![0u8; len];
         let result = f(&mut buf[..]);
+
+        // DHCP fixup must run for every outgoing DHCP client packet, not only
+        // the initial tx-tap frames.
+        dhcp_fixup_broadcast_and_udp_checksum(&mut buf[..]);
+
         let new_total = NET_TX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
         let new_dev_total = NET_TX_FRAMES_AT
             .get(self.index)
@@ -650,6 +879,16 @@ impl TxToken for AdapterTxTokenAt {
             let _ = NET_TX_DROPPED_AT
                 .get(self.index)
                 .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1);
+
+            // DHCP is low-rate but time-sensitive; if we drop it, say so.
+            if is_dhcp_client_udp(&buf[..]) {
+                crate::log!(
+                    "net: dhcp-tx-drop dev={} dropped_total={} len={}\n",
+                    self.index,
+                    dropped,
+                    buf.len()
+                );
+            }
             if (dropped & NET_FRAME_LOG_MASK) == 0 {
                 log!(
                     "net: tx busy (drop) frames={} dropped={} last_len={}\n",

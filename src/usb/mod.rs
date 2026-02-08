@@ -10,6 +10,7 @@ pub mod pen;
 pub mod print;
 pub mod isoch;
 pub mod uac;
+pub mod midi;
 pub mod leds;
 pub mod truekey;
 pub mod xhci;
@@ -59,6 +60,7 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
             DeviceKind::Pen => "pen",
             DeviceKind::Cdc => "cdc",
             DeviceKind::Uac => "uac",
+            DeviceKind::Midi => "midi",
             DeviceKind::Leds => "leds",
             DeviceKind::Unknown => "unknown",
         };
@@ -87,6 +89,7 @@ enum DeviceKind {
     Pen,
     Cdc,
     Uac,
+    Midi,
     Leds,
     Unknown,
 }

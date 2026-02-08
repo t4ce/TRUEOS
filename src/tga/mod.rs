@@ -1,6 +1,7 @@
-use core::ptr::{write_volatile, NonNull};
+use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
+use spin::{Mutex, Once};
 
 use crate::pci::PciDevice;
 
@@ -9,14 +10,23 @@ const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
 
 // Minimal "unified" contract (we control both ends):
 // - BAR0 is MMIO
-// - BAR0 + 0x00 is a 32-bit LED register
-// - write 0 => LED off, write 1 => LED on
-const TGA_LED_REG_OFF: usize = 0x00;
+// - BAR0 + 0x00 is a 32-bit LED bitfield
+//   - bit0..bit5: usr_led0..usr_led5
+//   - other bits ignored
+const TGA_LED_SET_OFF: usize = 0x00;
+const TGA_LAST_OFF: usize = 0x04;
+const TGA_COUNT_OFF: usize = 0x08;
+const TGA_ID_OFF: usize = 0x0C;
 
 struct Tga {
     bus: u8,
     slot: u8,
     function: u8,
+    bar_phys: u64,
+    bar_size: u64,
+    bar_is_64: bool,
+    bar_assigned_by_os: bool,
+    mmio_base: usize,
     led_reg: usize,
 }
 
@@ -28,10 +38,110 @@ impl Tga {
     fn write_led(&self, value: u32) {
         unsafe { write_volatile(self.led_reg as *mut u32, value) };
     }
+
+    #[inline(always)]
+    fn read_reg32(&self, offset: usize) -> u32 {
+        unsafe { read_volatile((self.mmio_base + offset) as *const u32) }
+    }
 }
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
+
+static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
+static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
+
+// Heartbeat policy: blink a single LED as a "driver alive" indicator.
+static TGA_HEARTBEAT_TOGGLE: AtomicU32 = AtomicU32::new(0);
+
+const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
+const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
+
+fn tga_bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
+    // BAR sizing writes can confuse some devices if decode is enabled.
+    // Also, some endpoints incorrectly return a 0 upper mask for 64-bit BAR sizing.
+    // We harden both issues locally for TGA bring-up.
+    let cmd_before = crate::pci::config_read_u16(bus, slot, function, 0x04);
+    if cmd_before == 0xFFFF {
+        return None;
+    }
+
+    let cmd_disabled = cmd_before & !(PCI_COMMAND_IO_SPACE | PCI_COMMAND_MEM_SPACE);
+    if cmd_disabled != cmd_before {
+        crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_disabled);
+    }
+
+    let off = 0x10u16;
+    let orig_lo = crate::pci::config_read_u32(bus, slot, function, off);
+    if orig_lo == 0xFFFF_FFFF {
+        crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_before);
+        return None;
+    }
+    if (orig_lo & 0x1) != 0 {
+        crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_before);
+        return None;
+    }
+
+    let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
+    let orig_hi = if is_64 {
+        crate::pci::config_read_u32(bus, slot, function, off + 4)
+    } else {
+        0
+    };
+
+    crate::pci::config_write_u32(bus, slot, function, off, 0xFFFF_FFF0);
+    if is_64 {
+        crate::pci::config_write_u32(bus, slot, function, off + 4, 0xFFFF_FFFF);
+    }
+
+    let mask_lo = crate::pci::config_read_u32(bus, slot, function, off);
+    let mask_hi = if is_64 {
+        crate::pci::config_read_u32(bus, slot, function, off + 4)
+    } else {
+        0
+    };
+
+    crate::pci::config_write_u32(bus, slot, function, off, orig_lo);
+    if is_64 {
+        crate::pci::config_write_u32(bus, slot, function, off + 4, orig_hi);
+    }
+
+    crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_before);
+
+    if is_64 {
+        let size_mask_lo = mask_lo & !0xFu32;
+        if size_mask_lo == 0 {
+            return None;
+        }
+
+        // If the upper mask comes back 0, compute the size from the low dword only.
+        // For small (<4GiB) 64-bit BARs, a conforming device typically returns 0xFFFF_FFFF
+        // in the upper mask during sizing. We've observed 0 here from the endpoint.
+        if mask_hi == 0 {
+            return Some((!size_mask_lo).wrapping_add(1) as u64);
+        }
+
+        let size_mask = ((mask_hi as u64) << 32) | (size_mask_lo as u64);
+        if size_mask == 0 {
+            return None;
+        }
+        let size = (!size_mask).wrapping_add(1);
+
+        // Extra guard: if the computed size looks like the "0xFFFFFFFF...." pattern,
+        // fall back to the low-dword-only calculation.
+        if (size >> 32) == 0xFFFF_FFFF {
+            return Some((!size_mask_lo).wrapping_add(1) as u64);
+        }
+
+        Some(size)
+    } else {
+        let size_mask = mask_lo & !0xFu32;
+        if size_mask == 0 {
+            return None;
+        }
+        Some((!size_mask).wrapping_add(1) as u64)
+    }
+}
 
 fn write_led_raw(value: u32) {
     let guard = TGA.lock();
@@ -41,8 +151,27 @@ fn write_led_raw(value: u32) {
     tga.write_led(value);
 }
 
+pub fn tga_led_write(value: u32) {
+    write_led_raw(value);
+}
+
 pub fn tga_led_set(on: bool) {
-    write_led_raw(if on { 1 } else { 0 });
+    tga_led_write(if on { 1 } else { 0 });
+}
+
+pub fn tga_last() -> Option<u32> {
+    let guard = TGA.lock();
+    guard.as_ref().map(|tga| tga.read_reg32(TGA_LAST_OFF))
+}
+
+pub fn tga_count() -> Option<u32> {
+    let guard = TGA.lock();
+    guard.as_ref().map(|tga| tga.read_reg32(TGA_COUNT_OFF))
+}
+
+pub fn tga_id() -> Option<u32> {
+    let guard = TGA.lock();
+    guard.as_ref().map(|tga| tga.read_reg32(TGA_ID_OFF))
 }
 
 pub fn try_init() -> bool {
@@ -64,6 +193,14 @@ pub fn try_init() -> bool {
         found = devices.iter().copied().find(is_tga);
     });
     let Some(dev) = found else {
+        TGA_MISSING_LOG_ONCE.call_once(|| {
+            crate::log!(
+                "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
+                TGA_VENDOR_ID,
+                TGA_DEVICE_ID,
+                device_count
+            );
+        });
         return false;
     };
 
@@ -71,8 +208,18 @@ pub fn try_init() -> bool {
         return false;
     };
 
+    crate::log!(
+        "tga: connected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {}\n",
+        tga.bus,
+        tga.slot,
+        tga.function,
+        tga.bar_phys,
+        tga.bar_size,
+        if tga.bar_is_64 { "64b" } else { "32b" },
+        if tga.bar_assigned_by_os { "assigned" } else { "fw" }
+    );
+
     *TGA.lock() = Some(tga);
-    crate::log!("tga: connected\n");
     // Keep contract explicit: default to LED off.
     tga_led_set(false);
     true
@@ -125,21 +272,31 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let bar_is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
     let _bar_prefetch = ((bar_lo >> 3) & 0x1) != 0;
 
+    let bar_size = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+
     let mut bar_phys = {
         let lo = (bar_lo as u64) & !0xFu64;
         let hi = bar_hi.unwrap_or(0) as u64;
         lo | (hi << 32)
     };
 
-    if bar_phys == 0 {
-        let size = crate::pci::bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
-        let base = crate::pci::bar_alloc::alloc_tga_bar0_base(size)?;
+    let mut bar_assigned_by_os = false;
 
-        // Preserve the low BAR attribute bits (IO/type/prefetch) if they were present.
-        let new_lo = (base & !0xFu32) | (bar_lo & 0xFu32);
+    if bar_phys == 0 {
+        bar_assigned_by_os = true;
+        // Hotplug path: firmware may not have assigned BARs for devices appearing later.
+        // Allocate a safe base and program BAR0 (+BAR1 if 64-bit).
+        let probed = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+        let size = probed.max(0x1000);
+        let align = size.max(0x1000);
+
+        let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
+
+        // Preserve the low BAR attribute bits (IO/type/prefetch) reported by the device.
+        let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
         crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x10, new_lo);
         if bar_is_64 {
-            crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x14, 0);
+            crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x14, (base >> 32) as u32);
         }
 
         // Re-read and re-validate.
@@ -182,12 +339,17 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     };
 
     let base = mapped.as_ptr() as usize;
-    let led_reg = base + TGA_LED_REG_OFF;
+    let led_reg = base + TGA_LED_SET_OFF;
 
     let tga = Tga {
         bus: dev.bus,
         slot: dev.slot,
         function: dev.function,
+        bar_phys,
+        bar_size,
+        bar_is_64,
+        bar_assigned_by_os,
+        mmio_base: base,
         led_reg,
     };
     tga.write_led(0);
@@ -196,12 +358,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
 #[embassy_executor::task]
 pub(crate) async fn tga_task() {
-    let mut ctr: u32 = 0;
+    TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
+        crate::log!("tga: task started\n");
+    });
     loop {
         if !is_online() {
             crate::pci::enumerate_silent();
             let _ = try_init();
-            ctr = 0;
             Timer::after(EmbassyDuration::from_secs(5)).await;
             continue;
         }
@@ -215,16 +378,24 @@ pub(crate) async fn tga_task() {
             {
                 let mut guard = TGA.lock();
                 if guard.is_some() {
-                    *guard = None;
-                    crate::log!("tga: disconnected\n");
+                    if let Some(old) = guard.take() {
+                        crate::log!(
+                            "tga: disconnected bdf={:02X}:{:02X}.{}\n",
+                            old.bus,
+                            old.slot,
+                            old.function
+                        );
+                    }
                 }
             }
             Timer::after(EmbassyDuration::from_secs(5)).await;
             continue;
         }
 
-        tga_led_set((ctr & 1) != 0);
-        ctr = ctr.wrapping_add(1);
+        let t = TGA_HEARTBEAT_TOGGLE.fetch_xor(1, Ordering::Relaxed);
+        // Blink usr_led0 (bit0). Other bits remain 0.
+        write_led_raw(if (t & 1) == 0 { 0x0000_0001 } else { 0x0000_0000 });
+
         Timer::after(EmbassyDuration::from_millis(500)).await;
     }
 }

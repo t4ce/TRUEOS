@@ -785,10 +785,17 @@ async fn fetch_control_in(
     let (phys, virt) = dma::alloc(want_len, 64).ok_or(FetchReportError::Alloc)?;
     unsafe { write_bytes(virt, 0, want_len) };
 
+    // xHCI Setup Stage TRB encodes an 8-byte USB setup packet in d0/d1.
+    // d0: bmRequestType | (bRequest<<8) | (wValue<<16)
+    // d1: wIndex | (wLength<<16)
+    // d2: transfer length (8) and TRT bits (IN=2)
+    let w_length = want_len as u16;
+    let setup_d1 = (setup_d1 & 0xFFFF) | ((w_length as u32) << 16);
+
     let setup = Trb {
         d0: setup_d0,
         d1: setup_d1,
-        d2: want_len as u32,                                  // wLength
+        d2: 8 | (2 << 16), // 8-byte setup, TRT=IN
         d3: trb_type(2) | (1 << 6),
     };
 
@@ -807,10 +814,18 @@ async fn fetch_control_in(
         d3: trb_type(4) | (1 << 5),
     };
 
-    if !ep0_ring.push(setup) || !ep0_ring.push(data) || !ep0_ring.push(status) {
+    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
         dma::dealloc(virt, want_len);
         return Err(FetchReportError::RingOverflow);
-    }
+    };
+    let Some(data_trb_phys) = ep0_ring.push_with_phys(data) else {
+        dma::dealloc(virt, want_len);
+        return Err(FetchReportError::RingOverflow);
+    };
+    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
+        dma::dealloc(virt, want_len);
+        return Err(FetchReportError::RingOverflow);
+    };
 
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
 
@@ -822,7 +837,22 @@ async fn fetch_control_in(
                 return false;
             }
             let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
+            if evt_slot != slot_id {
+                return false;
+            }
+
+            // EP0 completions may show up on endpoint ID 1 (EP0 OUT) or 2 (EP0 IN)
+            // depending on controller behavior.
+            let evt_target = (evt.d3 >> 16) & 0x1F;
+            if evt_target != 1 && evt_target != 2 {
+                return false;
+            }
+
+            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
+            let evt_ptr = evt_ptr & !0xFu64;
+            evt_ptr == (setup_trb_phys & !0xFu64)
+                || evt_ptr == (data_trb_phys & !0xFu64)
+                || evt_ptr == (status_trb_phys & !0xFu64)
         },
         400,
         EmbassyDuration::from_millis(5),
@@ -834,14 +864,19 @@ async fn fetch_control_in(
     };
 
     let completion = ((evt.d2 >> 24) & 0xFF) as u8;
-    if completion != 1 {
+    // CC=13 is normal Short Packet (common for descriptor reads).
+    if completion != 1 && completion != 13 {
         dma::dealloc(virt, want_len);
         return Err(FetchReportError::Completion(completion));
     }
 
+    let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
+    let requested = want_len as u32;
+    let transferred = requested.saturating_sub(remaining).min(requested) as usize;
+
     let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
     let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
-    let _ = out.extend_from_slice(data_slice);
+    let _ = out.extend_from_slice(&data_slice[..transferred]);
     dma::dealloc(virt, want_len);
     Ok(out)
 }
@@ -908,6 +943,131 @@ pub(crate) fn log_report_descriptor(slot_id: u32, iface: u8, desc: &[u8]) {
         );
         idx = end;
     }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct HidOutputReportFormat {
+    pub report_id: u8,
+    pub total_len_bytes: u16,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct HidGlobalState {
+    report_size_bits: u32,
+    report_count: u32,
+    report_id: u8,
+}
+
+/// Best-effort parse of a HID report descriptor to find an Output report format.
+///
+/// This intentionally handles only the subset needed for simple vendor LED devices:
+/// Report Size, Report Count, Report ID, and Main Output items.
+pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportFormat> {
+    let mut idx: usize = 0;
+    let mut state = HidGlobalState {
+        report_size_bits: 0,
+        report_count: 0,
+        report_id: 0,
+    };
+    let mut stack: [HidGlobalState; 4] = [HidGlobalState::default(); 4];
+    let mut sp: usize = 0;
+
+    // Track the largest Output report payload size per report ID.
+    let mut best_id: u8 = 0;
+    let mut best_payload_bytes: u16 = 0;
+
+    while idx < desc.len() {
+        let b = desc[idx];
+        idx += 1;
+
+        if b == 0xFE {
+            // Long item: [0xFE, data_size, long_tag, data...]
+            if idx + 2 > desc.len() {
+                break;
+            }
+            let data_size = desc[idx] as usize;
+            idx += 2; // skip size + long_tag
+            idx = idx.saturating_add(data_size);
+            continue;
+        }
+
+        let size_code = (b & 0x03) as usize;
+        let data_size = match size_code {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            3 => 4,
+            _ => 0,
+        };
+        let item_type = (b >> 2) & 0x03;
+        let tag = (b >> 4) & 0x0F;
+
+        if idx + data_size > desc.len() {
+            break;
+        }
+
+        let mut value_u32: u32 = 0;
+        for i in 0..data_size {
+            value_u32 |= (desc[idx + i] as u32) << (8 * i);
+        }
+        idx += data_size;
+
+        match (item_type, tag) {
+            // Global items.
+            (1, 7) => {
+                // Report Size (bits)
+                state.report_size_bits = value_u32;
+            }
+            (1, 9) => {
+                // Report Count
+                state.report_count = value_u32;
+            }
+            (1, 8) => {
+                // Report ID
+                state.report_id = (value_u32 & 0xFF) as u8;
+            }
+            (1, 10) => {
+                // Push
+                if sp < stack.len() {
+                    stack[sp] = state;
+                    sp += 1;
+                }
+            }
+            (1, 11) => {
+                // Pop
+                if sp > 0 {
+                    sp -= 1;
+                    state = stack[sp];
+                }
+            }
+
+            // Main items.
+            (0, 9) => {
+                // Output
+                let bits = state.report_size_bits.saturating_mul(state.report_count);
+                if bits == 0 {
+                    continue;
+                }
+                let payload_bytes = ((bits + 7) / 8) as u16;
+                if payload_bytes >= best_payload_bytes {
+                    best_payload_bytes = payload_bytes;
+                    best_id = state.report_id;
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    if best_payload_bytes == 0 {
+        return None;
+    }
+
+    let total_len_bytes = best_payload_bytes.saturating_add((best_id != 0) as u16);
+    Some(HidOutputReportFormat {
+        report_id: best_id,
+        total_len_bytes,
+    })
 }
 
 fn analyze_keyboard_report_descriptor(desc: &[u8]) -> Option<(Option<u8>, u16)> {
