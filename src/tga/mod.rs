@@ -51,8 +51,9 @@ static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
-// Heartbeat policy: blink a single LED as a "driver alive" indicator.
-static TGA_HEARTBEAT_TOGGLE: AtomicU32 = AtomicU32::new(0);
+// Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
+// We send 0..15 (wrap) so the FPGA can display the low bits.
+static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
@@ -392,9 +393,9 @@ pub(crate) async fn tga_task() {
             continue;
         }
 
-        let t = TGA_HEARTBEAT_TOGGLE.fetch_xor(1, Ordering::Relaxed);
-        // Blink usr_led0 (bit0). Other bits remain 0.
-        write_led_raw(if (t & 1) == 0 { 0x0000_0001 } else { 0x0000_0000 });
+        let t = TGA_HEARTBEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Send 0..15 then wrap.
+        write_led_raw(t & 0xF);
 
         Timer::after(EmbassyDuration::from_millis(500)).await;
     }

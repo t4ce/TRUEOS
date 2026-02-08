@@ -125,7 +125,7 @@ impl DmaWriter {
             total_bytes -= chunk;
 
             // Keep the executor responsive during long sequential I/O.
-            crate::time::poll_executor();
+            crate::runtime::poll_local_executor();
         }
 
         Ok(())

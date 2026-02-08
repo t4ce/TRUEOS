@@ -446,7 +446,7 @@ fn append_blob_line(blob: &mut AVec<u8>, line: &str) {
 fn log_line(slot_id: u8, blob: &mut AVec<u8>, line: &str) {
     push_line(slot_id, line);
     append_blob_line(blob, line);
-    crate::time::poll_executor();
+    crate::runtime::poll_local_executor();
 }
 
 #[embassy_executor::task]

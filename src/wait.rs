@@ -50,7 +50,7 @@ pub fn spin_step() {
 #[inline]
 pub fn park_step() {
     crate::time::poll();
-    crate::time::poll_executor();
+    crate::runtime::poll_local_executor();
     crate::power::idle_hint();
 }
 
@@ -230,7 +230,7 @@ impl WaitQueue {
             }
 
             crate::time::poll();
-            crate::time::poll_executor_allow_reentry();
+            crate::runtime::poll_local_executor_allow_reentry();
             crate::power::idle_hint();
         }
     }
