@@ -133,6 +133,7 @@ pub unsafe fn js_to_cstring(ctx: *mut JSContext, val: JSValueConst) -> *const c_
 ///
 /// Note: this is not an exported C symbol, so it must not be declared `extern`.
 #[inline]
+#[allow(non_snake_case)]
 pub unsafe fn JS_NewFloat64(_ctx: *mut JSContext, d: f64) -> JSValue {
     JSValue {
         u: JSValueUnion { float64: d },

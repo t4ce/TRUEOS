@@ -14,9 +14,6 @@ const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
 const TGA_LED_SET_OFF: usize = 0x00;
-const TGA_LAST_OFF: usize = 0x04;
-const TGA_COUNT_OFF: usize = 0x08;
-const TGA_ID_OFF: usize = 0x0C;
 
 struct Tga {
     bus: u8,
@@ -158,21 +155,6 @@ pub fn tga_led_write(value: u32) {
 
 pub fn tga_led_set(on: bool) {
     tga_led_write(if on { 1 } else { 0 });
-}
-
-pub fn tga_last() -> Option<u32> {
-    let guard = TGA.lock();
-    guard.as_ref().map(|tga| tga.read_reg32(TGA_LAST_OFF))
-}
-
-pub fn tga_count() -> Option<u32> {
-    let guard = TGA.lock();
-    guard.as_ref().map(|tga| tga.read_reg32(TGA_COUNT_OFF))
-}
-
-pub fn tga_id() -> Option<u32> {
-    let guard = TGA.lock();
-    guard.as_ref().map(|tga| tga.read_reg32(TGA_ID_OFF))
 }
 
 pub fn try_init() -> bool {

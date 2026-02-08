@@ -41,7 +41,6 @@ enum LedCmd {
         data: Vec<Rgb8, LED_POOL_SIZE>,
     },
     SetEffect { owner: u32, effect: Effect },
-    #[allow(dead_code)]
     RawOut {
         owner: u32,
         report_id: u8,
@@ -201,7 +200,6 @@ impl VLed {
         });
     }
 
-    #[allow(dead_code)]
     pub(crate) fn send_raw_out(&self, report_id: u8, data: &[u8]) {
         let mut v: Vec<u8, 64> = Vec::new();
         let _ = v.extend_from_slice(&data[..core::cmp::min(data.len(), 64)]);
@@ -311,6 +309,7 @@ fn mixed_rgb_from_pool() -> Rgb8 {
 pub async fn task() {
     crate::v::taskmon::run("vleds-mux", async move {
         crate::log!("v_leds: service online\n");
+        let raw_probe = alloc(1);
 
         let mut last_offline: bool = true;
         let mut last_sent_rgb: Option<Rgb8> = None;
@@ -339,9 +338,11 @@ pub async fn task() {
                         }
                     }
                     LedCmd::RawOut {
-                        report_id, data, ..
+                        owner,
+                        report_id,
+                        data,
                     } => {
-                        if online {
+                        if online && scope_range(*owner).is_some() {
                             let _ = crate::usb::leds::send_output_report_first(*report_id, data).await;
                         }
                     }
@@ -376,6 +377,11 @@ pub async fn task() {
                 }
 
                 if last_offline {
+                    if let Some(probe) = raw_probe {
+                        // Kick one raw OUT report when xHCI LED runtime comes online.
+                        probe.send_raw_out(0, &[0x00]);
+                    }
+
                     if let Some(effect) = last_effect {
                         let (rid, data) = encode_set_effect(effect);
                         if rid == 0 {

@@ -62,10 +62,6 @@ struct Completion {
 }
 
 impl Completion {
-    fn phase(self) -> bool {
-        (self.status & 0x1) != 0
-    }
-
     fn status_code(self) -> u8 {
         ((self.status >> 1) & 0xFF) as u8
     }
@@ -262,10 +258,6 @@ impl NvmeController {
         unsafe { read_volatile(self.mmio.as_ptr().add(off) as *const u32) }
     }
 
-    fn reg64(&self, off: usize) -> u64 {
-        unsafe { read_volatile(self.mmio.as_ptr().add(off) as *const u64) }
-    }
-
     fn write32(&self, off: usize, val: u32) {
         unsafe { write_volatile(self.mmio.as_ptr().add(off) as *mut u32, val) }
     }
@@ -295,30 +287,6 @@ impl NvmeController {
             rdy == want_ready
         });
         if ok { Ok(()) } else { Err(block::Error::Timeout) }
-    }
-
-    async fn wait_ready(&self, want_ready: bool, timeout_ms: u64) -> core::result::Result<(), block::Error> {
-        let hz = embassy_time_driver::TICK_HZ as u64;
-        let start = embassy_time_driver::now();
-        let ticks = if hz == 0 {
-            0
-        } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
-        };
-        let deadline = start.saturating_add(ticks);
-
-        loop {
-            let csts = self.reg32(NVME_REG_CSTS);
-            let rdy = (csts & 0x1) != 0;
-            if rdy == want_ready {
-                return Ok(());
-            }
-            if embassy_time_driver::now() >= deadline {
-                return Err(block::Error::Timeout);
-            }
-            // Cooperative yield while waiting for hardware state changes.
-            Timer::after(EmbassyDuration::from_micros(50)).await;
-        }
     }
 
     fn alloc_cid(&mut self) -> u16 {

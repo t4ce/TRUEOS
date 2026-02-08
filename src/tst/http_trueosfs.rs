@@ -157,20 +157,6 @@ fn http_url_decode(s: &str, max_len: usize) -> Option<String> {
     Some(out)
 }
 
-fn http_sanitize_filename(name: &str) -> String {
-    let mut out = String::new();
-    for ch in name.chars() {
-        match ch {
-            '"' | '\\' | '\r' | '\n' => out.push('_'),
-            _ => out.push(ch),
-        }
-    }
-    if out.is_empty() {
-        out.push_str("download.bin");
-    }
-    out
-}
-
 #[derive(Clone, Debug)]
 struct MultipartPart {
     start: u64,
@@ -191,7 +177,6 @@ enum HttpBodyPlan {
         path: String,
         parts: Vec<MultipartPart>,
         boundary: String,
-        total_len: u64,
     },
     None,
 }
@@ -429,7 +414,6 @@ async fn http_prepare_file_response(
                 path,
                 parts,
                 boundary: HTTP_MULTIPART_BOUNDARY.to_string(),
-                total_len: total_len_out,
             },
         };
     }
@@ -512,13 +496,11 @@ pub async fn http_trueosfs_task() {
                         let target = http_parse_target(data.as_slice()).unwrap_or("/");
 
                         let roots = crate::v::fs::trueosfs::list_roots();
-                        let primary_raw = crate::v::fs::trueosfs::primary_root_id().map(|v| v.raw());
 
                         let response: HttpResponsePlan = if http_path_only(target).starts_with("/dl/") {
                             // Download endpoint: /dl/<root_raw>/<path>
                             // (where <root_raw> is the DiscId raw value as decimal)
                             'resp: {
-                                let mut extra_headers = String::new();
                                 let path_only = http_path_only(target);
                                 let rest = path_only.strip_prefix("/dl/").unwrap_or("");
 
@@ -620,39 +602,11 @@ pub async fn http_trueosfs_task() {
                             }
                         } else {
                             // Build HTML trees (best-effort), one per mounted TRUEOSFS root.
-                            let mut selected_raw = primary_raw;
-
-                            if let Some(enc_root) = http_query_param(target, "root") {
-                                if let Some(root_s) = http_url_decode(enc_root, 16) {
-                                    if let Ok(v) = root_s.parse::<u32>() {
-                                        if roots.iter().any(|r| r.disk_id.raw() == v) {
-                                            selected_raw = Some(v);
-                                        }
-                                    }
-                                }
-                            }
-                            if selected_raw.is_none() {
-                                selected_raw = roots.first().map(|r| r.disk_id.raw());
-                            }
-
                             let js =    r#"<style>li{cursor:pointer}</style><script>(function(){function labelOf(li){var n=li.firstChild;return n&&n.nodeType===3?n.textContent:"";}function pathFor(li){var parts=[];var cur=li;while(cur){var t=labelOf(cur).trim();if(t==="/"){t="";}if(t.endsWith("/")){t=t.slice(0,-1);}if(t){parts.push(t);}var p=cur.parentElement;cur=p&&p.closest("li");}parts.reverse();return parts.join("/");}document.addEventListener("click",function(e){var li=e.target.closest("li");if(!li){return;}var tree=li.closest(".tree");if(!tree){return;}var root=tree.getAttribute("data-root")||"";var path=pathFor(li);if(!root||!path){return;}var segs=path.split("/").map(function(s){return encodeURIComponent(s);}).join("/");window.location.href="/dl/"+root+"/"+segs;});})();</script>"#;
 
-                            let mut options = String::new();
                             let mut trees_html = String::new();
                             for r in roots.iter() {
                                 let raw = r.disk_id.raw();
-                                let selected = selected_raw == Some(raw);
-                                options.push_str(
-                                    format!(
-                                        "<option value=\"{}\"{}>{} (raw={} seq={})</option>",
-                                        raw,
-                                        if selected { " selected" } else { "" },
-                                        r.disk_id,
-                                        raw,
-                                        r.seq
-                                    )
-                                    .as_str(),
-                                );
 
                                 let tree = match crate::disc::block::device_handle(r.disk_id) {
                                     None => None,
@@ -668,7 +622,10 @@ pub async fn http_trueosfs_task() {
                                 };
 
                                 trees_html.push_str(
-                                    format!("<div class=\"tree\" data-root=\"{}\">", raw)
+                                    format!(
+                                        "<section><h2>Root {} (raw={} seq={})</h2><div class=\"tree\" data-root=\"{}\">",
+                                        r.disk_id, raw, r.seq, raw
+                                    )
                                         .as_str(),
                                 );
                                 if let Some(t) = tree {
@@ -676,7 +633,7 @@ pub async fn http_trueosfs_task() {
                                 } else {
                                     trees_html.push_str("<p class=\"muted\">(tree unavailable)</p>");
                                 }
-                                trees_html.push_str("</div>");
+                                trees_html.push_str("</div></section>");
                             }
 
                             let body = if roots.is_empty() {
@@ -691,10 +648,8 @@ pub async fn http_trueosfs_task() {
                                 )
                             } else {
                                 format!(
-                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><div class=\"bar\"><label for=\"rootSel\">Root:</label><select id=\"rootSel\">{}</select><span class=\"muted\">(showing {})</span></div><p>Click a file to download.</p>{}</body></html>",
+                                    "<!doctype html><html><head><meta charset=\"utf-8\"><title>TRUEOSFS</title>{}</head><body><h1>TRUEOSFS</h1><p>Click a file to download.</p>{}</body></html>",
                                     js,
-                                    options,
-                                    selected_raw.unwrap_or(0),
                                     trees_html
                                 )
                             };
@@ -799,7 +754,6 @@ pub async fn http_trueosfs_task() {
                             path,
                             parts,
                             boundary,
-                            total_len: _,
                         } => {
                             let mut buf = vec![0u8; http_stream_chunk_bytes(disk)];
                             for part in parts {

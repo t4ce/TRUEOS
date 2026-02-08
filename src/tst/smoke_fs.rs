@@ -1,5 +1,4 @@
 use crate::disc::block;
-use crate::v::disc::partition;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 

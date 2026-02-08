@@ -34,12 +34,6 @@ pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
     true
 }
 
-/// Return whether the current context may block.
-#[inline]
-pub fn can_block() -> bool {
-    true
-}
-
 /// Single spin step that can be swapped for parking later.
 #[inline]
 pub fn spin_step() {
@@ -52,14 +46,6 @@ pub fn park_step() {
     crate::time::poll();
     crate::runtime::poll_local_executor();
     crate::power::idle_hint();
-}
-
-/// Spin until `condition` is true.
-#[inline]
-pub fn spin_until<F: FnMut() -> bool>(mut condition: F) {
-    while !condition() {
-        spin_step();
-    }
 }
 
 /// Spin until `condition` is true or the timeout expires.
@@ -208,32 +194,6 @@ impl WaitQueue {
         }
     }
 
-    #[inline]
-    pub fn wait_for_event_blocking_pump(&self, timeout_ms: u64) -> bool {
-        let hz = TICK_HZ as u64;
-        let ticks = if hz == 0 || timeout_ms == 0 {
-            0
-        } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
-        };
-        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
-        let observed = self.seq.load(Ordering::Acquire);
-
-        loop {
-            if ticks != 0 && now() >= deadline {
-                return false;
-            }
-
-            let current = self.seq.load(Ordering::Acquire);
-            if current != observed {
-                return true;
-            }
-
-            crate::time::poll();
-            crate::runtime::poll_local_executor_allow_reentry();
-            crate::power::idle_hint();
-        }
-    }
 }
 
 type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -288,11 +248,6 @@ pub async fn job_runner_task() {
     .await;
 }
 
-fn enqueue_job(job: JobFuture) {
-    JOBS.lock().push(job);
-    JOBS_WAIT.notify_one();
-}
-
 fn enqueue_local_job(job: LocalJobFuture) {
     LOCAL_JOBS.jobs.lock().push(job);
     JOBS_WAIT.notify_one();
@@ -301,32 +256,6 @@ fn enqueue_local_job(job: LocalJobFuture) {
 struct WaitState<T> {
     value: Mutex<Option<T>>,
     wait: WaitQueue,
-}
-
-/// Run a future on the async executor and wait synchronously for its result.
-pub fn spawn_and_wait<F, T>(fut: F) -> T
-where
-    F: Future<Output = T> + Send + 'static,
-    T: Send + 'static,
-{
-    let state = Arc::new(WaitState {
-        value: Mutex::new(None),
-        wait: WaitQueue::new(),
-    });
-    let state_task = state.clone();
-
-    enqueue_job(Box::pin(async move {
-        let out = fut.await;
-        *state_task.value.lock() = Some(out);
-        state_task.wait.notify_all();
-    }));
-
-    loop {
-        if let Some(out) = state.value.lock().take() {
-            return out;
-        }
-        state.wait.wait_for_event_blocking(0);
-    }
 }
 
 /// Run a future on the async executor and wait synchronously for its result.

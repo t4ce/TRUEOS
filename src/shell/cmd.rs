@@ -493,18 +493,38 @@ fn parse_i(tok: &str) -> Result<i64, &'static str> {
     }
 }
 
+#[inline]
+fn style_cmd_name(name: &str) -> impl core::fmt::Display + '_ {
+    crate::ecma48::bold(name)
+}
+
+#[inline]
+fn style_arg_name(name: &str) -> impl core::fmt::Display + '_ {
+    crate::ecma48::color(name, super::PROMPT_RGB)
+}
+
+#[inline]
+fn style_arg_type(ty: ArgType) -> impl core::fmt::Display {
+    crate::ecma48::dim(ty.name())
+}
+
+#[inline]
+fn style_error_label(text: &str) -> impl core::fmt::Display + '_ {
+    crate::ecma48::color(text, (255, 96, 96))
+}
+
 fn print_usage(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_str("usage: ");
-    io.write_str(cmd.name);
+    io.write_fmt(format_args!("{} ", crate::ecma48::dim("usage:")));
+    io.write_fmt(format_args!("{}", style_cmd_name(cmd.name)));
 
     for a in cmd.args.iter() {
         io.write_str(" ");
         if !a.mandatory {
             io.write_str("[");
         }
-        io.write_str(a.name);
+        io.write_fmt(format_args!("{}", style_arg_name(a.name)));
         io.write_str(":");
-        io.write_str(a.ty.name());
+        io.write_fmt(format_args!("{}", style_arg_type(a.ty)));
         if !a.mandatory {
             io.write_str("]");
         }
@@ -516,17 +536,19 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
     match &err.kind {
         ArgErrorKind::Missing { name, ty } => {
             io.write_fmt(format_args!(
-                "{}: missing argument '{}' (expected {})\r\n",
-                cmd.name,
-                name,
-                ty.name()
+                "{} {}: missing argument '{}' (expected {})\r\n",
+                style_error_label("error"),
+                style_cmd_name(cmd.name),
+                style_arg_name(name),
+                style_arg_type(*ty),
             ));
             print_usage(io, cmd);
         }
         ArgErrorKind::TooMany { expected, got } => {
             io.write_fmt(format_args!(
-                "{}: too many arguments (expected {}, got {})\r\n",
-                cmd.name,
+                "{} {}: too many arguments (expected {}, got {})\r\n",
+                style_error_label("error"),
+                style_cmd_name(cmd.name),
                 expected,
                 got
             ));
@@ -534,19 +556,21 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
         }
         ArgErrorKind::BadValue { name, ty, value, hint } => {
             io.write_fmt(format_args!(
-                "{}: bad value for '{}' (expected {}, got '{}')\r\n",
-                cmd.name,
-                name,
-                ty.name(),
+                "{} {}: bad value for '{}' (expected {}, got '{}')\r\n",
+                style_error_label("error"),
+                style_cmd_name(cmd.name),
+                style_arg_name(name),
+                style_arg_type(*ty),
                 value
             ));
-            io.write_fmt(format_args!("{}\r\n", hint));
+            io.write_fmt(format_args!("{} {}\r\n", crate::ecma48::dim("hint:"), hint));
             print_usage(io, cmd);
         }
         ArgErrorKind::RestNotLast => {
             io.write_fmt(format_args!(
-                "{}: internal schema error: rest argument must be last\r\n",
-                cmd.name
+                "{} {}: internal schema error: rest argument must be last\r\n",
+                style_error_label("error"),
+                style_cmd_name(cmd.name),
             ));
             print_usage(io, cmd);
         }
@@ -554,19 +578,23 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
 }
 
 pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_fmt(format_args!("cmd: {}\r\n", cmd.name));
+    io.write_fmt(format_args!("{} {}\r\n", crate::ecma48::dim("cmd:"), style_cmd_name(cmd.name)));
     if cmd.args.is_empty() {
-        io.write_str("  (no args)\r\n");
+        io.write_fmt(format_args!("  {}\r\n", crate::ecma48::dim("(no args)")));
         return;
     }
 
     for a in cmd.args.iter() {
         io.write_str("  ");
-        io.write_str(a.name);
+        io.write_fmt(format_args!("{}", style_arg_name(a.name)));
         io.write_str(": ");
-        io.write_str(a.ty.name());
+        io.write_fmt(format_args!("{}", style_arg_type(a.ty)));
         io.write_str("  ");
-        io.write_str(if a.mandatory { "mandatory" } else { "optional" });
+        if a.mandatory {
+            io.write_fmt(format_args!("{}", crate::ecma48::bold("mandatory")));
+        } else {
+            io.write_fmt(format_args!("{}", crate::ecma48::dim("optional")));
+        }
         io.write_str("\r\n");
     }
 }
@@ -574,7 +602,7 @@ pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
 pub(crate) fn init_builtin_shell_commands() {
     BUILTINS_ONCE.call_once(|| {
         static ARGS_ARGS: [ArgSpec; 1] = [ArgSpec::new("command", ArgType::Str).mandatory()];
-        static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Str)];
+        static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest)];
         static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
         static NET_ARGS: [ArgSpec; 2] = [

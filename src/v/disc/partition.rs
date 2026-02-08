@@ -135,17 +135,6 @@ pub struct PartitionInfo {
 }
 
 impl PartitionInfo {
-    pub fn block_count(&self) -> u64 {
-        self.range.block_count()
-    }
-
-    pub fn first_lba(&self) -> u64 {
-        self.range.first_lba()
-    }
-
-    pub fn last_lba(&self) -> u64 {
-        self.range.last_lba()
-    }
 }
 
 #[derive(Clone, Debug)]

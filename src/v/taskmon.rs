@@ -48,7 +48,6 @@ fn tsc_now() -> u64 {
 
 fn detect_tsc_hz() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
         let r15 = core::arch::x86_64::__cpuid(0x15);
         let denom = r15.eax as u64;
         let numer = r15.ebx as u64;
@@ -56,14 +55,11 @@ fn detect_tsc_hz() -> u64 {
         if denom != 0 && numer != 0 && crystal_hz != 0 {
             return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
         }
-
         let r16 = core::arch::x86_64::__cpuid(0x16);
         let base_mhz = (r16.eax & 0xFFFF) as u64;
         if base_mhz != 0 {
             return base_mhz * 1_000_000;
         }
-    }
-
     1_000_000_000
 }
 
