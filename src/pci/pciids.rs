@@ -235,49 +235,6 @@ fn hex4_to_u16(bytes: &[u8]) -> Option<u16> {
     Some((a << 12) | (b << 8) | (c << 4) | d)
 }
 
-/// Lookup a vendor name by vendor ID ($vid$) from a sanitized `pci.ids` blob.
-///
-/// Returns the vendor name bytes (typically UTF-8).
-pub fn lookup_vendor_name_from_db<'a>(db: &'a [u8], vid: u16) -> Option<&'a [u8]> {
-    let mut i: usize = 0;
-    while i < db.len() {
-        let start = i;
-        while i < db.len() && db[i] != b'\n' {
-            i += 1;
-        }
-        let mut line = &db[start..i];
-        if i < db.len() && db[i] == b'\n' {
-            i += 1;
-        }
-        if let Some((&b'\r', rest)) = line.split_last() {
-            line = rest;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        if line[0] == b'\t' {
-            continue;
-        }
-        if line.len() < 6 {
-            continue;
-        }
-        let Some(id) = hex4_to_u16(&line[..4]) else {
-            continue;
-        };
-        if line[4] != b' ' {
-            continue;
-        }
-        if id == vid {
-            let mut s = &line[5..];
-            while !s.is_empty() && (s[0] == b' ' || s[0] == b'\t') {
-                s = &s[1..];
-            }
-            return Some(s);
-        }
-    }
-    None
-}
-
 /// Lookup a `(vendor_name, device_name)` tuple by vendor+device IDs.
 ///
 /// Works on the sanitized `pci.ids` format produced by `sanitize_pci_ids()`:
@@ -360,30 +317,6 @@ pub fn lookup_vendor_device_from_db<'a>(
         }
     }
     None
-}
-
-/// Convenience: read the cached database and do a vendor+device lookup.
-pub fn lookup_vendor_device_cached(
-    vid: u16,
-    did: u16,
-) -> Result<
-    Option<(alloc::string::String, alloc::string::String)>,
-    crate::disc::block::Error,
-> {
-    use alloc::string::String;
-
-    let Some(db) = load_sanitized_from_root_blocking()? else {
-        return Ok(None);
-    };
-
-    let Some((v, d)) = lookup_vendor_device_from_db(&db, vid, did) else {
-        return Ok(None);
-    };
-
-    // Best-effort UTF-8 conversion for logs/UI.
-    let v = String::from_utf8_lossy(v).into_owned();
-    let d = String::from_utf8_lossy(d).into_owned();
-    Ok(Some((v, d)))
 }
 
 /// Download the upstream `pci.ids` database and store it on the TRUEOSFS root.

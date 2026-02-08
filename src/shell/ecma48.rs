@@ -439,6 +439,21 @@ pub(crate) fn handle_ecma48(io: &'static dyn super::ShellBackend, rest: &str) {
             .fg((255, 255, 0))
             .bg8(52)
     ));
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        style("builder dim+italic+fg8")
+            .dim()
+            .italic()
+            .fg8(214)
+    ));
+    io.write_fmt(format_args!(
+        "  {}\r\n",
+        style("builder invert+blink+strike+bg")
+            .invert()
+            .blink()
+            .strike()
+            .bg((32, 64, 96))
+    ));
     io.write_fmt(format_args!("  sanitize: {}\r\n", sanitize("\x1b[31mraw\x07")));
     io.write_str("  cursor edits: [ABCDE]\r\n");
 
