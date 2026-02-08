@@ -402,7 +402,7 @@ async fn fetch_on_device(
                                 }
                             } else if let Some(len) = header_parse_content_length(headers) {
                                 if body.len() >= len {
-                                    let mut out = body[..len].to_vec();
+                                    let  out = body[..len].to_vec();
                                     if out.len() > max_bytes {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -435,7 +435,7 @@ async fn fetch_on_device(
                     }
 
                     let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
-                    let mut decoded_body = if is_chunked {
+                    let  decoded_body = if is_chunked {
                         decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
                     } else if let Some(len) = header_parse_content_length(headers) {
                         body.get(..len).unwrap_or(body).to_vec()
