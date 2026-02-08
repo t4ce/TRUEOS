@@ -2,15 +2,8 @@ use crate::disc::block;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatVolumeLayout {
-    /// FAT boot sector is at LBA0.
-    ///
-    /// Note: `whole_disk` is true only when the BPB total sector count matches the device size.
     FatAtLba0 { total_sectors: u32, whole_disk: bool },
-
-    /// MBR at LBA0, with a FAT partition whose boot sector is at `start_lba`.
     MbrPartition { start_lba: u32, sectors: u32, part_type: u8 },
-
-    /// GPT partitioned disk, with a partition whose first LBA contains a FAT boot sector.
     GptPartition { start_lba: u64, sectors: u64 },
 }
 
@@ -285,21 +278,4 @@ pub async fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLa
     }
 
     Err(ProbeError::UnknownLayout)
-}
-
-/// Convert a detected FAT layout into a slice (base LBA, number of blocks) to use for mounting.
-pub fn fat_slice_for_mount(layout: FatVolumeLayout, disk_blocks: u64) -> (u64, u64) {
-    match layout {
-        FatVolumeLayout::FatAtLba0 { total_sectors, .. } => (0, core::cmp::min(total_sectors as u64, disk_blocks)),
-        FatVolumeLayout::MbrPartition { start_lba, sectors, .. } => {
-            let base = start_lba as u64;
-            let blocks = core::cmp::min(sectors as u64, disk_blocks.saturating_sub(base));
-            (base, blocks)
-        }
-        FatVolumeLayout::GptPartition { start_lba, sectors } => {
-            let base = start_lba;
-            let blocks = core::cmp::min(sectors, disk_blocks.saturating_sub(base));
-            (base, blocks)
-        }
-    }
 }
