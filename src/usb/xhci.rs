@@ -1158,7 +1158,7 @@ where
         polls = polls.wrapping_add(1);
         if (polls & 0x3F) == 0 {
             // Let other BSP tasks (timers, shell, etc.) run while we spin.
-            crate::time::poll_executor();
+            crate::runtime::poll_local_executor();
         }
 
         if embassy_time_driver::now() >= deadline {

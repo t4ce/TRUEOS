@@ -1,0 +1,63 @@
+#[inline]
+fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
+    let cpu_ptr = crate::percpu::this_cpu_ptr();
+    if cpu_ptr.is_null() {
+        return core::ptr::null_mut();
+    }
+    cpu_ptr
+}
+
+/// Poll the current CPU's executor once (if initialized).
+#[inline]
+pub fn poll_local_executor() {
+    let cpu_ptr = local_cpu_ptr();
+    if cpu_ptr.is_null() {
+        return;
+    }
+
+    let cpu = unsafe { &*cpu_ptr };
+    let ex_ptr = cpu.executor_ptr();
+    if ex_ptr.is_null() {
+        return;
+    }
+
+    if !cpu.try_enter_executor_poll() {
+        return;
+    }
+    unsafe { (&*ex_ptr).poll() };
+    cpu.leave_executor_poll();
+}
+
+/// Poll the current CPU's executor even if already inside a poll.
+#[inline]
+pub fn poll_local_executor_allow_reentry() {
+    let cpu_ptr = local_cpu_ptr();
+    if cpu_ptr.is_null() {
+        return;
+    }
+
+    let ex_ptr = unsafe { (&*cpu_ptr).executor_ptr() };
+    if ex_ptr.is_null() {
+        return;
+    }
+    unsafe { (&*ex_ptr).poll() };
+}
+
+pub fn run_ap_forever() -> ! {
+    let mut counter: u64 = 0;
+    loop {
+        if counter % 10_000_000 == 0 {
+            let slot = crate::percpu::this_cpu().cpu_index() as usize;
+            let total = crate::smp::cpu_count().max(1);
+            crate::vga::draw_header_square(
+                total,
+                slot,
+                crate::vga::DEFAULT_SHADOW_COLOR,
+                (counter % 360) as u32,
+            );
+            crate::smp::poll();
+            poll_local_executor();
+        }
+        counter = counter.wrapping_add(1);
+    }
+}

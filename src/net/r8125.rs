@@ -134,7 +134,7 @@ pub struct R8125Adapter {
     dbg_tx_submitted: u64,
     dbg_tx_reclaimed: u64,
     dbg_tx_ring_full: u64,
-    dbg_tx_stuck_logged: bool,
+    dbg_tx_stall_checks: u64,
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
@@ -356,7 +356,7 @@ impl R8125Adapter {
             dbg_tx_submitted: 0,
             dbg_tx_reclaimed: 0,
             dbg_tx_ring_full: 0,
-            dbg_tx_stuck_logged: false,
+            dbg_tx_stall_checks: 0,
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
@@ -387,9 +387,13 @@ impl R8125Adapter {
             let desc = unsafe { read_volatile(self.tx_desc.add(idx)) };
             let desc_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
             if (desc_opts1 & DESC_OWN) != 0 {
-                // If TX never advances, log once (helps diagnose DHCP “no offer”).
-                if !self.dbg_tx_stuck_logged && self.dbg_tx_reclaimed == 0 && self.dbg_tx_submitted != 0 {
-                    self.dbg_tx_stuck_logged = true;
+                // Seeing OWN set immediately after submission is normal; only treat it as a
+                // stall if it persists across many polls.
+                self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
+                if self.dbg_tx_reclaimed == 0
+                    && self.dbg_tx_submitted != 0
+                    && self.dbg_tx_stall_checks == 10_000
+                {
                     let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
                         (
                             self.mmio.read_u8(REG_CMD),
@@ -400,7 +404,7 @@ impl R8125Adapter {
                         )
                     };
                     crate::log!(
-                        "net/r8125: tx stuck head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
+                        "net/r8125: tx stall? head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
                         self.tx_head,
                         self.tx_tail,
                         desc_opts1,
@@ -410,11 +414,15 @@ impl R8125Adapter {
                         tn_lo,
                         isr
                     );
+
+                    // Attempt a one-time recovery kick.
                     self.kick_tx_engine();
                 }
                 break;
             }
             self.tx_head = (self.tx_head + 1) % TX_DESC_COUNT;
+
+            self.dbg_tx_stall_checks = 0;
 
             self.dbg_tx_reclaimed = self.dbg_tx_reclaimed.saturating_add(1);
             if self.dbg_tx_reclaimed == 1 {

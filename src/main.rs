@@ -23,7 +23,6 @@ pub extern crate alloc;
 
 mod allocators;
 mod audio;
-mod backtrace;
 mod disc;
 mod exceptions;
 mod limine;
@@ -36,6 +35,7 @@ mod portio;
 mod rng;
 mod power;
 mod globalog;
+mod runtime;
 mod shell;
 mod tst;
 mod surface;
@@ -55,76 +55,22 @@ pub(crate) use shell::matrix;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use ::limine::mp::Cpu as LimineCpu;
-use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use embassy_executor::{raw::Executor, Spawner};
-use trueos_qjs as qjs;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 pub use surface::pat as pattern;
 pub use surface::{io, path};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use spin::Once;
 
-static TOTAL_SLOTS: AtomicUsize = AtomicUsize::new(0);
-static CPU_SLOT_TABLE: AtomicPtr<CpuSlot> = AtomicPtr::new(core::ptr::null_mut());
-static CPU_SLOT_LEN: AtomicUsize = AtomicUsize::new(0);
 static LOG_CPU_TOPOLOGY_ONCE: Once<()> = Once::new();
+const AP_HEARTBEAT_TASK_POOL: usize = 256;
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct CpuSlot {
-    lapic_id: u32,
-    slot: u32,
-}
-
-#[inline]
-fn cpu_slot_table() -> &'static [CpuSlot] {
-    let len = CPU_SLOT_LEN.load(Ordering::Acquire);
-    let ptr = CPU_SLOT_TABLE.load(Ordering::Acquire);
-    if ptr.is_null() || len == 0 {
-        return &[];
-    }
-    unsafe { core::slice::from_raw_parts(ptr, len) }
-}
-
-#[inline]
-fn slot_for_lapic_id(lapic_id: u32, total: usize) -> usize {
-    let slots = cpu_slot_table();
-    if !slots.is_empty() {
-        for entry in slots {
-            if entry.lapic_id == lapic_id {
-                return entry.slot as usize;
-            }
-        }
-    }
-    if total == 0 {
-        0
-    } else {
-        (lapic_id as usize) % total
-    }
-}
-
-fn slot_for_lapic_id_in_slots(lapic_id: u32, slots: &[CpuSlot]) -> u32 {
-    for entry in slots {
-        if entry.lapic_id == lapic_id {
-            return entry.slot;
-        }
-    }
-    0
-}
-
-fn install_cpu_slot_table_owned(slots: Vec<CpuSlot>) {
-    let len = slots.len();
-    let mut boxed = slots.into_boxed_slice();
-    let ptr = boxed.as_mut_ptr();
-    core::mem::forget(boxed);
-    CPU_SLOT_TABLE.store(ptr, Ordering::Release);
-    CPU_SLOT_LEN.store(len, Ordering::Release);
-    TOTAL_SLOTS.store(len, Ordering::Release);
-}
-
-fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) -> Vec<CpuSlot> {
+fn build_cpu_slot_lapic_order(
+    resp: &::limine::response::MpResponse,
+    topo: X2ApicTopology,
+) -> Vec<u32> {
     // Important invariant for per-CPU mailboxes and other "slot indexed" data:
     // BSP must always be slot 0.
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
@@ -144,21 +90,17 @@ fn build_cpu_slots(resp: &::limine::response::MpResponse, topo: X2ApicTopology) 
         (a_pkg, a_core, a_smt, a_id).cmp(&(b_pkg, b_core, b_smt, b_id))
     });
 
-    let mut slots: Vec<CpuSlot> = Vec::with_capacity(items.len() + 1);
-    slots.push(CpuSlot {
-        lapic_id: bsp_lapic_id,
-        slot: 0,
-    });
+    let mut lapic_order: Vec<u32> = Vec::with_capacity(items.len() + 1);
+    lapic_order.push(bsp_lapic_id);
 
     for (lapic_id, _) in items {
-        if slots.iter().any(|s| s.lapic_id == lapic_id) {
+        if lapic_order.iter().any(|id| *id == lapic_id) {
             continue;
         }
-        let slot = slots.len() as u32;
-        slots.push(CpuSlot { lapic_id, slot });
+        lapic_order.push(lapic_id);
     }
 
-    slots
+    lapic_order
 }
 
 // Bootloader-provided stacks can be very small; debug builds can need a lot more
@@ -240,15 +182,16 @@ pub extern "C" fn kmain() -> ! {
     usb::truekey::init();
 
     let resp = limine::smp_response().unwrap();
-    TOTAL_SLOTS.store(resp.cpus().len() + 1, Ordering::Release);
+    percpu::set_total_slots(resp.cpus().len() + 1);
     log_cpu_topology_once(&resp);
-    smp::init(resp.cpus().len() + 1);
+    smp::init(percpu::total_slots());
     smp::mark_online();
 
     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
+    unsafe {
+        (&mut *percpu::this_cpu_ptr()).set_executor_ptr(executor as *mut Executor);
+    }
     let spawner = executor.spawner();
-
-    time::init(executor);
 
     if let Err(e) = crate::v::taskmon::spawn(&spawner, "job-runner", crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
@@ -286,11 +229,12 @@ pub extern "C" fn kmain() -> ! {
 fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
     LOG_CPU_TOPOLOGY_ONCE.call_once(|| {
         let topo = detect_x2apic_topology();
-        let slots = build_cpu_slots(resp, topo);
+        let lapic_order = build_cpu_slot_lapic_order(resp, topo);
+        percpu::install_cpu_slot_lapic_order_owned(lapic_order);
 
         crate::log!(
             "cpu-topology: total={} bsp_lapic_id={} leaf={} smt_bits={} core_bits={}\n",
-            TOTAL_SLOTS.load(Ordering::Acquire),
+            percpu::total_slots(),
             percpu::this_cpu().lapic_id(),
             topo.leaf,
             topo.smt_bits,
@@ -302,7 +246,7 @@ fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
 
         let bsp_lapic_id = percpu::this_cpu().lapic_id();
         let (pkg, core, smt) = topo.decode(bsp_lapic_id);
-        let bsp_slot = slot_for_lapic_id_in_slots(bsp_lapic_id, &slots);
+        let bsp_slot = percpu::slot_for_lapic_id(bsp_lapic_id);
         crate::log!(
             "cpu-topology: {:<4} {:>8} {:>4} {:>5} {:>4} {:>5}\n",
             "bsp", bsp_lapic_id, pkg, core, smt, bsp_slot
@@ -311,14 +255,12 @@ fn log_cpu_topology_once(resp: &::limine::response::MpResponse) {
         for cpu in resp.cpus() {
             let lapic_id = cpu.lapic_id as u32;
             let (pkg, core, smt) = topo.decode(lapic_id);
-            let slot = slot_for_lapic_id_in_slots(lapic_id, &slots);
+            let slot = percpu::slot_for_lapic_id(lapic_id);
             crate::log!(
                 "cpu-topology: {:<4} {:>8} {:>4} {:>5} {:>4} {:>5}\n",
                 "ap", lapic_id, pkg, core, smt, slot
             );
         }
-
-        install_cpu_slot_table_owned(slots);
     });
 }
 
@@ -345,46 +287,32 @@ fn _loop(executor: &'static Executor, _spawner: Spawner) -> ! {
 
 unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
-    let total = TOTAL_SLOTS.load(Ordering::Acquire);
-    let slot = slot_for_lapic_id(cpu.lapic_id as u32, total);
+    let slot = percpu::slot_for_lapic_id(cpu.lapic_id as u32);
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
+    let ex = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
+    unsafe {
+        (&mut *percpu::this_cpu_ptr()).set_executor_ptr(ex as *mut Executor);
+    }
+    let spawner = ex.spawner();
+    if let Err(e) = spawner.spawn(ap_heartbeat_task()) {
+        crate::log!("ap: heartbeat task spawn failed: {:?}\n", e);
+    }
     crate::smp::mark_online();
     exceptions::load_this_cpu();
-    ap_loop(cpu.lapic_id as u32, total, slot)
+    runtime::run_ap_forever()
 }
 
-//     let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
-//     let spawner = executor.spawner();
-fn ap_loop(lapic_id: u32, total: usize, slot: usize) -> ! {
-    let mut counter: u64 = 0;
+#[embassy_executor::task(pool_size = AP_HEARTBEAT_TASK_POOL)]
+async fn ap_heartbeat_task() {
     loop {
-        
-        if counter % 10_000_000 == 0 {
-            vga::draw_header_square(
-                total,
-                slot,
-                vga::DEFAULT_SHADOW_COLOR,
-                (counter % 360) as u32,
-            );
-            crate::smp::poll();
-        }
-        if counter % 100_000_000 == 0 {
-            globalog::debugcon_write_byte_raw(b'0' + lapic_id as u8);
-        }
-        counter = counter.wrapping_add(1);
-    }
-}
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
-    backtrace::print(64);
-    let mut counter: u64 = 0;
-    loop {
-        counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
-            globalog::debugcon_write_byte_raw(b'!');
-        }
+        Timer::after(EmbassyDuration::from_secs(5)).await;
+        let slot = percpu::this_cpu().cpu_index() as u8;
+        let mark = if slot < 10 {
+            b'0' + slot
+        } else {
+            b'A' + ((slot - 10) % 26)
+        };
+        globalog::debugcon_write_byte_raw(mark);
     }
 }
 

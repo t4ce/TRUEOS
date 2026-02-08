@@ -1,8 +1,7 @@
 use core::arch::x86_64::{__cpuid, _rdtsc};
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
 
-use embassy_executor::raw::Executor as RawExecutor;
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
 use spin::{Mutex, Once};
@@ -19,8 +18,6 @@ static TSC_HZ: AtomicU64 = AtomicU64::new(0);
 static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
-static EXECUTOR_PTR: AtomicPtr<RawExecutor> = AtomicPtr::new(core::ptr::null_mut());
-static EXECUTOR_POLLING: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 pub fn uptime_seconds() -> u64 {
@@ -45,48 +42,6 @@ pub fn unix_time_seconds() -> Option<u64> {
     }
     Some(base.saturating_add(uptime_seconds()))
 }
-
-#[inline]
-pub fn init(executor: &'static RawExecutor) {
-    EXECUTOR_PTR.store(executor as *const _ as *mut RawExecutor, Ordering::Release);
-}
-
-/// Poll the Embassy executor once (if initialized).
-///
-/// This is used by a few synchronous subsystems (e.g. C ABI shims) that need
-/// background async services (network/timers) to keep progressing while they
-/// wait in a tight loop.
-#[inline]
-pub fn poll_executor() {
-    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return;
-    }
-
-    // Avoid re-entrant executor polling (e.g. if `poll_executor` is used from within
-    // a `time::block_on` hook while the executor itself is polling futures).
-    if EXECUTOR_POLLING.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    unsafe { (&*ptr).poll() };
-    EXECUTOR_POLLING.store(false, Ordering::Release);
-}
-
-/// Poll the Embassy executor even if already inside a poll.
-///
-/// This is a best-effort escape hatch for blocking waits invoked from
-/// within async contexts (e.g. QuickJS module loading) so other tasks
-/// can still make progress.
-#[inline]
-pub fn poll_executor_allow_reentry() {
-    let ptr = EXECUTOR_PTR.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return;
-    }
-
-    unsafe { (&*ptr).poll() };
-}
-
 
 fn init_once() {
     INIT.call_once(|| {

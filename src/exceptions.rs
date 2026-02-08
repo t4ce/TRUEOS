@@ -1,6 +1,8 @@
 use core::fmt;
+use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use heapless::Vec;
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{
     InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode,
@@ -72,6 +74,72 @@ fn halt_loop() -> ! {
     }
 }
 
+/// Simple frame-pointer-based stack frame capture.
+#[derive(Copy, Clone, Debug)]
+pub struct Frame {
+    pub rbp: usize,
+    pub rip: usize,
+}
+
+const MAX_FRAMES: usize = 64;
+
+/// Collect up to `max_frames` frames using the canonical x86_64 RBP chain.
+/// Stops on null/zero RIP, non-forward RBP, or misaligned RBP to avoid loops.
+pub fn collect_backtrace(max_frames: usize) -> Vec<Frame, MAX_FRAMES> {
+    let limit = core::cmp::min(max_frames, MAX_FRAMES);
+
+    let mut rbp: *const usize;
+    unsafe {
+        core::arch::asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack, preserves_flags));
+    }
+
+    let mut frames = Vec::<Frame, MAX_FRAMES>::new();
+    while frames.len() < limit {
+        if rbp.is_null() {
+            break;
+        }
+
+        // Each frame: [saved_rbp, return_rip]. Bail if unreadable/corrupt.
+        let saved_rbp = unsafe { core::ptr::read(rbp) } as usize;
+        let ret_addr = unsafe { core::ptr::read(rbp.add(1)) } as usize;
+
+        if ret_addr == 0 {
+            break;
+        }
+
+        let _ = frames.push(Frame {
+            rbp: rbp as usize,
+            rip: ret_addr,
+        });
+
+        // Basic sanity: enforce forward progress and 16-byte alignment of caller frame.
+        if saved_rbp <= rbp as usize {
+            break;
+        }
+        if (saved_rbp & 0xF) != 0 {
+            break;
+        }
+
+        rbp = saved_rbp as *const usize;
+    }
+
+    frames
+}
+
+/// Print a stack trace to debugcon and VGA log.
+pub fn print_backtrace(max_frames: usize) {
+    let frames = collect_backtrace(max_frames);
+    crate::log!("stack trace ({} frames)\n", frames.len());
+    for (idx, frame) in frames.iter().enumerate() {
+        crate::log!(
+            "  #{:<2} rbp=0x{:016X} rip=0x{:016X}\n",
+            idx,
+            frame.rbp,
+            frame.rip
+        );
+    }
+}
+
 extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
     enter_handler_or_halt();
     interrupts::disable();
@@ -131,4 +199,17 @@ extern "x86-interrupt" fn double_fault_handler(
     dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
 
     halt_loop();
+}
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+    print_backtrace(64);
+    let mut counter: u64 = 0;
+    loop {
+        counter = counter.wrapping_add(1);
+        if counter % 100_000_000 == 0 {
+            crate::globalog::debugcon_write_byte_raw(b'!');
+        }
+    }
 }
