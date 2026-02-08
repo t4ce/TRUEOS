@@ -9,6 +9,7 @@ use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
+use embassy_time::Timer;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -28,6 +29,9 @@ struct LedIfaceInfo {
 pub struct LedRuntime {
     pub controller_id: usize,
     pub slot_id: u32,
+    pub iface: u8,
+    pub out_report_id: u8,
+    pub out_report_total_len: u16,
     pub ep_out_target: u32,
     pub ep_out_ring: TrbRing,
     pub out_ring_virt: *mut u8,
@@ -76,6 +80,39 @@ pub async fn send_output_report_first(report_id: u8, payload: &[u8]) -> Result<(
     send_output_report(controller_id, slot_id, report_id, payload).await
 }
 
+/// Send an OUT report using the device's preferred Report ID and expected total length
+/// (derived from its HID report descriptor), padding with zeros as needed.
+pub async fn send_preferred_output_report_first(payload: &[u8]) -> Result<(), ()> {
+    let Some((controller_id, slot_id)) = first_runtime_key() else {
+        return Err(());
+    };
+
+    let (preferred_id, preferred_total_len) = {
+        let guard = LED_RUNTIMES.lock();
+        let Some(rt) = guard
+            .iter()
+            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        else {
+            return Err(());
+        };
+        (rt.out_report_id, rt.out_report_total_len)
+    };
+
+    if preferred_total_len == 0 {
+        return send_output_report(controller_id, slot_id, preferred_id, payload).await;
+    }
+
+    let mut padded: Vec<u8, 64> = Vec::new();
+    let want_total = core::cmp::min(preferred_total_len as usize, 64);
+    let want_payload = want_total.saturating_sub((preferred_id != 0) as usize);
+    let take = core::cmp::min(payload.len(), want_payload);
+    let _ = padded.extend_from_slice(&payload[..take]);
+    while padded.len() < want_payload {
+        let _ = padded.push(0);
+    }
+    send_output_report(controller_id, slot_id, preferred_id, &padded).await
+}
+
 async fn send_output_report(
     controller_id: usize,
     slot_id: u32,
@@ -97,7 +134,7 @@ async fn send_output_report(
     let ctx = unsafe { XhciContext::new(info) };
 
     // Take a snapshot of the OUT ring state and endpoint target/address.
-    let (ep_out_target, mut ring_state) = {
+    let (ep_out_target, mut ring_state, pad_total_len) = {
         let mut guard = LED_RUNTIMES.lock();
         let Some(rt) = guard
             .iter_mut()
@@ -105,7 +142,7 @@ async fn send_output_report(
         else {
             return Err(());
         };
-        (rt.ep_out_target, rt.ep_out_ring.snapshot())
+        (rt.ep_out_target, rt.ep_out_ring.snapshot(), rt.out_report_total_len)
     };
 
     // Build report bytes. For report_id=0, many devices expect no ID byte; for non-zero,
@@ -114,8 +151,24 @@ async fn send_output_report(
     if report_id != 0 {
         let _ = report.push(report_id);
     }
-    let n = core::cmp::min(payload.len(), 64usize.saturating_sub(report.len()));
+    // If we know the device's expected total report length, pad/truncate to that.
+    let target_total = if pad_total_len != 0 {
+        core::cmp::min(pad_total_len as usize, 64)
+    } else {
+        0
+    };
+    let target_payload = if target_total != 0 {
+        target_total.saturating_sub(report.len())
+    } else {
+        64usize.saturating_sub(report.len())
+    };
+    let n = core::cmp::min(payload.len(), target_payload);
     let _ = report.extend_from_slice(&payload[..n]);
+    if target_total != 0 {
+        while report.len() < target_total {
+            let _ = report.push(0);
+        }
+    }
 
     // Allocate DMA for the report payload.
     let (buf_phys, buf_virt) = dma::alloc(report.len().max(1), 64).ok_or(())?;
@@ -552,62 +605,30 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     );
 
     set_configuration(ctx, ep0_ring, slot_id, info.configuration).await?;
+    // Some devices need a small settle time after configuration before responding
+    // to HID control reads.
+    Timer::after(EmbassyDuration::from_millis(10)).await;
 
-    // Configure OUT first (we expect control of LEDs via OUT reports).
-    let Some((ep_out_addr, ep_out_mps, ep_out_interval, ep_out_type)) = info.ep_out else {
-        crate::log!(
-            "usb: leds: no interrupt OUT endpoint (port={} slot={} iface={})\n",
-            target_port,
-            slot_id,
-            info.interface
-        );
-        return Err(());
-    };
-
-    let Some((ep_out_target, ep_out_ring, out_ring_virt, out_ring_bytes)) = configure_endpoint(
-            ctx,
-            cmd_ring,
-            slot_id,
-            dev_ctx_virt,
-            ctx_stride_bytes,
-            ctx_stride_words,
-            speed_code,
-            target_port,
-            ep_out_addr,
-            ep_out_mps,
-            ep_out_interval,
-            ep_out_type,
-        )
-        .await
-    else {
-        crate::log!("usb: leds: config OUT endpoint failed\n");
-        return Err(());
-    };
-
-    // Optional IN endpoint (some devices send status/acks).
-    if let Some((ep_in_addr, ep_in_mps, ep_in_interval, ep_in_type)) = info.ep_in {
-        let _ = configure_endpoint(
-            ctx,
-            cmd_ring,
-            slot_id,
-            dev_ctx_virt,
-            ctx_stride_bytes,
-            ctx_stride_words,
-            speed_code,
-            target_port,
-            ep_in_addr,
-            ep_in_mps,
-            ep_in_interval,
-            ep_in_type,
-        )
-        .await;
-    }
+    let mut preferred_out_report_id: u8 = 0;
+    let mut preferred_out_total_len: u16 = 0;
 
     if info.report_desc_len > 0 {
         let full_len = info.report_desc_len as usize;
         match hid::fetch_report_descriptor(ctx, ep0_ring, slot_id, info.interface, full_len).await {
             Ok(desc) => {
                 hid::log_report_descriptor(slot_id, info.interface, &desc);
+
+                if let Some(fmt) = hid::parse_output_report_format(&desc) {
+                    preferred_out_report_id = fmt.report_id;
+                    preferred_out_total_len = fmt.total_len_bytes;
+                    crate::log!(
+                        "usb: leds: output report format slot={} iface={} rid={} total_len={}\n",
+                        slot_id,
+                        info.interface,
+                        preferred_out_report_id,
+                        preferred_out_total_len
+                    );
+                }
             }
             Err(err) => {
                 crate::log!(
@@ -726,11 +747,64 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         crate::log!("usb: leds: report-desc len=0 iface={}\n", info.interface);
     }
 
+    // Configure OUT first (we expect control of LEDs via OUT reports).
+    let Some((ep_out_addr, ep_out_mps, ep_out_interval, ep_out_type)) = info.ep_out else {
+        crate::log!(
+            "usb: leds: no interrupt OUT endpoint (port={} slot={} iface={})\n",
+            target_port,
+            slot_id,
+            info.interface
+        );
+        return Err(());
+    };
+
+    let Some((ep_out_target, ep_out_ring, out_ring_virt, out_ring_bytes)) = configure_endpoint(
+            ctx,
+            cmd_ring,
+            slot_id,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+            ep_out_addr,
+            ep_out_mps,
+            ep_out_interval,
+            ep_out_type,
+        )
+        .await
+    else {
+        crate::log!("usb: leds: config OUT endpoint failed\n");
+        return Err(());
+    };
+
+    // Optional IN endpoint (some devices send status/acks).
+    if let Some((ep_in_addr, ep_in_mps, ep_in_interval, ep_in_type)) = info.ep_in {
+        let _ = configure_endpoint(
+            ctx,
+            cmd_ring,
+            slot_id,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+            ep_in_addr,
+            ep_in_mps,
+            ep_in_interval,
+            ep_in_type,
+        )
+        .await;
+    }
+
     {
         let mut guard = LED_RUNTIMES.lock();
         let _ = guard.push(LedRuntime {
             controller_id: ctx.controller_id,
             slot_id,
+            iface: info.interface,
+            out_report_id: preferred_out_report_id,
+            out_report_total_len: preferred_out_total_len,
             ep_out_target: ep_out_target as u32,
             ep_out_ring,
             out_ring_virt,
