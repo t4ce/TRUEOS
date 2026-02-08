@@ -31,12 +31,14 @@ QEMU_USB_FLAGS = \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx \
-	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=7,id=usbleds \
+	-device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=7,id=usbpiano \
+	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 	-drive file=nvme.img,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
-	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 
+	
+#-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
 

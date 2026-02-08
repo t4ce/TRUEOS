@@ -1,6 +1,6 @@
 use super::hub::HubWork;
 use super::xhci::{TrbRing, XhciContext};
-use super::{cdc_acm, hid, hub, leds, mass, pen, print, uac, DeviceKind, UsbControllerState};
+use super::{cdc_acm, hid, hub, leds, mass, midi, pen, print, uac, DeviceKind, UsbControllerState};
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -103,6 +103,36 @@ pub(crate) async fn try_attach_device(
             );
             super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Uac);
             return Some(DeviceKind::Uac);
+        }
+    }
+
+    let has_midi = midi::has_midi_streaming_interface(cfg_slice);
+    if has_midi {
+        if midi::attach_device(midi::AttachParams {
+            ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            target_port,
+            dev_vid,
+            dev_pid,
+        })
+        .await
+        .is_ok()
+        {
+            usbv!(
+                "usb: enum port {} claimed MIDI slot={} vid=0x{:04X} pid=0x{:04X}\n",
+                target_port,
+                slot_id,
+                dev_vid,
+                dev_pid
+            );
+            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Midi);
+            return Some(DeviceKind::Midi);
         }
     }
 

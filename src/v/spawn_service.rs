@@ -48,6 +48,7 @@ static UAC_SINE_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
+static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static TASKMON_REPORTER_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BENCH_NETWORK_STARTED: AtomicBool = AtomicBool::new(false);
@@ -214,6 +215,13 @@ fn spawn_truekey_drain(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
     spawn_monitored(spawner, "truekey-drain", crate::usb::truekey::drain_loop())
+}
+
+fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
+    spawn_monitored(spawner, "piano-drain", crate::usb::midi::piano_drain_loop())
 }
 
 fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -416,6 +424,12 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &TRUEKEY_DRAIN_STARTED,
         spawn: spawn_truekey_drain,
+    },
+    TaskSpec {
+        name: "piano-drain",
+        required: crate::v::readiness::PIANO_CLAIMED,
+        started: &PIANO_DRAIN_STARTED,
+        spawn: spawn_piano_drain,
     },
 
     // Boot-time gated tasks

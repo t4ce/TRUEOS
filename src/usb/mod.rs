@@ -260,13 +260,20 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                         // driven by this dispatcher task. Mass storage is driven by the mass driver
                         // (BOT) which waits for its own transfer events; if we consume them here, BOT
                         // will time out waiting for completions.
-                        Some(DeviceKind::Hid) | Some(DeviceKind::Cdc) | Some(DeviceKind::Uac) => true,
+                        Some(DeviceKind::Hid)
+                        | Some(DeviceKind::Cdc)
+                        | Some(DeviceKind::Uac)
+                        | Some(DeviceKind::Midi) => true,
                         Some(DeviceKind::Mass) => false,
                         Some(DeviceKind::Hub) => hub::interrupt_runtime_exists(controller_id, evt_slot),
                         Some(_) => false,
                         // During attach, transfers can complete before `register_device()` sets the
-                        // final kind. Only consume events for slots that already have a CDC runtime.
-                        None => cdc_acm::runtime_exists(controller_id, evt_slot),
+                        // final kind. Consume events for slots that already have a runtime.
+                        None => {
+                            cdc_acm::runtime_exists(controller_id, evt_slot)
+                                || midi::runtime_exists(controller_id, evt_slot)
+                                || hub::interrupt_runtime_exists(controller_id, evt_slot)
+                        }
                     }
                 },
                 400,
@@ -373,6 +380,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 Some(DeviceKind::Uac) => {
                     let _ = uac::handle_transfer_event(controller_id, &evt);
                 }
+                Some(DeviceKind::Midi) => {
+                    let _ = midi::handle_transfer_event(controller_id, &evt);
+                }
                 Some(DeviceKind::Hub) => {
                     if !hub::handle_transfer_event(controller_id, &evt) {
                         usbv!(
@@ -395,6 +405,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     // running) before `register_device()` marks the slot kind. Handle CDC events
                     // opportunistically so TX/RX doesn't stall.
                     let _ = cdc_acm::handle_transfer_event(controller_id, &evt);
+                    let _ = midi::handle_transfer_event(controller_id, &evt);
                 }
             }
         }
