@@ -469,8 +469,13 @@ impl Device for AdapterDeviceAt {
                 log!("net: rx frames={}\n", new_total);
             }
 
-            // DHCP offer detector (UDP 67 -> 68). Rate-limited so we can leave
+            // DHCP offer/ack detector (UDP 67 -> 68). Rate-limited so we can leave
             // it enabled while debugging without flooding logs.
+            //
+            // Important: replies are often broadcast, so multiple NICs on the same
+            // LAN will all see the same Offer/Ack. To avoid confusing logs, we
+            // only log packets whose BOOTP `chaddr` matches this NIC (and log a
+            // single mismatch sample otherwise).
             if packet.len() >= 14 {
                 let mut et = u16::from_be_bytes([packet[12], packet[13]]);
                 let mut l2_off = 14usize;
@@ -495,6 +500,7 @@ impl Device for AdapterDeviceAt {
                                     .unwrap_or(1);
 
                                 if offer_count <= 4 || (offer_count & 0x3F) == 0 {
+                                    let self_mac = crate::net::mac_address_at(self.index);
                                     let ip_src = [
                                         packet[l2_off + 12],
                                         packet[l2_off + 13],
@@ -520,8 +526,11 @@ impl Device for AdapterDeviceAt {
                                     let mut yiaddr = [0u8; 4];
                                     let mut cookie_ok: u8 = 0;
                                     let mut msg_type: u8 = 0;
+                                    let mut chaddr = [0u8; 6];
+                                    let mut chaddr_match: u8 = 0;
                                     if udp_len >= 8 + 240 && packet.len() >= udp_off + udp_len {
                                         op = packet[dhcp_off + 0];
+                                        let hlen = packet[dhcp_off + 2];
                                         xid = u32::from_be_bytes([
                                             packet[dhcp_off + 4],
                                             packet[dhcp_off + 5],
@@ -534,6 +543,16 @@ impl Device for AdapterDeviceAt {
                                             packet[dhcp_off + 18],
                                             packet[dhcp_off + 19],
                                         ];
+
+                                        if hlen == 6 {
+                                            chaddr.copy_from_slice(
+                                                &packet[dhcp_off + 28..dhcp_off + 34],
+                                            );
+                                            if let Some(m) = self_mac {
+                                                chaddr_match = (m == chaddr) as u8;
+                                            }
+                                        }
+
                                         cookie_ok = (packet[dhcp_off + 236..dhcp_off + 240]
                                             == [99, 130, 83, 99]) as u8;
 
@@ -564,28 +583,37 @@ impl Device for AdapterDeviceAt {
                                             opt_i += olen;
                                         }
                                     }
-                                    crate::log!(
-                                        "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} cookie_ok={} msg_type={}\n",
-                                        self.index,
-                                        offer_count,
-                                        ip_src[0],
-                                        ip_src[1],
-                                        ip_src[2],
-                                        ip_src[3],
-                                        ip_dst[0],
-                                        ip_dst[1],
-                                        ip_dst[2],
-                                        ip_dst[3],
-                                        packet.len(),
-                                        op,
-                                        xid,
-                                        yiaddr[0],
-                                        yiaddr[1],
-                                        yiaddr[2],
-                                        yiaddr[3],
-                                        cookie_ok,
-                                        msg_type
-                                    );
+                                    if chaddr_match != 0 || offer_count == 1 {
+                                        crate::log!(
+                                            "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chaddr_match={} cookie_ok={} msg_type={}\n",
+                                            self.index,
+                                            offer_count,
+                                            ip_src[0],
+                                            ip_src[1],
+                                            ip_src[2],
+                                            ip_src[3],
+                                            ip_dst[0],
+                                            ip_dst[1],
+                                            ip_dst[2],
+                                            ip_dst[3],
+                                            packet.len(),
+                                            op,
+                                            xid,
+                                            yiaddr[0],
+                                            yiaddr[1],
+                                            yiaddr[2],
+                                            yiaddr[3],
+                                            chaddr[0],
+                                            chaddr[1],
+                                            chaddr[2],
+                                            chaddr[3],
+                                            chaddr[4],
+                                            chaddr[5],
+                                            chaddr_match,
+                                            cookie_ok,
+                                            msg_type
+                                        );
+                                    }
                                 }
                             }
                         }
