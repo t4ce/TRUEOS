@@ -467,7 +467,7 @@ pub async fn resolve_ipv4_for_device(
                 );
                 let _ = net.submit(vnet::Command::Close { handle: udp });
                 // Best-effort cache insert; ignore on overflow.
-                if let Ok(mut hs) = heapless::String::<96>::try_from(host_trimmed) {
+                if let Ok(hs) = heapless::String::<96>::try_from(host_trimmed) {
                     let mut cache = DNS_CACHE.lock();
                     cache.retain(|e| e.expires_at > embassy_time_driver::now());
                     // Replace existing entry if present.
