@@ -607,7 +607,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
         static NET_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("op", ArgType::Str).mandatory(),
-            ArgSpec::new("target", ArgType::Str).mandatory(),
+            ArgSpec::new("target", ArgType::Str),
         ];
         static NO_ARGS: [ArgSpec; 0] = [];
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
@@ -821,14 +821,59 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
 fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let Some(args) = args else {
         ctx.io.write_str("net: usage net ping <host>\r\n");
+        ctx.io.write_str("net: usage net mac [index]\r\n");
         return super::CommandAction::None;
     };
 
     let op = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
     let target = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
 
+    if op.eq_ignore_ascii_case("mac") {
+        if target.is_empty() {
+            let count = crate::net::device_count();
+            if count == 0 {
+                ctx.io.write_str("net: no nics\r\n");
+                return super::CommandAction::None;
+            }
+            for index in 0..count {
+                let mac = if index == 0 {
+                    crate::net::mac_address()
+                } else {
+                    crate::net::mac_address_at(index)
+                };
+                if let Some([a, b, c, d, e, f]) = mac {
+                    ctx.io.write_fmt(format_args!(
+                        "net: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                        index, a, b, c, d, e, f
+                    ));
+                } else {
+                    ctx.io.write_fmt(format_args!("net: mac[{}]=unavailable\r\n", index));
+                }
+            }
+        } else if let Ok(index) = target.parse::<usize>() {
+            let mac = if index == 0 {
+                crate::net::mac_address()
+            } else {
+                crate::net::mac_address_at(index)
+            };
+
+            if let Some([a, b, c, d, e, f]) = mac {
+                ctx.io.write_fmt(format_args!(
+                    "net: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                    index, a, b, c, d, e, f
+                ));
+            } else {
+                ctx.io.write_fmt(format_args!("net: mac[{}]=unavailable\r\n", index));
+            }
+        } else {
+            ctx.io.write_str("net: usage net mac [index]\r\n");
+        }
+        return super::CommandAction::None;
+    }
+
     if op != "ping" || target.is_empty() {
         ctx.io.write_str("net: usage net ping <host>\r\n");
+        ctx.io.write_str("net: usage net mac [index]\r\n");
         return super::CommandAction::None;
     }
 
