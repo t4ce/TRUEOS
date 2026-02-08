@@ -12,6 +12,28 @@ const MAX_PCI_DEVICES: usize = 256;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 
+// PCI-to-PCI Bridge class/subclass
+const PCI_CLASS_BRIDGE: u8 = 0x06;
+const PCI_SUBCLASS_PCI_TO_PCI: u8 = 0x04;
+
+// Bridge window registers (Type 1 header)
+const PCI_BRIDGE_BUS_NUMBERS: u16 = 0x18;
+const PCI_BRIDGE_MEM_BASE_LIMIT: u16 = 0x20;
+
+const MAX_BRIDGE_ALLOCS: usize = 32;
+
+#[derive(Copy, Clone, Debug)]
+struct BridgeAlloc {
+    bus: u8,
+    slot: u8,
+    function: u8,
+    base: u64,
+    next_top: u64,
+    limit_excl: u64,
+}
+
+static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Vec::new());
+
 #[derive(Copy, Clone, Debug)]
 pub struct PciDevice {
     pub bus: u8,
@@ -564,6 +586,161 @@ pub fn bar_size_bytes(bus: u8, slot: u8, function: u8, index: u8) -> Option<u64>
 
 pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     bar_size_bytes(bus, slot, function, 0)
+}
+
+fn align_up_u64(value: u64, align: u64) -> Option<u64> {
+    if align <= 1 {
+        return Some(value);
+    }
+    let add = align.checked_sub(1)?;
+    let sum = value.checked_add(add)?;
+    Some((sum / align) * align)
+}
+
+fn bridge_bus_numbers(bus: u8, slot: u8, function: u8) -> (u8, u8, u8) {
+    let v = config_read_u32(bus, slot, function, PCI_BRIDGE_BUS_NUMBERS);
+    let primary = (v & 0xFF) as u8;
+    let secondary = ((v >> 8) & 0xFF) as u8;
+    let subordinate = ((v >> 16) & 0xFF) as u8;
+    (primary, secondary, subordinate)
+}
+
+fn bridge_mem_window(bus: u8, slot: u8, function: u8) -> Option<(u64, u64)> {
+    let v = config_read_u32(bus, slot, function, PCI_BRIDGE_MEM_BASE_LIMIT);
+    let base_reg = (v & 0xFFFF) as u16;
+    let limit_reg = (v >> 16) as u16;
+
+    // 1MiB granularity. Base is bits [15:4] << 16. Limit is bits [15:4] << 16 plus 0xFFFFF.
+    let base = ((base_reg as u64) & 0xFFF0u64) << 16;
+    let limit_incl = (((limit_reg as u64) & 0xFFF0u64) << 16) | 0xFFFFFu64;
+    if limit_incl < base {
+        return None;
+    }
+    Some((base, limit_incl.saturating_add(1)))
+}
+
+fn parent_bridge_for_bus(target_bus: u8) -> Option<(u8, u8, u8)> {
+    let mut best: Option<((u8, u8, u8), u16)> = None;
+    with_devices(|list| {
+        for dev in list {
+            if dev.class != PCI_CLASS_BRIDGE || dev.subclass != PCI_SUBCLASS_PCI_TO_PCI {
+                continue;
+            }
+            let (_p, sec, sub) = bridge_bus_numbers(dev.bus, dev.slot, dev.function);
+            if sec == 0 {
+                continue;
+            }
+
+            let score = if sec == target_bus {
+                0u16
+            } else if sec <= target_bus && target_bus <= sub {
+                1u16 + (target_bus as u16).saturating_sub(sec as u16)
+            } else {
+                continue;
+            };
+
+            match best {
+                Some((_b, best_score)) if score >= best_score => {}
+                _ => best = Some(((dev.bus, dev.slot, dev.function), score)),
+            }
+        }
+    });
+    best.map(|(bdf, _)| bdf)
+}
+
+fn alloc_from_bridge_window(
+    bridge_bus: u8,
+    bridge_slot: u8,
+    bridge_function: u8,
+    window_base: u64,
+    window_limit_excl: u64,
+    size: u64,
+    align: u64,
+) -> Option<u64> {
+    if size == 0 {
+        return None;
+    }
+
+    let mut lock = BRIDGE_ALLOCS.lock();
+    let mut idx: Option<usize> = None;
+    for (i, a) in lock.iter().enumerate() {
+        if a.bus == bridge_bus && a.slot == bridge_slot && a.function == bridge_function {
+            idx = Some(i);
+            break;
+        }
+    }
+
+    let (base, mut next_top, limit_excl) = if let Some(i) = idx {
+        let a = lock[i];
+        let base = a.base.min(window_base);
+        let limit_excl = a.limit_excl.max(window_limit_excl);
+        let next_top = a.next_top.min(limit_excl);
+        (base, next_top, limit_excl)
+    } else {
+        (window_base, window_limit_excl, window_limit_excl)
+    };
+
+    // Allocate from the top of the window downward.
+    // Heuristic: firmware typically allocates from base upward for devices present at boot.
+    // Using a top-down allocator reduces the chance of colliding with existing BARs without
+    // probing other devices.
+    next_top = next_top.min(limit_excl);
+    if next_top <= base {
+        return None;
+    }
+
+    let align = align.max(1);
+    let raw_start = next_top.checked_sub(size)?;
+    let start = (raw_start / align) * align;
+    let end = start.checked_add(size)?;
+    if start < base || end > limit_excl {
+        return None;
+    }
+
+    let new = BridgeAlloc {
+        bus: bridge_bus,
+        slot: bridge_slot,
+        function: bridge_function,
+        base,
+        next_top: start,
+        limit_excl,
+    };
+
+    if let Some(i) = idx {
+        lock[i] = new;
+    } else {
+        let _ = lock.push(new);
+    }
+
+    Some(start)
+}
+
+/// Allocate an MMIO base for a newly discovered device on `target_bus`.
+///
+/// Strategy:
+/// - Prefer allocating from the parent PCIe bridge's non-prefetchable Memory Window.
+/// - Fall back to the kernel's fixed "known-safe" MMIO32 allocator.
+///
+/// This is intentionally simple and is currently intended for our own endpoint(s).
+pub fn alloc_hotplug_mmio_base(target_bus: u8, size: u64, align: u64) -> Option<u64> {
+    if let Some((b_bus, b_slot, b_fun)) = parent_bridge_for_bus(target_bus) {
+        if let Some((base, limit_excl)) = bridge_mem_window(b_bus, b_slot, b_fun) {
+            if let Some(addr) = alloc_from_bridge_window(
+                b_bus,
+                b_slot,
+                b_fun,
+                base,
+                limit_excl,
+                size,
+                align,
+            ) {
+                return Some(addr);
+            }
+        }
+    }
+
+    // Fallback: fixed allocator (below 4GiB).
+    crate::pci::bar_alloc::alloc_mmio32(size, align).map(|x| x as u64)
 }
 
 #[inline(always)]

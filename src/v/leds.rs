@@ -359,14 +359,30 @@ pub async fn task() {
                 let desired_rgb = mixed_rgb_from_pool();
                 if last_offline || last_sent_rgb != Some(desired_rgb) {
                     let (rid, data) = encode_set_rgb(desired_rgb);
-                    let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                    if rid == 0 {
+                        let _ = crate::usb::leds::send_preferred_output_report_first(&data).await;
+
+                        // Try a few common vendor-HID RGB encodings (best-effort).
+                        // These are only sent when the desired RGB changes.
+                        let alt0 = [desired_rgb.r, desired_rgb.g, desired_rgb.b];
+                        let _ = crate::usb::leds::send_preferred_output_report_first(&alt0).await;
+
+                        let alt1 = [0x00, desired_rgb.r, desired_rgb.g, desired_rgb.b];
+                        let _ = crate::usb::leds::send_preferred_output_report_first(&alt1).await;
+                    } else {
+                        let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                    }
                     last_sent_rgb = Some(desired_rgb);
                 }
 
                 if last_offline {
                     if let Some(effect) = last_effect {
                         let (rid, data) = encode_set_effect(effect);
-                        let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                        if rid == 0 {
+                            let _ = crate::usb::leds::send_preferred_output_report_first(&data).await;
+                        } else {
+                            let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                        }
                     }
                 }
             }

@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use core::cmp::min;
 use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::sync::atomic::{compiler_fence, fence, Ordering};
 
 use crate::net::core::VendorAdapter;
 use crate::net::ring::{DmaRegion, NetRing};
@@ -104,6 +105,11 @@ impl Mmio {
     unsafe fn write_u32(&self, off: u16, val: u32) {
         write_volatile(self.base.as_ptr().add(off as usize) as *mut u32, val);
     }
+
+    #[inline]
+    unsafe fn read_u32(&self, off: u16) -> u32 {
+        read_volatile(self.base.as_ptr().add(off as usize) as *const u32)
+    }
 }
 
 pub struct R8125Adapter {
@@ -112,11 +118,13 @@ pub struct R8125Adapter {
     ring: Option<*mut NetRing>,
 
     _rx_desc_mem: DmaRegion,
+    rx_desc_phys: u64,
     rx_desc: *mut RxDesc,
     rx_bufs: Vec<DmaRegion>,
     rx_idx: usize,
 
     _tx_desc_mem: DmaRegion,
+    tx_desc_phys: u64,
     tx_desc: *mut TxDesc,
     tx_bufs: Vec<DmaRegion>,
     tx_head: usize,
@@ -126,6 +134,7 @@ pub struct R8125Adapter {
     dbg_tx_submitted: u64,
     dbg_tx_reclaimed: u64,
     dbg_tx_ring_full: u64,
+    dbg_tx_stuck_logged: bool,
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
@@ -235,9 +244,19 @@ impl R8125Adapter {
         let rx_desc_bytes = core::mem::size_of::<RxDesc>() * RX_DESC_COUNT;
         let tx_desc_bytes = core::mem::size_of::<TxDesc>() * TX_DESC_COUNT;
         crate::log!("net/r8125: alloc rx_desc bytes=0x{:x}\n", rx_desc_bytes);
-        let rx_desc_mem = DmaRegion::alloc(rx_desc_bytes, 16).ok_or(())?;
+        let rx_desc_mem = DmaRegion::alloc(rx_desc_bytes, 256).ok_or(())?;
         crate::log!("net/r8125: alloc tx_desc bytes=0x{:x}\n", tx_desc_bytes);
-        let tx_desc_mem = DmaRegion::alloc(tx_desc_bytes, 16).ok_or(())?;
+        let tx_desc_mem = DmaRegion::alloc(tx_desc_bytes, 256).ok_or(())?;
+
+        let rx_desc_phys = rx_desc_mem.phys();
+        let tx_desc_phys = tx_desc_mem.phys();
+        crate::log!(
+            "net/r8125: rx_desc phys=0x{:x} align256_ok={} tx_desc phys=0x{:x} align256_ok={}\n",
+            rx_desc_phys,
+            ((rx_desc_phys & 0xFF) == 0) as u8,
+            tx_desc_phys,
+            ((tx_desc_phys & 0xFF) == 0) as u8
+        );
 
         let rx_desc = rx_desc_mem.virt() as *mut RxDesc;
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
@@ -291,10 +310,10 @@ impl R8125Adapter {
             mmio.write_u16(REG_RX_MAX_SIZE, RX_BUF_SIZE as u16);
 
             // Descriptor ring addresses
-            mmio.write_u32(REG_RDSAR, rx_desc_mem.phys() as u32);
-            mmio.write_u32(REG_RDSAR_HI, (rx_desc_mem.phys() >> 32) as u32);
-            mmio.write_u32(REG_TNPDS, tx_desc_mem.phys() as u32);
-            mmio.write_u32(REG_TNPDS_HI, (tx_desc_mem.phys() >> 32) as u32);
+            mmio.write_u32(REG_RDSAR, rx_desc_phys as u32);
+            mmio.write_u32(REG_RDSAR_HI, (rx_desc_phys >> 32) as u32);
+            mmio.write_u32(REG_TNPDS, tx_desc_phys as u32);
+            mmio.write_u32(REG_TNPDS_HI, (tx_desc_phys >> 32) as u32);
 
             // Basic RX/TX config (promiscuous off; accept broadcast/multicast).
             // Values here are intentionally conservative for bring-up.
@@ -323,10 +342,12 @@ impl R8125Adapter {
             mac,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
+            rx_desc_phys,
             rx_desc,
             rx_bufs,
             rx_idx: 0,
             _tx_desc_mem: tx_desc_mem,
+            tx_desc_phys,
             tx_desc,
             tx_bufs,
             tx_head: 0,
@@ -335,6 +356,7 @@ impl R8125Adapter {
             dbg_tx_submitted: 0,
             dbg_tx_reclaimed: 0,
             dbg_tx_ring_full: 0,
+            dbg_tx_stuck_logged: false,
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
@@ -346,11 +368,50 @@ impl R8125Adapter {
         })
     }
 
+    fn kick_tx_engine(&mut self) {
+        unsafe {
+            self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
+
+            let cmd = self.mmio.read_u8(REG_CMD);
+            self.mmio.write_u8(REG_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
+
+            self.mmio.write_u8(REG_TXPOLL, 0x40);
+        }
+    }
+
     fn reclaim_tx(&mut self) {
         while self.tx_head != self.tx_tail {
             let idx = self.tx_head;
             let desc = unsafe { read_volatile(self.tx_desc.add(idx)) };
-            if (desc.opts1 & DESC_OWN) != 0 {
+            let desc_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
+            if (desc_opts1 & DESC_OWN) != 0 {
+                // If TX never advances, log once (helps diagnose DHCP “no offer”).
+                if !self.dbg_tx_stuck_logged && self.dbg_tx_reclaimed == 0 && self.dbg_tx_submitted != 0 {
+                    self.dbg_tx_stuck_logged = true;
+                    let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
+                        (
+                            self.mmio.read_u8(REG_CMD),
+                            self.mmio.read_u32(REG_TCR),
+                            self.mmio.read_u32(REG_TNPDS),
+                            self.mmio.read_u32(REG_TNPDS_HI),
+                            self.mmio.read_u16(REG_ISR),
+                        )
+                    };
+                    crate::log!(
+                        "net/r8125: tx stuck head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
+                        self.tx_head,
+                        self.tx_tail,
+                        desc_opts1,
+                        cmd,
+                        tcr,
+                        tn_hi,
+                        tn_lo,
+                        isr
+                    );
+                    self.kick_tx_engine();
+                }
                 break;
             }
             self.tx_head = (self.tx_head + 1) % TX_DESC_COUNT;
@@ -542,6 +603,9 @@ impl R8125Adapter {
             return Ok(());
         }
 
+        // Don't rely on RX polling cadence to free TX descriptors.
+        self.reclaim_tx();
+
         let len = min(frame.len(), TX_BUF_SIZE);
         let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
         if next_tail == self.tx_head {
@@ -563,6 +627,9 @@ impl R8125Adapter {
             core::ptr::copy_nonoverlapping(frame.as_ptr(), self.tx_bufs[idx].virt(), len);
         }
 
+        // Ensure the packet bytes are visible before we set DESC_OWN.
+        compiler_fence(Ordering::Release);
+
         let eor = if idx + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
         let opts1 = DESC_OWN | eor | TX_FS | TX_LS | (len as u32 & 0x3FFF);
         unsafe {
@@ -574,6 +641,9 @@ impl R8125Adapter {
                     addr: self.tx_bufs[idx].phys(),
                 },
             );
+
+            // Ensure descriptor writes are visible before we kick the device.
+            fence(Ordering::Release);
 
             // Kick TX (NPQ)
             self.mmio.write_u8(REG_TXPOLL, 0x40);
@@ -638,7 +708,7 @@ fn find_r8125_devices() -> alloc::vec::Vec<pci::PciDevice> {
 fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
     let mut i = 0u8;
     while i < 6 {
-        let (mut bar_lo, mut bar_hi) = pci::read_bar_raw(dev.bus, dev.slot, dev.function, i);
+        let (bar_lo, bar_hi) = pci::read_bar_raw(dev.bus, dev.slot, dev.function, i);
         if bar_lo == 0 {
             i += 1;
             continue;
