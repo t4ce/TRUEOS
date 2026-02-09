@@ -1,4 +1,4 @@
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::ptr::{write_volatile, NonNull};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
@@ -27,6 +27,18 @@ struct Tga {
     led_reg: usize,
 }
 
+#[derive(Copy, Clone)]
+struct TgaHotplugSnapshot {
+    bus: u8,
+    slot: u8,
+    function: u8,
+    bar_phys: u64,
+    bar_size: u64,
+    bar_is_64: bool,
+    bar_assigned_by_os: bool,
+    mmio_base: usize,
+}
+
 // Safety: `Tga` contains an MMIO pointer and is always accessed behind the `TGA` mutex.
 unsafe impl Send for Tga {}
 
@@ -39,6 +51,7 @@ impl Tga {
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
+static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
 
 static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
@@ -144,6 +157,67 @@ fn write_led_raw(value: u32) {
     tga.write_led(value);
 }
 
+fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
+    TgaHotplugSnapshot {
+        bus: tga.bus,
+        slot: tga.slot,
+        function: tga.function,
+        bar_phys: tga.bar_phys,
+        bar_size: tga.bar_size,
+        bar_is_64: tga.bar_is_64,
+        bar_assigned_by_os: tga.bar_assigned_by_os,
+        mmio_base: tga.mmio_base,
+    }
+}
+
+fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
+    let bdf_changed = prev.bus != now.bus || prev.slot != now.slot || prev.function != now.function;
+    let bar_phys_changed = prev.bar_phys != now.bar_phys;
+    let bar_size_changed = prev.bar_size != now.bar_size;
+    let bar_mode_changed = prev.bar_is_64 != now.bar_is_64;
+    let assign_changed = prev.bar_assigned_by_os != now.bar_assigned_by_os;
+    let map_changed = prev.mmio_base != now.mmio_base;
+
+    if !(bdf_changed
+        || bar_phys_changed
+        || bar_size_changed
+        || bar_mode_changed
+        || assign_changed
+        || map_changed)
+    {
+        crate::log!(
+            "tga: reconnect stable bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} map=0x{:X}\n",
+            now.bus,
+            now.slot,
+            now.function,
+            now.bar_phys,
+            now.bar_size,
+            now.mmio_base
+        );
+        return;
+    }
+
+    crate::log!(
+        "tga: reconnect delta bdf {:02X}:{:02X}.{} -> {:02X}:{:02X}.{} bar0 0x{:016X} -> 0x{:016X} size 0x{:X} -> 0x{:X} mode {} -> {} assign {} -> {} map 0x{:X} -> 0x{:X}\n",
+        prev.bus,
+        prev.slot,
+        prev.function,
+        now.bus,
+        now.slot,
+        now.function,
+        prev.bar_phys,
+        now.bar_phys,
+        prev.bar_size,
+        now.bar_size,
+        if prev.bar_is_64 { "64b" } else { "32b" },
+        if now.bar_is_64 { "64b" } else { "32b" },
+        if prev.bar_assigned_by_os { "assigned" } else { "fw" },
+        if now.bar_assigned_by_os { "assigned" } else { "fw" },
+        prev.mmio_base,
+        now.mmio_base
+    );
+}
+
 pub fn tga_led_write(value: u32) {
     write_led_raw(value);
 }
@@ -186,16 +260,21 @@ pub fn try_init() -> bool {
         return false;
     };
 
-    crate::log!(
-        "tga: connected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {}\n",
-        tga.bus,
-        tga.slot,
-        tga.function,
-        tga.bar_phys,
-        tga.bar_size,
-        if tga.bar_is_64 { "64b" } else { "32b" },
-        if tga.bar_assigned_by_os { "assigned" } else { "fw" }
-    );
+    if let Some(prev) = TGA_LAST_DISCONNECT.lock().take() {
+        log_reconnect_delta(prev, &tga);
+    } else {
+        crate::log!(
+            "tga: connected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
+            tga.bus,
+            tga.slot,
+            tga.function,
+            tga.bar_phys,
+            tga.bar_size,
+            if tga.bar_is_64 { "64b" } else { "32b" },
+            if tga.bar_assigned_by_os { "assigned" } else { "fw" },
+            tga.mmio_base
+        );
+    }
 
     *TGA.lock() = Some(tga);
     // Keep contract explicit: default to LED off.
@@ -269,6 +348,15 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         let align = size.max(0x1000);
 
         let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
+        crate::log!(
+            "tga: hotplug BAR assign bdf={:02X}:{:02X}.{} size=0x{:X} align=0x{:X} base=0x{:016X}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            size,
+            align,
+            base
+        );
 
         // Preserve the low BAR attribute bits (IO/type/prefetch) reported by the device.
         let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
@@ -319,6 +407,19 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
 
+    crate::log!(
+        "tga: bring_online bdf={:02X}:{:02X}.{} cmd 0x{:04X}->0x{:04X} raw_bar0=0x{:08X} raw_bar1=0x{:08X} bar0=0x{:016X} size=0x{:X}\n",
+        dev.bus,
+        dev.slot,
+        dev.function,
+        cmd_before,
+        cmd_after,
+        bar_lo,
+        bar_hi.unwrap_or(0),
+        bar_phys,
+        bar_size
+    );
+
     let tga = Tga {
         bus: dev.bus,
         slot: dev.slot,
@@ -357,11 +458,17 @@ pub(crate) async fn tga_task() {
                 let mut guard = TGA.lock();
                 if guard.is_some() {
                     if let Some(old) = guard.take() {
+                        *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
                         crate::log!(
-                            "tga: disconnected bdf={:02X}:{:02X}.{}\n",
+                            "tga: disconnected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
                             old.bus,
                             old.slot,
-                            old.function
+                            old.function,
+                            old.bar_phys,
+                            old.bar_size,
+                            if old.bar_is_64 { "64b" } else { "32b" },
+                            if old.bar_assigned_by_os { "assigned" } else { "fw" },
+                            old.mmio_base
                         );
                     }
                 }

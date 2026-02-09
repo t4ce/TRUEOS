@@ -4,12 +4,27 @@ pub const PCI_IDS_URL: &str = "https://raw.githubusercontent.com/pciutils/pciids
 pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
 
 pub fn load_raw_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
-    let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
-        return Ok(None);
-    };
-    crate::wait::spawn_and_wait_local(async move {
-        crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await
-    })
+    let mut last_err: Option<crate::disc::block::Error> = None;
+
+    // Try every mounted TRUEOSFS root (newest first) so a valid pci.ids on an
+    // older root still works if the primary root switched later in boot.
+    for root in crate::v::fs::trueosfs::list_roots() {
+        let Some(disk) = crate::disc::block::device_handle(root.disk_id) else {
+            continue;
+        };
+        match crate::wait::spawn_and_wait_local(async move {
+            crate::v::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await
+        }) {
+            Ok(Some(raw)) => return Ok(Some(raw)),
+            Ok(None) => {}
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    if let Some(e) = last_err {
+        return Err(e);
+    }
+    Ok(None)
 }
 
 pub fn load_sanitized_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
