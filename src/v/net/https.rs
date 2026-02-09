@@ -595,7 +595,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
     };
 
     // Match the old behavior: fixed limits and timeout.
-    const TIMEOUT_MS: u32 = 3_000;
+    const TIMEOUT_MS: u32 = 250;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
     let url = String::from(url_s);

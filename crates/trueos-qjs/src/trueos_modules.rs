@@ -6,21 +6,11 @@ use core::ffi::{c_char, c_int, CStr};
 use crate as qjs;
 
 extern "C" {
-    fn trueos_cabi_fs_read_file(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_fs_write_begin(path_ptr: *const u8, path_len: usize, total_len: u64, out_handle: *mut u32) -> i32;
-    fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
-    fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
-    fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
-    fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
-    fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 
 include!("../../../src/surface/cabi_codes.rs");
-
-const FS_WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -537,223 +527,6 @@ unsafe extern "C" fn qjs_complex_module_init(ctx: *mut qjs::JSContext, m: *mut q
     0
 }
 
-unsafe extern "C" fn qjs_fs_read_file_bytes(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 1 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-
-    let need = unsafe { trueos_cabi_fs_read_file(path_ptr, path_len, core::ptr::null_mut(), 0) };
-    if need < 0 {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-    let need = need as usize;
-
-    let buf = unsafe { qjs::js_malloc(ctx, need) } as *mut u8;
-    if buf.is_null() {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-
-    let got = unsafe { trueos_cabi_fs_read_file(path_ptr, path_len, buf, need) };
-    unsafe { js_free_cstring(ctx, path_cstr) };
-    if got < 0 {
-        unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-        return qjs::JSValue::exception();
-    }
-    let got = got as usize;
-
-    let ab = unsafe { qjs::JS_NewArrayBufferCopy(ctx, buf as *const u8, got) };
-    unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-    ab
-}
-
-unsafe extern "C" fn qjs_fs_read_file_text(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 1 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-
-    let need = unsafe { trueos_cabi_fs_read_file(path_ptr, path_len, core::ptr::null_mut(), 0) };
-    if need < 0 {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-    let need = need as usize;
-
-    let buf = unsafe { qjs::js_malloc(ctx, need + 1) } as *mut u8;
-    if buf.is_null() {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-    *unsafe { buf.add(need) } = 0;
-
-    let got = unsafe { trueos_cabi_fs_read_file(path_ptr, path_len, buf, need) };
-    unsafe { js_free_cstring(ctx, path_cstr) };
-    if got < 0 {
-        unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-        return qjs::JSValue::exception();
-    }
-    let got = got as usize;
-
-    let s = unsafe { qjs::JS_NewStringLen(ctx, buf as *const c_char, got) };
-    unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-    s
-}
-
-unsafe extern "C" fn qjs_fs_write_file_text(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 2 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-
-    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-    let Some((data_ptr, data_len, data_cstr)) = js_arg_to_utf8_bytes(ctx, args[1]) else {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    };
-
-    let mut handle = 0u32;
-    let mut rc = unsafe {
-        trueos_cabi_fs_write_begin(path_ptr, path_len, data_len as u64, &mut handle as *mut u32)
-    };
-    if rc == 0 {
-        let data = core::slice::from_raw_parts(data_ptr, data_len);
-        for chunk in data.chunks(FS_WRITE_CHUNK_BYTES) {
-            rc = unsafe { trueos_cabi_fs_write_chunk(handle, chunk.as_ptr(), chunk.len()) };
-            if rc != 0 {
-                let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
-                break;
-            }
-        }
-    }
-    if rc == 0 {
-        rc = unsafe { trueos_cabi_fs_write_finish(handle) };
-    } else {
-        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
-    }
-    unsafe { js_free_cstring(ctx, path_cstr) };
-    unsafe { js_free_cstring(ctx, data_cstr) };
-    if rc != 0 {
-        return qjs::JSValue::exception();
-    }
-    qjs::JSValue::undefined()
-}
-
-unsafe extern "C" fn qjs_fs_rename(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 2 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-
-    let Some((src_ptr, src_len, src_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-    let Some((dst_ptr, dst_len, dst_cstr)) = js_arg_to_utf8_bytes(ctx, args[1]) else {
-        unsafe { js_free_cstring(ctx, src_cstr) };
-        return qjs::JSValue::exception();
-    };
-
-    let rc = unsafe { trueos_cabi_fs_rename(src_ptr, src_len, dst_ptr, dst_len) };
-    unsafe { js_free_cstring(ctx, src_cstr) };
-    unsafe { js_free_cstring(ctx, dst_cstr) };
-    if rc != 0 {
-        return qjs::JSValue::exception();
-    }
-    qjs::JSValue::undefined()
-}
-
-unsafe extern "C" fn qjs_fs_list_dir(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 1 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-
-    let need = unsafe { trueos_cabi_fs_list_dir(path_ptr, path_len, core::ptr::null_mut(), 0) };
-    if need < 0 {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-    let need = need as usize;
-
-    let buf = unsafe { qjs::js_malloc(ctx, need + 1) } as *mut u8;
-    if buf.is_null() {
-        unsafe { js_free_cstring(ctx, path_cstr) };
-        return qjs::JSValue::exception();
-    }
-    *unsafe { buf.add(need) } = 0;
-
-    let got = unsafe { trueos_cabi_fs_list_dir(path_ptr, path_len, buf, need) };
-    unsafe { js_free_cstring(ctx, path_cstr) };
-    if got < 0 {
-        unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-        return qjs::JSValue::exception();
-    }
-    let got = got as usize;
-    let s = unsafe { qjs::JS_NewStringLen(ctx, buf as *const c_char, got) };
-    unsafe { qjs::js_free(ctx, buf as *mut core::ffi::c_void) };
-    s
-}
-
-unsafe extern "C" fn qjs_fs_remove(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: c_int,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    if argv.is_null() || argc < 1 {
-        return qjs::JSValue::undefined();
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some((path_ptr, path_len, path_cstr)) = js_arg_to_utf8_bytes(ctx, args[0]) else {
-        return qjs::JSValue::exception();
-    };
-
-    let rc = unsafe { trueos_cabi_fs_remove(path_ptr, path_len) };
-    unsafe { js_free_cstring(ctx, path_cstr) };
-    if rc != 0 {
-        return qjs::JSValue::exception();
-    }
-    qjs::JSValue::undefined()
-}
-
 unsafe extern "C" fn qjs_fs_read_file_text_async(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -886,88 +659,9 @@ unsafe extern "C" fn qjs_fs_write_file_text_async(
 }
 
 unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
-    let read_bytes_name = b"readFileBytes\0";
-    let read_text_name = b"readFile\0";
-    let write_text_name = b"writeFile\0";
-    let rename_name = b"rename\0";
-    let list_dir_name = b"listDir\0";
-    let remove_name = b"remove\0";
-
     let read_text_async_name = b"readFileAsync\0";
     let read_bytes_async_name = b"readFileBytesAsync\0";
     let write_text_async_name = b"writeFileAsync\0";
-
-    let read_bytes_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_read_file_bytes),
-        read_bytes_name.as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, read_bytes_name.as_ptr() as *const c_char, read_bytes_fn) < 0 {
-        return -1;
-    }
-
-    let read_text_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_read_file_text),
-        read_text_name.as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, read_text_name.as_ptr() as *const c_char, read_text_fn) < 0 {
-        return -1;
-    }
-
-    let write_text_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_write_file_text),
-        write_text_name.as_ptr() as *const c_char,
-        2,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, write_text_name.as_ptr() as *const c_char, write_text_fn) < 0 {
-        return -1;
-    }
-
-    let rename_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_rename),
-        rename_name.as_ptr() as *const c_char,
-        2,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, rename_name.as_ptr() as *const c_char, rename_fn) < 0 {
-        return -1;
-    }
-
-    let list_dir_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_list_dir),
-        list_dir_name.as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, list_dir_name.as_ptr() as *const c_char, list_dir_fn) < 0 {
-        return -1;
-    }
-
-    let remove_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_fs_remove),
-        remove_name.as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    if qjs::JS_SetModuleExport(ctx, m, remove_name.as_ptr() as *const c_char, remove_fn) < 0 {
-        return -1;
-    }
 
     let read_text_async_fn = qjs::JS_NewCFunction2(
         ctx,
@@ -1027,15 +721,9 @@ pub unsafe fn load_native_module(
         (
             qjs_fs_module_init,
             &[
-                b"readFileBytes\0",
-                b"readFile\0",
-                b"writeFile\0",
-                b"rename\0",
-                b"listDir\0",
-                b"remove\0",
-				b"readFileAsync\0",
-				b"readFileBytesAsync\0",
-				b"writeFileAsync\0",
+                b"readFileAsync\0",
+                b"readFileBytesAsync\0",
+                b"writeFileAsync\0",
             ],
         )
     } else if name == b"process" || name == b"node:process" {
@@ -1110,7 +798,8 @@ fn spec_is_url(spec: &[u8]) -> bool {
 
 const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
 const CDN_DIR: &[u8] = b"/qjs/cdn/";
-const CACHE_READ_TIMEOUT_MS: u64 = 8000;
+const FS_SYNC_TIMEOUT_MS: u64 = 8;
+const BOOTSTRAP_FS_TIMEOUT_MS: u64 = 32;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {
@@ -1142,27 +831,6 @@ unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
     let _ = qjs::JS_Throw(ctx, err);
 }
 
-unsafe fn read_file_js_malloc_rc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), isize> {
-    let need = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
-    if need < 0 {
-        return Err(need);
-    }
-    let need = need as usize;
-
-    let buf = qjs::js_malloc(ctx, need + 1) as *mut u8;
-    if buf.is_null() {
-        return Err(-4); // FS_ERR_BAD_PARAM (best-effort sentinel)
-    }
-    *buf.add(need) = 0;
-
-    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf, need);
-    if got < 0 {
-        qjs::js_free(ctx, buf as *mut core::ffi::c_void);
-        return Err(got);
-    }
-    Ok((buf, got as usize))
-}
-
 unsafe fn read_file_js_malloc_rc_async(
     ctx: *mut qjs::JSContext,
     path: &[u8],
@@ -1175,12 +843,12 @@ unsafe fn read_file_js_malloc_rc_async(
 
     loop {
         let len = qjs::async_fs::result_len(op_id);
-        if len == FS_ERR_NOT_FOUND as isize {
+        if len == FS_ERR_NOT_FOUND as isize && !qjs::async_fs::has_completion_result(op_id) {
             let ok = qjs::async_ops::wait_for_completion_blocking(timeout_ms);
             if !ok {
                 let _ = qjs::async_fs::discard(op_id);
-                log_str("qjs: async fs read timeout (treat miss)\n");
-                return Err(FS_ERR_NOT_FOUND as isize);
+                log_str("qjs: async fs read timeout\n");
+                return Err(FS_ERR_TIMEOUT as isize);
             }
             continue;
         }
@@ -1207,7 +875,7 @@ unsafe fn read_file_js_malloc_rc_async(
 }
 
 unsafe fn read_file_js_malloc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), ()> {
-    read_file_js_malloc_rc(ctx, path).map_err(|_| ())
+    read_file_js_malloc_rc_async(ctx, path, FS_SYNC_TIMEOUT_MS).map_err(|_| ())
 }
 
 unsafe fn compile_module_from_buf(
@@ -1571,7 +1239,7 @@ unsafe fn load_url_module(
     log_nl();
 
     // Fast-path: if the cached module is already present, avoid refetching.
-    match read_file_js_malloc_rc_async(ctx, &cache_path, CACHE_READ_TIMEOUT_MS) {
+    match read_file_js_malloc_rc_async(ctx, &cache_path, BOOTSTRAP_FS_TIMEOUT_MS) {
         Ok((buf, len)) => {
             log_str("qjs: url cache hit len=");
             log_usize_dec(len);
@@ -1624,7 +1292,7 @@ unsafe fn load_url_module(
     }
     log_str("qjs: url fetch ok\n");
 
-    let (buf, len) = match read_file_js_malloc_rc_async(ctx, &cache_path, CACHE_READ_TIMEOUT_MS) {
+    let (buf, len) = match read_file_js_malloc_rc_async(ctx, &cache_path, BOOTSTRAP_FS_TIMEOUT_MS) {
         Ok(v) => v,
         Err(_) => {
             let mut msg = Vec::new();

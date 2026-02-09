@@ -6,12 +6,31 @@ use core::ffi::CStr;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    pub fn trueos_cabi_poll_once();
     fn trueos_cabi_boot_timestamp_secs() -> u64;
     fn trueos_cabi_alloc(size: usize) -> *mut u8;
     fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
     fn trueos_cabi_free(ptr: *mut u8);
     fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
     fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
+    pub fn trueos_cabi_fs_read_file(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_fs_write_begin(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: u64,
+        out_handle: *mut u32,
+    ) -> i32;
+    pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
+    pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
+    pub fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
+    pub fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
 }
 
 #[inline]
