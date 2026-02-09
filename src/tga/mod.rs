@@ -7,6 +7,7 @@ use crate::pci::PciDevice;
 
 const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
 const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
+const TGA_EXPECTED_BAR0_SIZE: u64 = 1024 * 1024; // 1 MiB
 
 // Minimal "unified" contract (we control both ends):
 // - BAR0 is MMIO
@@ -218,6 +219,21 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
     );
 }
 
+fn log_tga_state(prefix: &str, tga: &Tga) {
+    crate::log!(
+        "tga: {} bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
+        prefix,
+        tga.bus,
+        tga.slot,
+        tga.function,
+        tga.bar_phys,
+        tga.bar_size,
+        if tga.bar_is_64 { "64b" } else { "32b" },
+        if tga.bar_assigned_by_os { "assigned" } else { "fw" },
+        tga.mmio_base
+    );
+}
+
 pub fn tga_led_write(value: u32) {
     write_led_raw(value);
 }
@@ -263,17 +279,7 @@ pub fn try_init() -> bool {
     if let Some(prev) = TGA_LAST_DISCONNECT.lock().take() {
         log_reconnect_delta(prev, &tga);
     } else {
-        crate::log!(
-            "tga: connected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
-            tga.bus,
-            tga.slot,
-            tga.function,
-            tga.bar_phys,
-            tga.bar_size,
-            if tga.bar_is_64 { "64b" } else { "32b" },
-            if tga.bar_assigned_by_os { "assigned" } else { "fw" },
-            tga.mmio_base
-        );
+        log_tga_state("connected", &tga);
     }
 
     *TGA.lock() = Some(tga);
@@ -327,13 +333,35 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     }
 
     let bar_is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
-    let _bar_prefetch = ((bar_lo >> 3) & 0x1) != 0;
+    if !bar_is_64 {
+        crate::log!(
+            "tga: unsupported BAR mode bdf={:02X}:{:02X}.{} (expected 64-bit BAR0/1)\n",
+            dev.bus,
+            dev.slot,
+            dev.function
+        );
+        return None;
+    }
 
-    let bar_size = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+    let mut bar_size = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+    if bar_size == 0 {
+        bar_size = TGA_EXPECTED_BAR0_SIZE;
+    } else if bar_size != TGA_EXPECTED_BAR0_SIZE {
+        crate::log!(
+            "tga: BAR0 size mismatch bdf={:02X}:{:02X}.{} probed=0x{:X} expected=0x{:X} (continuing)\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            bar_size,
+            TGA_EXPECTED_BAR0_SIZE
+        );
+    }
+
+    let bar_hi_u32 = bar_hi?;
 
     let mut bar_phys = {
         let lo = (bar_lo as u64) & !0xFu64;
-        let hi = bar_hi.unwrap_or(0) as u64;
+        let hi = bar_hi_u32 as u64;
         lo | (hi << 32)
     };
 
@@ -342,10 +370,9 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     if bar_phys == 0 {
         bar_assigned_by_os = true;
         // Hotplug path: firmware may not have assigned BARs for devices appearing later.
-        // Allocate a safe base and program BAR0 (+BAR1 if 64-bit).
-        let probed = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
-        let size = probed.max(0x1000);
-        let align = size.max(0x1000);
+        // Allocate a fixed 1 MiB window and program BAR0/BAR1.
+        let size = TGA_EXPECTED_BAR0_SIZE;
+        let align = TGA_EXPECTED_BAR0_SIZE;
 
         let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
         crate::log!(
@@ -361,9 +388,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         // Preserve the low BAR attribute bits (IO/type/prefetch) reported by the device.
         let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
         crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x10, new_lo);
-        if bar_is_64 {
-            crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x14, (base >> 32) as u32);
-        }
+        crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x14, (base >> 32) as u32);
 
         // Re-read and re-validate.
         (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
@@ -376,7 +401,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
         bar_phys = {
             let lo = (bar_lo as u64) & !0xFu64;
-            let hi = bar_hi.unwrap_or(0) as u64;
+            let hi = bar_hi? as u64;
             lo | (hi << 32)
         };
 
@@ -456,21 +481,9 @@ pub(crate) async fn tga_task() {
         if !present {
             {
                 let mut guard = TGA.lock();
-                if guard.is_some() {
-                    if let Some(old) = guard.take() {
-                        *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
-                        crate::log!(
-                            "tga: disconnected bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} {} {} map=0x{:X}\n",
-                            old.bus,
-                            old.slot,
-                            old.function,
-                            old.bar_phys,
-                            old.bar_size,
-                            if old.bar_is_64 { "64b" } else { "32b" },
-                            if old.bar_assigned_by_os { "assigned" } else { "fw" },
-                            old.mmio_base
-                        );
-                    }
+                if let Some(old) = guard.take() {
+                    *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
+                    log_tga_state("disconnected", &old);
                 }
             }
             Timer::after(EmbassyDuration::from_secs(5)).await;

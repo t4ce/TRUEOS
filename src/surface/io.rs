@@ -165,22 +165,68 @@ pub mod kfs {
 	}
 
 	#[inline]
-	pub fn write_file(path: &str, data: &[u8]) -> Result<()> {
+	pub fn write_file_begin(path: &str, total_len: u64) -> Result<u32> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let data = data.to_vec();
 		crate::wait::spawn_and_wait_local(async move {
-			let ok = crate::v::fs::trueosfs::file_in_async(disk, name.as_str(), data.as_slice()).await?;
-			if ok { Ok(()) } else { Err(FsError::NoSpace) }
+			match crate::v::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len).await? {
+				Some(h) => Ok(h),
+				None => Err(FsError::NoSpace),
+			}
 		})
 	}
 
 	#[inline]
-	pub async fn write_file_async(path: &str, data: &[u8]) -> Result<()> {
+	pub async fn write_file_begin_async(path: &str, total_len: u64) -> Result<u32> {
 		let disk = root_disk()?;
 		let name = normalize_rel(path, false)?;
-		let ok = crate::v::fs::trueosfs::file_in_async(disk, name.as_str(), data).await?;
-		if ok { Ok(()) } else { Err(FsError::NoSpace) }
+		match crate::v::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len).await? {
+			Some(h) => Ok(h),
+			None => Err(FsError::NoSpace),
+		}
+	}
+
+	#[inline]
+	pub fn write_file_chunk(handle: u32, data: &[u8]) -> Result<()> {
+		let data = data.to_vec();
+		crate::wait::spawn_and_wait_local(async move {
+			crate::v::fs::trueosfs::file_write_chunk_async(handle, data.as_slice()).await?;
+			Ok(())
+		})
+	}
+
+	#[inline]
+	pub async fn write_file_chunk_async(handle: u32, data: &[u8]) -> Result<()> {
+		crate::v::fs::trueosfs::file_write_chunk_async(handle, data).await?;
+		Ok(())
+	}
+
+	#[inline]
+	pub fn write_file_finish(handle: u32) -> Result<()> {
+		crate::wait::spawn_and_wait_local(async move {
+			crate::v::fs::trueosfs::file_write_finish_async(handle).await?;
+			Ok(())
+		})
+	}
+
+	#[inline]
+	pub async fn write_file_finish_async(handle: u32) -> Result<()> {
+		crate::v::fs::trueosfs::file_write_finish_async(handle).await?;
+		Ok(())
+	}
+
+	#[inline]
+	pub fn write_file_abort(handle: u32) -> Result<()> {
+		crate::wait::spawn_and_wait_local(async move {
+			crate::v::fs::trueosfs::file_write_abort_async(handle).await?;
+			Ok(())
+		})
+	}
+
+	#[inline]
+	pub async fn write_file_abort_async(handle: u32) -> Result<()> {
+		crate::v::fs::trueosfs::file_write_abort_async(handle).await?;
+		Ok(())
 	}
 
 	#[inline]
@@ -575,27 +621,65 @@ pub mod cabi {
 	}
 
 	#[no_mangle]
-	pub unsafe extern "C" fn trueos_cabi_fs_write_file(
+	pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
 		path_ptr: *const u8,
 		path_len: usize,
-		data_ptr: *const u8,
-		data_len: usize,
+		total_len: u64,
+		out_handle: *mut u32,
 	) -> i32 {
+		if out_handle.is_null() {
+			return FS_ERR_BAD_PARAM;
+		}
 		if path_ptr.is_null() && path_len != 0 {
 			return FS_ERR_BAD_PARAM;
 		}
-		if data_ptr.is_null() && data_len != 0 {
-			return FS_ERR_BAD_PARAM;
-		}
-		if path_len > QJS_ASYNC_FS_MAX_PATH || data_len > QJS_ASYNC_FS_MAX_DATA {
+		if path_len > QJS_ASYNC_FS_MAX_PATH {
 			return FS_ERR_TOO_LARGE;
 		}
 		let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
 		let Ok(path) = core::str::from_utf8(path_bytes) else {
 			return FS_ERR_BAD_UTF8;
 		};
-		let data = if data_len == 0 { &[] } else { core::slice::from_raw_parts(data_ptr, data_len) };
-		match super::kfs::write_file(path, data) {
+		match super::kfs::write_file_begin(path, total_len) {
+			Ok(h) => {
+				*out_handle = h;
+				0
+			}
+			Err(e) => fs_error_to_code(e),
+		}
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_write_chunk(
+		handle: u32,
+		data_ptr: *const u8,
+		data_len: usize,
+	) -> i32 {
+		if data_ptr.is_null() && data_len != 0 {
+			return FS_ERR_BAD_PARAM;
+		}
+		let data = if data_len == 0 {
+			&[]
+		} else {
+			core::slice::from_raw_parts(data_ptr, data_len)
+		};
+		match super::kfs::write_file_chunk(handle, data) {
+			Ok(()) => 0,
+			Err(e) => fs_error_to_code(e),
+		}
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_write_finish(handle: u32) -> i32 {
+		match super::kfs::write_file_finish(handle) {
+			Ok(()) => 0,
+			Err(e) => fs_error_to_code(e),
+		}
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_fs_write_abort(handle: u32) -> i32 {
+		match super::kfs::write_file_abort(handle) {
 			Ok(()) => 0,
 			Err(e) => fs_error_to_code(e),
 		}
@@ -681,7 +765,6 @@ pub mod cabi {
 	}
 
 	const QJS_ASYNC_FS_MAX_PATH: usize = 1024;
-	const QJS_ASYNC_FS_MAX_DATA: usize = 2 * 1024 * 1024;
 }
 
 /// Writer that routes bytes to the global console pipeline (stdout).

@@ -10,3 +10,7 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="058f", ATTRS{
 
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="07cf", ATTR{idProduct}=="6803", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{idProduct}=="6803", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
+
+# Allow user-level QEMU access to the dedicated TRUEOS data NVMe partition.
+# Match by PARTUUID so this keeps working even if the filesystem is reformatted.
+SUBSYSTEM=="block", ENV{ID_PART_ENTRY_UUID}=="2e4e446c-bc9b-4e6c-a657-9ff9a0edccca", MODE:="0660", GROUP:="kvm"
