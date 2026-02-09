@@ -45,6 +45,7 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SINE_STARTED: AtomicBool = AtomicBool::new(false);
+static UAC_SONG_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
@@ -196,6 +197,13 @@ fn spawn_uac_sine(spawner: Spawner) -> SpawnAttempt {
     spawn_monitored(spawner, "uac-sine", crate::usb::uac::sine_task())
 }
 
+fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
+    if crate::v::mode::is_benchmark() {
+        return SpawnAttempt::Skipped;
+    }
+    spawn_monitored(spawner, "uac-song", crate::usb::uac::song_task())
+}
+
 fn spawn_vleds_mux(spawner: Spawner) -> SpawnAttempt {
     if crate::v::mode::is_benchmark() {
         return SpawnAttempt::Skipped;
@@ -319,6 +327,9 @@ const HID_ANY_CLAIMED: u32 =
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const UAC_SONG_READY: u32 =
+    crate::v::readiness::UAC_SINE_DONE
+    | crate::v::readiness::UAC_ATTACHED;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)
@@ -406,6 +417,12 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &UAC_SINE_STARTED,
         spawn: spawn_uac_sine,
+    },
+    TaskSpec {
+        name: "uac-song",
+        required: UAC_SONG_READY,
+        started: &UAC_SONG_STARTED,
+        spawn: spawn_uac_song,
     },
     TaskSpec {
         name: "vleds-mux",

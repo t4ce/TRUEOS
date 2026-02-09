@@ -14,18 +14,9 @@ use crate::shell::{ShellBackend, ShellIo};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ArgType {
-    /// Accepts any token and passes it through as a string slice.
-    Any,
     Str,
-    Bool,
     U8,
-    U16,
-    U32,
-    U64,
-    I32,
-    I64,
     Usize,
-    Isize,
     /// Captures the remainder of the command line (may contain spaces).
     Rest,
 }
@@ -33,17 +24,9 @@ pub(crate) enum ArgType {
 impl ArgType {
     pub(crate) fn name(self) -> &'static str {
         match self {
-            ArgType::Any => "any",
             ArgType::Str => "str",
-            ArgType::Bool => "bool",
             ArgType::U8 => "u8",
-            ArgType::U16 => "u16",
-            ArgType::U32 => "u32",
-            ArgType::U64 => "u64",
-            ArgType::I32 => "i32",
-            ArgType::I64 => "i64",
             ArgType::Usize => "usize",
-            ArgType::Isize => "isize",
             ArgType::Rest => "rest",
         }
     }
@@ -74,11 +57,8 @@ impl ArgSpec {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) enum ArgValue<'a> {
     Str(&'a str),
-    Bool(bool),
     U64(u64),
-    I64(i64),
     Usize(usize),
-    Isize(isize),
 }
 
 impl<'a> ArgValue<'a> {
@@ -103,30 +83,9 @@ impl<'a> ArgValue<'a> {
         }
     }
 
-    pub(crate) fn as_i64(self) -> Option<i64> {
-        match self {
-            ArgValue::I64(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_bool(self) -> Option<bool> {
-        match self {
-            ArgValue::Bool(v) => Some(v),
-            _ => None,
-        }
-    }
-
     pub(crate) fn as_usize(self) -> Option<usize> {
         match self {
             ArgValue::Usize(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_isize(self) -> Option<isize> {
-        match self {
-            ArgValue::Isize(v) => Some(v),
             _ => None,
         }
     }
@@ -134,7 +93,6 @@ impl<'a> ArgValue<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedArgs<'a> {
-    specs: &'static [ArgSpec],
     values: Vec<ArgValue<'a>>,
 }
 
@@ -143,23 +101,8 @@ impl<'a> ParsedArgs<'a> {
         self.values.is_empty()
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.values.len()
-    }
-
     pub(crate) fn get(&self, idx: usize) -> Option<ArgValue<'a>> {
         self.values.get(idx).copied()
-    }
-
-    pub(crate) fn get_by_name(&self, name: &str) -> Option<ArgValue<'a>> {
-        self.specs
-            .iter()
-            .position(|s| s.name.eq_ignore_ascii_case(name))
-            .and_then(|idx| self.get(idx))
-    }
-
-    pub(crate) fn specs(&self) -> &'static [ArgSpec] {
-        self.specs
     }
 }
 
@@ -313,7 +256,7 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
         if got != 0 {
             return Err(ArgError { kind: ArgErrorKind::TooMany { expected: 0, got } });
         }
-        return Ok(ParsedArgs { specs: cmd.args, values: Vec::new() });
+        return Ok(ParsedArgs { values: Vec::new() });
     }
 
     // If there is a `rest` argument, it must be last.
@@ -333,7 +276,7 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
         if !rest.is_empty() {
             values.push(ArgValue::Str(rest));
         }
-        return Ok(ParsedArgs { specs: cmd.args, values });
+        return Ok(ParsedArgs { values });
     }
 
     // Otherwise: positional parsing by whitespace tokens, with optional trailing Rest.
@@ -383,14 +326,13 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
         }
     }
 
-    Ok(ParsedArgs { specs: cmd.args, values })
+    Ok(ParsedArgs { values })
 }
 
 fn parse_token<'a>(spec: ArgSpec, tok: &'a str) -> Result<ArgValue<'a>, ArgError> {
     match spec.ty {
-        ArgType::Any | ArgType::Str => Ok(ArgValue::Str(tok)),
+        ArgType::Str => Ok(ArgValue::Str(tok)),
         ArgType::Rest => Ok(ArgValue::Str(tok)),
-        ArgType::Bool => parse_bool(spec.name, tok),
         ArgType::U8 => parse_u(tok)
             .and_then(|v| {
                 if v <= u8::MAX as u64 {
@@ -401,45 +343,9 @@ fn parse_token<'a>(spec: ArgSpec, tok: &'a str) -> Result<ArgValue<'a>, ArgError
             })
             .map(ArgValue::U64)
             .map_err(|e| bad(spec, tok, e)),
-        ArgType::U16 => parse_u(tok)
-            .and_then(|v| {
-                if v <= u16::MAX as u64 {
-                    Ok(v)
-                } else {
-                    Err("value out of range")
-                }
-            })
-            .map(ArgValue::U64)
-            .map_err(|e| bad(spec, tok, e)),
-        ArgType::U32 => parse_u(tok)
-            .and_then(|v| {
-                if v <= u32::MAX as u64 {
-                    Ok(v)
-                } else {
-                    Err("value out of range")
-                }
-            })
-            .map(ArgValue::U64)
-            .map_err(|e| bad(spec, tok, e)),
-        ArgType::U64 => parse_u(tok).map(|v| ArgValue::U64(v)).map_err(|e| bad(spec, tok, e)),
-        ArgType::I32 => parse_i(tok)
-            .and_then(|v| {
-                if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
-                    Ok(v)
-                } else {
-                    Err("value out of range")
-                }
-            })
-            .map(ArgValue::I64)
-            .map_err(|e| bad(spec, tok, e)),
-        ArgType::I64 => parse_i(tok).map(|v| ArgValue::I64(v)).map_err(|e| bad(spec, tok, e)),
         ArgType::Usize => parse_u(tok)
             .and_then(|v| usize::try_from(v).map_err(|_| "value out of range"))
             .map(ArgValue::Usize)
-            .map_err(|e| bad(spec, tok, e)),
-        ArgType::Isize => parse_i(tok)
-            .and_then(|v| isize::try_from(v).map_err(|_| "value out of range"))
-            .map(ArgValue::Isize)
             .map_err(|e| bad(spec, tok, e)),
     }
 }
@@ -455,41 +361,12 @@ fn bad(spec: ArgSpec, tok: &str, hint: &'static str) -> ArgError {
     }
 }
 
-fn parse_bool<'a>(name: &'static str, tok: &'a str) -> Result<ArgValue<'a>, ArgError> {
-    let t = tok.trim();
-    let v = match t {
-        "1" | "true" | "True" | "TRUE" | "yes" | "y" | "on" => true,
-        "0" | "false" | "False" | "FALSE" | "no" | "n" | "off" => false,
-        _ => {
-            return Err(ArgError {
-                kind: ArgErrorKind::BadValue {
-                    name,
-                    ty: ArgType::Bool,
-                    value: alloc::string::String::from(tok),
-                    hint: "expected bool: true/false, 1/0, yes/no, on/off",
-                },
-            })
-        }
-    };
-    Ok(ArgValue::Bool(v))
-}
-
 fn parse_u(tok: &str) -> Result<u64, &'static str> {
     let t = tok.trim();
     if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).map_err(|_| "expected unsigned integer (dec or 0xHEX)")
     } else {
         t.parse::<u64>().map_err(|_| "expected unsigned integer (dec or 0xHEX)")
-    }
-}
-
-fn parse_i(tok: &str) -> Result<i64, &'static str> {
-    let t = tok.trim();
-    if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-        let u = u64::from_str_radix(hex, 16).map_err(|_| "expected integer (dec or 0xHEX)")?;
-        i64::try_from(u).map_err(|_| "value out of range")
-    } else {
-        t.parse::<i64>().map_err(|_| "expected integer (dec or 0xHEX)")
     }
 }
 

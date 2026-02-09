@@ -35,11 +35,6 @@ impl Tga {
     fn write_led(&self, value: u32) {
         unsafe { write_volatile(self.led_reg as *mut u32, value) };
     }
-
-    #[inline(always)]
-    fn read_reg32(&self, offset: usize) -> u32 {
-        unsafe { read_volatile((self.mmio_base + offset) as *const u32) }
-    }
 }
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
