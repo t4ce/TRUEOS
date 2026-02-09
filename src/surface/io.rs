@@ -340,6 +340,11 @@ pub mod kfs {
 		Ok(crate::v::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
 	}
 
+	#[inline]
+	pub fn is_root_read_only() -> Result<bool> {
+		crate::v::fs::trueosfs::primary_root_is_read_only().ok_or(FsError::NoRoot)
+	}
+
 	/// Append `src` bytes into the file at `dst_path`, creating the file if needed.
 	pub fn append_into_file(dst_path: &str, src: &[u8]) -> Result<()> {
 		let disk = root_disk()?;

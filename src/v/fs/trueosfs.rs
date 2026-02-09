@@ -997,6 +997,11 @@ pub fn primary_root_handle() -> Option<block::DeviceHandle> {
     primary_root_id().and_then(block::device_handle)
 }
 
+/// Returns read-only state for the current primary TRUEOSFS root disk.
+pub fn primary_root_is_read_only() -> Option<bool> {
+    primary_root_handle().map(|h| h.info().is_read_only())
+}
+
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
     roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)

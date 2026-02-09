@@ -58,8 +58,6 @@ struct NvmeCqe {
 #[derive(Debug, Copy, Clone)]
 struct Completion {
     cid: u16,
-    sq_head: u16,
-    sq_id: u16,
     status: u16,
 }
 
@@ -86,7 +84,6 @@ struct IdentifyControllerInfo {
 }
 
 struct NvmeQueue {
-    qid: u16,
     depth: u16,
     sq_phys: u64,
     sq_virt: *mut NvmeSqe,
@@ -109,7 +106,7 @@ impl NvmeQueue {
         16
     }
 
-    fn new(qid: u16, depth: u16, page_size_bytes: usize) -> core::result::Result<Self, block::Error> {
+    fn new(depth: u16, page_size_bytes: usize) -> core::result::Result<Self, block::Error> {
         if depth == 0 {
             return Err(block::Error::InvalidParam);
         }
@@ -141,7 +138,6 @@ impl NvmeQueue {
         }
 
         Ok(Self {
-            qid,
             depth,
             sq_phys,
             sq_virt: sq_virt_u8 as *mut NvmeSqe,
@@ -335,7 +331,7 @@ impl NvmeController {
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(NVME_ADMIN_QID, tail % depth);
-        self.admin_poll_cq_for_cid_sync(cid, timeout_ms)
+        self.poll_queue_cq_for_cid_sync(NVME_ADMIN_QID, cid, timeout_ms)
     }
 
     fn io_submit_and_wait_sync(
@@ -369,25 +365,9 @@ impl NvmeController {
             (q.sq_tail, q.depth)
         };
         self.db_write_sq_tail(NVME_IO_QID, tail % depth);
-        let res = self.io_poll_cq_for_cid_async(cid, timeout_ms).await;
+        let res = self.poll_queue_cq_for_cid_async(NVME_IO_QID, cid, timeout_ms).await;
         self.io_inflight_clear(cid);
         res
-    }
-
-    fn admin_poll_cq_for_cid_sync(
-        &mut self,
-        cid: u16,
-        timeout_ms: u64,
-    ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid_sync(NVME_ADMIN_QID, cid, timeout_ms)
-    }
-
-    async fn io_poll_cq_for_cid_async(
-        &mut self,
-        cid: u16,
-        timeout_ms: u64,
-    ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid_async(NVME_IO_QID, cid, timeout_ms).await
     }
 
     fn poll_queue_cq_for_cid_step(&mut self, qid: u16, cid: u16) -> Option<Completion> {
@@ -412,15 +392,11 @@ impl NvmeController {
                 (None, q.cq_head, q.depth)
             } else {
                 let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                let sq_id = (cqe.dw2 >> 16) as u16;
 
                 q.cq_pop();
                 (
                     Some(Completion {
                         cid: got_cid,
-                        sq_head,
-                        sq_id,
                         status,
                     }),
                     q.cq_head,
@@ -547,8 +523,8 @@ impl NvmeController {
             doorbell_stride_bytes,
             page_size_bytes,
             max_transfer_bytes: Self::default_max_transfer_bytes(),
-            admin: NvmeQueue::new(NVME_ADMIN_QID, 64, page_size_bytes)?,
-            io: NvmeQueue::new(NVME_IO_QID, 64, page_size_bytes)?,
+            admin: NvmeQueue::new(64, page_size_bytes)?,
+            io: NvmeQueue::new(64, page_size_bytes)?,
             next_cid: 1,
             io_inflight: [0u64; CID_BITMAP_WORDS],
             io_pending: [None; IO_PENDING_SLOTS],

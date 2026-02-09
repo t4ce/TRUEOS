@@ -91,6 +91,44 @@ pub(crate) async fn bsp_smoke_test_once_async() {
 
     crate::log!("trueosfs-smoke: starting (bsp)\n");
 
+    // Demo path: provision a 250 MiB RAM disk first so smoke testing can run
+    // independent of physical media bring-up.
+    let mut trueos_disk: Option<block::DeviceHandle> = None;
+    {
+        const RAMDISK_BYTES: u64 = 250 * 1024 * 1024;
+        const RAMDISK_BLOCK_SIZE: u32 = 512;
+        match crate::v::disc::ramdisk::create(RAMDISK_BYTES, RAMDISK_BLOCK_SIZE) {
+            Ok(h) => {
+                crate::log!(
+                    "trueosfs-smoke: ramdisk: created dev={} bytes={} bs={}\n",
+                    h.id(),
+                    RAMDISK_BYTES,
+                    RAMDISK_BLOCK_SIZE
+                );
+                match crate::v::fs::trueosfs::format_blank_async(h).await {
+                    Ok(()) => match crate::v::fs::trueosfs::mount_root_async(h).await {
+                        Ok(Some(_)) => {
+                            crate::log!("trueosfs-smoke: ramdisk: formatted+mounted dev={}\n", h.id());
+                            trueos_disk = Some(h);
+                        }
+                        Ok(None) => {
+                            crate::log!("trueosfs-smoke: ramdisk: mount returned None dev={}\n", h.id());
+                        }
+                        Err(e) => {
+                            crate::log!("trueosfs-smoke: ramdisk: mount failed dev={} err={:?}\n", h.id(), e);
+                        }
+                    },
+                    Err(e) => {
+                        crate::log!("trueosfs-smoke: ramdisk: format failed dev={} err={:?}\n", h.id(), e);
+                    }
+                }
+            }
+            Err(e) => {
+                crate::log!("trueosfs-smoke: ramdisk: create failed err={:?}\n", e);
+            }
+        }
+    }
+
     let devices = block::devices();
     if devices.is_empty() {
         crate::log!("trueosfs-smoke: no block devices; skipping\n");
@@ -105,20 +143,22 @@ pub(crate) async fn bsp_smoke_test_once_async() {
         discs.len()
     );
     for info in discs.iter().copied() {
+        let serial = info.serial.as_ref().map(|s| s.as_str());
         crate::log!(
-            "trueosfs-smoke: disc: id={} kind={:?} block_size={} blocks={} writable={} label={:?} pci={:?}\n",
+            "trueosfs-smoke: disc: id={} kind={:?} block_size={} blocks={} cap={} writable={} label={:?} serial={:?} pci={:?}\n",
             info.id,
             info.kind,
             info.block_size,
             info.block_count,
+            info.capacity_bytes,
             info.writable,
             info.label,
+            serial,
             info.pci
         );
     }
 
     // 2) Detect classification for each disc.
-    let mut trueos_disk: Option<block::DeviceHandle> = None;
     for h in block::device_handles().into_iter() {
         if h.parent().is_some() {
             continue;
