@@ -1,3 +1,23 @@
+use embassy_executor::{SendSpawner, Spawner};
+use spin::Mutex;
+
+static FIRST_AP_SPAWNER: Mutex<Option<SendSpawner>> = Mutex::new(None);
+
+/// Register a spawner for the first AP (CPU slot 1).
+#[inline]
+pub fn register_first_ap_spawner(spawner: Spawner) {
+    let mut guard = FIRST_AP_SPAWNER.lock();
+    if guard.is_none() {
+        *guard = Some(spawner.make_send());
+    }
+}
+
+/// Return the first AP spawner if that AP is online and initialized.
+#[inline]
+pub fn first_ap_spawner() -> Option<SendSpawner> {
+    *FIRST_AP_SPAWNER.lock()
+}
+
 #[inline]
 fn local_cpu_ptr() -> *mut crate::percpu::PerCpu {
     let cpu_ptr = crate::percpu::this_cpu_ptr();

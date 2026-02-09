@@ -930,7 +930,7 @@ pub async fn sine_task() {
         const TWO_PI: f32 = core::f32::consts::PI * 2.0;
         const PREFILL_TARGET: usize = 48;
         const PREFILL_BURST: usize = 24;
-        const SINE_RUNTIME: EmbassyDuration = EmbassyDuration::from_secs(3);
+        const SINE_RUNTIME_SECS: u64 = 3;
 
         let mut phase: f32 = 0.0;
         let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
@@ -943,16 +943,17 @@ pub async fn sine_task() {
 
         let mut last_status = Instant::now();
         let mut sine_start: Option<Instant> = None;
+        let mut target_frames: u64 = 0;
+        let mut submitted_frames: u64 = 0;
+        let mut stop_submit = false;
         let mut no_device: u64 = 0;
         let mut no_runtime: u64 = 0;
         let mut no_packet: u64 = 0;
         let mut fmt_mismatch: u64 = 0;
 
         loop {
-            if let Some(started_at) = sine_start {
-                if Instant::now().duration_since(started_at) >= SINE_RUNTIME {
-                    break;
-                }
+            if stop_submit {
+                break;
             }
 
             // If we have a UAC runtime, keep the isoch ring fed ahead of time.
@@ -986,10 +987,6 @@ pub async fn sine_task() {
                 Timer::after(EmbassyDuration::from_millis(10)).await;
                 continue;
             }
-            if sine_start.is_none() {
-                sine_start = Some(Instant::now());
-            }
-
             let target = core::cmp::min(PREFILL_TARGET, cap);
             if in_flight < target {
                 let budget = core::cmp::min(PREFILL_BURST, target - in_flight);
@@ -1017,28 +1014,56 @@ pub async fn sine_task() {
                     if res.rate_hz != 0 && res.rate_hz != rate_hz {
                         rate_hz = res.rate_hz;
                         phase_step = TWO_PI * FREQ_HZ / (rate_hz as f32);
+                        if target_frames == 0 {
+                            target_frames = (rate_hz as u64).saturating_mul(SINE_RUNTIME_SECS);
+                        }
                     }
                     channels = core::cmp::max(1, res.channels as usize);
+                    if target_frames == 0 && rate_hz != 0 {
+                        target_frames = (rate_hz as u64).saturating_mul(SINE_RUNTIME_SECS);
+                    }
+
+                    let frame_bytes = channels * 2;
+                    let packet_frames = res.payload_bytes / frame_bytes;
+                    let frames_left = if submitted_frames >= target_frames {
+                        0usize
+                    } else {
+                        (target_frames - submitted_frames) as usize
+                    };
+                    let tone_frames = core::cmp::min(packet_frames, frames_left);
+                    let tone_bytes = tone_frames * frame_bytes;
+                    let mut phase_next = phase;
 
                     unsafe {
                         let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
                         let (payload, pad) = out.split_at_mut(res.payload_bytes);
-                        let frame_bytes = channels * 2;
-                        for frame in payload.chunks_exact_mut(frame_bytes) {
+                        let (tone, tail) = payload.split_at_mut(tone_bytes);
+                        for frame in tone.chunks_exact_mut(frame_bytes) {
                             let sample = (sinf(phase) * AMP) as i16;
-                            phase += phase_step;
-                            if phase >= TWO_PI {
-                                phase -= TWO_PI;
+                            phase_next += phase_step;
+                            if phase_next >= TWO_PI {
+                                phase_next -= TWO_PI;
                             }
                             for ch in 0..channels {
                                 let off = ch * 2;
                                 frame[off..off + 2].copy_from_slice(&sample.to_le_bytes());
                             }
                         }
+                        tail.fill(0);
                         pad.fill(0);
                     }
 
-                    let _ = submit_demo_packet(res);
+                    if submit_demo_packet(res).unwrap_or(false) {
+                        phase = phase_next;
+                        submitted_frames = submitted_frames.saturating_add(tone_frames as u64);
+                        if sine_start.is_none() {
+                            sine_start = Some(Instant::now());
+                        }
+                        if submitted_frames >= target_frames {
+                            stop_submit = true;
+                            break;
+                        }
+                    }
                 }
             } else {
                 // Wait until transfer events free up budget (no Timer-based pacing).
@@ -1096,6 +1121,30 @@ pub async fn sine_task() {
             }
 
             // No Timer-based microframe pacing here on purpose.
+        }
+
+        // Important handoff rule:
+        // do not allow song spawn while sine packets are still queued in HW.
+        // Otherwise first song packets overlap with residual sine audio.
+        let drain_deadline = Instant::now() + EmbassyDuration::from_millis(500);
+        loop {
+            let Some(controller_id) = first_active_controller() else {
+                break;
+            };
+            let in_flight = demo_queue_depth(controller_id)
+                .map(|(cur, _cap)| cur)
+                .unwrap_or(0);
+            if in_flight == 0 {
+                break;
+            }
+            if Instant::now() >= drain_deadline {
+                crate::log!(
+                    "audio: uac sine handoff timeout (in_flight={})\n",
+                    in_flight
+                );
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(1)).await;
         }
 
         crate::v::readiness::set(crate::v::readiness::UAC_SINE_DONE);
@@ -1173,10 +1222,9 @@ pub async fn song_task() {
             return;
         };
 
-        crate::log!("song: playing\n");
-
         let data = &wav[data_off..data_off + data_len];
         let mut cursor = 0usize;
+        let mut logged_playing = false;
         while cursor < data.len() {
             let res = match reserve_demo_packet() {
                 Ok(v) => v,
@@ -1194,7 +1242,7 @@ pub async fn song_task() {
                 }
             };
 
-            unsafe {
+            let take = unsafe {
                 let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
                 let (payload, pad) = out.split_at_mut(res.payload_bytes);
 
@@ -1204,13 +1252,27 @@ pub async fn song_task() {
 
                 if take != 0 {
                     payload[..take].copy_from_slice(&data[cursor..cursor + take]);
-                    cursor += take;
                 }
                 payload[take..].fill(0);
                 pad.fill(0);
+                take
+            };
+
+            if take == 0 {
+                // WAV data should be frame-aligned; if not, ignore trailing partial frame.
+                break;
             }
 
-            let _ = submit_demo_packet(res);
+            if submit_demo_packet(res).unwrap_or(false) {
+                cursor += take;
+                if !logged_playing {
+                    logged_playing = true;
+                    crate::log!("song: playing\n");
+                }
+            } else {
+                // Ring/backpressure: retry same payload position instead of dropping audio.
+                Timer::after(EmbassyDuration::from_millis(1)).await;
+            }
         }
     })
     .await;

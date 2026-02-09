@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
+use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -51,7 +52,7 @@ struct AsyncFsCompletion {
 
 static ASYNC_FS_REQS: Mutex<VecDeque<AsyncFsRequest>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_DONE: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
-static ASYNC_FS_RESULTS: Mutex<VecDeque<AsyncFsCompletion>> = Mutex::new(VecDeque::new());
+static ASYNC_FS_RESULTS: Mutex<BTreeMap<u32, AsyncFsCompletion>> = Mutex::new(BTreeMap::new());
 
 #[inline]
 fn next_async_fs_id() -> u32 {
@@ -74,19 +75,24 @@ fn take_async_fs_req() -> Option<AsyncFsRequest> {
 
 fn push_async_fs_completion(done: AsyncFsCompletion) {
     let id = done.id;
-    ASYNC_FS_RESULTS.lock().push_back(done);
+    ASYNC_FS_RESULTS.lock().insert(id, done);
     ASYNC_FS_DONE.lock().push_back(id);
 }
 
-fn find_async_fs_completion(id: u32) -> Option<AsyncFsCompletion> {
+fn completion_rc_len(id: u32) -> Option<(i32, usize)> {
     let res = ASYNC_FS_RESULTS.lock();
-    res.iter().find(|c| c.id == id).cloned()
+    res.get(&id).map(|c| (c.rc, c.data.len()))
 }
 
-fn remove_async_fs_completion(id: u32) {
+fn remove_async_fs_completion(id: u32) -> Option<AsyncFsCompletion> {
     let mut res = ASYNC_FS_RESULTS.lock();
-    if let Some(pos) = res.iter().position(|c| c.id == id) {
-        res.remove(pos);
+    res.remove(&id)
+}
+
+fn remove_done_id(id: u32) {
+    let mut done = ASYNC_FS_DONE.lock();
+    if let Some(pos) = done.iter().position(|x| *x == id) {
+        done.remove(pos);
     }
 }
 
@@ -175,6 +181,14 @@ pub async fn async_fs_service_task() {
 }
 
 pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
+    enqueue_request(AsyncFsKind::ReadFile, path, &[])
+}
+
+pub fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
+    enqueue_request(AsyncFsKind::WriteFile, path, data)
+}
+
+fn enqueue_request(kind: AsyncFsKind, path: &[u8], data: &[u8]) -> Result<u32, i32> {
     if path.is_empty() {
         return Err(FS_ERR_BAD_PARAM);
     }
@@ -184,37 +198,20 @@ pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
     let Ok(path_str) = core::str::from_utf8(path) else {
         return Err(FS_ERR_BAD_UTF8);
     };
-
-    let id = next_async_fs_id();
-    let req = AsyncFsRequest {
-        id,
-        kind: AsyncFsKind::ReadFile,
-        path: path_str.to_string(),
-        data: Vec::new(),
-    };
-    match push_async_fs_req(req) {
-        Ok(()) => Ok(id),
-        Err(code) => Err(code),
-    }
-}
-
-pub fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
-    if path.is_empty() {
-        return Err(FS_ERR_BAD_PARAM);
-    }
-    if path.len() > ASYNC_FS_MAX_PATH || data.len() > ASYNC_FS_MAX_DATA {
+    if kind == AsyncFsKind::WriteFile && data.len() > ASYNC_FS_MAX_DATA {
         return Err(FS_ERR_TOO_LARGE);
     }
-    let Ok(path_str) = core::str::from_utf8(path) else {
-        return Err(FS_ERR_BAD_UTF8);
-    };
 
     let id = next_async_fs_id();
     let req = AsyncFsRequest {
         id,
-        kind: AsyncFsKind::WriteFile,
+        kind,
         path: path_str.to_string(),
-        data: data.to_vec(),
+        data: if kind == AsyncFsKind::WriteFile {
+            data.to_vec()
+        } else {
+            Vec::new()
+        },
     };
     match push_async_fs_req(req) {
         Ok(()) => Ok(id),
@@ -235,37 +232,41 @@ pub fn poll_completed(out_id: *mut u32) -> i32 {
 }
 
 pub fn result_len(op_id: u32) -> isize {
-    let Some(c) = find_async_fs_completion(op_id) else {
+    let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
     };
-    if c.rc != 0 {
-        return c.rc as isize;
+    if rc != 0 {
+        return rc as isize;
     }
-    c.data.len() as isize
+    len as isize
 }
 
 pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
-    let Some(c) = find_async_fs_completion(op_id) else {
+    let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
     };
-    if c.rc != 0 {
+    if rc != 0 {
         remove_async_fs_completion(op_id);
-        return c.rc as isize;
+        return rc as isize;
     }
 
     if out_ptr.is_null() || out_cap == 0 {
-        return c.data.len() as isize;
+        return len as isize;
     }
-    if c.data.len() > out_cap {
+    if len > out_cap {
         return FS_ERR_NO_SPACE as isize;
     }
+
+    let Some(c) = remove_async_fs_completion(op_id) else {
+        return FS_ERR_NOT_FOUND as isize;
+    };
     unsafe { core::ptr::copy_nonoverlapping(c.data.as_ptr(), out_ptr, c.data.len()) };
     let n = c.data.len() as isize;
-    remove_async_fs_completion(op_id);
     n
 }
 
 pub fn discard(op_id: u32) -> i32 {
+    remove_done_id(op_id);
     remove_async_fs_completion(op_id);
     0
 }

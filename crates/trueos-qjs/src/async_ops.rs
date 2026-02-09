@@ -133,6 +133,17 @@ unsafe fn resolve_undefined(ctx: *mut qjs::JSContext, op: &PendingOp) {
     );
 }
 
+fn read_completion_bytes(done_id: u32, len: usize) -> Result<Vec<u8>, i32> {
+    let mut buf: Vec<u8> = Vec::with_capacity(len);
+    buf.resize(len, 0);
+    let got = async_fs::read_result(done_id, buf.as_mut_ptr(), buf.len());
+    if got < 0 {
+        return Err(got as i32);
+    }
+    buf.truncate(got as usize);
+    Ok(buf)
+}
+
 /// Pump completed kernel async FS operations into JS Promises.
 ///
 /// Call this from the thread/task that owns the QuickJS runtime.
@@ -195,30 +206,28 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
             }
             OpKind::ReadBytes => {
                 let n = len as usize;
-                let mut buf: Vec<u8> = Vec::with_capacity(n);
-                buf.resize(n, 0);
-
-                let got = async_fs::read_result(done_id, buf.as_mut_ptr(), buf.len());
-                if got < 0 {
-                    unsafe { reject_with_code(ctx, &op, got as i32) };
-                } else {
-                    let ab = unsafe { qjs::JS_NewArrayBufferCopy(ctx, buf.as_ptr(), got as usize) };
-                    unsafe { resolve_with_value(ctx, &op, ab) };
+                match read_completion_bytes(done_id, n) {
+                    Ok(buf) => {
+                        let ab = unsafe { qjs::JS_NewArrayBufferCopy(ctx, buf.as_ptr(), buf.len()) };
+                        unsafe { resolve_with_value(ctx, &op, ab) };
+                    }
+                    Err(code) => unsafe { reject_with_code(ctx, &op, code) },
                 }
             }
             OpKind::ReadText => {
                 let n = len as usize;
-                let mut buf: Vec<u8> = Vec::with_capacity(n);
-                buf.resize(n, 0);
-
-                let got = async_fs::read_result(done_id, buf.as_mut_ptr(), buf.len());
-                if got < 0 {
-                    unsafe { reject_with_code(ctx, &op, got as i32) };
-                } else {
-                    let s = unsafe {
-                        qjs::JS_NewStringLen(ctx, buf.as_ptr() as *const core::ffi::c_char, got as usize)
-                    };
-                    unsafe { resolve_with_value(ctx, &op, s) };
+                match read_completion_bytes(done_id, n) {
+                    Ok(buf) => {
+                        let s = unsafe {
+                            qjs::JS_NewStringLen(
+                                ctx,
+                                buf.as_ptr() as *const core::ffi::c_char,
+                                buf.len(),
+                            )
+                        };
+                        unsafe { resolve_with_value(ctx, &op, s) };
+                    }
+                    Err(code) => unsafe { reject_with_code(ctx, &op, code) },
                 }
             }
         }
