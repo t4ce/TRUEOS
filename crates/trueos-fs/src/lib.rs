@@ -767,8 +767,41 @@ pub struct PutWriteStream {
     written: u64,
     name_len: u16,
     block_size: usize,
+    max_transfer_bytes: usize,
     hasher: Sha256,
+    batch: Vec<u8>,
+    batch_off: usize,
     pending: Vec<u8>,
+}
+
+#[inline]
+fn batch_available(stream: &PutWriteStream) -> usize {
+    stream.batch.len().saturating_sub(stream.batch_off)
+}
+
+#[inline]
+fn batch_push(stream: &mut PutWriteStream, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if stream.batch_off >= stream.batch.len() {
+        stream.batch.clear();
+        stream.batch_off = 0;
+    }
+    stream.batch.extend_from_slice(bytes);
+}
+
+#[inline]
+fn batch_maybe_compact(stream: &mut PutWriteStream) {
+    if stream.batch_off == 0 {
+        return;
+    }
+    if stream.batch_off >= stream.max_transfer_bytes || stream.batch_off.saturating_mul(2) >= stream.batch.len() {
+        let remain = stream.batch.len().saturating_sub(stream.batch_off);
+        stream.batch.copy_within(stream.batch_off.., 0);
+        stream.batch.truncate(remain);
+        stream.batch_off = 0;
+    }
 }
 
 pub async fn begin_write_file_stream<D: BlockIo>(
@@ -815,7 +848,15 @@ pub async fn begin_write_file_stream<D: BlockIo>(
             .await
             .map_err(FsError::Device)?;
     }
-    dev.flush().await.map_err(FsError::Device)?;
+    let max_transfer_bytes = {
+        let mt = dev.max_transfer_bytes();
+        if mt == 0 {
+            bs
+        } else {
+            core::cmp::max(bs, mt - (mt % bs))
+        }
+    };
+    let batch_capacity = core::cmp::min(2 * 1024 * 1024, core::cmp::max(bs, max_transfer_bytes * 2));
 
     Ok(Some(PutWriteStream {
         sb_before: sb,
@@ -826,7 +867,10 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         written: 0,
         name_len: name_len as u16,
         block_size: bs,
+        max_transfer_bytes,
         hasher: Sha256::new(),
+        batch: Vec::with_capacity(batch_capacity),
+        batch_off: 0,
         pending: Vec::new(),
     }))
 }
@@ -860,10 +904,11 @@ pub async fn write_file_stream_chunk<D: BlockIo>(
         stream.pending.extend_from_slice(&chunk[..take]);
         off = off.saturating_add(take);
         if stream.pending.len() == bs {
-            dev.write_blocks(stream.data_lba, stream.pending.as_slice())
-                .await
-                .map_err(FsError::Device)?;
-            stream.data_lba = stream.data_lba.saturating_add(1);
+            if stream.batch_off >= stream.batch.len() {
+                stream.batch.clear();
+                stream.batch_off = 0;
+            }
+            stream.batch.extend_from_slice(stream.pending.as_slice());
             stream.pending.clear();
         }
     }
@@ -872,18 +917,28 @@ pub async fn write_file_stream_chunk<D: BlockIo>(
     let remaining = chunk.len().saturating_sub(off);
     let full_bytes = (remaining / bs) * bs;
     if full_bytes > 0 {
-        dev.write_blocks(stream.data_lba, &chunk[off..off + full_bytes])
-            .await
-            .map_err(FsError::Device)?;
-        stream.data_lba = stream
-            .data_lba
-            .saturating_add((full_bytes / bs) as u64);
+        batch_push(stream, &chunk[off..off + full_bytes]);
         off = off.saturating_add(full_bytes);
     }
 
     // Keep tail (< block size) for later.
     if off < chunk.len() {
         stream.pending.extend_from_slice(&chunk[off..]);
+    }
+
+    // Batch full-block writes across chunk calls to reduce per-call overhead.
+    while batch_available(stream) >= stream.max_transfer_bytes {
+        let bytes_here = stream.max_transfer_bytes;
+        let start = stream.batch_off;
+        let stop = start.saturating_add(bytes_here);
+        dev.write_blocks(stream.data_lba, &stream.batch[start..stop])
+            .await
+            .map_err(FsError::Device)?;
+        stream.data_lba = stream
+            .data_lba
+            .saturating_add((bytes_here / bs) as u64);
+        stream.batch_off = stop;
+        batch_maybe_compact(stream);
     }
 
     stream.written = next;
@@ -893,12 +948,31 @@ pub async fn write_file_stream_chunk<D: BlockIo>(
 pub async fn finish_write_file_stream<D: BlockIo>(
     dev: &D,
     params: &FsParams,
-    stream: PutWriteStream,
+    mut stream: PutWriteStream,
 ) -> Result<(), FsError<D::Error>> {
     if stream.written != stream.data_len {
         return Err(FsError::InvalidParam);
     }
     let bs = stream.block_size;
+
+    // Flush any batched full blocks.
+    if batch_available(&stream) > 0 {
+        while batch_available(&stream) > 0 {
+            let remaining = batch_available(&stream);
+            let bytes_here = core::cmp::min(remaining, stream.max_transfer_bytes);
+            let start = stream.batch_off;
+            let stop = start.saturating_add(bytes_here);
+            dev.write_blocks(stream.data_lba, &stream.batch[start..stop])
+                .await
+                .map_err(FsError::Device)?;
+            stream.data_lba = stream
+                .data_lba
+                .saturating_add((bytes_here / bs) as u64);
+            stream.batch_off = stop;
+        }
+        stream.batch.clear();
+        stream.batch_off = 0;
+    }
 
     // Flush any trailing partial block as zero-padded.
     if !stream.pending.is_empty() {
@@ -909,7 +983,9 @@ pub async fn finish_write_file_stream<D: BlockIo>(
             .await
             .map_err(FsError::Device)?;
     }
-    dev.flush().await.map_err(FsError::Device)?;
+    if stream.written != 0 {
+        dev.flush().await.map_err(FsError::Device)?;
+    }
 
     // Commit header with final hash.
     let digest = stream.hasher.finalize();
