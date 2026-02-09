@@ -12,7 +12,7 @@ use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use crate::wait;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use heapless::Vec;
+use heapless::{Deque, Vec};
 use libm::sinf;
 use spin::Mutex;
 use core::future::poll_fn;
@@ -928,9 +928,11 @@ pub async fn sine_task() {
         const FREQ_HZ: f32 = 440.0;
         const AMP: f32 = (i16::MAX as f32) * 0.20;
         const TWO_PI: f32 = core::f32::consts::PI * 2.0;
-        const PREFILL_TARGET: usize = 48;
-        const PREFILL_BURST: usize = 24;
+        const PREFILL_TARGET: usize = 12;
+        const PREFILL_BURST: usize = 8;
         const SINE_RUNTIME_SECS: u64 = 3;
+        const RAMP_MS: u64 = 30;
+        const HANDOFF_GUARD_MS: u64 = 250;
 
         let mut phase: f32 = 0.0;
         let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
@@ -942,20 +944,20 @@ pub async fn sine_task() {
         };
 
         let mut last_status = Instant::now();
-        let mut sine_start: Option<Instant> = None;
         let mut target_frames: u64 = 0;
         let mut submitted_frames: u64 = 0;
+        let mut played_frames: u64 = 0;
         let mut stop_submit = false;
+        let mut queued_packet_frames: Deque<u16, 128> = Deque::new();
+        let mut hb_evt_ok: u64 = 0;
+        let mut hb_evt_err: u64 = 0;
+        let mut hb_last_cc: u32 = 0;
         let mut no_device: u64 = 0;
         let mut no_runtime: u64 = 0;
         let mut no_packet: u64 = 0;
         let mut fmt_mismatch: u64 = 0;
 
         loop {
-            if stop_submit {
-                break;
-            }
-
             // If we have a UAC runtime, keep the isoch ring fed ahead of time.
             // This is intentionally Timer-free for pacing: the controller schedules packets
             // at the correct microframe cadence; we just avoid letting the ring run dry.
@@ -987,8 +989,28 @@ pub async fn sine_task() {
                 Timer::after(EmbassyDuration::from_millis(10)).await;
                 continue;
             }
+
+            let (evt_ok, evt_err, last_cc) = take_xfer_event_counters(controller_id);
+            if evt_ok != 0 || evt_err != 0 {
+                hb_evt_ok = hb_evt_ok.saturating_add(evt_ok as u64);
+                hb_evt_err = hb_evt_err.saturating_add(evt_err as u64);
+                hb_last_cc = last_cc;
+            }
+            // Any transfer completion (success or error) retires one queued packet.
+            // Using only successful completions can stall handoff forever if some TRBs
+            // complete with non-CC=1 while still draining `in_flight`.
+            let retired = evt_ok.saturating_add(evt_err);
+            for _ in 0..retired {
+                if let Some(frames) = queued_packet_frames.pop_front() {
+                    played_frames = played_frames.saturating_add(frames as u64);
+                }
+            }
+            if stop_submit && (played_frames >= target_frames || queued_packet_frames.is_empty()) {
+                break;
+            }
+
             let target = core::cmp::min(PREFILL_TARGET, cap);
-            if in_flight < target {
+            if !stop_submit && in_flight < target {
                 let budget = core::cmp::min(PREFILL_BURST, target - in_flight);
                 for _ in 0..budget {
                     let res = match reserve_demo_packet() {
@@ -1022,6 +1044,11 @@ pub async fn sine_task() {
                     if target_frames == 0 && rate_hz != 0 {
                         target_frames = (rate_hz as u64).saturating_mul(SINE_RUNTIME_SECS);
                     }
+                    let ramp_frames = if rate_hz == 0 {
+                        0
+                    } else {
+                        core::cmp::max(1, (rate_hz as u64).saturating_mul(RAMP_MS) / 1000)
+                    };
 
                     let frame_bytes = channels * 2;
                     let packet_frames = res.payload_bytes / frame_bytes;
@@ -1038,8 +1065,21 @@ pub async fn sine_task() {
                         let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
                         let (payload, pad) = out.split_at_mut(res.payload_bytes);
                         let (tone, tail) = payload.split_at_mut(tone_bytes);
-                        for frame in tone.chunks_exact_mut(frame_bytes) {
-                            let sample = (sinf(phase) * AMP) as i16;
+                        for (i, frame) in tone.chunks_exact_mut(frame_bytes).enumerate() {
+                            let frame_idx = submitted_frames.saturating_add(i as u64);
+                            let gain = if ramp_frames == 0 {
+                                1.0
+                            } else if frame_idx < ramp_frames {
+                                (frame_idx as f32) / (ramp_frames as f32)
+                            } else {
+                                let tail_left = target_frames.saturating_sub(frame_idx);
+                                if tail_left < ramp_frames {
+                                    (tail_left as f32) / (ramp_frames as f32)
+                                } else {
+                                    1.0
+                                }
+                            };
+                            let sample = (sinf(phase_next) * AMP * gain) as i16;
                             phase_next += phase_step;
                             if phase_next >= TWO_PI {
                                 phase_next -= TWO_PI;
@@ -1054,11 +1094,13 @@ pub async fn sine_task() {
                     }
 
                     if submit_demo_packet(res).unwrap_or(false) {
+                        if queued_packet_frames.push_back(tone_frames as u16).is_err() {
+                            // Should never happen with small queue depth; abort safely.
+                            stop_submit = true;
+                            break;
+                        }
                         phase = phase_next;
                         submitted_frames = submitted_frames.saturating_add(tone_frames as u64);
-                        if sine_start.is_none() {
-                            sine_start = Some(Instant::now());
-                        }
                         if submitted_frames >= target_frames {
                             stop_submit = true;
                             break;
@@ -1077,12 +1119,18 @@ pub async fn sine_task() {
                     };
                     let cap = rt.bufs.len();
                     let target = core::cmp::min(PREFILL_TARGET, cap);
-                    if rt.in_flight < target {
+                    let ready = if stop_submit {
+                        rt.in_flight == 0
+                    } else {
+                        rt.in_flight < target
+                    };
+                    if ready {
                         Poll::Ready(())
                     } else {
                         wait::register_waker_slot(&mut rt.fill_waker, cx.waker());
                         // Re-check after registration to avoid missing a wake.
-                        if rt.in_flight < target
+                        if (stop_submit && rt.in_flight == 0)
+                            || (!stop_submit && rt.in_flight < target)
                             || UAC_SLOT[controller_id].load(Ordering::Acquire) == 0
                         {
                             Poll::Ready(())
@@ -1097,23 +1145,27 @@ pub async fn sine_task() {
             if UAC_SINE_HEARTBEAT_LOG
                 && Instant::now().duration_since(last_status) >= EmbassyDuration::from_secs(2)
             {
-                let (evt_ok, evt_err, last_cc) = take_xfer_event_counters(controller_id);
                 let in_flight_now =
                     demo_queue_depth(controller_id).map(|(cur, _cap)| cur).unwrap_or(0);
                 crate::log!(
-                    "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
+                    "audio: uac sine heartbeat rate_hz={} ch={} in_flight={} queued={} submitted={} played={} evt_ok={} evt_err={} last_cc={} no_device={} no_runtime={} no_packet={} fmt_mismatch={}\n",
                     rate_hz,
                     channels,
                     in_flight_now,
-                    evt_ok,
-                    evt_err,
-                    last_cc,
+                    queued_packet_frames.len(),
+                    submitted_frames,
+                    played_frames,
+                    hb_evt_ok,
+                    hb_evt_err,
+                    hb_last_cc,
                     no_device,
                     no_runtime,
                     no_packet,
                     fmt_mismatch
                 );
                 last_status = Instant::now();
+                hb_evt_ok = 0;
+                hb_evt_err = 0;
                 no_device = 0;
                 no_runtime = 0;
                 no_packet = 0;
@@ -1147,10 +1199,13 @@ pub async fn sine_task() {
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
 
+        // Additional guard so downstream playback cannot overlap codec/USB tail latency.
+        Timer::after(EmbassyDuration::from_millis(HANDOFF_GUARD_MS)).await;
         crate::v::readiness::set(crate::v::readiness::UAC_SINE_DONE);
     })
     .await;
 }
+
 
 #[embassy_executor::task]
 pub async fn song_task() {
