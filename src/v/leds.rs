@@ -307,7 +307,7 @@ fn mixed_rgb_from_pool() -> Rgb8 {
 
 #[embassy_executor::task]
 pub async fn task() {
-    crate::v::taskmon::run("vleds-mux", async move {
+    async move {
         crate::log!("v_leds: service online\n");
         let raw_probe = alloc(1);
 
@@ -397,13 +397,12 @@ pub async fn task() {
 
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
-    })
-    .await;
+    }.await;
 }
 
 #[embassy_executor::task]
 pub async fn color_cycle_task() {
-    crate::v::taskmon::run("vleds-cycle", async move {
+    async move {
         crate::log!("v_leds: color cycle online (1000ms)\n");
 
         let Some(led_a) = alloc(5) else {
@@ -436,6 +435,5 @@ pub async fn color_cycle_task() {
 
             Timer::after(EmbassyDuration::from_millis(1000)).await;
         }
-    })
-    .await;
+    }.await;
 }

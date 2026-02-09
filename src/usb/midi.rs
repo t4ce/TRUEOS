@@ -87,7 +87,7 @@ fn piano_push_packet(pkt: [u8; 4]) {
 
 #[embassy_executor::task]
 pub async fn piano_drain_loop() {
-    crate::v::taskmon::run("piano-drain", async move {
+    async move {
         const IDLE_SLEEP_MS: u64 = 25;
 
         loop {
@@ -127,8 +127,7 @@ pub async fn piano_drain_loop() {
                 );
             }
         }
-    })
-    .await;
+    }.await;
 }
 
 #[derive(Copy, Clone, Debug)]

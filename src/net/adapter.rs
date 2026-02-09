@@ -1779,18 +1779,17 @@ fn service_tick_once() {
 /// adding NICs doesn't make a single task heavier.
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_poll_task(index: usize) {
-    crate::v::taskmon::run("net-poll", async move {
+    async move {
         loop {
             crate::net::poll_at(index);
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
-    })
-    .await;
+    }.await;
 }
 
 #[task]
 pub async fn net_service_task() {
-    crate::v::taskmon::run("net-service", async move {
+    async move {
         let count = crate::net::device_count();
         if count == 0 {
             crate::log!("net: service disabled (no NIC)\n");
@@ -1803,8 +1802,7 @@ pub async fn net_service_task() {
             service_tick_once();
             Timer::after(EmbassyDuration::from_millis(5)).await;
         }
-    })
-    .await;
+    }.await;
 }
 
 /// TCP-backed shell I/O bridge.
@@ -1814,7 +1812,7 @@ pub async fn net_service_task() {
 /// - Buffers shell output from `net_shell_write_bytes()` and flushes it over TCP.
 #[task]
 pub async fn net_shell_task() {
-    crate::v::taskmon::run("net-shell", async move {
+    async move {
         if NET_SHELL_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -2018,6 +2016,5 @@ pub async fn net_shell_task() {
         Timer::after(EmbassyDuration::from_millis(10)).await;
         let _ = ticks;
         }
-    })
-    .await;
+    }.await;
 }

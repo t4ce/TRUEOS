@@ -1,4 +1,3 @@
-pub mod bench;
 pub mod html;
 pub mod http_trueosfs;
 pub mod nalgebra_demo;

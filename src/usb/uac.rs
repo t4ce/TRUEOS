@@ -924,7 +924,7 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
 
 #[embassy_executor::task]
 pub async fn sine_task() {
-    crate::v::taskmon::run("uac-sine", async move {
+    async move {
         const FREQ_HZ: f32 = 440.0;
         const AMP: f32 = (i16::MAX as f32) * 0.20;
         const TWO_PI: f32 = core::f32::consts::PI * 2.0;
@@ -1202,14 +1202,13 @@ pub async fn sine_task() {
         // Additional guard so downstream playback cannot overlap codec/USB tail latency.
         Timer::after(EmbassyDuration::from_millis(HANDOFF_GUARD_MS)).await;
         crate::v::readiness::set(crate::v::readiness::UAC_SINE_DONE);
-    })
-    .await;
+    }.await;
 }
 
 
 #[embassy_executor::task]
 pub async fn song_task() {
-    crate::v::taskmon::run("uac-song", async move {
+    async move {
         const FRAME_BYTES: usize = 4; // s16le stereo
 
         let wav = DEMO_WAV_EMBEDDED;
@@ -1329,6 +1328,5 @@ pub async fn song_task() {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
         }
-    })
-    .await;
+    }.await;
 }

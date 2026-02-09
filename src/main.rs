@@ -193,25 +193,17 @@ pub extern "C" fn kmain() -> ! {
     }
     let spawner = executor.spawner();
 
-    if let Err(e) = crate::v::taskmon::spawn(&spawner, "job-runner", crate::wait::job_runner_task()) {
+    if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
 
     net::init();
 
-    crate::v::mode::set_mode(crate::v::mode::SystemMode::Normal);
-
     // Spawn all Embassy tasks via the centralized v-layer spawn service.
-    if let Err(e) = crate::v::taskmon::spawn(
-        &spawner,
-        "spawn-service",
-        crate::v::spawn_service::spawn_service_task(spawner),
+    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner),
     ) {
         crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
-
-    // QuickJS smoke test (kept after net init so URL imports can work if used).
-    // unsafe { qjs::trueos_smoke::run() };
 
     let bsp_lapic_id = percpu::this_cpu().lapic_id();
     for cpu in resp.cpus() {
