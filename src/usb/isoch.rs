@@ -80,9 +80,10 @@ impl IsochOutPipe {
         // Note: `TrbRing` does not currently do producer/consumer fullness tracking.
         // UAC keeps an explicit in-flight budget; this ring only needs to be "reasonably big".
         const ISOCH_TRBS: usize = 256;
+        let ring_bytes = ISOCH_TRBS * size_of::<Trb>();
         let (ep_ring_phys, ep_ring_virt) =
-            dma::alloc(ISOCH_TRBS * size_of::<Trb>(), 64).ok_or(())?;
-        unsafe { write_bytes(ep_ring_virt, 0, ISOCH_TRBS * size_of::<Trb>()) };
+            dma::alloc(ring_bytes, 64).ok_or(())?;
+        unsafe { write_bytes(ep_ring_virt, 0, ring_bytes) };
         let ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, ISOCH_TRBS) };
 
         // Allocate input context for Configure Endpoint.
@@ -206,7 +207,7 @@ impl IsochOutPipe {
             d2: 0,
             d3: trb_type(12) | (slot_id << 24),
         };
-        xhci::submit_cmd_and_wait(
+        let cfg_res = xhci::submit_cmd_and_wait(
             ctx,
             cmd_ring,
             cfg_ep_cmd,
@@ -215,7 +216,13 @@ impl IsochOutPipe {
             400,
             EmbassyDuration::from_millis(5),
         )
-        .await?;
+        .await;
+        // Configure-endpoint input context is temporary and can be freed regardless of outcome.
+        dma::dealloc(input_cfg_virt, 4096);
+        if cfg_res.is_err() {
+            dma::dealloc(ep_ring_virt, ring_bytes);
+            return Err(());
+        }
 
         Ok(IsochOutPipe {
             ep_target,

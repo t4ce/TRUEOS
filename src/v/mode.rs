@@ -22,7 +22,3 @@ pub fn mode() -> SystemMode {
 pub fn is_benchmark() -> bool {
     mode() == SystemMode::Benchmark
 }
-
-pub fn is_normal() -> bool {
-    mode() == SystemMode::Normal
-}

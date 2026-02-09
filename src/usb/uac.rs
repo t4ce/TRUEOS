@@ -21,6 +21,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Poll, Waker};
 
 const UAC_SINE_HEARTBEAT_LOG: bool = false;
+const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
@@ -34,6 +35,8 @@ struct AsOutEndpoint {
     ep_addr: u8,
     max_packet: u16,
     interval: u8,
+    sync_type: u8,
+    has_feedback_ep: bool,
     max_esit_payload: u16,
     ss_max_burst: u8,
     ss_mult: u8,
@@ -125,6 +128,8 @@ struct UacRuntime {
     channels: u16,
     bits_per_sample: u8,
     interval: u8,
+    sync_type: u8,
+    has_feedback_ep: bool,
     speed_code: u32,
     phase_accum: u64,
     fill_waker: Option<Waker>,
@@ -418,8 +423,9 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
     let mut current_cls: u8 = 0;
     let mut current_sub: u8 = 0;
 
-    let mut pending_ep: Option<(u8, u16, u8)> = None; // (addr, max_packet, interval)
+    let mut pending_ep: Option<(u8, u16, u8, u8)> = None; // (addr, max_packet, interval, sync_type)
     let mut pending_ss: Option<(u8, u8, u16)> = None; // (max_burst, mult, bytes_per_interval)
+    let mut has_feedback_ep = false;
     // If we find a candidate AS isoch OUT endpoint, keep it until we see a SS
     // companion descriptor (0x30) or we move to a new interface.
     let mut candidate: Option<AsOutEndpoint> = None;
@@ -450,19 +456,26 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
                 // Reset endpoint state on new interface.
                 pending_ep = None;
                 pending_ss = None;
+                has_feedback_ep = false;
             }
             5 if len >= 7 => {
                 // Endpoint descriptor
                 let ep_addr = cfg[idx + 2];
                 let bm_attr = cfg[idx + 3];
                 let xfer_ty = bm_attr & 0x3;
+                let sync_type = (bm_attr >> 2) & 0x3;
+                let usage_type = (bm_attr >> 4) & 0x3;
                 let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
                 let interval = cfg[idx + 6];
 
                 // Isoch OUT only.
                 let dir_in = (ep_addr & 0x80) != 0;
                 if !dir_in && xfer_ty == 0x01 {
-                    pending_ep = Some((ep_addr, max_packet, interval));
+                    pending_ep = Some((ep_addr, max_packet, interval, sync_type));
+                }
+                // Optional explicit feedback endpoint for async OUT endpoints.
+                if dir_in && xfer_ty == 0x01 && usage_type == 0x01 {
+                    has_feedback_ep = true;
                 }
             }
             0x30 if len >= 6 => {
@@ -484,7 +497,8 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
             _ => {}
         }
 
-        if let (Some((ifnum, alt, _)), Some((ep_addr, max_packet, interval))) = (current_if, pending_ep)
+        if let (Some((ifnum, alt, _)), Some((ep_addr, max_packet, interval, sync_type))) =
+            (current_if, pending_ep)
         {
             if current_cls == USB_CLASS_AUDIO
                 && current_sub == USB_SUBCLASS_AUDIOSTREAMING
@@ -502,6 +516,8 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
                     ep_addr,
                     max_packet,
                     interval,
+                    sync_type,
+                    has_feedback_ep,
                     max_esit_payload,
                     ss_max_burst,
                     ss_mult,
@@ -733,6 +749,8 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         channels: sink.fmt.channels as u16,
         bits_per_sample: sink.fmt.bits_per_sample,
         interval: as_out.interval,
+        sync_type: as_out.sync_type,
+        has_feedback_ep: as_out.has_feedback_ep,
         speed_code,
         phase_accum: 0,
         fill_waker: None,
@@ -740,14 +758,17 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     UAC_SLOT[controller_id].store(slot_id, Ordering::Release);
 
     crate::log!(
-        "usb: uac attached slot={} if={} alt={} ep=0x{:02X} mps={} interval={}\n",
+        "usb: uac attached slot={} if={} alt={} ep=0x{:02X} mps={} interval={} sync={} feedback={}\n",
         slot_id,
         as_out.interface,
         as_out.alt_setting,
         as_out.ep_addr,
         as_out.max_packet,
-        as_out.interval
+        as_out.interval,
+        as_out.sync_type,
+        as_out.has_feedback_ep
     );
+    crate::v::readiness::set(crate::v::readiness::UAC_ATTACHED);
 
     // Best-effort: try to program sampling frequency via the UAC1 endpoint control.
     // Many UAC2 devices will STALL this; ignore errors and continue streaming.
@@ -826,21 +847,29 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
         return Err(DemoQueueError::NoPacket);
     }
 
-    let tick_us: u64 = if rt.speed_code == 1 {
-        // Full-speed: bInterval is in 1ms frames.
-        core::cmp::max(1, rt.interval as u64) * 1000
-    } else {
-        // High-/Super-speed: bInterval is 125us microframes as 2^(bInterval-1).
-        125u64 * (1u64 << (rt.interval.saturating_sub(1) as u64))
-    };
-
-    // Target PCM frames to send this tick.
-    rt.phase_accum = rt.phase_accum.saturating_add(rt.rate_hz as u64 * tick_us);
-    let frames = rt.phase_accum / 1_000_000u64;
-    rt.phase_accum %= 1_000_000u64;
-
     let channels = core::cmp::max(1, rt.channels as usize);
-    let mut samples_needed = (frames as usize).saturating_mul(channels);
+    let mut samples_needed = if rt.sync_type == 0x02 {
+        // Adaptive OUT endpoint: device tracks host pacing.
+        // Safe fallback policy: always send full packet-sized payload.
+        max_samples - (max_samples % channels)
+    } else {
+        // Async/synchronous OUT fallback:
+        // - if explicit feedback endpoint exists, we still run nominal pacing for now.
+        // - otherwise same nominal pacing path.
+        let _has_feedback = rt.has_feedback_ep;
+        let tick_us: u64 = if rt.speed_code == 1 {
+            // Full-speed: bInterval is in 1ms frames.
+            core::cmp::max(1, rt.interval as u64) * 1000
+        } else {
+            // High-/Super-speed: bInterval is 125us microframes as 2^(bInterval-1).
+            125u64 * (1u64 << (rt.interval.saturating_sub(1) as u64))
+        };
+
+        rt.phase_accum = rt.phase_accum.saturating_add(rt.rate_hz as u64 * tick_us);
+        let frames = rt.phase_accum / 1_000_000u64;
+        rt.phase_accum %= 1_000_000u64;
+        (frames as usize).saturating_mul(channels)
+    };
 
     // Keep sample count aligned to whole frames.
     if samples_needed > max_samples {
@@ -874,13 +903,16 @@ pub fn submit_demo_packet(res: DemoPacketReservation) -> Result<bool, DemoQueueE
     if rt.slot_id != res.slot_id {
         return Err(DemoQueueError::NoRuntime);
     }
+    if rt.in_flight >= rt.bufs.len() {
+        return Ok(false);
+    }
 
     if !rt
         .pipe
         // Always schedule immediately (SIA=1) and let the controller place TRBs into
         // successive service intervals. Using a constant frame_id for burst-queued TRBs
         // causes audible burst/gap artifacts (classic crackle/click).
-        .push_isoch_trb(res.buf_phys, res.packet_bytes as u32, false, true, None)
+        .push_isoch_trb(res.buf_phys, res.payload_bytes as u32, false, true, None)
     {
         return Ok(false);
     }
@@ -898,6 +930,7 @@ pub async fn sine_task() {
         const TWO_PI: f32 = core::f32::consts::PI * 2.0;
         const PREFILL_TARGET: usize = 48;
         const PREFILL_BURST: usize = 24;
+        const SINE_RUNTIME: EmbassyDuration = EmbassyDuration::from_secs(3);
 
         let mut phase: f32 = 0.0;
         let mut rate_hz: u32 = crate::audio::DEFAULT_RATE_HZ;
@@ -909,12 +942,19 @@ pub async fn sine_task() {
         };
 
         let mut last_status = Instant::now();
+        let mut sine_start: Option<Instant> = None;
         let mut no_device: u64 = 0;
         let mut no_runtime: u64 = 0;
         let mut no_packet: u64 = 0;
         let mut fmt_mismatch: u64 = 0;
 
         loop {
+            if let Some(started_at) = sine_start {
+                if Instant::now().duration_since(started_at) >= SINE_RUNTIME {
+                    break;
+                }
+            }
+
             // If we have a UAC runtime, keep the isoch ring fed ahead of time.
             // This is intentionally Timer-free for pacing: the controller schedules packets
             // at the correct microframe cadence; we just avoid letting the ring run dry.
@@ -945,6 +985,9 @@ pub async fn sine_task() {
                 no_runtime = no_runtime.saturating_add(1);
                 Timer::after(EmbassyDuration::from_millis(10)).await;
                 continue;
+            }
+            if sine_start.is_none() {
+                sine_start = Some(Instant::now());
             }
 
             let target = core::cmp::min(PREFILL_TARGET, cap);
@@ -1053,6 +1096,121 @@ pub async fn sine_task() {
             }
 
             // No Timer-based microframe pacing here on purpose.
+        }
+
+        crate::v::readiness::set(crate::v::readiness::UAC_SINE_DONE);
+    })
+    .await;
+}
+
+#[embassy_executor::task]
+pub async fn song_task() {
+    crate::v::taskmon::run("uac-song", async move {
+        const FRAME_BYTES: usize = 4; // s16le stereo
+
+        let wav = DEMO_WAV_EMBEDDED;
+
+        fn le_u16(s: &[u8]) -> Option<u16> {
+            if s.len() < 2 {
+                return None;
+            }
+            Some(u16::from_le_bytes([s[0], s[1]]))
+        }
+        fn le_u32(s: &[u8]) -> Option<u32> {
+            if s.len() < 4 {
+                return None;
+            }
+            Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        }
+        fn parse_wav_pcm_s16_stereo_48k(bytes: &[u8]) -> Option<(usize, usize)> {
+            if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+                return None;
+            }
+            let mut off = 12usize;
+            let mut fmt_ok = false;
+            let mut data: Option<(usize, usize)> = None;
+            while off + 8 <= bytes.len() {
+                let id = &bytes[off..off + 4];
+                let sz = le_u32(&bytes[off + 4..off + 8])? as usize;
+                let payload = off + 8;
+                let end = payload.saturating_add(sz);
+                if end > bytes.len() {
+                    return None;
+                }
+
+                if id == b"fmt " {
+                    if sz < 16 {
+                        return None;
+                    }
+                    let fmt = &bytes[payload..payload + sz];
+                    let audio_fmt = le_u16(&fmt[0..2])?;
+                    let channels = le_u16(&fmt[2..4])?;
+                    let rate = le_u32(&fmt[4..8])?;
+                    let bits = le_u16(&fmt[14..16])?;
+                    if audio_fmt == 1 && channels == 2 && rate == 48_000 && bits == 16 {
+                        fmt_ok = true;
+                    } else {
+                        return None;
+                    }
+                } else if id == b"data" {
+                    data = Some((payload, sz));
+                    if fmt_ok {
+                        break;
+                    }
+                }
+
+                off = end + (sz & 1);
+            }
+
+            if !fmt_ok {
+                return None;
+            }
+            data
+        }
+
+        let Some((data_off, data_len)) = parse_wav_pcm_s16_stereo_48k(wav) else {
+            crate::log!("song: unsupported wav format (need pcm s16le stereo 48k)\n");
+            return;
+        };
+
+        crate::log!("song: playing\n");
+
+        let data = &wav[data_off..data_off + data_len];
+        let mut cursor = 0usize;
+        while cursor < data.len() {
+            let res = match reserve_demo_packet() {
+                Ok(v) => v,
+                Err(DemoQueueError::NoDevice | DemoQueueError::NoRuntime) => {
+                    Timer::after(EmbassyDuration::from_millis(25)).await;
+                    continue;
+                }
+                Err(DemoQueueError::NoPacket) => {
+                    Timer::after(EmbassyDuration::from_millis(1)).await;
+                    continue;
+                }
+                Err(DemoQueueError::FormatMismatch) => {
+                    crate::log!("song: runtime format mismatch\n");
+                    return;
+                }
+            };
+
+            unsafe {
+                let out = core::slice::from_raw_parts_mut(res.buf_virt, res.packet_bytes);
+                let (payload, pad) = out.split_at_mut(res.payload_bytes);
+
+                let remaining = data.len().saturating_sub(cursor);
+                let mut take = core::cmp::min(payload.len(), remaining);
+                take -= take % FRAME_BYTES;
+
+                if take != 0 {
+                    payload[..take].copy_from_slice(&data[cursor..cursor + take]);
+                    cursor += take;
+                }
+                payload[take..].fill(0);
+                pad.fill(0);
+            }
+
+            let _ = submit_demo_packet(res);
         }
     })
     .await;

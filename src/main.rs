@@ -199,7 +199,7 @@ pub extern "C" fn kmain() -> ! {
 
     net::init();
 
-    //crate::v::mode::set_mode(crate::v::mode::SystemMode::Benchmark);
+    crate::v::mode::set_mode(crate::v::mode::SystemMode::Normal);
 
     // Spawn all Embassy tasks via the centralized v-layer spawn service.
     if let Err(e) = crate::v::taskmon::spawn(
