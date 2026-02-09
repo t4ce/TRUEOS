@@ -436,6 +436,11 @@ pub mod cabi {
 	}
 
 	#[no_mangle]
+	pub extern "C" fn trueos_cabi_poll_once() {
+		crate::wait::park_step();
+	}
+
+	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
 		if cstr.is_null() {
 			return;
@@ -769,7 +774,6 @@ pub mod cabi {
 		}
 	}
 
-	const QJS_ASYNC_FS_MAX_PATH: usize = 1024;
 }
 
 /// Writer that routes bytes to the global console pipeline (stdout).
