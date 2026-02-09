@@ -750,100 +750,188 @@ async fn write_stream_at_lba<D: BlockIo>(
     Ok(())
 }
 
-async fn write_put_entry<D: BlockIo>(
-    dev: &D,
+/// Incremental writer state for a single `Put` log entry.
+///
+/// Lifecycle:
+/// 1. `begin_write_file_stream` reserves space and writes header/name with `committed=0`.
+/// 2. Repeated `write_file_stream_chunk` calls append bytes in-order.
+/// 3. `finish_write_file_stream` commits the header and advances superblock log head.
+///
+/// If dropped before finish, the partial entry is ignored on mount (not committed).
+pub struct PutWriteStream {
+    sb_before: Superblock,
     entry_lba: u64,
     total_blocks: u64,
-    name: &str,
-    data_source: &mut dyn FnMut(&mut [u8]) -> Result<usize, FsError<D::Error>>,
+    data_lba: u64,
     data_len: u64,
-) -> Result<(), FsError<D::Error>> {
+    written: u64,
+    name_len: u16,
+    block_size: usize,
+    hasher: Sha256,
+    pending: Vec<u8>,
+}
+
+pub async fn begin_write_file_stream<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    data_len: u64,
+) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
+    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
+        return Ok(None);
+    }
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
     }
+    let data_len_usize = usize::try_from(data_len).map_err(|_| FsError::InvalidParam)?;
 
-    let name_len = name.as_bytes().len();
-    let name_blocks = (name_len + (bs - 1)) / bs;
-    let name_bytes_rounded = name_blocks * bs;
-    let data_blocks = ((data_len as usize) + (bs - 1)) / bs;
-    let data_bytes_rounded = data_blocks * bs;
+    let Some((sb, entry_lba, total_blocks)) =
+        check_space_for_put(dev, params, name.as_bytes().len(), data_len_usize).await?
+    else {
+        return Ok(None);
+    };
 
-    let expected_blocks = 1u64
-        .saturating_add(name_blocks as u64)
-        .saturating_add(data_blocks as u64);
-    if expected_blocks != total_blocks {
-        return Err(FsError::InvalidParam);
-    }
-
-    // 1) Header committed=0.
+    // Header with committed=0.
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
         kind: LogKind::Put,
         committed: false,
-        name_len: name_len as u16,
+        name_len: name.len() as u16,
         data_len,
         sha256: [0u8; 32],
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
 
-    // 2) Name blocks (padded).
-    if name_bytes_rounded > 0 {
+    // Name blocks (padded).
+    let name_len = name.as_bytes().len();
+    let name_blocks = (name_len + (bs - 1)) / bs;
+    if name_blocks > 0 {
+        let name_bytes_rounded = name_blocks * bs;
         let mut name_buf = vec![0u8; name_bytes_rounded];
         name_buf[..name_len].copy_from_slice(name.as_bytes());
         dev.write_blocks(entry_lba.saturating_add(1), &name_buf)
             .await
             .map_err(FsError::Device)?;
     }
+    dev.flush().await.map_err(FsError::Device)?;
 
-    // 3) Data stream while hashing.
-    let mut hasher = Sha256::new();
-    if data_bytes_rounded > 0 {
-        let mut remaining = data_len as usize;
-        let mut data_src = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> {
-            if remaining == 0 {
-                return Ok(0);
-            }
-            let want = core::cmp::min(dst.len(), remaining);
-            let got = data_source(&mut dst[..want])?;
-            if got == 0 {
-                return Err(FsError::Corrupted);
-            }
-            hasher.update(&dst[..got]);
-            remaining = remaining.saturating_sub(got);
-            Ok(got)
-        };
+    Ok(Some(PutWriteStream {
+        sb_before: sb,
+        entry_lba,
+        total_blocks,
+        data_lba: entry_lba.saturating_add(1).saturating_add(name_blocks as u64),
+        data_len,
+        written: 0,
+        name_len: name_len as u16,
+        block_size: bs,
+        hasher: Sha256::new(),
+        pending: Vec::new(),
+    }))
+}
 
-        write_stream_at_lba(
-            dev,
-            entry_lba
-                .saturating_add(1)
-                .saturating_add(name_blocks as u64),
-            data_len as usize,
-            data_bytes_rounded,
-            &mut data_src,
-        )
-        .await?;
+pub async fn write_file_stream_chunk<D: BlockIo>(
+    dev: &D,
+    stream: &mut PutWriteStream,
+    chunk: &[u8],
+) -> Result<(), FsError<D::Error>> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+
+    let next = stream
+        .written
+        .checked_add(chunk.len() as u64)
+        .ok_or(FsError::InvalidParam)?;
+    if next > stream.data_len {
+        return Err(FsError::InvalidParam);
+    }
+
+    let bs = stream.block_size;
+    stream.hasher.update(chunk);
+
+    let mut off = 0usize;
+
+    // Complete pending partial block first.
+    if !stream.pending.is_empty() {
+        let need = bs - stream.pending.len();
+        let take = core::cmp::min(need, chunk.len());
+        stream.pending.extend_from_slice(&chunk[..take]);
+        off = off.saturating_add(take);
+        if stream.pending.len() == bs {
+            dev.write_blocks(stream.data_lba, stream.pending.as_slice())
+                .await
+                .map_err(FsError::Device)?;
+            stream.data_lba = stream.data_lba.saturating_add(1);
+            stream.pending.clear();
+        }
+    }
+
+    // Write whole blocks directly.
+    let remaining = chunk.len().saturating_sub(off);
+    let full_bytes = (remaining / bs) * bs;
+    if full_bytes > 0 {
+        dev.write_blocks(stream.data_lba, &chunk[off..off + full_bytes])
+            .await
+            .map_err(FsError::Device)?;
+        stream.data_lba = stream
+            .data_lba
+            .saturating_add((full_bytes / bs) as u64);
+        off = off.saturating_add(full_bytes);
+    }
+
+    // Keep tail (< block size) for later.
+    if off < chunk.len() {
+        stream.pending.extend_from_slice(&chunk[off..]);
+    }
+
+    stream.written = next;
+    Ok(())
+}
+
+pub async fn finish_write_file_stream<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    stream: PutWriteStream,
+) -> Result<(), FsError<D::Error>> {
+    if stream.written != stream.data_len {
+        return Err(FsError::InvalidParam);
+    }
+    let bs = stream.block_size;
+
+    // Flush any trailing partial block as zero-padded.
+    if !stream.pending.is_empty() {
+        let mut last = vec![0u8; bs];
+        let n = stream.pending.len();
+        last[..n].copy_from_slice(stream.pending.as_slice());
+        dev.write_blocks(stream.data_lba, &last)
+            .await
+            .map_err(FsError::Device)?;
     }
     dev.flush().await.map_err(FsError::Device)?;
 
-    // 4) Rewrite header committed=1 with sha.
-    let digest = hasher.finalize();
+    // Commit header with final hash.
+    let digest = stream.hasher.finalize();
     let mut sha256 = [0u8; 32];
     sha256.copy_from_slice(&digest[..]);
+
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
         kind: LogKind::Put,
         committed: true,
-        name_len: name_len as u16,
-        data_len,
+        name_len: stream.name_len,
+        data_len: stream.data_len,
         sha256,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.write_blocks(stream.entry_lba, &hdr1)
+        .await
+        .map_err(FsError::Device)?;
     dev.flush().await.map_err(FsError::Device)?;
 
+    // Publish by advancing log head.
+    advance_log_head(dev, params, stream.sb_before, stream.total_blocks).await?;
     Ok(())
 }
 
@@ -1194,29 +1282,11 @@ pub async fn write_file<D: BlockIo>(
     name: &str,
     bytes: &[u8],
 ) -> Result<bool, FsError<D::Error>> {
-    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
-        return Ok(false);
-    }
-
-    let Some((sb, entry_lba, blocks)) =
-        check_space_for_put(dev, params, name.as_bytes().len(), bytes.len()).await?
-    else {
+    let Some(mut stream) = begin_write_file_stream(dev, params, name, bytes.len() as u64).await? else {
         return Ok(false);
     };
-
-    let mut off = 0usize;
-    let mut src = |dst: &mut [u8]| -> Result<usize, FsError<D::Error>> {
-        if off >= bytes.len() {
-            return Ok(0);
-        }
-        let take = core::cmp::min(dst.len(), bytes.len() - off);
-        dst[..take].copy_from_slice(&bytes[off..off + take]);
-        off = off.saturating_add(take);
-        Ok(take)
-    };
-
-    write_put_entry(dev, entry_lba, blocks, name, &mut src, bytes.len() as u64).await?;
-    advance_log_head(dev, params, sb, blocks).await?;
+    write_file_stream_chunk(dev, &mut stream, bytes).await?;
+    finish_write_file_stream(dev, params, stream).await?;
     Ok(true)
 }
 

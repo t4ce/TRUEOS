@@ -7,7 +7,10 @@ use crate as qjs;
 
 extern "C" {
     fn trueos_cabi_fs_read_file(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_fs_write_file(path_ptr: *const u8, path_len: usize, data_ptr: *const u8, data_len: usize) -> i32;
+    fn trueos_cabi_fs_write_begin(path_ptr: *const u8, path_len: usize, total_len: u64, out_handle: *mut u32) -> i32;
+    fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
+    fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
     fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
     fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
@@ -16,6 +19,8 @@ extern "C" {
 }
 
 include!("../../../src/surface/cabi_codes.rs");
+
+const FS_WRITE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -632,7 +637,25 @@ unsafe extern "C" fn qjs_fs_write_file_text(
         return qjs::JSValue::exception();
     };
 
-    let rc = unsafe { trueos_cabi_fs_write_file(path_ptr, path_len, data_ptr, data_len) };
+    let mut handle = 0u32;
+    let mut rc = unsafe {
+        trueos_cabi_fs_write_begin(path_ptr, path_len, data_len as u64, &mut handle as *mut u32)
+    };
+    if rc == 0 {
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        for chunk in data.chunks(FS_WRITE_CHUNK_BYTES) {
+            rc = unsafe { trueos_cabi_fs_write_chunk(handle, chunk.as_ptr(), chunk.len()) };
+            if rc != 0 {
+                let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+                break;
+            }
+        }
+    }
+    if rc == 0 {
+        rc = unsafe { trueos_cabi_fs_write_finish(handle) };
+    } else {
+        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+    }
     unsafe { js_free_cstring(ctx, path_cstr) };
     unsafe { js_free_cstring(ctx, data_cstr) };
     if rc != 0 {
