@@ -996,14 +996,14 @@ impl block::BlockDevice for NvmeBlockDevice {
 
             let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
             let max_blocks = core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
+            let (dma_phys, dma_virt) =
+                dma::alloc(max_io_bytes, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
 
             let mut remaining = out.as_mut_slice();
             let mut cur_lba = lba;
             while !remaining.is_empty() {
                 let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
                 let bytes_here = blocks_here * bs;
-                let (dma_phys, dma_virt) =
-                    dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
                 unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
                 if let Err(e) =
@@ -1011,7 +1011,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                         .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
                         .await
                 {
-                    dma::dealloc(dma_virt, bytes_here);
+                    dma::dealloc(dma_virt, max_io_bytes);
                     return Err(e);
                 }
 
@@ -1019,12 +1019,12 @@ impl block::BlockDevice for NvmeBlockDevice {
                     let src = core::slice::from_raw_parts(dma_virt, bytes_here);
                     remaining[..bytes_here].copy_from_slice(src);
                 }
-                dma::dealloc(dma_virt, bytes_here);
 
                 remaining = &mut remaining[bytes_here..];
                 cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
+            dma::dealloc(dma_virt, max_io_bytes);
             Ok(out)
         })
     }
@@ -1046,27 +1046,31 @@ impl block::BlockDevice for NvmeBlockDevice {
 
             let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
             let max_blocks = core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
+            let (dma_phys, dma_virt) =
+                dma::alloc(max_io_bytes, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
 
             let mut remaining = buf;
             let mut cur_lba = lba;
             while !remaining.is_empty() {
                 let blocks_here = core::cmp::min(max_blocks, remaining.len() / bs);
                 let bytes_here = blocks_here * bs;
-                let (dma_phys, dma_virt) =
-                    dma::alloc(bytes_here, self.ctrl.page_size_bytes()).ok_or(block::Error::DmaUnavailable)?;
                 unsafe {
                     core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
                 }
 
-                self.ctrl
+                if let Err(e) = self.ctrl
                     .io_rw_async(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                    .await?;
-                dma::dealloc(dma_virt, bytes_here);
+                    .await
+                {
+                    dma::dealloc(dma_virt, max_io_bytes);
+                    return Err(e);
+                }
 
                 remaining = &remaining[bytes_here..];
                 cur_lba = cur_lba.saturating_add(blocks_here as u64);
             }
 
+            dma::dealloc(dma_virt, max_io_bytes);
             Ok(())
         })
     }
