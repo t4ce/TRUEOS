@@ -545,7 +545,7 @@ pub async fn file_write_abort_async(stream_handle: u32) -> Result<(), block::Err
 
 /// Async TRUEOSFS: read a file.
 ///
-/// Returns `Ok(None)` if missing or fails integrity check.
+/// Returns `Ok(None)` if missing.
 pub async fn file_out_async(
     disk: block::DeviceHandle,
     name: &str,

@@ -218,16 +218,9 @@ fn http_find_header<'a>(req: &'a [u8], key: &str) -> Option<&'a str> {
     None
 }
 
-fn http_etag_from_sha(sha: &[u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(sha.len() * 2 + 2);
-    out.push('"');
-    for b in sha.iter().copied() {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out.push('"');
-    out
+fn http_etag_from_len(len: u64) -> String {
+    // Weak ETag for baseline mode: stable per file length.
+    format!("W/\"len-{}\"", len)
 }
 
 fn http_etag_matches(value: &str, etag: &str) -> bool {
@@ -320,7 +313,7 @@ async fn http_prepare_file_response(
     };
 
     let total_len = info.data_len;
-    let etag = http_etag_from_sha(&info.sha256);
+    let etag = http_etag_from_len(info.data_len);
     let mut extra_headers = String::new();
     extra_headers.push_str("Accept-Ranges: bytes\r\n");
     extra_headers.push_str(format!("ETag: {}\r\n", etag).as_str());

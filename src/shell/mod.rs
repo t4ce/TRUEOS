@@ -298,6 +298,40 @@ async fn print_bench_disk_table(io: &dyn ShellIo) {
     io.write_str("\r\n");
 }
 
+async fn print_netbench_nic_table(io: &dyn ShellIo) {
+    io.write_str("netbench: NIC selection\r\n");
+    io.write_str("netbench: enter a nic id (blank/q cancels)\r\n");
+    io.write_str("\r\n");
+
+    let count = crate::net::device_count();
+    if count == 0 {
+        io.write_str("  (no nics)\r\n");
+        io.write_str("\r\n");
+        return;
+    }
+
+    for idx in 0..count {
+        let mac = if idx == 0 {
+            crate::net::mac_address()
+        } else {
+            crate::net::mac_address_at(idx)
+        };
+        match mac {
+            Some([a, b, c, d, e, f]) => {
+                io.write_fmt(format_args!(
+                    "  id={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                    idx, a, b, c, d, e, f
+                ));
+            }
+            None => {
+                io.write_fmt(format_args!("  id={} mac=unavailable\r\n", idx));
+            }
+        }
+    }
+
+    io.write_str("\r\n");
+}
+
 #[derive(Copy, Clone)]
 pub(crate) enum PendingAction {
     Reset,
@@ -314,6 +348,7 @@ pub(crate) enum InstallWizardStage {
     UpdateSelectDisk,
     FileSelectMount,
     BenchSelectDisk,
+    NetbenchSelectNic,
 }
 
 pub(crate) enum CommandAction {
@@ -324,6 +359,7 @@ pub(crate) enum CommandAction {
     ShowUpdateDiskTable,
     ShowFileMountTable,
     ShowBenchDiskTable,
+    ShowNetbenchNicTable,
     EnterCube,
     EnterIco,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
@@ -615,6 +651,159 @@ async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHan
         }
         Ok(false) => io.write_str("bench: cleanup: benchmark file not present\r\n"),
         Err(e) => io.write_fmt(format_args!("bench: cleanup failed ({:?})\r\n", e)),
+    }
+}
+
+async fn run_netbench_udp(io: &dyn ShellBackend, nic_index: usize) {
+    use trueos_v::vnet as api;
+
+    const NETBENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
+    const UPDATE_MS: u64 = 250;
+    const PATTERN: &[u8] = b"10101010";
+    const CONTROL_PERIOD_CHUNKS: u32 = 64;
+    const OPEN_TIMEOUT_MS: u64 = 1500;
+    const REMOTE: api::EndpointV4 = api::EndpointV4::new([255, 255, 255, 255], 9);
+
+    let Some(vnet) = crate::v::net::VNet::open(nic_index) else {
+        io.write_str("netbench: failed to open vnet on selected nic\r\n");
+        return;
+    };
+
+    let local_port = 40000u16.saturating_add((embassy_time_driver::now() as u16) % 20000);
+    if vnet.submit(api::Command::OpenUdp { port: local_port }).is_err() {
+        io.write_str("netbench: failed to open udp socket\r\n");
+        return;
+    }
+
+    io.write_fmt(format_args!(
+        "netbench: nic={} local_port={} remote={}.{}.{}.{}:{}\r\n",
+        nic_index,
+        local_port,
+        REMOTE.addr[0],
+        REMOTE.addr[1],
+        REMOTE.addr[2],
+        REMOTE.addr[3],
+        REMOTE.port
+    ));
+    io.write_str("netbench: streaming 100MB udp payload (press any key to abort)\r\n");
+
+    let open_deadline = Instant::now() + EmbassyDuration::from_millis(OPEN_TIMEOUT_MS);
+    let udp_handle = loop {
+        if Instant::now() >= open_deadline {
+            io.write_str("netbench: udp open timeout\r\n");
+            return;
+        }
+        if let Some(ev) = vnet.pop_event() {
+            match ev {
+                api::Event::Opened { handle, kind } if kind == api::SocketKind::Udp => break handle,
+                api::Event::Error { msg } => {
+                    io.write_fmt(format_args!("netbench: udp open failed ({})\r\n", msg));
+                    return;
+                }
+                _ => {}
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    };
+
+    let mut chunk = [0u8; api::MAX_MSG];
+    if !PATTERN.is_empty() {
+        let mut off = 0usize;
+        while off < chunk.len() {
+            let take = core::cmp::min(PATTERN.len(), chunk.len() - off);
+            chunk[off..off + take].copy_from_slice(&PATTERN[..take]);
+            off = off.saturating_add(take);
+        }
+    }
+
+    let mut sent: u64 = 0;
+    let mut chunk_count: u32 = 0;
+    let mut aborted = false;
+    let mut failed = false;
+    let mut fail_msg: &'static str = "send failed";
+
+    let start_tick = embassy_time_driver::now();
+    let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+
+    while sent < NETBENCH_TOTAL_BYTES {
+        let remaining = (NETBENCH_TOTAL_BYTES - sent) as usize;
+        let n = core::cmp::min(remaining, chunk.len());
+        let payload = api::ByteBuf::from_slice_trunc(&chunk[..n]);
+        if vnet
+            .submit(api::Command::SendUdp {
+                handle: udp_handle,
+                remote: REMOTE,
+                data: payload,
+            })
+            .is_err()
+        {
+            // Backpressure from command queue: yield and retry.
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+            continue;
+        }
+
+        sent = sent.saturating_add(n as u64);
+        chunk_count = chunk_count.wrapping_add(1);
+
+        while let Some(ev) = vnet.pop_event() {
+            match ev {
+                api::Event::Error { msg } => {
+                    failed = true;
+                    fail_msg = msg;
+                    break;
+                }
+                api::Event::Closed { handle } if handle == udp_handle => {
+                    failed = true;
+                    fail_msg = "udp closed";
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if failed {
+            break;
+        }
+
+        if (chunk_count % CONTROL_PERIOD_CHUNKS) == 0 && io.read_byte().is_some() {
+            aborted = true;
+            break;
+        }
+
+        if Instant::now() >= next_update || sent >= NETBENCH_TOTAL_BYTES {
+            let now_tick = embassy_time_driver::now();
+            let elapsed_ticks = now_tick.saturating_sub(start_tick);
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                sent.saturating_mul(1000) / elapsed_ms
+            };
+            let kbps = bps / 1024;
+            let total_kb = sent / 1024;
+            io.write_fmt(format_args!(
+                "\rwrite speed: {} kb/sec | {} KB total   ",
+                kbps,
+                total_kb
+            ));
+            next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+        }
+    }
+
+    let _ = vnet.submit(api::Command::Close { handle: udp_handle });
+
+    io.write_str("\r\n");
+    if aborted {
+        io.write_str("netbench: aborted by key press\r\n");
+    } else if failed {
+        io.write_fmt(format_args!("netbench: failed ({})\r\n", fail_msg));
+    } else {
+        io.write_str("netbench: complete\r\n");
     }
 }
 
@@ -1193,6 +1382,39 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
+
+                        if let Some(InstallWizardStage::NetbenchSelectNic) = install_wizard {
+                            let mut s = line.as_str().trim();
+                            if let Some(rest) = s.strip_prefix("netbench") {
+                                s = rest.trim();
+                            }
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\nnetbench: cancelled\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let nic_index = s.parse::<usize>().ok();
+                            line.clear();
+                            let Some(nic_index) = nic_index else {
+                                io.write_str("\r\nnetbench: invalid nic id\r\n");
+                                io.write_str("netbench: enter a nic id or 'q'\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+                            if nic_index >= crate::net::device_count() {
+                                io.write_str("\r\nnetbench: no such nic\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            install_wizard = None;
+                            run_netbench_udp(io, nic_index).await;
+                            write_prompt_for_state(io, pending_action, install_wizard);
+                            continue;
+                        }
                     }
 
                     if line.is_empty() && pending_action.is_none() && go_mode {
@@ -1260,6 +1482,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 set_go_mode(io, &mut go_mode, false);
                                 print_bench_disk_table(io).await;
                                 io.write_str("bench: enter TRUEOSFS disk id (blank/q cancels)\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::ShowNetbenchNicTable => {
+                                set_go_mode(io, &mut go_mode, false);
+                                print_netbench_nic_table(io).await;
+                                io.write_str("netbench: enter nic id (blank/q cancels)\r\n");
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::Mv { src, dst } => {
