@@ -515,6 +515,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("update", &NO_ARGS, cmd_update);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
+        let _ = REGSHCMD("bench", &NO_ARGS, cmd_bench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
@@ -647,10 +648,7 @@ fn cmd_get(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
                     break;
                 }
             }
-                let _ = crate::v::taskmon::spawn(
-                    ctx.spawner,
-                    "html-get-matrix",
-                    crate::tst::html::http_get_matrix_job(slot, u),
+                let _ = ctx.spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u),
                 );
             ctx.io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
@@ -681,10 +679,7 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
                     break;
                 }
             }
-                let _ = crate::v::taskmon::spawn(
-                    ctx.spawner,
-                    "tls-demo-matrix",
-                    crate::tst::tls_demo::tls_demo_matrix_job(slot, h),
+                let _ = ctx.spawner.spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h),
                 );
             ctx.io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
@@ -761,7 +756,7 @@ fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
             break;
         }
     }
-        if crate::v::taskmon::spawn(ctx.spawner, "net-ping", net_ping_task(ctx.io, t)).is_err() {
+        if ctx.spawner.spawn(net_ping_task(ctx.io, t)).is_err() {
             ctx.io.write_str("net: ping spawn failed\r\n");
     }
 
@@ -817,6 +812,11 @@ fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> 
 fn cmd_file(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::FileSelectMount);
     super::CommandAction::ShowFileMountTable
+}
+
+fn cmd_bench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    *ctx.install_wizard = Some(super::InstallWizardStage::BenchSelectDisk);
+    super::CommandAction::ShowBenchDiskTable
 }
 
 fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

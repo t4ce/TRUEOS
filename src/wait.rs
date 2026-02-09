@@ -214,7 +214,7 @@ static LOCAL_JOBS: LocalJobQueue = LocalJobQueue {
 
 #[task]
 pub async fn job_runner_task() {
-    crate::v::taskmon::run("job-runner", async move {
+    async move {
         loop {
             let job = {
                 let mut jobs = LOCAL_JOBS.jobs.lock();
@@ -244,8 +244,7 @@ pub async fn job_runner_task() {
                 }
             }
         }
-    })
-    .await;
+    }.await;
 }
 
 fn enqueue_local_job(job: LocalJobFuture) {

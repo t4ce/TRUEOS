@@ -93,7 +93,7 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
 /// Background task that performs deferred TRUEOSFS probing/mounting.
 #[embassy_executor::task]
 pub async fn mount_service_task() {
-    crate::v::taskmon::run("trueosfs-mount-service", async move {
+    async move {
         loop {
             if MOUNT_REQUESTED.swap(false, Ordering::AcqRel) {
                 // Allow the device to settle after registration.
@@ -123,8 +123,7 @@ pub async fn mount_service_task() {
 
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
-    })
-    .await;
+    }.await;
 }
 
 /// Async variant of [`format_blank`].

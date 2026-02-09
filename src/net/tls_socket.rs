@@ -405,13 +405,12 @@ fn tls_socket_tick_once() {
 
 #[task]
 pub async fn tls_socket_service_task() {
-    crate::v::taskmon::run("tls-socket-service", async move {
+    async move {
         crate::log!("tls-socket: service running\n");
 
         loop {
             tls_socket_tick_once();
             Timer::after(EmbassyDuration::from_millis(5)).await;
         }
-    })
-    .await;
+    }.await;
 }

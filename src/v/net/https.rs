@@ -11,6 +11,12 @@ use super::dns::{self, DnsConfig};
 use super::Queue;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::surface::io::cabi::{
+    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO, FS_ERR_NO_SPACE,
+    FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
+    NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
+    NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
+};
 
 /// Errors returned by [`fetch_https_body_async`].
 #[derive(Clone, Debug)]
@@ -26,9 +32,6 @@ pub enum FetchError {
     Http(u16),
     ResponseTooLarge,
 }
-
-// Keep these return codes compatible with the existing TRUEOS C ABI (used by QJS).
-include!("../../surface/cabi_codes.rs");
 
 #[inline]
 fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
