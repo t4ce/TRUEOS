@@ -33,7 +33,7 @@ QEMU_USB_FLAGS = \
 	-device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx \
 	-device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=7,id=usbpiano \
 	-device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive \
-	-drive file=nvme.img,if=none,format=raw,id=nvme0 \
+	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 

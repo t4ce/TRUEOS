@@ -32,6 +32,8 @@ const NVME_FEAT_NUMBER_OF_QUEUES: u32 = 0x07;
 const NVME_NVM_FLUSH: u8 = 0x00;
 const NVME_NVM_WRITE: u8 = 0x01;
 const NVME_NVM_READ: u8 = 0x02;
+const NVME_ADMIN_QID: u16 = 0;
+const NVME_IO_QID: u16 = 1;
 
 const PAGE_SIZE: usize = 4096;
 
@@ -75,6 +77,12 @@ impl Completion {
 struct PendingCompletion {
     cid: u16,
     cpl: Completion,
+}
+
+struct IdentifyControllerInfo {
+    serial: String,
+    mdts: u8,
+    nn: u32,
 }
 
 struct NvmeQueue {
@@ -176,6 +184,7 @@ struct NvmeController {
     mmio: NonNull<u8>,
     doorbell_stride_bytes: u32,
     page_size_bytes: usize,
+    max_transfer_bytes: u64,
     admin: NvmeQueue,
     io: NvmeQueue,
     next_cid: u16,
@@ -189,6 +198,21 @@ unsafe impl Send for NvmeController {}
 unsafe impl Sync for NvmeController {}
 
 impl NvmeController {
+    fn default_max_transfer_bytes() -> u64 {
+        256 * 1024
+    }
+
+    fn mdts_to_max_transfer_bytes(page_size_bytes: usize, mdts: u8) -> u64 {
+        if mdts == 0 {
+            return Self::default_max_transfer_bytes();
+        }
+        let Some(factor) = 1u64.checked_shl(mdts as u32) else {
+            return Self::default_max_transfer_bytes();
+        };
+        let page = page_size_bytes as u64;
+        page.saturating_mul(factor).max(page)
+    }
+
     fn io_inflight_test(&self, cid: u16) -> bool {
         let idx = (cid as usize) >> 6;
         let bit = 1u64 << ((cid as usize) & 63);
@@ -310,7 +334,7 @@ impl NvmeController {
             let _ = q.sq_push(sqe)?;
             (q.sq_tail, q.depth)
         };
-        self.db_write_sq_tail(0, tail % depth);
+        self.db_write_sq_tail(NVME_ADMIN_QID, tail % depth);
         self.admin_poll_cq_for_cid_sync(cid, timeout_ms)
     }
 
@@ -326,8 +350,8 @@ impl NvmeController {
             let _ = q.sq_push(sqe)?;
             (q.sq_tail, q.depth)
         };
-        self.db_write_sq_tail(1, tail % depth);
-        let res = self.poll_queue_cq_for_cid_sync(1, cid, timeout_ms);
+        self.db_write_sq_tail(NVME_IO_QID, tail % depth);
+        let res = self.poll_queue_cq_for_cid_sync(NVME_IO_QID, cid, timeout_ms);
         self.io_inflight_clear(cid);
         res
     }
@@ -344,7 +368,7 @@ impl NvmeController {
             let _ = q.sq_push(sqe)?;
             (q.sq_tail, q.depth)
         };
-        self.db_write_sq_tail(1, tail % depth);
+        self.db_write_sq_tail(NVME_IO_QID, tail % depth);
         let res = self.io_poll_cq_for_cid_async(cid, timeout_ms).await;
         self.io_inflight_clear(cid);
         res
@@ -355,7 +379,7 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid_sync(0, cid, timeout_ms)
+        self.poll_queue_cq_for_cid_sync(NVME_ADMIN_QID, cid, timeout_ms)
     }
 
     async fn io_poll_cq_for_cid_async(
@@ -363,7 +387,73 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        self.poll_queue_cq_for_cid_async(1, cid, timeout_ms).await
+        self.poll_queue_cq_for_cid_async(NVME_IO_QID, cid, timeout_ms).await
+    }
+
+    fn poll_queue_cq_for_cid_step(&mut self, qid: u16, cid: u16) -> Option<Completion> {
+        if qid == NVME_IO_QID {
+            if let Some(cpl) = self.io_pending_take(cid) {
+                return Some(cpl);
+            }
+        }
+
+        let (maybe_cpl, new_head, depth) = {
+            let q = if qid == NVME_ADMIN_QID {
+                &mut self.admin
+            } else {
+                &mut self.io
+            };
+            fence(Ordering::Acquire);
+            let cqe = q.cq_peek();
+            let status = (cqe.dw3 >> 16) as u16;
+            let phase = (status & 0x1) != 0;
+
+            if phase != q.cq_phase {
+                (None, q.cq_head, q.depth)
+            } else {
+                let got_cid = (cqe.dw3 & 0xFFFF) as u16;
+                let sq_head = (cqe.dw2 & 0xFFFF) as u16;
+                let sq_id = (cqe.dw2 >> 16) as u16;
+
+                q.cq_pop();
+                (
+                    Some(Completion {
+                        cid: got_cid,
+                        sq_head,
+                        sq_id,
+                        status,
+                    }),
+                    q.cq_head,
+                    q.depth,
+                )
+            }
+        };
+
+        if let Some(cpl) = maybe_cpl {
+            self.db_write_cq_head(qid, new_head % depth);
+            if cpl.cid == cid {
+                return Some(cpl);
+            }
+
+            if qid == NVME_IO_QID && self.io_inflight_test(cpl.cid) {
+                self.io_inflight_clear(cpl.cid);
+                self.io_pending_put(cpl);
+                return None;
+            }
+
+            crate::log!(
+                "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
+                self.pci,
+                qid,
+                cid,
+                cpl.cid,
+                cpl.status,
+                cpl.status_type(),
+                cpl.status_code(),
+            );
+        }
+
+        None
     }
 
     fn poll_queue_cq_for_cid_sync(
@@ -382,88 +472,8 @@ impl NvmeController {
         let deadline = start.saturating_add(ticks);
 
         loop {
-            if qid == 1 {
-                if let Some(cpl) = self.io_pending_take(cid) {
-                    return Ok(cpl);
-                }
-            }
-
-            let (maybe_cpl, new_head, depth) = if qid == 0 {
-                let q = &mut self.admin;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let status = (cqe.dw3 >> 16) as u16;
-                let phase = (status & 0x1) != 0;
-
-                if phase != q.cq_phase {
-                    (None, q.cq_head, q.depth)
-                } else {
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
-
-                    q.cq_pop();
-                    (
-                        Some(Completion {
-                            cid: got_cid,
-                            sq_head,
-                            sq_id,
-                            status,
-                        }),
-                        q.cq_head,
-                        q.depth,
-                    )
-                }
-            } else {
-                let q = &mut self.io;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let status = (cqe.dw3 >> 16) as u16;
-                let phase = (status & 0x1) != 0;
-
-                if phase != q.cq_phase {
-                    (None, q.cq_head, q.depth)
-                } else {
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
-
-                    q.cq_pop();
-                    (
-                        Some(Completion {
-                            cid: got_cid,
-                            sq_head,
-                            sq_id,
-                            status,
-                        }),
-                        q.cq_head,
-                        q.depth,
-                    )
-                }
-            };
-
-            if let Some(cpl) = maybe_cpl {
-                self.db_write_cq_head(qid, new_head % depth);
-                if cpl.cid == cid {
-                    return Ok(cpl);
-                }
-
-                if qid == 1 && self.io_inflight_test(cpl.cid) {
-                    self.io_inflight_clear(cpl.cid);
-                    self.io_pending_put(cpl);
-                    continue;
-                }
-
-                crate::log!(
-                    "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
-                    self.pci,
-                    qid,
-                    cid,
-                    cpl.cid,
-                    cpl.status,
-                    cpl.status_type(),
-                    cpl.status_code(),
-                );
+            if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
+                return Ok(cpl);
             }
 
             if embassy_time_driver::now() >= deadline {
@@ -489,89 +499,8 @@ impl NvmeController {
         let deadline = start.saturating_add(ticks);
 
         loop {
-            if qid == 1 {
-                if let Some(cpl) = self.io_pending_take(cid) {
-                    return Ok(cpl);
-                }
-            }
-
-            let (maybe_cpl, new_head, depth) = if qid == 0 {
-                let q = &mut self.admin;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let status = (cqe.dw3 >> 16) as u16;
-                let phase = (status & 0x1) != 0;
-
-                if phase != q.cq_phase {
-                    (None, q.cq_head, q.depth)
-                } else {
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
-
-                    q.cq_pop();
-                    (
-                        Some(Completion {
-                            cid: got_cid,
-                            sq_head,
-                            sq_id,
-                            status,
-                        }),
-                        q.cq_head,
-                        q.depth,
-                    )
-                }
-            } else {
-                let q = &mut self.io;
-                fence(Ordering::Acquire);
-                let cqe = q.cq_peek();
-                let status = (cqe.dw3 >> 16) as u16;
-                let phase = (status & 0x1) != 0;
-
-                if phase != q.cq_phase {
-                    (None, q.cq_head, q.depth)
-                } else {
-                    let got_cid = (cqe.dw3 & 0xFFFF) as u16;
-                    let sq_head = (cqe.dw2 & 0xFFFF) as u16;
-                    let sq_id = (cqe.dw2 >> 16) as u16;
-
-                    q.cq_pop();
-                    (
-                        Some(Completion {
-                            cid: got_cid,
-                            sq_head,
-                            sq_id,
-                            status,
-                        }),
-                        q.cq_head,
-                        q.depth,
-                    )
-                }
-            };
-
-            if let Some(cpl) = maybe_cpl {
-                self.db_write_cq_head(qid, new_head % depth);
-                if cpl.cid == cid {
-                    return Ok(cpl);
-                }
-
-                if qid == 1 && self.io_inflight_test(cpl.cid) {
-                    self.io_inflight_clear(cpl.cid);
-                    self.io_pending_put(cpl);
-                    continue;
-                }
-
-                crate::log!(
-                    "nvme: {} unexpected completion qid={} want_cid={} got_cid={} status=0x{:04X} (sct={} sc={})\n",
-                    self.pci,
-                    qid,
-                    cid,
-                    cpl.cid,
-                    cpl.status,
-                    cpl.status_type(),
-                    cpl.status_code(),
-                );
-                // Drain and keep waiting for the desired CID.
+            if let Some(cpl) = self.poll_queue_cq_for_cid_step(qid, cid) {
+                return Ok(cpl);
             }
 
             if embassy_time_driver::now() >= deadline {
@@ -617,8 +546,9 @@ impl NvmeController {
             mmio,
             doorbell_stride_bytes,
             page_size_bytes,
-            admin: NvmeQueue::new(0, 64, page_size_bytes)?,
-            io: NvmeQueue::new(1, 64, page_size_bytes)?,
+            max_transfer_bytes: Self::default_max_transfer_bytes(),
+            admin: NvmeQueue::new(NVME_ADMIN_QID, 64, page_size_bytes)?,
+            io: NvmeQueue::new(NVME_IO_QID, 64, page_size_bytes)?,
             next_cid: 1,
             io_inflight: [0u64; CID_BITMAP_WORDS],
             io_pending: [None; IO_PENDING_SLOTS],
@@ -648,17 +578,19 @@ impl NvmeController {
         }
 
         // Create IO completion queue (qid=1) and submission queue (qid=1).
-        ctrl.admin_create_io_cq(1, ctrl.io.depth, ctrl.io.cq_phys)?;
-        ctrl.admin_create_io_sq(1, ctrl.io.depth, ctrl.io.sq_phys, 1)?;
+        ctrl.admin_create_io_cq(NVME_IO_QID, ctrl.io.depth, ctrl.io.cq_phys)?;
+        ctrl.admin_create_io_sq(NVME_IO_QID, ctrl.io.depth, ctrl.io.sq_phys, NVME_IO_QID)?;
 
         // Initialize doorbells for IO queue pair (some emulators are picky about initial values).
-        ctrl.db_write_cq_head(1, 0);
-        ctrl.db_write_sq_tail(1, 0);
+        ctrl.db_write_cq_head(NVME_IO_QID, 0);
+        ctrl.db_write_sq_tail(NVME_IO_QID, 0);
 
         // Identify controller once to grab a serial string (optional).
-        if let Ok(serial) = ctrl.identify_controller_serial() {
-            if !serial.is_empty() {
-                ctrl.serial = Some(serial);
+        if let Ok(ctrl_info) = ctrl.identify_controller_info() {
+            ctrl.max_transfer_bytes =
+                Self::mdts_to_max_transfer_bytes(ctrl.page_size_bytes(), ctrl_info.mdts);
+            if !ctrl_info.serial.is_empty() {
+                ctrl.serial = Some(ctrl_info.serial);
             }
         }
 
@@ -834,9 +766,7 @@ impl NvmeController {
         Ok(())
     }
 
-    fn identify_controller_serial(&mut self) -> core::result::Result<String, block::Error> {
-        let mut buf = [0u8; PAGE_SIZE];
-        self.admin_identify(0, 1, &mut buf)?;
+    fn identify_controller_serial_from_buf(buf: &[u8]) -> String {
         // Identify Controller: serial number bytes [4..24].
         let raw = &buf[4..24];
 
@@ -856,11 +786,55 @@ impl NvmeController {
             }
             s.push(b as char);
         }
-        Ok(s)
+        s
+    }
+
+    fn identify_controller_info(&mut self) -> core::result::Result<IdentifyControllerInfo, block::Error> {
+        let page_size = self.page_size_bytes();
+        let mut buf = alloc::vec![0u8; page_size];
+        self.admin_identify(0, 1, &mut buf)?;
+        let serial = Self::identify_controller_serial_from_buf(&buf);
+        // MDTS: byte 77, value is power-of-two multiplier of MPSMIN.
+        let mdts = *buf.get(77).ok_or(block::Error::Corrupted)?;
+        // NN: number of namespaces, bytes 516..519.
+        let nn = u32::from_le_bytes(
+            buf.get(516..520)
+                .ok_or(block::Error::Corrupted)?
+                .try_into()
+                .map_err(|_| block::Error::Corrupted)?,
+        );
+        Ok(IdentifyControllerInfo { serial, mdts, nn })
+    }
+
+    fn identify_first_active_namespace(&mut self, nn: u32) -> core::result::Result<u32, block::Error> {
+        if nn == 0 {
+            return Err(block::Error::NotReady);
+        }
+
+        let page_size = self.page_size_bytes();
+        let mut buf = alloc::vec![0u8; page_size];
+        // CNS=0x02: active namespace ID list (up to 1024 NSIDs per call).
+        self.admin_identify(0, 2, &mut buf)?;
+
+        let entries = core::cmp::min(buf.len() / 4, 1024);
+        for i in 0..entries {
+            let off = i * 4;
+            let nsid = u32::from_le_bytes(
+                buf[off..off + 4]
+                    .try_into()
+                    .map_err(|_| block::Error::Corrupted)?,
+            );
+            if nsid != 0 {
+                return Ok(nsid);
+            }
+        }
+
+        Err(block::Error::NotReady)
     }
 
     fn identify_namespace(&mut self, nsid: u32) -> core::result::Result<(u64, u32), block::Error> {
-        let mut buf = [0u8; PAGE_SIZE];
+        let page_size = self.page_size_bytes();
+        let mut buf = alloc::vec![0u8; page_size];
         self.admin_identify(nsid, 0, &mut buf)?;
 
         let nsze = u64::from_le_bytes(buf[0..8].try_into().unwrap());
@@ -1009,6 +983,7 @@ struct NvmeBlockDevice {
     nsid: u32,
     block_size: u32,
     block_count: u64,
+    max_transfer_bytes: u64,
 }
 
 unsafe impl Send for NvmeBlockDevice {}
@@ -1043,8 +1018,8 @@ impl block::BlockDevice for NvmeBlockDevice {
                 .ok_or(block::Error::InvalidParam)?;
             let mut out = alloc::vec![0u8; total_bytes];
 
-            const MAX_IO_BYTES: usize = 256 * 1024;
-            let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
+            let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
+            let max_blocks = core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
 
             let mut remaining = out.as_mut_slice();
             let mut cur_lba = lba;
@@ -1093,8 +1068,8 @@ impl block::BlockDevice for NvmeBlockDevice {
                 return Err(block::Error::OutOfBounds);
             }
 
-            const MAX_IO_BYTES: usize = 256 * 1024;
-            let max_blocks = core::cmp::max(1, MAX_IO_BYTES / bs);
+            let max_io_bytes = core::cmp::max(self.max_transfer_bytes, bs as u64) as usize;
+            let max_blocks = core::cmp::max(1, core::cmp::min(max_io_bytes / bs, u16::MAX as usize));
 
             let mut remaining = buf;
             let mut cur_lba = lba;
@@ -1125,7 +1100,7 @@ impl block::BlockDevice for NvmeBlockDevice {
     }
 
     fn max_transfer_bytes(&self) -> u64 {
-        256 * 1024
+        self.max_transfer_bytes
     }
 
     fn supports_write(&self) -> bool {
@@ -1196,16 +1171,32 @@ pub fn probe_once() {
                 }
             };
 
-            // For now: only register the first namespace (nsid=1).
-            let (blocks, block_size) = match ctrl.identify_namespace(1) {
+            let ctrl_info = match ctrl.identify_controller_info() {
+                Ok(info) => info,
+                Err(e) => {
+                    crate::log!("nvme: {} identify controller failed: {:?}\n", pci_addr, e);
+                    continue;
+                }
+            };
+
+            let nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
+                Ok(id) => id,
+                Err(e) => {
+                    crate::log!("nvme: {} no active namespace found: {:?}\n", pci_addr, e);
+                    continue;
+                }
+            };
+
+            // Register the first active namespace.
+            let (blocks, block_size) = match ctrl.identify_namespace(nsid) {
                 Ok(v) => v,
                 Err(e) => {
-                    crate::log!("nvme: {} identify namespace failed: {:?}\n", pci_addr, e);
+                    crate::log!("nvme: {} identify namespace {} failed: {:?}\n", pci_addr, nsid, e);
                     continue;
                 }
             };
             if blocks == 0 || block_size == 0 {
-                crate::log!("nvme: {} namespace has invalid capacity\n", pci_addr);
+                crate::log!("nvme: {} namespace {} has invalid capacity\n", pci_addr, nsid);
                 continue;
             }
 
@@ -1216,7 +1207,7 @@ pub fn probe_once() {
                 let bytes = bs.max(512);
                 if let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) {
                     unsafe { write_bytes(dma_virt, 0, bytes) };
-                    match ctrl.io_rw_sync(NVME_NVM_READ, 1, 0, 1, dma_phys, bs, 2000) {
+                    match ctrl.io_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
                         Ok(cpl) => {
                             if cpl.status_code() != 0 {
                                 crate::log!(
@@ -1233,7 +1224,7 @@ pub fn probe_once() {
 
                             // Diagnostic fallback: try the same NVM READ on the admin queue.
                             // If this completes, it suggests IO queue bring-up is the issue.
-                            match ctrl.admin_rw_sync(NVME_NVM_READ, 1, 0, 1, dma_phys, bs, 2000) {
+                            match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
                                 Ok(cpl) => {
                                     crate::log!(
                                         "nvme: {} admin-read selftest status=0x{:04X} (sct={} sc={})\n",
@@ -1273,20 +1264,24 @@ pub fn probe_once() {
                 desc = desc.with_serial(s);
             }
 
+            let max_transfer_bytes = ctrl.max_transfer_bytes;
             let dev = NvmeBlockDevice {
                 ctrl,
-                nsid: 1,
+                nsid,
                 block_size,
                 block_count: blocks,
+                max_transfer_bytes,
             };
             let handle = block::register_device(desc, dev);
             crate::v::fs::trueosfs::request_mount_root(handle.clone());
             crate::log!(
-                "nvme: registered {} id={} blocks={} bs={}\n",
+                "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
                 pci_addr,
+                nsid,
                 handle.id().raw(),
                 blocks,
-                block_size
+                block_size,
+                max_transfer_bytes,
             );
             registered_any = true;
 

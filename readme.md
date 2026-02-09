@@ -26,9 +26,12 @@ check disc files after install
 
 # good luck with this one
 
-# PASS IN USB DEVICE
+# PASS IN USB DEVICE / NVMe data partition permissions
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
-sudo udevadm control --reload-rules && sudo udevadm trigger -s usb --action=add
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=block --subsystem-match=usb
+sudo udevadm trigger --name-match=nvme2n1p1
+ls -l /dev/nvme2n1p1
 
 # VFIO USB CONTROLLER (persistent across reboot)
 sudo modprobe vfio-pci

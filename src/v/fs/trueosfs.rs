@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::disc::block;
 use crate::v::disc::partition;
@@ -59,6 +59,16 @@ static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new
 
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
+
+struct FileWriteStream {
+    disk: block::DeviceHandle,
+    path: String,
+    params: trueos_fs::FsParams,
+    stream: trueos_fs::PutWriteStream,
+}
+
+static FILE_WRITE_STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
+static FILE_WRITE_STREAMS: Mutex<BTreeMap<u32, FileWriteStream>> = Mutex::new(BTreeMap::new());
 
 /// Request that TRUEOSFS probing/mounting be performed asynchronously.
 ///
@@ -436,6 +446,102 @@ pub async fn file_in_async(
         file_record_cache_invalidate_path(disk_id, name);
     }
     Ok(ok)
+}
+
+/// Async TRUEOSFS: begin a streamed write for `name` with known final byte length.
+///
+/// Returns:
+/// - `Ok(Some(handle))` when the stream is created.
+/// - `Ok(None)` when there is no space or no filesystem placement.
+pub async fn file_write_begin_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    total_len: u64,
+) -> Result<Option<u32>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let Some(stream) = trueos_fs::begin_write_file_stream(&io, &params, name, total_len)
+        .await
+        .map_err(map_engine_err)?
+    else {
+        return Ok(None);
+    };
+
+    let handle = FILE_WRITE_STREAM_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
+    let entry = FileWriteStream {
+        disk,
+        path: name.into(),
+        params,
+        stream,
+    };
+    FILE_WRITE_STREAMS.lock().insert(handle, entry);
+    Ok(Some(handle))
+}
+
+/// Async TRUEOSFS: write a chunk into an open stream handle.
+pub async fn file_write_chunk_async(
+    stream_handle: u32,
+    bytes: &[u8],
+) -> Result<(), block::Error> {
+    let mut entry = {
+        let mut streams = FILE_WRITE_STREAMS.lock();
+        streams.remove(&stream_handle).ok_or(block::Error::InvalidParam)?
+    };
+
+    let io = KernelBlockIo::new(entry.disk);
+    let res = trueos_fs::write_file_stream_chunk(&io, &mut entry.stream, bytes)
+        .await
+        .map_err(map_engine_err);
+
+    match res {
+        Ok(()) => {
+            FILE_WRITE_STREAMS.lock().insert(stream_handle, entry);
+            Ok(())
+        }
+        Err(e) => {
+            // On any chunk failure we abort by dropping stream state.
+            Err(e)
+        }
+    }
+}
+
+/// Async TRUEOSFS: finish an open stream and publish the file atomically.
+pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Error> {
+    let entry = {
+        let mut streams = FILE_WRITE_STREAMS.lock();
+        streams.remove(&stream_handle).ok_or(block::Error::InvalidParam)?
+    };
+
+    let io = KernelBlockIo::new(entry.disk);
+    trueos_fs::finish_write_file_stream(&io, &entry.params, entry.stream)
+        .await
+        .map_err(map_engine_err)?;
+
+    let disk_id = entry.disk.id();
+    bump_root_cache_gen(disk_id);
+    file_record_cache_invalidate_path(disk_id, entry.path.as_str());
+    Ok(())
+}
+
+/// Async TRUEOSFS: abort an open stream handle.
+pub async fn file_write_abort_async(stream_handle: u32) -> Result<(), block::Error> {
+    let removed = FILE_WRITE_STREAMS.lock().remove(&stream_handle);
+    if removed.is_some() {
+        Ok(())
+    } else {
+        Err(block::Error::InvalidParam)
+    }
 }
 
 /// Async TRUEOSFS: read a file.
@@ -1157,4 +1263,3 @@ pub(crate) async fn format_blank_at_async(handle: block::DeviceHandle, super_lba
 
     Ok(())
 }
-
