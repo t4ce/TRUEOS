@@ -165,10 +165,8 @@ impl fmt::Display for DiscId {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum DeviceKind {
     Nvme,
-    Ahci,
     Partition,
     Ramdisk,
-    Virtual,
     Unknown,
 }
 
