@@ -516,6 +516,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
         let _ = REGSHCMD("bench", &NO_ARGS, cmd_bench);
+        let _ = REGSHCMD("netbench", &NO_ARGS, cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
@@ -817,6 +818,11 @@ fn cmd_file(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> su
 fn cmd_bench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::BenchSelectDisk);
     super::CommandAction::ShowBenchDiskTable
+}
+
+fn cmd_netbench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    *ctx.install_wizard = Some(super::InstallWizardStage::NetbenchSelectNic);
+    super::CommandAction::ShowNetbenchNicTable
 }
 
 fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

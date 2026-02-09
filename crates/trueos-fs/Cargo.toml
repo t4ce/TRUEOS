@@ -3,8 +3,5 @@ name = "trueos-fs"
 version = "0.0.1"
 edition = "2021"
 
-[dependencies]
-sha2 = { version = "0.10", default-features = false }
-
 [features]
 default = []
