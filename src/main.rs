@@ -294,6 +294,9 @@ unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
         (&mut *percpu::this_cpu_ptr()).set_executor_ptr(ex as *mut Executor);
     }
     let spawner = ex.spawner();
+    if percpu::this_cpu().cpu_index() == 1 {
+        runtime::register_first_ap_spawner(spawner);
+    }
     if let Err(e) = spawner.spawn(ap_heartbeat_task()) {
         crate::log!("ap: heartbeat task spawn failed: {:?}\n", e);
     }

@@ -201,7 +201,15 @@ fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     if crate::v::mode::is_benchmark() {
         return SpawnAttempt::Skipped;
     }
-    spawn_monitored(spawner, "uac-song", crate::usb::uac::song_task())
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so this task runs there.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; song intentionally targets AP1.
+    match crate::v::taskmon::spawn_send(&ap1_spawner, "uac-song", crate::usb::uac::song_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
 }
 
 fn spawn_vleds_mux(spawner: Spawner) -> SpawnAttempt {

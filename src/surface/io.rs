@@ -428,6 +428,115 @@ pub mod cabi {
 		crate::limine::boot_timestamp_secs().unwrap_or(0)
 	}
 
+	#[derive(Clone, Copy)]
+	struct AllocMeta {
+		size: usize,
+		align: usize,
+	}
+
+	static CABI_ALLOC_TABLE: spin::Mutex<alloc::collections::BTreeMap<usize, AllocMeta>> =
+		spin::Mutex::new(alloc::collections::BTreeMap::new());
+
+	#[inline]
+	fn cabi_malloc_align() -> usize {
+		core::cmp::max(core::mem::align_of::<usize>(), 16)
+	}
+
+	#[inline]
+	fn cabi_layout_for(size: usize, align: usize) -> Option<alloc::alloc::Layout> {
+		if size == 0 {
+			return None;
+		}
+		alloc::alloc::Layout::from_size_align(size, align).ok()
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_alloc(size: usize) -> *mut u8 {
+		let align = cabi_malloc_align();
+		let Some(layout) = cabi_layout_for(size, align) else {
+			return core::ptr::null_mut();
+		};
+		let p = alloc::alloc::alloc(layout);
+		if p.is_null() {
+			return core::ptr::null_mut();
+		}
+		CABI_ALLOC_TABLE
+			.lock()
+			.insert(p as usize, AllocMeta { size, align });
+		p
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8 {
+		let Some(total) = nmemb.checked_mul(size) else {
+			return core::ptr::null_mut();
+		};
+		if total == 0 {
+			return core::ptr::null_mut();
+		}
+		let p = trueos_cabi_alloc(total);
+		if !p.is_null() {
+			core::ptr::write_bytes(p, 0, total);
+		}
+		p
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_free(ptr: *mut u8) {
+		if ptr.is_null() {
+			return;
+		}
+		let meta = CABI_ALLOC_TABLE.lock().remove(&(ptr as usize));
+		let Some(meta) = meta else {
+			return;
+		};
+		let Some(layout) = cabi_layout_for(meta.size, meta.align) else {
+			return;
+		};
+		alloc::alloc::dealloc(ptr, layout);
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8 {
+		if ptr.is_null() {
+			return trueos_cabi_alloc(size);
+		}
+		if size == 0 {
+			trueos_cabi_free(ptr);
+			return core::ptr::null_mut();
+		}
+
+		let old_meta = {
+			let map = CABI_ALLOC_TABLE.lock();
+			map.get(&(ptr as usize)).copied()
+		};
+		let Some(old_meta) = old_meta else {
+			return core::ptr::null_mut();
+		};
+
+		let new_ptr = trueos_cabi_alloc(size);
+		if new_ptr.is_null() {
+			return core::ptr::null_mut();
+		}
+
+		let copy_len = core::cmp::min(old_meta.size, size);
+		core::ptr::copy_nonoverlapping(ptr, new_ptr, copy_len);
+		trueos_cabi_free(ptr);
+		new_ptr
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize {
+		if ptr.is_null() {
+			return 0;
+		}
+		CABI_ALLOC_TABLE
+			.lock()
+			.get(&(ptr as usize))
+			.map(|m| m.size)
+			.unwrap_or(0)
+	}
+
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_fs_read_file(
 		path_ptr: *const u8,

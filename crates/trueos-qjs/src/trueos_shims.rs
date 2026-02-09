@@ -1,16 +1,17 @@
 extern crate alloc;
 
-use alloc::alloc::{alloc, dealloc};
-use core::alloc::Layout;
-use core::cmp;
 use core::ffi::{c_char, c_int, c_long, c_void};
-use core::mem::{align_of, size_of};
 use core::ptr;
 use core::ffi::CStr;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_boot_timestamp_secs() -> u64;
+    fn trueos_cabi_alloc(size: usize) -> *mut u8;
+    fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
+    fn trueos_cabi_free(ptr: *mut u8);
+    fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
+    fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
 }
 
 #[inline]
@@ -258,85 +259,29 @@ fn ymdhms_to_unix_timestamp(year: i64, month0: i64, mday: i64, hour: i64, min: i
     Some(secs)
 }
 
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct AllocTag {
-    block_start: usize,
-    block_size: usize,
-}
-
-#[inline]
-unsafe fn usable_size(ptr: *const u8) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *const AllocTag;
-    let tag = *tag_ptr;
-    let offset = (ptr as usize).saturating_sub(tag.block_start);
-    tag.block_size.saturating_sub(offset)
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
-    if size == 0 {
-        return ptr::null_mut();
-    }
-    let layout = Layout::from_size_align_unchecked(size, align_of::<usize>());
-    alloc(layout) as *mut c_void
+    trueos_cabi_alloc(size) as *mut c_void
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
-    let total = nmemb.saturating_mul(size);
-    if total == 0 {
-        return ptr::null_mut();
-    }
-    let layout = Layout::from_size_align_unchecked(total, align_of::<usize>());
-    let ptr = alloc(layout);
-    if !ptr.is_null() {
-        ptr::write_bytes(ptr, 0, total);
-    }
-    ptr as *mut c_void
+    trueos_cabi_calloc(nmemb, size) as *mut c_void
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
-    if ptr.is_null() {
-        return;
-    }
-    let usable = usable_size(ptr as *const u8);
-    let layout = Layout::from_size_align_unchecked(usable.max(1), align_of::<usize>());
-    dealloc(ptr as *mut u8, layout);
+    trueos_cabi_free(ptr as *mut u8)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
-    if ptr.is_null() {
-        return malloc(size);
-    }
-    if size == 0 {
-        free(ptr);
-        return ptr::null_mut();
-    }
-
-    let old_ptr = ptr as *mut u8;
-    let old_usable = usable_size(old_ptr);
-
-    let layout = Layout::from_size_align_unchecked(size, align_of::<usize>());
-    let new_ptr = alloc(layout);
-    if new_ptr.is_null() {
-        return ptr::null_mut();
-    }
-
-    let copy_len = cmp::min(old_usable, size);
-    ptr::copy_nonoverlapping(old_ptr, new_ptr, copy_len);
-    free(ptr);
-    new_ptr as *mut c_void
+    trueos_cabi_realloc(ptr as *mut u8, size) as *mut c_void
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *const c_void) -> usize {
-    usable_size(ptr as *const u8)
+    trueos_cabi_malloc_usable_size(ptr as *const u8)
 }
 
 #[no_mangle]

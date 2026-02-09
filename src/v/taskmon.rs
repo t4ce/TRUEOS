@@ -6,7 +6,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 
-use embassy_executor::{SpawnError, SpawnToken, Spawner};
+use embassy_executor::{SendSpawner, SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
 
@@ -122,6 +122,15 @@ where
 }
 
 pub fn spawn<T>(spawner: &Spawner, name: &'static str, token: SpawnToken<T>) -> Result<(), SpawnError> {
+    register(name);
+    spawner.spawn(token)
+}
+
+pub fn spawn_send<T: Send>(
+    spawner: &SendSpawner,
+    name: &'static str,
+    token: SpawnToken<T>,
+) -> Result<(), SpawnError> {
     register(name);
     spawner.spawn(token)
 }
