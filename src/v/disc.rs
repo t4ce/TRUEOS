@@ -7,3 +7,4 @@
 
 pub mod partition;
 pub mod detect;
+pub mod ramdisk;
