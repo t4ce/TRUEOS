@@ -51,8 +51,6 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
-static BENCH_NETWORK_STARTED: AtomicBool = AtomicBool::new(false);
-
 static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);

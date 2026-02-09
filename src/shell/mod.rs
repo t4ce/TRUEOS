@@ -475,12 +475,12 @@ async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::block::Devi
     });
 }
 
-async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHandle) {
+async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHandle) {
     const BENCH_PATH: &str = "bench-lorem-100mb.txt";
     const BENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
-    const BENCH_CHUNK_BYTES: usize = 256 * 1024;
     const UPDATE_MS: u64 = 250;
-    const LOREM: &[u8] = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n";
+    const PATTERN: &[u8] = b"10101010";
+    const CONTROL_PERIOD_CHUNKS: u32 = 8;
 
     let Some(placement) = crate::v::fs::trueosfs::locate_async(disk).await.ok().flatten() else {
         io.write_str("bench: selected disk is not TRUEOSFS\r\n");
@@ -498,9 +498,23 @@ async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::Devic
         placement.data_lba,
         BENCH_PATH
     ));
-    io.write_str("bench: writing 100MB stream (press any key to abort)\r\n");
+    io.write_str("bench: writing 100MB fs stream (press any key to abort)\r\n");
 
-    let Some(stream_handle) = (match crate::v::fs::trueosfs::file_write_begin_async(disk, BENCH_PATH, BENCH_TOTAL_BYTES).await {
+    let info = disk.info();
+    let bench_chunk_bytes = if info.max_transfer_bytes > 0 {
+        let max_transfer = info.max_transfer_bytes as usize;
+        core::cmp::max(4 * 1024, core::cmp::min(max_transfer, 1024 * 1024))
+    } else {
+        256 * 1024
+    };
+
+    let Some(stream_handle) = (match crate::v::fs::trueosfs::file_write_begin_async(
+        disk,
+        BENCH_PATH,
+        BENCH_TOTAL_BYTES,
+    )
+    .await
+    {
         Ok(v) => v,
         Err(e) => {
             io.write_fmt(format_args!("bench: begin failed ({:?})\r\n", e));
@@ -511,38 +525,40 @@ async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::Devic
         return;
     };
 
-    let mut chunk: alloc::vec::Vec<u8> = alloc::vec![0u8; BENCH_CHUNK_BYTES];
-    let mut lorem_off: usize = 0;
+    let mut chunk: alloc::vec::Vec<u8> = alloc::vec![0u8; bench_chunk_bytes];
+    if !PATTERN.is_empty() {
+        let mut off = 0usize;
+        while off < chunk.len() {
+            let take = core::cmp::min(PATTERN.len(), chunk.len() - off);
+            chunk[off..off + take].copy_from_slice(&PATTERN[..take]);
+            off = off.saturating_add(take);
+        }
+    }
+
     let mut written: u64 = 0;
     let mut aborted = false;
     let mut write_err: Option<crate::disc::block::Error> = None;
     let mut finished_ok = false;
+    let mut chunk_count: u32 = 0;
 
     let start_tick = embassy_time_driver::now();
     let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
 
     while written < BENCH_TOTAL_BYTES {
-        if io.read_byte().is_some() {
-            aborted = true;
-            break;
-        }
-
         let remaining = (BENCH_TOTAL_BYTES - written) as usize;
         let n = core::cmp::min(remaining, chunk.len());
-
-        for b in chunk[..n].iter_mut() {
-            *b = LOREM[lorem_off];
-            lorem_off += 1;
-            if lorem_off >= LOREM.len() {
-                lorem_off = 0;
-            }
-        }
 
         if let Err(e) = crate::v::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await {
             write_err = Some(e);
             break;
         }
         written = written.saturating_add(n as u64);
+        chunk_count = chunk_count.wrapping_add(1);
+
+        if (chunk_count % CONTROL_PERIOD_CHUNKS) == 0 && io.read_byte().is_some() {
+            aborted = true;
+            break;
+        }
 
         if Instant::now() >= next_update || written >= BENCH_TOTAL_BYTES {
             let now_tick = embassy_time_driver::now();
@@ -567,14 +583,11 @@ async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::Devic
             ));
             next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
         }
-
     }
 
     if write_err.is_none() && !aborted {
         match crate::v::fs::trueosfs::file_write_finish_async(stream_handle).await {
-            Ok(()) => {
-                finished_ok = true;
-            }
+            Ok(()) => finished_ok = true,
             Err(e) => {
                 let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
                 write_err = Some(e);
@@ -594,14 +607,16 @@ async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::Devic
         io.write_str("bench: write complete\r\n");
     }
 
+    let expected_absent = aborted || write_err.is_some() || !finished_ok;
     match crate::v::fs::trueosfs::file_delete_async(disk, BENCH_PATH).await {
         Ok(true) => io.write_str("bench: cleanup ok (deleted benchmark file)\r\n"),
+        Ok(false) if expected_absent => {
+            io.write_str("bench: cleanup: nothing to delete (expected for aborted/failed run)\r\n")
+        }
         Ok(false) => io.write_str("bench: cleanup: benchmark file not present\r\n"),
         Err(e) => io.write_fmt(format_args!("bench: cleanup failed ({:?})\r\n", e)),
     }
 }
-
-
 
 #[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
@@ -1174,7 +1189,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
 
                             install_wizard = None;
-                            run_bench_stream(io, handle).await;
+                            run_bench_fs(io, handle).await;
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
