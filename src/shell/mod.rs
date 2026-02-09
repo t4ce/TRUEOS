@@ -114,7 +114,7 @@ fn write_right_aligned(io: &dyn ShellIo, row: usize, term_cols: usize, text: &st
     if term_cols == 0 || text.is_empty() {
         return;
     }
-    let len = text.chars().count();
+    let len = crate::ecma48::visible_width(text);
     let col = term_cols.saturating_sub(len).saturating_add(1);
     io.write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
     io.write_str(text);

@@ -1,5 +1,7 @@
 use core::fmt;
 
+use alloc::string::String;
+
 pub const RESET: &str = "\x1b[0m";
 
 pub const SAVE_CURSOR: &str = "\x1b[s";
@@ -387,6 +389,106 @@ impl fmt::Display for Sanitized<'_> {
 
 pub fn sanitize(text: &str) -> impl fmt::Display + '_ {
     Sanitized { text }
+}
+
+/// Returns the visible terminal column width of `text`.
+///
+/// This is intended for aligning output that contains ECMA-48/ANSI escape
+/// sequences. The width calculation:
+/// - ignores `ESC [` (CSI) sequences until the final byte in `@..~`
+/// - ignores `ESC ]` (OSC) sequences until BEL (`\x07`) or `ESC \\`
+/// - treats control characters as zero-width
+/// - counts all other Unicode scalar values as width 1
+///
+/// Note: This is a pragmatic shell UI helper, not a full terminal emulator.
+pub fn visible_width(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut width = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0x1B {
+            // ESC ...
+            if i + 1 >= bytes.len() {
+                break;
+            }
+            let next = bytes[i + 1];
+            match next {
+                b'[' => {
+                    // CSI: ESC [ ... <final>
+                    i += 2;
+                    while i < bytes.len() {
+                        let c = bytes[i];
+                        // Final byte for CSI is 0x40..=0x7E.
+                        i += 1;
+                        if (0x40..=0x7E).contains(&c) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                b']' => {
+                    // OSC: ESC ] ... (BEL | ESC \\)
+                    i += 2;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+                _ => {
+                    // Other ESC sequence: skip ESC + next.
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+
+        // Fast path for ASCII.
+        if b < 0x80 {
+            i += 1;
+            if b >= 0x20 && b != 0x7F {
+                width += 1;
+            }
+            continue;
+        }
+
+        // UTF-8 decode the next scalar and count it as width 1.
+        // If invalid, consume one byte to avoid infinite loop.
+        let s = core::str::from_utf8(&bytes[i..]).ok();
+        if let Some(s) = s {
+            if let Some(ch) = s.chars().next() {
+                i += ch.len_utf8();
+                if !ch.is_control() {
+                    width += 1;
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    width
+}
+
+/// Pads `text` with spaces on the right until it reaches `width` columns.
+///
+/// Uses `visible_width()` so ANSI sequences do not affect the padding.
+pub fn pad_right(text: &str, width: usize) -> String {
+    let mut out = String::from(text);
+    let w = visible_width(text);
+    if w < width {
+        out.extend(core::iter::repeat_n(' ', width - w));
+    }
+    out
 }
 
 pub(crate) fn handle_ecma48(io: &'static dyn super::ShellBackend, rest: &str) {

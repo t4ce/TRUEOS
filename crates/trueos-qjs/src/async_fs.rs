@@ -11,38 +11,26 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
-extern "C" {
-    fn trueos_cabi_fs_read_file(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
-    fn trueos_cabi_fs_write_begin(path_ptr: *const u8, path_len: usize, total_len: u64, out_handle: *mut u32) -> i32;
-    fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
-    fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
-    fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
-}
+use crate::trueos_shims::{
+    trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
+    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
+    trueos_cabi_poll_once,
+};
 
-const FS_ERR_BAD_UTF8: i32 = -1;
-const FS_ERR_NO_SPACE: i32 = -3;
-const FS_ERR_BAD_PARAM: i32 = -4;
-const FS_ERR_TOO_LARGE: i32 = -7;
-const FS_ERR_NOT_FOUND: i32 = -8;
+include!("../../../src/surface/cabi_codes.rs");
 
 const ASYNC_FS_MAX_QUEUE: usize = 64;
-const ASYNC_FS_MAX_PATH: usize = 1024;
 const ASYNC_FS_WRITE_CHUNK: usize = 256 * 1024;
 
 static ASYNC_FS_SEQ: AtomicU32 = AtomicU32::new(1);
 static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AsyncFsKind {
-    ReadFile,
-    WriteFile,
-}
-
-#[derive(Clone, Debug)]
-struct AsyncFsRequest {
-    id: u32,
-    kind: AsyncFsKind,
-    path: String,
+#[derive(Debug)]
+enum AsyncFsRequest {
+    ReadFile { id: u32, path: String },
+    WriteBegin { id: u32, path: String, total_len: u64 },
+    WriteChunk { id: u32, data: Vec<u8> },
+    WriteFinish { id: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +43,7 @@ struct AsyncFsCompletion {
 static ASYNC_FS_REQS: Mutex<VecDeque<AsyncFsRequest>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_DONE: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_RESULTS: Mutex<BTreeMap<u32, AsyncFsCompletion>> = Mutex::new(BTreeMap::new());
-static ASYNC_FS_WRITE_DATA: Mutex<BTreeMap<u32, Vec<u8>>> = Mutex::new(BTreeMap::new());
+static ASYNC_FS_WRITES: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
 
 #[inline]
 fn next_async_fs_id() -> u32 {
@@ -71,6 +59,25 @@ fn push_async_fs_req(req: AsyncFsRequest) -> Result<(), i32> {
     Ok(())
 }
 
+fn push_async_fs_req_wait(req: AsyncFsRequest) {
+    let mut req = Some(req);
+    loop {
+        let pushed = {
+            let mut q = ASYNC_FS_REQS.lock();
+            if q.len() < ASYNC_FS_MAX_QUEUE {
+                q.push_back(req.take().expect("request present"));
+                true
+            } else {
+                false
+            }
+        };
+        if pushed {
+            return;
+        }
+        unsafe { trueos_cabi_poll_once() };
+    }
+}
+
 fn take_async_fs_req() -> Option<AsyncFsRequest> {
     let mut q = ASYNC_FS_REQS.lock();
     q.pop_front()
@@ -78,8 +85,18 @@ fn take_async_fs_req() -> Option<AsyncFsRequest> {
 
 fn push_async_fs_completion(done: AsyncFsCompletion) {
     let id = done.id;
-    ASYNC_FS_RESULTS.lock().insert(id, done);
-    ASYNC_FS_DONE.lock().push_back(id);
+    let inserted = {
+        let mut res = ASYNC_FS_RESULTS.lock();
+        if res.contains_key(&id) {
+            false
+        } else {
+            res.insert(id, done);
+            true
+        }
+    };
+    if inserted {
+        ASYNC_FS_DONE.lock().push_back(id);
+    }
 }
 
 fn completion_rc_len(id: u32) -> Option<(i32, usize)> {
@@ -92,8 +109,34 @@ fn remove_async_fs_completion(id: u32) -> Option<AsyncFsCompletion> {
     res.remove(&id)
 }
 
-fn take_async_fs_write_data(id: u32) -> Option<Vec<u8>> {
-    ASYNC_FS_WRITE_DATA.lock().remove(&id)
+fn write_handle_for(id: u32) -> Option<u32> {
+    ASYNC_FS_WRITES.lock().get(&id).copied()
+}
+
+fn set_write_handle(id: u32, handle: u32) {
+    ASYNC_FS_WRITES.lock().insert(id, handle);
+}
+
+fn take_write_handle(id: u32) -> Option<u32> {
+    ASYNC_FS_WRITES.lock().remove(&id)
+}
+
+fn has_result(id: u32) -> bool {
+    ASYNC_FS_RESULTS.lock().contains_key(&id)
+}
+
+pub fn has_completion_result(op_id: u32) -> bool {
+    has_result(op_id)
+}
+
+fn remove_queued_reqs(id: u32) {
+    let mut q = ASYNC_FS_REQS.lock();
+    q.retain(|req| match req {
+        AsyncFsRequest::ReadFile { id: rid, .. }
+        | AsyncFsRequest::WriteBegin { id: rid, .. }
+        | AsyncFsRequest::WriteChunk { id: rid, .. }
+        | AsyncFsRequest::WriteFinish { id: rid } => *rid != id,
+    });
 }
 
 fn remove_done_id(id: u32) {
@@ -123,26 +166,28 @@ fn read_file_via_cabi(path: &str) -> Result<Vec<u8>, i32> {
     Ok(buf)
 }
 
-fn write_file_via_cabi(path: &str, data: &[u8]) -> Result<(), i32> {
+fn write_begin_via_cabi(path: &str, total_len: u64) -> Result<u32, i32> {
     let mut handle = 0u32;
     let rc = unsafe {
-        trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), data.len() as u64, &mut handle as *mut u32)
+        trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), total_len, &mut handle as *mut u32)
     };
     if rc != 0 {
         return Err(rc);
     }
+    Ok(handle)
+}
 
-    for chunk in data.chunks(ASYNC_FS_WRITE_CHUNK) {
-        let rc = unsafe { trueos_cabi_fs_write_chunk(handle, chunk.as_ptr(), chunk.len()) };
-        if rc != 0 {
-            let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
-            return Err(rc);
-        }
+fn write_chunk_via_cabi(handle: u32, chunk: &[u8]) -> Result<(), i32> {
+    let rc = unsafe { trueos_cabi_fs_write_chunk(handle, chunk.as_ptr(), chunk.len()) };
+    if rc != 0 {
+        return Err(rc);
     }
+    Ok(())
+}
 
+fn write_finish_via_cabi(handle: u32) -> Result<(), i32> {
     let rc = unsafe { trueos_cabi_fs_write_finish(handle) };
     if rc != 0 {
-        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
         return Err(rc);
     }
     Ok(())
@@ -168,32 +213,95 @@ pub async fn async_fs_service_task() {
                 break;
             };
 
-            match req.kind {
-                AsyncFsKind::ReadFile => match read_file_via_cabi(req.path.as_str()) {
+            match req {
+                AsyncFsRequest::ReadFile { id, path } => match read_file_via_cabi(path.as_str()) {
                     Ok(bytes) => push_async_fs_completion(AsyncFsCompletion {
-                        id: req.id,
+                        id,
                         rc: 0,
                         data: bytes,
                     }),
                     Err(rc) => push_async_fs_completion(AsyncFsCompletion {
-                        id: req.id,
+                        id,
                         rc,
                         data: Vec::new(),
                     }),
                 },
-                AsyncFsKind::WriteFile => {
-                    let data = take_async_fs_write_data(req.id).unwrap_or_default();
-                    match write_file_via_cabi(req.path.as_str(), data.as_slice()) {
-                        Ok(()) => push_async_fs_completion(AsyncFsCompletion {
-                            id: req.id,
-                            rc: 0,
-                            data: Vec::new(),
-                        }),
+                AsyncFsRequest::WriteBegin { id, path, total_len } => {
+                    if has_result(id) {
+                        processed = processed.saturating_add(1);
+                        if processed >= ASYNC_FS_MAX_QUEUE {
+                            break;
+                        }
+                        continue;
+                    }
+                    match write_begin_via_cabi(path.as_str(), total_len) {
+                        Ok(handle) => set_write_handle(id, handle),
                         Err(rc) => push_async_fs_completion(AsyncFsCompletion {
-                            id: req.id,
+                            id,
                             rc,
                             data: Vec::new(),
                         }),
+                    }
+                }
+                AsyncFsRequest::WriteChunk { id, data } => {
+                    if has_result(id) {
+                        processed = processed.saturating_add(1);
+                        if processed >= ASYNC_FS_MAX_QUEUE {
+                            break;
+                        }
+                        continue;
+                    }
+                    let Some(handle) = write_handle_for(id) else {
+                        processed = processed.saturating_add(1);
+                        if processed >= ASYNC_FS_MAX_QUEUE {
+                            break;
+                        }
+                        continue;
+                    };
+                    if let Err(rc) = write_chunk_via_cabi(handle, data.as_slice()) {
+                        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+                        let _ = take_write_handle(id);
+                        push_async_fs_completion(AsyncFsCompletion {
+                            id,
+                            rc,
+                            data: Vec::new(),
+                        });
+                    }
+                }
+                AsyncFsRequest::WriteFinish { id } => {
+                    if has_result(id) {
+                        processed = processed.saturating_add(1);
+                        if processed >= ASYNC_FS_MAX_QUEUE {
+                            break;
+                        }
+                        continue;
+                    }
+                    let Some(handle) = take_write_handle(id) else {
+                        push_async_fs_completion(AsyncFsCompletion {
+                            id,
+                            rc: FS_ERR_BAD_PARAM,
+                            data: Vec::new(),
+                        });
+                        processed = processed.saturating_add(1);
+                        if processed >= ASYNC_FS_MAX_QUEUE {
+                            break;
+                        }
+                        continue;
+                    };
+                    match write_finish_via_cabi(handle) {
+                        Ok(()) => push_async_fs_completion(AsyncFsCompletion {
+                            id,
+                            rc: 0,
+                            data: Vec::new(),
+                        }),
+                        Err(rc) => {
+                            let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+                            push_async_fs_completion(AsyncFsCompletion {
+                                id,
+                                rc,
+                                data: Vec::new(),
+                            });
+                        }
                     }
                 }
             }
@@ -211,42 +319,52 @@ pub async fn async_fs_service_task() {
 }
 
 pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
-    enqueue_request(AsyncFsKind::ReadFile, path, &[])
-}
-
-pub fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
-    enqueue_request(AsyncFsKind::WriteFile, path, data)
-}
-
-fn enqueue_request(kind: AsyncFsKind, path: &[u8], data: &[u8]) -> Result<u32, i32> {
     if path.is_empty() {
         return Err(FS_ERR_BAD_PARAM);
     }
-    if path.len() > ASYNC_FS_MAX_PATH {
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
         return Err(FS_ERR_TOO_LARGE);
     }
     let Ok(path_str) = core::str::from_utf8(path) else {
         return Err(FS_ERR_BAD_UTF8);
     };
     let id = next_async_fs_id();
-    if kind == AsyncFsKind::WriteFile {
-        ASYNC_FS_WRITE_DATA.lock().insert(id, data.to_vec());
-    }
-
-    let req = AsyncFsRequest {
+    let req = AsyncFsRequest::ReadFile {
         id,
-        kind,
         path: path_str.to_string(),
     };
-    match push_async_fs_req(req) {
-        Ok(()) => Ok(id),
-        Err(code) => {
-            if kind == AsyncFsKind::WriteFile {
-                let _ = ASYNC_FS_WRITE_DATA.lock().remove(&id);
-            }
-            Err(code)
-        }
+    push_async_fs_req(req)?;
+    Ok(id)
+}
+
+pub fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
+    if path.is_empty() {
+        return Err(FS_ERR_BAD_PARAM);
     }
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    let Ok(path_str) = core::str::from_utf8(path) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let id = next_async_fs_id();
+    let path = path_str.to_string();
+    push_async_fs_req_wait(AsyncFsRequest::WriteBegin {
+        id,
+        path,
+        total_len: data.len() as u64,
+    });
+    for chunk in data.chunks(ASYNC_FS_WRITE_CHUNK) {
+        push_async_fs_req_wait(AsyncFsRequest::WriteChunk {
+            id,
+            data: chunk.to_vec(),
+        });
+    }
+    let req = AsyncFsRequest::WriteFinish {
+        id,
+    };
+    push_async_fs_req_wait(req);
+    Ok(id)
 }
 
 pub fn poll_completed(out_id: *mut u32) -> i32 {
@@ -298,7 +416,10 @@ pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
 pub fn discard(op_id: u32) -> i32 {
     remove_done_id(op_id);
     remove_async_fs_completion(op_id);
-    let _ = ASYNC_FS_WRITE_DATA.lock().remove(&op_id);
+    remove_queued_reqs(op_id);
+    if let Some(handle) = take_write_handle(op_id) {
+        let _ = unsafe { trueos_cabi_fs_write_abort(handle) };
+    }
     0
 }
 
@@ -338,6 +459,6 @@ pub fn wait_for_completion_blocking(timeout_ms: u64) -> bool {
         if max_ticks != 0 && embassy_time_driver::now() >= deadline {
             return false;
         }
-        core::hint::spin_loop();
+        unsafe { trueos_cabi_poll_once() };
     }
 }
