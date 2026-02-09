@@ -4,7 +4,6 @@
 extern crate alloc;
 
 use alloc::{collections::BTreeSet, string::String, vec, vec::Vec};
-use sha2::{Digest, Sha256};
 
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
@@ -169,6 +168,7 @@ pub const LOG_ENTRY_MAGIC: [u8; 8] = *b"TOSFLOG\0";
 
 /// Delete records store the referenced (deleted) entry LBA as their data payload.
 pub const DELETE_REF_BYTES: usize = 8;
+const ZERO_INTEGRITY_TAG: [u8; 32] = [0u8; 32];
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,12 +179,14 @@ pub enum LogKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LogHeader {
-    pub kind: LogKind,
-    pub committed: bool,
-    pub name_len: u16,
-    pub data_len: u64,
-    pub sha256: [u8; 32],
+struct LogHeader {
+    kind: LogKind,
+    committed: bool,
+    name_len: u16,
+    data_len: u64,
+    // Reserved compatibility bytes in baseline mode.
+    // Writers currently store ZERO_INTEGRITY_TAG and readers ignore this field.
+    integrity_tag: [u8; 32],
 }
 
 /// Decoded index checkpoint payload.
@@ -262,7 +264,7 @@ pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint
 }
 
 impl LogHeader {
-    pub fn encode_into_block(&self, block: &mut [u8]) {
+    fn encode_into_block(&self, block: &mut [u8]) {
         const MIN: usize = 52;
         if block.len() < MIN {
             return;
@@ -272,13 +274,13 @@ impl LogHeader {
         block[9] = if self.committed { 1 } else { 0 };
         block[10..12].copy_from_slice(&self.name_len.to_le_bytes());
         block[12..20].copy_from_slice(&self.data_len.to_le_bytes());
-        block[20..52].copy_from_slice(&self.sha256);
+        block[20..52].copy_from_slice(&self.integrity_tag);
         for b in block[52..].iter_mut() {
             *b = 0;
         }
     }
 
-    pub fn decode_from_block(block: &[u8]) -> Option<Self> {
+    fn decode_from_block(block: &[u8]) -> Option<Self> {
         if block.len() < 52 {
             return None;
         }
@@ -296,14 +298,14 @@ impl LogHeader {
         let data_len = u64::from_le_bytes([
             block[12], block[13], block[14], block[15], block[16], block[17], block[18], block[19],
         ]);
-        let mut sha256 = [0u8; 32];
-        sha256.copy_from_slice(&block[20..52]);
+        let mut integrity_tag = [0u8; 32];
+        integrity_tag.copy_from_slice(&block[20..52]);
         Some(Self {
             kind,
             committed,
             name_len,
             data_len,
-            sha256,
+            integrity_tag,
         })
     }
 }
@@ -311,10 +313,8 @@ impl LogHeader {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileRecord {
     entry_lba: u64,
-    name_len: u16,
     data_len: u64,
     data_lba: u64,
-    sha256: [u8; 32],
 }
 
 fn disk_data_end_lba_exclusive<D: BlockIo>(dev: &D, params: &FsParams) -> u64 {
@@ -388,35 +388,6 @@ async fn read_exact_bytes<D: BlockIo>(
         abs_byte = abs_byte.saturating_add(take);
     }
     Ok(())
-}
-
-async fn compute_sha256_of_entry_data<D: BlockIo>(
-    dev: &D,
-    rec: &FileRecord,
-) -> Result<[u8; 32], FsError<D::Error>> {
-    let mut hasher = Sha256::new();
-    let mut remaining = rec.data_len as usize;
-    let bs = dev.block_size();
-    if bs == 0 {
-        return Err(FsError::InvalidParam);
-    }
-    let mut pos = 0usize;
-    while remaining > 0 {
-        let lba = rec.data_lba.saturating_add((pos / bs) as u64);
-        let off = pos % bs;
-        let scratch = read_one_block(dev, lba).await?;
-        if scratch.len() < bs {
-            return Err(FsError::Corrupted);
-        }
-        let take = core::cmp::min(bs - off, remaining);
-        hasher.update(&scratch[off..off + take]);
-        remaining = remaining.saturating_sub(take);
-        pos = pos.saturating_add(take);
-    }
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..]);
-    Ok(out)
 }
 
 async fn check_space_for_put<D: BlockIo>(
@@ -511,15 +482,6 @@ pub async fn read_index_checkpoint<D: BlockIo>(
     let mut payload = vec![0u8; payload_len];
     read_exact_bytes(dev, payload_lba, 0, &mut payload).await?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&payload);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != hdr.sha256 {
-        return Ok(None);
-    }
-
     Ok(decode_index_checkpoint_payload(&payload))
 }
 
@@ -564,7 +526,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         committed: false,
         name_len: 0,
         data_len: payload.len() as u64,
-        sha256: [0u8; 32],
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
@@ -595,19 +557,13 @@ pub async fn write_index_checkpoint<D: BlockIo>(
     dev.flush().await.map_err(FsError::Device)?;
 
     // 3) Rewrite header committed=1 with sha of payload.
-    let mut hasher = Sha256::new();
-    hasher.update(&payload);
-    let digest = hasher.finalize();
-    let mut sha256 = [0u8; 32];
-    sha256.copy_from_slice(&digest[..]);
-
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
         kind: LogKind::IndexCheckpoint,
         committed: true,
         name_len: 0,
         data_len: payload.len() as u64,
-        sha256,
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
@@ -768,7 +724,6 @@ pub struct PutWriteStream {
     name_len: u16,
     block_size: usize,
     max_transfer_bytes: usize,
-    hasher: Sha256,
     batch: Vec<u8>,
     batch_off: usize,
     pending: Vec<u8>,
@@ -832,7 +787,7 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         committed: false,
         name_len: name.len() as u16,
         data_len,
-        sha256: [0u8; 32],
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
@@ -868,7 +823,6 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         name_len: name_len as u16,
         block_size: bs,
         max_transfer_bytes,
-        hasher: Sha256::new(),
         batch: Vec::with_capacity(batch_capacity),
         batch_off: 0,
         pending: Vec::new(),
@@ -893,8 +847,6 @@ pub async fn write_file_stream_chunk<D: BlockIo>(
     }
 
     let bs = stream.block_size;
-    stream.hasher.update(chunk);
-
     let mut off = 0usize;
 
     // Complete pending partial block first.
@@ -987,18 +939,13 @@ pub async fn finish_write_file_stream<D: BlockIo>(
         dev.flush().await.map_err(FsError::Device)?;
     }
 
-    // Commit header with final hash.
-    let digest = stream.hasher.finalize();
-    let mut sha256 = [0u8; 32];
-    sha256.copy_from_slice(&digest[..]);
-
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
         kind: LogKind::Put,
         committed: true,
         name_len: stream.name_len,
         data_len: stream.data_len,
-        sha256,
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(stream.entry_lba, &hdr1)
@@ -1016,7 +963,6 @@ async fn write_delete_entry<D: BlockIo>(
     entry_lba: u64,
     name: &str,
     deleted_entry_lba: u64,
-    deleted_sha256: [u8; 32],
 ) -> Result<u64, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
@@ -1032,7 +978,7 @@ async fn write_delete_entry<D: BlockIo>(
         committed: false,
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
-        sha256: deleted_sha256,
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
@@ -1096,7 +1042,7 @@ async fn write_delete_entry<D: BlockIo>(
         committed: true,
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
-        sha256: deleted_sha256,
+        integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
@@ -1107,7 +1053,7 @@ async fn write_delete_entry<D: BlockIo>(
 async fn read_put_entry_data<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
-) -> Result<Option<(Vec<u8>, [u8; 32])>, FsError<D::Error>> {
+) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -1133,23 +1079,14 @@ async fn read_put_entry_data<D: BlockIo>(
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != hdr.sha256 {
-        return Ok(None);
-    }
-
-    Ok(Some((out, sha)))
+    Ok(Some(out))
 }
 
 async fn find_latest_delete_ref<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
-) -> Result<Option<(u64, [u8; 32])>, FsError<D::Error>> {
+) -> Result<Option<u64>, FsError<D::Error>> {
     if name.is_empty() {
         return Ok(None);
     }
@@ -1169,7 +1106,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
 
     let mut lba = params.data_lba;
     let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
-    let mut latest_delete: Option<(u64, [u8; 32])> = None;
+    let mut latest_delete: Option<u64> = None;
     let mut tmp_name: Vec<u8> = Vec::new();
 
     while lba < end_lba {
@@ -1226,7 +1163,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
                         let mut ref_bytes = [0u8; DELETE_REF_BYTES];
                         read_exact_bytes(dev, ref_lba, 0, &mut ref_bytes).await?;
                         let deleted_entry_lba = u64::from_le_bytes(ref_bytes);
-                        latest_delete = Some((deleted_entry_lba, hdr.sha256));
+                        latest_delete = Some(deleted_entry_lba);
                     }
                     LogKind::IndexCheckpoint => {}
                 }
@@ -1247,17 +1184,14 @@ pub async fn undelete_file<D: BlockIo>(
     params: &FsParams,
     name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    let Some((deleted_entry_lba, expected_sha)) = find_latest_delete_ref(dev, params, name).await? else {
+    let Some(deleted_entry_lba) = find_latest_delete_ref(dev, params, name).await? else {
         return Ok(false);
     };
 
     // Restore from the referenced Put entry.
-    let Some((data, sha)) = read_put_entry_data(dev, deleted_entry_lba).await? else {
+    let Some(data) = read_put_entry_data(dev, deleted_entry_lba).await? else {
         return Ok(false);
     };
-    if sha != expected_sha {
-        return Ok(false);
-    }
 
     write_file(dev, params, name, &data).await
 }
@@ -1332,10 +1266,8 @@ async fn find_latest_record<D: BlockIo>(
                         let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
                         latest = Some(FileRecord {
                             entry_lba: lba,
-                            name_len: hdr.name_len,
                             data_len: hdr.data_len,
                             data_lba,
-                            sha256: hdr.sha256,
                         });
                     }
                     LogKind::Delete => {
@@ -1369,7 +1301,6 @@ pub async fn write_file<D: BlockIo>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     pub data_len: u64,
-    pub sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1377,7 +1308,6 @@ pub struct FileRecordRef {
     pub entry_lba: u64,
     pub data_lba: u64,
     pub data_len: u64,
-    pub sha256: [u8; 32],
 }
 
 pub async fn read_file_info<D: BlockIo>(
@@ -1388,10 +1318,7 @@ pub async fn read_file_info<D: BlockIo>(
     let Some(rec) = find_latest_record(dev, params, name).await? else {
         return Ok(None);
     };
-    Ok(Some(FileInfo {
-        data_len: rec.data_len,
-        sha256: rec.sha256,
-    }))
+    Ok(Some(FileInfo { data_len: rec.data_len }))
 }
 
 pub async fn lookup_file_record<D: BlockIo>(
@@ -1406,7 +1333,6 @@ pub async fn lookup_file_record<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
-        sha256: rec.sha256,
     }))
 }
 
@@ -1414,7 +1340,6 @@ pub async fn lookup_file_record<D: BlockIo>(
 pub fn file_info_from_record(record: &FileRecordRef) -> FileInfo {
     FileInfo {
         data_len: record.data_len,
-        sha256: record.sha256,
     }
 }
 
@@ -1431,7 +1356,6 @@ pub async fn read_file<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
-        sha256: rec.sha256,
     };
 
     read_file_at_record(dev, params, &rec).await
@@ -1463,14 +1387,6 @@ pub async fn read_file_at_record<D: BlockIo>(
     let mut out = vec![0u8; record.data_len as usize];
     read_exact_bytes(dev, record.data_lba, 0, &mut out).await?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != record.sha256 {
-        return Ok(None);
-    }
     Ok(Some(out))
 }
 
@@ -1488,7 +1404,6 @@ pub async fn read_file_range<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
-        sha256: rec.sha256,
     };
     read_file_range_at(dev, params, &rec, offset, out).await
 }
@@ -1575,15 +1490,6 @@ pub async fn read_file_at<D: BlockIo>(
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != hdr.sha256 {
-        return Ok(None);
-    }
-
     Ok(Some(out))
 }
 
@@ -1642,8 +1548,7 @@ pub async fn read_entry_kind_at_named<D: BlockIo>(
 /// Read a file from a specific entry LBA, but only if the entry's name matches
 /// `expected_name`.
 ///
-/// Returns `Ok(None)` if the entry is invalid, not a Put, name mismatch, or
-/// fails integrity check.
+/// Returns `Ok(None)` if the entry is invalid, not a Put, or name mismatch.
 pub async fn read_file_at_named<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -1698,15 +1603,6 @@ pub async fn read_file_at_named<D: BlockIo>(
 
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != hdr.sha256 {
-        return Ok(None);
-    }
 
     Ok(Some(out))
 }
@@ -1775,15 +1671,6 @@ pub async fn read_file_at_for_name<D: BlockIo>(
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(&out);
-    let digest = hasher.finalize();
-    let mut sha = [0u8; 32];
-    sha.copy_from_slice(&digest[..]);
-    if sha != hdr.sha256 {
-        return Ok(None);
-    }
-
     Ok(Some(out))
 }
 
@@ -1819,21 +1706,9 @@ pub async fn delete_file<D: BlockIo>(
         return Ok(false);
     }
 
-    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba, base.sha256).await?;
+    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba).await?;
     advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
-}
-
-pub async fn file_valid<D: BlockIo>(
-    dev: &D,
-    params: &FsParams,
-    name: &str,
-) -> Result<bool, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name).await? else {
-        return Ok(false);
-    };
-    let sha = compute_sha256_of_entry_data(dev, &rec).await?;
-    Ok(sha == rec.sha256)
 }
 
 pub async fn file_exists<D: BlockIo>(
