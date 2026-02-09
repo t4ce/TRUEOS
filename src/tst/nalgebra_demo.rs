@@ -3,7 +3,7 @@ use nalgebra::{Matrix3, Matrix4, Point3, Rotation3, Translation3, Vector3};
 
 #[embassy_executor::task]
 pub(crate) async fn boot_nalgebra_demo_task() {
-    crate::v::taskmon::run("nalgebra-demo", async move {
+    async move {
     crate::log!("nalgebra-demo: starting\n");
 
     // Vector ops
@@ -85,6 +85,5 @@ pub(crate) async fn boot_nalgebra_demo_task() {
     }
 
     crate::log!("nalgebra-demo: done\n");
-    })
-    .await;
+    }.await;
 }

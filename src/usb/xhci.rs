@@ -868,7 +868,7 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: XhcInfo) {
-    crate::v::taskmon::run("usb-xhci-poll", async move {
+    async move {
         crate::log!(
             "xhci: controller poll task running bus={:02X} slot={:02X} fn={}\n",
             info.bus,
@@ -912,8 +912,7 @@ pub async fn poll_task(info: XhcInfo) {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
         }
-    })
-    .await;
+    }.await;
 }
 
 fn enqueue_event(controller_id: usize, evt: Trb) {

@@ -18,7 +18,7 @@ pub fn init() {
 
 #[embassy_executor::task]
 pub async fn drain_loop() {
-	crate::v::taskmon::run("truekey-drain", async move {
+	async move {
 		const CHUNK: usize = 1024;
 		const IDLE_SLEEP_MS: u64 = 100;
 
@@ -51,8 +51,7 @@ pub async fn drain_loop() {
 			}
 			let _ = cdc_acm::write_all(controller_id as usize, slot, &buf[..n]).await;
 		}
-	})
-	.await;
+	}.await;
 }
 
 pub fn push_bytes(data: &[u8]) {

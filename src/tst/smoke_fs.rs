@@ -24,7 +24,7 @@ pub(crate) fn request_bsp_smoke_test() {
 /// the BSP TrueOSFS smoke test exactly once.
 #[embassy_executor::task]
 pub(crate) async fn bsp_smoke_service_task() {
-    crate::v::taskmon::run("smoke-fs", async move {
+    async move {
     loop {
         if BSP_SMOKE_REQUESTED.swap(false, Ordering::AcqRel) {
             // Allow the USBMS device to settle after registration.
@@ -44,8 +44,7 @@ pub(crate) async fn bsp_smoke_service_task() {
         }
         Timer::after(EmbassyDuration::from_millis(50)).await;
     }
-    })
-    .await;
+    }.await;
 }
 
 #[inline]
@@ -162,6 +161,39 @@ pub(crate) async fn bsp_smoke_test_once_async() {
     for h in block::device_handles().into_iter() {
         if h.parent().is_some() {
             continue;
+        }
+
+        // Always log GPT partition layout best-effort so smoke output shows what
+        // the disk actually presents in this boot.
+        match partition::read_gpt_partitions(h).await {
+            Ok(parts) => {
+                if !parts.is_empty() {
+                    crate::log!(
+                        "trueosfs-smoke: gpt: dev={} partitions={}\n",
+                        h.id(),
+                        parts.len()
+                    );
+                    for p in parts.iter() {
+                        let is_esp = p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES;
+                        crate::log!(
+                            "trueosfs-smoke: gpt: dev={} first_lba={} last_lba={} esp={} type={:?}\n",
+                            h.id(),
+                            p.range.first_lba(),
+                            p.range.last_lba(),
+                            is_esp,
+                            p.type_guid
+                        );
+                    }
+                }
+            }
+            Err(e) if !is_transient_io(e) => {
+                crate::log!(
+                    "trueosfs-smoke: gpt: read partitions failed dev={} err={:?}\n",
+                    h.id(),
+                    e
+                );
+            }
+            Err(_) => {}
         }
 
         // Debug convenience: if we see a GPT disk with an ESP (FAT) and a *blank* data partition,

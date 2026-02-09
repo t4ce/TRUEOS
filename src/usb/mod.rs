@@ -229,7 +229,7 @@ fn any_hid_registered(controller_id: usize) -> bool {
 
 #[embassy_executor::task(pool_size = MAX_XHCI_CONTROLLERS)]
 pub async fn poll_task(info: xhci::XhcInfo) {
-    crate::v::taskmon::run("usb-poll", async move {
+    async move {
         let ctx = unsafe { XhciContext::new(info) };
         let controller_id = ctx.controller_id;
         let mut heartbeat: u32 = 0;
@@ -409,6 +409,5 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 }
             }
         }
-    })
-    .await;
+    }.await;
 }

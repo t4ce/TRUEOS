@@ -275,7 +275,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
 
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
-    crate::v::taskmon::run("hid-input-logger", async move {
+    async move {
         loop {
             if let Some(evt) = input::pop_event() {
                 match evt {
@@ -320,8 +320,7 @@ pub(crate) async fn input_logger() {
                 Timer::after(EmbassyDuration::from_millis(5)).await;
             }
         }
-    })
-    .await;
+    }.await;
 }
 
 // NOTE: No synthetic HID injections; reports now only reflect real device data.

@@ -25,7 +25,6 @@ const VIRTIO_PCI_REG_QUEUE_SIZE: u16 = 0x0C;
 const VIRTIO_PCI_REG_QUEUE_SELECT: u16 = 0x0E;
 const VIRTIO_PCI_REG_QUEUE_NOTIFY: u16 = 0x10;
 const VIRTIO_PCI_REG_DEVICE_STATUS: u16 = 0x12;
-const VIRTIO_PCI_REG_ISR_STATUS: u16 = 0x13;
 const VIRTIO_PCI_REG_GUEST_PAGE_SIZE: u16 = 0x28;
 
 const VIRTIO_STATUS_ACK: u8 = 0x01;
@@ -192,10 +191,6 @@ fn write_queue_addr(io_base: u16, pfn: u32) {
 
 fn notify_queue(io_base: u16, queue: u16) {
     unsafe { crate::portio::outw(io_base + VIRTIO_PCI_REG_QUEUE_NOTIFY, queue) };
-}
-
-fn read_isr(io_base: u16) -> u8 {
-    unsafe { crate::portio::inb(io_base + VIRTIO_PCI_REG_ISR_STATUS) }
 }
 
 fn setup_queue(io_base: u16, queue_index: u16) -> Result<VirtQueue, ()> {

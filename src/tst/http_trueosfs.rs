@@ -434,7 +434,7 @@ async fn http_prepare_file_response(
 
 #[embassy_executor::task]
 pub async fn http_trueosfs_task() {
-    crate::v::taskmon::run("http-trueosfs", async move {
+    async move {
         // Once the network is reachable, `open_primary()` should succeed; keep it strict.
         let vnet = loop {
             if let Some(v) = VNet::open_primary() {
@@ -857,6 +857,5 @@ pub async fn http_trueosfs_task() {
 
         Timer::after(EmbassyDuration::from_millis(10)).await;
     }
-    })
-    .await;
+    }.await;
 }

@@ -263,6 +263,41 @@ async fn print_format_disk_table(io: &dyn ShellIo) {
     io.write_str("\r\n");
 }
 
+async fn print_bench_disk_table(io: &dyn ShellIo) {
+    io.write_str("bench: TRUEOSFS disk selection\r\n");
+    io.write_str("bench: enter a disk id (blank/q cancels)\r\n");
+    io.write_str("\r\n");
+
+    for h in crate::disc::block::device_handles().into_iter() {
+        if h.parent().is_some() {
+            continue;
+        }
+        let info = h.info();
+        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
+        if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+            continue;
+        }
+        io.write_fmt(format_args!(
+            "  id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}\r\n",
+            info.id.raw(),
+            info.id,
+            info.block_count,
+            info.block_size,
+            info.writable,
+            info.label,
+            status.short(),
+            match (&status, err) {
+                (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => {
+                    alloc::format!(" (err={:?})", e)
+                }
+                _ => alloc::string::String::new(),
+            }
+        ));
+    }
+
+    io.write_str("\r\n");
+}
+
 #[derive(Copy, Clone)]
 pub(crate) enum PendingAction {
     Reset,
@@ -278,6 +313,7 @@ pub(crate) enum InstallWizardStage {
     FormatSelectDisk,
     UpdateSelectDisk,
     FileSelectMount,
+    BenchSelectDisk,
 }
 
 pub(crate) enum CommandAction {
@@ -287,6 +323,7 @@ pub(crate) enum CommandAction {
     ShowFormatDiskTable,
     ShowUpdateDiskTable,
     ShowFileMountTable,
+    ShowBenchDiskTable,
     EnterCube,
     EnterIco,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
@@ -436,6 +473,132 @@ async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::block::Devi
         }
         Ok(())
     });
+}
+
+async fn run_bench_stream(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHandle) {
+    const BENCH_PATH: &str = "bench-lorem-100mb.txt";
+    const BENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
+    const BENCH_CHUNK_BYTES: usize = 256 * 1024;
+    const UPDATE_MS: u64 = 250;
+    const LOREM: &[u8] = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n";
+
+    let Some(placement) = crate::v::fs::trueosfs::locate_async(disk).await.ok().flatten() else {
+        io.write_str("bench: selected disk is not TRUEOSFS\r\n");
+        return;
+    };
+    if !disk.supports_write() {
+        io.write_str("bench: selected disk is read-only\r\n");
+        return;
+    }
+
+    io.write_fmt(format_args!(
+        "bench: target={} super_lba={} data_lba={} file=/{}\r\n",
+        disk.id(),
+        placement.super_lba,
+        placement.data_lba,
+        BENCH_PATH
+    ));
+    io.write_str("bench: writing 100MB stream (press any key to abort)\r\n");
+
+    let Some(stream_handle) = (match crate::v::fs::trueosfs::file_write_begin_async(disk, BENCH_PATH, BENCH_TOTAL_BYTES).await {
+        Ok(v) => v,
+        Err(e) => {
+            io.write_fmt(format_args!("bench: begin failed ({:?})\r\n", e));
+            return;
+        }
+    }) else {
+        io.write_str("bench: begin failed (no space / no placement)\r\n");
+        return;
+    };
+
+    let mut chunk: alloc::vec::Vec<u8> = alloc::vec![0u8; BENCH_CHUNK_BYTES];
+    let mut lorem_off: usize = 0;
+    let mut written: u64 = 0;
+    let mut aborted = false;
+    let mut write_err: Option<crate::disc::block::Error> = None;
+    let mut finished_ok = false;
+
+    let start_tick = embassy_time_driver::now();
+    let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+
+    while written < BENCH_TOTAL_BYTES {
+        if io.read_byte().is_some() {
+            aborted = true;
+            break;
+        }
+
+        let remaining = (BENCH_TOTAL_BYTES - written) as usize;
+        let n = core::cmp::min(remaining, chunk.len());
+
+        for b in chunk[..n].iter_mut() {
+            *b = LOREM[lorem_off];
+            lorem_off += 1;
+            if lorem_off >= LOREM.len() {
+                lorem_off = 0;
+            }
+        }
+
+        if let Err(e) = crate::v::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await {
+            write_err = Some(e);
+            break;
+        }
+        written = written.saturating_add(n as u64);
+
+        if Instant::now() >= next_update || written >= BENCH_TOTAL_BYTES {
+            let now_tick = embassy_time_driver::now();
+            let elapsed_ticks = now_tick.saturating_sub(start_tick);
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                written.saturating_mul(1000) / elapsed_ms
+            };
+            let kbps = bps / 1024;
+            let total_kb = written / 1024;
+            io.write_fmt(format_args!(
+                "\rwrite speed: {} kb/sec | {} KB total   ",
+                kbps,
+                total_kb
+            ));
+            next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+        }
+
+    }
+
+    if write_err.is_none() && !aborted {
+        match crate::v::fs::trueosfs::file_write_finish_async(stream_handle).await {
+            Ok(()) => {
+                finished_ok = true;
+            }
+            Err(e) => {
+                let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
+                write_err = Some(e);
+            }
+        }
+    } else {
+        let _ = crate::v::fs::trueosfs::file_write_abort_async(stream_handle).await;
+    }
+
+    io.write_str("\r\n");
+    if aborted {
+        io.write_str("bench: aborted by key press\r\n");
+    }
+    if let Some(e) = write_err {
+        io.write_fmt(format_args!("bench: write failed ({:?})\r\n", e));
+    } else if finished_ok {
+        io.write_str("bench: write complete\r\n");
+    }
+
+    match crate::v::fs::trueosfs::file_delete_async(disk, BENCH_PATH).await {
+        Ok(true) => io.write_str("bench: cleanup ok (deleted benchmark file)\r\n"),
+        Ok(false) => io.write_str("bench: cleanup: benchmark file not present\r\n"),
+        Err(e) => io.write_fmt(format_args!("bench: cleanup failed ({:?})\r\n", e)),
+    }
 }
 
 
@@ -651,10 +814,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\ninstall: starting...\r\n");
                             match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", disc_id).as_str()) {
                                 Some(slot) => {
-                                    let _ = crate::v::taskmon::spawn(
-                                        &spawner,
-                                        "matrix-install",
-                                        crate::matrix::install_matrix_job(
+                                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
                                             slot,
                                             handle,
                                             bootx64,
@@ -701,10 +861,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             io.write_str("\r\nupdate: starting...\r\n");
                             match crate::matrix::alloc_slot(alloc::format!("update disc{:03}", disc_id).as_str()) {
                                 Some(slot) => {
-                                    let _ = crate::v::taskmon::spawn(
-                                        &spawner,
-                                        "matrix-update",
-                                        crate::matrix::update_matrix_job(slot, handle),
+                                    let _ = spawner.spawn(crate::matrix::update_matrix_job(slot, handle),
                                     );
                                     io.write_fmt(format_args!(
                                         "update: started §{} (dump logs with § {})\r\n",
@@ -969,6 +1126,58 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             write_prompt_for_state(io, pending_action, install_wizard);
                             continue;
                         }
+
+                        if let Some(InstallWizardStage::BenchSelectDisk) = install_wizard {
+                            let mut s = line.as_str().trim();
+                            if let Some(rest) = s.strip_prefix("bench") {
+                                s = rest.trim();
+                            }
+                            if s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit") {
+                                line.clear();
+                                install_wizard = None;
+                                io.write_str("\r\nbench: cancelled\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                            line.clear();
+                            if raw_id == 0 {
+                                io.write_str("\r\nbench: invalid id\r\n");
+                                io.write_str("bench: enter a TRUEOSFS disk id or 'q'\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            let target = crate::disc::block::device_handles()
+                                .into_iter()
+                                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+                            let Some(handle) = target else {
+                                io.write_str("\r\nbench: no such disk\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            };
+
+                            let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(handle).await;
+                            if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+                                io.write_fmt(format_args!(
+                                    "\r\nbench: refused (id={} is not TRUEOSFS; status={}{} )\r\n",
+                                    raw_id,
+                                    status.short(),
+                                    match (&status, err) {
+                                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" err={:?}", e),
+                                        _ => alloc::string::String::new(),
+                                    }
+                                ));
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                                continue;
+                            }
+
+                            install_wizard = None;
+                            run_bench_stream(io, handle).await;
+                            write_prompt_for_state(io, pending_action, install_wizard);
+                            continue;
+                        }
                     }
 
                     if line.is_empty() && pending_action.is_none() && go_mode {
@@ -1030,6 +1239,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 set_go_mode(io, &mut go_mode, false);
                                 print_trueosfs_mount_table(io).await;
                                 io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
+                            CommandAction::ShowBenchDiskTable => {
+                                set_go_mode(io, &mut go_mode, false);
+                                print_bench_disk_table(io).await;
+                                io.write_str("bench: enter TRUEOSFS disk id (blank/q cancels)\r\n");
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
                             CommandAction::Mv { src, dst } => {
