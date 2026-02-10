@@ -7,7 +7,7 @@ use crate::pci::PciDevice;
 
 const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
 const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
-const TGA_EXPECTED_BAR0_SIZE: u64 = 1024 * 1024; // 1 MiB
+const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 
 // Minimal "unified" contract (we control both ends):
 // - BAR0 is MMIO
@@ -480,7 +480,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     if bar_phys == 0 {
         bar_assigned_by_os = true;
         // Hotplug path: firmware may not have assigned BARs for devices appearing later.
-        // Allocate a fixed 1 MiB window and program BAR0/BAR1.
+        // Allocate a fixed 1 KiB window and program BAR0/BAR1.
         let size = TGA_EXPECTED_BAR0_SIZE;
         let align = TGA_EXPECTED_BAR0_SIZE;
 
