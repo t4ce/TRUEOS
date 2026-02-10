@@ -44,7 +44,6 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
-static UAC_SINE_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SONG_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -161,13 +160,6 @@ fn spawn_hid_input_logger(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_uac_sine(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::usb::uac::sine_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
         // Wait until AP1 executor is online so this task runs there.
@@ -257,12 +249,9 @@ const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 const PARSE5_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
+    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::v::readiness::QJS_ASYNC_FS_READY
-    | crate::v::readiness::PCI_IDS_CACHE_DONE;
-const UAC_SONG_READY: u32 =
-    crate::v::readiness::UAC_SINE_DONE
-    | crate::v::readiness::UAC_ATTACHED;
+    | crate::v::readiness::QJS_ASYNC_FS_READY;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)
@@ -339,14 +328,8 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_hid_input_logger,
     },
     TaskSpec {
-        name: "uac-sine",
-        required: 0,
-        started: &UAC_SINE_STARTED,
-        spawn: spawn_uac_sine,
-    },
-    TaskSpec {
         name: "uac-song",
-        required: UAC_SONG_READY,
+        required: crate::v::readiness::UAC_ATTACHED,
         started: &UAC_SONG_STARTED,
         spawn: spawn_uac_song,
     },
