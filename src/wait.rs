@@ -252,6 +252,14 @@ fn enqueue_local_job(job: LocalJobFuture) {
     JOBS_WAIT.notify_one();
 }
 
+/// Enqueue a non-Send future to run on the local executor without waiting.
+pub fn spawn_local_detached<F>(fut: F)
+where
+    F: Future<Output = ()> + 'static,
+{
+    enqueue_local_job(Box::pin(fut));
+}
+
 struct WaitState<T> {
     value: Mutex<Option<T>>,
     wait: WaitQueue,

@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{boxed::Box, format, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -12,11 +12,15 @@ use super::Queue;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use crate::surface::io::cabi::{
-    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO, FS_ERR_NO_SPACE,
-    FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
+    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND,
+    FS_ERR_NO_SPACE, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
 };
+use spin::Mutex;
+
+static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
+static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 
 /// Errors returned by [`fetch_https_body_async`].
 #[derive(Clone, Debug)]
@@ -778,7 +782,7 @@ pub async fn fetch_https_body_async(
 
 /// Fetch a URL into a TRUEOSFS key (cache file).
 ///
-/// Behavior matches the old surface `trueos_cabi_net_fetch_to_file`:
+/// Behavior used by async net-fetch C-ABI:
 /// - if `path` already exists: success
 /// - otherwise: download body (capped), write `path.tmp`, then rename into place
 pub async fn fetch_https_to_file_async(
@@ -845,39 +849,68 @@ pub async fn fetch_https_to_file_async(
     }
 }
 
-/// TRUEOS C ABI: fetch an HTTPS URL to a cache file.
-///
-/// This symbol is used by the QuickJS module loader.
+/// TRUEOS C ABI: start async HTTPS fetch to cache file.
 #[no_mangle]
-pub unsafe extern "C" fn trueos_cabi_net_fetch_to_file(
+pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     url_ptr: *const u8,
     url_len: usize,
     path_ptr: *const u8,
     path_len: usize,
-) -> i32 {
+) -> u32 {
     if url_ptr.is_null() || url_len == 0 || path_ptr.is_null() || path_len == 0 {
-        return FS_ERR_BAD_PARAM;
+        return 0;
     }
 
     let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
     let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
     let Ok(url_s) = core::str::from_utf8(url_bytes) else {
-        return FS_ERR_BAD_UTF8;
+        return 0;
     };
     let Ok(path_s) = core::str::from_utf8(path_bytes) else {
-        return FS_ERR_BAD_UTF8;
+        return 0;
     };
 
-    // Match the old behavior: fixed limits and timeout.
-    const TIMEOUT_MS: u32 = 250;
+    // Fixed fetch limits for loader cache path.
+    const TIMEOUT_MS: u32 = 8_000;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
     let url = String::from(url_s);
     let path = String::from(path_s);
-    match crate::wait::spawn_and_wait_local(async move {
-        fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES).await
-    }) {
-        Ok(()) => 0,
-        Err(rc) => rc,
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
+    crate::wait::spawn_local_detached(async move {
+        let rc = match fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES).await {
+            Ok(()) => 0,
+            Err(code) => code,
+        };
+        let mut map = CABI_NET_FETCH_RESULTS.lock();
+        if let Some(slot) = map.get_mut(&op_id) {
+            *slot = Some(rc);
+        }
+    });
+    op_id
+}
+
+/// TRUEOS C ABI: query async HTTPS fetch result.
+///
+/// Returns:
+/// - `FS_ERR_NOT_FOUND` while operation is pending/unknown
+/// - `0` on success
+/// - negative error code on completion failure
+#[no_mangle]
+pub extern "C" fn trueos_cabi_net_fetch_result(op_id: u32) -> i32 {
+    let map = CABI_NET_FETCH_RESULTS.lock();
+    match map.get(&op_id) {
+        Some(Some(rc)) => *rc,
+        Some(None) => FS_ERR_NOT_FOUND,
+        None => FS_ERR_NOT_FOUND,
     }
+}
+
+/// TRUEOS C ABI: discard async HTTPS fetch state.
+#[no_mangle]
+pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
+    let mut map = CABI_NET_FETCH_RESULTS.lock();
+    map.remove(&op_id);
+    0
 }

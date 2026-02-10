@@ -195,7 +195,7 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
 ///
 /// This exercises:
 /// - `trueos_module_normalize` (bare specifier -> https://esm.sh/...)
-/// - URL module caching to `/qjs/cdn/<hash>.mjs` via `trueos_cabi_net_fetch_to_file`
+/// - URL module caching to `/qjs/cdn/<hash>.mjs` via async net-fetch C-ABI
 /// - Recursive URL import handling (origin-relative specifiers like "/pkg@ver/..." from esm.sh)
 pub unsafe fn run_module_loader_smoke() {
     let rt = qjs::JS_NewRuntime();
