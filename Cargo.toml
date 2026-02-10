@@ -3,6 +3,10 @@ name = "TRUEOS"
 version = "0.0.1"
 edition = "2021"
 
+[features]
+default = []
+dma_nic_fpga = []
+
 [dependencies]
 embassy-executor = { version = "0.9.1", default-features = false, features = ["executor-thread", "arch-spin"] }
 embassy-time = { version = "0.5.0", default-features = false, features = ["tick-hz-1_000"] }

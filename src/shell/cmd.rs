@@ -486,6 +486,7 @@ pub(crate) fn init_builtin_shell_commands() {
             ArgSpec::new("op", ArgType::Str).mandatory(),
             ArgSpec::new("target", ArgType::Str),
         ];
+        static DMAFPGA_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest).mandatory()];
         static NO_ARGS: [ArgSpec; 0] = [];
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
         static MV_ARGS: [ArgSpec; 2] = [
@@ -512,6 +513,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
         let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
         let _ = REGSHCMD("net", &NET_ARGS, cmd_net);
+        let _ = REGSHCMD("dmafpga", &DMAFPGA_ARGS, cmd_dmafpga);
         let _ = REGSHCMD("update", &NO_ARGS, cmd_update);
         let _ = REGSHCMD("install", &[], cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
@@ -742,6 +744,151 @@ fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     }
 
     super::CommandAction::None
+}
+
+fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let Some(arg) = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()) else {
+        ctx.io.write_str("dmafpga: usage dmafpga <https://url>|status|off\r\n");
+        return super::CommandAction::None;
+    };
+
+    if arg.eq_ignore_ascii_case("status") {
+        let s = crate::net::dma_fpga_stream_status();
+        ctx.io.write_fmt(format_args!(
+            "dmafpga: active={} filter={} rx_seen={} matched={} queued={} queue_fail={}\r\n",
+            s.active as u8,
+            s.filter_enabled as u8,
+            s.rx_packets_seen,
+            s.rx_packets_matched,
+            s.queued_packets,
+            s.queue_failures
+        ));
+        return super::CommandAction::None;
+    }
+
+    if arg.eq_ignore_ascii_case("off") {
+        crate::net::dma_fpga_stream_end();
+        let s = crate::net::dma_fpga_stream_status();
+        ctx.io.write_fmt(format_args!(
+            "dmafpga: stopped rx_seen={} matched={} queued={} queue_fail={}\r\n",
+            s.rx_packets_seen, s.rx_packets_matched, s.queued_packets, s.queue_failures
+        ));
+        return super::CommandAction::None;
+    }
+
+    if !arg.starts_with("https://") {
+        ctx.io.write_str("dmafpga: only https:// URLs are supported\r\n");
+        return super::CommandAction::None;
+    }
+
+    let mut url: heapless::String<256> = heapless::String::new();
+    for ch in arg.chars() {
+        if url.push(ch).is_err() {
+            break;
+        }
+    }
+    if url.is_empty() {
+        ctx.io.write_str("dmafpga: URL too long/invalid\r\n");
+        return super::CommandAction::None;
+    }
+
+    if ctx.spawner.spawn(net_dmafpga_task(ctx.io, url)).is_err() {
+        ctx.io.write_str("dmafpga: spawn failed\r\n");
+        return super::CommandAction::None;
+    }
+    ctx.io.write_str("dmafpga: started\r\n");
+    super::CommandAction::None
+}
+
+#[task]
+async fn net_dmafpga_task(io: &'static dyn ShellBackend, url: heapless::String<256>) {
+    if let Err(e) = crate::net::dma_fpga_stream_begin() {
+        io.write_fmt(format_args!("dmafpga: begin failed ({})\r\n", e));
+        return;
+    }
+
+    let Some((host, remote_port)) = parse_https_host_port(url.as_str()) else {
+        io.write_str("dmafpga: bad https URL\r\n");
+        crate::net::dma_fpga_stream_end();
+        return;
+    };
+
+    match crate::v::net::dns::resolve_ipv4_primary(host.as_str(), crate::v::net::dns::DnsConfig::default()).await {
+        Ok(remote_ip) => {
+            let filter = crate::net::DmaFpgaFlowFilter {
+                proto: crate::net::DmaFpgaIpProto::Tcp,
+                src_ip: Some(remote_ip),
+                dst_ip: None,
+                src_port: Some(remote_port),
+                dst_port: None,
+            };
+            if let Err(e) = crate::net::dma_fpga_stream_set_filter(filter) {
+                io.write_fmt(format_args!("dmafpga: filter set failed ({})\r\n", e));
+                crate::net::dma_fpga_stream_end();
+                return;
+            }
+            io.write_fmt(format_args!(
+                "dmafpga: filter tcp src={}.{}.{}.{}:{}\r\n",
+                remote_ip[0], remote_ip[1], remote_ip[2], remote_ip[3], remote_port
+            ));
+        }
+        Err(err) => {
+            io.write_fmt(format_args!("dmafpga: dns failed {:?}\r\n", err));
+            crate::net::dma_fpga_stream_end();
+            return;
+        }
+    }
+
+    io.write_fmt(format_args!("dmafpga: fetching {}\r\n", url.as_str()));
+
+    let fetch = crate::v::net::https::fetch_https_body_async(url.as_str(), 30_000, 16 * 1024 * 1024).await;
+
+    match fetch {
+        Ok(body) => {
+            io.write_fmt(format_args!("dmafpga: fetch ok bytes={}\r\n", body.len()));
+        }
+        Err(e) => {
+            io.write_fmt(format_args!("dmafpga: fetch failed {:?}\r\n", e));
+        }
+    }
+
+    crate::net::dma_fpga_stream_end();
+    let s = crate::net::dma_fpga_stream_status();
+    io.write_fmt(format_args!(
+        "dmafpga: done rx_seen={} matched={} queued={} queue_fail={}\r\n",
+        s.rx_packets_seen, s.rx_packets_matched, s.queued_packets, s.queue_failures
+    ));
+}
+
+fn parse_https_host_port(url: &str) -> Option<(heapless::String<96>, u16)> {
+    let rest = url.strip_prefix("https://")?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.is_empty() {
+        return None;
+    }
+
+    let (host, port) = if let Some((h, p)) = authority.rsplit_once(':') {
+        if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            let parsed = p.parse::<u16>().ok()?;
+            (h, parsed)
+        } else {
+            (authority, 443u16)
+        }
+    } else {
+        (authority, 443u16)
+    };
+
+    if host.is_empty() {
+        return None;
+    }
+
+    let mut h: heapless::String<96> = heapless::String::new();
+    for ch in host.chars() {
+        if h.push(ch).is_err() {
+            return None;
+        }
+    }
+    Some((h, port))
 }
 
 #[task]
