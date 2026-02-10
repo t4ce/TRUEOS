@@ -873,7 +873,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     };
 
     // Fixed fetch limits for loader cache path.
-    const TIMEOUT_MS: u32 = 8_000;
+    const TIMEOUT_MS: u32 = 2_500;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
     let url = String::from(url_s);

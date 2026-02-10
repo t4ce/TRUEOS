@@ -407,6 +407,7 @@ fn tls_socket_tick_once() {
 pub async fn tls_socket_service_task() {
     async move {
         crate::log!("tls-socket: service running\n");
+        crate::v::readiness::set(crate::v::readiness::TLS_SOCKET_SERVICE_READY);
 
         loop {
             tls_socket_tick_once();

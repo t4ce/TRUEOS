@@ -1201,7 +1201,6 @@ pub async fn sine_task() {
 
         // Additional guard so downstream playback cannot overlap codec/USB tail latency.
         Timer::after(EmbassyDuration::from_millis(HANDOFF_GUARD_MS)).await;
-        crate::v::readiness::set(crate::v::readiness::UAC_SINE_DONE);
     }.await;
 }
 
