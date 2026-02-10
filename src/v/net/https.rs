@@ -12,15 +12,17 @@ use super::Queue;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use crate::surface::io::cabi::{
-    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND,
+    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND, FS_ERR_TIMEOUT,
     FS_ERR_NO_SPACE, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
 };
 use spin::Mutex;
+use crate::wait::WaitQueue;
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
+static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 
 /// Errors returned by [`fetch_https_body_async`].
 #[derive(Clone, Debug)]
@@ -887,6 +889,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
         if let Some(slot) = map.get_mut(&op_id) {
             *slot = Some(rc);
         }
+        CABI_NET_FETCH_WAIT.notify_all();
     });
     op_id
 }
@@ -913,4 +916,39 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
     let mut map = CABI_NET_FETCH_RESULTS.lock();
     map.remove(&op_id);
     0
+}
+
+/// TRUEOS C ABI: wait for a net-fetch operation to complete.
+///
+/// Returns:
+/// - `FS_ERR_NOT_FOUND` while pending (only when timeout_ms == 0)
+/// - `FS_ERR_TIMEOUT` when deadline expires
+/// - `0` on success
+/// - negative error code on completion failure
+#[no_mangle]
+pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32 {
+    if op_id == 0 {
+        return FS_ERR_BAD_PARAM;
+    }
+
+    if timeout_ms == 0 {
+        return trueos_cabi_net_fetch_result(op_id);
+    }
+
+    let start = embassy_time::Instant::now();
+    let timeout = EmbassyDuration::from_millis(timeout_ms);
+    loop {
+        let rc = trueos_cabi_net_fetch_result(op_id);
+        if rc != FS_ERR_NOT_FOUND {
+            return rc;
+        }
+
+        let elapsed = embassy_time::Instant::now().saturating_duration_since(start);
+        if elapsed >= timeout {
+            return FS_ERR_TIMEOUT;
+        }
+        let remain = timeout - elapsed;
+        let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
+        let _ = CABI_NET_FETCH_WAIT.wait_for_event_blocking(step.as_millis() as u64);
+    }
 }

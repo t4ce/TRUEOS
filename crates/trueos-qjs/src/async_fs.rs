@@ -15,6 +15,7 @@ use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
     trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start,
+    trueos_cabi_net_fetch_wait,
     trueos_cabi_poll_once,
 };
 
@@ -435,6 +436,13 @@ pub fn result_len(op_id: u32) -> isize {
         return rc as isize;
     }
     len as isize
+}
+
+pub fn wait_net_fetch(op_id: u32, timeout_ms: u64) -> i32 {
+    if !is_net_op(op_id) {
+        return FS_ERR_BAD_PARAM;
+    }
+    unsafe { trueos_cabi_net_fetch_wait(op_id, timeout_ms) }
 }
 
 pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
