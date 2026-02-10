@@ -158,6 +158,20 @@ pub extern "C" fn kmain() -> ! {
     
     pci::dma::init_from_limine();
     pci::dma::alloc_test_once();
+    #[cfg(feature = "dma_nic_fpga")]
+    {
+        match pci::nic_fpga_dma::init_default_once() {
+            Ok(region) => {
+                crate::log!(
+                    "dma_nic_fpga: region phys=0x{:X} virt=0x{:X} size=0x{:X}\n",
+                    region.phys_base,
+                    region.virt_base,
+                    region.size
+                );
+            }
+            Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
+        }
+    }
     pci::enumerate_once();
     pci::log_devices_once();
     pci::vrng::init_once();
