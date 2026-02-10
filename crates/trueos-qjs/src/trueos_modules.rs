@@ -1,8 +1,10 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use alloc::vec;
 use core::ffi::{c_char, c_int, CStr};
 use embassy_time_driver::{now, TICK_HZ};
+use spin::Mutex;
 
 use crate as qjs;
 
@@ -18,6 +20,41 @@ extern "C" {
 }
 
 include!("../../../src/surface/cabi_codes.rs");
+
+static PROCESS_ARGV: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+pub fn set_process_argv(args: &[&str]) {
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    for arg in args {
+        if arg.is_empty() {
+            continue;
+        }
+        out.push(arg.as_bytes().to_vec());
+    }
+    if out.is_empty() {
+        out.push(b"qjs".to_vec());
+    }
+    *PROCESS_ARGV.lock() = out;
+}
+
+fn process_argv_snapshot() -> Vec<Vec<u8>> {
+    let snapshot = PROCESS_ARGV.lock().clone();
+    if snapshot.is_empty() {
+        vec![b"qjs".to_vec()]
+    } else {
+        snapshot
+    }
+}
+
+fn process_cwd_snapshot() -> Vec<u8> {
+    let cwd = PROCESS_CWD.lock().clone();
+    if cwd.is_empty() {
+        b"/".to_vec()
+    } else {
+        cwd
+    }
+}
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -145,9 +182,60 @@ unsafe extern "C" fn qjs_process_cwd(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    // TODO: wire to per-context cwd once the shell/plumbing provides it.
-    let cwd = b"/\0";
-    unsafe { qjs::JS_NewStringLen(ctx, cwd.as_ptr() as *const c_char, cwd.len() - 1) }
+    let cwd = process_cwd_snapshot();
+    qjs::JS_NewStringLen(ctx, cwd.as_ptr() as *const c_char, cwd.len())
+}
+
+unsafe extern "C" fn qjs_process_chdir(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        throw_error(ctx, b"process.chdir requires path");
+        return qjs::JSValue::exception();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return qjs::JSValue::exception();
+    }
+    let input = core::slice::from_raw_parts(cstr as *const u8, len);
+    if input.is_empty() {
+        qjs::JS_FreeCString(ctx, cstr);
+        throw_error(ctx, b"process.chdir empty path");
+        return qjs::JSValue::exception();
+    }
+
+    let normalized = if input.starts_with(b"/") {
+        normalize_path_bytes(input)
+    } else {
+        let mut joined = process_cwd_snapshot();
+        if !joined.ends_with(b"/") {
+            joined.push(b'/');
+        }
+        joined.extend_from_slice(input);
+        normalize_path_bytes(joined.as_slice())
+    };
+    qjs::JS_FreeCString(ctx, cstr);
+
+    let mut final_cwd = if normalized.is_empty() {
+        b"/".to_vec()
+    } else if normalized.starts_with(b"/") {
+        normalized
+    } else {
+        let mut p = Vec::with_capacity(normalized.len() + 1);
+        p.push(b'/');
+        p.extend_from_slice(&normalized);
+        p
+    };
+    if final_cwd.len() > 1 && final_cwd.ends_with(b"/") {
+        final_cwd.pop();
+    }
+    *PROCESS_CWD.lock() = final_cwd;
+    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn qjs_process_uptime(
@@ -214,6 +302,152 @@ unsafe extern "C" fn qjs_path_join(
     unsafe { qjs::JS_NewStringLen(ctx, out.as_ptr() as *const c_char, out.len()) }
 }
 
+fn path_trim_trailing_slashes(mut p: &[u8]) -> &[u8] {
+    while p.len() > 1 && p.ends_with(b"/") {
+        p = &p[..p.len() - 1];
+    }
+    p
+}
+
+unsafe fn js_arg_to_bytes(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<Vec<u8>> {
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, v, 0);
+    if cstr.is_null() {
+        return None;
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len).to_vec();
+    qjs::JS_FreeCString(ctx, cstr);
+    Some(bytes)
+}
+
+unsafe extern "C" fn qjs_path_dirname(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return qjs::JS_NewStringLen(ctx, b".\0".as_ptr() as *const c_char, 1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(mut path) = js_arg_to_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+    if path.is_empty() {
+        return qjs::JS_NewStringLen(ctx, b".\0".as_ptr() as *const c_char, 1);
+    }
+    let trimmed = path_trim_trailing_slashes(path.as_slice());
+    if let Some(pos) = trimmed.iter().rposition(|&b| b == b'/') {
+        if pos == 0 {
+            return qjs::JS_NewStringLen(ctx, b"/\0".as_ptr() as *const c_char, 1);
+        }
+        path.truncate(pos);
+        return qjs::JS_NewStringLen(ctx, path.as_ptr() as *const c_char, path.len());
+    }
+    qjs::JS_NewStringLen(ctx, b".\0".as_ptr() as *const c_char, 1)
+}
+
+unsafe extern "C" fn qjs_path_basename(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(path) = js_arg_to_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+    if path.is_empty() {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let trimmed = path_trim_trailing_slashes(path.as_slice());
+    if trimmed == b"/" {
+        return qjs::JS_NewStringLen(ctx, b"/\0".as_ptr() as *const c_char, 1);
+    }
+    let base = if let Some(pos) = trimmed.iter().rposition(|&b| b == b'/') {
+        &trimmed[pos + 1..]
+    } else {
+        trimmed
+    };
+    qjs::JS_NewStringLen(ctx, base.as_ptr() as *const c_char, base.len())
+}
+
+unsafe extern "C" fn qjs_path_extname(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(path) = js_arg_to_bytes(ctx, args[0]) else {
+        return qjs::JSValue::exception();
+    };
+    let trimmed = path_trim_trailing_slashes(path.as_slice());
+    let base = if let Some(pos) = trimmed.iter().rposition(|&b| b == b'/') {
+        &trimmed[pos + 1..]
+    } else {
+        trimmed
+    };
+    if base.is_empty() {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let Some(dot) = base.iter().rposition(|&b| b == b'.') else {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    };
+    if dot == 0 || base == b"." || base == b".." {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let ext = &base[dot..];
+    qjs::JS_NewStringLen(ctx, ext.as_ptr() as *const c_char, ext.len())
+}
+
+unsafe extern "C" fn qjs_path_resolve(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return qjs::JS_NewStringLen(ctx, b"/\0".as_ptr() as *const c_char, 1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut acc: Vec<u8> = Vec::new();
+    let mut seen_abs = false;
+    for &v in args {
+        let Some(part) = js_arg_to_bytes(ctx, v) else {
+            return qjs::JSValue::exception();
+        };
+        if part.is_empty() {
+            continue;
+        }
+        if part.starts_with(b"/") {
+            acc.clear();
+            acc.extend_from_slice(&part);
+            seen_abs = true;
+            continue;
+        }
+        if !acc.is_empty() && !acc.ends_with(b"/") {
+            acc.push(b'/');
+        }
+        acc.extend_from_slice(&part);
+    }
+    if !seen_abs {
+        let mut prefixed = Vec::with_capacity(acc.len() + 1);
+        prefixed.push(b'/');
+        prefixed.extend_from_slice(&acc);
+        acc = prefixed;
+    }
+    let normalized = normalize_path_bytes(acc.as_slice());
+    let out = if normalized.is_empty() { b"/".as_slice() } else { normalized.as_slice() };
+    qjs::JS_NewStringLen(ctx, out.as_ptr() as *const c_char, out.len())
+}
+
 unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
     if ctx.is_null() || m.is_null() {
         return -1;
@@ -231,6 +465,66 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
         )
     };
     if unsafe { qjs::JS_SetModuleExport(ctx, m, join_name.as_ptr() as *const c_char, join_fn) } < 0 {
+        return -1;
+    }
+
+    let dirname_name = b"dirname\0";
+    let dirname_fn = unsafe {
+        qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_path_dirname),
+            dirname_name.as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        )
+    };
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, dirname_name.as_ptr() as *const c_char, dirname_fn) } < 0 {
+        return -1;
+    }
+
+    let basename_name = b"basename\0";
+    let basename_fn = unsafe {
+        qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_path_basename),
+            basename_name.as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        )
+    };
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, basename_name.as_ptr() as *const c_char, basename_fn) } < 0 {
+        return -1;
+    }
+
+    let extname_name = b"extname\0";
+    let extname_fn = unsafe {
+        qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_path_extname),
+            extname_name.as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        )
+    };
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, extname_name.as_ptr() as *const c_char, extname_fn) } < 0 {
+        return -1;
+    }
+
+    let resolve_name = b"resolve\0";
+    let resolve_fn = unsafe {
+        qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_path_resolve),
+            resolve_name.as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        )
+    };
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, resolve_name.as_ptr() as *const c_char, resolve_fn) } < 0 {
         return -1;
     }
 
@@ -263,17 +557,32 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
             qjs::js_free_value(ctx, obj);
             return Err(qjs::JSValue::exception());
         }
+        let node_env = qjs::JS_NewStringLen(ctx, b"production".as_ptr() as *const c_char, 10);
+        let home = qjs::JS_NewStringLen(ctx, b"/".as_ptr() as *const c_char, 1);
+        let pwd = qjs::JS_NewStringLen(ctx, b"/".as_ptr() as *const c_char, 1);
+        let tmpdir = qjs::JS_NewStringLen(ctx, b"/tmp".as_ptr() as *const c_char, 4);
+        let term = qjs::JS_NewStringLen(ctx, b"xterm-256color".as_ptr() as *const c_char, 14);
+        let path = qjs::JS_NewStringLen(ctx, b"/bin:/usr/bin".as_ptr() as *const c_char, 13);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"NODE_ENV\0".as_ptr() as *const c_char, node_env);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"HOME\0".as_ptr() as *const c_char, home);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"PWD\0".as_ptr() as *const c_char, pwd);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"TMPDIR\0".as_ptr() as *const c_char, tmpdir);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"TERM\0".as_ptr() as *const c_char, term);
+        let _ = qjs::JS_SetPropertyStr(ctx, env, b"PATH\0".as_ptr() as *const c_char, path);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"env\0".as_ptr() as *const c_char, env);
 
-        // argv: ["qjs"] default
+        // argv: shell-provided (fallback to ["qjs"]).
         let argv = qjs::JS_NewArray(ctx);
         if argv.is_exception() {
             qjs::js_free_value(ctx, global);
             qjs::js_free_value(ctx, obj);
             return Err(qjs::JSValue::exception());
         }
-        let qjs_str = qjs::JS_NewStringLen(ctx, b"qjs".as_ptr() as *const c_char, 3);
-        let _ = qjs::JS_SetPropertyUint32(ctx, argv, 0, qjs_str);
+        let argv_items = process_argv_snapshot();
+        for (idx, item) in argv_items.iter().enumerate() {
+            let v = qjs::JS_NewStringLen(ctx, item.as_ptr() as *const c_char, item.len());
+            let _ = qjs::JS_SetPropertyUint32(ctx, argv, idx as u32, v);
+        }
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"argv\0".as_ptr() as *const c_char, argv);
 
         // platform/arch/version
@@ -283,11 +592,43 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"platform\0".as_ptr() as *const c_char, platform);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"arch\0".as_ptr() as *const c_char, arch);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"version\0".as_ptr() as *const c_char, version);
+        let exec_path = qjs::JS_NewStringLen(ctx, b"/bin/qjs".as_ptr() as *const c_char, 8);
+        let title = qjs::JS_NewStringLen(ctx, b"trueos-qjs".as_ptr() as *const c_char, 10);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"execPath\0".as_ptr() as *const c_char, exec_path);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"title\0".as_ptr() as *const c_char, title);
+        let release = qjs::JS_NewObject(ctx);
+        if release.is_exception() {
+            qjs::js_free_value(ctx, global);
+            qjs::js_free_value(ctx, obj);
+            return Err(qjs::JSValue::exception());
+        }
+        let rel_name = qjs::JS_NewStringLen(ctx, b"node".as_ptr() as *const c_char, 4);
+        let rel_lts = qjs::JS_NewStringLen(ctx, b"trueos".as_ptr() as *const c_char, 6);
+        let _ = qjs::JS_SetPropertyStr(ctx, release, b"name\0".as_ptr() as *const c_char, rel_name);
+        let _ = qjs::JS_SetPropertyStr(ctx, release, b"lts\0".as_ptr() as *const c_char, rel_lts);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"release\0".as_ptr() as *const c_char, release);
+        let versions = qjs::JS_NewObject(ctx);
+        if versions.is_exception() {
+            qjs::js_free_value(ctx, global);
+            qjs::js_free_value(ctx, obj);
+            return Err(qjs::JSValue::exception());
+        }
+        let node_v = qjs::JS_NewStringLen(ctx, b"18.0.0-trueos".as_ptr() as *const c_char, 13);
+        let v8_v = qjs::JS_NewStringLen(ctx, b"quickjs".as_ptr() as *const c_char, 7);
+        let uv_v = qjs::JS_NewStringLen(ctx, b"0.0.0".as_ptr() as *const c_char, 5);
+        let modules_v = qjs::JS_NewStringLen(ctx, b"108".as_ptr() as *const c_char, 3);
+        let openssl_v = qjs::JS_NewStringLen(ctx, b"0.0.0".as_ptr() as *const c_char, 5);
+        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"node\0".as_ptr() as *const c_char, node_v);
+        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"v8\0".as_ptr() as *const c_char, v8_v);
+        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"uv\0".as_ptr() as *const c_char, uv_v);
+        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"modules\0".as_ptr() as *const c_char, modules_v);
+        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"openssl\0".as_ptr() as *const c_char, openssl_v);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"versions\0".as_ptr() as *const c_char, versions);
 
         // pid (placeholder)
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pid\0".as_ptr() as *const c_char, js_int32(1));
 
-        // Functions: nextTick/cwd/hrtime/uptime
+        // Functions: nextTick/cwd/chdir/hrtime/uptime
         let next_tick = qjs::JS_NewCFunction2(
             ctx,
             Some(qjs_process_next_tick),
@@ -301,6 +642,14 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
             Some(qjs_process_cwd),
             b"cwd\0".as_ptr() as *const c_char,
             0,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let chdir = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_process_chdir),
+            b"chdir\0".as_ptr() as *const c_char,
+            1,
             qjs::JS_CFUNC_GENERIC,
             0,
         );
@@ -322,6 +671,7 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
         );
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"nextTick\0".as_ptr() as *const c_char, next_tick);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cwd\0".as_ptr() as *const c_char, cwd);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"chdir\0".as_ptr() as *const c_char, chdir);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"hrtime\0".as_ptr() as *const c_char, hrtime);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"uptime\0".as_ptr() as *const c_char, uptime);
 
@@ -346,21 +696,31 @@ unsafe extern "C" fn qjs_process_module_init(ctx: *mut qjs::JSContext, m: *mut q
         Err(_) => return -1,
     };
 
-    // Named exports: env/argv/cwd/nextTick/hrtime/uptime
+    // Named exports: env/argv/cwd/chdir/nextTick/hrtime/uptime + compatibility fields.
     let env = qjs::JS_GetPropertyStr(ctx, proc, b"env\0".as_ptr() as *const c_char);
     let argv = qjs::JS_GetPropertyStr(ctx, proc, b"argv\0".as_ptr() as *const c_char);
     let cwd = qjs::JS_GetPropertyStr(ctx, proc, b"cwd\0".as_ptr() as *const c_char);
+    let chdir = qjs::JS_GetPropertyStr(ctx, proc, b"chdir\0".as_ptr() as *const c_char);
     let next_tick = qjs::JS_GetPropertyStr(ctx, proc, b"nextTick\0".as_ptr() as *const c_char);
     let hrtime = qjs::JS_GetPropertyStr(ctx, proc, b"hrtime\0".as_ptr() as *const c_char);
     let uptime = qjs::JS_GetPropertyStr(ctx, proc, b"uptime\0".as_ptr() as *const c_char);
+    let versions = qjs::JS_GetPropertyStr(ctx, proc, b"versions\0".as_ptr() as *const c_char);
+    let platform = qjs::JS_GetPropertyStr(ctx, proc, b"platform\0".as_ptr() as *const c_char);
+    let arch = qjs::JS_GetPropertyStr(ctx, proc, b"arch\0".as_ptr() as *const c_char);
+    let release = qjs::JS_GetPropertyStr(ctx, proc, b"release\0".as_ptr() as *const c_char);
 
     // Exporting consumes the values, so don't free them after.
     let _ = qjs::JS_SetModuleExport(ctx, m, b"env\0".as_ptr() as *const c_char, env);
     let _ = qjs::JS_SetModuleExport(ctx, m, b"argv\0".as_ptr() as *const c_char, argv);
     let _ = qjs::JS_SetModuleExport(ctx, m, b"cwd\0".as_ptr() as *const c_char, cwd);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"chdir\0".as_ptr() as *const c_char, chdir);
     let _ = qjs::JS_SetModuleExport(ctx, m, b"nextTick\0".as_ptr() as *const c_char, next_tick);
     let _ = qjs::JS_SetModuleExport(ctx, m, b"hrtime\0".as_ptr() as *const c_char, hrtime);
     let _ = qjs::JS_SetModuleExport(ctx, m, b"uptime\0".as_ptr() as *const c_char, uptime);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"versions\0".as_ptr() as *const c_char, versions);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"platform\0".as_ptr() as *const c_char, platform);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"arch\0".as_ptr() as *const c_char, arch);
+    let _ = qjs::JS_SetModuleExport(ctx, m, b"release\0".as_ptr() as *const c_char, release);
 
     let _ = qjs::JS_SetModuleExport(ctx, m, b"default\0".as_ptr() as *const c_char, proc);
     0
@@ -717,10 +1077,26 @@ pub unsafe fn load_native_module(
     } else if name == b"process" || name == b"node:process" {
         (
             qjs_process_module_init,
-            &[b"default\0", b"env\0", b"argv\0", b"cwd\0", b"nextTick\0", b"hrtime\0", b"uptime\0"],
+            &[
+                b"default\0",
+                b"env\0",
+                b"argv\0",
+                b"cwd\0",
+                b"chdir\0",
+                b"nextTick\0",
+                b"hrtime\0",
+                b"uptime\0",
+                b"versions\0",
+                b"platform\0",
+                b"arch\0",
+                b"release\0",
+            ],
         )
     } else if name == b"path" || name == b"node:path" {
-        (qjs_path_module_init, &[b"join\0"])
+        (
+            qjs_path_module_init,
+            &[b"join\0", b"dirname\0", b"basename\0", b"extname\0", b"resolve\0"],
+        )
     } else {
         return core::ptr::null_mut();
     };
@@ -873,7 +1249,18 @@ unsafe fn fetch_to_cache_rc_async(url: &[u8], cache_path: &[u8], timeout_ms: u64
                     let _ = qjs::async_fs::discard(op_id);
                     return Err(FS_ERR_TIMEOUT);
                 }
-                trueos_cabi_poll_once();
+                let wait_ms = if total_ticks == 0 {
+                    100
+                } else {
+                    let now_ticks = now();
+                    if now_ticks >= deadline {
+                        let _ = qjs::async_fs::discard(op_id);
+                        return Err(FS_ERR_TIMEOUT);
+                    }
+                    let remain_ticks = deadline - now_ticks;
+                    ((remain_ticks.saturating_mul(1000)) / hz).max(1)
+                };
+                let _ = qjs::async_fs::wait_net_fetch(op_id, core::cmp::min(wait_ms, 100));
                 continue;
             }
             if len < 0 {
