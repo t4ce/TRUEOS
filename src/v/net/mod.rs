@@ -15,12 +15,12 @@ pub type Queue<T> = adapter::NetQueue<T>;
 
 #[inline]
 pub fn net_shell_read_byte() -> Option<u8> {
-  adapter::net_shell_read_byte()
+  crate::shell::backends::net_tcp::net_shell_read_byte()
 }
 
 #[inline]
 pub fn net_shell_write_bytes(bytes: &[u8]) {
-  adapter::net_shell_write_bytes(bytes)
+  crate::shell::backends::net_tcp::net_shell_write_bytes(bytes)
 }
 
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -90,7 +90,7 @@ impl VNet {
   }
 
   pub fn open_primary() -> Option<Self> {
-    Self::open(0)
+    Self::open(crate::net::primary_device_index())
   }
 
   pub fn owner(&self) -> &'static str {

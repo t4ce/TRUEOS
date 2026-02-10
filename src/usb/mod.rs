@@ -378,7 +378,9 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                     }
                 }
                 Some(DeviceKind::Uac) => {
-                    let _ = uac::handle_transfer_event(controller_id, &evt);
+                    if !uac::queue_transfer_event_if_owned(controller_id, &evt) {
+                        let _ = uac::handle_transfer_event(controller_id, &evt);
+                    }
                 }
                 Some(DeviceKind::Midi) => {
                     let _ = midi::handle_transfer_event(controller_id, &evt);
