@@ -53,7 +53,6 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
-static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -229,14 +228,6 @@ fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_pci_ids_cache(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::pci::pciids::boot_cache_pci_ids_task(),
-    ) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND),
     ) {
@@ -389,12 +380,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &NALGEBRA_DEMO_STARTED,
         spawn: spawn_nalgebra_demo,
-    },
-    TaskSpec {
-        name: "pciids-boot-cache",
-        required: NET_AND_ROOT_READY,
-        started: &PCI_IDS_CACHE_STARTED,
-        spawn: spawn_pci_ids_cache,
     },
     TaskSpec {
         name: "uart-shell",
