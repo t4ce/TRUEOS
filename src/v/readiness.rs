@@ -9,10 +9,10 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 pub const HID_MOUSE_CLAIMED: u32 = 1 << 1;
 pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;
 pub const PIANO_CLAIMED: u32 = 1 << 3;
-pub const UAC_SINE_DONE: u32 = 1 << 4;
 pub const UAC_ATTACHED: u32 = 1 << 5;
 
 pub const NET_GATEWAY_REACHABLE: u32 = 1 << 8;
+pub const TLS_SOCKET_SERVICE_READY: u32 = 1 << 9;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;

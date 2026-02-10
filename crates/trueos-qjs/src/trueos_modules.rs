@@ -99,10 +99,50 @@ fn log_cstr_or_null(ptr: *const c_char) {
     log_bytes(bytes);
 }
 
+#[inline]
+fn qjs_loader_trace_enabled() -> bool {
+    false
+}
+
+#[inline]
+fn trace_bytes(bytes: &[u8]) {
+    if qjs_loader_trace_enabled() {
+        log_bytes(bytes);
+    }
+}
+
+#[inline]
+fn trace_str(s: &str) {
+    if qjs_loader_trace_enabled() {
+        log_str(s);
+    }
+}
+
+#[inline]
+fn trace_nl() {
+    if qjs_loader_trace_enabled() {
+        log_nl();
+    }
+}
+
+#[inline]
+fn trace_usize_dec(v: usize) {
+    if qjs_loader_trace_enabled() {
+        log_usize_dec(v);
+    }
+}
+
+#[inline]
+fn trace_cstr_or_null(ptr: *const c_char) {
+    if qjs_loader_trace_enabled() {
+        log_cstr_or_null(ptr);
+    }
+}
+
 fn log_normalized(out: &[u8]) {
-    log_str("qjs: normalize out=");
-    log_bytes(out);
-    log_nl();
+    trace_str("qjs: normalize out=");
+    trace_bytes(out);
+    trace_nl();
 }
 
 unsafe fn js_arg_to_utf8_bytes(ctx: *mut qjs::JSContext, val: qjs::JSValueConst) -> Option<(*const u8, usize, *const c_char)> {
@@ -1120,16 +1160,16 @@ pub(crate) unsafe extern "C" fn trueos_module_loader(
 ) -> *mut qjs::JSModuleDef {
     if !module_name.is_null() {
         let spec = CStr::from_ptr(module_name).to_bytes();
-        log_str("qjs: loader spec=");
-        log_bytes(spec);
-        log_nl();
+        trace_str("qjs: loader spec=");
+        trace_bytes(spec);
+        trace_nl();
     } else {
-        log_str("qjs: loader spec=<null>\n");
+        trace_str("qjs: loader spec=<null>\n");
     }
 
     let m = load_native_module(ctx, module_name);
     if !m.is_null() {
-        log_str("qjs: loader native ok\n");
+        trace_str("qjs: loader native ok\n");
         return m;
     }
 
@@ -1139,11 +1179,11 @@ pub(crate) unsafe extern "C" fn trueos_module_loader(
 
     let spec = CStr::from_ptr(module_name).to_bytes();
     if spec_is_url(spec) {
-        log_str("qjs: loader url\n");
+        trace_str("qjs: loader url\n");
         return load_url_module(ctx, module_name, spec);
     }
 
-    log_str("qjs: loader fs\n");
+    trace_str("qjs: loader fs\n");
 
     load_fs_module(ctx, module_name)
 }
@@ -1166,7 +1206,7 @@ const CDN_DIR: &[u8] = b"/qjs/cdn/";
 // An outer loader timeout can fire early while the async-fs service is still
 // executing a non-cancellable in-flight fetch, which then starves following ops.
 const BOOTSTRAP_NET_TIMEOUT_MS: u64 = 0;
-const BOOTSTRAP_NET_FETCH_RETRIES: usize = 3;
+const BOOTSTRAP_NET_FETCH_RETRIES: usize = 1;
 const BOOTSTRAP_NET_RETRY_BACKOFF_MS: u64 = 75;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
@@ -1493,16 +1533,16 @@ pub(crate) unsafe fn normalize_with_mode(
     module_name: *const c_char,
     mode: NormalizeMode,
 ) -> *mut c_char {
-    log_str("qjs: normalize mode=");
+    trace_str("qjs: normalize mode=");
     match mode {
-        NormalizeMode::Base => log_str("base"),
-        NormalizeMode::Node => log_str("node"),
+        NormalizeMode::Base => trace_str("base"),
+        NormalizeMode::Node => trace_str("node"),
     }
-    log_str(" base=");
-    log_cstr_or_null(module_base_name);
-    log_str(" spec=");
-    log_cstr_or_null(module_name);
-    log_nl();
+    trace_str(" base=");
+    trace_cstr_or_null(module_base_name);
+    trace_str(" spec=");
+    trace_cstr_or_null(module_name);
+    trace_nl();
 
     if module_name.is_null() {
         return core::ptr::null_mut();
@@ -1656,28 +1696,28 @@ unsafe fn load_url_module(
     push_hex_u64(&mut cache_path, hash);
     cache_path.extend_from_slice(b".mjs");
 
-    log_str("qjs: url cache=");
-    log_bytes(&cache_path);
-    log_nl();
+    trace_str("qjs: url cache=");
+    trace_bytes(&cache_path);
+    trace_nl();
 
     // Fast-path: if the cached module is already present, avoid refetching.
     match read_file_js_malloc_rc(ctx, &cache_path) {
         Ok((buf, len)) => {
-            log_str("qjs: url cache hit len=");
-            log_usize_dec(len);
-            log_nl();
-            log_str("qjs: url compile start\n");
+            trace_str("qjs: url cache hit len=");
+            trace_usize_dec(len);
+            trace_nl();
+            trace_str("qjs: url compile start\n");
             let m = compile_module_from_buf(ctx, module_name, buf, len);
-            log_str("qjs: url compile done\n");
+            trace_str("qjs: url compile done\n");
             qjs::js_free(ctx, buf as *mut core::ffi::c_void);
             return m;
         }
         Err(rc) => {
-            log_str("qjs: url cache miss rc=");
+            trace_str("qjs: url cache miss rc=");
             let mut tmp = Vec::new();
             push_i32_dec(&mut tmp, rc as i32);
-            log_bytes(&tmp);
-            log_nl();
+            trace_bytes(&tmp);
+            trace_nl();
             // Fall back to network fetch on NOT_FOUND.
             // Also treat IO errors as cache-miss: we may see transient FS errors or a partially
             // written cache entry, and fetching again is a safe recovery path.
@@ -1695,9 +1735,9 @@ unsafe fn load_url_module(
         }
     }
 
-    log_str("qjs: url prefetch url=");
-    log_bytes(url);
-    log_nl();
+    trace_str("qjs: url prefetch url=");
+    trace_bytes(url);
+    trace_nl();
     if let Err(rc) = fetch_to_cache_rc_async(url, &cache_path, BOOTSTRAP_NET_TIMEOUT_MS) {
         let mut msg = Vec::new();
         msg.extend_from_slice(b"fetch-to-cache failed rc=");
@@ -1712,7 +1752,7 @@ unsafe fn load_url_module(
         throw_error(ctx, &msg);
         return core::ptr::null_mut();
     }
-    log_str("qjs: url prefetch ok\n");
+    trace_str("qjs: url prefetch ok\n");
 
     let (buf, len) = match read_file_js_malloc_rc(ctx, &cache_path) {
         Ok(v) => v,
@@ -1728,9 +1768,9 @@ unsafe fn load_url_module(
     };
 
     // Use the URL as the module filename so relative URL imports resolve correctly.
-    log_str("qjs: url compile start\n");
+    trace_str("qjs: url compile start\n");
     let m = compile_module_from_buf(ctx, module_name, buf, len);
-    log_str("qjs: url compile done\n");
+    trace_str("qjs: url compile done\n");
     qjs::js_free(ctx, buf as *mut core::ffi::c_void);
     m
 }
@@ -1741,9 +1781,9 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
     }
 
     let path = CStr::from_ptr(module_name).to_bytes();
-    log_str("qjs: fs load path=");
-    log_bytes(path);
-    log_nl();
+    trace_str("qjs: fs load path=");
+    trace_bytes(path);
+    trace_nl();
     // Only attempt filesystem loading for absolute paths or explicit relative paths.
     if !(path_is_absolute(path) || path_is_relative(path)) {
         return core::ptr::null_mut();
@@ -1760,12 +1800,12 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
         }
     };
 
-    log_str("qjs: fs read len=");
-    log_usize_dec(len);
-    log_nl();
-    log_str("qjs: fs compile start\n");
+    trace_str("qjs: fs read len=");
+    trace_usize_dec(len);
+    trace_nl();
+    trace_str("qjs: fs compile start\n");
     let m = compile_module_from_buf(ctx, module_name, buf, len);
-    log_str("qjs: fs compile done\n");
+    trace_str("qjs: fs compile done\n");
     qjs::js_free(ctx, buf as *mut core::ffi::c_void);
     m
 }
