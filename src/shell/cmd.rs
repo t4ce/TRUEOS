@@ -1417,8 +1417,30 @@ fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
     }
 
     // Optional enrichment via cached `pci.ids`.
-    // Keep this best-effort and preserve the existing output when missing.
-    let pci_ids_db = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten();
+    // On-demand download only when cache is missing; no boot-time background fetch.
+    let mut pci_ids_db = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten();
+    if pci_ids_db.is_none() {
+        ctx.io.write_str("pci: pci.ids cache missing; downloading...\r\n");
+        let fetched = crate::wait::spawn_and_wait_local(async {
+            crate::pci::pciids::ensure_cached_async(false).await
+        });
+        match fetched {
+            Ok(bytes) => {
+                if bytes > 0 {
+                    ctx.io.write_fmt(format_args!(
+                        "pci: pci.ids downloaded bytes={}\r\n",
+                        bytes
+                    ));
+                } else {
+                    ctx.io.write_str("pci: pci.ids already cached\r\n");
+                }
+                pci_ids_db = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten();
+            }
+            Err(_) => {
+                ctx.io.write_str("pci: pci.ids download failed (continuing without names)\r\n");
+            }
+        }
+    }
 
     crate::pci::with_devices(|list| {
         ctx.io.write_fmt(format_args!("pci: devices={}\r\n", list.len()));

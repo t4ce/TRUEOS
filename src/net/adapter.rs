@@ -33,6 +33,9 @@ const NET_LOG_DHCP_VERBOSE: bool = false;
 
 const DHCP_DNS_MAX: usize = 4;
 pub const MAX_NET_DEVICES: usize = 8;
+const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
+const STATIC_FALLBACK_IPV4: [u8; 4] = [192, 168, 178, 111];
+const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
 // Best-effort primary DNS server snapshot (used by v-layer defaults).
 // Kept intentionally simple: we record what DHCP reports for the active primary NIC.
@@ -946,6 +949,7 @@ struct NetService {
     icmp: SocketHandle,
 
     dhcp: SocketHandle,
+    dhcp_has_lease: bool,
     local_ipv4: Option<Ipv4Address>,
     router_ipv4: Option<Ipv4Address>,
     dhcp_dns: [[u8; 4]; DHCP_DNS_MAX],
@@ -970,9 +974,22 @@ impl NetService {
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
         let mut device = AdapterDeviceAt { index: device_index };
         let mut iface = Interface::new(cfg, &mut device, now());
-        // IPv4 is configured via DHCPv4.
-        iface.update_ip_addrs(|addrs| addrs.clear());
-        iface.routes_mut().remove_default_ipv4_route();
+        // Bring-up default: install static IPv4 before DHCP starts.
+        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface);
+        let ip_o = fallback_ip.octets();
+        let gw_o = fallback_gw.octets();
+        crate::log!(
+            "net: static fallback dev={} ipv4={}.{}.{}.{} mask=255.255.255.0 gw={}.{}.{}.{}\n",
+            device_index,
+            ip_o[0],
+            ip_o[1],
+            ip_o[2],
+            ip_o[3],
+            gw_o[0],
+            gw_o[1],
+            gw_o[2],
+            gw_o[3]
+        );
 
         let rx_meta = vec![icmp::PacketMetadata::EMPTY; 8];
         let rx_buf = vec![0u8; 2048];
@@ -988,6 +1005,7 @@ impl NetService {
 
         let dhcp_socket = dhcpv4::Socket::new();
         let dhcp = sockets.add(dhcp_socket);
+        crate::log!("net: dhcp start dev={} mode=static-fallback\n", device_index);
 
         Self {
             device_index,
@@ -998,8 +1016,9 @@ impl NetService {
             icmp,
 
             dhcp,
-            local_ipv4: None,
-            router_ipv4: None,
+            dhcp_has_lease: false,
+            local_ipv4: Some(fallback_ip),
+            router_ipv4: Some(fallback_gw),
             dhcp_dns: [[0u8; 4]; DHCP_DNS_MAX],
             dhcp_dns_count: 0,
 
@@ -1486,17 +1505,37 @@ impl NetService {
             Some(dhcpv4::Event::Configured(config)) => {
                 let ip = config.address.address();
                 let ip_o = ip.octets();
-                crate::log!(
-                    "net: dhcp configured dev={} ip={}.{}.{}.{}\n",
-                    self.device_index,
-                    ip_o[0],
-                    ip_o[1],
-                    ip_o[2],
-                    ip_o[3]
-                );
+                let had_lease = self.dhcp_has_lease;
+                self.dhcp_has_lease = true;
 
                 self.local_ipv4 = Some(config.address.address());
                 self.router_ipv4 = config.router;
+                if let Some(router) = config.router {
+                    let r = router.octets();
+                    crate::log!(
+                        "net: dhcp {} dev={} ipv4={}.{}.{}.{} gw={}.{}.{}.{} ipv6=none\n",
+                        if had_lease { "renewed" } else { "acquired" },
+                        self.device_index,
+                        ip_o[0],
+                        ip_o[1],
+                        ip_o[2],
+                        ip_o[3],
+                        r[0],
+                        r[1],
+                        r[2],
+                        r[3]
+                    );
+                } else {
+                    crate::log!(
+                        "net: dhcp {} dev={} ipv4={}.{}.{}.{} gw=none ipv6=none\n",
+                        if had_lease { "renewed" } else { "acquired" },
+                        self.device_index,
+                        ip_o[0],
+                        ip_o[1],
+                        ip_o[2],
+                        ip_o[3]
+                    );
+                }
 
                 self.iface.update_ip_addrs(|addrs| {
                     addrs.clear();
@@ -1506,21 +1545,7 @@ impl NetService {
                 let routes = self.iface.routes_mut();
                 routes.remove_default_ipv4_route();
                 if let Some(router) = config.router {
-                    let r = router.octets();
-                    crate::log!(
-                        "net: dhcp router dev={} gw={}.{}.{}.{}\n",
-                        self.device_index,
-                        r[0],
-                        r[1],
-                        r[2],
-                        r[3]
-                    );
                     let _ = routes.add_default_ipv4_route(router);
-                } else {
-                    crate::log!(
-                        "net: dhcp router dev={} gw=none (readiness will not trip)\n",
-                        self.device_index
-                    );
                 }
 
                 self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
@@ -1528,6 +1553,19 @@ impl NetService {
                 for (i, s) in config.dns_servers.iter().take(DHCP_DNS_MAX).enumerate() {
                     self.dhcp_dns[i] = s.octets();
                     self.dhcp_dns_count = (i as u8) + 1;
+                }
+                crate::log!("net: dhcp dns-count dev={} count={}\n", self.device_index, self.dhcp_dns_count);
+                for i in 0..(self.dhcp_dns_count as usize) {
+                    let d = self.dhcp_dns[i];
+                    crate::log!(
+                        "net: dhcp dns dev={} idx={} server={}.{}.{}.{}\n",
+                        self.device_index,
+                        i,
+                        d[0],
+                        d[1],
+                        d[2],
+                        d[3]
+                    );
                 }
 
                 if PRIMARY_DEVICE_LOCKED
@@ -1542,18 +1580,32 @@ impl NetService {
                 }
             }
             Some(dhcpv4::Event::Deconfigured) => {
-                crate::log!("net: dhcp deconfigured dev={}\n", self.device_index);
-                self.local_ipv4 = None;
-                self.router_ipv4 = None;
-                self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
-                self.dhcp_dns_count = 0;
+                if self.dhcp_has_lease {
+                    self.dhcp_has_lease = false;
+                    let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut self.iface);
+                    self.local_ipv4 = Some(fallback_ip);
+                    self.router_ipv4 = Some(fallback_gw);
+                    self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
+                    self.dhcp_dns_count = 0;
+                    let ip_o = fallback_ip.octets();
+                    let gw_o = fallback_gw.octets();
+                    crate::log!(
+                        "net: dhcp lost dev={} fallback ipv4={}.{}.{}.{} gw={}.{}.{}.{} ipv6=none\n",
+                        self.device_index,
+                        ip_o[0],
+                        ip_o[1],
+                        ip_o[2],
+                        ip_o[3],
+                        gw_o[0],
+                        gw_o[1],
+                        gw_o[2],
+                        gw_o[3]
+                    );
 
-                self.iface.update_ip_addrs(|addrs| addrs.clear());
-                self.iface.routes_mut().remove_default_ipv4_route();
-
-                if self.device_index == crate::net::primary_device_index() {
-                    *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
-                    PRIMARY_DEVICE_LOCKED.store(false, Ordering::SeqCst);
+                    if self.device_index == crate::net::primary_device_index() {
+                        *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
+                        PRIMARY_DEVICE_LOCKED.store(false, Ordering::SeqCst);
+                    }
                 }
             }
         }
@@ -1706,6 +1758,30 @@ fn now() -> Instant {
     let ticks = embassy_time_driver::now();
     let ms = (ticks as u128 * 1000u128 / (TICK_HZ as u128)) as i64;
     Instant::from_millis(ms)
+}
+
+fn apply_static_fallback_ipv4(iface: &mut Interface) -> (Ipv4Address, Ipv4Address) {
+    let ip = Ipv4Address::new(
+        STATIC_FALLBACK_IPV4[0],
+        STATIC_FALLBACK_IPV4[1],
+        STATIC_FALLBACK_IPV4[2],
+        STATIC_FALLBACK_IPV4[3],
+    );
+    let gw = Ipv4Address::new(
+        STATIC_FALLBACK_GATEWAY[0],
+        STATIC_FALLBACK_GATEWAY[1],
+        STATIC_FALLBACK_GATEWAY[2],
+        STATIC_FALLBACK_GATEWAY[3],
+    );
+
+    iface.update_ip_addrs(|addrs| {
+        addrs.clear();
+        let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), STATIC_FALLBACK_PREFIX_LEN));
+    });
+    let routes = iface.routes_mut();
+    routes.remove_default_ipv4_route();
+    let _ = routes.add_default_ipv4_route(gw);
+    (ip, gw)
 }
 
 // Shared net service state so both the async service task and synchronous `time::block_on`

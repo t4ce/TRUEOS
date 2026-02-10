@@ -135,6 +135,7 @@ pub struct R8168Adapter {
     dbg_tx_reclaimed: u64,
     dbg_tx_ring_full: u64,
     dbg_tx_stall_checks: u64,
+    dbg_tx_recovery_kicks: u64,
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
@@ -359,6 +360,7 @@ impl R8168Adapter {
             dbg_tx_reclaimed: 0,
             dbg_tx_ring_full: 0,
             dbg_tx_stall_checks: 0,
+            dbg_tx_recovery_kicks: 0,
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
@@ -373,6 +375,7 @@ impl R8168Adapter {
     }
 
     fn kick_tx_engine(&mut self) {
+        self.dbg_tx_recovery_kicks = self.dbg_tx_recovery_kicks.saturating_add(1);
         unsafe {
             // Re-assert descriptor base addresses (some variants appear to need this
             // after a reset or transient fault) and re-enable TX.
@@ -388,6 +391,11 @@ impl R8168Adapter {
         }
     }
 
+    #[inline]
+    fn tx_ring_full(&self) -> bool {
+        (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head
+    }
+
     fn reclaim_tx(&mut self) {
         while self.tx_head != self.tx_tail {
             let idx = self.tx_head;
@@ -395,10 +403,7 @@ impl R8168Adapter {
             let desc_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
             if (desc_opts1 & DESC_OWN) != 0 {
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
-                if self.dbg_tx_reclaimed == 0
-                    && self.dbg_tx_submitted != 0
-                    && self.dbg_tx_stall_checks == 10_000
-                {
+                if self.dbg_tx_submitted != 0 && (self.dbg_tx_stall_checks % 10_000) == 0 {
                     let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
                         (
                             self.mmio.read_u8(REG_CMD),
@@ -409,7 +414,8 @@ impl R8168Adapter {
                         )
                     };
                     crate::log!(
-                        "net/r8168: tx stall? head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
+                        "net/r8168: tx stall? checks={} head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
+                        self.dbg_tx_stall_checks,
                         self.tx_head,
                         self.tx_tail,
                         desc_opts1,
@@ -420,7 +426,7 @@ impl R8168Adapter {
                         isr
                     );
 
-                    // Attempt a one-time recovery kick.
+                    // Recovery attempt when TX ownership appears stuck.
                     self.kick_tx_engine();
                 }
                 break;
@@ -504,42 +510,16 @@ impl R8168Adapter {
 
             if had_errsum {
                 self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
-                // Log the first few errsum frames with minimal decoding.
-                if self.dbg_rx_errsum <= 8 {
-                    let buf_ptr = self.rx_bufs[idx].virt();
-                    let peek_len = core::cmp::min(raw_len, 64);
-                    let peek = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, peek_len) };
-
-                    let (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
-                        let et = u16::from_be_bytes([peek[12], peek[13]]);
-                        if et == 0x0800 && peek_len >= 14 + 20 {
-                            let ihl = (peek[14] & 0x0f) as usize * 4;
-                            let proto = peek.get(23).copied().unwrap_or(0);
-                            if proto == 17 && peek_len >= 14 + ihl + 8 {
-                                let u = 14 + ihl;
-                                let s = u16::from_be_bytes([peek[u], peek[u + 1]]);
-                                let d = u16::from_be_bytes([peek[u + 2], peek[u + 3]]);
-                                (et, proto, s, d)
-                            } else {
-                                (et, proto, 0, 0)
-                            }
-                        } else {
-                            (et, 0, 0, 0)
-                        }
-                    } else {
-                        (0u16, 0u8, 0u16, 0u16)
-                    };
-
+                // On this family, ERR_SUM can represent checksum status metadata.
+                // Keep logging sparse and actionable.
+                if self.dbg_rx_errsum == 1 || (self.dbg_rx_errsum & 0x3ff) == 0 {
                     crate::log!(
-                        "net/r8168: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
+                        "net/r8168: rx errsum seen count={} opts1=0x{:08x} opts2=0x{:08x} raw_len={} (accepted={})\n",
                         self.dbg_rx_errsum,
                         opts1,
                         opts2,
                         raw_len,
-                        ethertype,
-                        ip_proto,
-                        udp_src,
-                        udp_dst
+                        ACCEPT_RX_ERR_SUM_FRAMES as u8
                     );
                 }
 
@@ -657,20 +637,64 @@ impl R8168Adapter {
         self.reclaim_tx();
 
         let len = min(frame.len(), TX_BUF_SIZE);
-        let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
-        if next_tail == self.tx_head {
+        if self.tx_ring_full() {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
-            if self.dbg_tx_ring_full == 1 {
-                crate::log!("net/r8168: tx ring full\n");
+            // Recovery path: reclaim + kick + reclaim once before dropping.
+            self.kick_tx_engine();
+            self.reclaim_tx();
+            if self.tx_ring_full() {
+                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full & 0xff) == 0 {
+                    let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
+                        (
+                            self.mmio.read_u8(REG_CMD),
+                            self.mmio.read_u32(REG_TCR),
+                            self.mmio.read_u32(REG_TNPDS),
+                            self.mmio.read_u32(REG_TNPDS_HI),
+                            self.mmio.read_u16(REG_ISR),
+                            self.mmio.read_u8(REG_PHYSTAT),
+                        )
+                    };
+                    crate::log!(
+                        "net/r8168: tx ring full count={} head={} tail={} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x} phystat=0x{:02x}\n",
+                        self.dbg_tx_ring_full,
+                        self.tx_head,
+                        self.tx_tail,
+                        cmd,
+                        tcr,
+                        tn_hi,
+                        tn_lo,
+                        isr,
+                        phy
+                    );
+                }
+                return Err(());
             }
-            return Err(());
         }
+        let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
 
         let idx = self.tx_tail;
         let cur = unsafe { read_volatile(self.tx_desc.add(idx)) };
-        if (cur.opts1 & DESC_OWN) != 0 {
+        let cur_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur.opts1)) };
+        if (cur_opts1 & DESC_OWN) != 0 {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
-            return Err(());
+            self.kick_tx_engine();
+            self.reclaim_tx();
+
+            let cur2 = unsafe { read_volatile(self.tx_desc.add(idx)) };
+            let cur2_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur2.opts1)) };
+            if (cur2_opts1 & DESC_OWN) != 0 {
+                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full & 0xff) == 0 {
+                    crate::log!(
+                        "net/r8168: tx desc busy count={} idx={} head={} tail={} opts1=0x{:08x}\n",
+                        self.dbg_tx_ring_full,
+                        idx,
+                        self.tx_head,
+                        self.tx_tail,
+                        cur2_opts1
+                    );
+                }
+                return Err(());
+            }
         }
 
         unsafe {

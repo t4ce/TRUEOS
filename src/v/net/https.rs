@@ -272,6 +272,73 @@ fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HttpBodyKind {
+    ContentLength(usize),
+    Chunked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HttpHead {
+    status: u16,
+    body: HttpBodyKind,
+}
+
+fn parse_http_head(headers: &[u8]) -> Option<HttpHead> {
+    let status = parse_http_status(headers)?;
+    let chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+    if chunked {
+        return Some(HttpHead {
+            status,
+            body: HttpBodyKind::Chunked,
+        });
+    }
+    let len = header_parse_content_length(headers)?;
+    Some(HttpHead {
+        status,
+        body: HttpBodyKind::ContentLength(len),
+    })
+}
+
+fn log_http_head(prefix: &str, host: &str, head: HttpHead) {
+    match head.body {
+        HttpBodyKind::ContentLength(len) => {
+            crate::log!(
+                "{} host={} status={} body=content-length len={}\n",
+                prefix,
+                host,
+                head.status,
+                len
+            );
+        }
+        HttpBodyKind::Chunked => {
+            crate::log!("{} host={} status={} body=chunked\n", prefix, host, head.status);
+        }
+    }
+}
+
+async fn write_body_to_tmp_file(
+    disk: crate::disc::block::DeviceHandle,
+    tmp_path: &str,
+    body: &[u8],
+) -> Result<(), i32> {
+    let Some(sh) = crate::v::fs::trueosfs::file_write_begin_async(disk, tmp_path, body.len() as u64)
+        .await
+        .map_err(block_error_to_code)?
+    else {
+        return Err(FS_ERR_NO_SPACE);
+    };
+    if !body.is_empty() {
+        crate::v::fs::trueosfs::file_write_chunk_async(sh, body)
+            .await
+            .map_err(block_error_to_code)?;
+    }
+    crate::v::fs::trueosfs::file_write_finish_async(sh)
+        .await
+        .map_err(block_error_to_code)?;
+    Ok(())
+}
+
 static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
 
 async fn fetch_on_device(
@@ -549,6 +616,9 @@ async fn fetch_on_device_to_file(
 
     let mut header_buf: Vec<u8> = Vec::new();
     let mut header_done = false;
+    let mut body_is_chunked = false;
+    let mut chunked_raw_body: Vec<u8> = Vec::new();
+    let chunked_capture_cap = max_bytes.saturating_add(64 * 1024);
     let mut body_expected = 0usize;
     let mut body_written = 0usize;
     let mut stream_handle: Option<u32> = None;
@@ -594,41 +664,40 @@ async fn fetch_on_device_to_file(
                         }
 
                         if let Some(hdr_end) = find_http_header_end(&header_buf) {
-                            let status = parse_http_status(&header_buf).unwrap_or(0);
-                            if status != 200 {
-                                if let Some(h) = tls_handle {
-                                    let _ = cmds.push(TlsCommand::Close { handle: h });
-                                }
-                                if let Some(sh) = stream_handle.take() {
-                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
-                                }
-                                return Err(fetch_error_to_code(FetchError::Http(status)));
-                            }
-
                             let headers = &header_buf[..hdr_end];
-                            if header_contains_token(headers, b"transfer-encoding", b"chunked") {
+                            let Some(head) = parse_http_head(headers) else {
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
                                 if let Some(sh) = stream_handle.take() {
                                     let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
+                                crate::log!(
+                                    "vhttps-file: invalid-http-head host={} hdr_bytes={}\n",
+                                    parsed.host,
+                                    header_buf.len()
+                                );
                                 return Err(fetch_error_to_code(FetchError::Http(0)));
+                            };
+                            log_http_head("vhttps-file: head", parsed.host.as_str(), head);
+                            if head.status != 200 {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                if let Some(sh) = stream_handle.take() {
+                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                }
+                                return Err(fetch_error_to_code(FetchError::Http(head.status)));
                             }
 
-                            body_expected = match header_parse_content_length(headers) {
-                                Some(v) => v,
-                                None => {
-                                    if let Some(h) = tls_handle {
-                                        let _ = cmds.push(TlsCommand::Close { handle: h });
-                                    }
-                                    if let Some(sh) = stream_handle.take() {
-                                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
-                                    }
-                                    return Err(fetch_error_to_code(FetchError::Http(0)));
+                            body_expected = match head.body {
+                                HttpBodyKind::ContentLength(v) => v,
+                                HttpBodyKind::Chunked => {
+                                    body_is_chunked = true;
+                                    0
                                 }
                             };
-                            if body_expected > max_bytes {
+                            if !body_is_chunked && body_expected > max_bytes {
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
@@ -638,46 +707,94 @@ async fn fetch_on_device_to_file(
                                 return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
                             }
 
-                            let sh = match crate::v::fs::trueosfs::file_write_begin_async(
-                                disk,
-                                tmp_path,
-                                body_expected as u64,
-                            )
-                            .await
-                            .map_err(block_error_to_code)?
-                            {
-                                Some(h) => h,
-                                None => return Err(FS_ERR_NO_SPACE),
-                            };
-                            stream_handle = Some(sh);
+                            if !body_is_chunked {
+                                let sh = match crate::v::fs::trueosfs::file_write_begin_async(
+                                    disk,
+                                    tmp_path,
+                                    body_expected as u64,
+                                )
+                                .await
+                                .map_err(block_error_to_code)?
+                                {
+                                    Some(h) => h,
+                                    None => return Err(FS_ERR_NO_SPACE),
+                                };
+                                stream_handle = Some(sh);
+                            }
                             header_done = true;
 
                             let body_start = hdr_end;
                             if header_buf.len() > body_start {
-                                let rem = body_expected.saturating_sub(body_written);
                                 let part = &header_buf[body_start..];
-                                let take = part.len().min(rem);
-                                if take > 0 {
-                                    crate::v::fs::trueosfs::file_write_chunk_async(
-                                        sh,
-                                        &part[..take],
-                                    )
-                                    .await
-                                    .map_err(block_error_to_code)?;
-                                    body_written = body_written.saturating_add(take);
+                                if body_is_chunked {
+                                    let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                                    if room == 0 {
+                                        if let Some(h) = tls_handle {
+                                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                                        }
+                                        return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                                    }
+                                    let take = part.len().min(room);
+                                    chunked_raw_body.extend_from_slice(&part[..take]);
+                                    if take < part.len() {
+                                        if let Some(h) = tls_handle {
+                                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                                        }
+                                        return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                                    }
+                                } else if let Some(sh) = stream_handle {
+                                    let rem = body_expected.saturating_sub(body_written);
+                                    let take = part.len().min(rem);
+                                    if take > 0 {
+                                        crate::v::fs::trueosfs::file_write_chunk_async(sh, &part[..take])
+                                            .await
+                                            .map_err(block_error_to_code)?;
+                                        body_written = body_written.saturating_add(take);
+                                    }
                                 }
                             }
                             header_buf.clear();
 
-                            if body_written >= body_expected {
-                                crate::v::fs::trueosfs::file_write_finish_async(sh)
-                                    .await
-                                    .map_err(block_error_to_code)?;
+                            if !body_is_chunked && body_written >= body_expected {
+                                if let Some(sh) = stream_handle.take() {
+                                    crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                        .await
+                                        .map_err(block_error_to_code)?;
+                                }
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
                                 return Ok(());
                             }
+                        }
+                    } else if body_is_chunked {
+                        let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                        if room == 0 {
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                        }
+                        let take = data.len().min(room);
+                        chunked_raw_body.extend_from_slice(&data[..take]);
+                        if take < data.len() {
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                        }
+                        if let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) {
+                            if decoded.len() > max_bytes {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                            }
+                            write_body_to_tmp_file(disk, tmp_path, decoded.as_slice()).await?;
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Ok(());
                         }
                     } else if let Some(sh) = stream_handle {
                         let rem = body_expected.saturating_sub(body_written);
@@ -702,6 +819,25 @@ async fn fetch_on_device_to_file(
                 TlsEvent::Closed { handle } => {
                     if tls_handle != Some(handle) {
                         continue;
+                    }
+                    if body_is_chunked && header_done {
+                        let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) else {
+                            if let Some(sh) = stream_handle.take() {
+                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            }
+                            return Err(fetch_error_to_code(FetchError::Http(0)));
+                        };
+                        if decoded.len() > max_bytes {
+                            if let Some(sh) = stream_handle.take() {
+                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            }
+                            return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                        }
+                        if let Some(sh) = stream_handle.take() {
+                            let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                        }
+                        write_body_to_tmp_file(disk, tmp_path, decoded.as_slice()).await?;
+                        return Ok(());
                     }
                     if let Some(sh) = stream_handle.take() {
                         let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
