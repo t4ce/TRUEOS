@@ -4,6 +4,7 @@ use crate::pci::dma;
 use core::ptr::{write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
 use heapless::String;
+const USB_EVENT_POLL_DELAY_MS: u64 = 1;
 
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -131,7 +132,7 @@ pub(crate) async fn control_in(
                     || evt_ptr == (status_trb_phys & !0xFu64)
             },
             timeout_iters,
-            EmbassyDuration::from_millis(5),
+            EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
         )
         .await
         .ok_or(())
@@ -253,7 +254,7 @@ pub(crate) async fn control_out(
                 evt_ptr == (status_trb_phys & !0xFu64)
             },
             timeout_iters,
-            EmbassyDuration::from_millis(5),
+            EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
         )
         .await
         .ok_or(())
@@ -367,7 +368,7 @@ pub(crate) async fn control_out_cc(
             evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,
-        EmbassyDuration::from_millis(5),
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await
     .ok_or(())

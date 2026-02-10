@@ -20,12 +20,17 @@ use crate::log;
 // failures under load.
 const MAX_SOCKETS: usize = 128;
 const MAX_DRAIN_PER_LOOP: usize = 128;
-const TCP_RX_BUF_BYTES: usize = 64 * 1024;
-const TCP_TX_BUF_BYTES: usize = 64 * 1024;
+const TCP_RX_BUF_BYTES: usize = 1024 * 1024;
+const TCP_TX_BUF_BYTES: usize = 1024 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = 32;
 const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
 const NET_SHELL_TCP_PORT: u16 = 4245;
+const NET_POLL_SLEEP_US: u64 = 100;
+const NET_SERVICE_SLEEP_US: u64 = 100;
+const NET_LOG_RX_TAP: bool = false;
+const NET_LOG_TX_TAP: bool = false;
+const NET_LOG_DHCP_VERBOSE: bool = false;
 
 const DHCP_DNS_MAX: usize = 4;
 pub const MAX_NET_DEVICES: usize = 8;
@@ -588,7 +593,7 @@ impl Device for AdapterDeviceAt {
                                             opt_i += olen;
                                         }
                                     }
-                                    if chaddr_match != 0 || offer_count == 1 {
+                                    if NET_LOG_DHCP_VERBOSE && (chaddr_match != 0 || offer_count == 1) {
                                         crate::log!(
                                             "net: dhcp-offer-rx dev={} count={} ip_src={}.{}.{}.{} ip_dst={}.{}.{}.{} len={} op={} xid=0x{:08x} yiaddr={}.{}.{}.{} chaddr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} chaddr_match={} cookie_ok={} msg_type={}\n",
                                             self.index,
@@ -627,7 +632,7 @@ impl Device for AdapterDeviceAt {
             }
 
             // Cheap RX tap for bring-up: log the first few frames per NIC.
-            if new_dev_total <= 8 {
+            if NET_LOG_RX_TAP && new_dev_total <= 8 {
                 if packet.len() >= 14 {
                     let dst = &packet[0..6];
                     let src = &packet[6..12];
@@ -678,9 +683,8 @@ impl Device for AdapterDeviceAt {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = 1500;
-        // Allow smoltcp to process/send multiple frames per poll cycle.
-        // `Some(1)` artificially throttles throughput on sustained TCP streams.
-        caps.max_burst_size = Some(32);
+        // Let smoltcp decide burst handling without an artificial small cap.
+        caps.max_burst_size = None;
         caps.medium = Medium::Ethernet;
         caps
     }
@@ -727,7 +731,7 @@ impl TxToken for AdapterTxTokenAt {
 
         // TX tap: log only the first few frames per NIC so we can verify
         // DHCP is actually being emitted on the wire.
-        if new_dev_total <= 8 {
+        if NET_LOG_TX_TAP && new_dev_total <= 8 {
             if buf.len() >= 14 {
                 let dst = &buf[0..6];
                 let src = &buf[6..12];
@@ -766,7 +770,7 @@ impl TxToken for AdapterTxTokenAt {
                             let udp_off = l2_off + ihl;
                             let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
                             let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
-                            if sport == 68 && dport == 67 {
+                            if NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
                                 crate::log!(
                                     "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
                                     self.index
@@ -916,7 +920,7 @@ impl TxToken for AdapterTxTokenAt {
                 .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1);
 
             // DHCP is low-rate but time-sensitive; if we drop it, say so.
-            if is_dhcp_client_udp(&buf[..]) {
+            if NET_LOG_DHCP_VERBOSE && is_dhcp_client_udp(&buf[..]) {
                 crate::log!(
                     "net: dhcp-tx-drop dev={} dropped_total={} len={}\n",
                     self.index,
@@ -1422,7 +1426,7 @@ impl NetService {
             }
 
             if socket.is_active() && socket.may_recv() {
-                // Match vnet MAX_MSG (8KiB) to reduce event churn and alloc pressure.
+                // Match vnet MAX_MSG (8KiB) to avoid large stack buffers per poll.
                 let mut buf = [0u8; 8192];
                 while let Ok(len) = socket.recv_slice(&mut buf) {
                     if len == 0 {
@@ -1788,7 +1792,7 @@ pub async fn net_poll_task(index: usize) {
     async move {
         loop {
             crate::net::poll_at(index);
-            Timer::after(EmbassyDuration::from_millis(1)).await;
+            Timer::after(EmbassyDuration::from_micros(NET_POLL_SLEEP_US)).await;
         }
     }.await;
 }
@@ -1806,7 +1810,7 @@ pub async fn net_service_task() {
 
         loop {
             service_tick_once();
-            Timer::after(EmbassyDuration::from_millis(1)).await;
+            Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;
         }
     }.await;
 }

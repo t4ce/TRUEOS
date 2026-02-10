@@ -21,7 +21,7 @@ use crate::net::e1000::E1000Adapter;
 
 const RX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
-const POLL_BUDGET: usize = 32;
+const POLL_BUDGET: usize = 256;
 
 enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
