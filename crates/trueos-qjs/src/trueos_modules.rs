@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
+use embassy_time_driver::{now, TICK_HZ};
 
 use crate as qjs;
 
@@ -14,12 +15,6 @@ extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    fn trueos_cabi_net_fetch_to_file(
-        url_ptr: *const u8,
-        url_len: usize,
-        path_ptr: *const u8,
-        path_len: usize,
-    ) -> i32;
 }
 
 include!("../../../src/surface/cabi_codes.rs");
@@ -791,9 +786,12 @@ fn spec_is_url(spec: &[u8]) -> bool {
 
 const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
 const CDN_DIR: &[u8] = b"/qjs/cdn/";
-const BOOTSTRAP_NET_TIMEOUT_MS: u64 = 15_000;
-const BOOTSTRAP_NET_RETRIES: usize = 3;
-const BOOTSTRAP_NET_RETRY_POLL_STEPS: usize = 400;
+// Use kernel fetch timeouts as the primary guard.
+// An outer loader timeout can fire early while the async-fs service is still
+// executing a non-cancellable in-flight fetch, which then starves following ops.
+const BOOTSTRAP_NET_TIMEOUT_MS: u64 = 0;
+const BOOTSTRAP_NET_FETCH_RETRIES: usize = 3;
+const BOOTSTRAP_NET_RETRY_BACKOFF_MS: u64 = 75;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {
@@ -848,35 +846,71 @@ unsafe fn read_file_js_malloc_rc(
 }
 
 unsafe fn fetch_to_cache_rc_async(url: &[u8], cache_path: &[u8], timeout_ms: u64) -> Result<(), i32> {
-    let _ = timeout_ms; // Timeout is enforced inside kernel fetch path.
-    let mut last_rc = FS_ERR_IO;
-    for attempt in 0..BOOTSTRAP_NET_RETRIES {
-        let rc = trueos_cabi_net_fetch_to_file(
-            url.as_ptr(),
-            url.len(),
-            cache_path.as_ptr(),
-            cache_path.len(),
-        );
-        if rc == 0 {
+    let hz = TICK_HZ as u64;
+    let total_ticks = if timeout_ms == 0 || hz == 0 {
+        0
+    } else {
+        (timeout_ms.saturating_mul(hz) + 999) / 1000
+    };
+    let deadline = if total_ticks == 0 {
+        0
+    } else {
+        now().saturating_add(total_ticks)
+    };
+
+    let mut attempts = 0usize;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let op_id = match qjs::async_fs::start_net_fetch_to_file(url, cache_path) {
+            Ok(id) => id,
+            Err(code) => return Err(code),
+        };
+
+        loop {
+            let len = qjs::async_fs::result_len(op_id);
+            if len == FS_ERR_NOT_FOUND as isize && !qjs::async_fs::has_completion_result(op_id) {
+                if total_ticks != 0 && now() >= deadline {
+                    let _ = qjs::async_fs::discard(op_id);
+                    return Err(FS_ERR_TIMEOUT);
+                }
+                trueos_cabi_poll_once();
+                continue;
+            }
+            if len < 0 {
+                let rc = len as i32;
+                let _ = qjs::async_fs::discard(op_id);
+                let retriable = rc == NET_ERR_TIMEOUT_DNS || rc == NET_ERR_TIMEOUT_TLS || rc == NET_ERR_TIMEOUT_CONNECT;
+                if retriable && attempts < BOOTSTRAP_NET_FETCH_RETRIES {
+                    let backoff_ticks = if hz == 0 {
+                        0
+                    } else {
+                        ((BOOTSTRAP_NET_RETRY_BACKOFF_MS.saturating_mul(hz) + 999) / 1000).max(1)
+                    };
+                    let retry_deadline = if backoff_ticks == 0 {
+                        0
+                    } else {
+                        now().saturating_add(backoff_ticks)
+                    };
+                    while backoff_ticks == 0 || now() < retry_deadline {
+                        if total_ticks != 0 && now() >= deadline {
+                            return Err(FS_ERR_TIMEOUT);
+                        }
+                        trueos_cabi_poll_once();
+                        if backoff_ticks == 0 {
+                            break;
+                        }
+                    }
+                    break;
+                }
+                return Err(rc);
+            }
+            let got = qjs::async_fs::read_result(op_id, core::ptr::null_mut(), 0);
+            if got < 0 {
+                return Err(got as i32);
+            }
             return Ok(());
         }
-        last_rc = rc;
-
-        let transient = rc == NET_ERR_TIMEOUT_DNS
-            || rc == NET_ERR_TIMEOUT_CONNECT
-            || rc == NET_ERR_TIMEOUT_TLS
-            || rc == NET_ERR_TIMEOUT_BODY
-            || rc == NET_ERR_TIMEOUT;
-        if !transient || attempt + 1 >= BOOTSTRAP_NET_RETRIES {
-            break;
-        }
-
-        // Cooperative backoff: keep BSP responsive while allowing NIC/TLS tasks to run.
-        for _ in 0..BOOTSTRAP_NET_RETRY_POLL_STEPS {
-            trueos_cabi_poll_once();
-        }
     }
-    Err(last_rc)
 }
 
 unsafe fn compile_module_from_buf(
