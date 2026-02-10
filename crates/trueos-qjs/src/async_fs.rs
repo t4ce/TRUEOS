@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::ToString;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -14,7 +14,7 @@ use spin::Mutex;
 use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
-    trueos_cabi_net_fetch_to_file,
+    trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start,
     trueos_cabi_poll_once,
 };
 
@@ -32,7 +32,6 @@ enum AsyncFsRequest {
     WriteBegin { id: u32, path: String, total_len: u64 },
     WriteChunk { id: u32, data: Vec<u8> },
     WriteFinish { id: u32 },
-    NetFetchToFile { id: u32, url: String, path: String },
 }
 
 #[derive(Clone, Debug)]
@@ -46,10 +45,15 @@ static ASYNC_FS_REQS: Mutex<VecDeque<AsyncFsRequest>> = Mutex::new(VecDeque::new
 static ASYNC_FS_DONE: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_RESULTS: Mutex<BTreeMap<u32, AsyncFsCompletion>> = Mutex::new(BTreeMap::new());
 static ASYNC_FS_WRITES: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
+static ASYNC_NET_OPS: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
 
 #[inline]
 fn next_async_fs_id() -> u32 {
     ASYNC_FS_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+fn is_net_op(id: u32) -> bool {
+    ASYNC_NET_OPS.lock().contains(&id)
 }
 
 fn push_async_fs_req(req: AsyncFsRequest) -> Result<(), i32> {
@@ -137,8 +141,7 @@ fn remove_queued_reqs(id: u32) {
         AsyncFsRequest::ReadFile { id: rid, .. }
         | AsyncFsRequest::WriteBegin { id: rid, .. }
         | AsyncFsRequest::WriteChunk { id: rid, .. }
-        | AsyncFsRequest::WriteFinish { id: rid }
-        | AsyncFsRequest::NetFetchToFile { id: rid, .. } => *rid != id,
+        | AsyncFsRequest::WriteFinish { id: rid } => *rid != id,
     });
 }
 
@@ -196,14 +199,14 @@ fn write_finish_via_cabi(handle: u32) -> Result<(), i32> {
     Ok(())
 }
 
-fn net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<(), i32> {
-    let rc = unsafe {
-        trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), path.as_ptr(), path.len())
+fn start_net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<u32, i32> {
+    let id = unsafe {
+        trueos_cabi_net_fetch_start(url.as_ptr(), url.len(), path.as_ptr(), path.len())
     };
-    if rc != 0 {
-        return Err(rc);
+    if id == 0 {
+        return Err(FS_ERR_BAD_PARAM);
     }
-    Ok(())
+    Ok(id)
 }
 
 pub fn ensure_service_started(spawner: &Spawner) -> bool {
@@ -321,20 +324,6 @@ pub async fn async_fs_service_task() {
                         }
                     }
                 }
-                AsyncFsRequest::NetFetchToFile { id, url, path } => {
-                    match net_fetch_to_file_via_cabi(url.as_str(), path.as_str()) {
-                        Ok(()) => push_async_fs_completion(AsyncFsCompletion {
-                            id,
-                            rc: 0,
-                            data: Vec::new(),
-                        }),
-                        Err(rc) => push_async_fs_completion(AsyncFsCompletion {
-                            id,
-                            rc,
-                            data: Vec::new(),
-                        }),
-                    }
-                }
             }
 
             processed = processed.saturating_add(1);
@@ -362,13 +351,8 @@ pub fn start_net_fetch_to_file(url: &[u8], path: &[u8]) -> Result<u32, i32> {
     let Ok(path_str) = core::str::from_utf8(path) else {
         return Err(FS_ERR_BAD_UTF8);
     };
-    let id = next_async_fs_id();
-    let req = AsyncFsRequest::NetFetchToFile {
-        id,
-        url: url_str.to_string(),
-        path: path_str.to_string(),
-    };
-    push_async_fs_req(req)?;
+    let id = start_net_fetch_to_file_via_cabi(url_str, path_str)?;
+    ASYNC_NET_OPS.lock().insert(id);
     Ok(id)
 }
 
@@ -434,6 +418,16 @@ pub fn poll_completed(out_id: *mut u32) -> i32 {
 }
 
 pub fn result_len(op_id: u32) -> isize {
+    if is_net_op(op_id) {
+        let rc = unsafe { trueos_cabi_net_fetch_result(op_id) };
+        if rc == FS_ERR_NOT_FOUND {
+            return FS_ERR_NOT_FOUND as isize;
+        }
+        if rc != 0 {
+            return rc as isize;
+        }
+        return 0;
+    }
     let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
     };
@@ -444,6 +438,19 @@ pub fn result_len(op_id: u32) -> isize {
 }
 
 pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
+    if is_net_op(op_id) {
+        let rc = unsafe { trueos_cabi_net_fetch_result(op_id) };
+        if rc == FS_ERR_NOT_FOUND {
+            return FS_ERR_NOT_FOUND as isize;
+        }
+        let _ = unsafe { trueos_cabi_net_fetch_discard(op_id) };
+        ASYNC_NET_OPS.lock().remove(&op_id);
+        if rc != 0 {
+            return rc as isize;
+        }
+        let _ = (out_ptr, out_cap);
+        return 0;
+    }
     let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
     };
@@ -468,6 +475,11 @@ pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
 }
 
 pub fn discard(op_id: u32) -> i32 {
+    if is_net_op(op_id) {
+        let _ = unsafe { trueos_cabi_net_fetch_discard(op_id) };
+        ASYNC_NET_OPS.lock().remove(&op_id);
+        return 0;
+    }
     remove_done_id(op_id);
     remove_async_fs_completion(op_id);
     remove_queued_reqs(op_id);
@@ -490,29 +502,5 @@ pub async fn wait_for_completion(timeout_ms: u64) -> bool {
             return false;
         }
         Timer::after(EmbassyDuration::from_millis(1)).await;
-    }
-}
-
-pub fn wait_for_completion_blocking(timeout_ms: u64) -> bool {
-    let hz = embassy_time_driver::TICK_HZ as u64;
-    let max_ticks = if timeout_ms == 0 || hz == 0 {
-        0
-    } else {
-        (timeout_ms.saturating_mul(hz) + 999) / 1000
-    };
-    let deadline = if max_ticks == 0 {
-        0
-    } else {
-        embassy_time_driver::now().saturating_add(max_ticks)
-    };
-
-    loop {
-        if has_completion() {
-            return true;
-        }
-        if max_ticks != 0 && embassy_time_driver::now() >= deadline {
-            return false;
-        }
-        unsafe { trueos_cabi_poll_once() };
     }
 }

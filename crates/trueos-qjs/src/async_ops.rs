@@ -284,7 +284,3 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
 pub async fn wait_for_completion(timeout_ms: u64) -> bool {
     async_fs::wait_for_completion(timeout_ms).await
 }
-
-pub fn wait_for_completion_blocking(timeout_ms: u64) -> bool {
-    async_fs::wait_for_completion_blocking(timeout_ms)
-}
