@@ -51,7 +51,6 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
-static BOOT_FETCH_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static PCI_IDS_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -209,14 +208,6 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_boot_fetch_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_fetch_to_file_smoke_task(),
-    ) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::boot_parse5_smoke_task(),
     ) {
@@ -264,15 +255,10 @@ const HID_ANY_CLAIMED: u32 =
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const NET_ROOT_AND_QJS_READY: u32 =
-    crate::v::readiness::NET_GATEWAY_REACHABLE
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::v::readiness::QJS_ASYNC_FS_READY;
 const PARSE5_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::v::readiness::QJS_ASYNC_FS_READY
-    | crate::v::readiness::QJS_BOOT_FETCH_DONE
     | crate::v::readiness::PCI_IDS_CACHE_DONE;
 const UAC_SONG_READY: u32 =
     crate::v::readiness::UAC_SINE_DONE
@@ -390,12 +376,6 @@ static TASKS: &[TaskSpec] = &[
     },
 
     // Boot-time gated tasks
-    TaskSpec {
-        name: "boot-fetch-smoke",
-        required: NET_ROOT_AND_QJS_READY,
-        started: &BOOT_FETCH_SMOKE_STARTED,
-        spawn: spawn_boot_fetch_smoke,
-    },
     TaskSpec {
         name: "boot-parse5-smoke",
         required: PARSE5_BOOT_READY,

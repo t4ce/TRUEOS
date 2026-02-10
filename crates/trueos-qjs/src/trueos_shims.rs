@@ -39,6 +39,7 @@ extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
+    pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
 }
 
 #[inline]
