@@ -44,6 +44,7 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
+static UAC_EVENT_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SONG_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -117,7 +118,7 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::net::adapter::net_shell_task()) {
+    match spawner.spawn(crate::shell::backends::net_tcp::net_shell_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -167,6 +168,18 @@ fn spawn_uac_song(spawner: Spawner) -> SpawnAttempt {
     };
     let _ = spawner; // keep signature stable; song intentionally targets AP1.
     match ap1_spawner.spawn(crate::usb::uac::song_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_uac_event_drain(spawner: Spawner) -> SpawnAttempt {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Wait until AP1 executor is online so this task runs there.
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner; // keep signature stable; drain intentionally targets AP1.
+    match ap1_spawner.spawn(crate::usb::uac::event_drain_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -326,6 +339,12 @@ static TASKS: &[TaskSpec] = &[
         required: HID_ANY_CLAIMED,
         started: &HID_INPUT_LOGGER_STARTED,
         spawn: spawn_hid_input_logger,
+    },
+    TaskSpec {
+        name: "uac-event-drain",
+        required: crate::v::readiness::UAC_ATTACHED,
+        started: &UAC_EVENT_DRAIN_STARTED,
+        spawn: spawn_uac_event_drain,
     },
     TaskSpec {
         name: "uac-song",

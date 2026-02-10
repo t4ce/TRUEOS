@@ -1,5 +1,6 @@
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
+use crate::time;
 
 static FIRST_AP_SPAWNER: Mutex<Option<SendSpawner>> = Mutex::new(None);
 
@@ -60,7 +61,10 @@ pub fn run_ap_forever() -> ! {
                 crate::vga::DEFAULT_SHADOW_COLOR,
                 (counter % 360) as u32,
             );
+        }
+        if counter % 100_000 == 0 {
             crate::smp::poll();
+            time::poll();
             poll_local_executor();
         }
         counter = counter.wrapping_add(1);
