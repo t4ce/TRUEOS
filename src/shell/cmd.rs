@@ -545,10 +545,15 @@ fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> 
         let mut buf: heapless::String<512> = heapless::String::new();
         crate::matrix::list_slots(&mut buf);
         ctx.io.write_str(buf.as_str());
+        if let Some(active) = crate::shell::statusbar::active_slot() {
+            ctx.io.write_fmt(format_args!("status: active §{}\r\n", active + 1));
+        } else {
+            ctx.io.write_str("status: active (none)\r\n");
+        }
         return super::CommandAction::None;
     };
 
-    // With id: dump + free.
+    // With id: set active status slot.
     let id = args.get(0).and_then(|v| v.as_u8()).unwrap_or(0);
     if id == 0 {
         ctx.io.write_str("§: ids are 1..\r\n");
@@ -556,33 +561,8 @@ fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> 
     }
     let slot_id = id - 1;
 
-    // Prefer dumping the slot blob (full, untruncated). This is what `get`/`https`
-    // jobs store their main payload in.
-    if let Some((state, title, has_blob, blob_len)) = crate::matrix::with_slot(slot_id, |s| {
-        (s.state, s.title.clone(), !s.blob.is_empty(), s.blob.len())
-    }) {
-        if has_blob {
-            let blob = crate::matrix::take_blob(slot_id).unwrap_or_default();
-            ctx.io.write_fmt(format_args!("#{} {:?} {}\r\n", id, state, title.as_str()));
-            ctx.io.write_fmt(format_args!("(blob {} bytes)\r\n", blob_len));
-            for &b in blob.iter() {
-                ctx.io.write_byte(b);
-            }
-            if !blob.ends_with(b"\n") {
-                ctx.io.write_str("\r\n");
-            }
-            let _ = crate::matrix::free_slot(slot_id);
-            crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-            return super::CommandAction::None;
-        }
-    }
-
-    // Fallback: preview dump (limited, but useful for non-blob jobs).
-    let mut buf: heapless::String<1024> = heapless::String::new();
-    if crate::matrix::dump_slot(&mut buf, slot_id) {
-        ctx.io.write_str(buf.as_str());
-        let _ = crate::matrix::free_slot(slot_id);
-        crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
+    if crate::shell::statusbar::set_active_slot(slot_id) {
+        ctx.io.write_fmt(format_args!("status: active §{}\r\n", id));
     } else {
         ctx.io.write_str("§: not found\r\n");
     }

@@ -12,6 +12,8 @@ pub const MAX_SLOTS: usize = 8;
 pub const MAX_LINES: usize = 64;
 pub const TITLE_LEN: usize = 32;
 pub const LINE_LEN: usize = 96;
+pub const STATUS_TEXT_LEN: usize = 10;
+pub const STATUS_INDICATORS: usize = 5;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SlotState {
@@ -24,6 +26,9 @@ pub struct SlotData {
     pub state: SlotState,
     pub title: String<TITLE_LEN>,
     pub lines: Deque<String<LINE_LEN>, MAX_LINES>,
+    pub status_left: String<STATUS_TEXT_LEN>,
+    pub status_right: String<STATUS_TEXT_LEN>,
+    pub status_indicators: [u8; STATUS_INDICATORS],
     pub blob: AVec<u8>,
 }
 
@@ -33,6 +38,9 @@ impl SlotData {
             state: SlotState::Done,
             title: String::new(),
             lines: Deque::new(),
+            status_left: String::new(),
+            status_right: String::new(),
+            status_indicators: [0u8; STATUS_INDICATORS],
             blob: AVec::new(),
         }
     }
@@ -41,6 +49,9 @@ impl SlotData {
         self.state = SlotState::Running;
         self.title.clear();
         self.lines.clear();
+        self.status_left.clear();
+        self.status_right.clear();
+        self.status_indicators = [0u8; STATUS_INDICATORS];
         self.blob.clear();
     }
 
@@ -48,6 +59,9 @@ impl SlotData {
         self.state = SlotState::Done;
         self.title.clear();
         self.lines.clear();
+        self.status_left.clear();
+        self.status_right.clear();
+        self.status_indicators = [0u8; STATUS_INDICATORS];
         self.blob.clear();
     }
 }
@@ -167,6 +181,7 @@ impl Slot {
 }
 
 static SLOTS: [Slot; MAX_SLOTS] = [const { Slot::empty() }; MAX_SLOTS];
+static ACTIVE_STATUS_SLOT: spin::Mutex<Option<u8>> = spin::Mutex::new(None);
 
 #[inline]
 fn slot_ref(slot_id: u8) -> Option<&'static Slot> {
@@ -216,6 +231,10 @@ pub fn free_slot(slot_id: u8) -> bool {
     // Best-effort cleanup.
     let mut data = slot.data.lock();
     data.free();
+    let mut active = ACTIVE_STATUS_SLOT.lock();
+    if *active == Some(slot_id) {
+        *active = None;
+    }
     true
 }
 
@@ -351,6 +370,124 @@ pub fn dump_slot(out: &mut String<1024>, slot_id: u8) -> bool {
         let _ = write!(out, "{}\r\n", line.as_str());
     }
     true
+}
+
+pub fn set_active_status_slot(slot_id: u8) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut active = ACTIVE_STATUS_SLOT.lock();
+    *active = Some(slot_id);
+    true
+}
+
+pub fn active_status_slot() -> Option<u8> {
+    *ACTIVE_STATUS_SLOT.lock()
+}
+
+pub fn clear_active_status_slot() {
+    let mut active = ACTIVE_STATUS_SLOT.lock();
+    *active = None;
+}
+
+#[inline]
+fn assign_status_text(dst: &mut String<STATUS_TEXT_LEN>, text: &str) {
+    dst.clear();
+    for ch in text.chars() {
+        if ch == '\r' || ch == '\n' {
+            continue;
+        }
+        if dst.push(ch).is_err() {
+            break;
+        }
+    }
+}
+
+pub fn status_set_left(slot_id: u8, text: &str) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    assign_status_text(&mut data.status_left, text);
+    true
+}
+
+pub fn status_set_right(slot_id: u8, text: &str) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    assign_status_text(&mut data.status_right, text);
+    true
+}
+
+pub fn status_set_indicator(slot_id: u8, index: usize, color_code: u8) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    if index >= STATUS_INDICATORS {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    data.status_indicators[index] = color_code;
+    true
+}
+
+pub fn status_set_left_active(text: &str) -> bool {
+    let Some(slot_id) = active_status_slot() else {
+        return false;
+    };
+    status_set_left(slot_id, text)
+}
+
+pub fn status_set_right_active(text: &str) -> bool {
+    let Some(slot_id) = active_status_slot() else {
+        return false;
+    };
+    status_set_right(slot_id, text)
+}
+
+pub fn status_set_indicator_active(index: usize, color_code: u8) -> bool {
+    let Some(slot_id) = active_status_slot() else {
+        return false;
+    };
+    status_set_indicator(slot_id, index, color_code)
+}
+
+pub struct StatusBarSnapshot {
+    pub indicators: [u8; STATUS_INDICATORS],
+    pub left: String<STATUS_TEXT_LEN>,
+    pub right: String<STATUS_TEXT_LEN>,
+}
+
+pub fn active_status_snapshot() -> Option<StatusBarSnapshot> {
+    let slot_id = active_status_slot()?;
+    with_slot(slot_id, |s| StatusBarSnapshot {
+        indicators: s.status_indicators,
+        left: s.status_left.clone(),
+        right: s.status_right.clone(),
+    })
 }
 
 #[inline]

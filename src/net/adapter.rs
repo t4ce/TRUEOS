@@ -19,7 +19,9 @@ use crate::log;
 // net-shell, etc.). 8 was too tight and caused transient "no sockets available"
 // failures under load.
 const MAX_SOCKETS: usize = 128;
-const MAX_DRAIN_PER_LOOP: usize = 32;
+const MAX_DRAIN_PER_LOOP: usize = 128;
+const TCP_RX_BUF_BYTES: usize = 64 * 1024;
+const TCP_TX_BUF_BYTES: usize = 64 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
 const ICMP_VNET_MAX_INFLIGHT: usize = 32;
 const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
@@ -389,6 +391,11 @@ impl<T> NetQueue<T> {
         Ok(())
     }
 
+    #[inline]
+    pub fn pop(&self) -> Option<T> {
+        self.inner.lock().pop_front()
+    }
+
     pub fn drain(&self, max: usize) -> Vec<T> {
         let mut guard = self.inner.lock();
         let mut out = Vec::with_capacity(max.min(guard.len()));
@@ -423,16 +430,14 @@ pub fn register_app_queues(
     guard.push(AppQueues { name, cmds, events });
 }
 
-fn drain_commands() -> Vec<(&'static str, Vec<NetCommand>)> {
+fn pop_command() -> Option<(&'static str, NetCommand)> {
     let guard = APP_QUEUES.lock();
-    let mut out = Vec::new();
     for entry in guard.iter() {
-        let drained = entry.cmds.drain(MAX_DRAIN_PER_LOOP);
-        if !drained.is_empty() {
-            out.push((entry.name, drained));
+        if let Some(cmd) = entry.cmds.pop() {
+            return Some((entry.name, cmd));
         }
     }
-    out
+    None
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
@@ -673,7 +678,9 @@ impl Device for AdapterDeviceAt {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = 1500;
-        caps.max_burst_size = Some(1);
+        // Allow smoltcp to process/send multiple frames per poll cycle.
+        // `Some(1)` artificially throttles throughput on sustained TCP streams.
+        caps.max_burst_size = Some(32);
         caps.medium = Medium::Ethernet;
         caps
     }
@@ -1078,8 +1085,8 @@ impl NetService {
             return Err("no sockets available");
         }
 
-        let rx = tcp::SocketBuffer::new(vec![0; 4096]);
-        let tx = tcp::SocketBuffer::new(vec![0; 4096]);
+        let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+        let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
         let mut socket = tcp::Socket::new(rx, tx);
         socket.listen(port).map_err(|_| "listen failed")?;
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
@@ -1108,8 +1115,8 @@ impl NetService {
             return Err("no sockets available");
         }
 
-        let rx = tcp::SocketBuffer::new(vec![0; 4096]);
-        let tx = tcp::SocketBuffer::new(vec![0; 4096]);
+        let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+        let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
         let mut socket = tcp::Socket::new(rx, tx);
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
 
@@ -1258,104 +1265,100 @@ impl NetService {
             .retain(|p| timestamp < p.sent_at + timeout);
     }
 
-    fn handle_commands(&mut self, commands: Vec<(&'static str, Vec<NetCommand>)>) {
-        for (owner, cmds) in commands.into_iter() {
-            for cmd in cmds {
-                match cmd {
-                    NetCommand::OpenUdp { port } => match self.open_udp(owner, port) {
-                        Ok(handle) => {
-                            let _ = push_event(
-                                owner,
-                                NetEvent::Opened {
-                                    handle,
-                                    kind: SocketKind::Udp,
-                                },
-                            );
-                        }
-                        Err(msg) => {
-                            let _ = push_event(owner, NetEvent::Error { msg });
-                        }
-                    },
-                    NetCommand::OpenTcpListen { port } => match self.open_tcp(owner, port) {
-                        Ok(handle) => {
-                            let _ = push_event(
-                                owner,
-                                NetEvent::Opened {
-                                    handle,
-                                    kind: SocketKind::Tcp,
-                                },
-                            );
-                        }
-                        Err(msg) => {
-                            let _ = push_event(owner, NetEvent::Error { msg });
-                        }
-                    },
-                    NetCommand::OpenTcpConnect { remote } => {
-                        match self.open_tcp_connect(owner, remote) {
-                            Ok(handle) => {
-                                let _ = push_event(
-                                    owner,
-                                    NetEvent::Opened {
-                                        handle,
-                                        kind: SocketKind::Tcp,
-                                    },
-                                );
-                            }
-                            Err(msg) => {
-                                let _ = push_event(owner, NetEvent::Error { msg });
-                            }
-                        }
+    fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {
+        match cmd {
+            NetCommand::OpenUdp { port } => match self.open_udp(owner, port) {
+                Ok(handle) => {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Opened {
+                            handle,
+                            kind: SocketKind::Udp,
+                        },
+                    );
+                }
+                Err(msg) => {
+                    let _ = push_event(owner, NetEvent::Error { msg });
+                }
+            },
+            NetCommand::OpenTcpListen { port } => match self.open_tcp(owner, port) {
+                Ok(handle) => {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Opened {
+                            handle,
+                            kind: SocketKind::Tcp,
+                        },
+                    );
+                }
+                Err(msg) => {
+                    let _ = push_event(owner, NetEvent::Error { msg });
+                }
+            },
+            NetCommand::OpenTcpConnect { remote } => {
+                match self.open_tcp_connect(owner, remote) {
+                    Ok(handle) => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Opened {
+                                handle,
+                                kind: SocketKind::Tcp,
+                            },
+                        );
                     }
-                    NetCommand::SendUdp {
-                        handle,
-                        remote,
-                        data,
-                    } => {
-                        if let Some(rec) = self.find_record(handle) {
-                            if rec.kind != SocketKind::Udp {
-                                let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
-                                continue;
-                            }
-                            let socket_handle = rec.socket;
-                            let endpoint = IpEndpoint::new(
-                                IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
-                                remote.port,
-                            );
-                            let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
-                            let _ = socket.send_slice(&data, endpoint).map_err(|_| {
-                                let _ = push_event(
-                                    owner,
-                                    NetEvent::Error {
-                                        msg: "udp send fail",
-                                    },
-                                );
-                            });
-                        } else {
-                            let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
-                        }
-                    }
-                    NetCommand::SendTcp { handle, data } => {
-                        if let Some(idx) = self.records.iter().position(|r| r.handle == handle) {
-                            if self.records[idx].kind != SocketKind::Tcp {
-                                let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
-                                continue;
-                            }
-                            // Don't drop on backpressure; queue and flush when the socket becomes writable.
-                            // This is especially important for TLS handshakes (ClientHello) right after connect.
-                            self.records[idx].tcp_tx.extend(data);
-                            self.flush_tcp_tx(idx);
-                        } else {
-                            let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
-                        }
-                    }
-                    NetCommand::IcmpEcho { target, seq, data } => {
-                        self.send_icmp_echo(owner, target, seq, data);
-                    }
-                    NetCommand::Close { handle } => {
-                        self.remove_record(handle);
-                        let _ = push_event(owner, NetEvent::Closed { handle });
+                    Err(msg) => {
+                        let _ = push_event(owner, NetEvent::Error { msg });
                     }
                 }
+            }
+            NetCommand::SendUdp {
+                handle,
+                remote,
+                data,
+            } => {
+                if let Some(rec) = self.find_record(handle) {
+                    if rec.kind != SocketKind::Udp {
+                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
+                        return;
+                    }
+                    let socket_handle = rec.socket;
+                    let endpoint = IpEndpoint::new(
+                        IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
+                        remote.port,
+                    );
+                    let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
+                    if socket.send_slice(&data, endpoint).is_err() {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Error {
+                                msg: "udp send fail",
+                            },
+                        );
+                    }
+                } else {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                }
+            }
+            NetCommand::SendTcp { handle, data } => {
+                if let Some(idx) = self.records.iter().position(|r| r.handle == handle) {
+                    if self.records[idx].kind != SocketKind::Tcp {
+                        let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
+                        return;
+                    }
+                    // Don't drop on backpressure; queue and flush when the socket becomes writable.
+                    // This is especially important for TLS handshakes (ClientHello) right after connect.
+                    self.records[idx].tcp_tx.extend(data);
+                    self.flush_tcp_tx(idx);
+                } else {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                }
+            }
+            NetCommand::IcmpEcho { target, seq, data } => {
+                self.send_icmp_echo(owner, target, seq, data);
+            }
+            NetCommand::Close { handle } => {
+                self.remove_record(handle);
+                let _ = push_event(owner, NetEvent::Closed { handle });
             }
         }
     }
@@ -1419,7 +1422,8 @@ impl NetService {
             }
 
             if socket.is_active() && socket.may_recv() {
-                let mut buf = [0u8; 2048];
+                // Match vnet MAX_MSG (8KiB) to reduce event churn and alloc pressure.
+                let mut buf = [0u8; 8192];
                 while let Ok(len) = socket.recv_slice(&mut buf) {
                     if len == 0 {
                         break;
@@ -1760,11 +1764,13 @@ fn service_tick_once() {
         svc.tick();
     }
 
-    let cmds = drain_commands();
-    for (owner, batch) in cmds {
+    for _ in 0..MAX_DRAIN_PER_LOOP {
+        let Some((owner, cmd)) = pop_command() else {
+            break;
+        };
         let idx = owner_device_index(owner).unwrap_or(0);
         let idx = idx.min(services.len().saturating_sub(1));
-        services[idx].handle_commands(vec![(owner, batch)]);
+        services[idx].handle_command(owner, cmd);
     }
 
     for svc in services.iter_mut() {
@@ -1800,7 +1806,7 @@ pub async fn net_service_task() {
 
         loop {
             service_tick_once();
-            Timer::after(EmbassyDuration::from_millis(5)).await;
+            Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }.await;
 }

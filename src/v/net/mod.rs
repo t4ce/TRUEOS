@@ -24,6 +24,8 @@ pub fn net_shell_write_bytes(bytes: &[u8]) {
 }
 
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
+const VNET_CMD_QUEUE_DEPTH: usize = 256;
+const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 256;
 
 pub struct VNet {
   owner: &'static str,
@@ -33,10 +35,11 @@ pub struct VNet {
 }
 
 impl VNet {
-  /// Create a new vnet client bound to a specific NIC index.
+  /// Create a new vnet client bound to a specific NIC index with explicit
+  /// event queue depth.
   ///
   /// `device_index` selects which NIC the adapter service routes this client's commands to.
-  pub fn open(device_index: usize) -> Option<Self> {
+  pub fn open_with_event_queue_depth(device_index: usize, event_queue_depth: usize) -> Option<Self> {
     if crate::net::device_count() == 0 {
       return None;
     }
@@ -62,8 +65,9 @@ impl VNet {
       Box::leak(s.into_boxed_str())
     };
 
-    let cmds = NetQueue::new_leaked(cmds_name, 256);
-    let events = NetQueue::new_leaked(events_name, 256);
+    let depth = event_queue_depth.max(64);
+    let cmds = NetQueue::new_leaked(cmds_name, VNET_CMD_QUEUE_DEPTH);
+    let events = NetQueue::new_leaked(events_name, depth);
     adapter::register_app_queues(owner, cmds, events);
 
     let vnet = Self {
@@ -78,6 +82,11 @@ impl VNet {
     }
 
     Some(vnet)
+  }
+
+  /// Create a new vnet client bound to a specific NIC index.
+  pub fn open(device_index: usize) -> Option<Self> {
+    Self::open_with_event_queue_depth(device_index, VNET_EVENT_QUEUE_DEPTH_DEFAULT)
   }
 
   pub fn open_primary() -> Option<Self> {
@@ -127,7 +136,7 @@ impl VNet {
       return Some(ev);
     }
 
-    let ev = self.events.drain(1).pop()?;
+    let ev = self.events.pop()?;
     match ev {
       // TCP is a byte stream; don't truncate payloads. Split into multiple
       // MAX_MSG chunks and queue the remainder.

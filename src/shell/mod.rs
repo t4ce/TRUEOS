@@ -1,6 +1,7 @@
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 use crate::shell::shellcube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 
@@ -13,6 +14,7 @@ pub(crate) mod txtedt;
 pub(crate) mod cmd;
 
 pub(crate) mod matrix;
+pub(crate) mod statusbar;
 
 mod crlf;
 
@@ -87,6 +89,39 @@ const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 80;
 const DEFAULT_TERM_ROWS: usize = 24;
+const NETBENCH_UPDATE_MS: u64 = 250;
+const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/100MB.zip";
+
+const NETBENCH_IDLE: u8 = 0;
+const NETBENCH_RUNNING: u8 = 1;
+const NETBENCH_DONE: u8 = 2;
+const NETBENCH_ABORTED: u8 = 3;
+const NETBENCH_FAILED: u8 = 4;
+
+static NETBENCH_STATE: AtomicU8 = AtomicU8::new(NETBENCH_IDLE);
+static NETBENCH_ABORT_REQ: AtomicBool = AtomicBool::new(false);
+static NETBENCH_BYTES: AtomicU64 = AtomicU64::new(0);
+static NETBENCH_START_TICK: AtomicU64 = AtomicU64::new(0);
+static NETBENCH_END_TICK: AtomicU64 = AtomicU64::new(0);
+static NETBENCH_FAIL_CODE: AtomicU8 = AtomicU8::new(0);
+static NETBENCH_STATUS_SLOT: AtomicU8 = AtomicU8::new(u8::MAX);
+
+#[inline]
+fn netbench_fail_text(code: u8) -> &'static str {
+    match code {
+        1 => "bad url",
+        2 => "dns",
+        3 => "open vnet",
+        4 => "open tcp",
+        5 => "tcp open timeout",
+        6 => "tcp open failed",
+        7 => "tcp send failed",
+        8 => "timeout",
+        9 => "response too large",
+        10 => "io",
+        _ => "unknown",
+    }
+}
 
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
@@ -141,6 +176,78 @@ fn write_banner(io: &dyn ShellIo, term_cols: usize) {
         let row = idx + 2;
         write_right_aligned(io, row, term_cols, cmd);
     }
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+}
+
+#[inline]
+fn refresh_status_bar(io: &dyn ShellIo, term_cols: usize, term_rows: usize) {
+    if term_cols == 0 || term_rows == 0 {
+        return;
+    }
+
+    #[inline]
+    fn indicator_rgb(code: u8) -> (u8, u8, u8) {
+        match code {
+            1 => (230, 70, 70),   // red
+            2 => (70, 210, 90),   // green
+            3 => (230, 190, 70),  // yellow
+            4 => (70, 130, 230),  // blue
+            5 => (80, 200, 210),  // cyan
+            6 => (200, 90, 210),  // magenta
+            7 => (210, 210, 210), // white
+            _ => (90, 90, 90),    // off/idle
+        }
+    }
+
+    fn fit_10(src: &str) -> heapless::String<10> {
+        let mut out: heapless::String<10> = heapless::String::new();
+        for ch in src.chars() {
+            if out.push(ch).is_err() {
+                break;
+            }
+        }
+        while out.len() < 10 {
+            let _ = out.push(' ');
+        }
+        out
+    }
+
+    let (indicators, left, right) = if let Some(s) = crate::shell::statusbar::snapshot_active() {
+        (
+            s.indicators,
+            fit_10(s.left.as_str()),
+            fit_10(s.right.as_str()),
+        )
+    } else {
+        (
+            [0u8; crate::shell::statusbar::INDICATOR_COUNT],
+            fit_10(""),
+            fit_10(""),
+        )
+    };
+
+    // Layout (single row):
+    // [5 colored indicators][space][left 10 chars] ... [right 10 chars]
+    // Render as non-invasive overlay on the bottom row.
+    let right_col = term_cols.saturating_sub(10).saturating_add(1);
+    let left_col = 1usize;
+
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, 1)));
+    for _ in 0..term_cols {
+        io.write_byte(b' ');
+    }
+
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, left_col)));
+    for c in indicators {
+        io.write_fmt(format_args!("{}", crate::ecma48::color("o", indicator_rgb(c))));
+    }
+    io.write_byte(b' ');
+    io.write_fmt(format_args!("{}", crate::ecma48::style(left.as_str()).dim().fg((210, 210, 210))));
+
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, right_col)));
+    io.write_fmt(format_args!("{}", crate::ecma48::style(right.as_str()).bold().fg((255, 120, 200))));
+
     io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 
@@ -654,50 +761,189 @@ async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHan
     }
 }
 
-async fn run_netbench_udp(io: &dyn ShellBackend, nic_index: usize) {
+fn netbench_start(spawner: &Spawner, nic_index: usize) -> bool {
+    if NETBENCH_STATE.load(Ordering::Relaxed) == NETBENCH_RUNNING {
+        return false;
+    }
+    let old_slot = NETBENCH_STATUS_SLOT.swap(u8::MAX, Ordering::Relaxed);
+    if old_slot != u8::MAX {
+        let _ = crate::matrix::free_slot(old_slot);
+    }
+    if let Some(slot) = crate::matrix::alloc_slot("netbench") {
+        NETBENCH_STATUS_SLOT.store(slot, Ordering::Relaxed);
+        let _ = crate::shell::statusbar::set_active_slot(slot);
+        let _ = crate::shell::statusbar::set_left(slot, "netbench");
+        let _ = crate::shell::statusbar::set_right(slot, "starting");
+        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+            let _ = crate::shell::statusbar::set_indicator(slot, i, 2);
+        }
+    }
+    NETBENCH_ABORT_REQ.store(false, Ordering::Relaxed);
+    NETBENCH_BYTES.store(0, Ordering::Relaxed);
+    NETBENCH_FAIL_CODE.store(0, Ordering::Relaxed);
+    NETBENCH_START_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+    NETBENCH_END_TICK.store(0, Ordering::Relaxed);
+    NETBENCH_STATE.store(NETBENCH_RUNNING, Ordering::Relaxed);
+    if spawner.spawn(netbench_worker_task(nic_index)).is_err() {
+        NETBENCH_FAIL_CODE.store(10, Ordering::Relaxed);
+        NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+        return false;
+    }
+    true
+}
+
+#[embassy_executor::task(pool_size = 1)]
+async fn netbench_worker_task(nic_index: usize) {
+    use alloc::{string::String as AString, vec::Vec};
     use trueos_v::vnet as api;
 
-    const NETBENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
-    const UPDATE_MS: u64 = 250;
-    const PATTERN: &[u8] = b"10101010";
-    const CONTROL_PERIOD_CHUNKS: u32 = 64;
-    const OPEN_TIMEOUT_MS: u64 = 1500;
-    const REMOTE: api::EndpointV4 = api::EndpointV4::new([255, 255, 255, 255], 9);
+    const OPEN_TIMEOUT_MS: u64 = 4000;
+    const OVERALL_TIMEOUT_MS: u64 = 120000;
+    const MAX_CAPTURE_BYTES: usize = 128 * 1024 * 1024;
+    const IDLE_YIELD_US: u64 = 100;
 
-    let Some(vnet) = crate::v::net::VNet::open(nic_index) else {
-        io.write_str("netbench: failed to open vnet on selected nic\r\n");
+    fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
+        let mut u = url.trim();
+        if let Some(rest) = u.strip_prefix("http://") {
+            u = rest;
+        } else {
+            return None;
+        }
+        let (hostport, path) = match u.split_once('/') {
+            Some((a, b)) => (a, alloc::format!("/{}", b)),
+            None => (u, alloc::string::String::from("/")),
+        };
+        if hostport.is_empty() {
+            return None;
+        }
+        let (host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
+            if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+                (h, p.parse::<u16>().ok()?)
+            } else {
+                (hostport, 80)
+            }
+        } else {
+            (hostport, 80)
+        };
+        if host.is_empty() {
+            return None;
+        }
+        Some((AString::from(host), port, path))
+    }
+
+    fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+        buf.windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|p| p + 4)
+    }
+
+    fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+        let mut i = 0usize;
+        while i < headers.len() {
+            let line_start = i;
+            while i < headers.len() && headers[i] != b'\n' {
+                i = i.saturating_add(1);
+            }
+            let mut line = &headers[line_start..i];
+            if i < headers.len() && headers[i] == b'\n' {
+                i = i.saturating_add(1);
+            }
+            if let Some((&b'\r', rest)) = line.split_last() {
+                line = rest;
+            }
+            if line.is_empty() {
+                continue;
+            }
+            let Some(colon) = line.iter().position(|b| *b == b':') else {
+                continue;
+            };
+            let (k, mut v) = line.split_at(colon);
+            v = v.get(1..).unwrap_or(&[]);
+            if k.len() != name.len() {
+                continue;
+            }
+            if !k
+                .iter()
+                .zip(name.iter())
+                .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            {
+                continue;
+            }
+            while !v.is_empty() && (v[0] == b' ' || v[0] == b'\t') {
+                v = &v[1..];
+            }
+            return Some(v);
+        }
+        None
+    }
+
+    fn parse_content_length(headers: &[u8]) -> Option<usize> {
+        let v = header_get_value(headers, b"content-length")?;
+        let s = core::str::from_utf8(v).ok()?;
+        s.trim().parse::<usize>().ok()
+    }
+
+    let Some((host, port, path)) = parse_http_url(NETBENCH_URL) else {
+        NETBENCH_FAIL_CODE.store(1, Ordering::Relaxed);
+        NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
         return;
     };
+    let ip = match crate::v::net::dns::resolve_ipv4_for_device(
+        nic_index,
+        host.as_str(),
+        crate::v::net::dns::DnsConfig::default(),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(_e) => {
+            NETBENCH_FAIL_CODE.store(2, Ordering::Relaxed);
+            NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+            NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+            return;
+        }
+    };
 
-    let local_port = 40000u16.saturating_add((embassy_time_driver::now() as u16) % 20000);
-    if vnet.submit(api::Command::OpenUdp { port: local_port }).is_err() {
-        io.write_str("netbench: failed to open udp socket\r\n");
+    let Some(vnet) = crate::v::net::VNet::open_with_event_queue_depth(nic_index, 4096) else {
+        NETBENCH_FAIL_CODE.store(3, Ordering::Relaxed);
+        NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+        return;
+    };
+    if vnet
+        .submit(api::Command::OpenTcpConnect {
+            remote: api::EndpointV4 { addr: ip, port },
+        })
+        .is_err()
+    {
+        NETBENCH_FAIL_CODE.store(4, Ordering::Relaxed);
+        NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
         return;
     }
 
-    io.write_fmt(format_args!(
-        "netbench: nic={} local_port={} remote={}.{}.{}.{}:{}\r\n",
-        nic_index,
-        local_port,
-        REMOTE.addr[0],
-        REMOTE.addr[1],
-        REMOTE.addr[2],
-        REMOTE.addr[3],
-        REMOTE.port
-    ));
-    io.write_str("netbench: streaming 100MB udp payload (press any key to abort)\r\n");
-
     let open_deadline = Instant::now() + EmbassyDuration::from_millis(OPEN_TIMEOUT_MS);
-    let udp_handle = loop {
+    let tcp_handle = loop {
+        if NETBENCH_ABORT_REQ.load(Ordering::Relaxed) {
+            NETBENCH_STATE.store(NETBENCH_ABORTED, Ordering::Relaxed);
+            NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+            return;
+        }
         if Instant::now() >= open_deadline {
-            io.write_str("netbench: udp open timeout\r\n");
+            NETBENCH_FAIL_CODE.store(5, Ordering::Relaxed);
+            NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+            NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
             return;
         }
         if let Some(ev) = vnet.pop_event() {
             match ev {
-                api::Event::Opened { handle, kind } if kind == api::SocketKind::Udp => break handle,
-                api::Event::Error { msg } => {
-                    io.write_fmt(format_args!("netbench: udp open failed ({})\r\n", msg));
+                api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => break handle,
+                api::Event::Error { msg: _ } => {
+                    NETBENCH_FAIL_CODE.store(6, Ordering::Relaxed);
+                    NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+                    NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
                     return;
                 }
                 _ => {}
@@ -707,55 +953,125 @@ async fn run_netbench_udp(io: &dyn ShellBackend, nic_index: usize) {
         }
     };
 
-    let mut chunk = [0u8; api::MAX_MSG];
-    if !PATTERN.is_empty() {
-        let mut off = 0usize;
-        while off < chunk.len() {
-            let take = core::cmp::min(PATTERN.len(), chunk.len() - off);
-            chunk[off..off + take].copy_from_slice(&PATTERN[..take]);
-            off = off.saturating_add(take);
-        }
+    let request = alloc::format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS netbench\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        path.as_str(),
+        host.as_str()
+    );
+    if vnet
+        .submit(api::Command::SendTcp {
+            handle: tcp_handle,
+            data: api::ByteBuf::from_slice_trunc(request.as_bytes()),
+        })
+        .is_err()
+    {
+        let _ = vnet.submit(api::Command::Close { handle: tcp_handle });
+        NETBENCH_FAIL_CODE.store(7, Ordering::Relaxed);
+        NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+        return;
     }
 
-    let mut sent: u64 = 0;
-    let mut chunk_count: u32 = 0;
-    let mut aborted = false;
+    let mut overall_deadline = Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
+    let mut header_bytes: Vec<u8> = Vec::new();
+    let mut body: Vec<u8> = Vec::new();
+    let mut header_done = false;
+    let mut expected_len: Option<usize> = None;
+    let mut received_bytes: usize = 0;
     let mut failed = false;
-    let mut fail_msg: &'static str = "send failed";
+    let mut fail_code: u8 = 10;
+    let mut closed = false;
 
-    let start_tick = embassy_time_driver::now();
-    let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
-
-    while sent < NETBENCH_TOTAL_BYTES {
-        let remaining = (NETBENCH_TOTAL_BYTES - sent) as usize;
-        let n = core::cmp::min(remaining, chunk.len());
-        let payload = api::ByteBuf::from_slice_trunc(&chunk[..n]);
-        if vnet
-            .submit(api::Command::SendUdp {
-                handle: udp_handle,
-                remote: REMOTE,
-                data: payload,
-            })
-            .is_err()
-        {
-            // Backpressure from command queue: yield and retry.
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-            continue;
+    loop {
+        if NETBENCH_ABORT_REQ.load(Ordering::Relaxed) {
+            NETBENCH_STATE.store(NETBENCH_ABORTED, Ordering::Relaxed);
+            NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
+            break;
         }
-
-        sent = sent.saturating_add(n as u64);
-        chunk_count = chunk_count.wrapping_add(1);
-
+        if Instant::now() >= overall_deadline {
+            failed = true;
+            fail_code = 8;
+            break;
+        }
+        let mut got_event = false;
         while let Some(ev) = vnet.pop_event() {
+            got_event = true;
             match ev {
-                api::Event::Error { msg } => {
-                    failed = true;
-                    fail_msg = msg;
+                api::Event::TcpData { handle, data } if handle == tcp_handle => {
+                    let bytes = data.as_slice();
+                    if !header_done {
+                        let room = MAX_CAPTURE_BYTES.saturating_sub(header_bytes.len());
+                        if room == 0 {
+                            failed = true;
+                            fail_code = 9;
+                            break;
+                        }
+                        let take = core::cmp::min(room, bytes.len());
+                        header_bytes.extend_from_slice(&bytes[..take]);
+                        if let Some(hend) = find_http_header_end(header_bytes.as_slice()) {
+                            header_done = true;
+                            expected_len = parse_content_length(&header_bytes[..hend]);
+                            if let Some(cl) = expected_len {
+                                let reserve = core::cmp::min(cl, MAX_CAPTURE_BYTES);
+                                body.reserve(reserve);
+                            }
+                            if hend < header_bytes.len() {
+                                let remain = header_bytes.split_off(hend);
+                                let room2 = MAX_CAPTURE_BYTES.saturating_sub(body.len());
+                                let take2 = core::cmp::min(room2, remain.len());
+                                body.extend_from_slice(&remain[..take2]);
+                                received_bytes = received_bytes.saturating_add(take2);
+                                NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
+                                if take2 < remain.len() {
+                                    failed = true;
+                                    fail_code = 9;
+                                    break;
+                                }
+                                if let Some(cl) = expected_len {
+                                    if body.len() >= cl {
+                                        closed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if take < bytes.len() && !header_done {
+                            failed = true;
+                            fail_code = 9;
+                            break;
+                        }
+                    } else {
+                        let room = MAX_CAPTURE_BYTES.saturating_sub(body.len());
+                        if room == 0 {
+                            failed = true;
+                            fail_code = 9;
+                            break;
+                        }
+                        let take = core::cmp::min(room, bytes.len());
+                        body.extend_from_slice(&bytes[..take]);
+                        received_bytes = received_bytes.saturating_add(take);
+                        NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
+                        if take < bytes.len() {
+                            failed = true;
+                            fail_code = 9;
+                            break;
+                        }
+                        if let Some(cl) = expected_len {
+                            if body.len() >= cl {
+                                closed = true;
+                                break;
+                            }
+                        }
+                    }
+                    overall_deadline = Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
+                }
+                api::Event::Closed { handle } if handle == tcp_handle => {
+                    closed = true;
                     break;
                 }
-                api::Event::Closed { handle } if handle == udp_handle => {
+                api::Event::Error { msg: _ } => {
                     failed = true;
-                    fail_msg = "udp closed";
+                    fail_code = 10;
                     break;
                 }
                 _ => {}
@@ -764,46 +1080,30 @@ async fn run_netbench_udp(io: &dyn ShellBackend, nic_index: usize) {
         if failed {
             break;
         }
-
-        if (chunk_count % CONTROL_PERIOD_CHUNKS) == 0 && io.read_byte().is_some() {
-            aborted = true;
+        if closed {
             break;
         }
 
-        if Instant::now() >= next_update || sent >= NETBENCH_TOTAL_BYTES {
-            let now_tick = embassy_time_driver::now();
-            let elapsed_ticks = now_tick.saturating_sub(start_tick);
-            let hz = embassy_time_driver::TICK_HZ as u64;
-            let elapsed_ms = if hz == 0 {
-                0
-            } else {
-                elapsed_ticks.saturating_mul(1000) / hz
-            };
-            let bps = if elapsed_ms == 0 {
-                0
-            } else {
-                sent.saturating_mul(1000) / elapsed_ms
-            };
-            let kbps = bps / 1024;
-            let total_kb = sent / 1024;
-            io.write_fmt(format_args!(
-                "\rwrite speed: {} kb/sec | {} KB total   ",
-                kbps,
-                total_kb
-            ));
-            next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+        if !got_event {
+            Timer::after(EmbassyDuration::from_micros(IDLE_YIELD_US)).await;
         }
     }
 
-    let _ = vnet.submit(api::Command::Close { handle: udp_handle });
-
-    io.write_str("\r\n");
-    if aborted {
-        io.write_str("netbench: aborted by key press\r\n");
-    } else if failed {
-        io.write_fmt(format_args!("netbench: failed ({})\r\n", fail_msg));
-    } else {
-        io.write_str("netbench: complete\r\n");
+    let _ = vnet.submit(api::Command::Close { handle: tcp_handle });
+    if NETBENCH_STATE.load(Ordering::Relaxed) != NETBENCH_ABORTED {
+        if let Some(cl) = expected_len {
+            if body.len() > cl {
+                body.truncate(cl);
+            }
+        }
+        NETBENCH_BYTES.store(body.len() as u64, Ordering::Relaxed);
+        if failed {
+            NETBENCH_FAIL_CODE.store(fail_code, Ordering::Relaxed);
+            NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);
+        } else {
+            NETBENCH_STATE.store(NETBENCH_DONE, Ordering::Relaxed);
+        }
+        NETBENCH_END_TICK.store(embassy_time_driver::now(), Ordering::Relaxed);
     }
 }
 
@@ -835,8 +1135,72 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
     // Treat CRLF as a single Enter (common on serial/USB bridges).
     let mut saw_cr: bool = false;
+    let mut next_netbench_update: Instant = Instant::now() + EmbassyDuration::from_millis(NETBENCH_UPDATE_MS);
+    let mut last_netbench_state: u8 = NETBENCH_STATE.load(Ordering::Relaxed);
+    let mut next_status_refresh: Instant = Instant::now() + EmbassyDuration::from_millis(250);
 
     loop {
+        let netbench_state = NETBENCH_STATE.load(Ordering::Relaxed);
+        if Instant::now() >= next_status_refresh {
+            refresh_status_bar(io, term_cols, term_rows);
+            next_status_refresh = Instant::now() + EmbassyDuration::from_millis(250);
+        }
+        if netbench_state == NETBENCH_RUNNING && Instant::now() >= next_netbench_update {
+            let now_tick = embassy_time_driver::now();
+            let start_tick = NETBENCH_START_TICK.load(Ordering::Relaxed);
+            let elapsed_ticks = now_tick.saturating_sub(start_tick);
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+            let bytes = NETBENCH_BYTES.load(Ordering::Relaxed);
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                bytes.saturating_mul(1000) / elapsed_ms
+            };
+            let mut speed: heapless::String<10> = heapless::String::new();
+            let _ = core::fmt::Write::write_fmt(&mut speed, format_args!("{}kb/s", bps / 1024));
+            let _ = crate::shell::statusbar::set_right_active(speed.as_str());
+            next_netbench_update = Instant::now() + EmbassyDuration::from_millis(NETBENCH_UPDATE_MS);
+        }
+
+        if netbench_state != last_netbench_state {
+            if netbench_state != NETBENCH_RUNNING {
+                match netbench_state {
+                    NETBENCH_DONE => {
+                        let _ = crate::shell::statusbar::set_left_active("done");
+                        let _ = crate::shell::statusbar::set_right_active("ok");
+                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                            let _ = crate::shell::statusbar::set_indicator_active(i, 2);
+                        }
+                    }
+                    NETBENCH_ABORTED => {
+                        let _ = crate::shell::statusbar::set_left_active("aborted");
+                        let _ = crate::shell::statusbar::set_right_active("stopped");
+                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                            let _ = crate::shell::statusbar::set_indicator_active(i, 3);
+                        }
+                    }
+                    NETBENCH_FAILED => {
+                        let code = NETBENCH_FAIL_CODE.load(Ordering::Relaxed);
+                        io.write_fmt(format_args!("netbench: failed ({})\r\n", netbench_fail_text(code)));
+                        let _ = crate::shell::statusbar::set_left_active("failed");
+                        let mut right: heapless::String<10> = heapless::String::new();
+                        let _ = core::fmt::Write::write_fmt(&mut right, format_args!("e{}", code));
+                        let _ = crate::shell::statusbar::set_right_active(right.as_str());
+                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                            let _ = crate::shell::statusbar::set_indicator_active(i, 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            last_netbench_state = netbench_state;
+        }
+
         if let Some(b) = io.read_byte() {
             if saw_cr && b == b'\n' {
                 saw_cr = false;
@@ -1411,8 +1775,26 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
 
                             install_wizard = None;
-                            run_netbench_udp(io, nic_index).await;
-                            write_prompt_for_state(io, pending_action, install_wizard);
+                            if netbench_start(&spawner, nic_index) {
+                                let slot = NETBENCH_STATUS_SLOT.load(Ordering::Relaxed);
+                                io.write_fmt(format_args!(
+                                    "\r\nnetbench: started nic={} §{} url={}\r\n",
+                                    nic_index,
+                                    slot.saturating_add(1),
+                                    NETBENCH_URL
+                                ));
+                                let _ = crate::shell::statusbar::set_left_active("netbench");
+                                let _ = crate::shell::statusbar::set_right_active("0kb/s");
+                                for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                                    let _ = crate::shell::statusbar::set_indicator_active(i, 2);
+                                }
+                                next_netbench_update = Instant::now() + EmbassyDuration::from_millis(NETBENCH_UPDATE_MS);
+                                last_netbench_state = NETBENCH_RUNNING;
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            } else {
+                                io.write_str("\r\nnetbench: already running\r\n");
+                                write_prompt_for_state(io, pending_action, install_wizard);
+                            }
                             continue;
                         }
                     }
