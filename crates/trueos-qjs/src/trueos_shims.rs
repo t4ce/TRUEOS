@@ -31,6 +31,12 @@ extern "C" {
     pub fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
     pub fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_net_fetch_to_file(
+        url_ptr: *const u8,
+        url_len: usize,
+        path_ptr: *const u8,
+        path_len: usize,
+    ) -> i32;
 }
 
 #[inline]

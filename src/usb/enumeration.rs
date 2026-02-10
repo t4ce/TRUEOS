@@ -22,6 +22,7 @@ macro_rules! usbv {
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static LOG_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
+const USB_EVENT_POLL_DELAY_MS: u64 = 1;
 
 async fn submit_cmd_and_wait(
     ctx: &XhciContext,
@@ -120,7 +121,7 @@ async fn update_ep0_max_packet(
         Some(slot_id),
         "eval-ctx-ep0",
         800,
-        EmbassyDuration::from_millis(5),
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await?;
 
@@ -176,7 +177,7 @@ pub(crate) async fn enumerate_port(
             );
             return;
         }
-        Timer::after(EmbassyDuration::from_millis(5)).await;
+        Timer::after(EmbassyDuration::from_millis(2)).await;
     }
 
     usbv!(
@@ -525,7 +526,7 @@ pub(crate) async fn enumerate_with_params(
     };
     unsafe { write_bytes(input_ctx_virt, 0, 4096) };
 
-    const EP0_TRBS: usize = 32;
+    const EP0_TRBS: usize = 64;
     let ep0_bytes = EP0_TRBS * size_of::<Trb>();
     let (ep0_phys, ep0_virt_raw) = match dma::alloc(ep0_bytes, 64) {
         Some(pair) => pair,
@@ -607,7 +608,7 @@ pub(crate) async fn enumerate_with_params(
         Some(slot_id),
         if use_bsr { "address-device-bsr" } else { "address-device" },
         2000,
-        EmbassyDuration::from_millis(5),
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await
     {
@@ -788,7 +789,7 @@ pub(crate) async fn enumerate_with_params(
                     Some(slot_id),
                     "address-device-retry",
                     2500,
-                    EmbassyDuration::from_millis(5),
+                    EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
                 )
                 .await
                 {
@@ -885,7 +886,7 @@ pub(crate) async fn enumerate_with_params(
                     Some(slot_id),
                     "address-device-bsr",
                     2500,
-                    EmbassyDuration::from_millis(5),
+                    EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
                 )
                 .await
                 {
@@ -1420,7 +1421,7 @@ pub(crate) async fn enable_slot(state: &mut UsbControllerState, target_port: u8)
         None,
         "enable-slot",
         400,
-        EmbassyDuration::from_millis(5),
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await
     {
@@ -1468,7 +1469,7 @@ pub(crate) async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -
         Some(slot_id),
         "disable-slot",
         400,
-        EmbassyDuration::from_millis(5),
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await?;
 
