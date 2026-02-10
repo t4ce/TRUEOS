@@ -2,11 +2,11 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
+use embassy_time_driver::{now, TICK_HZ};
 
 use crate as qjs;
 
 extern "C" {
-    fn trueos_cabi_net_fetch_to_file(url_ptr: *const u8, url_len: usize, path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 
@@ -800,6 +800,7 @@ const ESM_SH_PREFIX: &[u8] = b"https://esm.sh/";
 const CDN_DIR: &[u8] = b"/qjs/cdn/";
 const FS_SYNC_TIMEOUT_MS: u64 = 8;
 const BOOTSTRAP_FS_TIMEOUT_MS: u64 = 32;
+const BOOTSTRAP_NET_TIMEOUT_MS: u64 = 15_000;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {
@@ -876,6 +877,55 @@ unsafe fn read_file_js_malloc_rc_async(
 
 unsafe fn read_file_js_malloc(ctx: *mut qjs::JSContext, path: &[u8]) -> Result<(*mut u8, usize), ()> {
     read_file_js_malloc_rc_async(ctx, path, FS_SYNC_TIMEOUT_MS).map_err(|_| ())
+}
+
+unsafe fn fetch_to_cache_rc_async(url: &[u8], cache_path: &[u8], timeout_ms: u64) -> Result<(), i32> {
+    let op_id = match qjs::async_fs::start_net_fetch_to_file(url, cache_path) {
+        Ok(id) => id,
+        Err(code) => return Err(code),
+    };
+
+    let hz = TICK_HZ as u64;
+    let max_ticks = if timeout_ms == 0 || hz == 0 {
+        0
+    } else {
+        (timeout_ms.saturating_mul(hz) + 999) / 1000
+    };
+    let deadline = if max_ticks == 0 {
+        0
+    } else {
+        now().saturating_add(max_ticks)
+    };
+
+    loop {
+        let len = qjs::async_fs::result_len(op_id);
+        if len == FS_ERR_NOT_FOUND as isize && !qjs::async_fs::has_completion_result(op_id) {
+            if max_ticks != 0 && now() >= deadline {
+                let _ = qjs::async_fs::discard(op_id);
+                return Err(FS_ERR_TIMEOUT);
+            }
+            let wait_ms = FS_SYNC_TIMEOUT_MS.min(timeout_ms.max(1));
+            let ok = qjs::async_ops::wait_for_completion_blocking(wait_ms);
+            if !ok {
+                if max_ticks != 0 && now() >= deadline {
+                    let _ = qjs::async_fs::discard(op_id);
+                    return Err(FS_ERR_TIMEOUT);
+                }
+            }
+            continue;
+        }
+
+        if len < 0 {
+            let _ = qjs::async_fs::discard(op_id);
+            return Err(len as i32);
+        }
+
+        let got = qjs::async_fs::read_result(op_id, core::ptr::null_mut(), 0);
+        if got < 0 {
+            return Err(got as i32);
+        }
+        return Ok(());
+    }
 }
 
 unsafe fn compile_module_from_buf(
@@ -1275,8 +1325,8 @@ unsafe fn load_url_module(
     log_str("qjs: url fetch start url=");
     log_bytes(url);
     log_nl();
-    let rc = trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), cache_path.as_ptr(), cache_path.len());
-    if rc != 0 {
+    let rc = fetch_to_cache_rc_async(url, &cache_path, BOOTSTRAP_NET_TIMEOUT_MS);
+    if let Err(rc) = rc {
         let mut msg = Vec::new();
         msg.extend_from_slice(b"fetch-to-cache failed rc=");
         push_i32_dec(&mut msg, rc);

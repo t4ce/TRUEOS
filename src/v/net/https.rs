@@ -499,6 +499,255 @@ async fn fetch_on_device(
     }
 }
 
+async fn fetch_on_device_to_file(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    disk: crate::disc::block::DeviceHandle,
+    tmp_path: &str,
+) -> Result<(), i32> {
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+        Ok(ip) => ip,
+        Err(dns::DnsError::Timeout) => return Err(fetch_error_to_code(FetchError::DnsTimeout)),
+        Err(_) => return Err(fetch_error_to_code(FetchError::DnsFailed)),
+    };
+
+    crate::log!(
+        "vhttps: host={} dev={} ip={}.{}.{}.{}\n",
+        parsed.host,
+        dev_idx,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3]
+    );
+
+    let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let owner = leak_str(format!("vhttps-file-{}@{}", seq, dev_idx));
+    let cmds_name = leak_str(format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(format!("{}-tls-evt", owner));
+
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 4096);
+    register_tls_app_queues(owner, cmds, events);
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let mut tls_handle: Option<vnet::NetHandle> = None;
+    let mut sent_connect = false;
+    let mut http_sent = false;
+
+    let mut header_buf: Vec<u8> = Vec::new();
+    let mut header_done = false;
+    let mut body_expected = 0usize;
+    let mut body_written = 0usize;
+    let mut stream_handle: Option<u32> = None;
+
+    loop {
+        for ev in events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    tls_handle = Some(handle);
+                }
+                TlsEvent::Connected { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if !http_sent {
+                        let req = format!(
+                            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                            parsed.path,
+                            parsed.host
+                        );
+                        let _ = cmds.push(TlsCommand::Send {
+                            handle,
+                            data: req.into_bytes(),
+                        });
+                        http_sent = true;
+                    }
+                }
+                TlsEvent::Data { handle, data } => {
+                    if tls_handle != Some(handle) || data.is_empty() {
+                        continue;
+                    }
+
+                    if !header_done {
+                        header_buf.extend_from_slice(&data);
+                        if header_buf.len() > (64 * 1024) {
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            if let Some(sh) = stream_handle.take() {
+                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            }
+                            return Err(fetch_error_to_code(FetchError::Http(0)));
+                        }
+
+                        if let Some(hdr_end) = find_http_header_end(&header_buf) {
+                            let status = parse_http_status(&header_buf).unwrap_or(0);
+                            if status != 200 {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                if let Some(sh) = stream_handle.take() {
+                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                }
+                                return Err(fetch_error_to_code(FetchError::Http(status)));
+                            }
+
+                            let headers = &header_buf[..hdr_end];
+                            if header_contains_token(headers, b"transfer-encoding", b"chunked") {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                if let Some(sh) = stream_handle.take() {
+                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                }
+                                return Err(fetch_error_to_code(FetchError::Http(0)));
+                            }
+
+                            body_expected = match header_parse_content_length(headers) {
+                                Some(v) => v,
+                                None => {
+                                    if let Some(h) = tls_handle {
+                                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                                    }
+                                    if let Some(sh) = stream_handle.take() {
+                                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                    }
+                                    return Err(fetch_error_to_code(FetchError::Http(0)));
+                                }
+                            };
+                            if body_expected > max_bytes {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                if let Some(sh) = stream_handle.take() {
+                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                }
+                                return Err(fetch_error_to_code(FetchError::ResponseTooLarge));
+                            }
+
+                            let sh = match crate::v::fs::trueosfs::file_write_begin_async(
+                                disk,
+                                tmp_path,
+                                body_expected as u64,
+                            )
+                            .await
+                            .map_err(block_error_to_code)?
+                            {
+                                Some(h) => h,
+                                None => return Err(FS_ERR_NO_SPACE),
+                            };
+                            stream_handle = Some(sh);
+                            header_done = true;
+
+                            let body_start = hdr_end;
+                            if header_buf.len() > body_start {
+                                let rem = body_expected.saturating_sub(body_written);
+                                let part = &header_buf[body_start..];
+                                let take = part.len().min(rem);
+                                if take > 0 {
+                                    crate::v::fs::trueosfs::file_write_chunk_async(
+                                        sh,
+                                        &part[..take],
+                                    )
+                                    .await
+                                    .map_err(block_error_to_code)?;
+                                    body_written = body_written.saturating_add(take);
+                                }
+                            }
+                            header_buf.clear();
+
+                            if body_written >= body_expected {
+                                crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                    .await
+                                    .map_err(block_error_to_code)?;
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                return Ok(());
+                            }
+                        }
+                    } else if let Some(sh) = stream_handle {
+                        let rem = body_expected.saturating_sub(body_written);
+                        let take = data.len().min(rem);
+                        if take > 0 {
+                            crate::v::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
+                                .await
+                                .map_err(block_error_to_code)?;
+                            body_written = body_written.saturating_add(take);
+                        }
+                        if body_written >= body_expected {
+                            crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                .await
+                                .map_err(block_error_to_code)?;
+                            if let Some(h) = tls_handle {
+                                let _ = cmds.push(TlsCommand::Close { handle: h });
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if let Some(sh) = stream_handle.take() {
+                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                    }
+                    return Err(fetch_error_to_code(FetchError::BodyTimeout));
+                }
+                TlsEvent::Error { .. } => {}
+                TlsEvent::TlsError { .. } => {
+                    if let Some(h) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                    }
+                    if let Some(sh) = stream_handle.take() {
+                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                    }
+                    return Err(fetch_error_to_code(FetchError::Tls));
+                }
+            }
+        }
+
+        if !sent_connect {
+            let _ = cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+            });
+            sent_connect = true;
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
+            }
+            if let Some(sh) = stream_handle.take() {
+                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+            }
+            return Err(if tls_handle.is_none() {
+                fetch_error_to_code(FetchError::ConnectTimeout)
+            } else if !http_sent {
+                fetch_error_to_code(FetchError::TlsTimeout)
+            } else {
+                fetch_error_to_code(FetchError::BodyTimeout)
+            });
+        }
+
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+}
+
 /// Fetch an HTTPS URL and return the response body.
 ///
 /// Notes:
@@ -550,15 +799,37 @@ pub async fn fetch_https_to_file_async(
         Err(e) => return Err(block_error_to_code(e)),
     }
 
-    let body = fetch_https_body_async(url, timeout_ms, max_bytes)
-        .await
-        .map_err(fetch_error_to_code)?;
-
     let tmp = format!("{}.tmp", key);
-    match crate::v::fs::trueosfs::file_in_async(disk, tmp.as_str(), &body).await {
-        Ok(true) => {}
-        Ok(false) => return Err(FS_ERR_NO_SPACE),
-        Err(e) => return Err(block_error_to_code(e)),
+    let parsed = parse_https_url(url).ok_or(FetchError::BadUrl).map_err(fetch_error_to_code)?;
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return Err(fetch_error_to_code(FetchError::NoNic));
+    }
+
+    let mut last_err = fetch_error_to_code(FetchError::DnsFailed);
+    for dev_idx in 0..dev_count {
+        match fetch_on_device_to_file(
+            &parsed,
+            dev_idx,
+            timeout_ms,
+            max_bytes,
+            disk,
+            tmp.as_str(),
+        )
+        .await
+        {
+            Ok(()) => {
+                last_err = 0;
+                break;
+            }
+            Err(rc) => {
+                let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
+                last_err = rc;
+            }
+        }
+    }
+    if last_err != 0 {
+        return Err(last_err);
     }
 
     match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await {

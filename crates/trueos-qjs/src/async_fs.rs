@@ -14,6 +14,7 @@ use spin::Mutex;
 use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
+    trueos_cabi_net_fetch_to_file,
     trueos_cabi_poll_once,
 };
 
@@ -31,6 +32,7 @@ enum AsyncFsRequest {
     WriteBegin { id: u32, path: String, total_len: u64 },
     WriteChunk { id: u32, data: Vec<u8> },
     WriteFinish { id: u32 },
+    NetFetchToFile { id: u32, url: String, path: String },
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +137,8 @@ fn remove_queued_reqs(id: u32) {
         AsyncFsRequest::ReadFile { id: rid, .. }
         | AsyncFsRequest::WriteBegin { id: rid, .. }
         | AsyncFsRequest::WriteChunk { id: rid, .. }
-        | AsyncFsRequest::WriteFinish { id: rid } => *rid != id,
+        | AsyncFsRequest::WriteFinish { id: rid }
+        | AsyncFsRequest::NetFetchToFile { id: rid, .. } => *rid != id,
     });
 }
 
@@ -187,6 +190,16 @@ fn write_chunk_via_cabi(handle: u32, chunk: &[u8]) -> Result<(), i32> {
 
 fn write_finish_via_cabi(handle: u32) -> Result<(), i32> {
     let rc = unsafe { trueos_cabi_fs_write_finish(handle) };
+    if rc != 0 {
+        return Err(rc);
+    }
+    Ok(())
+}
+
+fn net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<(), i32> {
+    let rc = unsafe {
+        trueos_cabi_net_fetch_to_file(url.as_ptr(), url.len(), path.as_ptr(), path.len())
+    };
     if rc != 0 {
         return Err(rc);
     }
@@ -304,6 +317,20 @@ pub async fn async_fs_service_task() {
                         }
                     }
                 }
+                AsyncFsRequest::NetFetchToFile { id, url, path } => {
+                    match net_fetch_to_file_via_cabi(url.as_str(), path.as_str()) {
+                        Ok(()) => push_async_fs_completion(AsyncFsCompletion {
+                            id,
+                            rc: 0,
+                            data: Vec::new(),
+                        }),
+                        Err(rc) => push_async_fs_completion(AsyncFsCompletion {
+                            id,
+                            rc,
+                            data: Vec::new(),
+                        }),
+                    }
+                }
             }
 
             processed = processed.saturating_add(1);
@@ -316,6 +343,29 @@ pub async fn async_fs_service_task() {
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
     }
+}
+
+pub fn start_net_fetch_to_file(url: &[u8], path: &[u8]) -> Result<u32, i32> {
+    if url.is_empty() || path.is_empty() {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    let Ok(url_str) = core::str::from_utf8(url) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let Ok(path_str) = core::str::from_utf8(path) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let id = next_async_fs_id();
+    let req = AsyncFsRequest::NetFetchToFile {
+        id,
+        url: url_str.to_string(),
+        path: path_str.to_string(),
+    };
+    push_async_fs_req(req)?;
+    Ok(id)
 }
 
 pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {

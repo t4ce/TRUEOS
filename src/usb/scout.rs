@@ -269,7 +269,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         );
     }
 
-    const CMD_RING_TRBS: usize = 64;
+    const CMD_RING_TRBS: usize = 256;
     let (cmd_phys, cmd_virt_raw) = match dma::alloc(CMD_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
@@ -280,7 +280,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     unsafe { write_bytes(cmd_virt_raw, 0, CMD_RING_TRBS * size_of::<Trb>()) };
     let cmd_ring = unsafe { TrbRing::new(cmd_phys, cmd_virt_raw as *mut Trb, CMD_RING_TRBS) };
 
-    const EVENT_RING_TRBS: usize = 64;
+    const EVENT_RING_TRBS: usize = 256;
     let (evt_phys, evt_virt_raw) = match dma::alloc(EVENT_RING_TRBS * size_of::<Trb>(), 64) {
         Some(pair) => pair,
         None => {
