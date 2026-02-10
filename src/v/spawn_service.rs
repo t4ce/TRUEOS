@@ -264,6 +264,16 @@ const HID_ANY_CLAIMED: u32 =
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const NET_ROOT_AND_QJS_READY: u32 =
+    crate::v::readiness::NET_GATEWAY_REACHABLE
+    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::v::readiness::QJS_ASYNC_FS_READY;
+const PARSE5_BOOT_READY: u32 =
+    crate::v::readiness::NET_GATEWAY_REACHABLE
+    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::v::readiness::QJS_ASYNC_FS_READY
+    | crate::v::readiness::QJS_BOOT_FETCH_DONE
+    | crate::v::readiness::PCI_IDS_CACHE_DONE;
 const UAC_SONG_READY: u32 =
     crate::v::readiness::UAC_SINE_DONE
     | crate::v::readiness::UAC_ATTACHED;
@@ -382,13 +392,13 @@ static TASKS: &[TaskSpec] = &[
     // Boot-time gated tasks
     TaskSpec {
         name: "boot-fetch-smoke",
-        required: NET_AND_ROOT_READY,
+        required: NET_ROOT_AND_QJS_READY,
         started: &BOOT_FETCH_SMOKE_STARTED,
         spawn: spawn_boot_fetch_smoke,
     },
     TaskSpec {
         name: "boot-parse5-smoke",
-        required: NET_AND_ROOT_READY,
+        required: PARSE5_BOOT_READY,
         started: &BOOT_PARSE5_SMOKE_STARTED,
         spawn: spawn_boot_parse5_smoke,
     },

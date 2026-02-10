@@ -1882,7 +1882,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             }
                             CommandAction::Qjs { src } => {
                                 set_go_mode(io, &mut go_mode, false);
-                                trueos_qjs::async_fs::ensure_service_started(&spawner);
+                                if trueos_qjs::async_fs::ensure_service_started(&spawner) {
+                                    crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+                                } else {
+                                    io.write_str("qjs: async fs service unavailable\r\n");
+                                    write_prompt_for_state(io, pending_action, install_wizard);
+                                    continue;
+                                }
                                 crate::shell::shellqjs::run(io, src.as_str()).await;
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }

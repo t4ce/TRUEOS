@@ -15,6 +15,9 @@ pub const UAC_ATTACHED: u32 = 1 << 5;
 pub const NET_GATEWAY_REACHABLE: u32 = 1 << 8;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
+pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
+pub const QJS_BOOT_FETCH_DONE: u32 = 1 << 18;
+pub const PCI_IDS_CACHE_DONE: u32 = 1 << 19;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 

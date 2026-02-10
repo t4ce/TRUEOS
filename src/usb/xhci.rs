@@ -54,14 +54,7 @@ unsafe fn bios_handoff_if_present(cap: *mut u8, hccparams1: u32) {
             }
 
             // Wait for BIOS to drop ownership.
-            let mut spin: u32 = 5_000_000;
-            while spin != 0 {
-                let cur = read_volatile(legsup);
-                if (cur & BIOS_OWNED) == 0 {
-                    break;
-                }
-                spin -= 1;
-            }
+            let _ = spin_until(5_000_000, || (read_volatile(legsup) & BIOS_OWNED) == 0);
 
             // Disable SMIs and clear pending SMI status bits.
             // Lower 16 bits are SMI enables; upper 16 bits are RW1C status.
@@ -85,7 +78,23 @@ pub const MAX_XHCI_CONTROLLERS: usize = 8;
 
 static FIRST_CONTROLLER: Mutex<Option<XhcInfo>> = Mutex::new(None);
 static CONTROLLERS: Mutex<Vec<XhcInfo, MAX_XHCI_CONTROLLERS>> = Mutex::new(Vec::new());
-static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(true);
+static LOG_PORTS_ON_INIT: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn spin_until<F>(max_spins: u32, mut done: F) -> bool
+where
+    F: FnMut() -> bool,
+{
+    let mut spins = max_spins;
+    while spins != 0 {
+        if done() {
+            return true;
+        }
+        spins -= 1;
+        wait::spin_step();
+    }
+    done()
+}
 
 // Per-controller cache of the last enumerated VID:PID per *root* port.
 // Packed as (vid << 16) | pid, with 0 meaning "unknown".
@@ -242,59 +251,6 @@ pub fn init_once() {
                 };
 
                 register_xhc(info);
-
-                const USBCMD: usize = 0x00 / 4;
-                const USBSTS: usize = 0x04 / 4;
-
-                const USBCMD_RS: u32 = 1 << 0;
-                const USBCMD_HCRST: u32 = 1 << 1;
-
-                const USBSTS_HCH: u32 = 1 << 0;
-                const USBSTS_CNR: u32 = 1 << 11;
-
-                let mut cmd = read_volatile(op.add(USBCMD));
-                let mut sts = read_volatile(op.add(USBSTS));
-
-                if (cmd & USBCMD_RS) != 0 {
-                    cmd &= !USBCMD_RS;
-                    write_volatile(op.add(USBCMD), cmd);
-                }
-
-                let mut spin: u64 = 5_000_000;
-                while (sts & USBSTS_HCH) == 0 && spin != 0 {
-                    sts = read_volatile(op.add(USBSTS));
-                    spin -= 1;
-                }
-                if (sts & USBSTS_HCH) == 0 {
-                    crate::log!("xhci: halt timeout sts=0x{:X}\n", sts);
-                    continue;
-                }
-
-                cmd = read_volatile(op.add(USBCMD));
-                write_volatile(op.add(USBCMD), cmd | USBCMD_HCRST);
-
-                spin = 10_000_000;
-                while (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 && spin != 0 {
-                    spin -= 1;
-                }
-                if (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 {
-                    crate::log!("xhci: reset bit stuck\n");
-                    continue;
-                }
-
-                spin = 10_000_000;
-                sts = read_volatile(op.add(USBSTS));
-                while (sts & USBSTS_CNR) != 0 && spin != 0 {
-                    sts = read_volatile(op.add(USBSTS));
-                    spin -= 1;
-                }
-
-                if (sts & USBSTS_CNR) != 0 {
-                    crate::log!("xhci: CNR stuck sts=0x{:X}\n", sts);
-                    continue;
-                }
-
-                crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
 
                 if LOG_PORTS_ON_INIT.load(Ordering::Acquire) {
                     let ctx = XhciContext::new(info);
@@ -1229,6 +1185,55 @@ pub async fn submit_cmd_and_wait(
     }
 
     Ok(evt)
+}
+
+/// Submit a command TRB and wait for its command-completion event, returning the raw event
+/// regardless of Completion Code. This is useful for callers that implement their own CC policy
+/// and fallback paths (e.g., enumeration retries).
+pub async fn submit_cmd_and_wait_any_cc(
+    ctx: &XhciContext,
+    cmd_ring: &mut TrbRing,
+    cmd: Trb,
+    slot_filter: Option<u32>,
+    what: &'static str,
+    timeout_iters: usize,
+    delay: EmbassyDuration,
+) -> Result<Trb, ()> {
+    let cmd_phys = match cmd_ring.push_with_phys(cmd) {
+        Some(phys) => phys,
+        None => {
+            crate::log!("xhci: {}: cmd ring full\n", what);
+            return Err(());
+        }
+    };
+    unsafe { core::ptr::write_volatile(ctx.doorbell.add(0), 0) };
+
+    wait_for_event(
+        ctx,
+        |evt| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 33 {
+                return false;
+            }
+            let evt_cmd_ptr = ((evt.d1 as u64) << 32) | (evt.d0 as u64);
+            if (evt_cmd_ptr & !0xF) != (cmd_phys & !0xF) {
+                return false;
+            }
+            if let Some(slot) = slot_filter {
+                let evt_slot = (evt.d3 >> 24) & 0xFF;
+                evt_slot == slot
+            } else {
+                true
+            }
+        },
+        timeout_iters,
+        delay,
+    )
+    .await
+    .ok_or(())
+    .map_err(|_| {
+        crate::log!("xhci: {}: timeout waiting for command completion\n", what);
+    })
 }
 
 pub const fn lo(val: u64) -> u32 {

@@ -196,6 +196,13 @@ pub extern "C" fn kmain() -> ! {
     if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
+    // QJS async FS/NET ops (used by module loader smokes and shell qjs) require
+    // this service task; mark readiness only when startup succeeds.
+    if trueos_qjs::async_fs::ensure_service_started(&spawner) {
+        crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
+    } else {
+        crate::log!("qjs: async_fs service spawn failed\n");
+    }
 
     net::init();
 
