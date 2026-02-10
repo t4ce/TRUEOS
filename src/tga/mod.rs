@@ -14,7 +14,31 @@ const TGA_EXPECTED_BAR0_SIZE: u64 = 1024 * 1024; // 1 MiB
 // - BAR0 + 0x00 is a 32-bit LED bitfield
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
+// - BAR0 + 0x100.. stores mouse snapshots (up to 10 sources)
+//   - entry stride: 0x10 bytes
+//   - +0x00: src tag    [31:24]=valid(1), [23:16]=controller, [15:8]=slot, [7:0]=port
+//   - +0x04: payload    [31:24]=wheel(i8), [23:16]=dy(i8), [15:8]=dx(i8), [7:0]=buttons
+//   - +0x08: seq (monotonic per write, wraps naturally)
+//   - +0x0C: reserved (currently 0)
 const TGA_LED_SET_OFF: usize = 0x00;
+const TGA_MOUSE_BASE_OFF: usize = 0x100;
+const TGA_MOUSE_ENTRY_STRIDE: usize = 0x10;
+const TGA_MOUSE_MAX_SOURCES: usize = 10;
+
+#[derive(Copy, Clone)]
+struct MouseRoute {
+    valid: bool,
+    controller: u8,
+    slot: u8,
+    port: u8,
+}
+
+const EMPTY_MOUSE_ROUTE: MouseRoute = MouseRoute {
+    valid: false,
+    controller: 0,
+    slot: 0,
+    port: 0,
+};
 
 struct Tga {
     bus: u8,
@@ -48,11 +72,19 @@ impl Tga {
     fn write_led(&self, value: u32) {
         unsafe { write_volatile(self.led_reg as *mut u32, value) };
     }
+
+    #[inline(always)]
+    fn write_mmio_u32(&self, offset: usize, value: u32) {
+        unsafe { write_volatile((self.mmio_base + offset) as *mut u32, value) };
+    }
 }
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
+static TGA_MOUSE_ROUTES: Mutex<[MouseRoute; TGA_MOUSE_MAX_SOURCES]> =
+    Mutex::new([EMPTY_MOUSE_ROUTE; TGA_MOUSE_MAX_SOURCES]);
+static TGA_MOUSE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
@@ -236,6 +268,84 @@ fn log_tga_state(prefix: &str, tga: &Tga) {
 
 pub fn tga_led_write(value: u32) {
     write_led_raw(value);
+}
+
+fn narrow_u8(value: u32) -> u8 {
+    if value > u8::MAX as u32 {
+        u8::MAX
+    } else {
+        value as u8
+    }
+}
+
+fn resolve_mouse_route_index(controller_id: usize, slot_id: u32, port: u8) -> Option<usize> {
+    let controller = narrow_u8(controller_id as u32);
+    let slot = narrow_u8(slot_id);
+
+    let mut routes = TGA_MOUSE_ROUTES.lock();
+
+    for idx in 0..routes.len() {
+        let r = routes[idx];
+        if r.valid && r.controller == controller && r.slot == slot && r.port == port {
+            return Some(idx);
+        }
+    }
+
+    for idx in 0..routes.len() {
+        if !routes[idx].valid {
+            routes[idx] = MouseRoute {
+                valid: true,
+                controller,
+                slot,
+                port,
+            };
+            crate::log!(
+                "tga: mouse route add idx={} ctrl={} slot={} port={}\n",
+                idx,
+                controller,
+                slot,
+                port
+            );
+            return Some(idx);
+        }
+    }
+
+    None
+}
+
+pub fn tga_mouse_write(
+    controller_id: usize,
+    slot_id: u32,
+    port: u8,
+    buttons: u8,
+    dx: i8,
+    dy: i8,
+    wheel: i8,
+) {
+    let Some(idx) = resolve_mouse_route_index(controller_id, slot_id, port) else {
+        return;
+    };
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return;
+    };
+
+    let entry_off = TGA_MOUSE_BASE_OFF + (idx * TGA_MOUSE_ENTRY_STRIDE);
+    let controller = narrow_u8(controller_id as u32);
+    let slot = narrow_u8(slot_id);
+
+    let tag = (1u32 << 24) | ((controller as u32) << 16) | ((slot as u32) << 8) | (port as u32);
+    let payload = ((wheel as u8 as u32) << 24)
+        | ((dy as u8 as u32) << 16)
+        | ((dx as u8 as u32) << 8)
+        | (buttons as u32);
+    let seq = TGA_MOUSE_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    tga.write_mmio_u32(entry_off + 0x00, tag);
+    tga.write_mmio_u32(entry_off + 0x04, payload);
+    tga.write_mmio_u32(entry_off + 0x08, seq);
+    tga.write_mmio_u32(entry_off + 0x0C, 0);
 }
 
 pub fn tga_led_set(on: bool) {

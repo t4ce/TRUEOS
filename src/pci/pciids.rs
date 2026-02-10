@@ -340,6 +340,14 @@ pub fn lookup_vendor_device_from_db<'a>(
 /// shell command) can optionally load+sanitize it to enrich PCI enumeration.
 #[task]
 pub(crate) async fn boot_cache_pci_ids_task() {
+    struct DoneGuard;
+    impl Drop for DoneGuard {
+        fn drop(&mut self) {
+            crate::v::readiness::set(crate::v::readiness::PCI_IDS_CACHE_DONE);
+        }
+    }
+    let _done_guard = DoneGuard;
+
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
         crate::log!("pciids: no root disk; skipping url={} key={}\n", PCI_IDS_URL, PCI_IDS_KEY);
         return;

@@ -11,7 +11,8 @@ use super::{
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use heapless::String;
 macro_rules! usbv {
     ($($tt:tt)*) => {{
         if super::USB_LOG_VERBOSE {
@@ -23,53 +24,65 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static LOG_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
 const USB_EVENT_POLL_DELAY_MS: u64 = 1;
+const CMD_TIMEOUT_SHORT_ITERS: usize = 400;
+const CMD_TIMEOUT_DEFAULT_ITERS: usize = 800;
+const CMD_TIMEOUT_ADDRESS_ITERS: usize = 2000;
+const CMD_TIMEOUT_ADDRESS_RETRY_ITERS: usize = 2500;
+const CTRL_TIMEOUT_DEFAULT_ITERS: usize = 800;
+const HUB_CHILD_ADDR_RETRY_ATTEMPTS: u8 = 2;
+const HUB_CHILD_ADDR_RETRY_BACKOFF_START_MS: u64 = 80;
+const HUB_CHILD_ADDR_RETRY_BACKOFF_STEP_MS: u64 = 120;
+const HUB_CHILD_ADDR_BSR_PRE_DELAY_MS: u64 = 60;
+const HUB_CHILD_SET_ADDRESS_TRIES: u8 = 2;
+const HUB_CHILD_ENUM_COOLDOWN_BASE_MS: u64 = 120;
+const HUB_CHILD_ENUM_COOLDOWN_MAX_MS: u64 = 2_000;
+const HUB_SLOT_TRACKED_MAX: usize = 32;
 
-async fn submit_cmd_and_wait(
-    ctx: &XhciContext,
-    cmd_ring: &mut TrbRing,
-    cmd: Trb,
-    slot_filter: Option<u32>,
-    what: &'static str,
-    timeout_iters: usize,
-    delay: EmbassyDuration,
-) -> Result<Trb, ()> {
-    let cmd_phys = match cmd_ring.push_with_phys(cmd) {
-        Some(phys) => phys,
-        None => {
-            usbv!("usb: {}: cmd ring full\n", what);
-            return Err(());
-        }
-    };
-    unsafe { write_volatile(ctx.doorbell.add(0), 0) };
+static HUB_CHILD_RETRY_AT_MS: [[[AtomicU64; LOG_PORTS_MAX + 1]; HUB_SLOT_TRACKED_MAX + 1];
+    xhci::MAX_XHCI_CONTROLLERS] = [const { [const { [const { AtomicU64::new(0) }; LOG_PORTS_MAX + 1] };
+    HUB_SLOT_TRACKED_MAX + 1] }; xhci::MAX_XHCI_CONTROLLERS];
+static HUB_CHILD_FAIL_STREAK: [[[AtomicU32; LOG_PORTS_MAX + 1]; HUB_SLOT_TRACKED_MAX + 1];
+    xhci::MAX_XHCI_CONTROLLERS] = [const { [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX + 1] };
+    HUB_SLOT_TRACKED_MAX + 1] }; xhci::MAX_XHCI_CONTROLLERS];
 
-    let evt = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 33 {
-                return false;
-            }
-            let evt_cmd_ptr = ((evt.d1 as u64) << 32) | (evt.d0 as u64);
-            if (evt_cmd_ptr & !0xF) != (cmd_phys & !0xF) {
-                return false;
-            }
-            if let Some(slot) = slot_filter {
-                let evt_slot = (evt.d3 >> 24) & 0xFF;
-                evt_slot == slot
-            } else {
-                true
-            }
-        },
-        timeout_iters,
-        delay,
-    )
-    .await
-    .ok_or(())
-    .map_err(|_| {
-        usbv!("usb: {}: timeout waiting for command completion\n", what);
-    })?;
+#[inline(always)]
+fn now_ms() -> u64 {
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    if hz == 0 {
+        return 0;
+    }
+    embassy_time_driver::now().saturating_mul(1000) / hz
+}
 
-    Ok(evt)
+fn hub_child_should_backoff(controller_id: usize, hub_slot: u32, hub_port: u8, now_ms: u64) -> bool {
+    let hs = hub_slot as usize;
+    let hp = hub_port as usize;
+    if controller_id >= xhci::MAX_XHCI_CONTROLLERS || hs == 0 || hs > HUB_SLOT_TRACKED_MAX || hp > LOG_PORTS_MAX {
+        return false;
+    }
+    now_ms < HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp].load(Ordering::Acquire)
+}
+
+fn hub_child_mark_result(controller_id: usize, hub_slot: u32, hub_port: u8, success: bool, now_ms: u64) {
+    let hs = hub_slot as usize;
+    let hp = hub_port as usize;
+    if controller_id >= xhci::MAX_XHCI_CONTROLLERS || hs == 0 || hs > HUB_SLOT_TRACKED_MAX || hp > LOG_PORTS_MAX {
+        return;
+    }
+    if success {
+        HUB_CHILD_FAIL_STREAK[controller_id][hs][hp].store(0, Ordering::Release);
+        HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp].store(0, Ordering::Release);
+        return;
+    }
+    let prev = HUB_CHILD_FAIL_STREAK[controller_id][hs][hp].load(Ordering::Relaxed);
+    let streak = core::cmp::min(prev.saturating_add(1), 8);
+    HUB_CHILD_FAIL_STREAK[controller_id][hs][hp].store(streak, Ordering::Release);
+    let shift = streak.saturating_sub(1).min(4);
+    let cooldown = core::cmp::min(
+        HUB_CHILD_ENUM_COOLDOWN_BASE_MS.saturating_mul(1u64 << shift),
+        HUB_CHILD_ENUM_COOLDOWN_MAX_MS,
+    );
+    HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp].store(now_ms.saturating_add(cooldown), Ordering::Release);
 }
 
 async fn update_ep0_max_packet(
@@ -109,7 +122,7 @@ async fn update_ep0_max_packet(
         write_volatile(ep0_dst.add(1), dw1);
     }
 
-    let eval_evt = submit_cmd_and_wait(
+    let eval_evt = xhci::submit_cmd_and_wait_any_cc(
         ctx,
         cmd_ring,
         Trb {
@@ -120,7 +133,7 @@ async fn update_ep0_max_packet(
         },
         Some(slot_id),
         "eval-ctx-ep0",
-        800,
+        CMD_TIMEOUT_DEFAULT_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await?;
@@ -135,6 +148,276 @@ async fn update_ep0_max_packet(
     }
 
     Ok(())
+}
+
+async fn fetch_devdesc_header_mps0(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    desc_phys: u64,
+    desc_virt: *mut u8,
+    fallback_mps0: u16,
+) -> u8 {
+    if let Ok((_cc, hdr_xfer)) = control::control_in(
+        ctx,
+        ep0_ring,
+        slot_id,
+        control::setup_get_descriptor(1, 0, 8),
+        desc_phys,
+        8,
+        "get-devdesc-8",
+        CTRL_TIMEOUT_DEFAULT_ITERS,
+    )
+    .await
+    {
+        let hdr_len = (hdr_xfer as usize).min(8);
+        let hdr = unsafe { core::slice::from_raw_parts(desc_virt, hdr_len) };
+        if hdr_len >= 8 {
+            return hdr[7];
+        }
+    }
+    fallback_mps0 as u8
+}
+
+async fn fetch_full_device_descriptor(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    desc_phys: u64,
+) -> Result<(), ()> {
+    control::control_in(
+        ctx,
+        ep0_ring,
+        slot_id,
+        control::setup_get_descriptor(1, 0, 18),
+        desc_phys,
+        18,
+        "get-devdesc",
+        CTRL_TIMEOUT_DEFAULT_ITERS,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn fetch_cfg_total_len(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    cfg_phys: u64,
+    cfg_virt: *mut u8,
+) -> u16 {
+    let mut cfg_total_len: u16 = 0;
+    if let Ok((_cc, hdr_xfer)) = control::control_in(
+        ctx,
+        ep0_ring,
+        slot_id,
+        control::setup_get_descriptor(2, 0, 9),
+        cfg_phys,
+        9,
+        "get-cfg-hdr",
+        CTRL_TIMEOUT_DEFAULT_ITERS,
+    )
+    .await
+    {
+        let hdr_len = (hdr_xfer as usize).min(9);
+        let hdr = unsafe { core::slice::from_raw_parts(cfg_virt, hdr_len) };
+        if hdr_len >= 4 {
+            cfg_total_len = u16::from_le_bytes([hdr[2], hdr[3]]);
+        }
+
+        let req_len = cfg_total_len.min(256) as u16;
+        if req_len > 9 {
+            let _ = control::control_in(
+                ctx,
+                ep0_ring,
+                slot_id,
+                control::setup_get_descriptor(2, 0, req_len),
+                cfg_phys,
+                req_len,
+                "get-cfg-full",
+                CTRL_TIMEOUT_DEFAULT_ITERS,
+            )
+            .await;
+        }
+    }
+    cfg_total_len
+}
+
+async fn fetch_device_strings_pair(
+    ctx: &XhciContext,
+    ep0_ring: &mut TrbRing,
+    slot_id: u32,
+    i_mfr: u8,
+    i_prod: u8,
+) -> (String<64>, String<64>) {
+    let mfr = control::fetch_string_ascii::<64>(ctx, ep0_ring, slot_id, i_mfr).await;
+    let prod = control::fetch_string_ascii::<64>(ctx, ep0_ring, slot_id, i_prod).await;
+    (mfr, prod)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn retry_hub_child_address_after_cc4(
+    state: &mut UsbControllerState,
+    ctx: &XhciContext,
+    slot_id: u32,
+    input_ctx_phys: u64,
+    tree_parent: (u32, u8),
+    tree_parent_hub_params: Option<(u32, u16)>,
+    ep0_ring: &mut TrbRing,
+    dev_ctx_virt: *mut u8,
+    input_ctx_virt: *mut u8,
+    ep0_virt_raw: *mut u8,
+    ep0_bytes: usize,
+) -> Result<(Trb, bool), ()> {
+    let (hub_slot, hub_port) = tree_parent;
+    let mut backoff_ms = HUB_CHILD_ADDR_RETRY_BACKOFF_START_MS;
+    for attempt in 1..=HUB_CHILD_ADDR_RETRY_ATTEMPTS {
+        Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
+        backoff_ms = core::cmp::min(
+            backoff_ms + HUB_CHILD_ADDR_RETRY_BACKOFF_STEP_MS,
+            600,
+        );
+
+        match xhci::submit_cmd_and_wait_any_cc(
+            ctx,
+            &mut state.cmd_ring,
+            Trb {
+                d0: lo(input_ctx_phys),
+                d1: hi(input_ctx_phys),
+                d2: 0,
+                d3: trb_type(11) | (slot_id << 24),
+            },
+            Some(slot_id),
+            "address-device-retry",
+            CMD_TIMEOUT_ADDRESS_RETRY_ITERS,
+            EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
+        )
+        .await
+        {
+            Ok(evt) => {
+                let retry_cc = control::trb_cc(&evt);
+                if retry_cc == 1 {
+                    return Ok((evt, false));
+                }
+                crate::log!(
+                    "usb: hub child address-device retry {} cc={} hub_slot={} port={} slot={}\n",
+                    attempt,
+                    retry_cc,
+                    hub_slot,
+                    hub_port,
+                    slot_id
+                );
+            }
+            Err(()) => {
+                crate::log!(
+                    "usb: hub child address-device retry {} timed out hub_slot={} port={} slot={}\n",
+                    attempt,
+                    hub_slot,
+                    hub_port,
+                    slot_id
+                );
+            }
+        }
+    }
+
+    if let Some((hub_speed_code, power_on_good_ms)) = tree_parent_hub_params {
+        crate::log!(
+            "usb[xHCI {}]: hub child port-recover before BSR=1 hub_slot={} port={}\n",
+            state.info.controller_id,
+            hub_slot,
+            hub_port
+        );
+        match hub::force_hub_port_reset_via_saved_ep0(
+            ctx,
+            hub_slot,
+            hub_port,
+            power_on_good_ms,
+            hub_speed_code,
+        )
+        .await
+        {
+            Some(st) => crate::log!(
+                "usb[xHCI {}]: hub child port-recover before BSR done status=0x{:04X} change=0x{:04X} ped={} speed_code={}\n",
+                state.info.controller_id,
+                st.status,
+                st.change,
+                st.enabled as u8,
+                st.speed_code,
+            ),
+            None => crate::log!(
+                "usb[xHCI {}]: hub child port-recover before BSR did not return state\n",
+                state.info.controller_id
+            ),
+        }
+    }
+
+    Timer::after(EmbassyDuration::from_millis(HUB_CHILD_ADDR_BSR_PRE_DELAY_MS)).await;
+    match xhci::submit_cmd_and_wait_any_cc(
+        ctx,
+        &mut state.cmd_ring,
+        Trb {
+            d0: lo(input_ctx_phys),
+            d1: hi(input_ctx_phys),
+            d2: 0,
+            d3: trb_type(11) | (1 << 9) | (slot_id << 24),
+        },
+        Some(slot_id),
+        "address-device-bsr",
+        CMD_TIMEOUT_ADDRESS_RETRY_ITERS,
+        EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
+    )
+    .await
+    {
+        Ok(evt) => {
+            if control::trb_cc(&evt) == 1
+                && set_address_with_retries(
+                    state.info.controller_id,
+                    ctx,
+                    ep0_ring,
+                    slot_id,
+                    HUB_CHILD_SET_ADDRESS_TRIES,
+                )
+                .await
+                .is_err()
+            {
+                crate::log!(
+                    "usb: hub child set-address failed after BSR hub_slot={} port={} slot={}\n",
+                    hub_slot,
+                    hub_port,
+                    slot_id
+                );
+                disable_slot_and_free(
+                    state,
+                    slot_id,
+                    dev_ctx_virt,
+                    input_ctx_virt,
+                    ep0_virt_raw,
+                    ep0_bytes,
+                )
+                .await;
+                return Err(());
+            }
+            Ok((evt, true))
+        }
+        Err(()) => {
+            crate::log!(
+                "usb: hub child address-device BSR retry timed out hub_slot={} port={} slot={}\n",
+                hub_slot,
+                hub_port,
+                slot_id
+            );
+            disable_slot_and_free(
+                state,
+                slot_id,
+                dev_ctx_virt,
+                input_ctx_virt,
+                ep0_virt_raw,
+                ep0_bytes,
+            )
+            .await;
+            Err(())
+        }
+    }
 }
 
 pub(crate) async fn enumerate_port(
@@ -253,7 +536,7 @@ async fn set_address_with_retries(
             None,
             0,
             "set-address",
-            800,
+            CTRL_TIMEOUT_DEFAULT_ITERS,
         )
         .await
         {
@@ -458,7 +741,13 @@ pub(crate) async fn enumerate_with_params(
     tt_think_time: u8,
     hub_queue: &mut heapless::Vec<HubWork, 16>,
 ) {
+    let controller_id = state.info.controller_id;
     if let Some((hub_slot, hub_port)) = tree_parent {
+        let t_ms = now_ms();
+        if hub_child_should_backoff(controller_id, hub_slot, hub_port, t_ms) {
+            let _ = disable_slot(state, slot_id).await;
+            return;
+        }
         crate::log!(
             "usb: hub child enum begin hub_slot={} port={} slot={} route=0x{:X} depth={} speed={}({})\n",
             hub_slot,
@@ -596,7 +885,7 @@ pub(crate) async fn enumerate_with_params(
     // Some SS hub-child paths are timing-sensitive; if we get a USB transaction
     // error (cc=4), fall back to BSR=1 + manual SET_ADDRESS.
     let mut use_bsr = false;
-    let mut addr_evt = match submit_cmd_and_wait(
+    let mut addr_evt = match xhci::submit_cmd_and_wait_any_cc(
         &ctx,
         &mut state.cmd_ring,
         Trb {
@@ -607,7 +896,7 @@ pub(crate) async fn enumerate_with_params(
         },
         Some(slot_id),
         if use_bsr { "address-device-bsr" } else { "address-device" },
-        2000,
+        CMD_TIMEOUT_ADDRESS_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await
@@ -620,6 +909,7 @@ pub(crate) async fn enumerate_with_params(
                 slot_id
             );
             if let Some((hub_slot, hub_port)) = tree_parent {
+                hub_child_mark_result(controller_id, hub_slot, hub_port, false, now_ms());
                 crate::log!(
                     "usb: hub child address-device timeout hub_slot={} port={} slot={}\n",
                     hub_slot,
@@ -692,7 +982,8 @@ pub(crate) async fn enumerate_with_params(
             // Cross-check the USB2 companion path hypothesis: for this physical hub
             // port number, see if any other hub device on this controller (especially
             // HS companion hubs) reports the same port as connected.
-            if let Some((hub_slot, hub_port)) = tree_parent {
+            if super::USB_LOG_VERBOSE {
+                if let Some((hub_slot, hub_port)) = tree_parent {
                 let hubs = hub::list_hubs_with_saved_ep0(&ctx);
                 for h in hubs.iter() {
                     if h.slot_id == hub_slot {
@@ -733,14 +1024,16 @@ pub(crate) async fn enumerate_with_params(
                         ),
                     }
                 }
+                }
             }
 
             // Before retrying Address Device, try a targeted downstream-port recovery
             // using the hub's EP0 (power/reset/enable). This can help if the hub's
             // SS link is in a transient/bad state even though the port looks enabled.
-            if let (Some((hub_slot, hub_port)), Some((hub_speed_code, power_on_good_ms))) =
-                (tree_parent, tree_parent_hub_params)
-            {
+            if super::USB_LOG_VERBOSE {
+                if let (Some((hub_slot, hub_port)), Some((hub_speed_code, power_on_good_ms))) =
+                    (tree_parent, tree_parent_hub_params)
+                {
                 crate::log!(
                     "usb[xHCI {}]: hub child port-recover hub_slot={} port={}\n",
                     state.info.controller_id,
@@ -769,179 +1062,31 @@ pub(crate) async fn enumerate_with_params(
                         state.info.controller_id
                     ),
                 }
-            }
-
-            // First try a few conservative BSR=0 retries with backoff.
-            let mut backoff_ms = 120u64;
-            for attempt in 1..=3u8 {
-                Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
-                backoff_ms = core::cmp::min(backoff_ms + 120, 600);
-
-                match submit_cmd_and_wait(
-                    &ctx,
-                    &mut state.cmd_ring,
-                    Trb {
-                        d0: lo(input_ctx_phys),
-                        d1: hi(input_ctx_phys),
-                        d2: 0,
-                        d3: trb_type(11) | (slot_id << 24),
-                    },
-                    Some(slot_id),
-                    "address-device-retry",
-                    2500,
-                    EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
-                )
-                .await
-                {
-                    Ok(evt) => {
-                        let retry_cc = control::trb_cc(&evt);
-                        addr_evt = evt;
-                        if retry_cc == 1 {
-                            break;
-                        }
-                        if let Some((hub_slot, hub_port)) = tree_parent {
-                            crate::log!(
-                                "usb: hub child address-device retry {} cc={} hub_slot={} port={} slot={}\n",
-                                attempt,
-                                retry_cc,
-                                hub_slot,
-                                hub_port,
-                                slot_id
-                            );
-                        }
-                    }
-                    Err(()) => {
-                        if let Some((hub_slot, hub_port)) = tree_parent {
-                            crate::log!(
-                                "usb: hub child address-device retry {} timed out hub_slot={} port={} slot={}\n",
-                                attempt,
-                                hub_slot,
-                                hub_port,
-                                slot_id
-                            );
-                        }
-                    }
-                }
-
-                if control::trb_cc(&addr_evt) == 1 {
-                    break;
                 }
             }
 
-            // If retries still aren't good, fall back to BSR=1 + manual SET_ADDRESS.
-            if control::trb_cc(&addr_evt) != 1 {
-                if let Some((hub_slot, hub_port)) = tree_parent {
-                    crate::log!(
-                        "usb: hub child address-device still failing; trying BSR=1 hub_slot={} port={} slot={}\n",
-                        hub_slot,
-                        hub_port,
-                        slot_id
-                    );
-                }
-
-                if let (Some((hub_slot, hub_port)), Some((hub_speed_code, power_on_good_ms))) =
-                    (tree_parent, tree_parent_hub_params)
-                {
-                    crate::log!(
-                        "usb[xHCI {}]: hub child port-recover before BSR=1 hub_slot={} port={}\n",
-                        state.info.controller_id,
-                        hub_slot,
-                        hub_port
-                    );
-                    match hub::force_hub_port_reset_via_saved_ep0(
-                        &ctx,
-                        hub_slot,
-                        hub_port,
-                        power_on_good_ms,
-                        hub_speed_code,
-                    )
-                    .await
-                    {
-                        Some(st) => crate::log!(
-                            "usb[xHCI {}]: hub child port-recover before BSR done status=0x{:04X} change=0x{:04X} ped={} speed_code={}\n",
-                            state.info.controller_id,
-                            st.status,
-                            st.change,
-                            st.enabled as u8,
-                            st.speed_code,
-                        ),
-                        None => crate::log!(
-                            "usb[xHCI {}]: hub child port-recover before BSR did not return state\n",
-                            state.info.controller_id
-                        ),
-                    }
-                }
-
-                Timer::after(EmbassyDuration::from_millis(120)).await;
-                use_bsr = true;
-                match submit_cmd_and_wait(
+            if let Some(parent) = tree_parent {
+                match retry_hub_child_address_after_cc4(
+                    state,
                     &ctx,
-                    &mut state.cmd_ring,
-                    Trb {
-                        d0: lo(input_ctx_phys),
-                        d1: hi(input_ctx_phys),
-                        d2: 0,
-                        d3: trb_type(11) | (1 << 9) | (slot_id << 24),
-                    },
-                    Some(slot_id),
-                    "address-device-bsr",
-                    2500,
-                    EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
+                    slot_id,
+                    input_ctx_phys,
+                    parent,
+                    tree_parent_hub_params,
+                    &mut ep0_ring,
+                    dev_ctx_virt,
+                    input_ctx_virt,
+                    ep0_virt_raw,
+                    ep0_bytes,
                 )
                 .await
                 {
-                    Ok(evt) => {
+                    Ok((evt, used_bsr)) => {
                         addr_evt = evt;
-                        if control::trb_cc(&addr_evt) == 1 {
-                            if set_address_with_retries(
-                                state.info.controller_id,
-                                &ctx,
-                                &mut ep0_ring,
-                                slot_id,
-                                3,
-                            )
-                                .await
-                                .is_err()
-                            {
-                                if let Some((hub_slot, hub_port)) = tree_parent {
-                                    crate::log!(
-                                        "usb: hub child set-address failed after BSR hub_slot={} port={} slot={}\n",
-                                        hub_slot,
-                                        hub_port,
-                                        slot_id
-                                    );
-                                }
-                                disable_slot_and_free(
-                                    state,
-                                    slot_id,
-                                    dev_ctx_virt,
-                                    input_ctx_virt,
-                                    ep0_virt_raw,
-                                    ep0_bytes,
-                                )
-                                .await;
-                                return;
-                            }
-                        }
+                        use_bsr = used_bsr;
                     }
                     Err(()) => {
-                        if let Some((hub_slot, hub_port)) = tree_parent {
-                            crate::log!(
-                                "usb: hub child address-device BSR retry timed out hub_slot={} port={} slot={}\n",
-                                hub_slot,
-                                hub_port,
-                                slot_id
-                            );
-                        }
-                        disable_slot_and_free(
-                            state,
-                            slot_id,
-                            dev_ctx_virt,
-                            input_ctx_virt,
-                            ep0_virt_raw,
-                            ep0_bytes,
-                        )
-                        .await;
+                        hub_child_mark_result(controller_id, parent.0, parent.1, false, now_ms());
                         return;
                     }
                 }
@@ -957,6 +1102,7 @@ pub(crate) async fn enumerate_with_params(
             slot_id
         );
         if let Some((hub_slot, hub_port)) = tree_parent {
+            hub_child_mark_result(controller_id, hub_slot, hub_port, false, now_ms());
             crate::log!(
                 "usb: hub child address-device failed hub_slot={} port={} slot={} cc={} evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
                 hub_slot,
@@ -987,6 +1133,7 @@ pub(crate) async fn enumerate_with_params(
     }
 
     if let Some((hub_slot, hub_port)) = tree_parent {
+        hub_child_mark_result(controller_id, hub_slot, hub_port, true, now_ms());
         crate::log!(
             "usb: hub child address-ok hub_slot={} port={} slot={}\n",
             hub_slot,
@@ -1022,25 +1169,9 @@ pub(crate) async fn enumerate_with_params(
 
     // First grab the 8-byte header to learn bMaxPacketSize0, then, if needed,
     // reprogram EP0 MPS via Evaluate Context before pulling the full descriptor.
-    let mut dev_mps0_hdr: u8 = ep0_mps as u8;
-    if let Ok((_cc, hdr_xfer)) = control::control_in(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        control::setup_get_descriptor(1, 0, 8),
-        desc_phys,
-        8,
-        "get-devdesc-8",
-        800,
-    )
-    .await
-    {
-        let hdr_len = (hdr_xfer as usize).min(8);
-        let hdr = unsafe { core::slice::from_raw_parts(desc_virt, hdr_len) };
-        if hdr_len >= 8 {
-            dev_mps0_hdr = hdr[7];
-        }
-    }
+    let dev_mps0_hdr =
+        fetch_devdesc_header_mps0(&ctx, &mut ep0_ring, slot_id, desc_phys, desc_virt, ep0_mps)
+            .await;
 
     let desired_mps0 = match dev_mps0_hdr {
         0 => ep0_mps,
@@ -1078,18 +1209,9 @@ pub(crate) async fn enumerate_with_params(
 
     unsafe { write_bytes(desc_virt, 0, 64) };
 
-    if control::control_in(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        control::setup_get_descriptor(1, 0, 18),
-        desc_phys,
-        18,
-        "get-devdesc",
-        800,
-    )
-    .await
-    .is_err()
+    if fetch_full_device_descriptor(&ctx, &mut ep0_ring, slot_id, desc_phys)
+        .await
+        .is_err()
     {
         usbv!(
             "usb: enum port {} get-devdesc failed slot={}\n",
@@ -1113,9 +1235,6 @@ pub(crate) async fn enumerate_with_params(
         (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[14], dd[15], dd[16], dd[17])
     };
 
-    let dev_mfr = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_mfr).await;
-    let dev_prod = control::fetch_string_ascii::<64>(&ctx, &mut ep0_ring, slot_id, dev_i_prod).await;
-
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
         Some(pair) => pair,
         None => {
@@ -1125,40 +1244,8 @@ pub(crate) async fn enumerate_with_params(
     };
     unsafe { write_bytes(cfg_virt, 0, 256) };
 
-    let mut cfg_total_len: u16 = 0;
-    if let Ok((_cc, hdr_xfer)) = control::control_in(
-        &ctx,
-        &mut ep0_ring,
-        slot_id,
-        control::setup_get_descriptor(2, 0, 9),
-        cfg_phys,
-        9,
-        "get-cfg-hdr",
-        800,
-    )
-    .await
-    {
-        let hdr_len = (hdr_xfer as usize).min(9);
-        let hdr = unsafe { core::slice::from_raw_parts(cfg_virt, hdr_len) };
-        if hdr_len >= 4 {
-            cfg_total_len = u16::from_le_bytes([hdr[2], hdr[3]]);
-        }
-
-        let req_len = cfg_total_len.min(256) as u16;
-        if req_len > 9 {
-            let _ = control::control_in(
-                &ctx,
-                &mut ep0_ring,
-                slot_id,
-                control::setup_get_descriptor(2, 0, req_len),
-                cfg_phys,
-                req_len,
-                "get-cfg-full",
-                800,
-            )
-            .await;
-        }
-    }
+    let cfg_total_len =
+        fetch_cfg_total_len(&ctx, &mut ep0_ring, slot_id, cfg_phys, cfg_virt).await;
 
     usbv!(
         "usb: enum port {} cfgdesc len={} slot={}\n",
@@ -1191,15 +1278,6 @@ pub(crate) async fn enumerate_with_params(
             target_port,
             dev_vid,
             dev_pid
-        );
-    }
-
-    if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
-        crate::log!(
-            "usb: enum port {} strings mfr='{}' prod='{}'\n",
-            target_port,
-            dev_mfr.as_str(),
-            dev_prod.as_str()
         );
     }
 
@@ -1327,13 +1405,18 @@ pub(crate) async fn enumerate_with_params(
     let should_log = count == 1 || (count % 50 == 0);
 
     if should_log {
-        if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
-            crate::log!(
-                "usb: device strings on port {} mfr='{}' prod='{}'\n",
-                target_port,
-                dev_mfr.as_str(),
-                dev_prod.as_str()
-            );
+        if dev_i_mfr != 0 || dev_i_prod != 0 {
+            let (dev_mfr, dev_prod) =
+                fetch_device_strings_pair(&ctx, &mut ep0_ring, slot_id, dev_i_mfr, dev_i_prod)
+                    .await;
+            if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
+                crate::log!(
+                    "usb: device strings on port {} mfr='{}' prod='{}'\n",
+                    target_port,
+                    dev_mfr.as_str(),
+                    dev_prod.as_str()
+                );
+            }
         }
 
         if let Some((if_num, if_cls, if_sub, if_prot)) = first_if {
@@ -1409,7 +1492,7 @@ pub(crate) async fn enumerate_with_params(
 
 pub(crate) async fn enable_slot(state: &mut UsbControllerState, target_port: u8) -> Option<u32> {
     let ctx = state.ctx;
-    let enable_evt = match submit_cmd_and_wait(
+    let enable_evt = match xhci::submit_cmd_and_wait_any_cc(
         &ctx,
         &mut state.cmd_ring,
         Trb {
@@ -1420,7 +1503,7 @@ pub(crate) async fn enable_slot(state: &mut UsbControllerState, target_port: u8)
         },
         None,
         "enable-slot",
-        400,
+        CMD_TIMEOUT_SHORT_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await
@@ -1462,13 +1545,13 @@ pub(crate) async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -
         d2: 0,
         d3: trb_type(10) | (slot_id << 24),
     };
-    xhci::submit_cmd_and_wait(
+    xhci::submit_cmd_and_wait_any_cc(
         &state.ctx,
         &mut state.cmd_ring,
         disable,
         Some(slot_id),
         "disable-slot",
-        400,
+        CMD_TIMEOUT_SHORT_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await?;

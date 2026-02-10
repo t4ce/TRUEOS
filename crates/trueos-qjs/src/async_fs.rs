@@ -206,15 +206,19 @@ fn net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<(), i32> {
     Ok(())
 }
 
-pub fn ensure_service_started(spawner: &Spawner) {
+pub fn ensure_service_started(spawner: &Spawner) -> bool {
     if SERVICE_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return;
+        return true;
     }
 
-    let _ = spawner.spawn(async_fs_service_task());
+    if spawner.spawn(async_fs_service_task()).is_err() {
+        SERVICE_STARTED.store(false, Ordering::Release);
+        return false;
+    }
+    true
 }
 
 #[embassy_executor::task]

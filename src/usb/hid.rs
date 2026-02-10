@@ -104,6 +104,7 @@ pub struct HidEpInfo {
 
 pub struct HidRuntime {
     pub controller_id: usize,
+    pub target_port: u8,
     pub ep: HidEpInfo,
     pub report_phys: u64,
     pub report_virt: *mut u8,
@@ -119,7 +120,7 @@ pub struct HidRuntime {
 unsafe impl Send for HidRuntime {}
 unsafe impl Sync for HidRuntime {}
 
-const MAX_HID_DEVICES: usize = 8;
+const MAX_HID_DEVICES: usize = 16;
 const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
@@ -229,6 +230,15 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 dy,
                 wheel,
             }));
+            crate::tga::tga_mouse_write(
+                runtime.controller_id,
+                runtime.slot_id,
+                runtime.target_port,
+                buttons,
+                dx,
+                dy,
+                wheel,
+            );
         }
     } else if runtime.hid_kind == 1 {
         // Boot keyboard: modifiers + 6 keycodes
@@ -742,6 +752,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
+            target_port,
             ep,
             report_phys: rep_phys,
             report_virt: rep_virt,
@@ -1391,6 +1402,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
+            target_port,
             ep,
             report_phys: rep_phys,
             report_virt: rep_virt,

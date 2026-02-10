@@ -5,9 +5,28 @@ pub mod smoke_fs;
 pub mod tls_demo;
 
 use embassy_executor::task;
+use embassy_time::Duration as EmbassyDuration;
 
 #[task]
 pub(crate) async fn boot_fetch_to_file_smoke_task() {
+    struct DoneGuard;
+    impl Drop for DoneGuard {
+        fn drop(&mut self) {
+            crate::v::readiness::set(crate::v::readiness::QJS_BOOT_FETCH_DONE);
+        }
+    }
+    let _done_guard = DoneGuard;
+
+    if !crate::v::readiness::wait_for_timeout(
+        crate::v::readiness::QJS_ASYNC_FS_READY,
+        EmbassyDuration::from_secs(5),
+    )
+    .await
+    {
+        crate::log!("qjs-loader-smoke: skipped (qjs async fs not ready)\n");
+        return;
+    }
+
     // Keep these as concrete URLs (not bare specifiers) so this directly validates
     // the CDN fetch-to-file + persistence layer.
     //
@@ -70,6 +89,15 @@ pub(crate) async fn boot_fetch_to_file_smoke_task() {
 
 #[task]
 pub(crate) async fn boot_cheerio_smoke_task() {
+    if !crate::v::readiness::wait_for_timeout(
+        crate::v::readiness::QJS_ASYNC_FS_READY,
+        EmbassyDuration::from_secs(5),
+    )
+    .await
+    {
+        crate::log!("qjs-cheerio-smoke: skipped (qjs async fs not ready)\n");
+        return;
+    }
     crate::log!("qjs-cheerio-smoke: starting\n");
     unsafe { trueos_qjs::trueos_smoke::run_cheerio_smoke() };
     crate::log!("qjs-cheerio-smoke: done\n");
@@ -77,6 +105,15 @@ pub(crate) async fn boot_cheerio_smoke_task() {
 
 #[task]
 pub(crate) async fn boot_parse5_smoke_task() {
+    if !crate::v::readiness::wait_for_timeout(
+        crate::v::readiness::QJS_ASYNC_FS_READY,
+        EmbassyDuration::from_secs(5),
+    )
+    .await
+    {
+        crate::log!("qjs-parse5-smoke: skipped (qjs async fs not ready)\n");
+        return;
+    }
     crate::log!("qjs-parse5-smoke: starting\n");
     unsafe { trueos_qjs::trueos_smoke::run_parse5_smoke() };
     crate::log!("qjs-parse5-smoke: done\n");
