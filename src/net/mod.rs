@@ -73,6 +73,52 @@ impl NetDevice for ActiveDevice {
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
 static PRIMARY_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DmaFpgaStreamStatus {
+    pub active: bool,
+    pub filter_enabled: bool,
+    pub rx_packets_seen: u64,
+    pub rx_packets_matched: u64,
+    pub queued_packets: u64,
+    pub queue_failures: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmaFpgaIpProto {
+    Tcp,
+    Udp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DmaFpgaFlowFilter {
+    pub proto: DmaFpgaIpProto,
+    pub src_ip: Option<[u8; 4]>,
+    pub dst_ip: Option<[u8; 4]>,
+    pub src_port: Option<u16>,
+    pub dst_port: Option<u16>,
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+#[derive(Clone, Copy)]
+struct DmaFpgaStreamState {
+    active: bool,
+    filter: Option<DmaFpgaFlowFilter>,
+    rx_packets_seen: u64,
+    rx_packets_matched: u64,
+    queued_packets: u64,
+    queue_failures: u64,
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+static DMA_FPGA_STREAM_STATE: Mutex<DmaFpgaStreamState> = Mutex::new(DmaFpgaStreamState {
+    active: false,
+    filter: None,
+    rx_packets_seen: 0,
+    rx_packets_matched: 0,
+    queued_packets: 0,
+    queue_failures: 0,
+});
+
 pub fn init() {
     {
         let mut guard = DEVICES.lock();
@@ -178,3 +224,187 @@ fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> O
     let dev = guard.get_mut(index)?;
     Some(f(dev))
 }
+
+#[cfg(feature = "dma_nic_fpga")]
+pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
+    let mut st = DMA_FPGA_STREAM_STATE.lock();
+    if st.active {
+        return Err("already active");
+    }
+    st.active = true;
+    st.filter = None;
+    st.rx_packets_seen = 0;
+    st.rx_packets_matched = 0;
+    st.queued_packets = 0;
+    st.queue_failures = 0;
+    Ok(())
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
+    Err("feature dma_nic_fpga disabled")
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+pub fn dma_fpga_stream_end() {
+    let mut st = DMA_FPGA_STREAM_STATE.lock();
+    st.active = false;
+    st.filter = None;
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub fn dma_fpga_stream_end() {}
+
+#[cfg(feature = "dma_nic_fpga")]
+pub fn dma_fpga_stream_status() -> DmaFpgaStreamStatus {
+    let st = DMA_FPGA_STREAM_STATE.lock();
+    DmaFpgaStreamStatus {
+        active: st.active,
+        filter_enabled: st.filter.is_some(),
+        rx_packets_seen: st.rx_packets_seen,
+        rx_packets_matched: st.rx_packets_matched,
+        queued_packets: st.queued_packets,
+        queue_failures: st.queue_failures,
+    }
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub fn dma_fpga_stream_status() -> DmaFpgaStreamStatus {
+    DmaFpgaStreamStatus {
+        active: false,
+        filter_enabled: false,
+        rx_packets_seen: 0,
+        rx_packets_matched: 0,
+        queued_packets: 0,
+        queue_failures: 0,
+    }
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+pub fn dma_fpga_stream_set_filter(filter: DmaFpgaFlowFilter) -> Result<(), &'static str> {
+    let mut st = DMA_FPGA_STREAM_STATE.lock();
+    if !st.active {
+        return Err("stream not active");
+    }
+    st.filter = Some(filter);
+    Ok(())
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub fn dma_fpga_stream_set_filter(_filter: DmaFpgaFlowFilter) -> Result<(), &'static str> {
+    Err("feature dma_nic_fpga disabled")
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+pub fn dma_fpga_stream_clear_filter() {
+    let mut st = DMA_FPGA_STREAM_STATE.lock();
+    st.filter = None;
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub fn dma_fpga_stream_clear_filter() {}
+
+#[cfg(feature = "dma_nic_fpga")]
+fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {
+    if packet.len() < 14 {
+        return false;
+    }
+
+    let mut ether_type = u16::from_be_bytes([packet[12], packet[13]]);
+    let mut l2_off = 14usize;
+    if ether_type == 0x8100 {
+        if packet.len() < 18 {
+            return false;
+        }
+        ether_type = u16::from_be_bytes([packet[16], packet[17]]);
+        l2_off = 18;
+    }
+    if ether_type != 0x0800 || packet.len() < l2_off + 20 {
+        return false;
+    }
+
+    let ver_ihl = packet[l2_off];
+    if (ver_ihl >> 4) != 4 {
+        return false;
+    }
+    let ihl = ((ver_ihl & 0x0F) as usize) * 4;
+    if ihl < 20 || packet.len() < l2_off + ihl {
+        return false;
+    }
+
+    let proto = packet[l2_off + 9];
+    let want_proto = match filter.proto {
+        DmaFpgaIpProto::Tcp => 6u8,
+        DmaFpgaIpProto::Udp => 17u8,
+    };
+    if proto != want_proto {
+        return false;
+    }
+
+    let src_ip = [
+        packet[l2_off + 12],
+        packet[l2_off + 13],
+        packet[l2_off + 14],
+        packet[l2_off + 15],
+    ];
+    let dst_ip = [
+        packet[l2_off + 16],
+        packet[l2_off + 17],
+        packet[l2_off + 18],
+        packet[l2_off + 19],
+    ];
+
+    if let Some(want) = filter.src_ip {
+        if src_ip != want {
+            return false;
+        }
+    }
+    if let Some(want) = filter.dst_ip {
+        if dst_ip != want {
+            return false;
+        }
+    }
+
+    let l4_off = l2_off + ihl;
+    if packet.len() < l4_off + 4 {
+        return false;
+    }
+    let src_port = u16::from_be_bytes([packet[l4_off], packet[l4_off + 1]]);
+    let dst_port = u16::from_be_bytes([packet[l4_off + 2], packet[l4_off + 3]]);
+
+    if let Some(want) = filter.src_port {
+        if src_port != want {
+            return false;
+        }
+    }
+    if let Some(want) = filter.dst_port {
+        if dst_port != want {
+            return false;
+        }
+    }
+
+    true
+}
+
+#[cfg(feature = "dma_nic_fpga")]
+pub(crate) fn dma_fpga_stream_on_rx_packet(packet: &[u8]) {
+    let mut st = DMA_FPGA_STREAM_STATE.lock();
+    if !st.active {
+        return;
+    }
+
+    st.rx_packets_seen = st.rx_packets_seen.saturating_add(1);
+    if let Some(filter) = st.filter {
+        if !rx_packet_matches_filter(packet, filter) {
+            return;
+        }
+    }
+    st.rx_packets_matched = st.rx_packets_matched.saturating_add(1);
+    match crate::pci::nic_fpga_dma::submit_nic_frame_copy(packet) {
+        Ok(_) => st.queued_packets = st.queued_packets.saturating_add(1),
+        Err(_) => st.queue_failures = st.queue_failures.saturating_add(1),
+    }
+}
+
+#[cfg(not(feature = "dma_nic_fpga"))]
+pub(crate) fn dma_fpga_stream_on_rx_packet(_packet: &[u8]) {}
