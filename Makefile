@@ -1,5 +1,10 @@
 BUILD_MODE ?= debug
 KERNEL_BIN = tgt/86_64/$(BUILD_MODE)/TRUEOS
+ARTIFACT_BUILD_ID ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+ARTIFACT_DIR := bld/artifacts/$(BUILD_MODE)-$(ARTIFACT_BUILD_ID)
+ARTIFACT_FULL_ELF := $(ARTIFACT_DIR)/TRUEOS.full.elf
+ARTIFACT_RUNTIME_ELF := $(ARTIFACT_DIR)/TRUEOS.elf
+ARTIFACT_BUILD_INFO := $(ARTIFACT_DIR)/BUILD_INFO
 
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
@@ -23,6 +28,7 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
 QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_RUNH_FLAGS = -machine q35,accel=kvm:tcg -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu-runh.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,+vmx -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -41,6 +47,7 @@ QEMU_USB_FLAGS = \
 #-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
+QEMU_RUNH = $(QEMU_BIN) $(QEMU_RUNH_FLAGS)
 
 IMG_SIZE ?= 1G
 
@@ -55,12 +62,29 @@ nvme.img:
 kernel:
 	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
 
-iso: kernel images
+artifacts: kernel
+	mkdir -p $(ARTIFACT_DIR)
+	cp $(KERNEL_BIN) $(ARTIFACT_FULL_ELF)
+	cp $(KERNEL_BIN) $(ARTIFACT_RUNTIME_ELF)
+	strip -s $(ARTIFACT_RUNTIME_ELF) || true
+	@{ \
+		commit=$$(git rev-parse HEAD 2>/dev/null || echo unknown); \
+		ts=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+		printf "build_mode=%s\n" "$(BUILD_MODE)"; \
+		printf "build_id=%s\n" "$(ARTIFACT_BUILD_ID)"; \
+		printf "commit=%s\n" "$$commit"; \
+		printf "timestamp_utc=%s\n" "$$ts"; \
+		printf "full_elf=%s\n" "$(ARTIFACT_FULL_ELF)"; \
+		printf "runtime_elf=%s\n" "$(ARTIFACT_RUNTIME_ELF)"; \
+	} > $(ARTIFACT_BUILD_INFO)
+
+kernel-stages: artifacts
+
+iso: artifacts images
 	rm -rf $(ISO_BOOT_DIR)
 	rm -f $(ISO_PATH)
 	mkdir -p $(ISO_BOOT_DIR)
-	cp $(KERNEL_BIN) $(ISO_BOOT_DIR)/TRUEOS.elf
-	strip -s $(ISO_BOOT_DIR)/TRUEOS.elf || true
+	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
@@ -101,6 +125,9 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
+
+runh: iso-debug
+	@($(QEMU_RUNH) & $(SERIAL_CONSOLE_CMD))
 
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
