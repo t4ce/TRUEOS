@@ -125,6 +125,8 @@ fn netbench_fail_text(code: u8) -> &'static str {
 
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
 }
 
@@ -145,6 +147,134 @@ fn write_prompt_for_state(
 }
 
 #[inline]
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    if prefix.len() > s.len() {
+        return false;
+    }
+    s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+fn handle_tab_completion(
+    io: &dyn ShellIo,
+    line: &mut String<128>,
+    term_cols: usize,
+    term_rows: usize,
+    pending_action: Option<PendingAction>,
+    install_wizard: Option<InstallWizardStage>,
+) {
+    if pending_action.is_some() || install_wizard.is_some() {
+        return;
+    }
+
+    let mut input_buf: String<128> = String::new();
+    let _ = input_buf.push_str(line.as_str());
+    let input = input_buf.as_str();
+    if input.is_empty() {
+        return;
+    }
+
+    // If the command token is already present, Tab shows that command's usage line.
+    if input.chars().any(|ch| ch.is_whitespace()) {
+        let cmd = input.split_whitespace().next().unwrap_or("");
+        if !cmd.is_empty() {
+            let mut usage: String<192> = String::new();
+            if crate::shell::cmd::usage_text_for_name(cmd, &mut usage) {
+                write_overlay_hint(io, term_cols, term_rows, usage.as_str());
+            }
+        }
+        return;
+    }
+
+    let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
+    crate::shell::cmd::list_command_names(&mut cmds);
+    cmds.as_mut_slice().sort_unstable();
+
+    let mut shown: heapless::Vec<&'static str, 5> = heapless::Vec::new();
+    let mut match_count = 0usize;
+    let mut unique: Option<&'static str> = None;
+
+    for name in cmds.iter().copied() {
+        if starts_with_ignore_ascii_case(name, input) {
+            match_count += 1;
+            if unique.is_none() {
+                unique = Some(name);
+            }
+            if shown.len() < 5 {
+                let _ = shown.push(name);
+            }
+        }
+    }
+
+    if match_count == 0 {
+        return;
+    }
+
+    if match_count == 1 {
+        let target = unique.unwrap_or(input);
+        if target.len() > input.len() {
+            let suffix = &target[input.len()..];
+            for ch in suffix.chars() {
+                if line.push(ch).is_err() {
+                    break;
+                }
+                io.write_char(ch);
+            }
+        }
+        if !line.as_str().ends_with(' ') {
+            if line.push(' ').is_ok() {
+                io.write_char(' ');
+            }
+        }
+        let mut usage: String<192> = String::new();
+        if crate::shell::cmd::usage_text_for_name(target, &mut usage) {
+            write_overlay_hint(io, term_cols, term_rows, usage.as_str());
+        } else {
+            write_overlay_hint(io, term_cols, term_rows, "");
+        }
+        return;
+    }
+
+    let mut msg: String<192> = String::new();
+    let _ = msg.push_str("matches: ");
+    for (idx, name) in shown.iter().enumerate() {
+        if idx != 0 {
+            let _ = msg.push(' ');
+        }
+        let _ = msg.push_str(name);
+    }
+    if match_count > shown.len() {
+        let _ = msg.push_str(" ...");
+    }
+    write_overlay_hint(io, term_cols, term_rows, msg.as_str());
+}
+
+#[inline]
+fn write_overlay_hint(io: &dyn ShellIo, term_cols: usize, term_rows: usize, text: &str) {
+    if term_cols == 0 || term_rows < 2 {
+        return;
+    }
+
+    let mut clipped: String<256> = String::new();
+    let mut cols = 0usize;
+    for ch in text.chars() {
+        if cols >= term_cols {
+            break;
+        }
+        if clipped.push(ch).is_err() {
+            break;
+        }
+        cols += 1;
+    }
+
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows - 1, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(clipped.as_str());
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+    refresh_status_bar(io, term_cols, term_rows);
+}
+
+#[inline]
 fn write_right_aligned(io: &dyn ShellIo, row: usize, term_cols: usize, text: &str) {
     if term_cols == 0 || text.is_empty() {
         return;
@@ -153,6 +283,26 @@ fn write_right_aligned(io: &dyn ShellIo, row: usize, term_cols: usize, text: &st
     let col = term_cols.saturating_sub(len).saturating_add(1);
     io.write_fmt(format_args!("{}", crate::ecma48::pos(row, col)));
     io.write_str(text);
+}
+
+#[inline]
+fn output_bottom_row(term_rows: usize) -> usize {
+    // row 1: banner, row 2: prompt, row term_rows-1: hint, row term_rows: status
+    core::cmp::max(3, term_rows.saturating_sub(2))
+}
+
+#[inline]
+fn apply_shell_scroll_region(io: &dyn ShellIo, term_rows: usize) {
+    let top = 3usize;
+    let bottom = output_bottom_row(term_rows);
+    io.write_fmt(format_args!("\x1b[{};{}r", top, bottom));
+}
+
+#[inline]
+fn append_output_cursor(io: &dyn ShellIo, term_rows: usize) {
+    let row = output_bottom_row(term_rows);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(row, 1)));
+    io.write_str("\r\n");
 }
 
 #[inline]
@@ -441,8 +591,8 @@ async fn print_netbench_nic_table(io: &dyn ShellIo) {
 
 #[derive(Copy, Clone)]
 pub(crate) enum PendingAction {
-    Reset,
-    S5,
+    AcpiReset,
+    AcpiState(u8),
     FormatConfirm { disc_id: u32 },
     InstallConfirm { disc_id: u32 },
     UpdateConfirm { disc_id: u32 },
@@ -1118,6 +1268,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     let mut term_rows: usize = DEFAULT_TERM_ROWS;
 
     write_banner(io, term_cols);
+    apply_shell_scroll_region(io, term_rows);
+    write_prompt(io);
 
     let mut line: String<128> = String::new();
     let mut utf8 = Utf8Decoder::new();
@@ -1210,15 +1362,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
+                    term_cols = DEFAULT_TERM_COLS;
+                    term_rows = DEFAULT_TERM_ROWS;
                     set_go_mode(io, &mut go_mode, false);
                     io.write_str(crate::ecma48::CLEAR_SCREEN);
                     io.write_str(crate::ecma48::HOME);
                     write_banner(io, term_cols);
+                    apply_shell_scroll_region(io, term_rows);
+                    write_prompt(io);
                 }
                 continue;
             }
             match b {
-                b'\r' | b'\n' | b' ' if matches!(pending_action, Some(PendingAction::Reset | PendingAction::S5)) => {
+                b'\r' | b'\n' | b' ' if matches!(pending_action, Some(PendingAction::AcpiReset | PendingAction::AcpiState(_))) => {
                     utf8.clear();
                     // Other pending actions: Enter/Space cancels.
                     pending_action = None;
@@ -1810,7 +1966,49 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         continue;
                     }
                     if !line.is_empty() {
-                        io.write_str("\r\n");
+                        // Enter uses the same prefix matching behavior as Tab:
+                        // unique -> expand and execute, ambiguous -> show matches and stay in-place.
+                        if pending_action.is_none() {
+                            let mut input_buf: String<128> = String::new();
+                            let _ = input_buf.push_str(line.as_str());
+                            let input = input_buf.as_str();
+                            if !input.chars().any(|ch| ch.is_whitespace()) {
+                                let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
+                                crate::shell::cmd::list_command_names(&mut cmds);
+                                let mut matches = 0usize;
+                                let mut unique: Option<&'static str> = None;
+                                for name in cmds.iter().copied() {
+                                    if starts_with_ignore_ascii_case(name, input) {
+                                        matches += 1;
+                                        if unique.is_none() {
+                                            unique = Some(name);
+                                        }
+                                    }
+                                }
+                                if matches > 1 {
+                                    utf8.clear();
+                                    handle_tab_completion(
+                                        io,
+                                        &mut line,
+                                        term_cols,
+                                        term_rows,
+                                        pending_action,
+                                        install_wizard,
+                                    );
+                                    continue;
+                                }
+                                if matches == 1 {
+                                    if let Some(full) = unique {
+                                        if !full.eq_ignore_ascii_case(input) {
+                                            line.clear();
+                                            let _ = line.push_str(full);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        append_output_cursor(io, term_rows);
                         let action = handle_line(
                             &line,
                             &spawner,
@@ -1825,7 +2023,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             CommandAction::Pending(action) => {
                                 pending_action = Some(action);
                                 pending_deadline = match action {
-                                    PendingAction::Reset | PendingAction::S5 => {
+                                    PendingAction::AcpiReset |
+                                    PendingAction::AcpiState(_) => {
                                         Some(Instant::now() + EmbassyDuration::from_secs(5))
                                     }
                                     PendingAction::FormatConfirm { .. } => None,
@@ -1835,7 +2034,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 set_go_mode(
                                     io,
                                     &mut go_mode,
-                                    matches!(action, PendingAction::Reset | PendingAction::S5),
+                                    matches!(action, PendingAction::AcpiReset | PendingAction::AcpiState(_)),
                                 );
                                 write_prompt_for_state(io, pending_action, install_wizard);
                             }
@@ -1917,6 +2116,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                     io.write_str(crate::ecma48::CLEAR_SCREEN);
                                     io.write_str(crate::ecma48::HOME);
                                     write_banner(io, term_cols);
+                                    apply_shell_scroll_region(io, term_rows);
+                                    write_prompt(io);
                                     continue;
                                 };
 
@@ -1930,6 +2131,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 io.write_str(crate::ecma48::CLEAR_SCREEN);
                                 io.write_str(crate::ecma48::HOME);
                                 write_banner(io, term_cols);
+                                apply_shell_scroll_region(io, term_rows);
+                                write_prompt(io);
                             }
                             CommandAction::None => {
                                 write_prompt_for_state(io, pending_action, install_wizard);
@@ -1949,6 +2152,17 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     line.clear();
                     io.write_str("^C\r\n");
                     write_prompt(io);
+                }
+                b'\t' => {
+                    utf8.clear();
+                    handle_tab_completion(
+                        io,
+                        &mut line,
+                        term_cols,
+                        term_rows,
+                        pending_action,
+                        install_wizard,
+                    );
                 }
                 _ => {
                     if b >= 0x20 {
@@ -1979,15 +2193,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     pending_action = None;
                     pending_deadline = None;
                     match action {
-                        PendingAction::Reset => {
-                            if let Err(_err) = crate::efi::acpi::facp::reset_system() {
-                                io.write_str("tlb miss warn\r\n");
+                        PendingAction::AcpiReset => {
+                            if crate::efi::acpi::facp::reset_system().is_err() {
+                                io.write_str("\r\nacpi reset failed\r\n");
                                 write_prompt(io);
                             }
                         }
-                        PendingAction::S5 => {
-                            if crate::efi::acpi::facp::enter_s5(0, None).is_err() {
-                                io.write_str("\r\ns5 failed\r\n");
+                        PendingAction::AcpiState(level) => {
+                            if crate::efi::acpi::facp::enter_named_sleep_state(level).is_err() {
+                                io.write_fmt(format_args!("\r\nacpi s{} failed\r\n", level));
                                 write_prompt(io);
                             }
                         }

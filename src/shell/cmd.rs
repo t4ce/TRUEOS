@@ -8,10 +8,6 @@ use embassy_executor::task;
 
 use crate::shell::{ShellBackend, ShellIo};
 
-// NOTE: This module intentionally keeps the registration API simple and
-// runtime-driven. The kernel has no global constructors, so callers should
-// invoke `init_builtin_shell_commands()` once during shell startup.
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ArgType {
     Str,
@@ -155,6 +151,31 @@ pub(crate) fn list_command_names<const N: usize>(out: &mut heapless::Vec<&'stati
     for c in cmds.iter() {
         let _ = out.push(c.name);
     }
+}
+
+pub(crate) fn usage_text_for_name<const N: usize>(name: &str, out: &mut heapless::String<N>) -> bool {
+    init_builtin_shell_commands();
+    let cmd = {
+        let cmds = registry().lock();
+        find_command(cmds.as_slice(), name)
+    };
+    let Some(cmd) = cmd else { return false };
+
+    out.clear();
+    let _ = write!(out, "usage: {}", cmd.name);
+    for a in cmd.args.iter() {
+        let _ = out.push(' ');
+        if !a.mandatory {
+            let _ = out.push('[');
+        }
+        let _ = out.push_str(a.name);
+        let _ = out.push(':');
+        let _ = out.push_str(a.ty.name());
+        if !a.mandatory {
+            let _ = out.push(']');
+        }
+    }
+    true
 }
 
 pub(crate) fn reg_sh_cmd(
@@ -506,6 +527,7 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
+        static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
 
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
@@ -522,8 +544,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
-        let _ = REGSHCMD("reset", &[], cmd_reset);
-        let _ = REGSHCMD("s5", &[], cmd_s5);
+        let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd_acpi);
         let _ = REGSHCMD("go", &[], cmd_go);
         let _ = REGSHCMD("mandel", &[], cmd_mandel);
         let _ = REGSHCMD("time", &[], cmd_time);
@@ -997,12 +1018,63 @@ fn cmd_mv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
     }
 }
 
-fn cmd_reset(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    super::CommandAction::Pending(super::PendingAction::Reset)
+enum AcpiAction {
+    Reset,
+    State(u8),
 }
 
-fn cmd_s5(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    super::CommandAction::Pending(super::PendingAction::S5)
+fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("reboot") {
+        return Some(AcpiAction::Reset);
+    }
+    if let Some(rest) = s.strip_prefix('s').or_else(|| s.strip_prefix('S')) {
+        return match rest {
+            "0" => Some(AcpiAction::State(0)),
+            "1" => Some(AcpiAction::State(1)),
+            "2" => Some(AcpiAction::State(2)),
+            "3" => Some(AcpiAction::State(3)),
+            "4" => Some(AcpiAction::State(4)),
+            "5" => Some(AcpiAction::State(5)),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    #[inline]
+    fn print_acpi_usage(io: &dyn ShellIo) {
+        io.write_str("acpi: usage acpi <reboot|s0|s1|s2|s3|s4|s5>\r\n");
+        io.write_str("reboot = ACPI reset\r\n");
+        io.write_str("S0 = running\r\n");
+        io.write_str("S1 = light sleep\r\n");
+        io.write_str("S2 = deeper sleep (rare)\r\n");
+        io.write_str("S3 = suspend to RAM\r\n");
+        io.write_str("S4 = hibernate (suspend to disk)\r\n");
+        io.write_str("S5 = soft off (shutdown)\r\n");
+    }
+
+    let Some(state) = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()) else {
+        print_acpi_usage(ctx.io);
+        return super::CommandAction::None;
+    };
+
+    let Some(action) = parse_acpi_state(state) else {
+        print_acpi_usage(ctx.io);
+        return super::CommandAction::None;
+    };
+
+    match action {
+        AcpiAction::Reset => super::CommandAction::Pending(super::PendingAction::AcpiReset),
+        AcpiAction::State(level) => {
+            if level == 0 {
+                ctx.io.write_str("acpi: already in S0 (running)\r\n");
+                return super::CommandAction::None;
+            }
+            super::CommandAction::Pending(super::PendingAction::AcpiState(level))
+        }
+    }
 }
 
 fn cmd_go(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
