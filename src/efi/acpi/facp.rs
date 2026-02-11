@@ -4,7 +4,7 @@ use acpi::AcpiError;
 use core::ptr::{addr_of, read_unaligned};
 use spin::Once;
 
-use super::{ensure_tables, AcpiIdentityHandler};
+use super::{ensure_tables, sleep, AcpiIdentityHandler};
 
 const PM1_SLEEP_TYP_SHIFT: u64 = 10;
 const PM1_SLEEP_TYP_MASK: u64 = 0b111 << PM1_SLEEP_TYP_SHIFT;
@@ -17,6 +17,7 @@ pub enum FacpError {
     TablesMissing,
     FadtMissing,
     ResetUnsupported,
+    InvalidSleepState,
     SleepUnsupported,
     Acpi,
 }
@@ -172,23 +173,7 @@ fn format_gas(gas: &GenericAddress) -> heapless::String<96> {
     s
 }
 
-pub fn reset_system() -> FacpResult<()> {
-    with_fadt(|fadt| {
-        let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
-        if !flags.supports_system_reset_via_fadt() {
-            return Err(FacpError::ResetUnsupported);
-        }
-
-        let reg = fadt.reset_register()?;
-        if reg.address == 0 {
-            return Err(FacpError::ResetUnsupported);
-        }
-
-        write_gas_u64(&reg, u64::from(fadt.reset_value))
-    })
-}
-
-pub fn enter_s5(pm1a_slp_typ: u8, pm1b_slp_typ: Option<u8>) -> FacpResult<()> {
+pub fn enter_s_state(pm1a_slp_typ: u8, pm1b_slp_typ: Option<u8>) -> FacpResult<()> {
     with_fadt(|fadt| {
         if fadt.pm1_control_length < 2 {
             return Err(FacpError::SleepUnsupported);
@@ -205,6 +190,30 @@ pub fn enter_s5(pm1a_slp_typ: u8, pm1b_slp_typ: Option<u8>) -> FacpResult<()> {
         }
 
         Ok(())
+    })
+}
+
+pub fn enter_named_sleep_state(state: u8) -> FacpResult<()> {
+    if state == 0 || state > 5 {
+        return Err(FacpError::InvalidSleepState);
+    }
+    let st = sleep::sleep_type_for_state(state).ok_or(FacpError::SleepUnsupported)?;
+    enter_s_state(st.pm1a, st.pm1b)
+}
+
+pub fn reset_system() -> FacpResult<()> {
+    with_fadt(|fadt| {
+        let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
+        if !flags.supports_system_reset_via_fadt() {
+            return Err(FacpError::ResetUnsupported);
+        }
+
+        let reg = fadt.reset_register()?;
+        if reg.address == 0 {
+            return Err(FacpError::ResetUnsupported);
+        }
+
+        write_gas_u64(&reg, u64::from(fadt.reset_value))
     })
 }
 

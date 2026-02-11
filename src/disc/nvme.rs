@@ -36,6 +36,10 @@ const NVME_ADMIN_QID: u16 = 0;
 const NVME_IO_QID: u16 = 1;
 
 const PAGE_SIZE: usize = 4096;
+const NVME_IO_TIMEOUT_FAST_MS: u64 = 2000;
+const NVME_IO_TIMEOUT_RETRY_MS: u64 = 6000;
+const NVME_ADMIN_PROBE_TIMEOUT_MS: u64 = 6000;
+const NVME_IO_SYNC_FALLBACK_TIMEOUT_MS: u64 = 12000;
 
 const IO_PENDING_SLOTS: usize = 128;
 const CID_BITMAP_WORDS: usize = 1024; // 65536 bits / 64
@@ -839,25 +843,72 @@ impl NvmeController {
         buf_len: usize,
     ) -> core::result::Result<(), block::Error> {
         let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
-        let cid = self.alloc_cid();
+        let cpl_res = 'submit: loop {
+            let cid = self.alloc_cid();
+            let mut sqe = NvmeSqe { d: [0; 16] };
+            sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
+            sqe.d[1] = nsid;
+            sqe.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
+            sqe.d[7] = (prp1 >> 32) as u32;
+            sqe.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
+            sqe.d[9] = (prp2 >> 32) as u32;
+            sqe.d[10] = (slba & 0xFFFF_FFFF) as u32;
+            sqe.d[11] = (slba >> 32) as u32;
+            sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
 
-        let mut sqe = NvmeSqe { d: [0; 16] };
-        sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
-        sqe.d[1] = nsid;
-        sqe.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
-        sqe.d[7] = (prp1 >> 32) as u32;
-        sqe.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
-        sqe.d[9] = (prp2 >> 32) as u32;
-        sqe.d[10] = (slba & 0xFFFF_FFFF) as u32;
-        sqe.d[11] = (slba >> 32) as u32;
-        sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
+            match self
+                .io_submit_and_wait_async(sqe, cid, NVME_IO_TIMEOUT_FAST_MS)
+                .await
+            {
+                Ok(cpl) => break 'submit Ok(cpl),
+                Err(block::Error::Timeout) => {
+                    crate::log!(
+                        "nvme: {} io retry opcode=0x{:02X} nsid={} slba={} nlb={} wait={}ms->{}ms\n",
+                        self.pci,
+                        opcode,
+                        nsid,
+                        slba,
+                        nlb,
+                        NVME_IO_TIMEOUT_FAST_MS,
+                        NVME_IO_TIMEOUT_RETRY_MS
+                    );
 
-        let cpl = self.io_submit_and_wait_async(sqe, cid, 2000).await?;
+                    let cid_retry = self.alloc_cid();
+                    let mut sqe_retry = NvmeSqe { d: [0; 16] };
+                    sqe_retry.d[0] = (opcode as u32) | ((cid_retry as u32) << 16);
+                    sqe_retry.d[1] = nsid;
+                    sqe_retry.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
+                    sqe_retry.d[7] = (prp1 >> 32) as u32;
+                    sqe_retry.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
+                    sqe_retry.d[9] = (prp2 >> 32) as u32;
+                    sqe_retry.d[10] = (slba & 0xFFFF_FFFF) as u32;
+                    sqe_retry.d[11] = (slba >> 32) as u32;
+                    sqe_retry.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
+
+                    let retry_res = self
+                        .io_submit_and_wait_async(sqe_retry, cid_retry, NVME_IO_TIMEOUT_RETRY_MS)
+                        .await;
+                    if matches!(retry_res, Err(block::Error::Timeout)) {
+                        crate::log!(
+                            "nvme: {} io timeout opcode=0x{:02X} nsid={} slba={} nlb={} after retry\n",
+                            self.pci,
+                            opcode,
+                            nsid,
+                            slba,
+                            nlb
+                        );
+                    }
+                    break 'submit retry_res;
+                }
+                Err(e) => break 'submit Err(e),
+            }
+        };
 
         if let Some((_lp, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
         }
 
+        let cpl = cpl_res?;
         if cpl.status_code() != 0 {
             crate::log!(
                 "nvme: {} io failed opcode=0x{:02X} nsid={} slba={} nlb={} status=0x{:04X} (sct={} sc={})\n",
@@ -964,6 +1015,16 @@ struct NvmeBlockDevice {
 
 unsafe impl Send for NvmeBlockDevice {}
 
+impl NvmeBlockDevice {
+    fn is_small_probe_read(lba: u64, blocks: usize) -> bool {
+        blocks <= 2 && lba <= 2
+    }
+
+    fn is_small_probe_write(lba: u64, blocks: usize) -> bool {
+        blocks <= 2 && lba <= 2
+    }
+}
+
 impl block::BlockDevice for NvmeBlockDevice {
     fn block_size_bytes(&self) -> u32 {
         self.block_size
@@ -1006,13 +1067,52 @@ impl block::BlockDevice for NvmeBlockDevice {
                 let bytes_here = blocks_here * bs;
                 unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
-                if let Err(e) =
-                    self.ctrl
-                        .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                        .await
+                match self
+                    .ctrl
+                    .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+                    .await
                 {
-                    dma::dealloc(dma_virt, max_io_bytes);
-                    return Err(e);
+                    Ok(()) => {}
+                    Err(block::Error::Timeout) if Self::is_small_probe_read(cur_lba, blocks_here) => {
+                        crate::log!(
+                            "nvme: {} probe-read fallback admin opcode=0x{:02X} nsid={} slba={} nlb={}\n",
+                            self.ctrl.pci,
+                            NVME_NVM_READ,
+                            self.nsid,
+                            cur_lba,
+                            blocks_here
+                        );
+                        match self.ctrl.admin_rw_sync(
+                            NVME_NVM_READ,
+                            self.nsid,
+                            cur_lba,
+                            blocks_here as u16,
+                            dma_phys,
+                            bytes_here,
+                            NVME_ADMIN_PROBE_TIMEOUT_MS,
+                        ) {
+                            Ok(cpl) if cpl.status_code() == 0 => {}
+                            Ok(cpl) => {
+                                dma::dealloc(dma_virt, max_io_bytes);
+                                crate::log!(
+                                    "nvme: {} probe-read fallback failed status=0x{:04X} (sct={} sc={})\n",
+                                    self.ctrl.pci,
+                                    cpl.status,
+                                    cpl.status_type(),
+                                    cpl.status_code(),
+                                );
+                                return Err(block::Error::Io);
+                            }
+                            Err(e) => {
+                                dma::dealloc(dma_virt, max_io_bytes);
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        dma::dealloc(dma_virt, max_io_bytes);
+                        return Err(e);
+                    }
                 }
 
                 unsafe {
@@ -1058,12 +1158,52 @@ impl block::BlockDevice for NvmeBlockDevice {
                     core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
                 }
 
-                if let Err(e) = self.ctrl
+                match self
+                    .ctrl
                     .io_rw_async(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
                     .await
                 {
-                    dma::dealloc(dma_virt, max_io_bytes);
-                    return Err(e);
+                    Ok(()) => {}
+                    Err(block::Error::Timeout) if Self::is_small_probe_write(cur_lba, blocks_here) => {
+                        crate::log!(
+                            "nvme: {} probe-write fallback sync opcode=0x{:02X} nsid={} slba={} nlb={}\n",
+                            self.ctrl.pci,
+                            NVME_NVM_WRITE,
+                            self.nsid,
+                            cur_lba,
+                            blocks_here
+                        );
+                        match self.ctrl.io_rw_sync(
+                            NVME_NVM_WRITE,
+                            self.nsid,
+                            cur_lba,
+                            blocks_here as u16,
+                            dma_phys,
+                            bytes_here,
+                            NVME_IO_SYNC_FALLBACK_TIMEOUT_MS,
+                        ) {
+                            Ok(cpl) if cpl.status_code() == 0 => {}
+                            Ok(cpl) => {
+                                dma::dealloc(dma_virt, max_io_bytes);
+                                crate::log!(
+                                    "nvme: {} probe-write fallback failed status=0x{:04X} (sct={} sc={})\n",
+                                    self.ctrl.pci,
+                                    cpl.status,
+                                    cpl.status_type(),
+                                    cpl.status_code(),
+                                );
+                                return Err(block::Error::Io);
+                            }
+                            Err(e) => {
+                                dma::dealloc(dma_virt, max_io_bytes);
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        dma::dealloc(dma_virt, max_io_bytes);
+                        return Err(e);
+                    }
                 }
 
                 remaining = &remaining[bytes_here..];

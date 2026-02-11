@@ -17,6 +17,7 @@ pub mod facp;
 pub mod fpdt;
 pub mod hpet;
 pub mod madt;
+pub mod sleep;
 pub mod ssdt;
 pub mod tpm2;
 
@@ -33,6 +34,7 @@ pub(crate) fn log_once() {
         madt::log_once();
         dbg::log_once();
         ssdt::log_once();
+        sleep::log_once();
         bgrt::log_once();
     });
 }
