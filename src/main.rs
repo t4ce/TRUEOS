@@ -35,6 +35,7 @@ mod portio;
 mod rng;
 mod power;
 mod globalog;
+mod hv;
 mod runtime;
 mod shell;
 mod tst;

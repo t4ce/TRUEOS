@@ -528,6 +528,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
+        static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
 
         let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
@@ -545,6 +546,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
         let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd_acpi);
+        let _ = REGSHCMD("hv", &HV_ARGS, cmd_hv);
         let _ = REGSHCMD("go", &[], cmd_go);
         let _ = REGSHCMD("mandel", &[], cmd_mandel);
         let _ = REGSHCMD("time", &[], cmd_time);
@@ -1075,6 +1077,76 @@ fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> sup
             super::CommandAction::Pending(super::PendingAction::AcpiState(level))
         }
     }
+}
+
+fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    #[inline]
+    fn print_usage(io: &dyn ShellIo) {
+        io.write_str("hv: usage hv [status|start|stop|log]\r\n");
+        io.write_str("hv: single-VM milestone target is vm1\r\n");
+    }
+
+    let op = args
+        .and_then(|a| a.get(0))
+        .and_then(|v| v.as_str())
+        .unwrap_or("status")
+        .trim();
+
+    if op.is_empty() || op.eq_ignore_ascii_case("status") {
+        let s = crate::hv::status();
+        ctx.io.write_fmt(format_args!(
+            "hv: vmx intel={} msr={} vmx={} fc_lock={} fc_vmx_outside_smx={}\r\n",
+            s.vendor_intel as u8,
+            s.has_msr as u8,
+            s.has_vmx as u8,
+            s.feature_control_locked as u8,
+            s.feature_control_vmx_outside_smx as u8
+        ));
+        ctx.io.write_fmt(format_args!(
+            "hv: vm1 running={} starting={} marker_seen={} guest_module={}\r\n",
+            s.vm1_running as u8,
+            s.vm1_starting as u8,
+            s.vm1_marker_seen as u8,
+            s.guest_module_present as u8
+        ));
+        return super::CommandAction::None;
+    }
+
+    if op.eq_ignore_ascii_case("start") {
+        match crate::hv::start(ctx.spawner, ctx.io) {
+            Ok(()) => ctx.io.write_str("hv: vm1 start queued\r\n"),
+            Err(crate::hv::StartError::AlreadyRunning) => {
+                ctx.io.write_str("hv: vm1 already running\r\n")
+            }
+            Err(crate::hv::StartError::VmxUnsupported) => {
+                ctx.io.write_str("hv: vmx preflight failed (run 'hv status')\r\n")
+            }
+            Err(crate::hv::StartError::MissingGuestModule) => {
+                ctx.io.write_str("hv: missing Limine module trueos.guest.kernel\r\n")
+            }
+            Err(crate::hv::StartError::SpawnFailed) => {
+                ctx.io.write_str("hv: vm1 spawn failed\r\n")
+            }
+        }
+        return super::CommandAction::None;
+    }
+
+    if op.eq_ignore_ascii_case("stop") {
+        if crate::hv::stop() {
+            ctx.io.write_str("hv: vm1 stop requested\r\n");
+        } else {
+            ctx.io.write_str("hv: vm1 not running\r\n");
+        }
+        return super::CommandAction::None;
+    }
+
+    if op.eq_ignore_ascii_case("log") {
+        crate::hv::write_logs(ctx.io);
+        return super::CommandAction::None;
+    }
+
+    print_usage(ctx.io);
+    super::CommandAction::None
 }
 
 fn cmd_go(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {

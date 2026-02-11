@@ -94,6 +94,10 @@ pub fn install_bootx64_bytes() -> Option<&'static [u8]> {
     module_bytes_by_string(b"trueos.install.bootx64")
 }
 
+pub fn guest_kernel_bytes() -> Option<&'static [u8]> {
+    module_bytes_by_string(b"trueos.guest.kernel")
+}
+
 fn bytes_from_limine_file(file: &limine::file::File) -> Option<&'static [u8]> {
     let addr = file.addr();
     let size = file.size() as usize;
