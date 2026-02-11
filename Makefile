@@ -27,8 +27,7 @@ QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=o
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
-QEMU_ISO_FLAGS = -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
-QEMU_RUNH_FLAGS = -machine q35,accel=kvm:tcg -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu-runh.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,+vmx -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS = -machine q35,accel=kvm:tcg -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,+vmx -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device nec-usb-xhci,id=xhci,p2=8,p3=8 \
@@ -47,7 +46,6 @@ QEMU_USB_FLAGS = \
 #-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
-QEMU_RUNH = $(QEMU_BIN) $(QEMU_RUNH_FLAGS)
 
 IMG_SIZE ?= 1G
 
@@ -125,9 +123,6 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 1
 
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
-
-runh: iso-debug
-	@($(QEMU_RUNH) & $(SERIAL_CONSOLE_CMD))
 
 dbg: iso-debug
 	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
