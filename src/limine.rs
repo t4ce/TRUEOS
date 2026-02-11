@@ -86,8 +86,14 @@ pub fn module_bytes_by_string(expected: &[u8]) -> Option<&'static [u8]> {
     None
 }
 
+pub fn kernel_file_bytes() -> Option<&'static [u8]> {
+    let resp = EXECUTABLE_FILE_REQUEST.get_response()?;
+    bytes_from_limine_file(resp.file())
+}
+
 pub fn install_kernel_bytes() -> Option<&'static [u8]> {
-    module_bytes_by_string(b"trueos.install.kernel")
+    // Re-use the kernel executable file itself rather than a separate module
+    kernel_file_bytes()
 }
 
 pub fn install_bootx64_bytes() -> Option<&'static [u8]> {
@@ -95,7 +101,8 @@ pub fn install_bootx64_bytes() -> Option<&'static [u8]> {
 }
 
 pub fn guest_kernel_bytes() -> Option<&'static [u8]> {
-    module_bytes_by_string(b"trueos.guest.kernel")
+    // Re-use the kernel executable file itself rather than a separate module
+    kernel_file_bytes()
 }
 
 fn bytes_from_limine_file(file: &limine::file::File) -> Option<&'static [u8]> {
