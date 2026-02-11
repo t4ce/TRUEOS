@@ -549,7 +549,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("hv", &HV_ARGS, cmd_hv);
         let _ = REGSHCMD("go", &[], cmd_go);
         let _ = REGSHCMD("mandel", &[], cmd_mandel);
-        let _ = REGSHCMD("time", &[], cmd_time);
         let _ = REGSHCMD("set", &SET_ARGS, cmd_set);
         let _ = REGSHCMD("idle", &IDLE_ARGS, cmd_idle);
         let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd_pstate);
@@ -1122,7 +1121,7 @@ fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
                 ctx.io.write_str("hv: vmx preflight failed (run 'hv status')\r\n")
             }
             Err(crate::hv::StartError::MissingGuestModule) => {
-                ctx.io.write_str("hv: missing Limine module trueos.guest.kernel\r\n")
+                ctx.io.write_str("hv: missing kernel file\r\n")
             }
             Err(crate::hv::StartError::SpawnFailed) => {
                 ctx.io.write_str("hv: vm1 spawn failed\r\n")
@@ -1157,27 +1156,6 @@ fn cmd_go(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> supe
 fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     crate::vga::draw_mandelbrot();
     ctx.io.write_str("mandel ok\r\n");
-    super::CommandAction::None
-}
-
-fn cmd_time(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    if let Some(ts) = crate::time::unix_time_seconds() {
-        let (year, month, day, hour, minute, second) = super::unix_timestamp_to_ymdhms(ts);
-        let mut buf: heapless::String<64> = heapless::String::new();
-        let _ = write!(
-            &mut buf,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second
-        );
-        ctx.io.write_fmt(format_args!("{}\r\n", crate::ecma48::underline(buf.as_str())));
-    } else {
-        ctx.io.write_str("time: boot timestamp unavailable\r\n");
-    }
     super::CommandAction::None
 }
 

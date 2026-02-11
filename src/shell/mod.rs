@@ -307,9 +307,9 @@ fn append_output_cursor(io: &dyn ShellIo, term_rows: usize) {
 
 #[inline]
 fn write_banner(io: &dyn ShellIo, term_cols: usize) {
-    // Row 1: Banner + matrix symbols on the right.
-    io.write_fmt(format_args!("{}\n", crate::ecma48::bold("TRUE OS")));
-    crate::matrix::refresh_matrix_symbols(io, term_cols);
+    // Row 1: Banner + center clock + matrix symbols on the right.
+    refresh_title_bar(io, term_cols);
+    io.write_byte(b'\n');
 
     write_prompt(io);
 
@@ -326,6 +326,51 @@ fn write_banner(io: &dyn ShellIo, term_cols: usize) {
         let row = idx + 2;
         write_right_aligned(io, row, term_cols, cmd);
     }
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
+}
+
+#[inline]
+fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
+    if term_cols == 0 {
+        return;
+    }
+
+    io.write_str(crate::ecma48::SAVE_CURSOR);
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(1, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_fmt(format_args!("{}", crate::ecma48::bold("TRUE OS")));
+
+    // Draw right-side matrix symbols before centered time because symbol refresh
+    // clears a right-side region on row 1.
+    crate::matrix::refresh_matrix_symbols(io, term_cols);
+
+    let mut center: heapless::String<32> = heapless::String::new();
+    if let Some(ts) = crate::time::unix_time_seconds() {
+        let (year, month, day, hour, minute, second) = unix_timestamp_to_ymdhms(ts);
+        let _ = core::fmt::write(
+            &mut center,
+            format_args!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                year, month, day, hour, minute, second
+            ),
+        );
+    } else {
+        let _ = center.push_str("time unavailable");
+    }
+
+    let text_len = center.as_str().len();
+    if text_len > 0 {
+        let start_col = term_cols
+            .saturating_sub(text_len)
+            .saturating_div(2)
+            .saturating_add(1);
+        io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
+        io.write_fmt(format_args!(
+            "{}",
+            crate::ecma48::style(center.as_str()).bold().fg((120, 210, 255))
+        ));
+    }
+
     io.write_str(crate::ecma48::RESTORE_CURSOR);
 }
 
@@ -1518,9 +1563,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             };
 
                             let Some(kernel) = crate::limine::install_kernel_bytes() else {
-                                io.write_str("\r\ninstall: kernel module missing\r\n");
+                                io.write_str("\r\ninstall: kernel file missing\r\n");
                                 io.write_str(
-                                    "install: expected Limine module_string trueos.install.kernel\r\n",
+                                    "install: expected Limine to provide the kernel file\r\n",
                                 );
                                 write_prompt_for_state(io, pending_action, install_wizard);
                                 continue;
@@ -1550,7 +1595,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                         slot + 1,
                                         slot + 1
                                     ));
-                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
+                                    refresh_title_bar(io, term_cols);
                                 }
                                 None => {
                                     io.write_str("install: matrix full\r\n");
@@ -1592,7 +1637,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                         slot + 1,
                                         slot + 1
                                     ));
-                                    crate::matrix::refresh_matrix_symbols(io, term_cols);
+                                    refresh_title_bar(io, term_cols);
                                 }
                                 None => {
                                     io.write_str("update: matrix full\r\n");
@@ -2126,7 +2171,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 let _ = crate::matrix::set_blob_owned_with_preview(slot_id, out_buf);
                                 crate::matrix::set_state(slot_id, crate::matrix::SlotState::Done);
                                 io.write_fmt(format_args!("\r\ntxt: updated §{}\r\n", slot_id + 1));
-                                crate::matrix::refresh_matrix_symbols(io, term_cols);
+                                refresh_title_bar(io, term_cols);
 
                                 io.write_str(crate::ecma48::CLEAR_SCREEN);
                                 io.write_str(crate::ecma48::HOME);
@@ -2183,7 +2228,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
             // Keep header symbols in sync with background job state transitions.
             if Instant::now() >= next_matrix_refresh {
-                crate::matrix::refresh_matrix_symbols(io, term_cols);
+                refresh_title_bar(io, term_cols);
                 next_matrix_refresh = Instant::now() + EmbassyDuration::from_millis(250);
             }
 
