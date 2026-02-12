@@ -585,6 +585,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tlb.mem", &NO_ARGS, cmd::cmd_tlb_mem);
         let _ = REGSHCMD("tlb.cpu", &NO_ARGS, cmd::cmd_tlb_cpu);
         let _ = REGSHCMD("tlb.acpi", &NO_ARGS, cmd::cmd_tlb_acpi);
+        let _ = REGSHCMD("tlb.x2apic", &NO_ARGS, cmd::cmd_tlb_x2apic);
         let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
         let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
 
