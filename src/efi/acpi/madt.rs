@@ -1,10 +1,6 @@
 use crate::efi::acpi::ensure_tables;
 use acpi::sdt::madt::Madt;
 
-pub fn log_once() {
-    // Intentionally left empty
-}
-
 pub fn walk_subtables<F>(mut callback: F)
 where
     F: FnMut(&dyn core::fmt::Debug),

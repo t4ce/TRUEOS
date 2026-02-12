@@ -47,7 +47,9 @@ fn init_once() {
     INIT.call_once(|| {
         let start = unsafe { _rdtsc() as u64 };
         START_TSC.store(start, Ordering::Relaxed);
-        TSC_HZ.store(detect_tsc_hz().max(1), Ordering::Relaxed);
+        let hz = detect_tsc_hz().max(1);
+        crate::log!("time: tsc_hz={}\n", hz);
+        TSC_HZ.store(hz, Ordering::Relaxed);
     });
 }
 
@@ -56,12 +58,27 @@ fn detect_tsc_hz() -> u64 {
     let denom = r15.eax as u64;
     let numer = r15.ebx as u64;
     let crystal_hz = r15.ecx as u64;
+    crate::log!("time: cpuid 0x15: denom={} numer={} crystal_hz={}\n", denom, numer, crystal_hz);
+
     if denom != 0 && numer != 0 && crystal_hz != 0 {
-        return ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
+        let hz = ((crystal_hz as u128) * (numer as u128) / (denom as u128)) as u64;
+        if hz >= 1_000_000 {
+            return hz;
+        }
+        // If the value is suspiciously low (e.g. in MHz instead of Hz, common in some virt/TCG quirks), 
+        // try scaling it.
+        if hz > 0 {
+            let mhz_estimate = hz * 1_000_000;
+            if mhz_estimate >= 100_000_000 {
+                return mhz_estimate;
+            }
+        }
     }
 
     let r16 = __cpuid(0x16);
     let base_mhz = (r16.eax & 0xFFFF) as u64;
+    crate::log!("time: cpuid 0x16: base_mhz={}\n", base_mhz);
+
     if base_mhz != 0 {
         return base_mhz * 1_000_000;
     }

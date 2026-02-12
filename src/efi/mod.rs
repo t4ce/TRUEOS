@@ -5,7 +5,7 @@ use crate::pci::mmio;
 use crate::limine;
 
 pub mod acpi;
-pub mod acpi_uefi;
+// pub mod acpi_uefi;
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
 
