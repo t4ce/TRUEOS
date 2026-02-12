@@ -3,567 +3,50 @@ use alloc::vec::Vec;
 
 use core::fmt::Write;
 
-use spin::{Mutex, Once};
 use embassy_executor::task;
 
 use crate::shell::{ShellBackend, ShellIo};
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ArgType {
-    Str,
-    U8,
-    Usize,
-    /// Captures the remainder of the command line (may contain spaces).
-    Rest,
-}
+use crate::shell::cmdreg::{
+    ArgValue, ParsedArgs, ShellCommandCtx, ShellCommand,
+};
 
-impl ArgType {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            ArgType::Str => "str",
-            ArgType::U8 => "u8",
-            ArgType::Usize => "usize",
-            ArgType::Rest => "rest",
-        }
-    }
-}
 
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct ArgSpec {
-    pub(crate) name: &'static str,
-    pub(crate) ty: ArgType,
-    pub(crate) mandatory: bool,
-}
+pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
+    crate::shell::cmdreg::list_command_names(&mut cmds);
+    cmds.as_mut_slice().sort_unstable();
 
-impl ArgSpec {
-    pub(crate) const fn new(name: &'static str, ty: ArgType) -> Self {
-        Self {
-            name,
-            ty,
-            mandatory: false,
-        }
-    }
-
-    pub(crate) const fn mandatory(mut self) -> Self {
-        self.mandatory = true;
-        self
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub(crate) enum ArgValue<'a> {
-    Str(&'a str),
-    U64(u64),
-    Usize(usize),
-}
-
-impl<'a> ArgValue<'a> {
-    pub(crate) fn as_str(self) -> Option<&'a str> {
-        match self {
-            ArgValue::Str(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_u8(self) -> Option<u8> {
-        match self {
-            ArgValue::U64(v) => u8::try_from(v).ok(),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_u64(self) -> Option<u64> {
-        match self {
-            ArgValue::U64(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_usize(self) -> Option<usize> {
-        match self {
-            ArgValue::Usize(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ParsedArgs<'a> {
-    values: Vec<ArgValue<'a>>,
-}
-
-impl<'a> ParsedArgs<'a> {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
-    pub(crate) fn get(&self, idx: usize) -> Option<ArgValue<'a>> {
-        self.values.get(idx).copied()
-    }
-}
-
-pub(crate) struct ShellCommandCtx<'a> {
-    pub(crate) line: &'a str,
-    pub(crate) spawner: &'a embassy_executor::Spawner,
-    pub(crate) io: &'static dyn ShellBackend,
-    pub(crate) term_cols: &'a mut usize,
-    pub(crate) term_rows: &'a mut usize,
-    pub(crate) go_mode: &'a mut bool,
-    pub(crate) install_wizard: &'a mut Option<super::InstallWizardStage>,
-}
-
-pub(crate) type ShellCmdHandler = fn(&mut ShellCommandCtx<'_>, Option<&ParsedArgs<'_>>) -> super::CommandAction;
-
-#[derive(Clone)]
-pub(crate) struct ShellCommand {
-    pub(crate) name: &'static str,
-    pub(crate) args: &'static [ArgSpec],
-    pub(crate) handler: ShellCmdHandler,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum RegisterError {
-    DuplicateName,
-    EmptyName,
-}
-
-static REGISTRY: Once<Mutex<Vec<&'static ShellCommand>>> = Once::new();
-static BUILTINS_ONCE: Once<()> = Once::new();
-
-fn registry() -> &'static Mutex<Vec<&'static ShellCommand>> {
-    REGISTRY.call_once(|| Mutex::new(Vec::new()))
-}
-
-fn find_command(cmds: &[&'static ShellCommand], name: &str) -> Option<&'static ShellCommand> {
-    // Fast path: length mismatch cannot match.
-    let name = name.trim();
-    let name_len = name.len();
-    cmds.iter()
-        .copied()
-        .filter(|c| c.name.len() == name_len)
-        .find(|c| c.name.eq_ignore_ascii_case(name))
-}
-
-pub(crate) fn list_command_names<const N: usize>(out: &mut heapless::Vec<&'static str, N>) {
-    init_builtin_shell_commands();
-    out.clear();
-    let cmds = registry().lock();
-    for c in cmds.iter() {
-        let _ = out.push(c.name);
-    }
-}
-
-pub(crate) fn usage_text_for_name<const N: usize>(name: &str, out: &mut heapless::String<N>) -> bool {
-    init_builtin_shell_commands();
-    let cmd = {
-        let cmds = registry().lock();
-        find_command(cmds.as_slice(), name)
-    };
-    let Some(cmd) = cmd else { return false };
-
-    out.clear();
-    let _ = write!(out, "usage: {}", cmd.name);
-    for a in cmd.args.iter() {
-        let _ = out.push(' ');
-        if !a.mandatory {
-            let _ = out.push('[');
-        }
-        let _ = out.push_str(a.name);
-        let _ = out.push(':');
-        let _ = out.push_str(a.ty.name());
-        if !a.mandatory {
-            let _ = out.push(']');
-        }
-    }
-    true
-}
-
-pub(crate) fn reg_sh_cmd(
-    name: &'static str,
-    args: &'static [ArgSpec],
-    handler: ShellCmdHandler,
-) -> Result<(), RegisterError> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(RegisterError::EmptyName);
-    }
-
-    let leaked: &'static ShellCommand = Box::leak(Box::new(ShellCommand { name, args, handler }));
-
-    let mut cmds = registry().lock();
-    if cmds.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
-        return Err(RegisterError::DuplicateName);
-    }
-    cmds.push(leaked);
-    Ok(())
-}
-
-/// Uppercase alias to match the requested API.
-#[allow(non_snake_case)]
-pub(crate) fn REGSHCMD(
-    name: &'static str,
-    args: &'static [ArgSpec],
-    handler: ShellCmdHandler,
-) -> Result<(), RegisterError> {
-    reg_sh_cmd(name, args, handler)
-}
-
-/// Dispatch a command line to the registered command set.
-///
-/// Returns `Some(action)` if the line matched a registered command name.
-/// Returns `None` if no registered command matched (caller may fall back to legacy parsing).
-pub(crate) fn dispatch_line(ctx: &mut ShellCommandCtx<'_>) -> Option<super::CommandAction> {
-    init_builtin_shell_commands();
-
-    let line = ctx.line.trim();
-    if line.is_empty() {
-        return None;
-    }
-
-    let (verb, rest) = split_verb_rest(line);
-    // IMPORTANT: Don't hold the registry lock while parsing/executing the command.
-    // Some commands (e.g. `args`) look back into the registry.
-    let cmd = {
-        let cmds = registry().lock();
-        find_command(cmds.as_slice(), verb)
-    };
-    let Some(cmd) = cmd else { return None };
-
-    // Parse arguments based on the command schema.
-    match parse_args(cmd, rest) {
-        Ok(parsed) => {
-            if parsed.is_empty() {
-                Some((cmd.handler)(ctx, None))
-            } else {
-                Some((cmd.handler)(ctx, Some(&parsed)))
-            }
-        }
-        Err(err) => {
-            print_arg_error(ctx.io, cmd, &err);
-            Some(super::CommandAction::None)
-        }
-    }
-}
-
-fn split_verb_rest(line: &str) -> (&str, &str) {
-    // `split_once` does not support predicate patterns on stable, so do this manually.
-    let mut iter = line.char_indices();
-    while let Some((idx, ch)) = iter.next() {
-        if ch.is_whitespace() {
-            let a = &line[..idx];
-            let b = line[idx..].trim();
-            return (a, b);
-        }
-    }
-    (line, "")
-}
-
-#[derive(Clone, Debug)]
-struct ArgError {
-    kind: ArgErrorKind,
-}
-
-#[derive(Clone, Debug)]
-enum ArgErrorKind {
-    Missing { name: &'static str, ty: ArgType },
-    TooMany { expected: usize, got: usize },
-    BadValue { name: &'static str, ty: ArgType, value: alloc::string::String, hint: &'static str },
-    RestNotLast,
-}
-
-fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, ArgError> {
-    if cmd.args.is_empty() {
-        let got = rest.split_whitespace().count();
-        if got != 0 {
-            return Err(ArgError { kind: ArgErrorKind::TooMany { expected: 0, got } });
-        }
-        return Ok(ParsedArgs { values: Vec::new() });
-    }
-
-    // If there is a `rest` argument, it must be last.
-    if let Some((idx, _)) = cmd.args.iter().enumerate().find(|(_, a)| a.ty == ArgType::Rest) {
-        if idx + 1 != cmd.args.len() {
-            return Err(ArgError { kind: ArgErrorKind::RestNotLast });
-        }
-    }
-
-    // Special-case: a single Rest argument consumes the whole remainder.
-    if cmd.args.len() == 1 && cmd.args[0].ty == ArgType::Rest {
-        let arg0 = cmd.args[0];
-        if arg0.mandatory && rest.is_empty() {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: arg0.name, ty: arg0.ty } });
-        }
-        let mut values = Vec::new();
-        if !rest.is_empty() {
-            values.push(ArgValue::Str(rest));
-        }
-        return Ok(ParsedArgs { values });
-    }
-
-    // Otherwise: positional parsing by whitespace tokens, with optional trailing Rest.
-    let tokens: Vec<&'a str> = rest.split_whitespace().collect();
-
-    let has_rest = cmd.args.last().map(|a| a.ty == ArgType::Rest).unwrap_or(false);
-    let positional_count = if has_rest { cmd.args.len() - 1 } else { cmd.args.len() };
-
-    if !has_rest && tokens.len() > cmd.args.len() {
-        return Err(ArgError { kind: ArgErrorKind::TooMany { expected: cmd.args.len(), got: tokens.len() } });
-    }
-
-    // Validate mandatory positional args.
-    for i in 0..positional_count {
-        let spec = cmd.args[i];
-        if spec.mandatory && tokens.get(i).is_none() {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: spec.name, ty: spec.ty } });
-        }
-    }
-
-    let mut values: Vec<ArgValue<'a>> = Vec::new();
-
-    for i in 0..positional_count {
-        let spec = cmd.args[i];
-        let Some(tok) = tokens.get(i).copied() else {
+    ctx.io.write_str("\r\n");
+    
+    let light_green = (100, 255, 100);
+    let mut col_count = 0;
+    
+    for name in cmds {
+        // Skip subcommands (containing dot)
+        if name.contains('.') {
             continue;
-        };
-        let v = parse_token(spec, tok)?;
-        values.push(v);
-    }
-
-    if has_rest {
-        let spec = *cmd.args.last().unwrap();
-        // If rest is mandatory, require at least one leftover token.
-        if spec.mandatory && tokens.len() <= positional_count {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: spec.name, ty: spec.ty } });
         }
 
-        if tokens.len() > positional_count {
-            // Find the start byte offset of the first rest token in `rest`.
-            let rest_tok = tokens[positional_count];
-            let start = rest.find(rest_tok).unwrap_or(0);
-            let tail = rest[start..].trim();
-            if !tail.is_empty() {
-                values.push(ArgValue::Str(tail));
-            }
+        // [name] + space
+        let len = name.len() + 3; 
+        if col_count + len > *ctx.term_cols {
+            ctx.io.write_str("\r\n");
+            col_count = 0;
         }
+        
+        ctx.io.write_str("[");
+        ctx.io.write_fmt(format_args!("{}", crate::ecma48::color(name, light_green)));
+        ctx.io.write_str("] ");
+        
+        col_count += len;
     }
+    ctx.io.write_str("\r\n");
 
-    Ok(ParsedArgs { values })
+    super::CommandAction::None
 }
 
-fn parse_token<'a>(spec: ArgSpec, tok: &'a str) -> Result<ArgValue<'a>, ArgError> {
-    match spec.ty {
-        ArgType::Str => Ok(ArgValue::Str(tok)),
-        ArgType::Rest => Ok(ArgValue::Str(tok)),
-        ArgType::U8 => parse_u(tok)
-            .and_then(|v| {
-                if v <= u8::MAX as u64 {
-                    Ok(v)
-                } else {
-                    Err("value out of range")
-                }
-            })
-            .map(ArgValue::U64)
-            .map_err(|e| bad(spec, tok, e)),
-        ArgType::Usize => parse_u(tok)
-            .and_then(|v| usize::try_from(v).map_err(|_| "value out of range"))
-            .map(ArgValue::Usize)
-            .map_err(|e| bad(spec, tok, e)),
-    }
-}
-
-fn bad(spec: ArgSpec, tok: &str, hint: &'static str) -> ArgError {
-    ArgError {
-        kind: ArgErrorKind::BadValue {
-            name: spec.name,
-            ty: spec.ty,
-            value: alloc::string::String::from(tok),
-            hint,
-        },
-    }
-}
-
-fn parse_u(tok: &str) -> Result<u64, &'static str> {
-    let t = tok.trim();
-    if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-        u64::from_str_radix(hex, 16).map_err(|_| "expected unsigned integer (dec or 0xHEX)")
-    } else {
-        t.parse::<u64>().map_err(|_| "expected unsigned integer (dec or 0xHEX)")
-    }
-}
-
-#[inline]
-fn style_cmd_name(name: &str) -> impl core::fmt::Display + '_ {
-    crate::ecma48::bold(name)
-}
-
-#[inline]
-fn style_arg_name(name: &str) -> impl core::fmt::Display + '_ {
-    crate::ecma48::color(name, super::PROMPT_RGB)
-}
-
-#[inline]
-fn style_arg_type(ty: ArgType) -> impl core::fmt::Display {
-    crate::ecma48::dim(ty.name())
-}
-
-#[inline]
-fn style_error_label(text: &str) -> impl core::fmt::Display + '_ {
-    crate::ecma48::color(text, (255, 96, 96))
-}
-
-fn print_usage(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_fmt(format_args!("{} ", crate::ecma48::dim("usage:")));
-    io.write_fmt(format_args!("{}", style_cmd_name(cmd.name)));
-
-    for a in cmd.args.iter() {
-        io.write_str(" ");
-        if !a.mandatory {
-            io.write_str("[");
-        }
-        io.write_fmt(format_args!("{}", style_arg_name(a.name)));
-        io.write_str(":");
-        io.write_fmt(format_args!("{}", style_arg_type(a.ty)));
-        if !a.mandatory {
-            io.write_str("]");
-        }
-    }
-    io.write_str("\r\n");
-}
-
-fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
-    match &err.kind {
-        ArgErrorKind::Missing { name, ty } => {
-            io.write_fmt(format_args!(
-                "{} {}: missing argument '{}' (expected {})\r\n",
-                style_error_label("error"),
-                style_cmd_name(cmd.name),
-                style_arg_name(name),
-                style_arg_type(*ty),
-            ));
-            print_usage(io, cmd);
-        }
-        ArgErrorKind::TooMany { expected, got } => {
-            io.write_fmt(format_args!(
-                "{} {}: too many arguments (expected {}, got {})\r\n",
-                style_error_label("error"),
-                style_cmd_name(cmd.name),
-                expected,
-                got
-            ));
-            print_usage(io, cmd);
-        }
-        ArgErrorKind::BadValue { name, ty, value, hint } => {
-            io.write_fmt(format_args!(
-                "{} {}: bad value for '{}' (expected {}, got '{}')\r\n",
-                style_error_label("error"),
-                style_cmd_name(cmd.name),
-                style_arg_name(name),
-                style_arg_type(*ty),
-                value
-            ));
-            io.write_fmt(format_args!("{} {}\r\n", crate::ecma48::dim("hint:"), hint));
-            print_usage(io, cmd);
-        }
-        ArgErrorKind::RestNotLast => {
-            io.write_fmt(format_args!(
-                "{} {}: internal schema error: rest argument must be last\r\n",
-                style_error_label("error"),
-                style_cmd_name(cmd.name),
-            ));
-            print_usage(io, cmd);
-        }
-    }
-}
-
-pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_fmt(format_args!("{} {}\r\n", crate::ecma48::dim("cmd:"), style_cmd_name(cmd.name)));
-    if cmd.args.is_empty() {
-        io.write_fmt(format_args!("  {}\r\n", crate::ecma48::dim("(no args)")));
-        return;
-    }
-
-    for a in cmd.args.iter() {
-        io.write_str("  ");
-        io.write_fmt(format_args!("{}", style_arg_name(a.name)));
-        io.write_str(": ");
-        io.write_fmt(format_args!("{}", style_arg_type(a.ty)));
-        io.write_str("  ");
-        if a.mandatory {
-            io.write_fmt(format_args!("{}", crate::ecma48::bold("mandatory")));
-        } else {
-            io.write_fmt(format_args!("{}", crate::ecma48::dim("optional")));
-        }
-        io.write_str("\r\n");
-    }
-}
-
-pub(crate) fn init_builtin_shell_commands() {
-    BUILTINS_ONCE.call_once(|| {
-        static ARGS_ARGS: [ArgSpec; 1] = [ArgSpec::new("command", ArgType::Str).mandatory()];
-        static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest)];
-        static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
-        static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
-        static NET_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("op", ArgType::Str).mandatory(),
-            ArgSpec::new("target", ArgType::Str),
-        ];
-        static DMAFPGA_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest).mandatory()];
-        static NO_ARGS: [ArgSpec; 0] = [];
-        static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
-        static MV_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("src", ArgType::Str).mandatory(),
-            ArgSpec::new("dst", ArgType::Str).mandatory(),
-        ];
-        static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
-        static PSTATE_ARGS: [ArgSpec; 1] = [ArgSpec::new("ratio", ArgType::U8)];
-        static TURBO_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("op", ArgType::Str),
-            ArgSpec::new("spins", ArgType::Usize),
-        ];
-        static SMP_ARGS: [ArgSpec; 1] = [ArgSpec::new("slot", ArgType::Usize)];
-        static SET_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("cols", ArgType::Usize).mandatory(),
-            ArgSpec::new("rows", ArgType::Usize).mandatory(),
-        ];
-        static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
-        static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
-        static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
-        static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
-
-        let _ = REGSHCMD("args", &ARGS_ARGS, builtin_args);
-        let _ = REGSHCMD("§", &SECTION_ARGS, cmd_section);
-        let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd_ecma48);
-        let _ = REGSHCMD("get", &GET_ARGS, cmd_get);
-        let _ = REGSHCMD("https", &HTTPS_ARGS, cmd_https);
-        let _ = REGSHCMD("net", &NET_ARGS, cmd_net);
-        let _ = REGSHCMD("dmafpga", &DMAFPGA_ARGS, cmd_dmafpga);
-        let _ = REGSHCMD("update", &NO_ARGS, cmd_update);
-        let _ = REGSHCMD("install", &[], cmd_install);
-        let _ = REGSHCMD("format", &NO_ARGS, cmd_format);
-        let _ = REGSHCMD("bench", &NO_ARGS, cmd_bench);
-        let _ = REGSHCMD("netbench", &NO_ARGS, cmd_netbench);
-        let _ = REGSHCMD("file", &FILE_ARGS, cmd_file);
-        let _ = REGSHCMD("qjs", &QJS_ARGS, cmd_qjs);
-        let _ = REGSHCMD("mv", &MV_ARGS, cmd_mv);
-        let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd_acpi);
-        let _ = REGSHCMD("hv", &HV_ARGS, cmd_hv);
-        let _ = REGSHCMD("go", &[], cmd_go);
-        let _ = REGSHCMD("mandel", &[], cmd_mandel);
-        let _ = REGSHCMD("set", &SET_ARGS, cmd_set);
-        let _ = REGSHCMD("idle", &IDLE_ARGS, cmd_idle);
-        let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd_pstate);
-        let _ = REGSHCMD("turbo", &TURBO_ARGS, cmd_turbo);
-        let _ = REGSHCMD("smp", &SMP_ARGS, cmd_smp);
-        let _ = REGSHCMD("cube", &[], cmd_cube);
-        let _ = REGSHCMD("ico", &[], cmd_ico);
-        let _ = REGSHCMD("txt", &NO_ARGS, cmd_txt);
-        let _ = REGSHCMD("insane", &[], cmd_insane);
-        let _ = REGSHCMD("usb", &[], cmd_usb);
-        let _ = REGSHCMD("pci", &[], cmd_pci);
-    });
-}
-
-fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     // No args: list slots.
     let Some(args) = args else {
         let mut buf: heapless::String<512> = heapless::String::new();
@@ -594,32 +77,9 @@ fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> 
     super::CommandAction::None
 }
 
-fn lookup_registered(name: &str) -> Option<&'static ShellCommand> {
-    let cmds = registry().lock();
-    find_command(cmds.as_slice(), name)
-}
-
-fn builtin_args(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let Some(args) = args else {
-        ctx.io.write_str("args: usage args <command>\r\n");
-        return super::CommandAction::None;
-    };
-    let Some(ArgValue::Str(name)) = args.get(0) else {
-        ctx.io.write_str("args: internal parse error\r\n");
-        return super::CommandAction::None;
-    };
-
-    let Some(cmd) = lookup_registered(name) else {
-        ctx.io.write_str("args: unknown command\r\n");
-        return super::CommandAction::None;
-    };
-
-    print_usage(ctx.io, cmd);
-    print_schema(ctx.io, cmd);
-    super::CommandAction::None
-}
-
-fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    // Escaped IO not needed, forward not possible with new lifetimes easily for spawned tasks
+    ctx.io.write_str("ecma48: local echo only in prepend mode\r\n");
     let arg = args
         .and_then(|a| a.get(0))
         .and_then(|v| v.as_str())
@@ -628,12 +88,89 @@ fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> s
     super::CommandAction::None
 }
 
-fn cmd_get(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    ctx.io.write_str("net: available subcommands\r\n");
+    ctx.io.write_str("  net.icmp <target>\r\n");
+    ctx.io.write_str("  net.mac [index]\r\n");
+    ctx.io.write_str("  net.http <url>\r\n");
+    ctx.io.write_str("  net.https <host>\r\n");
+    super::CommandAction::None
+}
+
+pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let target = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
+    if target.is_empty() {
+        ctx.io.write_str("net.icmp: usage net.icmp <host>\r\n");
+        return super::CommandAction::None;
+    }
+
+    ctx.io.write_fmt(format_args!("net.icmp: ping {}\r\n", target));
+    let mut t: heapless::String<64> = heapless::String::new();
+    for ch in target.chars() {
+        if t.push(ch).is_err() {
+            break;
+        }
+    }
+        // Disabled ping spawn as it requires static io lifetime, incompatible with prepend mode
+        // if ctx.spawner.spawn(net_ping_task(ctx.io, t)).is_err() {
+        //    ctx.io.write_str("net: ping spawn failed\r\n");
+        // }
+        ctx.io.write_str("net: ping background task disabled in prepend mode\r\n");
+
+    super::CommandAction::None
+}
+
+pub(crate) fn cmd_net_mac(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    let target = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
+    
+    if target.is_empty() {
+        let count = crate::net::device_count();
+        if count == 0 {
+            ctx.io.write_str("net.mac: no nics\r\n");
+            return super::CommandAction::None;
+        }
+        for index in 0..count {
+            let mac = if index == 0 {
+                crate::net::mac_address()
+            } else {
+                crate::net::mac_address_at(index)
+            };
+            if let Some([a, b, c, d, e, f]) = mac {
+                ctx.io.write_fmt(format_args!(
+                    "net.mac: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                    index, a, b, c, d, e, f
+                ));
+            } else {
+                ctx.io.write_fmt(format_args!("net.mac: mac[{}]=unavailable\r\n", index));
+            }
+        }
+    } else if let Ok(index) = target.parse::<usize>() {
+        let mac = if index == 0 {
+            crate::net::mac_address()
+        } else {
+            crate::net::mac_address_at(index)
+        };
+
+        if let Some([a, b, c, d, e, f]) = mac {
+            ctx.io.write_fmt(format_args!(
+                "net.mac: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                index, a, b, c, d, e, f
+            ));
+        } else {
+            ctx.io.write_fmt(format_args!("net.mac: mac[{}]=unavailable\r\n", index));
+        }
+    } else {
+        ctx.io.write_str("net.mac: usage net.mac [index]\r\n");
+    }
+    super::CommandAction::None
+}
+
+pub(crate) fn cmd_net_http(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let url = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
     if url.is_empty() {
-        ctx.io.write_str("get: usage get <host|http://url>\r\n");
-        ctx.io.write_str("get: example get http://example.com/\r\n");
-        ctx.io.write_str("get: note: plaintext HTTP only (no TLS)\r\n");
+        ctx.io.write_str("net.http: usage net.http <host|http://url>\r\n");
+        ctx.io.write_str("net.http: example net.http http://example.com/\r\n");
+        ctx.io.write_str("net.http: note: plaintext HTTP only (no TLS)\r\n");
         return super::CommandAction::None;
     }
 
@@ -655,16 +192,16 @@ fn cmd_get(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
             }
                 let _ = ctx.spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u),
                 );
-            ctx.io.write_fmt(format_args!("get: started §{}\r\n", slot + 1));
+            ctx.io.write_fmt(format_args!("net.http: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
-        None => ctx.io.write_str("get: matrix full\r\n"),
+        None => ctx.io.write_str("net.http: matrix full\r\n"),
     }
 
     super::CommandAction::None
 }
 
-fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_net_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let host = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
 
     let mut title: heapless::String<{ crate::matrix::TITLE_LEN }> = heapless::String::new();
@@ -686,89 +223,16 @@ fn cmd_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
             }
                 let _ = ctx.spawner.spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h),
                 );
-            ctx.io.write_fmt(format_args!("https: started §{}\r\n", slot + 1));
+            ctx.io.write_fmt(format_args!("net.https: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
-        None => ctx.io.write_str("https: matrix full\r\n"),
+        None => ctx.io.write_str("net.https: matrix full\r\n"),
     }
 
     super::CommandAction::None
 }
 
-fn cmd_net(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let Some(args) = args else {
-        ctx.io.write_str("net: usage net ping <host>\r\n");
-        ctx.io.write_str("net: usage net mac [index]\r\n");
-        return super::CommandAction::None;
-    };
-
-    let op = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
-    let target = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
-
-    if op.eq_ignore_ascii_case("mac") {
-        if target.is_empty() {
-            let count = crate::net::device_count();
-            if count == 0 {
-                ctx.io.write_str("net: no nics\r\n");
-                return super::CommandAction::None;
-            }
-            for index in 0..count {
-                let mac = if index == 0 {
-                    crate::net::mac_address()
-                } else {
-                    crate::net::mac_address_at(index)
-                };
-                if let Some([a, b, c, d, e, f]) = mac {
-                    ctx.io.write_fmt(format_args!(
-                        "net: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
-                        index, a, b, c, d, e, f
-                    ));
-                } else {
-                    ctx.io.write_fmt(format_args!("net: mac[{}]=unavailable\r\n", index));
-                }
-            }
-        } else if let Ok(index) = target.parse::<usize>() {
-            let mac = if index == 0 {
-                crate::net::mac_address()
-            } else {
-                crate::net::mac_address_at(index)
-            };
-
-            if let Some([a, b, c, d, e, f]) = mac {
-                ctx.io.write_fmt(format_args!(
-                    "net: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
-                    index, a, b, c, d, e, f
-                ));
-            } else {
-                ctx.io.write_fmt(format_args!("net: mac[{}]=unavailable\r\n", index));
-            }
-        } else {
-            ctx.io.write_str("net: usage net mac [index]\r\n");
-        }
-        return super::CommandAction::None;
-    }
-
-    if op != "ping" || target.is_empty() {
-        ctx.io.write_str("net: usage net ping <host>\r\n");
-        ctx.io.write_str("net: usage net mac [index]\r\n");
-        return super::CommandAction::None;
-    }
-
-    ctx.io.write_fmt(format_args!("net: ping {}\r\n", target));
-    let mut t: heapless::String<64> = heapless::String::new();
-    for ch in target.chars() {
-        if t.push(ch).is_err() {
-            break;
-        }
-    }
-        if ctx.spawner.spawn(net_ping_task(ctx.io, t)).is_err() {
-            ctx.io.write_str("net: ping spawn failed\r\n");
-    }
-
-    super::CommandAction::None
-}
-
-fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let Some(arg) = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()) else {
         ctx.io.write_str("dmafpga: usage dmafpga <https://url>|status|off\r\n");
         return super::CommandAction::None;
@@ -814,11 +278,12 @@ fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> 
         return super::CommandAction::None;
     }
 
-    if ctx.spawner.spawn(net_dmafpga_task(ctx.io, url)).is_err() {
-        ctx.io.write_str("dmafpga: spawn failed\r\n");
-        return super::CommandAction::None;
-    }
-    ctx.io.write_str("dmafpga: started\r\n");
+    // if ctx.spawner.spawn(net_dmafpga_task(ctx.io, url)).is_err() {
+    //    ctx.io.write_str("dmafpga: spawn failed\r\n");
+    //    return super::CommandAction::None;
+    // }
+    // ctx.io.write_str("dmafpga: started\r\n");
+    ctx.io.write_str("dmafpga: background task disabled in prepend mode\r\n");
     super::CommandAction::None
 }
 
@@ -944,37 +409,37 @@ async fn net_ping_task(io: &'static dyn ShellBackend, target: heapless::String<6
     }
 }
 
-fn cmd_update(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_update(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::UpdateSelectDisk);
     super::CommandAction::ShowUpdateDiskTable
 }
 
-fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_install(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::SelectDisk);
     super::CommandAction::ShowInstallDiskTable
 }
 
-fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_format(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::FormatSelectDisk);
     super::CommandAction::ShowFormatDiskTable
 }
 
-fn cmd_file(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_file(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::FileSelectMount);
     super::CommandAction::ShowFileMountTable
 }
 
-fn cmd_bench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_bench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::BenchSelectDisk);
     super::CommandAction::ShowBenchDiskTable
 }
 
-fn cmd_netbench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_netbench(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     *ctx.install_wizard = Some(super::InstallWizardStage::NetbenchSelectNic);
     super::CommandAction::ShowNetbenchNicTable
 }
 
-fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let src = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("");
     let src = src.trim();
     if src.is_empty() {
@@ -988,34 +453,6 @@ fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
             }
         }
         super::CommandAction::Qjs { src: buf }
-    }
-}
-
-fn cmd_mv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    let Some(args) = args else {
-        ctx.io.write_str("mv: usage mv <src> <dst>\r\n");
-        return super::CommandAction::None;
-    };
-    let src = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
-    let dst = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
-    if src.is_empty() || dst.is_empty() {
-        ctx.io.write_str("mv: usage mv <src> <dst>\r\n");
-        return super::CommandAction::None;
-    }
-
-    fn path_160(s: &str) -> heapless::String<160> {
-        let mut out: heapless::String<160> = heapless::String::new();
-        for ch in s.chars() {
-            if out.push(ch).is_err() {
-                break;
-            }
-        }
-        out
-    }
-
-    super::CommandAction::Mv {
-        src: path_160(src),
-        dst: path_160(dst),
     }
 }
 
@@ -1043,7 +480,7 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
     None
 }
 
-fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     #[inline]
     fn print_acpi_usage(io: &dyn ShellIo) {
         io.write_str("acpi: usage acpi <reboot|s0|s1|s2|s3|s4|s5>\r\n");
@@ -1078,7 +515,7 @@ fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> sup
     }
 }
 
-fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     #[inline]
     fn print_usage(io: &dyn ShellIo) {
         io.write_str("hv: usage hv [status|start|stop|log]\r\n");
@@ -1112,6 +549,8 @@ fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
     }
 
     if op.eq_ignore_ascii_case("start") {
+        ctx.io.write_str("hv: start disabled in prepend mode (lifetime issues)\r\n");
+        /*
         match crate::hv::start(ctx.spawner, ctx.io) {
             Ok(()) => ctx.io.write_str("hv: vm1 start queued\r\n"),
             Err(crate::hv::StartError::AlreadyRunning) => {
@@ -1127,6 +566,7 @@ fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
                 ctx.io.write_str("hv: vm1 spawn failed\r\n")
             }
         }
+        */
         return super::CommandAction::None;
     }
 
@@ -1148,18 +588,17 @@ fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super
     super::CommandAction::None
 }
 
-fn cmd_go(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
-    super::set_go_mode(ctx.io, ctx.go_mode, true);
-    super::CommandAction::None
+pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+    super::CommandAction::EnterGo
 }
 
-fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     crate::vga::draw_mandelbrot();
     ctx.io.write_str("mandel ok\r\n");
     super::CommandAction::None
 }
 
-fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let Some(args) = args else {
         ctx.io.write_str("set: usage set <cols> <rows>\r\n");
         return super::CommandAction::None;
@@ -1177,6 +616,10 @@ fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     *ctx.term_cols = cols;
     *ctx.term_rows = rows;
 
+    super::apply_shell_scroll_region(ctx.io, rows);
+    // Restore cursor to safe area (Row 3) because DECSTBM resets to (1,1)
+    ctx.io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+
     let mut buf: heapless::String<64> = heapless::String::new();
     let _ = write!(&mut buf, "term set: {}x{}\r\n", cols, rows);
     ctx.io.write_str(buf.as_str());
@@ -1184,7 +627,7 @@ fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     super::CommandAction::None
 }
 
-fn cmd_idle(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_idle(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let policy = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("").trim();
     if policy.is_empty() {
         ctx.io
@@ -1209,7 +652,7 @@ fn cmd_idle(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> sup
     super::CommandAction::None
 }
 
-fn cmd_pstate(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_pstate(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let ratio = args.and_then(|a| a.get(0)).and_then(|v| v.as_u64());
 
     if ratio.is_none() {
@@ -1255,7 +698,7 @@ fn smp_state_name(st: u8) -> &'static str {
     }
 }
 
-fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     if !crate::smp::is_init() {
         ctx.io.write_str("smp: not initialized\r\n");
         return super::CommandAction::None;
@@ -1299,7 +742,7 @@ fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     super::CommandAction::None
 }
 
-fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let op = args
         .and_then(|a| a.get(0))
         .and_then(|v| v.as_str())
@@ -1408,15 +851,15 @@ fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> su
     super::CommandAction::None
 }
 
-fn cmd_cube(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_cube(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     super::CommandAction::EnterCube
 }
 
-fn cmd_ico(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_ico(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     super::CommandAction::EnterIco
 }
 
-fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let arg = args.and_then(|a| a.get(0)).and_then(|v| v.as_str()).unwrap_or("").trim();
 
     if !arg.is_empty() {
@@ -1433,7 +876,7 @@ fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> supe
     super::CommandAction::EnterTxtEdt { filename, slot_id }
 }
 
-fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let cols = (*ctx.term_cols).max(1);
     ctx.io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
 
@@ -1451,7 +894,7 @@ fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> 
         let ch = match core::char::from_u32(cp) {
             Some(ch) if !ch.is_control() => ch,
             Some(_) => '.',
-            None => '�',
+            None => '\u{FFFD}',
         };
 
         ctx.io.write_char(ch);
@@ -1470,7 +913,7 @@ fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> 
     super::CommandAction::None
 }
 
-fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_pci_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let sub = _args
         .and_then(|a| a.get(0))
         .and_then(|v| v.as_str())
@@ -1479,23 +922,23 @@ fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
 
     if sub == "dump" {
         ctx.io.write_str(
-            "usb: targeted descriptor dump is printed automatically when an unclaimed device matches vid=0x0416 pid=0xA125 (JGINYUE 'LED SheBei').\r\n",
+            "pci.usb: targeted descriptor dump is printed automatically when an unclaimed device matches vid=0x0416 pid=0xA125 (JGINYUE 'LED SheBei').\r\n",
         );
         ctx.io.write_str(
-            "usb: replug the device (or reboot) to re-trigger enumeration.\r\n",
+            "pci.usb: replug the device (or reboot) to re-trigger enumeration.\r\n",
         );
         return super::CommandAction::None;
     }
 
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
-        ctx.io.write_str("usb: no xhci controllers\r\n");
+        ctx.io.write_str("pci.usb: no xhci controllers\r\n");
         return super::CommandAction::None;
     }
 
     for info in ctrls.iter() {
         ctx.io.write_fmt(format_args!(
-            "usb: xHCI {} {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} ac64={}\r\n",
+            "pci.usb: xHCI {} {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} ac64={}\r\n",
             info.controller_id,
             info.bus,
             info.slot,
@@ -1529,7 +972,7 @@ fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> sup
     super::CommandAction::None
 }
 
-fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
+pub(crate) fn cmd_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> super::CommandAction {
     let mut len: usize = 0;
     crate::pci::with_devices(|list| {
         len = list.len();

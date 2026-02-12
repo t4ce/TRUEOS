@@ -119,7 +119,7 @@ iso-release: iso
 iso-debug: BUILD_MODE := debug
 iso-debug: iso
 
-SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 80; nc 127.0.0.1 5555; stty sane'
+SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 30; nc 127.0.0.1 5555; stty sane'
 
 run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))

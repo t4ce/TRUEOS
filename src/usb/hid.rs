@@ -230,15 +230,6 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 dy,
                 wheel,
             }));
-            crate::tga::tga_mouse_write(
-                runtime.controller_id,
-                runtime.slot_id,
-                runtime.target_port,
-                buttons,
-                dx,
-                dy,
-                wheel,
-            );
         }
     } else if runtime.hid_kind == 1 {
         // Boot keyboard: modifiers + 6 keycodes

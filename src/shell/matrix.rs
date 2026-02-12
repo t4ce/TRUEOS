@@ -521,25 +521,30 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
         }
     }
 
-    // Clear the right-side symbol area first so shrinking/empty updates don't
+    // Clear the center area (between Title and Time) so shrinking/empty updates don't
     // leave stale characters behind.
-    if term_cols != 0 {
-        let clear_width: usize = 64;
-        let mut start_col = term_cols.saturating_sub(clear_width).saturating_add(1);
-        // Keep the left banner ("TRUE OS") intact.
-        start_col = start_col.max(9);
-        if start_col <= term_cols {
+    if term_cols > 16 {
+        let start_col = 9;
+        // Leave space for the right-side Time (~8 chars).
+        let end_col = term_cols.saturating_sub(8); 
+        if end_col > start_col {
             io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
-            let to_clear = term_cols - start_col + 1;
-            for _ in 0..to_clear {
+            for _ in 0..(end_col - start_col) {
                 io.write_byte(b' ');
             }
         }
     }
 
     if term_cols != 0 && visible_len != 0 {
-        let mut start_col = term_cols.saturating_sub(visible_len).saturating_add(1);
+        // Center alignment
+        let mut start_col = term_cols
+            .saturating_sub(visible_len)
+            .saturating_div(2)
+            .saturating_add(1);
+        
+        // Clamp to avoid overwriting title
         start_col = start_col.max(9);
+
         if start_col <= term_cols {
             io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
             for (i, (id, state)) in symbols.iter().enumerate() {

@@ -8,6 +8,14 @@ pub const SAVE_CURSOR: &str = "\x1b[s";
 pub const RESTORE_CURSOR: &str = "\x1b[u";
 pub const HIDE_CURSOR: &str = "\x1b[?25l";
 pub const SHOW_CURSOR: &str = "\x1b[?25h";
+
+pub const CURSOR_BLINKING_BLOCK: &str = "\x1b[1 q";
+pub const CURSOR_STEADY_BLOCK: &str = "\x1b[2 q";
+pub const CURSOR_BLINKING_UNDERLINE: &str = "\x1b[3 q";
+pub const CURSOR_STEADY_UNDERLINE: &str = "\x1b[4 q";
+pub const CURSOR_BLINKING_BAR: &str = "\x1b[5 q";
+pub const CURSOR_STEADY_BAR: &str = "\x1b[6 q";
+
 pub const CLEAR_SCREEN: &str = "\x1b[2J";
 pub const CLEAR_LINE: &str = "\x1b[2K";
 pub const CLEAR_TO_EOL: &str = "\x1b[K";
@@ -215,7 +223,7 @@ impl Drop for CursorGuard<'_> {
     }
 }
 
-pub fn hide_cursor_guard(io: &'static dyn super::ShellBackend) -> CursorGuard<'static> {
+pub fn hide_cursor_guard(io: &dyn super::ShellBackend) -> CursorGuard<'_> {
     io.write_str(HIDE_CURSOR);
     CursorGuard { io }
 }
@@ -491,7 +499,7 @@ pub fn pad_right(text: &str, width: usize) -> String {
     out
 }
 
-pub(crate) fn handle_ecma48(io: &'static dyn super::ShellBackend, rest: &str) {
+pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend, rest: &str) {
     let arg = rest.trim();
     if arg.eq_ignore_ascii_case("help") {
         io.write_str("ecma48: usage\r\n");
