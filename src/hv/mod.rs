@@ -239,6 +239,17 @@ pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend) -> Result<(), Sta
         return Err(StartError::AlreadyRunning);
     }
 
+    // Try to enable usage of VMX if not already locked.
+    let (compatible, has_msr, _, locked, _) = vmx_caps();
+    if compatible && has_msr && !locked {
+        // SAFETY: Only writes MSR if supported and unlocked.
+        unsafe {
+            let mut val = Msr::new(IA32_FEATURE_CONTROL).read();
+            val |= IA32_FEATURE_CONTROL_LOCK | IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX;
+            Msr::new(IA32_FEATURE_CONTROL).write(val);
+        }
+    }
+
     let caps = status();
     if !caps.vendor_intel
         || !caps.has_msr
@@ -372,13 +383,21 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
     // GenuineIntel
     let r0 = __cpuid(0);
     let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
+    
+    // Also accept generic TCG if VMX is present (we can't check VMX here easily without r1, but checking vendor is enough for this flag)
+    // TCGTCGTCGTCG: EBX=0x54474354 EDX=0x47435447 ECX=0x43544743
+    // AuthenticAMD: EBX=0x68747541 EDX=0x69746e65 ECX=0x444d4163
+    let known_compatible = vendor_intel 
+        || (r0.ebx == 0x54474354 && r0.edx == 0x47435447 && r0.ecx == 0x43544743) // TCGTCGTCGTCG
+        || (r0.ebx == 0x68747541 && r0.edx == 0x69746e65 && r0.ecx == 0x444d4163); // AuthenticAMD (if has_vmx, emulated)
 
     let r1 = __cpuid(1);
     let has_msr = (r1.edx & (1 << 5)) != 0;
     let has_vmx = (r1.ecx & (1 << 5)) != 0;
 
     let (mut feature_control_locked, mut feature_control_vmx_outside_smx) = (false, false);
-    if vendor_intel && has_msr {
+    // Relaxed vendor check for MSR reading
+    if (known_compatible || has_vmx) && has_msr {
         // SAFETY: guarded by CPUID MSR capability bit on Intel CPUs.
         let val = unsafe { Msr::new(IA32_FEATURE_CONTROL).read() };
         feature_control_locked = (val & IA32_FEATURE_CONTROL_LOCK) != 0;
@@ -386,7 +405,7 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
     }
 
     (
-        vendor_intel,
+        known_compatible,
         has_msr,
         has_vmx,
         feature_control_locked,
