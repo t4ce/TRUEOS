@@ -29,7 +29,6 @@ struct LedIfaceInfo {
 pub struct LedRuntime {
     pub controller_id: usize,
     pub slot_id: u32,
-    pub iface: u8,
     pub out_report_id: u8,
     pub out_report_total_len: u16,
     pub ep_out_target: u32,
@@ -802,7 +801,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         let _ = guard.push(LedRuntime {
             controller_id: ctx.controller_id,
             slot_id,
-            iface: info.interface,
             out_report_id: preferred_out_report_id,
             out_report_total_len: preferred_out_total_len,
             ep_out_target: ep_out_target as u32,

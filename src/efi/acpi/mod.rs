@@ -23,22 +23,6 @@ pub mod tpm2;
 
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
-static LOG_ACPI_ONCE: Once<()> = Once::new();
-
-pub(crate) fn log_once() {
-    LOG_ACPI_ONCE.call_once(|| {
-        facp::log_once();
-        tpm2::log_once();
-        dmar::log_once();
-        fpdt::log_once();
-        madt::log_once();
-        dbg::log_once();
-        ssdt::log_once();
-        sleep::log_once();
-        bgrt::log_once();
-    });
-}
-
 pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>> {
     ACPI_TABLES.call_once(|| {
         let Some(rsdp) = limine::rsdp_address() else {
@@ -244,4 +228,18 @@ impl AcpiHandler for AcpiIdentityHandler {
     fn sleep(&self, milliseconds: u64) {
         self.stall(milliseconds.saturating_mul(1_000));
     }
+
+    fn create_mutex(&self) -> acpi::Handle {
+        unsafe { core::mem::transmute(0u32) }
+    }
+
+    fn acquire(&self, _handle: acpi::Handle, _timeout: u16) -> Result<(), acpi::aml::AmlError> {
+        Ok(())
+    }
+
+    fn release(&self, _handle: acpi::Handle) {
+    }
 }
+
+
+

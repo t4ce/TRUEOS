@@ -15,7 +15,7 @@ x86_64 = { version = "0.15.4", default-features = false, features = ["instructio
 spin = "0.10"
 heapless = { version = "0.9", default-features = false }
 limine = { version = "0.5", default-features = false }
-acpi = { version = "6", default-features = false }
+acpi = { version = "6", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16", default-features = false }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 rdrand = { version = "0.8", default-features = false }

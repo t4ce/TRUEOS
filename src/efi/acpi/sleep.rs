@@ -41,45 +41,14 @@ impl SleepTypeCache {
 }
 
 static SLEEP_TYPES: Once<Option<SleepTypeCache>> = Once::new();
-static LOG_ONCE: Once<()> = Once::new();
+
+
 
 pub fn sleep_type_for_state(state: u8) -> Option<SleepType> {
     SLEEP_TYPES
         .call_once(resolve_sleep_types)
         .as_ref()
         .and_then(|cache| cache.get(state))
-}
-
-pub fn log_once() {
-    LOG_ONCE.call_once(|| {
-        let Some(cache) = SLEEP_TYPES.call_once(resolve_sleep_types).as_ref() else {
-            crate::log!("ACPI Sx: unavailable\n");
-            return;
-        };
-
-        log_state("S1", cache.s1);
-        log_state("S2", cache.s2);
-        log_state("S3", cache.s3);
-        log_state("S4", cache.s4);
-        log_state("S5", cache.s5);
-    });
-}
-
-fn log_state(label: &str, value: Option<SleepType>) {
-    match value {
-        Some(st) => crate::log!(
-            "ACPI {}: pm1a_typ={} pm1b_typ={}\n",
-            label,
-            st.pm1a,
-            opt_u8(st.pm1b)
-        ),
-        None => crate::log!("ACPI {}: missing\n", label),
-    }
-}
-
-#[inline(always)]
-fn opt_u8(v: Option<u8>) -> u8 {
-    v.unwrap_or(0)
 }
 
 fn resolve_sleep_types() -> Option<SleepTypeCache> {

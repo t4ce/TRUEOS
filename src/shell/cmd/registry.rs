@@ -98,6 +98,22 @@ impl<'a> ParsedArgs<'a> {
     pub(crate) fn get(&self, idx: usize) -> Option<ArgValue<'a>> {
         self.values.get(idx).copied()
     }
+
+    pub(crate) fn get_str(&self, idx: usize) -> Option<&'a str> {
+        self.get(idx).and_then(|v| v.as_str())
+    }
+
+    pub(crate) fn get_u64(&self, idx: usize) -> Option<u64> {
+        self.get(idx).and_then(|v| v.as_u64())
+    }
+
+    pub(crate) fn get_usize(&self, idx: usize) -> Option<usize> {
+        self.get(idx).and_then(|v| v.as_usize())
+    }
+
+    pub(crate) fn get_u8(&self, idx: usize) -> Option<u8> {
+        self.get(idx).and_then(|v| v.as_u8())
+    }
 }
 
 pub(crate) struct ShellCommandCtx<'a> {
@@ -106,7 +122,7 @@ pub(crate) struct ShellCommandCtx<'a> {
     pub(crate) io: &'a dyn ShellBackend,
     pub(crate) term_cols: &'a mut usize,
     pub(crate) term_rows: &'a mut usize,
-    pub(crate) install_wizard: &'a mut Option<crate::shell::InstallWizardStage>,
+    pub(crate) mode: &'a mut crate::shell::ShellMode,
 }
 
 pub(crate) type ShellCmdHandler = fn(&mut ShellCommandCtx<'_>, Option<&ParsedArgs<'_>>) -> CommandAction;
@@ -139,11 +155,6 @@ fn find_command(cmds: &[&'static ShellCommand], name: &str) -> Option<&'static S
         .copied()
         .filter(|c| c.name.len() == name_len)
         .find(|c| c.name.eq_ignore_ascii_case(name))
-}
-
-pub(crate) fn lookup_registered(name: &str) -> Option<&'static ShellCommand> {
-    let cmds = registry().lock();
-    find_command(cmds.as_slice(), name)
 }
 
 pub(crate) fn list_command_names<const N: usize>(out: &mut heapless::Vec<&'static str, N>) {
@@ -219,7 +230,20 @@ pub(crate) fn dispatch_line(ctx: &mut ShellCommandCtx<'_>) -> Option<CommandActi
         return None;
     }
 
-    let (verb, rest) = split_verb_rest(line);
+    let (mut verb, mut rest) = split_verb_rest(line);
+
+    // Enforce "§1" style, reject "§ 1"
+    if verb == "§" {
+        return None;
+    }
+    if verb.starts_with("§") && verb.len() > "§".len() {
+        // Treat "§<something>" as command "§" with argument "<something>"
+        // This effectively shifts the split point to right after "§"
+        verb = "§";
+        // Safe slicing because we know verb (and thus line) starts with "§"
+        rest = &line["§".len()..];
+    }
+
     let cmd = {
         let cmds = registry().lock();
         find_command(cmds.as_slice(), verb)
@@ -522,6 +546,10 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
+        static MV_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("src", ArgType::Str).mandatory(),
+            ArgSpec::new("dst", ArgType::Str).mandatory(),
+        ];
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
@@ -544,11 +572,22 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench", &NO_ARGS, cmd::cmd_bench);
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
+        let _ = REGSHCMD("mv", &MV_ARGS, cmd::cmd_mv);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         // let _ = REGSHCMD("https", &HTTPS_ARGS, cmd::cmd_https);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
         let _ = REGSHCMD("go", &[], cmd::cmd_go);
+
+        // Table commands
+        let _ = REGSHCMD("tlb", &NO_ARGS, cmd::cmd_tlb);
+        let _ = REGSHCMD("tlb.pci", &NO_ARGS, cmd::cmd_tlb_pci);
+        let _ = REGSHCMD("tlb.mem", &NO_ARGS, cmd::cmd_tlb_mem);
+        let _ = REGSHCMD("tlb.cpu", &NO_ARGS, cmd::cmd_tlb_cpu);
+        let _ = REGSHCMD("tlb.acpi", &NO_ARGS, cmd::cmd_tlb_acpi);
+        let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
+        let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
+
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
         let _ = REGSHCMD("set", &SET_ARGS, cmd::cmd_set);
         let _ = REGSHCMD("idle", &IDLE_ARGS, cmd::cmd_idle);

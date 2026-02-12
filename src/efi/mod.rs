@@ -1,54 +1,48 @@
-use core::{char, ptr};
 
 use crate::pci::mmio;
 
-use spin::Once;
 
 use crate::limine;
 
 pub mod acpi;
 pub mod acpi_uefi;
 
-static LOG_ONCE: Once<()> = Once::new();
-static DID_DUMP_SYSTEM_TABLE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct EfiTableHeader {
-    signature: u64,
-    revision: u32,
-    header_size: u32,
-    crc32: u32,
-    reserved: u32,
+pub struct EfiTableHeader {
+    pub signature: u64,
+    pub revision: u32,
+    pub header_size: u32,
+    pub crc32: u32,
+    pub reserved: u32,
 }
 
 #[repr(C)]
-struct EfiSystemTable {
-    hdr: EfiTableHeader,
-    firmware_vendor: *const u16,
-    firmware_revision: u32,
-    console_in_handle: usize,
-    con_in: usize,
-    console_out_handle: usize,
-    con_out: usize,
-    standard_error_handle: usize,
-    std_err: usize,
-    runtime_services: usize,
-    boot_services: usize,
-    number_of_table_entries: usize,
-    configuration_table: usize,
+pub struct EfiSystemTable {
+    pub hdr: EfiTableHeader,
+    pub firmware_vendor: *const u16,
+    pub firmware_revision: u32,
+    pub console_in_handle: usize,
+    pub con_in: usize,
+    pub console_out_handle: usize,
+    pub con_out: usize,
+    pub standard_error_handle: usize,
+    pub std_err: usize,
+    pub runtime_services: usize,
+    pub boot_services: usize,
+    pub number_of_table_entries: usize,
+    pub configuration_table: usize,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub(crate) struct EfiGuid {
-    data1: u32,
-    data2: u16,
-    data3: u16,
-    data4: [u8; 8],
+pub struct EfiGuid {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
 }
 
 impl EfiGuid {
@@ -98,12 +92,12 @@ impl EfiGuid {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct EfiConfigurationTable {
-    vendor_guid: EfiGuid,
-    vendor_table: usize,
+pub struct EfiConfigurationTable {
+    pub vendor_guid: EfiGuid,
+    pub vendor_table: usize,
 }
 
-fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
+pub fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
     // Common config-table GUIDs.
     const ACPI_20: EfiGuid = EfiGuid::new(
         0x8868e871,
@@ -295,193 +289,19 @@ fn cfg_guid_name(guid: &EfiGuid) -> Option<&'static str> {
     None
 }
 
-#[inline(always)]
-fn guid_short(guid: &EfiGuid) -> (u16, u16) {
-    let first4 = (guid.data1 >> 16) as u16;
-    let last4 = u16::from_be_bytes([guid.data4[6], guid.data4[7]]);
-    (first4, last4)
-}
-
-pub fn log_system_table_once() -> bool {
-    use core::sync::atomic::Ordering;
-
-    if DID_DUMP_SYSTEM_TABLE.load(Ordering::Acquire) {
-        return true;
-    }
-
-    LOG_ONCE.call_once(|| {
-        let phys_or_virt = match limine::efi_system_table_address() {
-            Some(addr) if addr != 0 => addr,
-            Some(_) => {
-                crate::log!("UEFI: EFI system table address is 0 (Limine)\n");
-                return;
-            }
-            None => {
-                crate::log!("UEFI: no EFI system table address (Limine)\n");
-                return;
-            }
-        };
-
-        // Limine may provide either a physical address or an address already HHDM-mapped.
-        // Only attempt to map if we can translate it to a physical address within the Limine
-        // memmap contract; otherwise, probing it risks mapping nonsense and faulting/rebooting.
-        let phys = match limine::try_as_phys_addr(phys_or_virt) {
-            Some(phys) => {
-                crate::log!(
-                    "UEFI: EFI system table addr=0x{:016X} (phys=0x{:016X})\n",
-                    phys_or_virt,
-                    phys
-                );
-                phys
-            }
-            None => {
-                crate::log!(
-                    "UEFI: EFI system table addr=0x{:016X} not mappable via Limine memmap/HHDM; skipping full SystemTable dump\n",
-                    phys_or_virt
-                );
-                return;
-            }
-        };
-
-        let mapped = match mmio::map_limine_struct::<EfiSystemTable>(phys) {
-            Ok(m) => m,
-            Err(err) => {
-                crate::log!(
-                    "UEFI: EFI system table map failed addr=0x{:016X} size=0x{:X} err={:?}\n",
-                    phys,
-                    core::mem::size_of::<EfiSystemTable>(),
-                    err
-                );
-                return;
-            }
-        };
-
-        // Safety: The region is explicitly mapped and sized for EfiSystemTable.
-        // We still do a minimal sanity check before reading further.
-        let st = unsafe { mapped.as_ref() };
-        if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
-            crate::log!(
-                "UEFI: EFI system table at 0x{:016X} signature mismatch 0x{:016X}\n",
-                phys,
-                st.hdr.signature
-            );
-            return;
-        }
-
-        let vendor = (|| {
-            let vendor_addr = st.firmware_vendor as u64;
-            // Map at most 96 UTF-16 units (+ trailing NUL).
-            let (vendor_ptr, _) = mmio::map_limine_slice::<u16>(vendor_addr, 97).ok()?;
-            let vendor_ptr = vendor_ptr.as_ptr() as *const u16;
-            unsafe { read_utf16z_lossy(vendor_ptr, 96) }
-        })();
-        if let Some(vendor) = vendor {
-            crate::log!(
-                "UEFI: SystemTable rev=0x{:08X} vendor='{}' fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
-                st.hdr.revision,
-                vendor,
-                st.firmware_revision,
-                st.runtime_services as u64,
-                st.boot_services as u64,
-                st.number_of_table_entries as u64,
-                st.configuration_table as u64,
-            );
-        } else {
-            crate::log!(
-                "UEFI: SystemTable rev=0x{:08X} fw_rev=0x{:08X} rt=0x{:016X} bs=0x{:016X} cfg_entries={} cfg=0x{:016X}\n",
-                st.hdr.revision,
-                st.firmware_revision,
-                st.runtime_services as u64,
-                st.boot_services as u64,
-                st.number_of_table_entries as u64,
-                st.configuration_table as u64,
-            );
-        }
-
-        // Dump configuration table entries (GUID -> vendor_table pointer).
-        // The pointers inside the System Table are typically physical in early boot; still,
-        // guard with Limine translation to avoid mis-mapping on odd firmware.
-        let cfg_addr_raw = st.configuration_table as u64;
-        let cfg_entries = st.number_of_table_entries;
-        let cfg_addr = match (cfg_addr_raw, limine::try_as_phys_addr(cfg_addr_raw)) {
-            (0, _) => 0,
-            (_, Some(phys)) => phys,
-            (_, None) => {
-                crate::log!(
-                    "UEFI: cfg table ptr=0x{:016X} not mappable via Limine; skipping cfg dump\n",
-                    cfg_addr_raw
-                );
-                0
-            }
-        };
-
-        if cfg_addr != 0 && cfg_entries != 0 {
-            const MAX_CFG_DUMP: usize = 64;
-            let dump_count = core::cmp::min(cfg_entries, MAX_CFG_DUMP);
-            match mmio::map_limine_slice::<EfiConfigurationTable>(cfg_addr, dump_count) {
-                Ok((cfg_ptr, _)) => {
-                    let slice =
-                        unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), dump_count) };
-                    for (idx, entry) in slice.iter().enumerate() {
-                        let name = cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
-                        let (first4, last4) = guid_short(&entry.vendor_guid);
-                        crate::log!(
-                            "UEFI: cfg[{:<2}] {:04x}~{:04x} ({}) table=0x{:016X}\n",
-                            idx as u64,
-                            first4,
-                            last4,
-                            name,
-                            entry.vendor_table as u64
-                        );
-                    }
-                    if cfg_entries > dump_count {
-                        crate::log!(
-                            "UEFI: cfg dump truncated ({} of {})\n",
-                            dump_count as u64,
-                            cfg_entries as u64
-                        );
-                    }
-                }
-                Err(err) => {
-                    crate::log!(
-                        "UEFI: cfg table map failed addr=0x{:016X} entries={} err={:?}\n",
-                        cfg_addr,
-                        cfg_entries as u64,
-                        err
-                    );
-                }
-            }
-        }
-
-        DID_DUMP_SYSTEM_TABLE.store(true, Ordering::Release);
-    });
-
-    DID_DUMP_SYSTEM_TABLE.load(Ordering::Acquire)
-}
-
-pub fn log_once() {
-    // Prefer the actual UEFI System Table dump when Limine provides a mappable address.
-    // If that fails, fall back to the ACPI "UEFI" table decoder.
-    if !log_system_table_once() {
-        acpi_uefi::log_once();
-    }
-}
-
-unsafe fn read_utf16z_lossy(ptr16: *const u16, max_units: usize) -> Option<alloc::string::String> {
-    if ptr16.is_null() {
+pub fn system_table() -> Option<&'static EfiSystemTable> {
+    let phys_or_virt = match limine::efi_system_table_address() {
+        Some(addr) if addr != 0 => addr,
+        _ => return None,
+    };
+    let phys = limine::try_as_phys_addr(phys_or_virt)?;
+    let mapped = mmio::map_limine_struct::<EfiSystemTable>(phys).ok()?;
+    let st = unsafe { mapped.as_ref() };
+    if st.hdr.signature != EFI_SYSTEM_TABLE_SIGNATURE {
         return None;
     }
-
-    let mut out = alloc::string::String::new();
-    for i in 0..max_units {
-        let unit = ptr::read(ptr16.add(i));
-        if unit == 0 {
-            break;
-        }
-        // UEFI strings are UCS-2 in practice; treat as BMP.
-        let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
-        out.push(ch);
-    }
-
-    Some(out)
+    Some(st)
 }
+
+
+

@@ -273,8 +273,6 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
     unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
 
     let scratchpad_count = ctx.max_scratchpad_buffers() as usize;
-    let mut scratchpad_array_phys: u64 = 0;
-    let mut scratchpad_array_virt: *mut u8 = core::ptr::null_mut();
     if scratchpad_count > 0 {
         let array_bytes = scratchpad_count * core::mem::size_of::<u64>();
         let (sp_array_phys, sp_array_virt) = match dma::alloc_with_max(array_bytes, 64, dma_max_exclusive) {
@@ -315,8 +313,6 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
             write_volatile(dcbaa, sp_array_phys);
         }
 
-        scratchpad_array_phys = sp_array_phys;
-        scratchpad_array_virt = sp_array_virt;
         crate::log!(
             "usb[xHCI {}]: scratchpads={} array=0x{:X}\n",
             controller_id,
@@ -416,11 +412,7 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         ctx,
         ctx_stride_bytes,
         ctx_stride_words,
-        dcbaa_phys,
         dcbaa_virt,
-        scratchpad_array_phys,
-        scratchpad_array_virt,
-        scratchpad_count: scratchpad_count as u32,
         cmd_ring,
         _cmd_phys: cmd_phys,
         _cmd_virt: cmd_virt_raw,
