@@ -1,10 +1,7 @@
-use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::Instant;
 
-use crate::shell::{ShellIo, PROMPT_RGB};
+use crate::shell::{ShellBackend, ShellIo, PROMPT_RGB, CommandAction};
 use crate::ecma48;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +23,308 @@ pub enum PendingAction {
     UpdateConfirm { disc_id: u32 },
 }
 
+#[derive(Clone)]
+pub enum ShellMode {
+    Idle,
+    Wizard(InstallWizardStage),
+    Confirm(PendingAction),
+    Wait { action: PendingAction, deadline: Instant },
+}
+
+impl Default for ShellMode {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+pub enum InputResult {
+    Handled,
+    Transition(ShellMode),
+    ProcessCommand,
+    RunAction(CommandAction),
+}
+
+impl ShellMode {
+    pub async fn process_input(
+        &self,
+        io: &dyn ShellBackend,
+        line: &str,
+        spawner: &Spawner,
+    ) -> InputResult {
+        match self {
+            ShellMode::Idle => InputResult::ProcessCommand,
+            ShellMode::Wait { .. } => {
+                io.write_str("\r\n");
+                InputResult::Transition(ShellMode::Idle)
+            }
+            ShellMode::Confirm(action) => {
+                let s = line.trim();
+                match action {
+                    PendingAction::FormatConfirm { disc_id } => {
+                        if s.is_empty() {
+                            InputResult::RunAction(CommandAction::DoFormat { disc_id: *disc_id })
+                        } else {
+                            io.write_str("\r\nformat: cancelled\r\n");
+                            InputResult::Transition(ShellMode::Idle)
+                        }
+                    }
+                    PendingAction::InstallConfirm { disc_id } => {
+                        if s.is_empty() {
+                            InputResult::RunAction(CommandAction::DoInstall { disc_id: *disc_id })
+                        } else {
+                            io.write_str("\r\ninstall: cancelled\r\n");
+                            InputResult::Transition(ShellMode::Idle)
+                        }
+                    }
+                    PendingAction::UpdateConfirm { disc_id } => {
+                        if s.is_empty() {
+                            InputResult::RunAction(CommandAction::DoUpdate { disc_id: *disc_id })
+                        } else {
+                            io.write_str("\r\nupdate: cancelled\r\n");
+                            InputResult::Transition(ShellMode::Idle)
+                        }
+                    }
+                    _ => InputResult::Transition(ShellMode::Idle),
+                }
+            }
+            ShellMode::Wizard(stage) => {
+                handle_wizard_input_internal(io, line, spawner, *stage).await
+            }
+        }
+    }
+}
+
+fn should_cancel(s: &str) -> bool {
+    s.is_empty() || s.eq_ignore_ascii_case("q") || s.eq_ignore_ascii_case("quit")
+}
+
+async fn handle_wizard_input_internal(
+    io: &dyn ShellBackend,
+    line: &str,
+    spawner: &Spawner,
+    stage: InstallWizardStage,
+) -> InputResult {
+    let mut s = line.trim();
+    
+    match stage {
+        InstallWizardStage::SelectDisk => {
+            if let Some(rest) = s.strip_prefix("install") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\ninstall: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+            if raw_id == 0 {
+                io.write_str("\r\ninstall: invalid id\r\n");
+                io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
+            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let Some(handle) = target else {
+                io.write_str("\r\ninstall: no such disk\r\n");
+                return InputResult::Handled;
+            };
+            
+            let info = handle.info();
+            let status = crate::v::disc::detect::detect_physical_disk(handle).await;
+            io.write_fmt(format_args!(
+                "\r\ninstall: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                info.id.raw(), info.id, info.block_count, info.block_size, info.writable, info.label, status.short(),
+            ));
+            io.write_str("install: DANGER: this may REPARTITION and FORMAT the disk\r\n");
+            io.write_str("install: press Enter to confirm (any other key cancels)\r\n");
+            
+            InputResult::Transition(ShellMode::Confirm(PendingAction::InstallConfirm { disc_id: raw_id }))
+        }
+        
+        InstallWizardStage::UpdateSelectDisk => {
+            if let Some(rest) = s.strip_prefix("update") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\nupdate: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+            if raw_id == 0 {
+                io.write_str("\r\nupdate: invalid id\r\n");
+                io.write_str("update: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
+            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let Some(handle) = target else {
+                io.write_str("\r\nupdate: no such disk\r\n");
+                return InputResult::Handled;
+            };
+
+            let info = handle.info();
+            let status = crate::v::disc::detect::detect_physical_disk(handle).await;
+            io.write_fmt(format_args!(
+                "\r\nupdate: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                info.id.raw(), info.id, info.block_count, info.block_size, info.writable, info.label, status.short(),
+            ));
+
+            if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+                io.write_str("update: refused (selected disk is not a TRUEOS disk)\r\n");
+                io.write_str("update: use `install` for a fresh install\r\n");
+                io.write_str("update: choose another disk id (or 'q' to cancel)\r\n");
+                print_update_disk_table(io).await;
+                return InputResult::Handled;
+            }
+
+            io.write_str("update: downloads BOOTX64.EFI + TRUEOS.elf and refreshes ESP boot files\r\n");
+            io.write_str("update: will NOT repartition/format (refuses if TRUEOSFS is not detected)\r\n");
+            io.write_str("update: press Enter to confirm (any other key cancels)\r\n");
+
+            InputResult::Transition(ShellMode::Confirm(PendingAction::UpdateConfirm { disc_id: raw_id }))
+        }
+        
+        InstallWizardStage::FormatSelectDisk => {
+            if let Some(rest) = s.strip_prefix("format") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\nformat: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+            if raw_id == 0 {
+                io.write_str("\r\nformat: invalid id\r\n");
+                io.write_str("format: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
+            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let Some(handle) = target else {
+                io.write_str("\r\nformat: no such disk\r\n");
+                return InputResult::Handled;
+            };
+
+            let info = handle.info();
+            let status = crate::v::disc::detect::detect_physical_disk(handle).await;
+            io.write_fmt(format_args!(
+                "\r\nformat: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}\r\n",
+                info.id.raw(), info.id, info.block_count, info.block_size, info.writable, info.label, status.short(),
+            ));
+            io.write_str("format: DANGER: this destroys all data on the disk\r\n");
+            io.write_str("format: press Enter to confirm (any other key cancels)\r\n");
+
+            InputResult::Transition(ShellMode::Confirm(PendingAction::FormatConfirm { disc_id: raw_id }))
+        }
+        
+        InstallWizardStage::FileSelectMount => {
+            if let Some(rest) = s.strip_prefix("file") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\nfile: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                print_trueosfs_mount_table(io).await;
+                io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
+                return InputResult::Handled;
+            }
+
+            let roots = crate::v::fs::trueosfs::list_roots();
+            let (handle, shown_id) = if let Ok(idx) = s.parse::<usize>() {
+                if let Some(r) = roots.get(idx) {
+                    (crate::disc::block::device_handle(r.disk_id), Some(r.disk_id.raw()))
+                } else {
+                    (None, None)
+                }
+            } else {
+                let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+                if raw_id == 0 { (None, None) } else {
+                    (crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id), Some(raw_id))
+                }
+            };
+            
+            let Some(handle) = handle else {
+                io.write_str("\r\nfile: invalid mount id (try 'ls')\r\n");
+                io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
+                return InputResult::Handled;
+            };
+
+            io.write_fmt(format_args!(
+                "\r\nfile: printing tree for {} (raw={})\r\n",
+                handle.id(), shown_id.unwrap_or(handle.id().raw())
+            ));
+
+            print_trueosfs_tree_25(io, handle).await;
+            io.write_str("\r\nfile: enter another mount index/id, 'ls', or 'q'\r\n");
+            InputResult::Handled
+        }
+        
+        InstallWizardStage::BenchSelectDisk => {
+            if let Some(rest) = s.strip_prefix("bench") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\nbench: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            let raw_id = parse_disc_id_raw(s).unwrap_or(0);
+            if raw_id == 0 {
+                io.write_str("\r\nbench: invalid id\r\n");
+                io.write_str("bench: enter a TRUEOSFS disk id or 'q'\r\n");
+                return InputResult::Handled;
+            }
+
+            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let Some(handle) = target else {
+                io.write_str("\r\nbench: no such disk\r\n");
+                return InputResult::Handled;
+            };
+
+            let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(handle).await;
+            if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+                io.write_fmt(format_args!(
+                    "\r\nbench: refused (id={} is not TRUEOSFS; status={}{} )\r\n",
+                    raw_id, status.short(),
+                    match (&status, err) {
+                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" err={:?}", e),
+                        _ => alloc::string::String::new(),
+                    }
+                ));
+                return InputResult::Handled;
+            }
+            
+            crate::shell::bench::run_bench_fs(io, handle).await;
+            InputResult::Transition(ShellMode::Idle)
+        }
+        
+        InstallWizardStage::NetbenchSelectNic => {
+            if let Some(rest) = s.strip_prefix("netbench") { s = rest.trim(); }
+            if should_cancel(s) {
+                io.write_str("\r\nnetbench: cancelled\r\n");
+                return InputResult::Transition(ShellMode::Idle);
+            }
+            let nic_index = s.parse::<usize>().ok();
+            let Some(nic_index) = nic_index else {
+                 io.write_str("\r\nnetbench: invalid nic id\r\n");
+                 io.write_str("netbench: enter a nic id or 'q'\r\n");
+                 return InputResult::Handled;
+            };
+            if nic_index >= crate::net::device_count() {
+                io.write_str("\r\nnetbench: no such nic\r\n");
+                return InputResult::Handled;
+            }
+            
+             if crate::shell::bench::netbench_start(spawner, nic_index) {
+                use core::sync::atomic::Ordering;
+                let slot = crate::shell::bench::NETBENCH_STATUS_SLOT.load(Ordering::Relaxed);
+                io.write_fmt(format_args!(
+                    "\r\nnetbench: started nic={} §{} url={}\r\n",
+                    nic_index,
+                    slot.saturating_add(1),
+                    crate::shell::bench::NETBENCH_URL
+                ));
+                let _ = crate::shell::statusbar::set_left_active("netbench");
+                let _ = crate::shell::statusbar::set_right_active("0kb/s");
+                for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                    let _ = crate::shell::statusbar::set_indicator_active(i, 2);
+                }
+                InputResult::RunAction(CommandAction::NetbenchStarted)
+            } else {
+                io.write_str("\r\nnetbench: already running\r\n");
+                InputResult::Handled
+            }
+        }
+    }
+}
+
 pub(crate) fn parse_disc_id_raw(s: &str) -> Option<u32> {
     let s = s.trim();
     if s.is_empty() {
@@ -35,19 +334,40 @@ pub(crate) fn parse_disc_id_raw(s: &str) -> Option<u32> {
     s.parse::<u32>().ok()
 }
 
+fn write_inserted_line(io: &dyn ShellIo, args: core::fmt::Arguments) {
+    // Insert Line at current cursor position (pushes everything down)
+    io.write_str("\x1b[L");
+
+    // Fix artifact on the line below (which was pushed down)
+    io.write_str(ecma48::SAVE_CURSOR);
+    io.write_str("\x1b[1B\r"); // Down 1, CR to Column 1
+    io.write_str("\x1b[38;2;80;80;80m│\x1b[0m");
+    io.write_str(ecma48::RESTORE_CURSOR);
+
+    // Write scrollbar for the new line
+    io.write_str("\x1b[38;2;80;80;80m│\x1b[0m");
+    
+    io.write_fmt(args);
+    // Move to next line (which puts us on top of the pushed content, ready to insert again)
+    io.write_str("\r\n");
+}
+
 pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, filter_trueos: bool) {
+    // Start at top of scroll region
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+
     let title = crate::ecma48::style(header).bold().fg(crate::shell::PROMPT_RGB);
-    io.write_fmt(format_args!("{} {}\r\n", title, crate::ecma48::dim("disk detection stage")));
-    io.write_fmt(format_args!("{}\r\n\r\n", crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")));
+    write_inserted_line(io, format_args!("{} {}", title, crate::ecma48::dim("disk detection stage")));
+    write_inserted_line(io, format_args!("\r\n{}", crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")));
 
     let mut found = false;
 
     // Header
-    io.write_fmt(format_args!(
-        "  {:<3} {:<8} {:<10} {:<6} {:<12} {}\r\n",
+    write_inserted_line(io, format_args!(
+        "  {:<3} {:<8} {:<10} {:<6} {:<12} {}",
         "ID", "Name", "Size", "Mode", "Status", "Label"
     ));
-    io.write_fmt(format_args!("  {}\r\n", crate::ecma48::dim("---------------------------------------------------------")));
+    write_inserted_line(io, format_args!("  {}", crate::ecma48::dim("---------------------------------------------------------")));
 
     for h in crate::disc::block::device_handles().into_iter() {
         if h.parent().is_some() {
@@ -76,29 +396,29 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
             _ => (255, 200, 100),
         };
 
-        io.write_fmt(format_args!(
-            "  {:<3} {:<8} {:>4} {:<5} {:<6} {:<12} {}\r\n",
+        write_inserted_line(io, format_args!(
+            "  {:<3} {:<8} {:>4} {:<5} {:<6} {:<12} {}",
             crate::ecma48::bold(&alloc::format!("{}", info.id.raw())),
             info.id,
             size_val, size_suffix,
             if info.writable { "RW" } else { "RO" },
             crate::ecma48::color(status.short(), status_color),
-            crate::ecma48::dim(info.label.unwrap_or("-"))
+            crate::ecma48::dim(info.label.as_deref().unwrap_or("-"))
         ));
 
         if let Some(e) = err {
-             io.write_fmt(format_args!(
-                 "       {}\r\n", 
+             write_inserted_line(io, format_args!(
+                 "       {}", 
                  crate::ecma48::color(&alloc::format!("Error: {:?}", e), (255, 80, 80))
              ));
         }
     }
 
     if !found {
-         io.write_str("  (no suitable disks found)\r\n");
+         write_inserted_line(io, format_args!("  (no suitable disks found)"));
     }
 
-    io.write_str("\r\n");
+    write_inserted_line(io, format_args!(""));
 }
 
 pub(crate) async fn print_install_disk_table(io: &dyn ShellIo) {
@@ -118,14 +438,15 @@ pub(crate) async fn print_bench_disk_table(io: &dyn ShellIo) {
 }
 
 pub(crate) async fn print_netbench_nic_table(io: &dyn ShellIo) {
-    io.write_str("netbench: NIC selection\r\n");
-    io.write_str("netbench: enter a nic id (blank/q cancels)\r\n");
-    io.write_str("\r\n");
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+    write_inserted_line(io, format_args!("netbench: NIC selection"));
+    write_inserted_line(io, format_args!("netbench: enter a nic id (blank/q cancels)"));
+    write_inserted_line(io, format_args!(""));
 
     let count = crate::net::device_count();
     if count == 0 {
-        io.write_str("  (no nics)\r\n");
-        io.write_str("\r\n");
+        write_inserted_line(io, format_args!("  (no nics)"));
+        write_inserted_line(io, format_args!(""));
         return;
     }
 
@@ -137,22 +458,24 @@ pub(crate) async fn print_netbench_nic_table(io: &dyn ShellIo) {
         };
         match mac {
             Some([a, b, c, d, e, f]) => {
-                io.write_fmt(format_args!(
-                    "  id={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
+                write_inserted_line(io, format_args!(
+                    "  id={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                     idx, a, b, c, d, e, f
                 ));
             }
             None => {
-                io.write_fmt(format_args!("  id={} mac=unavailable\r\n", idx));
+                write_inserted_line(io, format_args!("  id={} mac=unavailable", idx));
             }
         }
     }
 
-    io.write_str("\r\n");
+    write_inserted_line(io, format_args!(""));
 }
 
 pub(crate) async fn print_trueosfs_mount_table(io: &dyn ShellIo) {
-    io.write_str("\r\nfile: TRUEOSFS mounts\r\n");
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+    write_inserted_line(io, format_args!(""));
+    write_inserted_line(io, format_args!("file: TRUEOSFS mounts"));
 
     for disk in crate::disc::block::device_handles()
         .into_iter()
@@ -163,12 +486,12 @@ pub(crate) async fn print_trueosfs_mount_table(io: &dyn ShellIo) {
 
     let roots = crate::v::fs::trueosfs::list_roots();
     if roots.is_empty() {
-        io.write_str("file: (none)\r\n");
+        write_inserted_line(io, format_args!("file: (none)"));
         return;
     }
     for (idx, r) in roots.iter().enumerate() {
-        io.write_fmt(format_args!(
-            "file: {:>2}: {} (raw={} seq={})\r\n",
+        write_inserted_line(io, format_args!(
+            "file: {:>2}: {} (raw={} seq={})",
             idx,
             r.disk_id,
             r.disk_id.raw(),
@@ -196,23 +519,45 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
         name: AString,
     }
 
-    struct IoWriter<'a>(&'a dyn ShellIo);
+    struct IoWriter<'a> {
+        io: &'a dyn ShellIo,
+        buf: AString,
+    }
+
     impl<'a> Write for IoWriter<'a> {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            self.0.write_str(s);
+            for ch in s.chars() {
+                if ch == '\n' {
+                    write_inserted_line(self.io, format_args!("{}", self.buf));
+                    self.buf.clear();
+                } else if ch != '\r' {
+                    let _ = self.buf.push(ch);
+                }
+            }
             Ok(())
+        }
+    }
+    
+    impl<'a> Drop for IoWriter<'a> {
+        fn drop(&mut self) {
+            if !self.buf.is_empty() {
+                write_inserted_line(self.io, format_args!("{}", self.buf));
+            }
         }
     }
 
     const MAX_PRINT: usize = 25;
     const CAP: usize = 128;
 
+    // Reset position before output
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+
     let mut tree: Tree<FsEntry, CAP> = Tree::new();
     let Some(root) = tree.add_root(FsEntry {
         kind: FsKind::Root,
         name: AString::from("/"),
     }) else {
-        io.write_str("file: tree alloc failed\r\n");
+        write_inserted_line(io, format_args!("file: tree alloc failed"));
         return;
     };
 
@@ -227,11 +572,11 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
         let listing = match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
             Ok(Some(s)) => s,
             Ok(None) => {
-                io.write_str("file: not a TRUEOSFS disk\r\n");
+                write_inserted_line(io, format_args!("file: not a TRUEOSFS disk"));
                 break;
             }
             Err(e) => {
-                io.write_fmt(format_args!("file: list_dir failed ({:?})\r\n", e));
+                write_inserted_line(io, format_args!("file: list_dir failed ({:?})", e));
                 break;
             }
         };
@@ -276,7 +621,7 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
         }
     }
 
-    let mut w = IoWriter(io);
+    let mut w = IoWriter { io, buf: AString::new() };
     let _ = tree.write_ascii_tree(root, &mut w, MAX_PRINT, |e, w| {
         match e.kind {
             FsKind::Root => w.write_str("/")?,
@@ -294,29 +639,27 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
 #[inline]
 pub(crate) fn write_prompt_for_state(
     io: &dyn ShellIo,
-    pending_action: Option<PendingAction>,
-    install_wizard: Option<InstallWizardStage>,
+    mode: &ShellMode,
 ) {
     io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
     io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", PROMPT_RGB)));
 
-    if install_wizard.is_some() {
-        io.write_fmt(format_args!("[{}] ", crate::ecma48::dim("id")));
-    } else if let Some(action) = pending_action {
-        let hint = match action {
-            PendingAction::FormatConfirm { .. } |
-            PendingAction::InstallConfirm { .. } |
-            PendingAction::UpdateConfirm { .. } => "confirm",
-            _ => "wait",
-        };
-        // Wait, format_args! macro needs a format string. The original code used io.write_fmt with extra brackets.
-        // Let's copy it carefully.
-        // io.write_fmt(format_args!("[{}] ", crate::ecma48::dim(hint)));
-        // This looks correct.
-        
-        io.write_fmt(format_args!("[{}] ", crate::ecma48::dim(hint)));
+    match mode {
+        ShellMode::Wizard(_) => {
+            io.write_fmt(format_args!("[{}] ", crate::ecma48::dim("id")));
+        }
+        ShellMode::Confirm(action) => {
+            let hint = match action {
+                PendingAction::FormatConfirm { .. } |
+                PendingAction::InstallConfirm { .. } |
+                PendingAction::UpdateConfirm { .. } => "confirm",
+                _ => "wait",
+            };
+            io.write_fmt(format_args!("[{}] ", crate::ecma48::dim(hint)));
+        }
+        _ => {}
     }
 }
 

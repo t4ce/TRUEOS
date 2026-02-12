@@ -82,6 +82,7 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         fb.clear(DEFAULT_BG_COLOR)
     });
     render_framebuffer_banner(BANNER_TEXT); // the one true operating system
+    crate::efi::acpi::bgrt::log_once();
 }
 
 pub fn init_font_cache() {

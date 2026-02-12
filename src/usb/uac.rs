@@ -11,16 +11,14 @@ use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
 use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use crate::wait;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, Vec};
-use libm::sinf;
 use spin::Mutex;
-use core::future::poll_fn;
+
 use core::ptr::{write_bytes, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
-use core::task::{Poll, Waker};
+use core::task::Waker;
 
-const UAC_SINE_HEARTBEAT_LOG: bool = false;
 const DEMO_WAV_EMBEDDED: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/demo.wav"));
 
 const USB_CLASS_AUDIO: u8 = 0x01;
@@ -282,18 +280,6 @@ pub fn drain_owned_event_queue(controller_id: usize, budget: usize) -> usize {
         drained += 1;
     }
     drained
-}
-
-pub fn take_xfer_event_counters(controller_id: usize) -> (u32, u32, u32) {
-    let ok = UAC_XFER_OK[controller_id].swap(0, Ordering::AcqRel);
-    let err = UAC_XFER_ERR[controller_id].swap(0, Ordering::AcqRel);
-    let last_cc = UAC_XFER_LAST_CC[controller_id].load(Ordering::Acquire);
-    (ok, err, last_cc)
-}
-
-pub fn demo_queue_depth(controller_id: usize) -> Option<(usize, usize)> {
-    let guard = UAC_RUNTIME[controller_id].lock();
-    guard.as_ref().map(|rt| (rt.in_flight, rt.bufs.len()))
 }
 
 fn setup_std_nodata(bm_request_type: u8, request: u8, value: u16, index: u16) -> Trb {
@@ -896,8 +882,6 @@ pub struct DemoPacketReservation {
     pub buf_virt: *mut u8,
     pub packet_bytes: usize,
     pub payload_bytes: usize,
-    pub rate_hz: u32,
-    pub channels: u8,
 }
 
 pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
@@ -965,8 +949,6 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
         buf_virt: buf.virt,
         packet_bytes,
         payload_bytes,
-        rate_hz: rt.rate_hz,
-        channels: rt.channels as u8,
     })
 }
 

@@ -285,9 +285,6 @@ struct MidiRuntime {
     ep_in_target: Option<u32>,
     ring_in: Option<TrbRing>,
 
-    ep_out_target: Option<u32>,
-    ring_out: Option<TrbRing>,
-
     rx_dma_phys: u64,
     rx_dma_virt: *mut u8,
     rx_dma_len: usize,
@@ -644,8 +641,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let mut ring_in_virt: Option<*mut u8> = None;
     let mut ring_in_bytes: usize = 0;
 
-    let mut ep_out_target: Option<u32> = None;
-    let mut ring_out: Option<TrbRing> = None;
     let mut ring_out_virt: Option<*mut u8> = None;
     let mut ring_out_bytes: usize = 0;
 
@@ -674,7 +669,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     }
 
     if let Some(ep) = info.ep_out {
-        let (target, ring, virt, bytes) = configure_bulk_endpoint(
+        let (_target, _ring, virt, bytes) = configure_bulk_endpoint(
             ctx,
             cmd_ring,
             slot_id,
@@ -689,8 +684,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             add_flags_out,
         )
         .await?;
-        ep_out_target = Some(target);
-        ring_out = Some(ring);
         ring_out_virt = Some(virt);
         ring_out_bytes = bytes;
     }
@@ -714,8 +707,6 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         alt_setting: info.alt_setting,
         ep_in_target,
         ring_in,
-        ep_out_target,
-        ring_out,
         rx_dma_phys,
         rx_dma_virt,
         rx_dma_len: rx_len,

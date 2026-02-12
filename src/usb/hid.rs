@@ -104,7 +104,6 @@ pub struct HidEpInfo {
 
 pub struct HidRuntime {
     pub controller_id: usize,
-    pub target_port: u8,
     pub ep: HidEpInfo,
     pub report_phys: u64,
     pub report_virt: *mut u8,
@@ -743,7 +742,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
-            target_port,
             ep,
             report_phys: rep_phys,
             report_virt: rep_virt,
@@ -771,7 +769,7 @@ pub(crate) enum FetchReportError {
     Alloc,
     RingOverflow,
     Timeout,
-    Completion(u8),
+    Completion(#[allow(dead_code)] u8),
 }
 
 async fn fetch_control_in(
@@ -1393,7 +1391,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
-            target_port,
             ep,
             report_phys: rep_phys,
             report_virt: rep_virt,
