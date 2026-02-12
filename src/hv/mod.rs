@@ -567,7 +567,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     let mut host_es = (ES::get_reg().0 & !0x7) as u64;
     let mut host_fs = (FS::get_reg().0 & !0x7) as u64;
     let mut host_gs = (GS::get_reg().0 & !0x7) as u64;
-    let mut tr_base: u64;
+    let tr_base: u64;
 
     if tr_sel == 0 {
         if let Some((busy_sel, 0xB)) = find_tss_selector(gdtr.base.as_u64(), gdtr.limit) {
@@ -1024,8 +1024,8 @@ struct HvSyntheticHostState {
 }
 
 fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
-    let gdt = unsafe { core::ptr::addr_of_mut!(HV_HOST_GDT) };
-    let tss = unsafe { core::ptr::addr_of_mut!(HV_HOST_TSS) };
+    let gdt = core::ptr::addr_of_mut!(HV_HOST_GDT);
+    let tss = core::ptr::addr_of_mut!(HV_HOST_TSS);
     let tss_base = tss as u64;
     let tss_limit = (core::mem::size_of::<[u8; 104]>() as u64) - 1;
 

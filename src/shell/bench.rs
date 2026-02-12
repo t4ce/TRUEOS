@@ -1,17 +1,11 @@
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-use heapless::String;
 
 use crate::shell::{ShellBackend, ShellIo};
 
-pub(crate) struct BenchState {
-    // You might want to move statics into a struct if possible, or keep them static if they must be shared globally easily
-}
-
 // NETBENCH Statics
-const NETBENCH_UPDATE_MS: u64 = 250;
+pub(crate) const NETBENCH_UPDATE_MS: u64 = 250;
 pub(crate) const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/100MB.zip";
 
 pub(crate) const NETBENCH_IDLE: u8 = 0;

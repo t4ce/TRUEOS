@@ -811,10 +811,3 @@ impl Write for Stderr {
 		Ok(())
 	}
 }
-
-pub fn smoke_test() {
-	crate::log!("io: smoke_test begin (minimal)\n");
-
-	let _ = stdout().write_all(b"io: stdout write_all ok\n");
-	let _ = stderr().write_all(b"io: stderr write_all ok\n");
-}

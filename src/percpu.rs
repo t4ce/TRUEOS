@@ -14,9 +14,9 @@ static CPU_SLOT_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::Atomi
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct CpuSlot {
-    lapic_id: u32,
-    slot: u32,
+pub struct CpuSlot {
+    pub lapic_id: u32,
+    pub slot: u32,
 }
 
 #[repr(C)]
@@ -77,6 +77,11 @@ pub fn set_total_slots(total: usize) {
 #[inline]
 pub fn total_slots() -> usize {
     TOTAL_SLOTS.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn cpu_slots() -> &'static [CpuSlot] {
+    cpu_slot_table()
 }
 
 #[inline]
