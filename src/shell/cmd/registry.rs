@@ -523,6 +523,7 @@ pub(crate) fn init_builtin_shell_commands() {
             ArgSpec::new("target", ArgType::Str),
         ];
         */
+        #[cfg(feature = "dma_nic_fpga")]
         static DMAFPGA_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest).mandatory()];
         static NO_ARGS: [ArgSpec; 0] = [];
         static NET_ARGS: [ArgSpec; 0] = [];
@@ -565,6 +566,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("net.http", &NET_HTTP_ARGS, cmd::cmd_net_http);
         let _ = REGSHCMD("net.https", &NET_HTTPS_ARGS, cmd::cmd_net_https);
         
+        #[cfg(feature = "dma_nic_fpga")]
         let _ = REGSHCMD("dmafpga", &DMAFPGA_ARGS, cmd::cmd_dmafpga);
         let _ = REGSHCMD("update", &NO_ARGS, cmd::cmd_update);
         let _ = REGSHCMD("install", &[], cmd::cmd_install);
