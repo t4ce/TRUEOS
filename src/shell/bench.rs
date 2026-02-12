@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use crate::shell::{ShellBackend, ShellIo};
+use crate::shell::ShellBackend;
 
 // NETBENCH Statics
 pub(crate) const NETBENCH_UPDATE_MS: u64 = 250;

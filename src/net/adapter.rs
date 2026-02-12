@@ -444,6 +444,7 @@ impl Device for AdapterDeviceAt {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         crate::net::pop_rx_packet_at(self.index).map(|packet| {
+            #[cfg(feature = "dma_nic_fpga")]
             crate::net::dma_fpga_stream_on_rx_packet(&packet);
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
             let new_dev_total = NET_RX_FRAMES_AT
@@ -1710,8 +1711,8 @@ impl NetService {
                     if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
                         let inflight = self.icmp_vnet_inflight.remove(pos);
                         let rtt = now() - inflight.sent_at;
-                        if let IpAddress::Ipv4(addr) = from {
-                            let _ = push_event(
+                        let IpAddress::Ipv4(addr) = from;
+                        let _ = push_event(
                                 inflight.owner,
                                 NetEvent::IcmpReply {
                                     from: addr.octets(),
@@ -1720,7 +1721,6 @@ impl NetService {
                                     data: buf[..len].to_vec(),
                                 },
                             );
-                        }
                         continue;
                     }
 

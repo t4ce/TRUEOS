@@ -118,7 +118,6 @@ pub struct R8168Adapter {
     ring: Option<*mut NetRing>,
 
     _rx_desc_mem: DmaRegion,
-    rx_desc_phys: u64,
     rx_desc: *mut RxDesc,
     rx_bufs: Vec<DmaRegion>,
     rx_idx: usize,
@@ -345,7 +344,6 @@ impl R8168Adapter {
             mac,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
-            rx_desc_phys,
             rx_desc,
             rx_bufs,
             rx_idx: 0,

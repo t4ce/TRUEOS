@@ -10,6 +10,7 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     ctx.io.write_str("  tlb.cpu         - List CPU cores\r\n");
     ctx.io.write_str("  tlb.acpi        - List ACPI tables\r\n");
     ctx.io.write_str("  tlb.uefi        - List UEFI tables\r\n");
+    ctx.io.write_str("  tlb.x2apic      - List x2APIC topology\r\n");
     ctx.io.write_str("  tlb.dump_acpi   - Dump specific ACPI table parsers info\r\n");
     CommandAction::None
 }
@@ -253,6 +254,57 @@ pub(crate) fn cmd_tlb_uefi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedA
                  t_cfg.print_row(ctx.io, &[idx, fmt_guid, name.to_string(), ptr]);
              }
          }
+    }
+
+    CommandAction::None
+}
+
+pub(crate) fn cmd_tlb_x2apic(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    let topo = crate::x2apic::detect_x2apic_topology();
+    
+    ctx.io.write_fmt(format_args!(
+        "x2APIC Topology Detection: Leaf=0x{:X} SMT_Bits={} Core_Bits={}\r\n\r\n", 
+        topo.leaf, topo.smt_bits, topo.core_bits
+    ));
+
+    let cols = [
+        TableColumn { header: "Slot", width: 6 },
+        TableColumn { header: "APIC ID", width: 10 },
+        TableColumn { header: "Pkg", width: 6 },
+        TableColumn { header: "Core", width: 6 },
+        TableColumn { header: "SMT", width: 6 },
+    ];
+    
+    let t = Table::new(&cols);
+    t.print_header(ctx.io);
+
+    if !crate::smp::is_init() {
+         ctx.io.write_str("(SMP not initialized, showing BSP only if possible)\r\n");
+    }
+
+    let count = crate::smp::cpu_count();
+    let slots = crate::percpu::cpu_slots();
+
+    for slot in 0..count {
+         let lapic_id = slots.iter().find(|s| s.slot == slot as u32)
+            .map(|s| s.lapic_id)
+            .unwrap_or(0xFFFFFFFF);
+            
+         if lapic_id == 0xFFFFFFFF {
+             let s_slot = alloc::format!("{}", slot);
+             t.print_row(ctx.io, &[s_slot, "?".into(), "?".into(), "?".into(), "?".into()]);
+             continue;
+         }
+
+         let (pkg, core, smt) = topo.decode(lapic_id);
+         
+         let s_slot = alloc::format!("{}", slot);
+         let s_apic = alloc::format!("0x{:X}", lapic_id);
+         let s_pkg = alloc::format!("{}", pkg);
+         let s_core = alloc::format!("{}", core);
+         let s_smt = alloc::format!("{}", smt);
+         
+         t.print_row(ctx.io, &[s_slot, s_apic, s_pkg, s_core, s_smt]);
     }
 
     CommandAction::None
