@@ -149,6 +149,7 @@ pub extern "C" fn kmain() -> ! {
     }
     tga::init_once();
     net::init();
+
     #[cfg(feature = "dma_nic_fpga")]
     {
         match pci::nic_fpga_dma::init_default_once() {
@@ -183,8 +184,6 @@ pub extern "C" fn kmain() -> ! {
     _loop(executor, spawner)
 }
 
-
-
 fn _loop(executor: &'static Executor, _spawner: Spawner) -> ! {
     let mut counter: u64 = 0;
     loop {
@@ -205,5 +204,3 @@ fn _loop(executor: &'static Executor, _spawner: Spawner) -> ! {
         power::idle_hint();
     }
 }
-
-

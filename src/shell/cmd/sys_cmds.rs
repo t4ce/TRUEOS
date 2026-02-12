@@ -714,6 +714,7 @@ pub(crate) fn cmd_net_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedA
     CommandAction::None
 }
 
+#[cfg(feature = "dma_nic_fpga")]
 pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
     let Some(arg) = args.and_then(|a| a.get_str(0)) else {
         ctx.io.write_str("dmafpga: usage dmafpga <https://url>|status|off\r\n");
@@ -769,6 +770,7 @@ pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     CommandAction::None
 }
 
+#[cfg(feature = "dma_nic_fpga")]
 #[task]
 async fn net_dmafpga_task(io: &'static dyn ShellBackend, url: heapless::String<256>) {
     if let Err(e) = crate::net::dma_fpga_stream_begin() {
@@ -829,6 +831,7 @@ async fn net_dmafpga_task(io: &'static dyn ShellBackend, url: heapless::String<2
     ));
 }
 
+#[cfg(feature = "dma_nic_fpga")]
 fn parse_https_host_port(url: &str) -> Option<(heapless::String<96>, u16)> {
     let rest = url.strip_prefix("https://")?;
     let authority = rest.split('/').next().unwrap_or(rest);
