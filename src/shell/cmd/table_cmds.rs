@@ -1,4 +1,4 @@
-use crate::shell::{ShellIo, CommandAction};
+use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::table::{Table, TableColumn};
 use alloc::string::{String, ToString};

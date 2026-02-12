@@ -104,6 +104,15 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
+    if let Some(perf) = limine::bootloader_performance() {
+        crate::log!(
+            "Boot Performance: reset={}_usec init={}_usec exec={}_usec\n",
+            perf.reset_usec(),
+            perf.init_usec(),
+            perf.exec_usec()
+        );
+    }
+    
     percpu::init_bsp();
 
     pci::dma::init_from_limine();
