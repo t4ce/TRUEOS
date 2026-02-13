@@ -130,31 +130,6 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
     CommandAction::None
 }
 
-pub(crate) fn cmd_idle(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let policy = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
-    if policy.is_empty() {
-        ctx.io
-            .write_fmt(format_args!("idle: {}\r\n", crate::power::idle_policy().as_str()));
-        return CommandAction::None;
-    }
-
-    let policy = match policy {
-        "spin" => crate::power::IdlePolicy::Spin,
-        "hlt" => crate::power::IdlePolicy::Halt,
-        _ => {
-            ctx.io.write_str("idle: usage idle [spin|hlt]\r\n");
-            return CommandAction::None;
-        }
-    };
-    let prev = crate::power::set_idle_policy(policy);
-    ctx.io.write_fmt(format_args!(
-        "idle: {} -> {}\r\n",
-        prev.as_str(),
-        policy.as_str()
-    ));
-    CommandAction::None
-}
-
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",

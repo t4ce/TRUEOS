@@ -92,7 +92,7 @@ impl Utf8Decoder {
 pub(crate) const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 200;
-const DEFAULT_TERM_ROWS: usize = 80;
+const DEFAULT_TERM_ROWS: usize = 60;
 
 
 #[inline]

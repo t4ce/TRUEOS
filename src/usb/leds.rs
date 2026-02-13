@@ -629,13 +629,13 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                     );
                 }
             }
-            Err(err) => {
-                crate::log!(
-                    "usb: leds: report-desc fetch failed iface={} len={} err={:?}\n",
-                    info.interface,
-                    info.report_desc_len,
-                    err
-                );
+            Err(_err) => {
+                // crate::log!(
+                //     "usb: leds: report-desc fetch failed iface={} len={} err={:?}\n",
+                //     info.interface,
+                //     info.report_desc_len,
+                //     err
+                // );
 
                 let mut recovered = false;
                 let short_len = core::cmp::min(full_len, 64);
@@ -658,13 +658,13 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                             hid::log_report_descriptor(slot_id, info.interface, &desc);
                             recovered = true;
                         }
-                        Err(err2) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback short failed iface={} len={} err={:?}\n",
-                                info.interface,
-                                short_len,
-                                err2
-                            );
+                        Err(_err2) => {
+                            // crate::log!(
+                            //     "usb: leds: report-desc fallback short failed iface={} len={} err={:?}\n",
+                            //     info.interface,
+                            //     short_len,
+                            //     err2
+                            // );
                         }
                     }
                 }
@@ -679,12 +679,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                             hid::log_report_descriptor(slot_id, 0, &desc);
                             recovered = true;
                         }
-                        Err(err2) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback iface=0 failed len={} err={:?}\n",
-                                full_len,
-                                err2
-                            );
+                        Err(_err2) => {
+                            // crate::log!(
+                            //     "usb: leds: report-desc fallback iface=0 failed len={} err={:?}\n",
+                            //     full_len,
+                            //     err2
+                            // );
                         }
                     }
                 }
@@ -699,12 +699,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                             hid::log_report_descriptor(slot_id, 0, &desc);
                             recovered = true;
                         }
-                        Err(err2) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback device failed len={} err={:?}\n",
-                                full_len,
-                                err2
-                            );
+                        Err(_err2) => {
+                            // crate::log!(
+                            //     "usb: leds: report-desc fallback device failed len={} err={:?}\n",
+                            //     full_len,
+                            //     err2
+                            // );
                         }
                     }
                 }
@@ -730,13 +730,13 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                             );
                             hid::log_report_descriptor(slot_id, info.interface, &desc);
                         }
-                        Err(err2) => {
-                            crate::log!(
-                                "usb: leds: get-report feature failed iface={} len={} err={:?}\n",
-                                info.interface,
-                                get_report_len,
-                                err2
-                            );
+                        Err(_err2) => {
+                            // crate::log!(
+                            //     "usb: leds: get-report feature failed iface={} len={} err={:?}\n",
+                            //     info.interface,
+                            //     get_report_len,
+                            //     err2
+                            // );
                         }
                     }
                 }

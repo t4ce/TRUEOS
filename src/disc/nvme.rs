@@ -280,6 +280,32 @@ impl NvmeController {
         core::cmp::max(PAGE_SIZE, self.page_size_bytes)
     }
 
+    fn dump_regs(&self, reason: &str) {
+        let cap = unsafe { read_volatile(self.mmio.as_ptr().add(NVME_REG_CAP) as *const u64) };
+        let vs = self.reg32(NVME_REG_VS);
+        let cc = self.reg32(NVME_REG_CC);
+        let csts = self.reg32(NVME_REG_CSTS);
+        let aqa = self.reg32(NVME_REG_AQA);
+        crate::log!(
+            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}]\n",
+            self.pci,
+            reason,
+            cap,
+            vs,
+            cc,
+            csts,
+            aqa,
+            self.doorbell_stride_bytes,
+            self.page_size_bytes(),
+            self.admin.sq_tail,
+            self.admin.cq_head,
+            self.admin.cq_phase,
+            self.io.sq_tail,
+            self.io.cq_head,
+            self.io.cq_phase,
+        );
+    }
+
     fn reg32(&self, off: usize) -> u32 {
         unsafe { read_volatile(self.mmio.as_ptr().add(off) as *const u32) }
     }
@@ -338,6 +364,21 @@ impl NvmeController {
         };
         self.db_write_sq_tail(NVME_ADMIN_QID, tail % depth);
         self.poll_queue_cq_for_cid_sync(NVME_ADMIN_QID, cid, timeout_ms)
+    }
+
+    async fn admin_submit_and_wait_async(
+        &mut self,
+        sqe: NvmeSqe,
+        cid: u16,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let (tail, depth) = {
+            let q = &mut self.admin;
+            let _ = q.sq_push(sqe)?;
+            (q.sq_tail, q.depth)
+        };
+        self.db_write_sq_tail(NVME_ADMIN_QID, tail % depth);
+        self.poll_queue_cq_for_cid_async(NVME_ADMIN_QID, cid, timeout_ms).await
     }
 
     fn io_submit_and_wait_sync(
@@ -464,6 +505,7 @@ impl NvmeController {
                     let csts = self.reg32(NVME_REG_CSTS);
                     crate::log!("nvme: {} poll_sync timeout qid={} cid={} csts=0x{:08X}\n", self.pci, qid, cid, csts);
                 }
+                self.dump_regs("poll_sync_timeout");
                 return Err(block::Error::Timeout);
             }
             wait::spin_step();
@@ -491,13 +533,11 @@ impl NvmeController {
             }
 
             if embassy_time_driver::now() >= deadline {
-                // Silenced to avoid spam on unresponsive devices
-                /*
                 if qid == NVME_IO_QID {
                     let csts = self.reg32(NVME_REG_CSTS);
                     crate::log!("nvme: {} poll_async timeout qid={} cid={} csts=0x{:08X}\n", self.pci, qid, cid, csts);
                 }
-                */
+                self.dump_regs("poll_async_timeout");
                 return Err(block::Error::Timeout);
             }
             // Cooperative wait: yield to other tasks instead of busy-spinning.
@@ -920,19 +960,20 @@ impl NvmeController {
                     let retry_res = self
                         .io_submit_and_wait_async(sqe_retry, cid_retry, NVME_IO_TIMEOUT_RETRY_MS)
                         .await;
-                    
-                    /*
+
                     if matches!(retry_res, Err(block::Error::Timeout)) {
                         crate::log!(
-                            "nvme: {} io timeout opcode=0x{:02X} nsid={} slba={} nlb={} after retry\n",
+                            "nvme: {} io timeout opcode=0x{:02X} nsid={} slba={} nlb={} buf_phys=0x{:X} buf_len={} after retry\n",
                             self.pci,
                             opcode,
                             nsid,
                             slba,
-                            nlb
+                            nlb,
+                            buf_phys,
+                            buf_len,
                         );
+                        self.dump_regs("io_rw_async_timeout");
                     }
-                    */
                     break 'submit retry_res;
                 }
                 Err(e) => break 'submit Err(e),
@@ -998,6 +1039,39 @@ impl NvmeController {
         sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
 
         let cpl = self.io_submit_and_wait_sync(sqe, cid, timeout_ms);
+
+        if let Some((_, lv, lb)) = prp_list {
+            dma::dealloc(lv, lb);
+        }
+
+        cpl
+    }
+
+    async fn admin_rw_async(
+        &mut self,
+        opcode: u8,
+        nsid: u32,
+        slba: u64,
+        nlb: u16,
+        buf_phys: u64,
+        buf_len: usize,
+        timeout_ms: u64,
+    ) -> core::result::Result<Completion, block::Error> {
+        let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
+        let cid = self.alloc_cid();
+
+        let mut sqe = NvmeSqe { d: [0; 16] };
+        sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
+        sqe.d[1] = nsid;
+        sqe.d[6] = (prp1 & 0xFFFF_FFFF) as u32;
+        sqe.d[7] = (prp1 >> 32) as u32;
+        sqe.d[8] = (prp2 & 0xFFFF_FFFF) as u32;
+        sqe.d[9] = (prp2 >> 32) as u32;
+        sqe.d[10] = (slba & 0xFFFF_FFFF) as u32;
+        sqe.d[11] = (slba >> 32) as u32;
+        sqe.d[12] = (nlb as u32).wrapping_sub(1) & 0xFFFF;
+
+        let cpl = self.admin_submit_and_wait_async(sqe, cid, timeout_ms).await;
 
         if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
@@ -1109,15 +1183,15 @@ impl block::BlockDevice for NvmeBlockDevice {
                 {
                     Ok(()) => {}
                     Err(block::Error::Timeout) if Self::is_small_probe_read(cur_lba, blocks_here) => {
-                        crate::log!(
-                            "nvme: {} probe-read fallback admin opcode=0x{:02X} nsid={} slba={} nlb={}\n",
-                            self.ctrl.pci,
-                            NVME_NVM_READ,
-                            self.nsid,
-                            cur_lba,
-                            blocks_here
-                        );
-                        match self.ctrl.admin_rw_sync(
+                        // crate::log!(
+                        //     "nvme: {} probe-read fallback admin opcode=0x{:02X} nsid={} slba={} nlb={}\n",
+                        //     self.ctrl.pci,
+                        //     NVME_NVM_READ,
+                        //     self.nsid,
+                        //     cur_lba,
+                        //     blocks_here
+                        // );
+                        match self.ctrl.admin_rw_async(
                             NVME_NVM_READ,
                             self.nsid,
                             cur_lba,
@@ -1125,7 +1199,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                             dma_phys,
                             bytes_here,
                             NVME_ADMIN_PROBE_TIMEOUT_MS,
-                        ) {
+                        ).await {
                             Ok(cpl) if cpl.status_code() == 0 => {}
                             Ok(cpl) => {
                                 dma::dealloc(dma_virt, max_io_bytes);
