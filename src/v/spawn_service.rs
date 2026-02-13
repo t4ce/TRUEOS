@@ -52,6 +52,7 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -220,6 +221,14 @@ fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task(),
+    ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::nalgebra_demo::boot_nalgebra_demo_task(),
     ) {
@@ -256,6 +265,10 @@ const PARSE5_BOOT_READY: u32 =
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::v::readiness::QJS_ASYNC_FS_READY;
+
+const WS_BOOT_READY: u32 =
+    crate::v::readiness::NET_GATEWAY_REACHABLE
+    | crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)
@@ -374,6 +387,12 @@ static TASKS: &[TaskSpec] = &[
         required: PARSE5_BOOT_READY,
         started: &BOOT_PARSE5_SMOKE_STARTED,
         spawn: spawn_boot_parse5_smoke,
+    },
+    TaskSpec {
+        name: "boot-ws-smoke",
+        required: WS_BOOT_READY,
+        started: &BOOT_WS_SMOKE_STARTED,
+        spawn: spawn_boot_ws_smoke,
     },
     TaskSpec {
         name: "boot-nalgebra-demo",

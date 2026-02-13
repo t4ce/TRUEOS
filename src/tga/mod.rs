@@ -253,7 +253,7 @@ pub fn try_init() -> bool {
         device_count = devices.len();
     });
     if device_count == 0 {
-        crate::pci::enumerate_silent();
+        crate::pci::enumerate_impl();
     }
 
     let mut found: Option<PciDevice> = None;
@@ -479,7 +479,7 @@ pub(crate) async fn tga_task() {
     });
     loop {
         if !is_online() {
-            crate::pci::enumerate_silent();
+            crate::pci::enumerate_impl();
             let _ = try_init();
             Timer::after(EmbassyDuration::from_secs(5)).await;
             continue;

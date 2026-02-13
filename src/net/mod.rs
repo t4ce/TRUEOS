@@ -69,6 +69,15 @@ impl NetDevice for ActiveDevice {
         }
     }
 
+    fn drain_rx(&mut self, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
+            ActiveDevice::E1000(dev) => dev.drain_rx(limit),
+            ActiveDevice::R8125(dev) => dev.drain_rx(limit),
+            ActiveDevice::R8168(dev) => dev.drain_rx(limit),
+        }
+    }
+
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
@@ -194,12 +203,24 @@ pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
     with_device_at(index, |dev| dev.pop_rx()).flatten()
 }
 
+pub fn drain_rx_packets_at(index: usize, limit: usize) -> alloc::vec::Vec<alloc::vec::Vec<u8>> {
+    with_device_at(index, |dev| dev.drain_rx(limit)).unwrap_or_else(alloc::vec::Vec::new)
+}
+
 pub fn rx_pending_at(index: usize) -> usize {
     with_device_at(index, |dev| dev.rx_queue_len()).unwrap_or(0)
 }
 
 pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
     with_device_at(index, |dev| dev.transmit(data)).unwrap_or(Err(()))
+}
+
+pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec::Vec<u8>>) {
+    with_device_at(index, |dev| {
+        for pkt in packets {
+            let _ = dev.transmit(&pkt);
+        }
+    });
 }
 
 pub fn mac_address() -> Option<[u8; 6]> {
