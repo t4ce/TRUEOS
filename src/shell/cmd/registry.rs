@@ -590,7 +590,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tlb.acpi.ssdt", &NO_ARGS, cmd::cmd_tlb_acpi_ssdt);
         let _ = REGSHCMD("tlb.x2apic", &NO_ARGS, cmd::cmd_tlb_x2apic);
         let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
-        let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
         let _ = REGSHCMD("tlb.dump", &NO_ARGS, cmd::cmd_tlb_dump);
 
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
