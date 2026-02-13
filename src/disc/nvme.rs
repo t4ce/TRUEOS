@@ -136,6 +136,7 @@ impl NvmeQueue {
 
         let (sq_phys, sq_virt_u8) = dma::alloc(sq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
         let (cq_phys, cq_virt_u8) = dma::alloc(cq_alloc_bytes, align).ok_or(block::Error::DmaUnavailable)?;
+        crate::log!("nvme: queue alloc depth={} sq_phys=0x{:X} cq_phys=0x{:X}\n", depth, sq_phys, cq_phys);
         unsafe {
             write_bytes(sq_virt_u8, 0, sq_alloc_bytes);
             write_bytes(cq_virt_u8, 0, cq_alloc_bytes);
@@ -293,14 +294,14 @@ impl NvmeController {
     fn db_write_sq_tail(&self, qid: u16, tail: u16) {
         let stride = self.doorbell_stride_bytes as usize;
         let idx = (2usize * (qid as usize)) * stride;
-        fence(Ordering::Release);
+        fence(Ordering::SeqCst);
         self.write32(NVME_REG_DBS + idx, tail as u32);
     }
 
     fn db_write_cq_head(&self, qid: u16, head: u16) {
         let stride = self.doorbell_stride_bytes as usize;
         let idx = (2usize * (qid as usize) + 1) * stride;
-        fence(Ordering::Release);
+        fence(Ordering::SeqCst);
         self.write32(NVME_REG_DBS + idx, head as u32);
     }
 
@@ -387,7 +388,7 @@ impl NvmeController {
             } else {
                 &mut self.io
             };
-            fence(Ordering::Acquire);
+            fence(Ordering::SeqCst);
             let cqe = q.cq_peek();
             let status = (cqe.dw3 >> 16) as u16;
             let phase = (status & 0x1) != 0;
