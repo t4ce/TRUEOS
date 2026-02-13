@@ -63,6 +63,7 @@ struct NvmeCqe {
 struct Completion {
     cid: u16,
     status: u16,
+    dw0: u32,
 }
 
 impl Completion {
@@ -403,6 +404,7 @@ impl NvmeController {
                     Some(Completion {
                         cid: got_cid,
                         status,
+                        dw0: cqe.dw0,
                     }),
                     q.cq_head,
                     q.depth,
@@ -458,6 +460,10 @@ impl NvmeController {
             }
 
             if embassy_time_driver::now() >= deadline {
+                if qid == NVME_IO_QID {
+                    let csts = self.reg32(NVME_REG_CSTS);
+                    crate::log!("nvme: {} poll_sync timeout qid={} cid={} csts=0x{:08X}\n", self.pci, qid, cid, csts);
+                }
                 return Err(block::Error::Timeout);
             }
             wait::spin_step();
@@ -485,6 +491,10 @@ impl NvmeController {
             }
 
             if embassy_time_driver::now() >= deadline {
+                if qid == NVME_IO_QID {
+                    let csts = self.reg32(NVME_REG_CSTS);
+                    crate::log!("nvme: {} poll_async timeout qid={} cid={} csts=0x{:08X}\n", self.pci, qid, cid, csts);
+                }
                 return Err(block::Error::Timeout);
             }
             // Cooperative wait: yield to other tasks instead of busy-spinning.
@@ -555,6 +565,12 @@ impl NvmeController {
         // Request at least one IO submission/completion queue pair.
         // Some controllers/emulators require Set Features (Number of Queues) before IO queues work.
         if let Err(e) = ctrl.admin_set_number_of_queues(1, 1) {
+        // Debug logging for doorbell addresses
+        let s_sq = (2usize * (NVME_IO_QID as usize)) * (ctrl.doorbell_stride_bytes as usize);
+        let s_cq = (2usize * (NVME_IO_QID as usize) + 1) * (ctrl.doorbell_stride_bytes as usize);
+        crate::log!("nvme: {} io_q pair initialized. dstrd={} sq_db_off=0x{:X} cq_db_off=0x{:X}\n", 
+            pci, ctrl.doorbell_stride_bytes, s_sq, s_cq);
+
             crate::log!("nvme: {} set num-queues failed (continuing): {:?}\n", pci, e);
         }
 
@@ -579,6 +595,7 @@ impl NvmeController {
     }
 
     fn admin_create_io_cq(&mut self, qid: u16, depth: u16, cq_phys: u64) -> core::result::Result<(), block::Error> {
+        crate::log!("nvme: {} create_io_cq qid={} depth={} phys=0x{:X}\n", self.pci, qid, depth, cq_phys);
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
         sqe.d[0] = (NVME_ADMIN_CREATE_IO_CQ as u32) | ((cid as u32) << 16);
@@ -609,6 +626,7 @@ impl NvmeController {
         sq_phys: u64,
         cqid: u16,
     ) -> core::result::Result<(), block::Error> {
+        crate::log!("nvme: {} create_io_sq qid={} depth={} phys=0x{:X} cqid={}\n", self.pci, qid, depth, sq_phys, cqid);
         let cid = self.alloc_cid();
         let mut sqe = NvmeSqe { d: [0; 16] };
         sqe.d[0] = (NVME_ADMIN_CREATE_IO_SQ as u32) | ((cid as u32) << 16);
@@ -655,6 +673,13 @@ impl NvmeController {
             );
             return Err(block::Error::Io);
         }
+
+        let allocated_ncqr = cpl.dw0 & 0xFFFF;
+        let allocated_nsqr = (cpl.dw0 >> 16) & 0xFFFF;
+        crate::log!(
+            "nvme: {} set_number_of_queues req sq={} cq={} -> got sq={} cq={}\n",
+            self.pci, nsqr + 1, ncqr + 1, allocated_nsqr + 1, allocated_ncqr + 1
+        );
         Ok(())
     }
 
@@ -1096,7 +1121,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                             Ok(cpl) => {
                                 dma::dealloc(dma_virt, max_io_bytes);
                                 crate::log!(
-                                    "nvme: {} probe-read fallback failed status=0x{:04X} (sct={} sc={})\n",
+                                    "nvme: {} probe-read fallback (admin) failed status=0x{:04X} (sct={} sc={})\n",
                                     self.ctrl.pci,
                                     cpl.status,
                                     cpl.status_type(),

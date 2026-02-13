@@ -9,7 +9,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxTo
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
+    DhcpOption, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
     Icmpv4Packet, Icmpv4Repr,
 };
 
@@ -45,6 +45,36 @@ static PRIMARY_DEVICE_LOCKED: AtomicBool = AtomicBool::new(false);
 
 pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
     *PRIMARY_DHCP_DNS.lock()
+}
+
+pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    services.get(index).and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
+}
+
+static HOSTNAME: spin::Mutex<Option<alloc::string::String>> = spin::Mutex::new(None);
+
+pub fn get_hostname() -> alloc::string::String {
+    HOSTNAME.lock().clone().unwrap_or_else(|| alloc::string::String::from("TRUEOS"))
+}
+
+pub fn set_hostname(name: &str) {
+    *HOSTNAME.lock() = Some(alloc::string::String::from(name));
+    
+    // Update running sockets
+    // Note: smoltcp copies options, so we can pass a temporary slice.
+    let mut guard = NET_SERVICES.lock();
+    if let Some(services) = guard.as_mut() {
+        let name_owned = alloc::string::String::from(name);
+        for svc in services {
+            let socket = svc.sockets.get_mut::<dhcpv4::Socket>(svc.dhcp);
+            // socket.set_outgoing_options(&[DhcpOption {
+            //     kind: 12,
+            //     data: name_owned.as_bytes(),
+            // }]);
+        }
+    }
 }
 
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -1019,7 +1049,12 @@ impl NetService {
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
 
-        let dhcp_socket = dhcpv4::Socket::new();
+        let mut dhcp_socket = dhcpv4::Socket::new();
+        // let current_hostname = get_hostname();
+        // dhcp_socket.set_outgoing_options(&[DhcpOption {
+        //     kind: 12,
+        //     data: current_hostname.as_bytes(),
+        // }]);
         let dhcp = sockets.add(dhcp_socket);
         crate::log!("net: dhcp start dev={} mode=static-fallback\n", device_index);
 

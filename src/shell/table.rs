@@ -1,5 +1,7 @@
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Write;
+use core::cell::RefCell;
 use crate::shell::ShellIo;
 
 pub struct TableColumn {
@@ -7,26 +9,39 @@ pub struct TableColumn {
     pub width: usize,
 }
 
-pub struct Table<'a> {
+pub struct Table<'a, 'io> {
     cols: &'a [TableColumn],
+    io: RefCell<Option<&'io dyn ShellIo>>,
+    lines: RefCell<Vec<String>>,
 }
 
-impl<'a> Table<'a> {
+impl<'a, 'io> Table<'a, 'io> {
     pub fn new(cols: &'a [TableColumn]) -> Self {
-        Self { cols }
+        Self { 
+            cols,
+            io: RefCell::new(None),
+            lines: RefCell::new(Vec::new()),
+        }
     }
 
-    pub fn print_header(&self, io: &dyn ShellIo) {
+    fn capture_io(&self, io: &'io dyn ShellIo) {
+        let mut slot = self.io.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(io);
+        }
+    }
+
+    pub fn print_header(&self, io: &'io dyn ShellIo) {
+        self.capture_io(io);
         let mut line: String = String::new();
         
-        // Top border
-        // self.print_separator(io);
-
         // Header row
         for col in self.cols {
             let _ = write!(line, "{:width$}  ", col.header, width = col.width);
         }
-        io.write_fmt(format_args!("{}\r\n", crate::ecma48::bold(&line)));
+        
+        let header_str = alloc::format!("{}\r\n", crate::ecma48::bold(&line));
+        self.lines.borrow_mut().push(header_str);
         
         // Underline
         let mut sep: String = String::new();
@@ -36,24 +51,22 @@ impl<'a> Table<'a> {
             }
             let _ = sep.push_str("  ");
         }
-        io.write_fmt(format_args!("{}\r\n", crate::ecma48::dim(&sep)));
+        let sep_str = alloc::format!("{}\r\n", crate::ecma48::dim(&sep));
+        self.lines.borrow_mut().push(sep_str);
     }
 
-    pub fn print_row<I, S>(&self, io: &dyn ShellIo, fields: I) 
+    pub fn print_row<I, S>(&self, io: &'io dyn ShellIo, fields: I) 
     where 
         I: IntoIterator<Item = S>,
         S: core::fmt::Display,
     {
+        self.capture_io(io);
         let mut line: String = String::new();
         for (i, field) in fields.into_iter().enumerate() {
             if i >= self.cols.len() {
                 break;
             }
             let width = self.cols[i].width;
-            
-            // Simple truncation/padding logic or use format!
-            // Note: format! with dynamic width in no_std/alloc environment works usually.
-            // We use a temporary string to measure/truncate if needed.
             
             let mut cell = String::new();
             let _ = write!(cell, "{}", field);
@@ -67,7 +80,34 @@ impl<'a> Table<'a> {
             
             let _ = write!(line, "{:width$}  ", cell, width = width);
         }
-        io.write_str(&line);
-        io.write_str("\r\n");
+        
+        // self.lines.borrow_mut().push(line + "\r\n");
+        let mut slot = self.lines.borrow_mut();
+        slot.push(line);
+        if let Some(last) = slot.last_mut() {
+            let _ = last.push_str("\r\n");
+        }
     }
 }
+
+impl<'a, 'io> Drop for Table<'a, 'io> {
+    fn drop(&mut self) {
+        let slot = self.io.borrow();
+        if let Some(io) = *slot {
+             // We print lines in REVERSE order because the shell pushes lines to the TOP.
+             // Standard logical order: Header, Sep, Row0, Row1...
+             // Stacked output: 
+             //   Row 1 (last written) -> Top
+             //   Row 0
+             //   Sep
+             //   Header (first written) -> Bottom
+             //
+             // Thus we iterate lines.rev()
+             
+             for line in self.lines.borrow().iter().rev() {
+                 io.write_str(line);
+             }
+        }
+    }
+}
+

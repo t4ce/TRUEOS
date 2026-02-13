@@ -1,7 +1,6 @@
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
-use core::sync::atomic::Ordering;
 
 use crate::shell::cube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 
@@ -16,7 +15,6 @@ pub(crate) mod cmd;
 pub(crate) mod matrix;
 pub(crate) mod statusbar;
 pub(crate) mod bench;
-pub(crate) use bench::*;
 pub(crate) mod wizards;
 pub use wizards::*;
 pub(crate) mod output;
@@ -93,8 +91,8 @@ impl Utf8Decoder {
 
 pub(crate) const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const MATRIX_RUNNING_GLYPH: char = '⣿';
-const DEFAULT_TERM_COLS: usize = 100;
-const DEFAULT_TERM_ROWS: usize = 30;
+const DEFAULT_TERM_COLS: usize = 200;
+const DEFAULT_TERM_ROWS: usize = 80;
 
 
 #[inline]
@@ -263,91 +261,9 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
 
-#[inline]
-fn refresh_status_bar(io: &dyn ShellIo, term_cols: usize, term_rows: usize) {
-    if term_cols == 0 || term_rows == 0 {
-        return;
-    }
 
-    #[inline]
-    fn indicator_rgb(code: u8) -> (u8, u8, u8) {
-        match code {
-            1 => (230, 70, 70),   // red
-            2 => (70, 210, 90),   // green
-            3 => (230, 190, 70),  // yellow
-            4 => (70, 130, 230),  // blue
-            5 => (80, 200, 210),  // cyan
-            6 => (200, 90, 210),  // magenta
-            7 => (210, 210, 210), // white
-            _ => (90, 90, 90),    // off/idle
-        }
-    }
+// refresh_status_bar moved to statusbar.rs
 
-    fn fit_10(src: &str) -> heapless::String<10> {
-        let mut out: heapless::String<10> = heapless::String::new();
-        for ch in src.chars() {
-            if out.push(ch).is_err() {
-                break;
-            }
-        }
-        while out.len() < 10 {
-            let _ = out.push(' ');
-        }
-        out
-    }
-
-    let (indicators, left, right) = if let Some(s) = crate::shell::statusbar::snapshot_active() {
-        (
-            s.indicators,
-            fit_10(s.left.as_str()),
-            fit_10(s.right.as_str()),
-        )
-    } else {
-        (
-            [0u8; crate::shell::statusbar::INDICATOR_COUNT],
-            fit_10(""),
-            fit_10(""),
-        )
-    };
-
-    let left: heapless::String<10> = left;
-    let right: heapless::String<10> = right;
-
-    let right_col = term_cols.saturating_sub(10).saturating_add(1);
-    let left_col = 1usize;
-
-    io.write_str(crate::ecma48::HIDE_CURSOR);
-    io.write_str(crate::ecma48::SAVE_CURSOR);
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, 1)));
-
-    // White background for status bar
-    let bar_bg = (255u8, 255u8, 255u8);
-    io.write_fmt(format_args!("\x1b[48;2;{};{};{}m", bar_bg.0, bar_bg.1, bar_bg.2));
-    for _ in 0..term_cols {
-        io.write_byte(b' ');
-    }
-    io.write_str(crate::ecma48::RESET);
-
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, left_col)));
-    for c in indicators {
-        // Adjust indicator color 7 (white) to be dark so it's visible on white bg
-        let fg = if c == 7 { (0u8, 0u8, 0u8) } else { indicator_rgb(c) };
-        io.write_fmt(format_args!("{}", crate::ecma48::style("o").fg(fg).bg(bar_bg)));
-    }
-    io.write_fmt(format_args!("{}", crate::ecma48::style(" ").bg(bar_bg)));
-    
-    // Left text: dark grey on white
-    // io.write_fmt(format_args!("{}", crate::ecma48::style(left.as_str()).dim().fg((50, 50, 50)).bg(bar_bg)));
-    io.write_str(left.as_str());
-
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, right_col)));
-    // Right text: darker pink on white
-    // io.write_fmt(format_args!("{}", crate::ecma48::style(right.as_str()).bold().fg((200, 50, 150)).bg(bar_bg)));
-    io.write_str(right.as_str());
-
-    io.write_str(crate::ecma48::RESTORE_CURSOR);
-    io.write_str(crate::ecma48::SHOW_CURSOR);
-}
 
 
 
@@ -370,7 +286,8 @@ pub(crate) enum CommandAction {
     EnterGo,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
     Qjs { src: String<192> },
-    NetbenchStarted,
+    RunNetbench { nic_index: usize },
+    RunBenchFs { disk_id: u32 },
     DoFormat { disc_id: u32 },
     DoInstall { disc_id: u32 },
     DoUpdate { disc_id: u32 },
@@ -409,80 +326,16 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
     // Treat CRLF as a single Enter (common on serial/USB bridges).
     let mut saw_cr: bool = false;
-    let mut next_netbench_update: Instant = Instant::now() + EmbassyDuration::from_millis(NETBENCH_UPDATE_MS);
-    let mut last_netbench_state: u8 = NETBENCH_STATE.load(Ordering::Relaxed);
     let mut next_status_refresh: Instant = Instant::now() + EmbassyDuration::from_millis(250);
     let mut esc_state = 0;
 
     // Initial status bar draw
-    refresh_status_bar(io, term_cols, term_rows);
+    crate::shell::statusbar::refresh(io, term_cols, term_rows);
 
     loop {
-        let netbench_state = NETBENCH_STATE.load(Ordering::Relaxed);
-        
         if Instant::now() >= next_status_refresh {
-            refresh_status_bar(io, term_cols, term_rows);
+            crate::shell::statusbar::refresh(io, term_cols, term_rows);
             next_status_refresh = Instant::now() + EmbassyDuration::from_millis(250);
-        }
-        
-        if netbench_state == NETBENCH_RUNNING && Instant::now() >= next_netbench_update {
-            let now_tick = embassy_time_driver::now();
-            let start_tick = NETBENCH_START_TICK.load(Ordering::Relaxed);
-            let elapsed_ticks = now_tick.saturating_sub(start_tick);
-            let hz = embassy_time_driver::TICK_HZ as u64;
-            let elapsed_ms = if hz == 0 {
-                0
-            } else {
-                elapsed_ticks.saturating_mul(1000) / hz
-            };
-            let bytes = NETBENCH_BYTES.load(Ordering::Relaxed);
-            let bps = if elapsed_ms == 0 {
-                0
-            } else {
-                bytes.saturating_mul(1000) / elapsed_ms
-            };
-            let mut speed: heapless::String<10> = heapless::String::new();
-            let _ = core::fmt::Write::write_fmt(&mut speed, format_args!("{}kb/s", bps / 1024));
-            let _ = crate::shell::statusbar::set_right_active(speed.as_str());
-            
-            // Explicitly refresh status bar during netbench so the speed update is visible
-            refresh_status_bar(io, term_cols, term_rows);
-
-            next_netbench_update = Instant::now() + EmbassyDuration::from_millis(NETBENCH_UPDATE_MS);
-        }
-
-        if netbench_state != last_netbench_state {
-            if netbench_state != NETBENCH_RUNNING {
-                match netbench_state {
-                    NETBENCH_DONE => {
-                        let _ = crate::shell::statusbar::set_left_active("done");
-                        let _ = crate::shell::statusbar::set_right_active("ok");
-                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
-                            let _ = crate::shell::statusbar::set_indicator_active(i, 2);
-                        }
-                    }
-                    NETBENCH_ABORTED => {
-                        let _ = crate::shell::statusbar::set_left_active("aborted");
-                        let _ = crate::shell::statusbar::set_right_active("stopped");
-                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
-                            let _ = crate::shell::statusbar::set_indicator_active(i, 3);
-                        }
-                    }
-                    NETBENCH_FAILED => {
-                        let code = NETBENCH_FAIL_CODE.load(Ordering::Relaxed);
-                        io.write_fmt(format_args!("netbench: failed ({})\r\n", netbench_fail_text(code)));
-                        let _ = crate::shell::statusbar::set_left_active("failed");
-                        let mut right: heapless::String<10> = heapless::String::new();
-                        let _ = core::fmt::Write::write_fmt(&mut right, format_args!("e{}", code));
-                        let _ = crate::shell::statusbar::set_right_active(right.as_str());
-                        for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
-                            let _ = crate::shell::statusbar::set_indicator_active(i, 1);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            last_netbench_state = netbench_state;
         }
 
         if let Some(b) = io.read_byte() {
@@ -562,7 +415,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             continue;
                         }
                         InputResult::RunAction(action) => {
-                             handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner).await;
+                             handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner, &mut history).await;
                              line.clear();
                              wizards::write_prompt_for_state(io, &mode);
                              continue;
@@ -599,7 +452,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         scroll_offset = 0;
                         
                         ReverseOutput::new(io, term_cols, term_rows, &mut history).echo_command(cmd_echo.trim());
-                        handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner).await;
+                        handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner, &mut history).await;
                         wizards::write_prompt_for_state(io, &mode);
                     } else {
                          // Empty line
@@ -674,13 +527,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                      // Check specific actions on timeout
                      match action {
                         PendingAction::AcpiReset => {
-                            if crate::efi::acpi::facp::reset_system().is_err() {
-                                io.write_str("\r\nacpi reset failed\r\n");
+                            if let Err(e) = crate::efi::acpi::facp::reset_system() {
+                                io.write_fmt(format_args!("\r\nacpi reset failed: {:?}\r\n", e));
                             }
                         }
                         PendingAction::AcpiState(level) => {
-                            if crate::efi::acpi::facp::enter_named_sleep_state(*level).is_err() {
-                                io.write_fmt(format_args!("\r\nacpi s{} failed\r\n", level));
+                            if let Err(e) = crate::efi::acpi::facp::enter_named_sleep_state(*level) {
+                                io.write_fmt(format_args!("\r\nacpi s{} failed: {:?}\r\n", level, e));
                             }
                         }
                         _ => {}
@@ -824,6 +677,7 @@ async fn handle_command_action(
     term_cols: &mut usize,
     term_rows: &mut usize,
     spawner: &Spawner,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
     match action {
         CommandAction::Pending(pending) => {
@@ -1006,7 +860,35 @@ async fn handle_command_action(
             }
             *mode = ShellMode::Idle;
         }
-        CommandAction::NetbenchStarted => {
+        CommandAction::RunNetbench { nic_index } => {
+            crate::shell::bench::run_netbench(io, nic_index, *term_cols, *term_rows, history).await;
+            
+            // Cleanup status bar
+            let _ = crate::shell::statusbar::set_left_active("");
+            let _ = crate::shell::statusbar::set_right_active("");
+            for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                let _ = crate::shell::statusbar::set_indicator_active(i, 0);
+            }
+            crate::shell::statusbar::refresh(io, *term_cols, *term_rows);
+            
+            *mode = ShellMode::Idle;
+        }
+        CommandAction::RunBenchFs { disk_id } => {
+            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == disk_id);
+            if let Some(handle) = target {
+                crate::shell::bench::run_bench_fs(io, handle, *term_cols, *term_rows, history).await;
+            } else {
+                io.write_str("\r\nbench: disk disappeared\r\n");
+            }
+
+            // Cleanup status bar
+            let _ = crate::shell::statusbar::set_left_active("");
+            let _ = crate::shell::statusbar::set_right_active("");
+            for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
+                let _ = crate::shell::statusbar::set_indicator_active(i, 0);
+            }
+            crate::shell::statusbar::refresh(io, *term_cols, *term_rows);
+
             *mode = ShellMode::Idle;
         }
         CommandAction::None => {}

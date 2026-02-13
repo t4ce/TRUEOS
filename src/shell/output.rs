@@ -84,10 +84,24 @@ impl<'a> ReverseOutput<'a> {
         for _ in 0..padding {
             self.inner.write_str(" ");
         }
+
+        // We must manually clip s if it's too long, otherwise it wraps to next line col 1
+        let final_s = if content_len > max_width {
+            let mut clipped = String::new();
+            let mut w = 0;
+            for ch in s.chars() {
+                w += 1;
+                if w > max_width { break; }
+                clipped.push(ch);
+            }
+            clipped
+        } else {
+            String::from(s)
+        };
         
         // Clock/System Message color: (120, 210, 255)
         self.inner.write_str("\x1b[38;2;120;210;255m");
-        self.inner.write_str(s);
+        self.inner.write_str(&final_s);
         self.inner.write_str("\x1b[0m");
         
         // 3. Redraw ENTIRE scrollbar to fix the shift (offset 0 presumed)
@@ -257,12 +271,13 @@ pub(crate) fn redraw_view(
     io: &dyn ShellIo,
     history: &[String],
     offset: usize,
-    _term_cols: usize,
+    term_cols: usize,
     term_rows: usize,
 ) {
     let top = 3usize;
     let bottom = output_bottom_row(term_rows);
     let height = bottom.saturating_sub(top).saturating_add(1);
+    let max_width = term_cols.saturating_sub(2);
 
     // Save cursor position to restore after drawing
     io.write_str(crate::ecma48::SAVE_CURSOR);
@@ -284,8 +299,29 @@ pub(crate) fn redraw_view(
             if let Some(line) = history.get(hist_idx) {
                 // Determine color based on content?
                 // For now, let's keep it simple.
+                 
+                 // Apply padding if needed (Right Align in Redraw too)
+                 let content_len = crate::shell::ecma48::visible_width(line);
+                 let padding = max_width.saturating_sub(content_len);
+                 for _ in 0..padding {
+                     io.write_str(" ");
+                 }
+
+                 let final_line = if content_len > max_width {
+                     let mut clipped = String::new();
+                     let mut w = 0;
+                     for ch in line.chars() {
+                         w += 1;
+                         if w > max_width { break; }
+                         clipped.push(ch);
+                     }
+                     clipped
+                 } else {
+                     String::from(line)
+                 };
+
                  io.write_str("\x1b[38;2;120;210;255m"); // Blue
-                 io.write_str(line.as_str());
+                 io.write_str(&final_line);
                  io.write_str("\x1b[0m");
             }
         }

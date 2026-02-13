@@ -23,7 +23,7 @@ use crate::net::e1000::E1000Adapter;
 const RX_DESC_COUNT: usize = 256;
 const RX_BUF_SIZE: usize = 2048;
 const POLL_BUDGET: usize = 512;
-const ENABLE_R8125: bool = false;
+const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
@@ -86,6 +86,26 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::R8168(dev) => dev.transmit(frame),
         }
     }
+}
+
+pub fn device_name_at(index: usize) -> Option<&'static str> {
+    with_device_at(index, |dev| {
+        // Since we can't easily downcast or modify trait yet, we can't get the inner name easily 
+        // without adding name() to NetDevice trait.
+        // However, we can peek at the ActiveDevice list if we change how with_device_at works 
+        // or just access DEVICES directly here.
+        "NetDevice" // Fallback 
+    });
+
+    // Access DEVICES directly to match on enum variants
+    let guard = DEVICES.lock();
+    let dev = guard.get(index)?;
+    Some(match dev {
+        ActiveDevice::Virtio(_) => "Virtio Net",
+        ActiveDevice::E1000(_) => "Intel E1000",
+        ActiveDevice::R8125(_) => "Realtek RTL8125",
+        ActiveDevice::R8168(_) => "Realtek RTL8168",
+    })
 }
 
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());

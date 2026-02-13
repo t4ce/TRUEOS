@@ -19,7 +19,7 @@ mod enumeration;
 mod control;
 mod attach;
 
-pub use scout::usb_scout_service;
+pub use scout::{usb_scout_service, inspect_ports, ScoutedPort};
 pub(crate) use self::control::{control_in, control_out};
 pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
 
@@ -208,7 +208,7 @@ fn register_unclaimed_device(
     register_device_inner(controller_id, slot_id, port, DeviceKind::Unknown, Some(resources));
 }
 
-fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceKind> {
+pub(crate) fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceKind> {
     DEVICES[controller_id]
         .lock()
         .iter()

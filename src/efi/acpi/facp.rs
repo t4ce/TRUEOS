@@ -57,24 +57,53 @@ pub fn enter_named_sleep_state(state: u8) -> FacpResult<()> {
     if state == 0 || state > 5 {
         return Err(FacpError::InvalidSleepState);
     }
-    let st = sleep::sleep_type_for_state(state).ok_or(FacpError::SleepUnsupported)?;
-    enter_s_state(st.pm1a, st.pm1b)
+    
+    // Try ACPI
+    if let Some(st) = sleep::sleep_type_for_state(state) {
+        if enter_s_state(st.pm1a, st.pm1b).is_ok() {
+             return Ok(());
+        }
+    }
+
+    // Fallback for S5 (Shutdown) -> UEFI Shutdown
+    if state == 5 {
+        unsafe {
+            crate::efi::runtime_services_reset(crate::efi::EfiResetType::Shutdown);
+        }
+    }
+
+    Err(FacpError::SleepUnsupported)
 }
 
 pub fn reset_system() -> FacpResult<()> {
-    with_fadt(|fadt| {
+    // Try FADT mechanisms first
+    let _ = with_fadt(|fadt| {
         let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
-        if !flags.supports_system_reset_via_fadt() {
-            return Err(FacpError::ResetUnsupported);
+        if flags.supports_system_reset_via_fadt() {
+            if let Ok(reg) = fadt.reset_register() {
+                if reg.address != 0 {
+                    let _ = write_gas_u64(&reg, u64::from(fadt.reset_value));
+                }
+            }
         }
+        Ok(())
+    });
+    
+    // Fallback 1: PCI Reset (0xCF9)
+    // 0xCF9 is Reset Control Register in PIIX3/4 and ICH.
+    // Bit 2 (0x4) = System Reset, Bit 1 (0x2) = Reset CPU.
+    // Writing 0x06 (System Reset + Reset CPU) usually works.
+    unsafe {
+        crate::outb(0xCF9, 0x06);
+    }
 
-        let reg = fadt.reset_register()?;
-        if reg.address == 0 {
-            return Err(FacpError::ResetUnsupported);
-        }
+    // Fallback 2: UEFI Reset
+    unsafe {
+        crate::efi::runtime_services_reset(crate::efi::EfiResetType::Cold);
+    }
 
-        write_gas_u64(&reg, u64::from(fadt.reset_value))
-    })
+    // If we are still here, we failed.
+    Err(FacpError::ResetUnsupported)
 }
 
 fn program_pm1_control(register: &MappedGas<AcpiIdentityHandler>, slp_typ: u8) -> FacpResult<()> {
