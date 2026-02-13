@@ -491,10 +491,13 @@ impl NvmeController {
             }
 
             if embassy_time_driver::now() >= deadline {
+                // Silenced to avoid spam on unresponsive devices
+                /*
                 if qid == NVME_IO_QID {
                     let csts = self.reg32(NVME_REG_CSTS);
                     crate::log!("nvme: {} poll_async timeout qid={} cid={} csts=0x{:08X}\n", self.pci, qid, cid, csts);
                 }
+                */
                 return Err(block::Error::Timeout);
             }
             // Cooperative wait: yield to other tasks instead of busy-spinning.
@@ -888,6 +891,8 @@ impl NvmeController {
             {
                 Ok(cpl) => break 'submit Ok(cpl),
                 Err(block::Error::Timeout) => {
+                    // Silencing retry logs
+                    /* 
                     crate::log!(
                         "nvme: {} io retry opcode=0x{:02X} nsid={} slba={} nlb={} wait={}ms->{}ms\n",
                         self.pci,
@@ -898,6 +903,7 @@ impl NvmeController {
                         NVME_IO_TIMEOUT_FAST_MS,
                         NVME_IO_TIMEOUT_RETRY_MS
                     );
+                    */
 
                     let cid_retry = self.alloc_cid();
                     let mut sqe_retry = NvmeSqe { d: [0; 16] };
@@ -914,6 +920,8 @@ impl NvmeController {
                     let retry_res = self
                         .io_submit_and_wait_async(sqe_retry, cid_retry, NVME_IO_TIMEOUT_RETRY_MS)
                         .await;
+                    
+                    /*
                     if matches!(retry_res, Err(block::Error::Timeout)) {
                         crate::log!(
                             "nvme: {} io timeout opcode=0x{:02X} nsid={} slba={} nlb={} after retry\n",
@@ -924,6 +932,7 @@ impl NvmeController {
                             nlb
                         );
                     }
+                    */
                     break 'submit retry_res;
                 }
                 Err(e) => break 'submit Err(e),
@@ -1120,13 +1129,13 @@ impl block::BlockDevice for NvmeBlockDevice {
                             Ok(cpl) if cpl.status_code() == 0 => {}
                             Ok(cpl) => {
                                 dma::dealloc(dma_virt, max_io_bytes);
-                                crate::log!(
-                                    "nvme: {} probe-read fallback (admin) failed status=0x{:04X} (sct={} sc={})\n",
-                                    self.ctrl.pci,
-                                    cpl.status,
-                                    cpl.status_type(),
-                                    cpl.status_code(),
-                                );
+                                // crate::log!(
+                                //     "nvme: {} probe-read fallback (admin) failed status=0x{:04X} (sct={} sc={})\n",
+                                //     self.ctrl.pci,
+                                //     cpl.status,
+                                //     cpl.status_type(),
+                                //     cpl.status_code(),
+                                // );
                                 return Err(block::Error::Io);
                             }
                             Err(e) => {
