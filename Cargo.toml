@@ -15,22 +15,21 @@ x86_64 = { version = "0.15.4", default-features = false, features = ["instructio
 spin = "0.10"
 heapless = { version = "0.9", default-features = false }
 limine = { version = "0.5", default-features = false }
-acpi = { version = "6", default-features = false, features = ["alloc", "aml"] }
+acpi = { version = "6.1.0", default-features = false, features = ["alloc", "aml"] }
 aml = { version = "0.16", default-features = false }
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] }
 rdrand = { version = "0.8", default-features = false }
-getrandom = { version = "0.3", default-features = false }
-getrandom02 = { package = "getrandom", version = "0.2.17", default-features = false, features = ["custom"] }
+getrandom = { version = "0.2", default-features = false, features = ["custom"] }
 raw-cpuid = { version = "11", default-features = false }
-rand_core = { version = "0.9", default-features = false }
-rand_chacha = { version = "0.9", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-v = { path = "crates/trueos-v" }
 hashbrown = { version = "0.16.1", default-features = false }
-memchr = { version = "2", default-features = false }
+memchr = { version = "2.8.0", default-features = false }
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
@@ -40,10 +39,11 @@ log = { version = "0.4", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
-webpki-roots = { version = "1.0", default-features = false }
+webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
-nalgebra = { version = "0.33.2", default-features = false, features = ["alloc", "libm"] }
+nalgebra = { version = "0.34.1", default-features = false, features = ["alloc", "libm"] }
+embedded-websocket = { version = "0.9.3", default-features = false }
 
 [profile.dev]
 panic = "abort"

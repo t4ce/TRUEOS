@@ -4,6 +4,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub mod dns;
 pub mod https;
 pub mod ping;
+pub mod ws;
+pub mod wss;
 
 use trueos_v::vnet as api;
 

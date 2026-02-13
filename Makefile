@@ -92,12 +92,9 @@ iso: artifacts images
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/EFI/BOOT/limine.conf
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
-	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1M count=31
-	mkfs.vfat -F 16 -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
+	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=512
+	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_BOOT_DIR)/limine.conf ::/limine.conf
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_BOOT_DIR)/limine.conf ::/EFI/BOOT/limine.conf
-	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_BOOT_DIR)/TRUEOS.elf ::/TRUEOS.elf
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
