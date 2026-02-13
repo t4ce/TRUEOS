@@ -614,8 +614,12 @@ pub(crate) fn cmd_tlb_dump(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<
                  ssdt_count += 1;
                  writeln!(out, "--- SSDT #{} ---", ssdt_count).unwrap();
                  writeln!(out, "Address: 0x{:08X}", phys).unwrap();
-                 writeln!(out, "Length: {} bytes", hdr.length).unwrap();
-                 writeln!(out, "Revision: {}", hdr.revision).unwrap();
+                 
+                 let len = hdr.length;
+                 let rev = hdr.revision;
+                 
+                 writeln!(out, "Length: {} bytes", len).unwrap();
+                 writeln!(out, "Revision: {}", rev).unwrap();
                  let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
                  let tbl_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
                  writeln!(out, "OEM ID: {}", oem).unwrap();
@@ -738,6 +742,32 @@ pub(crate) fn cmd_tlb_dump(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<
              let is_prim = if i == primary { "*" } else { "" };
              let _ = writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", i, name, mac, is_prim);
          }
+    }
+    writeln!(out).unwrap();
+
+    // 9. Block Devices
+    writeln!(out, "=== Block Devices ===").unwrap();
+    let devices = crate::disc::block::devices();
+    if devices.is_empty() {
+        writeln!(out, "No block devices found").unwrap();
+    } else {
+        writeln!(out, "{:8}  {:10}  {:12}  {:10}  {:20}  {:6}  {:8}", 
+            "ID", "Kind", "Size (MB)", "Blocks", "Label", "R/W", "Parent").unwrap();
+        writeln!(out, "{:-<8}  {:-<10}  {:-<12}  {:-<10}  {:-<20}  {:-<6}  {:-<8}", 
+            "", "", "", "", "", "", "").unwrap();
+            
+        for dev in devices {
+             let id_s = alloc::format!("{}", dev.id);
+             let kind_s = alloc::format!("{:?}", dev.kind);
+             let size_mb = dev.capacity_bytes / (1024 * 1024);
+             let blocks = dev.block_count;
+             let label = dev.label.as_deref().unwrap_or("-");
+             let rw = if dev.writable { "RW" } else { "RO" };
+             let parent = dev.parent.map(|p| alloc::format!("{}", p)).unwrap_or("-".into());
+             
+             let _ = writeln!(out, "{:<8}  {:<10}  {:<12}  {:<10}  {:<20}  {:<6}  {:<8}",
+                 id_s, kind_s, size_mb, blocks, label, rw, parent);
+        }
     }
     writeln!(out).unwrap();
 

@@ -535,7 +535,7 @@ pub(crate) fn init_builtin_shell_commands() {
         
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
 
-        static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
+        static AI_ARGS: [ArgSpec; 1] = [ArgSpec::new("msg", ArgType::Rest)];
         static TURBO_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("op", ArgType::Str),
             ArgSpec::new("spins", ArgType::Usize),
@@ -592,9 +592,10 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
         let _ = REGSHCMD("tlb.dump", &NO_ARGS, cmd::cmd_tlb_dump);
 
+        let _ = REGSHCMD("ai", &AI_ARGS, crate::ai::cmd_ai);
+        
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
         let _ = REGSHCMD("set", &SET_ARGS, cmd::cmd_set);
-        let _ = REGSHCMD("idle", &IDLE_ARGS, cmd::cmd_idle);
         let _ = REGSHCMD("turbo", &TURBO_ARGS, cmd::cmd_turbo);
         let _ = REGSHCMD("smp", &SMP_ARGS, cmd::cmd_smp);
         let _ = REGSHCMD("cube", &[], cmd::cmd_cube);

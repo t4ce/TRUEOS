@@ -17,7 +17,7 @@ UDPPort 50000-50999
 # Restart NoMachine:
 sudo systemctl restart nxserver
 
-konsole -e sh -c 'stty -echo -icanon cols 100 rows 100; nc 192.168.178.78 4245; stty sane'
+konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.78 4245; stty sane'
 
 PXE_IF=br0
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
