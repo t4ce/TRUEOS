@@ -303,5 +303,50 @@ pub fn system_table() -> Option<&'static EfiSystemTable> {
     Some(st)
 }
 
+#[repr(C)]
+pub struct EfiRuntimeServices {
+    pub hdr: EfiTableHeader,
+    pub get_time: usize,
+    pub set_time: usize,
+    pub get_wakeup_time: usize,
+    pub set_wakeup_time: usize,
+    pub set_virtual_address_map: usize,
+    pub convert_pointer: usize,
+    pub get_variable: usize,
+    pub get_next_variable_name: usize,
+    pub set_variable: usize,
+    pub get_next_high_mono_count: usize,
+    pub reset_system: usize,
+}
+
+#[repr(usize)]
+pub enum EfiResetType {
+    Cold = 0,
+    Warm = 1,
+    Shutdown = 2,
+    PlatformSpecific = 3,
+}
+
+pub unsafe fn runtime_services_reset(reset_type: EfiResetType) {
+    let Some(st) = system_table() else { return };
+    // st.runtime_services is physical.
+    // Map the RuntimeServices table structure.
+    let Ok(rt_ptr) = mmio::map_limine_struct::<EfiRuntimeServices>(st.runtime_services as u64) else { return };
+    let rt = rt_ptr.as_ref();
+    
+    // rt.reset_system is physical (function pointer).
+    // Convert to virtual via HHDM (assuming Limine provides it and it's executable).
+    let Some(hhdm) = limine::hhdm_offset() else { return };
+    
+    let fn_phys = rt.reset_system as u64;
+    let fn_virt = hhdm + fn_phys;
+    
+    let reset_fn: unsafe extern "efiapi" fn(EfiResetType, usize, usize, *const u8) -> ! = 
+        core::mem::transmute(fn_virt as usize);
+
+    reset_fn(reset_type, 0, 0, core::ptr::null());
+}
+
+
 
 

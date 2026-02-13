@@ -1,5 +1,6 @@
 
 use crate::shell::{ShellIo, CommandAction, ShellBackend};
+use crate::shell::table::{Table, TableColumn};
 
 // use embassy_executor::task;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
@@ -31,25 +32,29 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
 }
 
 pub(crate) fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    #[inline]
-    fn print_acpi_usage(io: &dyn ShellIo) {
-        io.write_str("acpi: usage acpi <reboot|s0|s1|s2|s3|s4|s5>\r\n");
-        io.write_str("reboot = ACPI reset\r\n");
-        io.write_str("S0 = running\r\n");
-        io.write_str("S1 = light sleep\r\n");
-        io.write_str("S2 = deeper sleep (rare)\r\n");
-        io.write_str("S3 = suspend to RAM\r\n");
-        io.write_str("S4 = hibernate (suspend to disk)\r\n");
-        io.write_str("S5 = soft off (shutdown)\r\n");
-    }
+    let print_usage = |io: &dyn ShellIo| {
+        let cols = [
+            TableColumn { header: "State", width: 8 },
+            TableColumn { header: "Description", width: 32 },
+        ];
+        let t = Table::new(&cols);
+        t.print_header(io);
+        t.print_row(io, &["reboot", "ACPI reset"]);
+        t.print_row(io, &["S0", "Running"]);
+        t.print_row(io, &["S1", "Light sleep"]);
+        t.print_row(io, &["S2", "Deeper sleep (rare)"]);
+        t.print_row(io, &["S3", "Suspend to RAM"]);
+        t.print_row(io, &["S4", "Hibernate (suspend to disk)"]);
+        t.print_row(io, &["S5", "Soft off (shutdown)"]);
+    };
 
     let Some(state) = args.and_then(|a| a.get_str(0)) else {
-        print_acpi_usage(ctx.io);
+        print_usage(ctx.io);
         return CommandAction::None;
     };
 
     let Some(action) = parse_acpi_state(state) else {
-        print_acpi_usage(ctx.io);
+        print_usage(ctx.io);
         return CommandAction::None;
     };
 
@@ -372,11 +377,19 @@ pub(crate) fn cmd_pci_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
 
 
 pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    ctx.io.write_str("net: available subcommands\r\n");
-    ctx.io.write_str("  net.icmp <target>\r\n");
-    ctx.io.write_str("  net.mac [index]\r\n");
-    ctx.io.write_str("  net.http <url>\r\n");
-    ctx.io.write_str("  net.https <host>\r\n");
+    let cols = [
+        TableColumn { header: "Subcommand", width: 22 },
+        TableColumn { header: "Arguments", width: 28 },
+    ];
+    let t = Table::new(&cols);
+    t.print_header(ctx.io);
+
+    t.print_row(ctx.io, &["net.icmp", "<target>"]);
+    t.print_row(ctx.io, &["net.nic", "[index]"]);
+    t.print_row(ctx.io, &["net.hostname", "[name]"]);
+    t.print_row(ctx.io, &["net.http", "<url>"]);
+    t.print_row(ctx.io, &["net.https", "<host>"]);
+    
     CommandAction::None
 }
 
@@ -453,47 +466,77 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_mac(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
     let target = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    
-    if target.is_empty() {
-        let count = crate::net::device_count();
-        if count == 0 {
-            ctx.io.write_str("net.mac: no nics\r\n");
-            return CommandAction::None;
-        }
-        for index in 0..count {
-            let mac = if index == 0 {
-                crate::net::mac_address()
-            } else {
-                crate::net::mac_address_at(index)
-            };
-            if let Some([a, b, c, d, e, f]) = mac {
-                ctx.io.write_fmt(format_args!(
-                    "net.mac: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
-                    index, a, b, c, d, e, f
-                ));
-            } else {
-                ctx.io.write_fmt(format_args!("net.mac: mac[{}]=unavailable\r\n", index));
+    let specific_index = if target.is_empty() {
+        None
+    } else {
+        match target.parse::<usize>() {
+            Ok(i) => Some(i),
+            Err(_) => {
+                ctx.io.write_str("net.nic: usage net.nic [index]\r\n");
+                return CommandAction::None;
             }
         }
-    } else if let Ok(index) = target.parse::<usize>() {
-        let mac = if index == 0 {
-            crate::net::mac_address()
+    };
+
+    let count = crate::net::device_count();
+    if count == 0 {
+        ctx.io.write_str("net.nic: no nics\r\n");
+        return CommandAction::None;
+    }
+
+    let cols = [
+        TableColumn { header: "Idx", width: 4 },
+        TableColumn { header: "Interface", width: 20 },
+        TableColumn { header: "MAC Address", width: 17 },
+        TableColumn { header: "IPv4", width: 15 },
+        TableColumn { header: "IPv6", width: 4 },
+    ];
+    let t = Table::new(&cols);
+    t.print_header(ctx.io);
+
+    for index in 0..count {
+        if let Some(target_idx) = specific_index {
+            if index != target_idx {
+                continue;
+            }
+        }
+
+        let name = crate::net::device_name_at(index).unwrap_or("Unknown");
+        let mac_raw = crate::net::mac_address_at(index).unwrap_or([0; 6]);
+        let mac = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", 
+            mac_raw[0], mac_raw[1], mac_raw[2], mac_raw[3], mac_raw[4], mac_raw[5]);
+        
+        let ip_raw = crate::net::adapter::ipv4_at(index);
+        let ip = if let Some(ip) = ip_raw {
+            alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
         } else {
-            crate::net::mac_address_at(index)
+            alloc::string::String::from(" - ")
         };
 
-        if let Some([a, b, c, d, e, f]) = mac {
-            ctx.io.write_fmt(format_args!(
-                "net.mac: mac[{}]={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}\r\n",
-                index, a, b, c, d, e, f
-            ));
-        } else {
-            ctx.io.write_fmt(format_args!("net.mac: mac[{}]=unavailable\r\n", index));
+        let idx_s = alloc::format!("{}", index);
+        t.print_row(ctx.io, &[idx_s, name.into(), mac, ip, "::".into()]);
+    }
+
+    CommandAction::None
+}
+
+pub(crate) fn cmd_net_hostname(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    let name = args.and_then(|a| a.get_str(0));
+    match name {
+        Some(n) => {
+            if n.is_empty() {
+                 ctx.io.write_str("net.hostname: name cannot be empty\r\n");
+            } else {
+                 crate::net::adapter::set_hostname(n);
+                 ctx.io.write_fmt(format_args!("net.hostname: set to '{}'\r\n", n));
+            }
         }
-    } else {
-        ctx.io.write_str("net.mac: usage net.mac [index]\r\n");
+        None => {
+             let current = crate::net::adapter::get_hostname();
+             ctx.io.write_fmt(format_args!("net.hostname: {}\r\n", current));
+        }
     }
     CommandAction::None
 }
