@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, PollResult};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
@@ -668,6 +668,15 @@ impl Device for AdapterDeviceAt {
 
 struct AdapterRxToken {
     buffer: Vec<u8>,
+}
+
+impl Drop for AdapterRxToken {
+    fn drop(&mut self) {
+        let buf = core::mem::take(&mut self.buffer);
+        if !buf.is_empty() {
+             crate::net::ring::recycle_rx_buf(buf);
+        }
+    }
 }
 
 impl RxToken for AdapterRxToken {
@@ -1419,8 +1428,10 @@ impl NetService {
 
             if socket.is_active() && socket.may_recv() {
                 // Match vnet MAX_MSG (8KiB) to avoid large stack buffers per poll.
-                let mut buf = [0u8; 8192];
-                while let Ok(len) = socket.recv_slice(&mut buf) {
+                let mut buf_guard = POLL_SCRATCH_BUF.lock();
+                let buf = &mut *buf_guard;
+                
+                while let Ok(len) = socket.recv_slice(buf) {
                     if len == 0 {
                         break;
                     }
@@ -1490,12 +1501,44 @@ impl NetService {
         }
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self) -> bool {
         let timestamp = now();
         let mut device = AdapterDeviceAt {
             index: self.device_index,
         };
+        
+        // Always poll at least once
         let _ = self.iface.poll(timestamp, &mut device, &mut self.sockets);
+        
+        let mut work_done = false;
+        
+        // Drain packets with a higher limit.
+        // If we hit the limit, we return true to hint "call me again immediately".
+        let limit = 128; 
+        let mut count = 0;
+        loop {
+            if count >= limit {
+                work_done = true;
+                break;
+            }
+            if crate::net::rx_pending_at(self.device_index) == 0 {
+                break;
+            }
+            match self.iface.poll(timestamp, &mut device, &mut self.sockets) {
+                PollResult::None => {
+                    count += 1;
+                }
+                _ => {
+                    work_done = true;
+                    count += 1;
+                }
+            }
+        }
+        
+        // Also drain the TX queue for sockets (esp. TCP)
+         if let Some(idx) = self.records.iter().position(|r| r.kind == SocketKind::Tcp) {
+             self.flush_tcp_tx(idx);
+         }
 
         let dhcp_event = self
             .sockets
@@ -1616,6 +1659,8 @@ impl NetService {
 
         // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
         self.maybe_send_icmp_ping(timestamp);
+        
+        work_done
     }
 
     fn maybe_send_icmp_ping(&mut self, timestamp: Instant) {
@@ -1784,6 +1829,9 @@ fn apply_static_fallback_ipv4(iface: &mut Interface) -> (Ipv4Address, Ipv4Addres
     (ip, gw)
 }
 
+// Reusable scratch buffer for polling sockets to avoid large stack zeroing
+static POLL_SCRATCH_BUF: spin::Mutex<[u8; 8192]> = spin::Mutex::new([0u8; 8192]);
+
 // Shared net service state so both the async service task and synchronous `time::block_on`
 // hooks can drive the stack without diverging socket/interface state.
 static NET_SERVICES: spin::Mutex<Option<Vec<NetService>>> = spin::Mutex::new(None);
@@ -1807,27 +1855,31 @@ fn ensure_services(count: usize) {
     }
 }
 
-fn service_tick_once() {
+fn service_tick_once() -> bool {
     let count = crate::net::device_count();
     if count == 0 {
-        return;
+        return false;
     }
 
     ensure_services(count);
 
     let mut guard = NET_SERVICES.lock();
     let Some(services) = guard.as_mut() else {
-        return;
+        return false;
     };
 
+    let mut busy = false;
     for svc in services.iter_mut() {
-        svc.tick();
+        if svc.tick() {
+            busy = true;
+        }
     }
 
     for _ in 0..MAX_DRAIN_PER_LOOP {
         let Some((owner, cmd)) = pop_command() else {
             break;
         };
+        busy = true;
         let idx = owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
         let idx = idx.min(services.len().saturating_sub(1));
         services[idx].handle_command(owner, cmd);
@@ -1836,6 +1888,8 @@ fn service_tick_once() {
     for svc in services.iter_mut() {
         svc.poll_sockets();
     }
+    
+    busy
 }
 
 
@@ -1865,8 +1919,11 @@ pub async fn net_service_task() {
         ensure_services(count);
 
         loop {
-            service_tick_once();
-            Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;
+            if service_tick_once() {
+                Timer::after(EmbassyDuration::from_micros(0)).await;
+            } else {
+                Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;
+            }
         }
     }.await;
 }

@@ -13,16 +13,6 @@ use crate::net::adapter::{self, NetCommand, NetEndpoint, NetEvent, NetHandle, Ne
 
 pub type Queue<T> = adapter::NetQueue<T>;
 
-#[inline]
-pub fn net_shell_read_byte() -> Option<u8> {
-  crate::shell::backends::net_tcp::net_shell_read_byte()
-}
-
-#[inline]
-pub fn net_shell_write_bytes(bytes: &[u8]) {
-  crate::shell::backends::net_tcp::net_shell_write_bytes(bytes)
-}
-
 static VNET_SEQ: AtomicU32 = AtomicU32::new(1);
 const VNET_CMD_QUEUE_DEPTH: usize = 256;
 const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 256;

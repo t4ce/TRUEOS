@@ -440,6 +440,8 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
 
+    let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
+
     crate::log!(
         "tga: bring_online bdf={:02X}:{:02X}.{} cmd 0x{:04X}->0x{:04X} raw_bar0=0x{:08X} raw_bar1=0x{:08X} bar0=0x{:016X} size=0x{:X}\n",
         dev.bus,

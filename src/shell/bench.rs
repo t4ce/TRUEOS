@@ -6,7 +6,7 @@ use crate::shell::ShellBackend;
 
 // NETBENCH Statics
 pub(crate) const NETBENCH_UPDATE_MS: u64 = 250;
-pub(crate) const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/100MB.zip";
+pub(crate) const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/1GB.zip";
 
 pub(crate) const NETBENCH_IDLE: u8 = 0;
 pub(crate) const NETBENCH_RUNNING: u8 = 1;
@@ -221,7 +221,7 @@ pub(crate) async fn netbench_worker_task(nic_index: usize) {
 
     const OPEN_TIMEOUT_MS: u64 = 4000;
     const OVERALL_TIMEOUT_MS: u64 = 120000;
-    const MAX_CAPTURE_BYTES: usize = 128 * 1024 * 1024;
+    const MAX_CAPTURE_BYTES: usize = 1024 * 1024 * 1024 + 1024 * 1024; // 1GB + 1MB buffer
     const IDLE_YIELD_US: u64 = 100;
 
     fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
@@ -395,7 +395,7 @@ pub(crate) async fn netbench_worker_task(nic_index: usize) {
 
     let mut overall_deadline = Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
     let mut header_bytes: Vec<u8> = Vec::new();
-    let mut body: Vec<u8> = Vec::new();
+    // We stream data to void to avoid OOM on large files
     let mut header_done = false;
     let mut expected_len: Option<usize> = None;
     let mut received_bytes: usize = 0;
@@ -421,64 +421,43 @@ pub(crate) async fn netbench_worker_task(nic_index: usize) {
                 api::Event::TcpData { handle, data } if handle == tcp_handle => {
                     let bytes = data.as_slice();
                     if !header_done {
-                        let room = MAX_CAPTURE_BYTES.saturating_sub(header_bytes.len());
-                        if room == 0 {
-                            failed = true;
-                            fail_code = 9;
-                            break;
+                        // Max header size check
+                        if header_bytes.len() + bytes.len() > 16 * 1024 {
+                             failed = true;
+                             fail_code = 9;
+                             break;
                         }
-                        let take = core::cmp::min(room, bytes.len());
-                        header_bytes.extend_from_slice(&bytes[..take]);
+                        
+                        // Append to header buffer (inefficient but only for headers)
+                        header_bytes.extend_from_slice(bytes);
+                        
                         if let Some(hend) = find_http_header_end(header_bytes.as_slice()) {
                             header_done = true;
                             expected_len = parse_content_length(&header_bytes[..hend]);
+                            
+                            // Count body bytes that came with the header
+                            let body_len = header_bytes.len() - hend;
+                            received_bytes = received_bytes.saturating_add(body_len);
+                            NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
+                            
+                            // Free header memory now that we are done
+                            header_bytes = Vec::new();
+                            
                             if let Some(cl) = expected_len {
-                                let reserve = core::cmp::min(cl, MAX_CAPTURE_BYTES);
-                                body.reserve(reserve);
-                            }
-                            if hend < header_bytes.len() {
-                                let remain = header_bytes.split_off(hend);
-                                let room2 = MAX_CAPTURE_BYTES.saturating_sub(body.len());
-                                let take2 = core::cmp::min(room2, remain.len());
-                                body.extend_from_slice(&remain[..take2]);
-                                received_bytes = received_bytes.saturating_add(take2);
-                                NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
-                                if take2 < remain.len() {
-                                    failed = true;
-                                    fail_code = 9;
+                                if received_bytes >= cl {
+                                    closed = true;
                                     break;
                                 }
-                                if let Some(cl) = expected_len {
-                                    if body.len() >= cl {
-                                        closed = true;
-                                        break;
-                                    }
-                                }
                             }
                         }
-                        if take < bytes.len() && !header_done {
-                            failed = true;
-                            fail_code = 9;
-                            break;
-                        }
                     } else {
-                        let room = MAX_CAPTURE_BYTES.saturating_sub(body.len());
-                        if room == 0 {
-                            failed = true;
-                            fail_code = 9;
-                            break;
-                        }
-                        let take = core::cmp::min(room, bytes.len());
-                        body.extend_from_slice(&bytes[..take]);
-                        received_bytes = received_bytes.saturating_add(take);
+                        // Streaming mode: simply count the bytes
+                        let len = bytes.len();
+                        received_bytes = received_bytes.saturating_add(len);
                         NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
-                        if take < bytes.len() {
-                            failed = true;
-                            fail_code = 9;
-                            break;
-                        }
+                        
                         if let Some(cl) = expected_len {
-                            if body.len() >= cl {
+                            if received_bytes >= cl {
                                 closed = true;
                                 break;
                             }
@@ -512,12 +491,8 @@ pub(crate) async fn netbench_worker_task(nic_index: usize) {
 
     let _ = vnet.submit(api::Command::Close { handle: tcp_handle });
     if NETBENCH_STATE.load(Ordering::Relaxed) != NETBENCH_ABORTED {
-        if let Some(cl) = expected_len {
-            if body.len() > cl {
-                body.truncate(cl);
-            }
-        }
-        NETBENCH_BYTES.store(body.len() as u64, Ordering::Relaxed);
+        // Body is already truncated by not storing it :D
+        NETBENCH_BYTES.store(received_bytes as u64, Ordering::Relaxed);
         if failed {
             NETBENCH_FAIL_CODE.store(fail_code, Ordering::Relaxed);
             NETBENCH_STATE.store(NETBENCH_FAILED, Ordering::Relaxed);

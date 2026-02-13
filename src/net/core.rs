@@ -52,6 +52,10 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
         self.adapter.pop_rx()
     }
 
+    fn rx_queue_len(&self) -> usize {
+        self.rx_queue.len()
+    }
+
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.adapter.transmit(frame)
     }

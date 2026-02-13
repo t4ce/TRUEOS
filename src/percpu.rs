@@ -69,6 +69,14 @@ pub fn init_ap(lapic_id: u32, cpu_index: u32) {
     init_with(lapic_id, cpu_index, "ap")
 }
 
+pub fn init_executor() -> &'static mut RawExecutor {
+    let executor = Box::leak(Box::new(RawExecutor::new(core::ptr::null_mut())));
+    unsafe {
+        (&mut *this_cpu_ptr()).set_executor_ptr(executor as *mut RawExecutor);
+    }
+    executor
+}
+
 #[inline]
 pub fn set_total_slots(total: usize) {
     TOTAL_SLOTS.store(total, Ordering::Release);

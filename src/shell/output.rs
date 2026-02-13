@@ -257,7 +257,7 @@ pub(crate) fn redraw_view(
     io: &dyn ShellIo,
     history: &[String],
     offset: usize,
-    term_cols: usize,
+    _term_cols: usize,
     term_rows: usize,
 ) {
     let top = 3usize;

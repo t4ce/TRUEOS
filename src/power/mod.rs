@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::arch::x86_64::__cpuid;
 use core::sync::atomic::{AtomicU8, Ordering};
 

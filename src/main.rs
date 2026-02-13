@@ -27,7 +27,6 @@ mod audio;
 mod disc;
 mod exceptions;
 mod limine;
-mod limstats;
 mod net;
 mod pci;
 mod percpu;
@@ -55,7 +54,6 @@ mod x2apic;
 pub(crate) use shell::ecma48;
 pub(crate) use shell::matrix;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-use alloc::boxed::Box;
 use embassy_executor::{raw::Executor, Spawner};
 pub use surface::pat as pattern;
 pub use surface::{io, path};
@@ -96,10 +94,10 @@ pub unsafe extern "C" fn _start() -> ! {
 pub extern "C" fn kmain() -> ! {
     unsafe {cpu::enable_sse();}
     exceptions::init();
-   
-
+    crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     phys::register_memory_metadata();
     phys::init_pmm_from_limine();
+
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
@@ -112,50 +110,34 @@ pub extern "C" fn kmain() -> ! {
             perf.exec_usec()
         );
     }
-    
+    let smp_resp = limine::smp_response().unwrap();
+    let lapic_ids: alloc::vec::Vec<u32> = smp_resp.cpus().iter().map(|c| c.lapic_id as u32).collect();
+    percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     percpu::init_bsp();
-
     pci::dma::init_from_limine();
-    pci::dma::alloc_test_once();
+    vga::init(limine::framebuffer_response());
     pci::enumerate_once();
-
     usb::xhci::init_once();
     usb::truekey::init();
-
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ok = crate::rng::init();
-        crate::log!("rng: init {}\n", if ok { "ok" } else { "failed" });
-    }
+    crate::rng::init();
     disc::probe_once();
     efi::acpi::ensure_tables();
     efi::acpi::hpet::ensure();
     power::init();
-    vga::init(limine::framebuffer_response());
-    
-    let resp = limine::smp_response().unwrap();
-    
-    percpu::set_total_slots(resp.cpus().len());
-
     smp::init(percpu::total_slots());
     smp::mark_online();
 
-    let executor = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
-    unsafe {
-        (&mut *percpu::this_cpu_ptr()).set_executor_ptr(executor as *mut Executor);
-    }
+    let executor = percpu::init_executor();
     let spawner = executor.spawner();
     if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
+
     if trueos_qjs::async_fs::ensure_service_started(&spawner) {
         crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
-    } else {
-        crate::log!("qjs: async_fs service spawn failed\n");
-    }
+    } 
     tga::init_once();
     net::init();
 
@@ -173,42 +155,31 @@ pub extern "C" fn kmain() -> ! {
             Err(e) => crate::log!("dma_nic_fpga: init failed: {:?}\n", e),
         }
     }
-
-    // Spawn all Embassy tasks via the centralized v-layer spawn service.
-    if let Err(e) = spawner.spawn(crate::v::spawn_service::spawn_service_task(spawner),
-    ) {
-        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
-    }
-
-    let bsp_lapic_id = percpu::this_cpu().lapic_id();
-    for cpu in resp.cpus() {
-        if cpu.lapic_id as u32 == bsp_lapic_id {
-            continue;
-        }
-        cpu.goto_address.write(cpu::ap_start);
-    }
-
-    crate::log!("main: entering executor loop\n");
-
-    _loop(executor, spawner)
+    _loop(executor, spawner, smp_resp)
 }
 
-fn _loop(executor: &'static Executor, _spawner: Spawner) -> ! {
+fn _loop(executor: &'static Executor, _spawner: Spawner, resp: &'static ::limine::response::MpResponse) -> ! {
+    resp.cpus()
+        .iter()
+        .filter(|c| c.lapic_id as u32 != percpu::this_cpu().lapic_id())
+        .for_each(|c| c.goto_address.write(cpu::ap_start));
+   
+    if let Err(e) = _spawner.spawn(crate::v::spawn_service::spawn_service_task(_spawner)) {
+        crate::log!("spawn-svc: spawn failed: {:?}\n", e);
+    }
+   
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000 == 0 {
             time::poll();
             unsafe { executor.poll() };
         }
-
-        if counter % 500_000 == 0 {
+        if counter % 250_000 == 0 {
             vga::cube::tick();
         }
-
         if counter % 10_000_000 == 0 {
             globalog::debugcon_write_byte_raw(b'0');
         }
-
         counter = counter.wrapping_add(1);
         power::idle_hint();
     }

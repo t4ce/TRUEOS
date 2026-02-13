@@ -302,25 +302,6 @@ pub fn dealloc(ptr: *mut u8, size: usize) {
     }
 }
 
-pub fn alloc_test_once() {
-    if !ensure_ready() {
-        return;
-    }
-
-    let Some((p1, v1)) = alloc(4096, 4096) else {
-        crate::log!("dma: alloc test (4K) failed\n");
-        return;
-    };
-
-    let Some((p2, v2)) = alloc(256, 64) else {
-        crate::log!("dma: alloc test (256B) failed\n");
-        return;
-    };
-
-    crate::log!("dma: alloc1 phys=0x{:X} virt=0x{:X}\n", p1, v1 as usize);
-    crate::log!("dma: alloc2 phys=0x{:X} virt=0x{:X}\n", p2, v2 as usize);
-}
-
 fn init_pools() {
     if DMA_POOL_LOW_SIZE > 0 {
         let low_phys = crate::phys::alloc_phys_range(

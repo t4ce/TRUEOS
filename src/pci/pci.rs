@@ -182,10 +182,6 @@ fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32)
 }
 
 fn enumerate_impl(log: bool) {
-    if log {
-        crate::log!("pci: enumerate\n");
-    }
-
     let mut new_devices: Vec<PciDevice, MAX_PCI_DEVICES> = Vec::new();
 
     for bus in 0u8..=255 {
@@ -249,14 +245,10 @@ fn enumerate_impl(log: bool) {
     }
 
     *DEVICES.lock() = new_devices;
-
-    if log {
-        crate::log!("pci: done\n");
-    }
 }
 
 pub fn enumerate_once() {
-    enumerate_impl(true)
+    enumerate_impl(false)
 }
 
 pub fn enumerate_silent() {
@@ -319,53 +311,6 @@ fn write_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
         outl(CFG_ADDR, addr);
         outl(CFG_DATA, value);
     }
-}
-
-fn record_device(
-    bus: u8,
-    slot: u8,
-    function: u8,
-    vendor: u16,
-    device: u16,
-    class: u8,
-    subclass: u8,
-    prog_if: u8,
-) {
-    push_device(PciDevice {
-        bus,
-        slot,
-        function,
-        vendor,
-        device,
-        class,
-        subclass,
-        prog_if,
-    });
-}
-
-fn push_device(dev: PciDevice) {
-    let mut lock = DEVICES.lock();
-    if lock.push(dev).is_err() {
-        crate::log!("pci device list full (>{})\n", MAX_PCI_DEVICES);
-    }
-}
-
-pub fn log_devices_once() {
-    with_devices(|list| {
-        for dev in list {
-            crate::log!(
-                "pci {:02X}:{:02X}.{} vid={:04X} did={:04X} class={:02X}:{:02X}:{:02X}\n",
-                dev.bus,
-                dev.slot,
-                dev.function,
-                dev.vendor,
-                dev.device,
-                dev.class,
-                dev.subclass,
-                dev.prog_if
-            );
-        }
-    });
 }
 
 pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
