@@ -158,7 +158,7 @@ async fn fetch_devdesc_header_mps0(
     desc_virt: *mut u8,
     fallback_mps0: u16,
 ) -> u8 {
-    if let Ok((_cc, hdr_xfer)) = control::control_in(
+    if let Ok((_, hdr_xfer)) = control::control_in(
         ctx,
         ep0_ring,
         slot_id,
@@ -207,7 +207,7 @@ async fn fetch_cfg_total_len(
     cfg_virt: *mut u8,
 ) -> u16 {
     let mut cfg_total_len: u16 = 0;
-    if let Ok((_cc, hdr_xfer)) = control::control_in(
+    if let Ok((_, hdr_xfer)) = control::control_in(
         ctx,
         ep0_ring,
         slot_id,

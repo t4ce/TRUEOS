@@ -623,10 +623,6 @@ pub(crate) fn help(io: &dyn ShellIo) {
     io.write_str("qjs -m -e <module javascript>\r\n");
     io.write_str("qjs -p <expr>\r\n");
     io.write_str("qjs --repl\r\n");
-    io.write_str("qjs: notes\r\n");
-    io.write_str("- auto-detects modules (import/export/import.meta) unless forced\r\n");
-    io.write_str("- drains the QuickJS job queue (Promises) after eval\r\n");
-    io.write_str("- does not print `=> ...` by default; use -p or print()\r\n");
     io.write_str("qjs: examples\r\n");
     io.write_str("qjs print(1+2)\r\n");
     io.write_str("qjs -m -e import leftPad from 'left-pad@1.3.0'; print(leftPad('a',3,'.'));\r\n");

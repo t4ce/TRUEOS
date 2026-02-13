@@ -1,11 +1,14 @@
+#[allow(unused_imports)]
 use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use crate::{percpu, runtime, globalog, exceptions};
 use ::limine::mp::Cpu as LimineCpu;
 use alloc::boxed::Box;
+#[allow(unused_imports)]
 use alloc::vec::Vec;
 use embassy_executor::raw::Executor;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+#[allow(unused_imports)]
 use spin::Once;
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;

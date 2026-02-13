@@ -1,8 +1,10 @@
 
 use crate::shell::{ShellIo, CommandAction, ShellBackend};
 
-use embassy_executor::task;
+// use embassy_executor::task;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
+use trueos_v::vnet as api;
+use crate::v::net::VNet;
 
 enum AcpiAction {
     Reset,
@@ -145,42 +147,6 @@ pub(crate) fn cmd_idle(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'
         prev.as_str(),
         policy.as_str()
     ));
-    CommandAction::None
-}
-
-pub(crate) fn cmd_pstate(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let ratio = args.and_then(|a| a.get_u64(0));
-
-    if ratio.is_none() {
-        let cur = crate::power::current_ratio();
-        let armed = crate::power::msr_armed();
-        let details = crate::power::msr_details().copied();
-
-        match (cur, armed, details) {
-            (Some(cur), true, Some(d)) => ctx.io.write_fmt(format_args!(
-                "pstate: current={} min={} max={}\r\n",
-                cur,
-                d.min_ratio.unwrap_or(0),
-                d.max_ratio.unwrap_or(0)
-            )),
-            (_, false, _) => ctx.io.write_str("pstate: msr disarmed\r\n"),
-            (_, true, None) => ctx.io.write_str("pstate: msr details not probed\r\n"),
-            _ => ctx.io.write_str("pstate: unsupported\r\n"),
-        }
-        return CommandAction::None;
-    }
-
-    let req_u64 = ratio.unwrap();
-    let Ok(req) = u8::try_from(req_u64) else {
-        ctx.io.write_str("pstate: usage pstate <ratio>\r\n");
-        return CommandAction::None;
-    };
-
-    match crate::power::set_pstate_ratio(req) {
-        Ok(applied) => ctx.io.write_fmt(format_args!("pstate: applied {}\r\n", applied)),
-        Err(err) => ctx.io.write_fmt(format_args!("pstate: failed: {}\r\n", err)),
-    }
-
     CommandAction::None
 }
 
@@ -580,14 +546,74 @@ pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
 }
 
 pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let target = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    if target.is_empty() {
+    let target_str = args.and_then(|a| a.get_str(0)).unwrap_or("");
+    if target_str.is_empty() {
         ctx.io.write_str("net.icmp: usage net.icmp <host>\r\n");
         return CommandAction::None;
     }
+    
+    let mut target: heapless::String<128> = heapless::String::new();
+    if target.push_str(target_str).is_err() {
+        ctx.io.write_str("net.icmp: target too long\r\n");
+        return CommandAction::None;
+    }
 
-    ctx.io.write_fmt(format_args!("net.icmp: ping {}\r\n", target));
-    ctx.io.write_str("net.icmp: ping functionality removed\r\n");
+    // Use global serial backend for async task output since we block anyway
+    let io_static: &'static dyn ShellBackend = &crate::shell::backends::UART1_COM1_BACKEND;
+
+    crate::wait::spawn_and_wait_local(async move {
+        // DNS
+        let ip = match crate::v::net::dns::resolve_ipv4_primary(target.as_str(), crate::v::net::dns::DnsConfig::default()).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                io_static.write_fmt(format_args!("net.icmp: resolve failed {:?}\r\n", e));
+                return;
+            }
+        };
+
+        io_static.write_fmt(format_args!(
+            "PING {} ({}.{}.{}.{}): 56 data bytes\r\n",
+            target.as_str(), ip[0], ip[1], ip[2], ip[3]
+        ));
+
+        let Some(vnet) = VNet::open_primary() else {
+             io_static.write_str("net.icmp: no network device\r\n");
+             return;
+        };
+
+        let mut seq = 1u16;
+        for _ in 0..4 {
+             let payload = [0u8; 56];
+             if vnet.submit(api::Command::IcmpEcho { target: ip, seq, data: api::ByteBuf::from_slice_trunc(&payload) }).is_err() {
+                 io_static.write_str("net.icmp: send failed\r\n");
+             }
+
+             // Wait for reply
+             let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(2);
+             let mut got = false;
+             while embassy_time::Instant::now() < deadline {
+                 if let Some(ev) = vnet.pop_event() {
+                     if let api::Event::IcmpReply { from, seq: rseq, rtt_ms, .. } = ev {
+                         if from == ip && rseq == seq {
+                             io_static.write_fmt(format_args!(
+                                "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n", 
+                                from[0], from[1], from[2], from[3], seq, rtt_ms
+                            ));
+                             got = true;
+                             break;
+                         }
+                     }
+                 }
+                 embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
+             }
+             if !got {
+                 io_static.write_fmt(format_args!("net.icmp: request seq={} timeout\r\n", seq));
+             }
+
+             seq += 1;
+             embassy_time::Timer::after(embassy_time::Duration::from_millis(1000)).await;
+        }
+    });
 
     CommandAction::None
 }
