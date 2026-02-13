@@ -31,7 +31,7 @@ QEMU_ISO_FLAGS = -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(I
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	-device vfio-pci,host=0000:06:00.0 \
+	-device vfio-pci,host=0000:06:00.0,rombar=1 \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \

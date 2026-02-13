@@ -7,6 +7,8 @@ pub trait NetDevice {
     fn poll_rx(&mut self);
     /// Pop a single received frame, if available.
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
+    /// Return the number of pending RX frames.
+    fn rx_queue_len(&self) -> usize { 0 }
     /// Transmit a raw Ethernet frame.
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
 }

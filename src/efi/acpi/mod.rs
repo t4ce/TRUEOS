@@ -39,20 +39,10 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     count += 1;
                     let table_len =
                         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(header.length)) };
-
-                    // SSDTs can be very numerous and noisy; summarize them here and let
-                    // `ssdt::log_once()` print richer details later.
                     if header.signature.as_str() == "SSDT" {
                         ssdt_count += 1;
                         continue;
                     }
-
-                    crate::log!(
-                        "ACPI TABLE {} @0x{:X} len=0x{:X}\n",
-                        header.signature.as_str(),
-                        phys,
-                        table_len
-                    );
                 }
                 if ssdt_count != 0 {
                     crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);

@@ -1,15 +1,7 @@
-#[allow(unused_imports)]
-use crate::x2apic::{detect_x2apic_topology, X2ApicTopology};
 use crate::{percpu, runtime, globalog, exceptions};
 use ::limine::mp::Cpu as LimineCpu;
-use alloc::boxed::Box;
-#[allow(unused_imports)]
-use alloc::vec::Vec;
-use embassy_executor::raw::Executor;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
-#[allow(unused_imports)]
-use spin::Once;
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
 
@@ -18,10 +10,7 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
     let slot = percpu::slot_for_lapic_id(cpu.lapic_id as u32);
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
-    let ex = Box::leak(Box::new(Executor::new(core::ptr::null_mut())));
-    unsafe {
-        (&mut *percpu::this_cpu_ptr()).set_executor_ptr(ex as *mut Executor);
-    }
+    let ex = percpu::init_executor();
     let spawner = ex.spawner();
     if percpu::this_cpu().cpu_index() == 1 {
         runtime::register_first_ap_spawner(spawner);

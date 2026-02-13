@@ -20,9 +20,9 @@ use crate::net::r8168::R8168Adapter;
 use crate::net::vio::VirtioNetAdapter;
 use crate::net::e1000::E1000Adapter;
 
-const RX_DESC_COUNT: usize = 64;
+const RX_DESC_COUNT: usize = 256;
 const RX_BUF_SIZE: usize = 2048;
-const POLL_BUDGET: usize = 256;
+const POLL_BUDGET: usize = 512;
 const ENABLE_R8125: bool = false;
 
 enum ActiveDevice {
@@ -57,6 +57,15 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::E1000(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
             ActiveDevice::R8168(dev) => dev.pop_rx(),
+        }
+    }
+
+    fn rx_queue_len(&self) -> usize {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.rx_queue_len(),
+            ActiveDevice::E1000(dev) => dev.rx_queue_len(),
+            ActiveDevice::R8125(dev) => dev.rx_queue_len(),
+            ActiveDevice::R8168(dev) => dev.rx_queue_len(),
         }
     }
 
@@ -183,6 +192,10 @@ pub fn poll_at(index: usize) {
 
 pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
     with_device_at(index, |dev| dev.pop_rx()).flatten()
+}
+
+pub fn rx_pending_at(index: usize) -> usize {
+    with_device_at(index, |dev| dev.rx_queue_len()).unwrap_or(0)
 }
 
 pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
