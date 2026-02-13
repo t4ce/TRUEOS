@@ -1390,6 +1390,62 @@ pub async fn read_file_at_record<D: BlockIo>(
     Ok(Some(out))
 }
 
+/// Validate an entry at `entry_lba` and return its file record if it matches `expected_name`.
+pub async fn get_file_record_at<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+    expected_name: &str,
+) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+
+    if entry_lba < params.data_lba {
+        return Ok(None);
+    }
+    let end_lba = disk_data_end_lba_exclusive(dev, params);
+    if entry_lba >= end_lba {
+        return Ok(None);
+    }
+
+    let hdr_block = read_one_block(dev, entry_lba).await?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed || hdr.kind != LogKind::Put {
+        return Ok(None);
+    }
+
+    let name_len = hdr.name_len as usize;
+    if name_len == 0 || name_len > 4096 {
+        return Ok(None);
+    }
+    if expected_name.as_bytes().len() != name_len {
+        return Ok(None);
+    }
+    
+    // Verify name matches.
+    let name_lba = entry_lba.saturating_add(1);
+    let mut name_bytes = vec![0u8; name_len];
+    read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
+    if name_bytes != expected_name.as_bytes() {
+        return Ok(None);
+    }
+
+    let name_blocks = (name_len + (bs - 1)) / bs;
+    let data_lba = entry_lba
+        .saturating_add(1)
+        .saturating_add(name_blocks as u64);
+
+    Ok(Some(FileRecordRef {
+        entry_lba,
+        data_lba,
+        data_len: hdr.data_len,
+    }))
+}
+
 pub async fn read_file_range<D: BlockIo>(
     dev: &D,
     params: &FsParams,

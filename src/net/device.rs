@@ -4,7 +4,8 @@ pub trait NetDevice {
     /// Return the hardware MAC address or zeros if unavailable.
     fn mac(&self) -> [u8; 6];
     /// Poll receive path (e.g., acknowledge interrupts, service rings).
-    fn poll_rx(&mut self);
+    /// Returns true if any packet was received/processed.
+    fn poll_rx(&mut self) -> bool;
     /// Pop a single received frame, if available.
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
     /// Return the number of pending RX frames.

@@ -42,7 +42,7 @@ impl NetDevice for ActiveDevice {
         }
     }
 
-    fn poll_rx(&mut self) {
+    fn poll_rx(&mut self) -> bool {
         match self {
             ActiveDevice::Virtio(dev) => dev.poll_rx(),
             ActiveDevice::E1000(dev) => dev.poll_rx(),
@@ -186,8 +186,8 @@ pub fn init() {
     crate::log!("net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n");
 }
 
-pub fn poll_at(index: usize) {
-    let _ = with_device_at(index, |dev| dev.poll_rx());
+pub fn poll_at(index: usize) -> bool {
+    with_device_at(index, |dev| dev.poll_rx()).unwrap_or(false)
 }
 
 pub fn pop_rx_packet_at(index: usize) -> Option<alloc::vec::Vec<u8>> {
