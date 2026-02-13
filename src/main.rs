@@ -138,7 +138,7 @@ pub extern "C" fn kmain() -> ! {
     
     let resp = limine::smp_response().unwrap();
     
-    percpu::set_total_slots(resp.cpus().len() + 1);
+    percpu::set_total_slots(resp.cpus().len());
 
     smp::init(percpu::total_slots());
     smp::mark_online();

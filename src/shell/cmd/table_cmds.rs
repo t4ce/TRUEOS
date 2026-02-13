@@ -3,7 +3,7 @@ use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::table::{Table, TableColumn};
 use alloc::string::{String, ToString};
 
-pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     ctx.io.write_str("tlb: available subcommands\r\n");
     ctx.io.write_str("  tlb.pci         - List PCI devices\r\n");
     ctx.io.write_str("  tlb.mem         - List memory map\r\n");
@@ -15,7 +15,7 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_dump_acpi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_dump_acpi(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     ctx.io.write_str("Dumping ACPI parsers info (check main logs for now):\r\n");
     // Since individual modules use static ONCE, they might not reprint.
     // However, we added force_log_all() to help.
@@ -50,7 +50,7 @@ pub(crate) fn cmd_tlb_dump_acpi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&Pa
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let mut len: usize = 0;
     crate::pci::with_devices(|list| {
         len = list.len();
@@ -63,12 +63,10 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
     let _ = crate::pci::pciids::load_sanitized_from_root_blocking();
 
     let cols = [
-        TableColumn { header: "Address", width: 10 },
-        TableColumn { header: "Vendor", width: 6 },
-        TableColumn { header: "Device", width: 6 },
-        TableColumn { header: "Class", width: 8 },
-        TableColumn { header: "Subsys", width: 11 },
         TableColumn { header: "Name", width: 40 },
+        TableColumn { header: "Address", width: 10 },
+        TableColumn { header: "VID", width: 6 },
+        TableColumn { header: "PID", width: 6 },
     ];
     let t = Table::new(&cols);
     t.print_header(ctx.io);
@@ -78,10 +76,6 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
             let addr = alloc::format!("{:02X}:{:02X}.{}", dev.bus, dev.slot, dev.function);
             let vid = alloc::format!("{:04X}", dev.vendor);
             let did = alloc::format!("{:04X}", dev.device);
-            let subsys_vid = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2C);
-            let subsys_did = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2E);
-            let subsys = alloc::format!("{:04X}:{:04X}", subsys_vid, subsys_did);
-            let cls = alloc::format!("{:02X}/{:02X}/{:02X}", dev.class, dev.subclass, dev.prog_if);
             
             let name = if let Some(db) = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten() {
                  if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(&db, dev.vendor, dev.device) {
@@ -95,14 +89,14 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
                 String::new()
             };
 
-            t.print_row(ctx.io, &[addr, vid, did, cls, subsys, name]);
+            t.print_row(ctx.io, &[name, addr, vid, did]);
         }
     });
 
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_mem(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_mem(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let memmap = crate::limine::memmap_entries().unwrap_or(&[]);
     if memmap.is_empty() {
         ctx.io.write_str("tlb.mem: no memory map available\r\n");
@@ -127,7 +121,7 @@ pub(crate) fn cmd_tlb_mem(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_cpu(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_cpu(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     if !crate::smp::is_init() {
         ctx.io.write_str("tlb.cpu: smp not initialized\r\n");
         return CommandAction::None;
@@ -171,7 +165,7 @@ pub(crate) fn cmd_tlb_cpu(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_acpi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_acpi(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
      let tables = crate::efi::acpi::ensure_tables();
      if tables.is_none() {
          ctx.io.write_str("tlb.acpi: no tables found\r\n");
@@ -206,7 +200,7 @@ pub(crate) fn cmd_tlb_acpi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedA
      CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_uefi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_uefi(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let st = crate::efi::system_table();
     if st.is_none() {
         ctx.io.write_str("tlb.uefi: system table not found (not booted via UEFI?)\r\n");
@@ -259,7 +253,7 @@ pub(crate) fn cmd_tlb_uefi(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedA
     CommandAction::None
 }
 
-pub(crate) fn cmd_tlb_x2apic(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_x2apic(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let topo = crate::x2apic::detect_x2apic_topology();
     
     ctx.io.write_fmt(format_args!(

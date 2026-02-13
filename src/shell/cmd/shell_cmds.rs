@@ -3,7 +3,7 @@ use core::fmt::Write;
 use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 
-pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
     crate::shell::cmd::registry::list_command_names(&mut cmds);
     cmds.as_mut_slice().sort_unstable();
@@ -27,7 +27,12 @@ pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         }
         
         ctx.io.write_str("[");
-        ctx.io.write_fmt(format_args!("{}", crate::ecma48::color(name, light_green)));
+        let color = if name.eq_ignore_ascii_case("install") || name.eq_ignore_ascii_case("update") {
+             (255, 55, 255)
+        } else {
+             light_green
+        };
+        ctx.io.write_fmt(format_args!("{}", crate::ecma48::color(name, color)));
         ctx.io.write_str("] ");
         
         col_count += len;
@@ -74,15 +79,15 @@ pub(crate) fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs
     let arg = args
         .and_then(|a| a.get_str(0))
         .unwrap_or("");
-    crate::shell::ecma48::handle_ecma48(ctx.io, arg);
+    crate::shell::ecma48::handle_ecma48(ctx.io, arg, *ctx.term_cols);
     CommandAction::None
 }
 
-pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     CommandAction::EnterGo
 }
 
-pub(crate) fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     crate::vga::draw_mandelbrot();
     ctx.io.write_str("mandel ok\r\n");
     CommandAction::None
@@ -117,11 +122,11 @@ pub(crate) fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::None
 }
 
-pub(crate) fn cmd_cube(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_cube(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     CommandAction::EnterCube
 }
 
-pub(crate) fn cmd_ico(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_ico(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     CommandAction::EnterIco
 }
 
@@ -142,7 +147,7 @@ pub(crate) fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::EnterTxtEdt { filename, slot_id }
 }
 
-pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let cols = (*ctx.term_cols).max(1);
     ctx.io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
 
