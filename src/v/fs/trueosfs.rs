@@ -1239,6 +1239,11 @@ fn is_transient_io(e: block::Error) -> bool {
     matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io)
 }
 
+#[inline]
+fn is_nvme_handle(handle: block::DeviceHandle) -> bool {
+    handle.info().kind == block::DeviceKind::Nvme
+}
+
 // NOTE: the synchronous `locate` helper was removed.
 // Use `locate_async`.
 
@@ -1270,7 +1275,18 @@ async fn read_blocks_aligned_retry_async(
         }
         i = i.wrapping_add(1);
     }
-    Err(last.unwrap_or(block::Error::Io))
+    let err = last.unwrap_or(block::Error::Io);
+    if is_nvme_handle(handle) {
+        crate::log!(
+            "trueosfs: read-retry failed dev={} lba={} blocks={} attempts={} err={:?}\n",
+            handle.id(),
+            lba,
+            blocks,
+            attempts,
+            err
+        );
+    }
+    Err(err)
 }
 
 /// Find where TRUEOSFS lives on a whole disk.
@@ -1312,14 +1328,35 @@ pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFs
                 Err(e) if is_transient_io(e) => {
                     Timer::after(EmbassyDuration::from_millis(10)).await;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    if is_nvme_handle(handle) {
+                        crate::log!(
+                            "trueosfs: locate stage=read_gpt_partitions dev={} err={:?}\n",
+                            handle.id(),
+                            e
+                        );
+                    }
+                    return Err(e);
+                }
             }
             tries = tries.wrapping_add(1);
         }
     }
 
     // Fallback: superblock at LBA0 (data-only images/disks).
-    let bs0 = read_blocks_aligned_retry_async(handle, 0, 1, 3).await?;
+    let bs0 = match read_blocks_aligned_retry_async(handle, 0, 1, 3).await {
+        Ok(v) => v,
+        Err(e) => {
+            if is_nvme_handle(handle) {
+                crate::log!(
+                    "trueosfs: locate stage=read_lba0_super dev={} err={:?}\n",
+                    handle.id(),
+                    e
+                );
+            }
+            return Err(e);
+        }
+    };
     if looks_like_trueos_superblock(&bs0) {
         return Ok(Some(TrueosFsPlacement {
             bootable: false,

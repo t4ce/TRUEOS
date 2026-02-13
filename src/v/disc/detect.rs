@@ -76,7 +76,17 @@ pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscSt
     // Read MBR/boot sector.
     let bs0 = match handle.read_blocks(0, 1).await {
         Ok(v) => v,
-        Err(e) => return (DiscStatus::Unknown, Some(e)),
+        Err(e) => {
+            if handle.info().kind == block::DeviceKind::Nvme {
+                crate::log!(
+                    "disc-detect: dev={} stage=read_lba0 kind={:?} err={:?}\n",
+                    handle.id(),
+                    handle.info().kind,
+                    e
+                );
+            }
+            return (DiscStatus::Unknown, Some(e));
+        }
     };
 
     // Quick signature checks for common formats.
@@ -104,7 +114,17 @@ pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscSt
     match crate::v::fs::trueosfs::locate_async(handle).await {
         Ok(Some(loc)) => return (DiscStatus::Trueos { bootable: loc.bootable }, None),
         Ok(None) => {}
-        Err(e) => return (DiscStatus::Unknown, Some(e)),
+        Err(e) => {
+            if handle.info().kind == block::DeviceKind::Nvme {
+                crate::log!(
+                    "disc-detect: dev={} stage=trueosfs_locate kind={:?} err={:?}\n",
+                    handle.id(),
+                    handle.info().kind,
+                    e
+                );
+            }
+            return (DiscStatus::Unknown, Some(e));
+        }
     };
 
     // MBR-style FAT probe (superfloppy or partitioned) using the existing layout heuristic.
@@ -133,6 +153,14 @@ pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscSt
         }
         Err(e) => {
             // If everything else failed and even this probe errors, surface it.
+            if handle.info().kind == block::DeviceKind::Nvme {
+                crate::log!(
+                    "disc-detect: dev={} stage=read_ext_probe kind={:?} err={:?}\n",
+                    handle.id(),
+                    handle.info().kind,
+                    e
+                );
+            }
             return (DiscStatus::Unknown, Some(e));
         }
     }
