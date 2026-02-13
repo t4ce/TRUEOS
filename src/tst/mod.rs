@@ -3,6 +3,7 @@ pub mod http_trueosfs;
 pub mod nalgebra_demo;
 pub mod smoke_fs;
 pub mod tls_demo;
+pub mod ws_smoke;
 
 use embassy_executor::task;
 

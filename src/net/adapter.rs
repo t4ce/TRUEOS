@@ -428,22 +428,35 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     }
 }
 
-struct AdapterDeviceAt {
+struct AdapterDeviceAt<'a> {
     index: usize,
+    rx_buffer: &'a mut VecDeque<Vec<u8>>,
+    tx_buffer: &'a mut VecDeque<Vec<u8>>,
 }
 
-impl Device for AdapterDeviceAt {
-    type RxToken<'a>
+impl<'a> Device for AdapterDeviceAt<'a> {
+    type RxToken<'b>
         = AdapterRxToken
     where
-        Self: 'a;
-    type TxToken<'a>
-        = AdapterTxTokenAt
+        Self: 'b;
+    type TxToken<'b>
+        = AdapterTxTokenAt<'b>
     where
-        Self: 'a;
+        Self: 'b;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        crate::net::pop_rx_packet_at(self.index).map(|packet| {
+        let packet = if let Some(p) = self.rx_buffer.pop_front() {
+             p
+        } else {
+             let packets = crate::net::drain_rx_packets_at(self.index, 128);
+             if packets.is_empty() {
+                 return None;
+             }
+             self.rx_buffer.extend(packets);
+             self.rx_buffer.pop_front()?
+        };
+        
+        Some(packet).map(|packet| {
             #[cfg(feature = "dma_nic_fpga")]
             crate::net::dma_fpga_stream_on_rx_packet(&packet);
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
@@ -647,13 +660,16 @@ impl Device for AdapterDeviceAt {
             }
             (
                 AdapterRxToken { buffer: packet },
-                AdapterTxTokenAt { index: self.index },
+                AdapterTxTokenAt { index: self.index, tx_buffer: self.tx_buffer },
             )
         })
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(AdapterTxTokenAt { index: self.index })
+        Some(AdapterTxTokenAt {
+            index: self.index,
+            tx_buffer: self.tx_buffer,
+        })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -692,11 +708,12 @@ impl RxToken for AdapterRxToken {
     }
 }
 
-struct AdapterTxTokenAt {
+struct AdapterTxTokenAt<'a> {
     index: usize,
+    tx_buffer: &'a mut VecDeque<Vec<u8>>,
 }
 
-impl TxToken for AdapterTxTokenAt {
+impl<'a> TxToken for AdapterTxTokenAt<'a> {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
@@ -898,30 +915,10 @@ impl TxToken for AdapterTxTokenAt {
                 crate::log!("net: tx-tap dev={} len={} (short)\n", self.index, buf.len());
             }
         }
-        if crate::net::transmit_packet_at(self.index, &buf[..]).is_err() {
-            let dropped = NET_TX_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-            let _ = NET_TX_DROPPED_AT
-                .get(self.index)
-                .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1);
-
-            // DHCP is low-rate but time-sensitive; if we drop it, say so.
-            if NET_LOG_DHCP_VERBOSE && is_dhcp_client_udp(&buf[..]) {
-                crate::log!(
-                    "net: dhcp-tx-drop dev={} dropped_total={} len={}\n",
-                    self.index,
-                    dropped,
-                    buf.len()
-                );
-            }
-            if (dropped & NET_FRAME_LOG_MASK) == 0 {
-                log!(
-                    "net: tx busy (drop) frames={} dropped={} last_len={}\n",
-                    new_total,
-                    dropped,
-                    len
-                );
-            }
-        } else if (new_total & NET_FRAME_LOG_MASK) == 0 {
+        
+        self.tx_buffer.push_back(buf);
+        
+        if (new_total & NET_FRAME_LOG_MASK) == 0 {
             log!(
                 "net: tx frames={} dropped={}\n",
                 new_total,
@@ -954,6 +951,8 @@ struct NetService {
     device_index: usize,
     iface: Interface,
     sockets: SocketSet<'static>,
+    rx_buffer: VecDeque<Vec<u8>>,
+    tx_buffer: VecDeque<Vec<u8>>,
     records: Vec<SocketRecord>,
     next_handle: AtomicU32,
     icmp: SocketHandle,
@@ -982,7 +981,14 @@ impl NetService {
 
         let mut cfg = IfaceConfig::new(hw_addr);
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
-        let mut device = AdapterDeviceAt { index: device_index };
+        
+        let mut rx_buffer = VecDeque::new();
+        let mut tx_buffer = VecDeque::new();
+        let mut device = AdapterDeviceAt {
+            index: device_index,
+            rx_buffer: &mut rx_buffer,
+            tx_buffer: &mut tx_buffer,
+        };
         let mut iface = Interface::new(cfg, &mut device, now());
         // Bring-up default: install static IPv4 before DHCP starts.
         let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface);
@@ -1021,6 +1027,8 @@ impl NetService {
             device_index,
             iface,
             sockets,
+            rx_buffer,
+            tx_buffer,
             records: Vec::new(),
             next_handle: AtomicU32::new(1),
             icmp,
@@ -1503,35 +1511,51 @@ impl NetService {
 
     fn tick(&mut self) -> bool {
         let timestamp = now();
-        let mut device = AdapterDeviceAt {
-            index: self.device_index,
-        };
-        
-        // Always poll at least once
-        let _ = self.iface.poll(timestamp, &mut device, &mut self.sockets);
-        
         let mut work_done = false;
-        
-        // Drain packets with a higher limit.
-        // If we hit the limit, we return true to hint "call me again immediately".
-        let limit = 128; 
-        let mut count = 0;
-        loop {
-            if count >= limit {
-                work_done = true;
-                break;
-            }
-            if crate::net::rx_pending_at(self.device_index) == 0 {
-                break;
-            }
-            match self.iface.poll(timestamp, &mut device, &mut self.sockets) {
-                PollResult::None => {
-                    count += 1;
-                }
-                _ => {
+
+        {
+            let device_index = self.device_index;
+            let NetService {
+                ref mut iface,
+                ref mut rx_buffer,
+                ref mut tx_buffer,
+                ref mut sockets,
+                ..
+            } = self;
+
+            let mut device = AdapterDeviceAt {
+                index: device_index,
+                rx_buffer,
+                tx_buffer,
+            };
+            
+            // Always poll at least once
+            let _ = iface.poll(timestamp, &mut device, sockets);
+            
+            // Drain packets with a higher limit.
+            // If we hit the limit, we return true to hint "call me again immediately".
+            let limit = 128; 
+            let mut count = 0;
+            loop {
+                if count >= limit {
                     work_done = true;
-                    count += 1;
+                    break;
                 }
+                if device.rx_buffer.is_empty() && crate::net::rx_pending_at(device_index) == 0 {
+                    break;
+                }
+                match iface.poll(timestamp, &mut device, sockets) {
+                    PollResult::None => {}
+                    _ => {
+                        work_done = true;
+                        count += 1;
+                    }
+                }
+            }
+            
+            // Flush buffered TX packets
+            if !self.tx_buffer.is_empty() {
+                crate::net::transmit_batch_at(device_index, self.tx_buffer.drain(..));
             }
         }
         

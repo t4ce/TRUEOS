@@ -8,6 +8,20 @@ pub trait NetDevice {
     fn poll_rx(&mut self) -> bool;
     /// Pop a single received frame, if available.
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
+
+    /// Drain multiple received frames, up to `limit`.
+    fn drain_rx(&mut self, limit: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::with_capacity(limit.min(64));
+        for _ in 0..limit {
+            if let Some(pkt) = self.pop_rx() {
+                out.push(pkt);
+            } else {
+                break;
+            }
+        }
+        out
+    }
+
     /// Return the number of pending RX frames.
     fn rx_queue_len(&self) -> usize { 0 }
     /// Transmit a raw Ethernet frame.

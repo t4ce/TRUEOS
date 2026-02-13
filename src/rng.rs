@@ -86,7 +86,7 @@ pub fn init() -> bool {
     ensure_csprng()
 }
 
-/// Fill `dest` with cryptographically-strong random bytes.
+/// Fill  with cryptographically-strong random bytes.
 ///
 /// Backed by a kernel CSPRNG (ChaCha20) seeded from RDSEED/RDRAND.
 #[cfg(target_arch = "x86_64")]
@@ -102,47 +102,15 @@ pub fn fill_bytes(dest: &mut [u8]) -> bool {
     true
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
 fn trueos_getrandom(dest: &mut [u8]) -> Result<(), getrandom::Error> {
     if fill_bytes(dest) {
         Ok(())
     } else {
-        Err(getrandom::Error::new_custom(1))
-    }
-}
-
-// getrandom 0.2 compatibility: some transitive crypto deps still pull `getrandom v0.2.x`
-// via `rand_core v0.6`. For our freestanding target we register the same kernel RNG.
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-fn trueos_getrandom_v02(dest: &mut [u8]) -> Result<(), getrandom02::Error> {
-    if fill_bytes(dest) {
-        Ok(())
-    } else {
-        let code = core::num::NonZeroU32::new(getrandom02::Error::CUSTOM_START + 1).unwrap();
-        Err(getrandom02::Error::from(code))
+        let code = core::num::NonZeroU32::new(getrandom::Error::CUSTOM_START + 1).unwrap();
+        Err(getrandom::Error::from(code))
     }
 }
 
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
-getrandom02::register_custom_getrandom!(trueos_getrandom_v02);
-
-// getrandom 0.3 custom backend hook.
-// Enabled via: `--cfg getrandom_backend="custom"` (set in .cargo/config.toml for target_os=none).
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-#[no_mangle]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
-    if len == 0 {
-        return Ok(());
-    }
-    if dest.is_null() {
-        return Err(getrandom::Error::new_custom(1));
-    }
-
-    // getrandom may pass uninitialized memory.
-    core::ptr::write_bytes(dest, 0, len);
-    let buf = core::slice::from_raw_parts_mut(dest, len);
-    trueos_getrandom(buf)
-}
+getrandom::register_custom_getrandom!(trueos_getrandom);

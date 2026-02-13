@@ -181,7 +181,7 @@ fn ecam_write_u32(bus: u8, slot: u8, function: u8, aligned_off: u16, value: u32)
     Some(())
 }
 
-fn enumerate_impl(log: bool) {
+pub fn enumerate_impl() {
     let mut new_devices: Vec<PciDevice, MAX_PCI_DEVICES> = Vec::new();
 
     for bus in 0u8..=255 {
@@ -247,13 +247,6 @@ fn enumerate_impl(log: bool) {
     *DEVICES.lock() = new_devices;
 }
 
-pub fn enumerate_once() {
-    enumerate_impl(false)
-}
-
-pub fn enumerate_silent() {
-    enumerate_impl(false)
-}
 
 fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     CFG_ENABLE

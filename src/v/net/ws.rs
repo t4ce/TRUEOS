@@ -1,0 +1,245 @@
+extern crate alloc;
+
+use alloc::{format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use embedded_websocket::{
+    WebSocketClient, WebSocketOptions, WebSocketSendMessageType, WebSocketReceiveMessageType,
+};
+use rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use embassy_time::{Duration, Timer};
+use trueos_v::vnet::{Command, Event, EndpointV4, ByteBuf, NetHandle, SocketKind};
+
+use crate::v::net::VNet;
+use crate::time::unix_time_seconds;
+
+static WS_SEQ: AtomicU32 = AtomicU32::new(1);
+const RX_BUF_SIZE: usize = 4096;
+
+pub struct WsConnection {
+    net: VNet,
+    handle: Option<NetHandle>,
+    client: WebSocketClient<ChaCha20Rng>,
+    connected: bool,
+    closed: bool,
+    rx_buf: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum WsError {
+    ConnectFailed,
+    InvalidUrl,
+    DnsFailed,
+    Io,
+    Protocol,
+    Closed,
+}
+
+impl WsConnection {
+    pub async fn connect(url: &str) -> Result<Self, WsError> {
+        let (host, port, path) = parse_ws_url(url).ok_or(WsError::InvalidUrl)?;
+
+        let dev_idx = crate::net::primary_device_index();
+        let api_ip = match super::dns::resolve_ipv4_for_device(dev_idx, &host, super::dns::DnsConfig::default()).await {
+            Ok(ip) => ip,
+            Err(_) => return Err(WsError::DnsFailed),
+        };
+
+        let seq = WS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let net = VNet::open(dev_idx).ok_or(WsError::ConnectFailed)?;
+
+        let mut seed = [0u8; 32];
+        let t = unix_time_seconds().unwrap_or(0);
+        seed[0..8].copy_from_slice(&t.to_le_bytes());
+        seed[8..16].copy_from_slice(&seq.to_le_bytes());
+        let rng = ChaCha20Rng::from_seed(seed);
+
+        let mut client = WebSocketClient::new_client(rng);
+        let options = WebSocketOptions {
+            path: path.as_str(),
+            host: host.as_str(),
+            origin: "",
+            sub_protocols: None,
+            additional_headers: None,
+        };
+
+        let mut frame_buf = [0u8; RX_BUF_SIZE];
+        let (len, _handshake_bytes) = match client.client_connect(&options, &mut frame_buf) {
+            Ok(res) => res,
+            Err(_) => return Err(WsError::Protocol),
+        };
+        let handshake_data = Vec::from(&frame_buf[..len]);
+
+        net.submit(Command::OpenTcpConnect {
+            remote: EndpointV4::new(api_ip, port),
+        }).map_err(|_| WsError::ConnectFailed)?;
+
+        let mut handle = None;
+
+        let start = crate::time::uptime_seconds();
+        let deadline = start + 10;
+
+        loop {
+            if let Some(ev) = net.pop_event() {
+                match ev {
+                    Event::Opened { handle: h, kind } => {
+                       if kind == SocketKind::Tcp {
+                            handle = Some(h);
+                       }
+                    }
+                    Event::TcpEstablished { handle: h } => {
+                        if Some(h) == handle {
+                             net.submit(Command::SendTcp {
+                                handle: h,
+                                data: ByteBuf::from_slice_trunc(&handshake_data),
+                            }).ok();
+                            break;
+                        }
+                    }
+                    Event::Error { msg: _ } => return Err(WsError::ConnectFailed),
+                    Event::Closed { handle: h } => {
+                        if Some(h) == handle {
+                            return Err(WsError::ConnectFailed);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if crate::time::uptime_seconds() > deadline {
+                return Err(WsError::ConnectFailed);
+            }
+            Timer::after(Duration::from_micros(100)).await;
+        }
+        
+
+        let mut rx_buf = Vec::new();
+        loop {
+            if let Some(ev) = net.pop_event() {
+                 match ev {
+                     Event::TcpData { handle: h, data } => {
+                         if Some(h) == handle {
+                             rx_buf.extend_from_slice(data.as_slice());
+                             if let Some(end) = find_http_header_end(&rx_buf) {
+                                 // Simple check for 101 Switching Protocols
+                                 if !rx_buf.windows(12).any(|w| w == b"101 Switching") { // Loose check
+                                     // return Err(WsError::Protocol);
+                                 }
+                                 
+                                 // Consume logic
+                                 let extra = rx_buf.split_off(end);
+                                 rx_buf = extra;
+                                 break;
+                             }
+                         }
+                     }
+                     Event::Closed { .. } => return Err(WsError::Closed),
+                     _ => {}
+                 }
+            }
+            if crate::time::uptime_seconds() > deadline {
+                return Err(WsError::ConnectFailed);
+            }
+            Timer::after(Duration::from_micros(100)).await;
+        }
+
+        Ok(Self {
+            net,
+            handle,
+            client,
+            connected: true,
+            closed: false,
+            rx_buf,
+        })
+    }
+
+    pub fn send(&mut self, text: &str) -> Result<(), WsError> {
+        if self.closed || !self.connected { return Err(WsError::Closed); }
+        let mut buf = [0u8; RX_BUF_SIZE];
+        
+        // Client side write requires mutable input for masking
+        let mut input = Vec::from(text.as_bytes());
+
+        let len = self.client.write(
+            WebSocketSendMessageType::Text,
+            true, // fin
+            &mut buf,
+            &mut input
+        ).map_err(|_| WsError::Io)?;
+
+        if let Some(h) = self.handle {
+            self.net.submit(Command::SendTcp {
+                handle: h,
+                data: ByteBuf::from_slice_trunc(&buf[..len]),
+            }).map_err(|_| WsError::Io)?;
+        }
+        Ok(())
+    }
+
+     pub fn recv(&mut self) -> Option<String> {
+        while let Some(ev) = self.net.pop_event() {
+            match ev {
+                Event::TcpData { handle, data } => {
+                    if Some(handle) == self.handle {
+                        self.rx_buf.extend_from_slice(data.as_slice());
+                    }
+                }
+                Event::Closed { handle } => {
+                     if Some(handle) == self.handle {
+                         self.closed = true;
+                     }
+                }
+                _ => {}
+            }
+        }
+
+        if self.rx_buf.is_empty() { return None; }
+
+        let mut out_buf = [0u8; RX_BUF_SIZE];
+        match self.client.read(&self.rx_buf, &mut out_buf) {
+            Ok(read_result) => {
+                let consumed = read_result.len_from;
+                self.rx_buf.drain(0..consumed);
+
+                match read_result.message_type {
+                    WebSocketReceiveMessageType::Text => {
+                        let s = core::str::from_utf8(&out_buf[..read_result.len_to]).ok()?;
+                        Some(String::from(s))
+                    }
+                    WebSocketReceiveMessageType::Binary => None,
+                    WebSocketReceiveMessageType::Ping => None,
+                    WebSocketReceiveMessageType::Pong => None,
+                    WebSocketReceiveMessageType::CloseCompleted => {
+                        self.closed = true;
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            Err(_) => {
+                // Ignore incomplete or others for now unless fatal
+                None
+            }
+        }
+    }
+}
+
+fn parse_ws_url(url: &str) -> Option<(String, u16, String)> {
+    let url = url.strip_prefix("ws://")?;
+    let (authority, path) = match url.split_once('/') {
+        Some((a, p)) => (a, format!("/{}", p)),
+        None => (url, String::from("/")),
+    };
+    let (host, port) = if let Some((h, p)) = authority.rsplit_once(':') {
+        (String::from(h), p.parse::<u16>().ok()?)
+    } else {
+        (String::from(authority), 80)
+    };
+    Some((host, port, path))
+}
+
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+}

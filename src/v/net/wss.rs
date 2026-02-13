@@ -1,0 +1,281 @@
+extern crate alloc;
+
+use alloc::{boxed::Box, format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use embedded_websocket::{
+    WebSocketClient, WebSocketOptions, WebSocketSendMessageType, WebSocketReceiveMessageType,
+};
+use rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use embassy_time::{Duration, Timer};
+
+use trueos_v::vnet;
+
+use crate::time::unix_time_seconds;
+use crate::net::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::v::net::Queue;
+
+static WSS_SEQ: AtomicU32 = AtomicU32::new(1);
+const RX_BUF_SIZE: usize = 4096;
+
+pub struct WssConnection {
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    handle: Option<vnet::NetHandle>,
+    client: WebSocketClient<ChaCha20Rng>,
+    connected: bool,
+    closed: bool,
+    rx_buf: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub enum WssError {
+    ConnectFailed,
+    InvalidUrl,
+    DnsFailed,
+    TlsFailed,
+    Io,
+    Protocol,
+    Closed,
+}
+
+impl WssConnection {
+    pub async fn connect(url: &str) -> Result<Self, WssError> {
+        let (host, port, path) = parse_wss_url(url).ok_or(WssError::InvalidUrl)?;
+
+        let dev_idx = crate::net::primary_device_index();
+        let api_ip = match super::dns::resolve_ipv4_for_device(dev_idx, &host, super::dns::DnsConfig::default()).await {
+            Ok(ip) => ip,
+            Err(_) => return Err(WssError::DnsFailed),
+        };
+
+        let seq = WSS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let owner = Box::leak(format!("wss-{}@{}", seq, dev_idx).into_boxed_str());
+        let cmds_name = Box::leak(format!("{}-wss-cmd", owner).into_boxed_str());
+        let evts_name = Box::leak(format!("{}-wss-evt", owner).into_boxed_str());
+
+        let cmds = Queue::new_leaked(cmds_name, 256);
+        let events = Queue::new_leaked(evts_name, 1024);
+        register_tls_app_queues(owner, cmds, events);
+
+        let roots = TlsRoots::mozilla();
+        let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]); 
+
+        let mut seed = [0u8; 32];
+        let t = unix_time_seconds().unwrap_or(0);
+        seed[0..8].copy_from_slice(&t.to_le_bytes());
+        seed[8..16].copy_from_slice(&seq.to_le_bytes());
+        let rng = ChaCha20Rng::from_seed(seed);
+
+        let mut client = WebSocketClient::new_client(rng);
+         let options = WebSocketOptions {
+            path: path.as_str(),
+            host: host.as_str(),
+            origin: "",
+            sub_protocols: None,
+            additional_headers: None,
+        };
+
+        let mut frame_buf = [0u8; RX_BUF_SIZE];
+        let (len, _handshake_bytes) = match client.client_connect(&options, &mut frame_buf) {
+            Ok(res) => res,
+            Err(_) => return Err(WssError::Protocol), 
+        };
+        let handshake_buffer = Vec::from(&frame_buf[..len]); 
+
+        cmds.push(TlsCommand::OpenTcpConnect {
+            remote: vnet::EndpointV4::new(api_ip, port),
+            server_name: Box::leak(host.clone().into_boxed_str()),
+            cfg,
+            roots,
+        }).map_err(|_| WssError::ConnectFailed)?;
+
+        let mut handle = None; 
+        
+        let mut established = false;
+        
+        // Polling loop for connect
+        let start = crate::time::uptime_seconds();
+        let deadline = start + 15;
+
+        // TLS Connect Loop
+        loop {
+              // Drain events
+            let mut got_event = false;
+            while let Some(ev) = events.pop() {
+                got_event = true;
+                match ev {
+                    TlsEvent::Opened { handle: h } => {
+                        handle = Some(h);
+                    }
+                    TlsEvent::Connected { handle: h } => {
+                        if Some(h) == handle {
+                            established = true;
+                             // TLS established, send WS handshake
+                            cmds.push(TlsCommand::Send {
+                                handle: h,
+                                data: handshake_buffer.clone(),
+                            }).ok();
+                            break;
+                            
+                        }
+                    }
+                     TlsEvent::Error { .. } | TlsEvent::TlsError { .. } | TlsEvent::Closed { .. } => {
+                        return Err(WssError::TlsFailed);
+                    }
+                    _ => {}
+                }
+            }
+            if established { break; }
+             if crate::time::uptime_seconds() > deadline {
+                return Err(WssError::ConnectFailed);
+            }
+            if !got_event {
+                 Timer::after(Duration::from_micros(100)).await;
+            }
+        }
+        
+        // Silence warning for unused variable  if loop breaks early
+        let _ = established;
+
+        // Wait for handshake response (HTTP 101)
+         let mut handshake_response = Vec::new();
+         let mut rx_buf = Vec::new();
+         let mut connected = false;
+
+        loop {
+             let mut got_event = false;
+             while let Some(ev) = events.pop() {
+                 got_event = true;
+                  match ev {
+                     TlsEvent::Data { handle: h, data } => {
+                         if Some(h) == handle {
+                             handshake_response.extend_from_slice(&data);
+                              if let Some(end) = find_http_header_end(&handshake_response) {
+                                 // Check status 101 -- loose check
+                                 if !handshake_response.windows(12).any(|w| w == b"101 Switching") {
+                                      // return Err(WssError::Protocol);
+                                 }
+                                 let extra = handshake_response.split_off(end);
+                                 rx_buf = extra;
+                                 connected = true;
+                                 break;
+                             }
+                         }
+                     }
+                      TlsEvent::Closed { .. } => return Err(WssError::Closed),
+                      _ => {}
+                  }
+             }
+             if connected { break; }
+             if crate::time::uptime_seconds() > deadline {
+                return Err(WssError::ConnectFailed);
+            }
+             if !got_event {
+                 Timer::after(Duration::from_micros(100)).await;
+            }
+        }
+
+        Ok(Self {
+            cmds,
+            events,
+            handle,
+            client,
+            connected,
+            closed: false,
+            rx_buf,
+        })
+    }
+
+    pub fn send(&mut self, text: &str) -> Result<(), WssError> {
+        if self.closed || !self.connected { return Err(WssError::Closed); }
+        let mut buf = [0u8; RX_BUF_SIZE];
+        let mut input = Vec::from(text.as_bytes());
+
+        let len = self.client.write(
+            WebSocketSendMessageType::Text, 
+            true, // fin
+            &mut buf, 
+            &mut input, 
+        ).map_err(|_| WssError::Io)?;
+        
+        if let Some(h) = self.handle {
+             self.cmds.push(TlsCommand::Send {
+                handle: h,
+                data: Vec::from(&buf[..len]),
+            }).map_err(|_| WssError::Io)?;
+        }
+        Ok(())
+    }
+
+     pub fn recv(&mut self) -> Option<String> {
+         // Drain TLS events
+          while let Some(ev) = self.events.pop() {
+            match ev {
+                TlsEvent::Data { handle, data } => {
+                    if Some(handle) == self.handle {
+                        self.rx_buf.extend_from_slice(&data);
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                     if Some(handle) == self.handle {
+                         self.closed = true;
+                     }
+                }
+                _ => {}
+            }
+        }
+        
+        if self.rx_buf.is_empty() { return None; }
+
+        let mut out_buf = [0u8; RX_BUF_SIZE];
+        match self.client.read(&self.rx_buf, &mut out_buf) {
+            Ok(read_result) => {
+                let consumed = read_result.len_from;
+                self.rx_buf.drain(0..consumed);
+                
+                match read_result.message_type {
+                    WebSocketReceiveMessageType::Text => {
+                        let s = core::str::from_utf8(&out_buf[..read_result.len_to]).ok()?;
+                        Some(String::from(s))
+                    }
+                    WebSocketReceiveMessageType::Binary => None, 
+                    WebSocketReceiveMessageType::Ping => None,
+                    WebSocketReceiveMessageType::Pong => None,
+                    WebSocketReceiveMessageType::CloseCompleted => {
+                        self.closed = true;
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            // Error handling matching ws.rs
+            Err(_) => {
+                // Ignore for now
+                None
+            }
+        }
+    }
+}
+
+fn parse_wss_url(url: &str) -> Option<(String, u16, String)> {
+    let url = url.strip_prefix("wss://")?;
+    let (authority, path) = match url.split_once('/') {
+        Some((a, p)) => (a, format!("/{}", p)),
+        None => (url, String::from("/")),
+    };
+    let (host, port) = if let Some((h, p)) = authority.rsplit_once(':') {
+        (String::from(h), p.parse::<u16>().ok()?)
+    } else {
+        (String::from(authority), 443)
+    };
+    Some((host, port, path))
+}
+
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+}

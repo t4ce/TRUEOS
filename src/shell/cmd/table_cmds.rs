@@ -56,7 +56,7 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'
         len = list.len();
     });
     if len == 0 {
-        crate::pci::enumerate_silent();
+        crate::pci::enumerate_impl();
     }
     
     // Best effort loading of strings
