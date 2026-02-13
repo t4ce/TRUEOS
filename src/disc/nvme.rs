@@ -721,7 +721,7 @@ impl NvmeController {
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
         let status_ok = cpl.status_code() == 0;
 
-        if let Some((_lp, lv, lb)) = prp_list {
+        if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
         }
 
@@ -904,7 +904,7 @@ impl NvmeController {
             }
         };
 
-        if let Some((_lp, lv, lb)) = prp_list {
+        if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
         }
 
@@ -964,7 +964,7 @@ impl NvmeController {
 
         let cpl = self.io_submit_and_wait_sync(sqe, cid, timeout_ms);
 
-        if let Some((_lp, lv, lb)) = prp_list {
+        if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
         }
 
@@ -997,7 +997,7 @@ impl NvmeController {
 
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, timeout_ms);
 
-        if let Some((_lp, lv, lb)) = prp_list {
+        if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
         }
 

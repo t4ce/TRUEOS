@@ -535,7 +535,6 @@ pub(crate) fn init_builtin_shell_commands() {
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
 
         static IDLE_ARGS: [ArgSpec; 1] = [ArgSpec::new("policy", ArgType::Str)];
-        static PSTATE_ARGS: [ArgSpec; 1] = [ArgSpec::new("ratio", ArgType::U8)];
         static TURBO_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("op", ArgType::Str),
             ArgSpec::new("spins", ArgType::Usize),
@@ -547,10 +546,6 @@ pub(crate) fn init_builtin_shell_commands() {
         ];
         static SECTION_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::U8)];
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
-        static MV_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("src", ArgType::Str).mandatory(),
-            ArgSpec::new("dst", ArgType::Str).mandatory(),
-        ];
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
@@ -574,7 +569,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench", &NO_ARGS, cmd::cmd_bench);
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
-        let _ = REGSHCMD("mv", &MV_ARGS, cmd::cmd_mv);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         // let _ = REGSHCMD("https", &HTTPS_ARGS, cmd::cmd_https);
@@ -594,7 +588,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
         let _ = REGSHCMD("set", &SET_ARGS, cmd::cmd_set);
         let _ = REGSHCMD("idle", &IDLE_ARGS, cmd::cmd_idle);
-        let _ = REGSHCMD("pstate", &PSTATE_ARGS, cmd::cmd_pstate);
         let _ = REGSHCMD("turbo", &TURBO_ARGS, cmd::cmd_turbo);
         let _ = REGSHCMD("smp", &SMP_ARGS, cmd::cmd_smp);
         let _ = REGSHCMD("cube", &[], cmd::cmd_cube);

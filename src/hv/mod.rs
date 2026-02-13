@@ -257,6 +257,24 @@ pub fn start(spawner: &Spawner, io: &'static dyn ShellBackend) -> Result<(), Sta
         || !caps.feature_control_locked
         || !caps.feature_control_vmx_outside_smx
     {
+        hvlogf(format_args!(
+            "hv: start failed: vendor={} msr={} vmx={} locked={} outside_smx={}",
+            caps.vendor_intel,
+            caps.has_msr,
+            caps.has_vmx,
+            caps.feature_control_locked,
+            caps.feature_control_vmx_outside_smx
+        ));
+        let r0 = __cpuid(0);
+        hvlogf(format_args!(
+            "hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}",
+            r0.ebx, r0.ecx, r0.edx
+        ));
+        let r1 = __cpuid(1);
+        hvlogf(format_args!(
+            "hv: cpuid1 ecx=0x{:X} edx=0x{:X}",
+            r1.ecx, r1.edx
+        ));
         return Err(StartError::VmxUnsupported);
     }
 

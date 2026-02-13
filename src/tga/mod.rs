@@ -317,10 +317,8 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     }
 
     let cmd_before = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
-    crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
-    let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
-    if cmd_before == 0xFFFF || cmd_after == 0xFFFF {
+    if cmd_before == 0xFFFF {
         return None;
     }
 
@@ -367,7 +365,14 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
     let mut bar_assigned_by_os = false;
 
-    if bar_phys == 0 {
+    // Sanity check: if BAR is uninitialized (0) or at a suspiciously high address
+    // (e.g. > 256 GiB), we force reassignment to our known-good 32-bit MMIO window.
+    //
+    // Context: we've observed the device reporting 0x3800_0000_0000 (approx 61 TiB).
+    // This exceeds the physical address width of many hosts (e.g. 39-bit = 512 GiB)
+    // and causes QEMU VFIO DMA map failures (error -22) when the guest enables
+    // the BAR.
+    if bar_phys == 0 || bar_phys >= 0x40_0000_0000 {
         bar_assigned_by_os = true;
         // Hotplug path: firmware may not have assigned BARs for devices appearing later.
         // Allocate a fixed 1 KiB window and program BAR0/BAR1.
@@ -409,6 +414,9 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         if bar_phys == 0 {
             return None;
         }
+    } else {
+        // If the BAR was already valid, ensure the device is enabled now.
+        crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
     }
 
     // We only need BAR0+0, so mapping 1 page keeps it minimal.

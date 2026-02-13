@@ -9,6 +9,7 @@ const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256;
 
+const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 
@@ -490,59 +491,75 @@ pub fn bar_size_bytes(bus: u8, slot: u8, function: u8, index: u8) -> Option<u64>
     if index >= 6 {
         return None;
     }
-    let off = 0x10u16 + (index as u16) * 4;
-    let orig_lo = config_read_u32(bus, slot, function, off);
-    if (orig_lo & 0x1) != 0 {
-        return None;
-    }
 
-    let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
-    if is_64 && index >= 5 {
-        return None;
-    }
-    let orig_hi = if is_64 {
-        config_read_u32(bus, slot, function, off + 4)
-    } else {
-        0
-    };
+    let cmd = config_read_u16(bus, slot, function, 0x04);
+    config_write_u16(
+        bus,
+        slot,
+        function,
+        0x04,
+        cmd & !(PCI_COMMAND_IO_SPACE | PCI_COMMAND_MEM_SPACE),
+    );
 
-    config_write_u32(bus, slot, function, off, 0xFFFF_FFF0);
-    if is_64 {
-        config_write_u32(bus, slot, function, off + 4, 0xFFFF_FFFF);
-    }
-
-    let mask_lo = config_read_u32(bus, slot, function, off);
-    let mask_hi = if is_64 {
-        config_read_u32(bus, slot, function, off + 4)
-    } else {
-        0
-    };
-
-    config_write_u32(bus, slot, function, off, orig_lo);
-    if is_64 {
-        config_write_u32(bus, slot, function, off + 4, orig_hi);
-    }
-
-    let mask = if is_64 {
-        ((mask_hi as u64) << 32) | mask_lo as u64
-    } else {
-        mask_lo as u64
-    };
-
-    if is_64 {
-        let size_mask = mask & !0xFu64;
-        if size_mask == 0 {
+    let result = (|| {
+        let off = 0x10u16 + (index as u16) * 4;
+        let orig_lo = config_read_u32(bus, slot, function, off);
+        if (orig_lo & 0x1) != 0 {
             return None;
         }
-        Some((!size_mask).wrapping_add(1))
-    } else {
-        // For 32-bit BARs, do the inversion in 32-bit space.
-        let size_mask = mask_lo & !0xFu32;
-        if size_mask == 0 {
+
+        let is_64 = ((orig_lo >> 1) & 0x3) == 0x2;
+        if is_64 && index >= 5 {
             return None;
         }
-        Some((!size_mask).wrapping_add(1) as u64)
-    }
+        let orig_hi = if is_64 {
+            config_read_u32(bus, slot, function, off + 4)
+        } else {
+            0
+        };
+
+        config_write_u32(bus, slot, function, off, 0xFFFF_FFF0);
+        if is_64 {
+            config_write_u32(bus, slot, function, off + 4, 0xFFFF_FFFF);
+        }
+
+        let mask_lo = config_read_u32(bus, slot, function, off);
+        let mask_hi = if is_64 {
+            config_read_u32(bus, slot, function, off + 4)
+        } else {
+            0
+        };
+
+        config_write_u32(bus, slot, function, off, orig_lo);
+        if is_64 {
+            config_write_u32(bus, slot, function, off + 4, orig_hi);
+        }
+
+        let mask = if is_64 {
+            ((mask_hi as u64) << 32) | mask_lo as u64
+        } else {
+            mask_lo as u64
+        };
+
+        if is_64 {
+            let size_mask = mask & !0xFu64;
+            if size_mask == 0 {
+                return None;
+            }
+            Some((!size_mask).wrapping_add(1))
+        } else {
+            // For 32-bit BARs, do the inversion in 32-bit space.
+            let size_mask = mask_lo & !0xFu32;
+            if size_mask == 0 {
+                return None;
+            }
+            Some((!size_mask).wrapping_add(1) as u64)
+        }
+    })();
+
+    config_write_u16(bus, slot, function, 0x04, cmd);
+
+    result
 }
 
 pub fn bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {

@@ -400,7 +400,7 @@ async fn fetch_first_langid(
     .await;
 
     let lang = match res {
-        Ok((_cc, transferred)) => unsafe {
+        Ok((_, transferred)) => unsafe {
             let n = (transferred as usize).min(256);
             let desc = core::slice::from_raw_parts(buf_virt, n);
             if desc.len() < 4 || desc[1] != 3 {
@@ -449,7 +449,7 @@ pub(crate) async fn fetch_string_ascii<const N: usize>(
     )
     .await;
 
-    if let Ok((_cc, transferred)) = res {
+    if let Ok((_, transferred)) = res {
         unsafe {
             let n = (transferred as usize).min(256);
             let desc = core::slice::from_raw_parts(buf_virt, n);
