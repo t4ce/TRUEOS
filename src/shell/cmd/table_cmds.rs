@@ -25,45 +25,10 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         t.print_row(ctx.io, &["tlb.acpi", "List ACPI tables"]);
         t.print_row(ctx.io, &["tlb.uefi", "List UEFI tables"]);
         t.print_row(ctx.io, &["tlb.x2apic", "List x2APIC topology"]);
-        t.print_row(ctx.io, &["tlb.dump_acpi", "Dump specific ACPI table parsers info"]);
+        t.print_row(ctx.io, &["tlb.dump", "Write all tables to trueos/pci/tlb.txt"]);
     }
     
     ctx.io.write_str("tlb: available subcommands\r\n");
-    CommandAction::None
-}
-
-pub(crate) fn cmd_tlb_dump_acpi(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    ctx.io.write_str("Dumping ACPI parsers info (check main logs for now):\r\n");
-    // Since individual modules use static ONCE, they might not reprint.
-    // However, we added force_log_all() to help.
-    // But individual modules like bgrt.rs use their own LOG_ONCE.
-    // We can't force them easily without editing every file.
-    // For now, we rely on the fact that if they ran at boot, they logged.
-    // If we want to see them again, we view logs.
-    // But user asked for table access.
-    // Let's print what we can easily access.
-    
-    if let Some(rect) = crate::efi::acpi::bgrt::last_logo_rect() {
-        ctx.io.write_str("BGRT: Last logo rect: ");
-        let s = alloc::format!("x={} y={} w={} h={}\r\n", rect.0, rect.1, rect.2, rect.3);
-        ctx.io.write_str(&s);
-    } else {
-        ctx.io.write_str("BGRT: No logo rect recorded.\r\n");
-    }
-
-    if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
-         ctx.io.write_str("HPET: Found\r\n");
-         // We can print hpet struct
-         let s = alloc::format!("{:#?}\r\n", hpet);
-         ctx.io.write_str(&s);
-    }
-
-    ctx.io.write_str("MADT Subtables:\r\n");
-    crate::efi::acpi::madt::walk_subtables(|entry| {
-        let s = alloc::format!("  {:?}\r\n", entry);
-        ctx.io.write_str(&s);
-    });
-
     CommandAction::None
 }
 
@@ -602,9 +567,178 @@ pub(crate) fn cmd_tlb_dump(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<
              let len = hdr.length;
              let _ = writeln!(out, "{:10}  0x{:016X}  0x{:X}", sig.as_str(), phys, len);
          }
+         writeln!(out).unwrap();
+
+         writeln!(out, "=== ACPI Detail ===").unwrap();
+         
+         // FADT/FACP
+         if let Some(fadt) = tables.find_table::<Fadt>() {
+            let fadt_ref = unsafe { fadt.virtual_start.as_ref() };
+            writeln!(out, "--- FACP (FADT) ---").unwrap();
+            writeln!(out, "Physical Address: 0x{:X}", fadt.physical_start).unwrap();
+            writeln!(out, "{:#?}", fadt_ref).unwrap();
+            writeln!(out).unwrap();
+         }
+
+         // MADT/APIC
+         if let Some(madt) = tables.find_table::<Madt>() {
+            writeln!(out, "--- APIC (MADT) ---").unwrap();
+            writeln!(out, "Physical Address: 0x{:X}", madt.physical_start).unwrap();
+            let madt_ref = unsafe { madt.virtual_start.as_ref() };
+             writeln!(out, "{:#?}", madt_ref).unwrap();
+             writeln!(out, "Subtables:").unwrap();
+             crate::efi::acpi::madt::walk_subtables(|entry| {
+                 let _ = writeln!(out, "  {:?}", entry);
+             });
+             writeln!(out).unwrap();
+         }
+
+         // HPET
+         if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
+              writeln!(out, "--- HPET ---").unwrap();
+              writeln!(out, "{:#?}", hpet).unwrap();
+              writeln!(out).unwrap();
+         }
+
+         // BGRT
+         if let Some(rect) = crate::efi::acpi::bgrt::last_logo_rect() {
+             writeln!(out, "--- BGRT ---").unwrap();
+             writeln!(out, "Logo Rect: x={} y={} w={} h={}", rect.0, rect.1, rect.2, rect.3).unwrap();
+             writeln!(out).unwrap();
+         }
+
+         // SSDT
+         let mut ssdt_count = 0;
+         for (phys, hdr) in tables.table_headers() {
+            if hdr.signature.as_str() == "SSDT" {
+                 ssdt_count += 1;
+                 writeln!(out, "--- SSDT #{} ---", ssdt_count).unwrap();
+                 writeln!(out, "Address: 0x{:08X}", phys).unwrap();
+                 writeln!(out, "Length: {} bytes", hdr.length).unwrap();
+                 writeln!(out, "Revision: {}", hdr.revision).unwrap();
+                 let oem = core::str::from_utf8(&hdr.oem_id).unwrap_or("      ");
+                 let tbl_id = core::str::from_utf8(&hdr.oem_table_id).unwrap_or("        ");
+                 writeln!(out, "OEM ID: {}", oem).unwrap();
+                 writeln!(out, "Table ID: {}", tbl_id).unwrap();
+                 writeln!(out).unwrap();
+            }
+         }
+
      } else {
         writeln!(out, "No tables found").unwrap();
      }
+    writeln!(out).unwrap();
+
+    // 5. UEFI
+    writeln!(out, "=== UEFI Tables ===").unwrap();
+    if let Some(st) = crate::efi::system_table() {
+        writeln!(out, "Signature: EFI SYSTEM TABLE").unwrap();
+        writeln!(out, "Revision: 0x{:08X}", st.hdr.revision).unwrap();
+        writeln!(out, "Runtime Services: 0x{:016X}", st.runtime_services as u64).unwrap();
+        writeln!(out, "Boot Services: 0x{:016X}", st.boot_services as u64).unwrap();
+        writeln!(out).unwrap();
+        
+        let entries = st.number_of_table_entries;
+        let cfg_addr = st.configuration_table as u64;
+        
+        writeln!(out, "{:6}  {:40}  {:24}  {:18}", "Index", "GUID", "Name", "Table Ptr").unwrap();
+        writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
+
+        if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) {
+             if let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries) {
+                 let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+                 for (i, entry) in slice.iter().enumerate() {
+                     let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
+                     let _ = writeln!(
+                        out, "{:6}  {}  {:24}  0x{:016X}", 
+                        i, entry.vendor_guid.fmt_canonical(), name, entry.vendor_table as u64
+                    );
+                 }
+             }
+        }
+    } else {
+        writeln!(out, "No UEFI system table found").unwrap();
+    }
+    writeln!(out).unwrap();
+
+    // 6. x2APIC
+    writeln!(out, "=== x2APIC Topology ===").unwrap();
+    let topo = crate::x2apic::detect_x2apic_topology();
+    writeln!(out, "Leaf=0x{:X} SMT_Bits={} Core_Bits={}", topo.leaf, topo.smt_bits, topo.core_bits).unwrap();
+    writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", "Slot", "APIC ID", "Pkg", "Core", "SMT").unwrap();
+    writeln!(out, "{:-<6}  {:-<10}  {:-<6}  {:-<6}  {:-<6}", "", "", "", "", "").unwrap();
+    
+    let count = crate::smp::cpu_count();
+    let slots = crate::percpu::cpu_slots();
+    for slot in 0..count {
+         let lapic_id = slots.iter().find(|s| s.slot == slot as u32)
+            .map(|s| s.lapic_id)
+            .unwrap_or(0xFFFFFFFF);
+            
+         if lapic_id == 0xFFFFFFFF {
+             let _ = writeln!(out, "{:6}  {:10}  {:6}  {:6}  {:6}", slot, "?", "?", "?", "?");
+             continue;
+         }
+         let (pkg, core, smt) = topo.decode(lapic_id);
+         let _ = writeln!(out, "{:6}  0x{:<8X}  {:<6}  {:<6}  {:<6}", slot, lapic_id, pkg, core, smt);
+    }
+    writeln!(out).unwrap();
+
+    // 7. USB
+    writeln!(out, "=== USB Devices ===").unwrap();
+    let ctrls = crate::usb::xhci::xhc_list();
+    if ctrls.is_empty() {
+        writeln!(out, "No XHCI controllers found").unwrap();
+    } else {
+        writeln!(out, "{:4}  {:4}  {:10}  {:8}  {:12}  {:11}  {:16}", 
+            "Ctrl", "Port", "State", "Speed", "Device", "VID:PID", "Raw Status").unwrap();
+        writeln!(out, "{:-<4}  {:-<4}  {:-<10}  {:-<8}  {:-<12}  {:-<11}  {:-<16}", 
+            "", "", "", "", "", "", "").unwrap();
+        
+        for info in ctrls.iter() {
+            let ports = crate::usb::inspect_ports(info.controller_id);
+            for p in ports.iter() {
+                 let state_str = if p.connected {
+                     if p.enabled { "Active" } else { "Connected" }
+                 } else {
+                     "Empty"
+                 };
+                 let speed = if p.connected { p.speed } else { "-" };
+                 let device = p.device_kind.unwrap_or(if p.connected { "Unknown" } else { "-" });
+                 let vidpid = if let (Some(v), Some(pid)) = (p.vid, p.pid) {
+                     alloc::format!("{:04X}:{:04X}", v, pid)
+                 } else {
+                     "-".into()
+                 };
+                 
+                 let _ = writeln!(out, "{:<4}  {:<4}  {:<10}  {:<8}  {:<12}  {:<11}  0x{:08X}", 
+                     info.controller_id, p.port_id, state_str, speed, device, vidpid, p.status);
+            }
+        }
+    }
+    writeln!(out).unwrap();
+
+    // 8. Network
+    writeln!(out, "=== Network Interfaces ===").unwrap();
+    let net_count = crate::net::device_count();
+    if net_count == 0 {
+        writeln!(out, "No network interfaces found").unwrap();
+    } else {
+         writeln!(out, "{:4}  {:20}  {:17}  {:10}", "Idx", "Name", "MAC Address", "Primary").unwrap();
+         writeln!(out, "{:-<4}  {:-<20}  {:-<17}  {:-<10}", "", "", "", "").unwrap();
+         
+         let primary = crate::net::primary_device_index();
+         for i in 0..net_count {
+             let name = crate::net::device_name_at(i).unwrap_or("Unknown");
+             let mac = if let Some(m) = crate::net::mac_address_at(i) {
+                 alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", m[0], m[1], m[2], m[3], m[4], m[5])
+             } else {
+                 "??:??:??:??:??:??".into()
+             };
+             let is_prim = if i == primary { "*" } else { "" };
+             let _ = writeln!(out, "{:<4}  {:<20}  {:<17}  {:<10}", i, name, mac, is_prim);
+         }
+    }
     writeln!(out).unwrap();
 
     // Write file

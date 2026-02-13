@@ -462,7 +462,14 @@ pub(crate) async fn print_trueosfs_mount_table(io: &dyn ShellIo) {
         .into_iter()
         .filter(|h| h.parent().is_none())
     {
-        let _ = crate::v::fs::trueosfs::mount_root_async(disk).await;
+        // HARDENING: Ignore disks that are unresponsive or not TRUEOSFS.
+        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(disk).await;
+        if err.is_some() {
+            continue;
+        }
+        if let crate::v::disc::detect::DiscStatus::Trueos { .. } = status {
+            let _ = crate::v::fs::trueosfs::mount_root_async(disk).await;
+        }
     }
 
     let roots = crate::v::fs::trueosfs::list_roots();

@@ -1,0 +1,153 @@
+cargo +nightly build  -Z build-std=core,compiler_builtins,alloc --target 86_64.json
+   Compiling TRUEOS v0.0.1 (/home/t4ce/Repos/TRUEOS)
+error[E0425]: cannot find value `cmd_tlb_dump_acpi` in module `cmd`
+   --> src/shell/cmd/registry.rs:593:58
+    |
+593 | ...mp_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
+    |                             ^^^^^^^^^^^^^^^^^
+    |
+   ::: src/shell/cmd/table_cmds.rs:160:1
+    |
+160 | pub(crate) fn cmd_tlb_acpi(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+    | ------------------------------------------------------------------------------------------------------ similarly named function `cmd_tlb_acpi` defined here
+    |
+help: a function with a similar name exists
+    |
+593 -         let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
+593 +         let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_acpi);
+    |
+
+warning: unused import: `DhcpOption`
+  --> src/net/adapter.rs:12:5
+   |
+12 |     DhcpOption, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpE...
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `ScoutedPort`
+  --> src/usb/mod.rs:22:51
+   |
+22 | pub use scout::{usb_scout_service, inspect_ports, ScoutedPort};
+   |                                                   ^^^^^^^^^^^
+
+warning: unused variable: `params`
+    --> src/v/fs/trueosfs.rs:1018:9
+     |
+1018 |     let params = trueos_fs::FsParams {
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_params`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `io`
+    --> src/v/fs/trueosfs.rs:1023:9
+     |
+1023 |     let io = KernelBlockIo::new(disk);
+     |         ^^ help: if this is intentional, prefix it with an underscore: `_io`
+
+warning: variable does not need to be mutable
+   --> src/v/leds.rs:315:13
+    |
+315 |         let mut last_sent_rgb: Option<Rgb8> = None;
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `last_sent_rgb`
+   --> src/v/leds.rs:315:13
+    |
+315 |         let mut last_sent_rgb: Option<Rgb8> = None;
+    |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_last_sent_rgb`
+
+warning: unused variable: `cpl`
+    --> src/disc/nvme.rs:1130:32
+     |
+1130 | ...                   Ok(cpl) => {
+     |                          ^^^ help: if this is intentional, prefix it with an underscore: `_cpl`
+
+warning: unused variable: `name_owned`
+  --> src/net/adapter.rs:69:13
+   |
+69 |         let name_owned = alloc::string::String::from(name);
+   |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_name_owned`
+
+warning: unused variable: `socket`
+  --> src/net/adapter.rs:71:17
+   |
+71 |             let socket = svc.sockets.get_mut::<dhcpv4::Socket>(svc.dhcp);
+   |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_socket`
+
+warning: variable does not need to be mutable
+    --> src/net/adapter.rs:1052:13
+     |
+1052 |         let mut dhcp_socket = dhcpv4::Socket::new();
+     |             ----^^^^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: unused variable: `opts2`
+   --> src/net/r8125.rs:455:17
+    |
+455 |             let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::a...
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_opts2`
+
+warning: unused variable: `ethertype`
+   --> src/net/r8125.rs:482:26
+    |
+482 |                     let (ethertype, ip_proto, udp_src, udp_dst) = if pe...
+    |                          ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ethertype`
+
+warning: unused variable: `ip_proto`
+   --> src/net/r8125.rs:482:37
+    |
+482 | ...       let (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= ...
+    |                           ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ip_proto`
+
+warning: unused variable: `udp_src`
+   --> src/net/r8125.rs:482:47
+    |
+482 | ...et (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
+    |                             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_udp_src`
+
+warning: unused variable: `udp_dst`
+   --> src/net/r8125.rs:482:56
+    |
+482 | ...type, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
+    |                             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_udp_dst`
+
+warning: unused variable: `dev`
+  --> src/net/mod.rs:92:28
+   |
+92 |     with_device_at(index, |dev| {
+   |                            ^^^ help: if this is intentional, prefix it with an underscore: `_dev`
+
+error[E0793]: reference to field of packed struct is unaligned
+   --> src/shell/cmd/table_cmds.rs:617:52
+    |
+617 |                  writeln!(out, "Length: {} bytes", hdr.length).unwrap();
+    |                                                    ^^^^^^^^^^
+    |
+    = note: this struct is 1-byte aligned, but the type of this field may require higher alignment
+    = note: creating a misaligned reference is undefined behavior (even if that reference is never dereferenced)
+    = help: copy the field contents to a local variable, or replace the reference with a raw pointer and use `read_unaligned`/`write_unaligned` (loads and stores via `*p` must be properly aligned even when using raw pointers)
+    = note: this error originates in the macro `$crate::format_args_nl` which comes from the expansion of the macro `writeln` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused variable: `phys`
+  --> src/efi/acpi/mod.rs:38:22
+   |
+38 |                 for (phys, header) in tables.table_headers() {
+   |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_phys`
+
+warning: unused variable: `table_len`
+  --> src/efi/acpi/mod.rs:40:25
+   |
+40 |                     let table_len =
+   |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_table_len`
+
+Some errors have detailed explanations: E0425, E0793.
+For more information about an error, try `rustc --explain E0425`.
+warning: `TRUEOS` (bin "TRUEOS") generated 18 warnings
+error: could not compile `TRUEOS` (bin "TRUEOS") due to 2 previous errors; 18 warnings emitted
+make: *** [Makefile:61: kernel] Fehler 101

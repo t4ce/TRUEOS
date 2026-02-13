@@ -54,7 +54,9 @@ fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
 
 #[inline]
 fn is_transient_io(e: block::Error) -> bool {
-    matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io)
+    // Timeout is handled by the driver (re-try). If it propagates here,
+    // the device is likely unresponsive.
+    matches!(e, block::Error::NotReady | block::Error::Io)
 }
 
 async fn read_blocks_aligned_retry_async(
@@ -163,140 +165,6 @@ pub(crate) async fn bsp_smoke_test_once_async() {
             continue;
         }
 
-        // Always log GPT partition layout best-effort so smoke output shows what
-        // the disk actually presents in this boot.
-        match partition::read_gpt_partitions(h).await {
-            Ok(parts) => {
-                if !parts.is_empty() {
-                    crate::log!(
-                        "trueosfs-smoke: gpt: dev={} partitions={}\n",
-                        h.id(),
-                        parts.len()
-                    );
-                    for p in parts.iter() {
-                        let is_esp = p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES;
-                        crate::log!(
-                            "trueosfs-smoke: gpt: dev={} first_lba={} last_lba={} esp={} type={:?}\n",
-                            h.id(),
-                            p.range.first_lba(),
-                            p.range.last_lba(),
-                            is_esp,
-                            p.type_guid
-                        );
-                    }
-                }
-            }
-            Err(e) if !is_transient_io(e) => {
-                crate::log!(
-                    "trueosfs-smoke: gpt: read partitions failed dev={} err={:?}\n",
-                    h.id(),
-                    e
-                );
-            }
-            Err(_) => {}
-        }
-
-        // Debug convenience: if we see a GPT disk with an ESP (FAT) and a *blank* data partition,
-        // auto-format TRUEOSFS into that partition so smoke testing works on fresh images.
-        //
-        // Safety properties:
-        // - Only in debug builds.
-        // - Only if the target partition's first LBA reads as all-zero.
-        // - Only if the whole disk is writable.
-        #[cfg(debug_assertions)]
-        if trueos_disk.is_none() {
-            for h in block::device_handles().into_iter() {
-                if h.parent().is_some() {
-                    continue;
-                }
-                if !h.supports_write() {
-                    continue;
-                }
-
-                let parts = match partition::read_gpt_partitions(h).await {
-                    Ok(p) => p,
-                    Err(e) => {
-                        if is_transient_io(e) {
-                            continue;
-                        }
-                        crate::log!(
-                            "trueosfs-smoke: gpt: read partitions failed dev={} err={:?}\n",
-                            h.id(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-                if parts.is_empty() {
-                    continue;
-                }
-
-                let mut candidate_super_lba: Option<u64> = None;
-                for p in parts.iter() {
-                    // Skip ESP.
-                    if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
-                        continue;
-                    }
-                    let p0 = match read_blocks_aligned_retry_async(h, p.range.first_lba(), 1, 3).await {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    if p0.iter().all(|&b| b == 0) {
-                        candidate_super_lba = Some(p.range.first_lba());
-                        break;
-                    }
-                }
-
-                let Some(super_lba) = candidate_super_lba else {
-                    continue;
-                };
-
-                crate::log!(
-                    "trueosfs-smoke: debug: gpt blank data partition dev={} super_lba={} -> formatting TRUEOSFS\n",
-                    h.id(),
-                    super_lba
-                );
-                match crate::v::fs::trueosfs::format_blank_at_async(h, super_lba).await {
-                    Ok(()) => {
-                        crate::log!(
-                            "trueosfs-smoke: debug: format ok dev={} super_lba={} -> mount_root_async\n",
-                            h.id(),
-                            super_lba
-                        );
-                    }
-                    Err(e) => {
-                        crate::log!(
-                            "trueosfs-smoke: debug: format failed dev={} super_lba={} err={:?}\n",
-                            h.id(),
-                            super_lba,
-                            e
-                        );
-                        continue;
-                    }
-                }
-
-                match crate::v::fs::trueosfs::mount_root_async(h).await {
-                    Ok(Some(_)) => {
-                        trueos_disk = Some(h);
-                        break;
-                    }
-                    Ok(None) => {
-                        crate::log!(
-                            "trueosfs-smoke: debug: mount_root_async returned None after format dev={}\n",
-                            h.id()
-                        );
-                    }
-                    Err(e) => {
-                        crate::log!(
-                            "trueosfs-smoke: debug: mount_root_async failed after format dev={} err={:?}\n",
-                            h.id(),
-                            e
-                        );
-                    }
-                }
-            }
-        }
-
         // Disks can briefly report transient I/O errors right after bring-up.
         // Retry a handful of times so BSP logs reflect the steady state.
         let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
@@ -318,18 +186,118 @@ pub(crate) async fn bsp_smoke_test_once_async() {
 
         let (status, err) = last;
         if let Some(e) = err {
+            // HARDENING: If the disk cannot even be detected (IO error/timeout), skip everything.
+            // This prevents unresponsive hardware (e.g. hung NVMe) from stalling checks.
             crate::log!(
-                "trueosfs-smoke: disc-detect: dev={} => {} (err={:?})\n",
+                "trueosfs-smoke: disc-detect: ignoring unresponsive dev={} err={:?}\n",
                 h.id(),
-                status.short(),
                 e
             );
+            continue;
         } else {
             crate::log!(
                 "trueosfs-smoke: disc-detect: dev={} => {}\n",
                 h.id(),
                 status.short()
             );
+        }
+
+        // Always log GPT partition layout best-effort so smoke output shows what
+        // the disk actually presents in this boot.
+        let partitions = match partition::read_gpt_partitions(h).await {
+            Ok(parts) => {
+                if !parts.is_empty() {
+                    crate::log!(
+                        "trueosfs-smoke: gpt: dev={} partitions={}\n",
+                        h.id(),
+                        parts.len()
+                    );
+                    for p in parts.iter() {
+                        let is_esp = p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES;
+                        crate::log!(
+                            "trueosfs-smoke: gpt: dev={} first_lba={} last_lba={} esp={} type={:?}\n",
+                            h.id(),
+                            p.range.first_lba(),
+                            p.range.last_lba(),
+                            is_esp,
+                            p.type_guid
+                        );
+                    }
+                }
+                Some(parts)
+            }
+            Err(e) => {
+                if !is_transient_io(e) {
+                    crate::log!(
+                        "trueosfs-smoke: gpt: read partitions failed dev={} err={:?}\n",
+                        h.id(),
+                        e
+                    );
+                }
+                None
+            }
+        };
+
+        // Debug convenience: if we see a GPT disk with an ESP (FAT) and a *blank* data partition,
+        // auto-format TRUEOSFS into that partition so smoke testing works on fresh images.
+        //
+        // Safety properties:
+        // - Only in debug builds.
+        // - Only if the target partition's first LBA reads as all-zero.
+        // - Only if the whole disk is writable.
+        #[cfg(debug_assertions)]
+        if trueos_disk.is_none() && h.supports_write() {
+            if let Some(parts) = &partitions {
+                if !parts.is_empty() {
+                    let mut candidate_super_lba: Option<u64> = None;
+                    for p in parts.iter() {
+                        // Skip ESP.
+                        if p.type_guid.as_bytes() == &GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES {
+                            continue;
+                        }
+                        let p0 = match read_blocks_aligned_retry_async(h, p.range.first_lba(), 1, 3).await {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if p0.iter().all(|&b| b == 0) {
+                            candidate_super_lba = Some(p.range.first_lba());
+                            break;
+                        }
+                    }
+
+                    if let Some(super_lba) = candidate_super_lba {
+                        crate::log!(
+                            "trueosfs-smoke: debug: gpt blank data partition dev={} super_lba={} -> formatting TRUEOSFS\n",
+                            h.id(),
+                            super_lba
+                        );
+                        match crate::v::fs::trueosfs::format_blank_at_async(h, super_lba).await {
+                            Ok(()) => {
+                                crate::log!(
+                                    "trueosfs-smoke: debug: format ok dev={} super_lba={} -> mount_root_async\n",
+                                    h.id(),
+                                    super_lba
+                                );
+                                match crate::v::fs::trueosfs::mount_root_async(h).await {
+                                    Ok(Some(_)) => {
+                                        trueos_disk = Some(h);
+                                    }
+                                    Ok(None) => {}
+                                    Err(_) => {}
+                                }
+                            }
+                            Err(e) => {
+                                crate::log!(
+                                    "trueosfs-smoke: debug: format failed dev={} super_lba={} err={:?}\n",
+                                    h.id(),
+                                    super_lba,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if trueos_disk.is_none() {
