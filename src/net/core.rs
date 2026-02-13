@@ -37,12 +37,14 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
         self.adapter.mac()
     }
 
-    fn poll_rx(&mut self) {
+    fn poll_rx(&mut self) -> bool {
         self.adapter.poll_rx();
         let packets = self.ring.poll_rx();
-        if !packets.is_empty() {
+        let received = !packets.is_empty();
+        if received {
             self.rx_queue.extend(packets);
         }
+        received
     }
 
     fn pop_rx(&mut self) -> Option<Vec<u8>> {

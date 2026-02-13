@@ -317,8 +317,10 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     }
 
     let cmd_before = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
+    crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+    let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
-    if cmd_before == 0xFFFF {
+    if cmd_before == 0xFFFF || cmd_after == 0xFFFF {
         return None;
     }
 

@@ -219,17 +219,6 @@ fn tls_socket_tick_once() {
                     cfg,
                     roots,
                 } => {
-                    crate::log!(
-                        "tls-socket: open request owner={} remote={}.{}.{}.{}:{} sni={}\n",
-                        owner,
-                        remote.addr[0],
-                        remote.addr[1],
-                        remote.addr[2],
-                        remote.addr[3],
-                        remote.port,
-                        server_name
-                    );
-
                     let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
                     let dev_idx =
                         owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
@@ -319,11 +308,6 @@ fn tls_socket_tick_once() {
                 vnet::Event::Opened { handle, kind } => {
                     if kind == vnet::SocketKind::Tcp {
                         conns[idx].handle = Some(handle);
-                        crate::log!(
-                            "tls-socket: tcp opened owner={} handle={}\n",
-                            conns[idx].user_owner,
-                            handle.0
-                        );
                         let _ =
                             push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                     }
@@ -370,13 +354,7 @@ fn tls_socket_tick_once() {
                 vnet::Event::Closed { handle } => {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].closed = true;
-                        crate::log!(
-                            "tls-socket: tcp closed owner={} handle={}\n",
-                            conns[idx].user_owner,
-                            handle.0
-                        );
-                        let _ =
-                            push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
+                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
                         remove = true;
                     }
                 }

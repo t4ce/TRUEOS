@@ -403,37 +403,41 @@ pub async fn task() {
 #[embassy_executor::task]
 pub async fn color_cycle_task() {
     async move {
-        crate::log!("v_leds: color cycle online (1000ms)\n");
+        crate::log!("v_leds: rainbow generator online (20ms)\n");
 
-        let Some(led_a) = alloc(5) else {
-            crate::log!("v_leds: alloc(5) failed\n");
-            return;
-        };
-        let Some(led_b) = alloc(5) else {
-            crate::log!("v_leds: alloc(5) failed\n");
+        let Some(all_leds) = alloc(LED_POOL_SIZE) else {
+            crate::log!("v_leds: alloc({}) failed\n", LED_POOL_SIZE);
             return;
         };
 
-        led_a.set_effect(Effect::Rainbow);
+        fn wheel(mut pos: u8) -> Rgb8 {
+            pos = 255 - pos;
+            if pos < 85 {
+                Rgb8::new(255 - pos * 3, 0, pos * 3)
+            } else if pos < 170 {
+                let pos = pos - 85;
+                Rgb8::new(0, pos * 3, 255 - pos * 3)
+            } else {
+                let pos = pos - 170;
+                Rgb8::new(pos * 3, 255 - pos * 3, 0)
+            }
+        }
+
+        let mut buf: Vec<Rgb8, LED_POOL_SIZE> = Vec::new();
+        for _ in 0..LED_POOL_SIZE {
+            let _ = buf.push(Rgb8::new(0, 0, 0));
+        }
+
+        let mut offset: u8 = 0;
 
         loop {
-            let t = crate::time::uptime_seconds();
-            let rgb = match t % 6 {
-                0 => Rgb8::new(255, 0, 0),
-                1 => Rgb8::new(0, 255, 0),
-                2 => Rgb8::new(0, 0, 255),
-                3 => Rgb8::new(255, 255, 0),
-                4 => Rgb8::new(0, 255, 255),
-                _ => Rgb8::new(255, 0, 255),
-            };
+            for i in 0..LED_POOL_SIZE {
+                buf[i] = wheel((i as u8).wrapping_add(offset));
+            }
+            all_leds.set_leds(&buf);
+            offset = offset.wrapping_add(2);
 
-            led_a.set_rgb(rgb);
-
-            let mut data = [Rgb8::new(0, 0, 0); 5];
-            data[(t as usize) % data.len()] = rgb;
-            led_b.set_leds(&data);
-
-            Timer::after(EmbassyDuration::from_millis(1000)).await;
+            Timer::after(EmbassyDuration::from_millis(20)).await;
         }
     }.await;
 }

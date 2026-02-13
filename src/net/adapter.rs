@@ -1901,8 +1901,11 @@ fn service_tick_once() -> bool {
 pub async fn net_poll_task(index: usize) {
     async move {
         loop {
-            crate::net::poll_at(index);
-            Timer::after(EmbassyDuration::from_micros(NET_POLL_SLEEP_US)).await;
+            if crate::net::poll_at(index) {
+                Timer::after(EmbassyDuration::from_micros(0)).await;
+            } else {
+                Timer::after(EmbassyDuration::from_micros(NET_POLL_SLEEP_US)).await;
+            }
         }
     }.await;
 }
