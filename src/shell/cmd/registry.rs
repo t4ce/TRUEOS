@@ -528,7 +528,8 @@ pub(crate) fn init_builtin_shell_commands() {
         static NO_ARGS: [ArgSpec; 0] = [];
         static NET_ARGS: [ArgSpec; 0] = [];
         static NET_ICMP_ARGS: [ArgSpec; 1] = [ArgSpec::new("target", ArgType::Str).mandatory()];
-        static NET_MAC_ARGS: [ArgSpec; 1] = [ArgSpec::new("index", ArgType::Rest)];
+        static NET_NIC_ARGS: [ArgSpec; 1] = [ArgSpec::new("index", ArgType::Rest)];
+        static NET_HOSTNAME_ARGS: [ArgSpec; 1] = [ArgSpec::new("name", ArgType::Str)];
         static NET_HTTP_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static NET_HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
         
@@ -557,7 +558,8 @@ pub(crate) fn init_builtin_shell_commands() {
         // Network
         let _ = REGSHCMD("net", &NET_ARGS, cmd::cmd_net);           // Prints help
         let _ = REGSHCMD("net.icmp", &NET_ICMP_ARGS, cmd::cmd_net_icmp);
-        let _ = REGSHCMD("net.mac", &NET_MAC_ARGS, cmd::cmd_net_mac);
+        let _ = REGSHCMD("net.nic", &NET_NIC_ARGS, cmd::cmd_net_nic);
+        let _ = REGSHCMD("net.hostname", &NET_HOSTNAME_ARGS, cmd::cmd_net_hostname);
         let _ = REGSHCMD("net.http", &NET_HTTP_ARGS, cmd::cmd_net_http);
         let _ = REGSHCMD("net.https", &NET_HTTPS_ARGS, cmd::cmd_net_https);
         
@@ -581,9 +583,15 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tlb.mem", &NO_ARGS, cmd::cmd_tlb_mem);
         let _ = REGSHCMD("tlb.cpu", &NO_ARGS, cmd::cmd_tlb_cpu);
         let _ = REGSHCMD("tlb.acpi", &NO_ARGS, cmd::cmd_tlb_acpi);
+        let _ = REGSHCMD("tlb.acpi.facp", &NO_ARGS, cmd::cmd_tlb_acpi_facp);
+        let _ = REGSHCMD("tlb.acpi.madt", &NO_ARGS, cmd::cmd_tlb_acpi_madt);
+        let _ = REGSHCMD("tlb.acpi.hpet", &NO_ARGS, cmd::cmd_tlb_acpi_hpet);
+        let _ = REGSHCMD("tlb.acpi.mcfg", &NO_ARGS, cmd::cmd_tlb_acpi_mcfg);
+        let _ = REGSHCMD("tlb.acpi.ssdt", &NO_ARGS, cmd::cmd_tlb_acpi_ssdt);
         let _ = REGSHCMD("tlb.x2apic", &NO_ARGS, cmd::cmd_tlb_x2apic);
         let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
         let _ = REGSHCMD("tlb.dump_acpi", &NO_ARGS, cmd::cmd_tlb_dump_acpi);
+        let _ = REGSHCMD("tlb.dump", &NO_ARGS, cmd::cmd_tlb_dump);
 
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
         let _ = REGSHCMD("set", &SET_ARGS, cmd::cmd_set);
@@ -595,5 +603,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("txt", &NO_ARGS, cmd::cmd_txt);
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
+        let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
     });
 }

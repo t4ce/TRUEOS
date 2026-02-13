@@ -101,7 +101,7 @@ fn should_cancel(s: &str) -> bool {
 async fn handle_wizard_input_internal(
     io: &dyn ShellBackend,
     line: &str,
-    spawner: &Spawner,
+    _spawner: &Spawner,
     stage: InstallWizardStage,
 ) -> InputResult {
     let mut s = line.trim();
@@ -281,8 +281,7 @@ async fn handle_wizard_input_internal(
                 return InputResult::Handled;
             }
             
-            crate::shell::bench::run_bench_fs(io, handle).await;
-            InputResult::Transition(ShellMode::Idle)
+            InputResult::RunAction(CommandAction::RunBenchFs { disk_id: raw_id })
         }
         
         InstallWizardStage::NetbenchSelectNic => {
@@ -302,25 +301,7 @@ async fn handle_wizard_input_internal(
                 return InputResult::Handled;
             }
             
-             if crate::shell::bench::netbench_start(spawner, nic_index) {
-                use core::sync::atomic::Ordering;
-                let slot = crate::shell::bench::NETBENCH_STATUS_SLOT.load(Ordering::Relaxed);
-                io.write_fmt(format_args!(
-                    "\r\nnetbench: started nic={} §{} url={}\r\n",
-                    nic_index,
-                    slot.saturating_add(1),
-                    crate::shell::bench::NETBENCH_URL
-                ));
-                let _ = crate::shell::statusbar::set_left_active("netbench");
-                let _ = crate::shell::statusbar::set_right_active("0kb/s");
-                for i in 0..crate::shell::statusbar::INDICATOR_COUNT {
-                    let _ = crate::shell::statusbar::set_indicator_active(i, 2);
-                }
-                InputResult::RunAction(CommandAction::NetbenchStarted)
-            } else {
-                io.write_str("\r\nnetbench: already running\r\n");
-                InputResult::Handled
-            }
+            InputResult::RunAction(CommandAction::RunNetbench { nic_index })
         }
     }
 }

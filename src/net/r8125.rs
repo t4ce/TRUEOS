@@ -392,26 +392,26 @@ impl R8125Adapter {
                     && self.dbg_tx_submitted != 0
                     && self.dbg_tx_stall_checks == 10_000
                 {
-                    let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
-                        (
-                            self.mmio.read_u8(REG_CMD),
-                            self.mmio.read_u32(REG_TCR),
-                            self.mmio.read_u32(REG_TNPDS),
-                            self.mmio.read_u32(REG_TNPDS_HI),
-                            self.mmio.read_u16(REG_ISR),
-                        )
-                    };
-                    crate::log!(
-                        "net/r8125: tx stall? head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
-                        self.tx_head,
-                        self.tx_tail,
-                        desc_opts1,
-                        cmd,
-                        tcr,
-                        tn_hi,
-                        tn_lo,
-                        isr
-                    );
+                    // let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
+                    //     (
+                    //         self.mmio.read_u8(REG_CMD),
+                    //         self.mmio.read_u32(REG_TCR),
+                    //         self.mmio.read_u32(REG_TNPDS),
+                    //         self.mmio.read_u32(REG_TNPDS_HI),
+                    //         self.mmio.read_u16(REG_ISR),
+                    //     )
+                    // };
+                    // crate::log!(
+                    //     "net/r8125: tx stall? head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
+                    //     self.tx_head,
+                    //     self.tx_tail,
+                    //     desc_opts1,
+                    //     cmd,
+                    //     tcr,
+                    //     tn_hi,
+                    //     tn_lo,
+                    //     isr
+                    // );
 
                     // Attempt a one-time recovery kick.
                     self.kick_tx_engine();
@@ -462,10 +462,10 @@ impl R8125Adapter {
 
             if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
                 if self.dbg_rx_bad_flags == 0 {
-                    crate::log!(
-                        "net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
-                        opts1
-                    );
+                    // crate::log!(
+                    //     "net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
+                    //     opts1
+                    // );
                 }
             }
 
@@ -474,7 +474,7 @@ impl R8125Adapter {
             if had_errsum {
                 self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
                 // Log the first few errsum frames with minimal decoding.
-                if self.dbg_rx_errsum <= 8 {
+                if false && self.dbg_rx_errsum <= 8 {
                     let buf_ptr = self.rx_bufs[idx].virt();
                     let peek_len = core::cmp::min(raw_len, 64);
                     let peek = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, peek_len) };
@@ -499,17 +499,17 @@ impl R8125Adapter {
                         (0u16, 0u8, 0u16, 0u16)
                     };
 
-                    crate::log!(
-                        "net/r8125: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
-                        self.dbg_rx_errsum,
-                        opts1,
-                        opts2,
-                        raw_len,
-                        ethertype,
-                        ip_proto,
-                        udp_src,
-                        udp_dst
-                    );
+                    // crate::log!(
+                    //     "net/r8125: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
+                    //     self.dbg_rx_errsum,
+                    //     opts1,
+                    //     opts2,
+                    //     raw_len,
+                    //     ethertype,
+                    //     ip_proto,
+                    //     udp_src,
+                    //     udp_dst
+                    // );
                 }
 
                 if !ACCEPT_RX_ERR_SUM_FRAMES {

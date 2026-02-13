@@ -598,3 +598,82 @@ pub async fn usb_scout_service(info: xhci::XhcInfo) {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct ScoutedPort {
+    pub port_id: u8,
+    pub status: u32,
+    pub connected: bool,
+    pub enabled: bool,
+    pub speed: &'static str,
+    pub device_kind: Option<&'static str>,
+    pub vid: Option<u16>,
+    pub pid: Option<u16>,
+}
+
+pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
+    let mut results: Vec<ScoutedPort, 64> = Vec::new();
+    let guard = USB_CTRL[controller_id].lock();
+    let state = match guard.as_ref() {
+        Some(s) => s,
+        None => return results,
+    };
+
+    for port in 0..state.ctx.port_count {
+        let status = unsafe { state.ctx.portsc(port as usize) };
+        let (connected, enabled, speed) = decode_port_status(status);
+
+        let mut kind_str: Option<&'static str> = None;
+        let mut vid: Option<u16> = None;
+        let mut pid: Option<u16> = None;
+
+        // Check registered devices
+        {
+             let devs = super::DEVICES[controller_id].lock();
+             if let Some(dev) = devs.iter().find(|d| d.port == (port + 1) as u8) {
+                  kind_str = Some(match dev.kind {
+                        DeviceKind::Hid => "hid",
+                        DeviceKind::Hub => "hub",
+                        DeviceKind::Mass => "mass",
+                        DeviceKind::Printer => "printer",
+                        DeviceKind::Pen => "pen",
+                        DeviceKind::Cdc => "cdc",
+                        DeviceKind::Uac => "uac",
+                        DeviceKind::Midi => "midi",
+                        DeviceKind::Leds => "leds",
+                        DeviceKind::Unknown => "unknown",
+                  });
+
+                  // Try to get VID/PID from identity cache
+                  if let Some(ident) = super::hub::identity_for_slot(controller_id, dev.slot_id) {
+                      vid = Some(ident.vid);
+                      pid = Some(ident.pid);
+                  }
+             }
+        }
+
+        // Fallback or detecting state
+        if kind_str.is_none() && connected {
+             if let Some((v, p)) = xhci::get_port_vidpid(controller_id, (port + 1) as u8) {
+                 vid = Some(v);
+                 pid = Some(p);
+                 if v != 0 || p != 0 {
+                      kind_str = Some("detecting");
+                 }
+             }
+        }
+
+        let _ = results.push(ScoutedPort {
+            port_id: (port + 1) as u8,
+            status,
+            connected,
+            enabled,
+            speed,
+            device_kind: kind_str,
+            vid,
+            pid
+        });
+    }
+    results
+}
+

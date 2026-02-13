@@ -357,23 +357,22 @@ pub async fn task() {
                     last_effect = None;
                     last_effect_owner = None;
                 }
-                let desired_rgb = mixed_rgb_from_pool();
-                if last_offline || last_sent_rgb != Some(desired_rgb) {
-                    let (rid, data) = encode_set_rgb(desired_rgb);
-                    if rid == 0 {
-                        let _ = crate::usb::leds::send_preferred_output_report_first(&data).await;
 
-                        // Try a few common vendor-HID RGB encodings (best-effort).
-                        // These are only sent when the desired RGB changes.
-                        let alt0 = [desired_rgb.r, desired_rgb.g, desired_rgb.b];
-                        let _ = crate::usb::leds::send_preferred_output_report_first(&alt0).await;
-
-                        let alt1 = [0x00, desired_rgb.r, desired_rgb.g, desired_rgb.b];
-                        let _ = crate::usb::leds::send_preferred_output_report_first(&alt1).await;
-                    } else {
-                        let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
+                // Attempt to send RAW RGB data for the first 20 LEDs (Addressable Mode Probe)
+                // instead of averaging them into a single color.
+                // Packet format: [R, G, B, R, G, B, ... ] up to 64 bytes.
+                {
+                    let colors = POOL_COLORS.lock();
+                    let mut packet: Vec<u8, 64> = Vec::new();
+                    // 21 LEDs * 3 bytes = 63 bytes, fits in 64 byte HID report
+                    for i in 0..21 {
+                        let c = colors[i];
+                        let _ = packet.push(c.r);
+                        let _ = packet.push(c.g);
+                        let _ = packet.push(c.b);
                     }
-                    last_sent_rgb = Some(desired_rgb);
+                    // Send using preferred ID (usually 0 for these streams)
+                    let _ = crate::usb::leds::send_preferred_output_report_first(&packet).await;
                 }
 
                 if last_offline {
