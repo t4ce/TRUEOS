@@ -1,6 +1,33 @@
 use alloc::vec::Vec;
 
 use crate::net::device::LinkState;
+use spin::Mutex;
+
+static PACKET_POOL: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+const POOL_MAX: usize = 1024;
+const RX_BUF_SIZE: usize = 2048;
+
+pub fn alloc_rx_buf() -> Vec<u8> {
+    if let Some(buf) = PACKET_POOL.lock().pop() {
+        buf
+    } else {
+        alloc::vec![0u8; RX_BUF_SIZE]
+    }
+}
+
+pub fn recycle_rx_buf(mut buf: Vec<u8>) {
+    if buf.capacity() < RX_BUF_SIZE {
+        return;
+    }
+    // Safety: we are about to put this into the ring for DMA overwrite.
+    // The previous contents don't matter, and we don't need to zero-fill (costly).
+    unsafe { buf.set_len(RX_BUF_SIZE); }
+    
+    let mut pool = PACKET_POOL.lock();
+    if pool.len() < POOL_MAX {
+        pool.push(buf);
+    }
+}
 
 pub struct DmaRegion {
     phys: u64,
@@ -84,8 +111,13 @@ impl RxRing {
             if slot.owned_by_hw || slot.len == 0 {
                 break;
             }
-            let mut packet = Vec::with_capacity(slot.len);
-            packet.extend_from_slice(&slot.buf[..slot.len]);
+            
+            // Swap buffer from pool to avoid allocation and copy
+            let new_buf = alloc_rx_buf();
+            let len = slot.len;
+            let mut packet = core::mem::replace(&mut slot.buf, new_buf);
+            packet.truncate(len);
+            
             out.push(packet);
             slot.len = 0;
             slot.owned_by_hw = true;

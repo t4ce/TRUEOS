@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use alloc::vec::Vec;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
