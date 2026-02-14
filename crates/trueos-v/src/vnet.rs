@@ -22,6 +22,18 @@ impl EndpointV4 {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct EndpointV6 {
+    pub addr: [u8; 16],
+    pub port: u16,
+}
+
+impl EndpointV6 {
+    pub const fn new(addr: [u8; 16], port: u16) -> Self {
+        Self { addr, port }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SocketKind {
     Udp,
     Tcp,
@@ -68,9 +80,15 @@ pub enum Command {
     OpenUdp { port: u16 },
     OpenTcpListen { port: u16 },
     OpenTcpConnect { remote: EndpointV4 },
+    OpenTcpConnectV6 { remote: EndpointV6 },
     SendUdp {
         handle: NetHandle,
         remote: EndpointV4,
+        data: ByteBuf<MAX_MSG>,
+    },
+    SendUdpV6 {
+        handle: NetHandle,
+        remote: EndpointV6,
         data: ByteBuf<MAX_MSG>,
     },
     SendTcp {
@@ -80,6 +98,11 @@ pub enum Command {
     Close { handle: NetHandle },
     IcmpEcho {
         target: [u8; 4],
+        seq: u16,
+        data: ByteBuf<MAX_MSG>,
+    },
+    IcmpEchoV6 {
+        target: [u8; 16],
         seq: u16,
         data: ByteBuf<MAX_MSG>,
     },
@@ -95,11 +118,22 @@ pub enum Event {
         from: EndpointV4,
         data: ByteBuf<MAX_MSG>,
     },
+    UdpPacketV6 {
+        handle: NetHandle,
+        from: EndpointV6,
+        data: ByteBuf<MAX_MSG>,
+    },
     TcpEstablished { handle: NetHandle },
     TcpData { handle: NetHandle, data: ByteBuf<MAX_MSG> },
     TcpSent { handle: NetHandle, len: u16 },
     IcmpReply {
         from: [u8; 4],
+        seq: u16,
+        rtt_ms: u32,
+        data: ByteBuf<MAX_MSG>,
+    },
+    IcmpReplyV6 {
+        from: [u8; 16],
         seq: u16,
         rtt_ms: u32,
         data: ByteBuf<MAX_MSG>,

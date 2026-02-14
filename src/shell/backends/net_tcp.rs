@@ -191,7 +191,9 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::UdpPacket { .. } => {}
+                    NetEvent::UdpPacketV6 { .. } => {}
                     NetEvent::IcmpReply { .. } => {}
+                    NetEvent::IcmpReplyV6 { .. } => {}
                 }
             }
 

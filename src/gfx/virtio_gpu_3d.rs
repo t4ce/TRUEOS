@@ -284,6 +284,17 @@ impl ScanoutBacking {
     }
 }
 
+struct BorrowedScanout {
+    backing: ScanoutBacking,
+    res_width: u32,
+    res_height: u32,
+    res_bytes: usize,
+
+    fb_width: u32,
+    fb_height: u32,
+    fb_pitch: usize,
+}
+
 struct VirtQueue {
     size: u16,
     _mem: DmaRegion,
@@ -1251,7 +1262,7 @@ impl VirglGfxBackend {
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
-        let (scanout_id, width, height) = gpu.get_display_info()?;
+        let (scanout_id, disp_w, disp_h) = gpu.get_display_info()?;
 
         let ctx_id = alloc_ctx_id();
         if !gpu.ctx_create(ctx_id) {
@@ -1264,39 +1275,67 @@ impl VirglGfxBackend {
         let vbo_res = alloc_res_pair().0;
 
         // 2D scanout + backing.
-        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, width, height) {
+        // If we can borrow the Limine framebuffer memory as backing, we create a scanout
+        // resource wide enough to match the framebuffer pitch (pitch/4 pixels).
+        // The scanout rect remains the virtio-gpu display width/height.
+        // Prefer borrowing Limine FB backing (shared memory) so toggling back to LimineFB is visible.
+        // IMPORTANT: Limine's chosen framebuffer size can differ from virtio-gpu display-info size.
+        // If we borrow, we drive the scanout size from the Limine FB (clamped to display size).
+        let (scanout_backing, res_w, res_h, res_bytes, present_w, present_h) =
+            if let Some(b) = Self::try_borrow_limine_scanout(framebuffers) {
+                let pw = b.fb_width.min(disp_w).max(1);
+                let ph = b.fb_height.min(disp_h).max(1);
+                crate::log!(
+                    "virgl-backend: scanout backing=limine-fb fb={}x{} pitch={} present={}x{} res={}x{} bytes={}\n",
+                    b.fb_width,
+                    b.fb_height,
+                    b.fb_pitch,
+                    pw,
+                    ph,
+                    b.res_width,
+                    b.res_height,
+                    b.res_bytes
+                );
+                (b.backing, b.res_width, b.res_height, b.res_bytes, pw, ph)
+            } else {
+                let bytes = (disp_w as usize)
+                    .saturating_mul(disp_h as usize)
+                    .saturating_mul(4)
+                    .max(4096);
+                crate::log!("virgl-backend: scanout backing=dma display={}x{} bytes={}\n", disp_w, disp_h, bytes);
+                (
+                    ScanoutBacking::Owned(DmaRegion::alloc(bytes, 4096)?),
+                    disp_w,
+                    disp_h,
+                    bytes,
+                    disp_w,
+                    disp_h,
+                )
+            };
+
+        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, res_w, res_h) {
             crate::log!("virgl-backend: resource_create_2d scanout failed\n");
             return None;
         }
-        let scanout_bytes = (width as usize)
-            .saturating_mul(height as usize)
-            .saturating_mul(4)
-            .max(4096);
-
-        let scanout_backing = if let Some(b) =
-            Self::try_borrow_limine_scanout(framebuffers, width, height)
-        {
-            crate::log!("virgl-backend: scanout backing=limine-fb\n");
-            b
-        } else {
-            crate::log!("virgl-backend: scanout backing=dma\n");
-            ScanoutBacking::Owned(DmaRegion::alloc(scanout_bytes, 4096)?)
-        };
 
         // Clear the scanout backing so we start from a known state.
-        let clear_len = scanout_bytes.min(scanout_backing.len());
+        let clear_len = res_bytes.min(scanout_backing.len());
         unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, clear_len) };
 
-        if scanout_backing.len() < scanout_bytes {
-            crate::log!("virgl-backend: scanout backing too small len={} need={}\n", scanout_backing.len(), scanout_bytes);
+        if scanout_backing.len() < res_bytes {
+            crate::log!(
+                "virgl-backend: scanout backing too small len={} need={}\n",
+                scanout_backing.len(),
+                res_bytes
+            );
             return None;
         }
 
-        if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_bytes as u32) {
+        if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), res_bytes as u32) {
             crate::log!("virgl-backend: attach_backing failed\n");
             return None;
         }
-        if !gpu.set_scanout(scanout_id, scanout_res, width, height) {
+        if !gpu.set_scanout(scanout_id, scanout_res, present_w, present_h) {
             crate::log!("virgl-backend: set_scanout failed\n");
             return None;
         }
@@ -1309,8 +1348,8 @@ impl VirglGfxBackend {
             PIPE_TEXTURE_2D,
             VIRGL_FORMAT_B8G8R8X8_UNORM,
             rt_bind,
-            width,
-            height,
+            present_w,
+            present_h,
             1,
             1,
             0,
@@ -1377,7 +1416,7 @@ impl VirglGfxBackend {
         encode_create_rasterizer(&mut init, rs_handle);
         encode_bind_object(&mut init, VIRGL_OBJECT_RASTERIZER, rs_handle);
 
-        encode_set_viewport(&mut init, width, height);
+        encode_set_viewport(&mut init, present_w, present_h);
 
         if !gpu.submit_3d(ctx_id, init.as_bytes(), 1) {
             crate::log!("virgl-backend: submit_3d init failed\n");
@@ -1386,15 +1425,18 @@ impl VirglGfxBackend {
 
         let swapchain = SwapchainDesc {
             format: ImageFormat::Rgbx8888,
-            extent: trueos_gfx_core::Extent2D { width, height },
+            extent: trueos_gfx_core::Extent2D {
+                width: present_w,
+                height: present_h,
+            },
         };
 
         Some(Self {
             gpu,
             ctx_id,
             scanout_id,
-            width,
-            height,
+            width: present_w,
+            height: present_h,
             scanout_res,
             scanout_backing,
             rt_res,
@@ -1415,8 +1457,8 @@ impl VirglGfxBackend {
                 viewport: Viewport {
                     x: 0,
                     y: 0,
-                    width: width as i32,
-                    height: height as i32,
+                    width: present_w as i32,
+                    height: present_h as i32,
                 },
                 ..VirglDrawState::default()
             },
@@ -1427,35 +1469,56 @@ impl VirglGfxBackend {
 
     fn try_borrow_limine_scanout(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
-        width: u32,
-        height: u32,
-    ) -> Option<ScanoutBacking> {
-        let fb = framebuffers?.framebuffers().next()?;
+    ) -> Option<BorrowedScanout> {
+        let fb_resp = framebuffers?;
+        let fb = fb_resp.framebuffers().next()?;
 
         if fb.bpp() != 32 {
-            return None;
-        }
-        if fb.width() as u32 != width || fb.height() as u32 != height {
+            crate::log!("virgl-backend: borrow-limine: bpp != 32 (bpp={})\n", fb.bpp());
             return None;
         }
         let pitch = fb.pitch() as usize;
-        let expected_pitch = (width as usize).saturating_mul(4);
-        if pitch != expected_pitch {
-            return None;
-        }
 
-        let len = pitch.saturating_mul(height as usize);
-        if len < expected_pitch.saturating_mul(height as usize) {
+        let fb_h = fb.height() as usize;
+        let len = pitch.saturating_mul(fb_h);
+        if len == 0 {
+            crate::log!("virgl-backend: borrow-limine: len==0 pitch={} h={}\n", pitch, fb_h);
             return None;
         }
 
         let virt = fb.addr();
         if virt.is_null() {
+            crate::log!("virgl-backend: borrow-limine: fb.addr is null\n");
             return None;
         }
-        let phys = crate::phys::virt_to_phys_checked(virt as *const u8)?;
+        let Some(phys) = crate::phys::virt_to_phys_checked(virt as *const u8) else {
+            crate::log!("virgl-backend: borrow-limine: virt_to_phys failed addr=0x{:X}\n", virt as usize);
+            return None;
+        };
 
-        Some(ScanoutBacking::Borrowed { phys, virt, len })
+        if (pitch % 4) != 0 {
+            crate::log!("virgl-backend: borrow-limine: pitch not multiple of 4 (pitch={})\n", pitch);
+            return None;
+        }
+
+        let stride_pixels = (pitch / 4) as u32;
+        let fb_width = fb.width() as u32;
+        let fb_height = fb.height() as u32;
+
+        if stride_pixels == 0 || fb_height == 0 {
+            crate::log!("virgl-backend: borrow-limine: bad dims stride={} fb={}x{}\n", stride_pixels, fb_width, fb_height);
+            return None;
+        }
+
+        Some(BorrowedScanout {
+            backing: ScanoutBacking::Borrowed { phys, virt, len },
+            res_width: stride_pixels,
+            res_height: fb_h as u32,
+            res_bytes: len,
+            fb_width,
+            fb_height,
+            fb_pitch: pitch,
+        })
     }
 
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> usize {

@@ -293,7 +293,8 @@ const PARSE5_BOOT_READY: u32 =
 
 const WS_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY;
+    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
+    | crate::v::readiness::QJS_PARSE5_SMOKE_DONE;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)

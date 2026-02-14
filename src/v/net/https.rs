@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -23,6 +23,98 @@ use crate::wait::WaitQueue;
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
+
+// --- keep-alive pool (per host) ---
+
+const VHTTPS_KEEPALIVE_ENABLE: bool = true;
+const VHTTPS_KEEPALIVE_IDLE_CLOSE_MS: u64 = 10_000;
+
+static VHTTPS_KEEPALIVE_SEQ: AtomicU32 = AtomicU32::new(1);
+
+struct KeepAliveConn {
+    owner: &'static str,
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    in_use: AtomicBool,
+    state: Mutex<KeepAliveState>,
+}
+
+#[derive(Clone, Copy)]
+struct KeepAliveState {
+    handle: Option<vnet::NetHandle>,
+    connected: bool,
+    last_used: Instant,
+}
+
+impl Default for KeepAliveState {
+    fn default() -> Self {
+        Self {
+            handle: None,
+            connected: false,
+            last_used: Instant::from_ticks(0),
+        }
+    }
+}
+
+static VHTTPS_KEEPALIVE_POOL: Mutex<BTreeMap<String, &'static KeepAliveConn>> = Mutex::new(BTreeMap::new());
+
+fn keepalive_pool_key(dev_idx: usize, host: &str, port: u16) -> String {
+    // host is already a DNS name in our URL parser; no IPv6 here.
+    alloc::format!("{}|{}|{}", dev_idx, host, port)
+}
+
+fn ensure_keepalive_conn(dev_idx: usize, host: &str, port: u16) -> &'static KeepAliveConn {
+    let key = keepalive_pool_key(dev_idx, host, port);
+    let mut pool = VHTTPS_KEEPALIVE_POOL.lock();
+    if let Some(c) = pool.get(&key) {
+        return *c;
+    }
+
+    let seq = VHTTPS_KEEPALIVE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        alloc::format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        alloc::format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        alloc::format!("{}", dev_idx)
+    };
+
+    // Owner suffix pins tls-socket's VNet selection to the chosen NIC.
+    let owner = leak_str(alloc::format!("vhttps-ka-{}@{}", seq, selector));
+    let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 4096);
+    register_tls_app_queues(owner, cmds, events);
+
+    let conn = KeepAliveConn {
+        owner,
+        cmds,
+        events,
+        in_use: AtomicBool::new(false),
+        state: Mutex::new(KeepAliveState::default()),
+    };
+    let leaked: &'static KeepAliveConn = Box::leak(Box::new(conn));
+    pool.insert(key, leaked);
+    leaked
+}
+
+async fn keepalive_acquire(conn: &'static KeepAliveConn) {
+    loop {
+        if conn
+            .in_use
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return;
+        }
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
+fn keepalive_release(conn: &'static KeepAliveConn) {
+    conn.in_use.store(false, Ordering::Release);
+}
 
 // Net-fetch scheduler (used by QJS URL module cache):
 // - coalesces concurrent requests for the same cache key
@@ -664,6 +756,339 @@ async fn fetch_on_device(
 enum FetchToFileError {
     Code(i32),
     Redirect { status: u16, url: String },
+}
+
+async fn fetch_on_device_to_file_keepalive(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    disk: crate::disc::block::DeviceHandle,
+    tmp_path: &str,
+) -> Result<(), FetchToFileError> {
+    let conn = ensure_keepalive_conn(dev_idx, parsed.host.as_str(), parsed.port);
+    keepalive_acquire(conn).await;
+
+    // Drain any stale events (best-effort) before starting a new request.
+    let _ = conn.events.drain(4096);
+
+    // Close idle keep-alive connections (server may have timed out anyway).
+    {
+        let mut st = conn.state.lock();
+        let idle_ms = Instant::now()
+            .saturating_duration_since(st.last_used)
+            .as_millis() as u64;
+        if st.handle.is_some() && idle_ms > VHTTPS_KEEPALIVE_IDLE_CLOSE_MS {
+            if let Some(h) = st.handle.take() {
+                let _ = conn.cmds.push(TlsCommand::Close { handle: h });
+            }
+            st.connected = false;
+        }
+    }
+
+    // Resolve DNS only when we need to (re)connect.
+    let mut ip: Option<[u8; 4]> = None;
+    {
+        let st = conn.state.lock();
+        if st.handle.is_none() || !st.connected {
+            drop(st);
+            match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+                Ok(v) => ip = Some(v),
+                Err(dns::DnsError::Timeout) => {
+                    keepalive_release(conn);
+                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsTimeout)));
+                }
+                Err(_) => {
+                    keepalive_release(conn);
+                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsFailed)));
+                }
+            }
+        }
+    }
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+
+    // Avoid flooding tls-socket with repeated connect requests while waiting for events.
+    let mut connect_in_flight = false;
+
+    // Ensure connected.
+    loop {
+        let (handle, connected) = {
+            let st = conn.state.lock();
+            (st.handle, st.connected)
+        };
+
+        if handle.is_some() && connected {
+            break;
+        }
+
+        // If no handle, initiate a connect.
+        if handle.is_none() && !connect_in_flight {
+            let Some(ip) = ip else {
+                keepalive_release(conn);
+                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ConnectTimeout)));
+            };
+            let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+            });
+            connect_in_flight = true;
+        }
+
+        // Wait for Opened/Connected.
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    let mut st = conn.state.lock();
+                    st.handle = Some(handle);
+                }
+                TlsEvent::Connected { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.connected = true;
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    let mut st = conn.state.lock();
+                    if st.handle == Some(handle) {
+                        st.handle = None;
+                        st.connected = false;
+                        connect_in_flight = false;
+                    }
+                }
+                TlsEvent::TlsError { .. } => {
+                    let mut st = conn.state.lock();
+                    st.handle = None;
+                    st.connected = false;
+                    connect_in_flight = false;
+                }
+                _ => {}
+            }
+        }
+
+        if Instant::now() >= deadline {
+            keepalive_release(conn);
+            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::TlsTimeout)));
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+
+    let handle = conn.state.lock().handle.expect("connected handle");
+
+    // Send HTTP GET request. Use keep-alive; we will stop reading once body complete.
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
+        parsed.path,
+        parsed.host
+    );
+    let _ = conn.cmds.push(TlsCommand::Send {
+        handle,
+        data: req.into_bytes(),
+    });
+
+    // Response parsing/writing (mostly identical to the non-keepalive path).
+    let mut header_buf: Vec<u8> = Vec::new();
+    let mut header_done = false;
+    let mut body_is_chunked = false;
+    let mut chunked_raw_body: Vec<u8> = Vec::new();
+    let chunked_capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut body_expected = 0usize;
+    let mut body_written = 0usize;
+    let mut stream_handle: Option<u32> = None;
+
+    loop {
+        for ev in conn.events.drain(1024) {
+            match ev {
+                TlsEvent::Data { handle: h, data } => {
+                    if h != handle || data.is_empty() {
+                        continue;
+                    }
+
+                    if !header_done {
+                        header_buf.extend_from_slice(&data);
+                        if header_buf.len() > (64 * 1024) {
+                            if let Some(sh) = stream_handle.take() {
+                                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                            }
+                            keepalive_release(conn);
+                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                        }
+
+                        if let Some(hdr_end) = find_http_header_end(&header_buf) {
+                            let headers = &header_buf[..hdr_end];
+                            let status = parse_http_status(headers).unwrap_or(0);
+                            if status != 200 {
+                                if is_redirect_status(status) {
+                                    if let Some(next) = redirect_url_from_location(parsed, headers) {
+                                        keepalive_release(conn);
+                                        return Err(FetchToFileError::Redirect { status, url: next });
+                                    }
+                                }
+                                keepalive_release(conn);
+                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(status))));
+                            }
+
+                            let Some(head) = parse_http_head(headers) else {
+                                keepalive_release(conn);
+                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                            };
+
+                            body_expected = match head.body {
+                                HttpBodyKind::ContentLength(v) => v,
+                                HttpBodyKind::Chunked => {
+                                    body_is_chunked = true;
+                                    0
+                                }
+                            };
+
+                            if !body_is_chunked && body_expected > max_bytes {
+                                keepalive_release(conn);
+                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                            }
+
+                            if !body_is_chunked {
+                                let sh = match crate::v::fs::trueosfs::file_write_begin_async(
+                                    disk,
+                                    tmp_path,
+                                    body_expected as u64,
+                                )
+                                .await
+                                .map_err(block_error_to_code)
+                                .map_err(FetchToFileError::Code)?
+                                {
+                                    Some(h) => h,
+                                    None => {
+                                        keepalive_release(conn);
+                                        return Err(FetchToFileError::Code(FS_ERR_NO_SPACE));
+                                    }
+                                };
+                                stream_handle = Some(sh);
+                            }
+
+                            header_done = true;
+
+                            let body_start = hdr_end;
+                            if header_buf.len() > body_start {
+                                let part = &header_buf[body_start..];
+                                if body_is_chunked {
+                                    let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                                    let take = part.len().min(room);
+                                    chunked_raw_body.extend_from_slice(&part[..take]);
+                                } else if let Some(sh) = stream_handle {
+                                    let rem = body_expected.saturating_sub(body_written);
+                                    let take = part.len().min(rem);
+                                    if take > 0 {
+                                        crate::v::fs::trueosfs::file_write_chunk_async(sh, &part[..take])
+                                            .await
+                                            .map_err(block_error_to_code)
+                                            .map_err(FetchToFileError::Code)?;
+                                        body_written = body_written.saturating_add(take);
+                                    }
+                                }
+                            }
+                            header_buf.clear();
+
+                            if !body_is_chunked && body_written >= body_expected {
+                                if let Some(sh) = stream_handle.take() {
+                                    crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                        .await
+                                        .map_err(block_error_to_code)
+                                        .map_err(FetchToFileError::Code)?;
+                                }
+                                let mut st = conn.state.lock();
+                                st.last_used = Instant::now();
+                                keepalive_release(conn);
+                                return Ok(());
+                            }
+                        }
+                    } else if body_is_chunked {
+                        let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                        let take = data.len().min(room);
+                        chunked_raw_body.extend_from_slice(&data[..take]);
+                        if let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) {
+                            if decoded.len() > max_bytes {
+                                keepalive_release(conn);
+                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                            }
+                            write_body_to_tmp_file(disk, tmp_path, decoded.as_slice())
+                                .await
+                                .map_err(FetchToFileError::Code)?;
+                            let mut st = conn.state.lock();
+                            st.last_used = Instant::now();
+                            keepalive_release(conn);
+                            return Ok(());
+                        }
+                    } else if let Some(sh) = stream_handle {
+                        let rem = body_expected.saturating_sub(body_written);
+                        let take = data.len().min(rem);
+                        if take > 0 {
+                            crate::v::fs::trueosfs::file_write_chunk_async(sh, &data[..take])
+                                .await
+                                .map_err(block_error_to_code)
+                                .map_err(FetchToFileError::Code)?;
+                            body_written = body_written.saturating_add(take);
+                        }
+                        if body_written >= body_expected {
+                            crate::v::fs::trueosfs::file_write_finish_async(sh)
+                                .await
+                                .map_err(block_error_to_code)
+                                .map_err(FetchToFileError::Code)?;
+                            let mut st = conn.state.lock();
+                            st.last_used = Instant::now();
+                            keepalive_release(conn);
+                            return Ok(());
+                        }
+                    }
+                }
+                TlsEvent::Closed { handle: h } => {
+                    if h == handle {
+                        // Server closed; reset pool state and fail.
+                        {
+                            let mut st = conn.state.lock();
+                            st.handle = None;
+                            st.connected = false;
+                        }
+                        if let Some(sh) = stream_handle.take() {
+                            let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                        }
+                        keepalive_release(conn);
+                        return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
+                    }
+                }
+                TlsEvent::TlsError { .. } => {
+                    {
+                        let mut st = conn.state.lock();
+                        st.handle = None;
+                        st.connected = false;
+                    }
+                    if let Some(sh) = stream_handle.take() {
+                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                    }
+                    keepalive_release(conn);
+                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Tls)));
+                }
+                _ => {}
+            }
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(sh) = stream_handle.take() {
+                let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+            }
+            keepalive_release(conn);
+            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
+        }
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
 }
 
 async fn fetch_on_device_to_file(
@@ -1491,16 +1916,13 @@ pub async fn fetch_https_to_file_async(
         last_err = fetch_error_to_code(FetchError::DnsFailed);
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device_to_file(
-                &parsed,
-                dev_idx,
-                timeout_ms,
-                max_bytes,
-                disk,
-                tmp.as_str(),
-            )
-            .await
-            {
+            let r = if VHTTPS_KEEPALIVE_ENABLE {
+                fetch_on_device_to_file_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str()).await
+            } else {
+                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str()).await
+            };
+
+            match r {
                 Ok(()) => {
                     last_err = 0;
                     break;
