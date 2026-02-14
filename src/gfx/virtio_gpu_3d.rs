@@ -44,6 +44,9 @@ const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
 const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
 const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
 const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
+const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
 const VIRTIO_GPU_CMD_RESOURCE_CREATE_3D: u32 = 0x0201;
 const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0203;
@@ -620,6 +623,33 @@ struct CmdResourceFlush {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct MemEntry {
+    addr: u64,
+    length: u32,
+    padding: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdResourceAttachBacking {
+    hdr: CtrlHdr,
+    resource_id: u32,
+    nr_entries: u32,
+    // followed by `nr_entries` MemEntry entries
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdTransferToHost2d {
+    hdr: CtrlHdr,
+    r: Rect,
+    offset: u64,
+    resource_id: u32,
+    padding: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 struct CmdCtxCreate {
     hdr: CtrlHdr,
@@ -868,6 +898,60 @@ impl VirtioGpu3d {
                 padding: 0,
             },
             r: Rect { x: 0, y: 0, width, height },
+            resource_id,
+            padding: 0,
+        };
+        self.ctrl_submit_bytes(as_bytes(&req))
+    }
+
+    pub fn resource_attach_backing(&mut self, resource_id: u32, backing_phys: u64, backing_len: u32) -> bool {
+        let hdr = CtrlHdr {
+            type_: VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+            flags: 0,
+            fence_id: 0,
+            ctx_id: 0,
+            padding: 0,
+        };
+        let header = CmdResourceAttachBacking {
+            hdr,
+            resource_id,
+            nr_entries: 1,
+        };
+        let entry = MemEntry {
+            addr: backing_phys,
+            length: backing_len,
+            padding: 0,
+        };
+
+        let header_bytes = as_bytes(&header);
+        let entry_bytes = as_bytes(&entry);
+        let total = header_bytes.len().saturating_add(entry_bytes.len());
+        if total == 0 || total > self.req.len() {
+            return false;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(header_bytes.as_ptr(), self.req.virt(), header_bytes.len());
+            core::ptr::copy_nonoverlapping(
+                entry_bytes.as_ptr(),
+                self.req.virt().add(header_bytes.len()),
+                entry_bytes.len(),
+            );
+            core::ptr::write_bytes(self.resp.virt(), 0, self.resp.len());
+        }
+        self.ctrl_submit_desc_chain(total)
+    }
+
+    pub fn transfer_to_host_2d(&mut self, resource_id: u32, width: u32, height: u32) -> bool {
+        let req = CmdTransferToHost2d {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            r: Rect { x: 0, y: 0, width, height },
+            offset: 0,
             resource_id,
             padding: 0,
         };
@@ -1184,6 +1268,30 @@ fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8
     buf.push_bytes_padded(data);
 }
 
+fn encode_resource_copy_region(
+    buf: &mut VirglCmdBuf,
+    dst_res: u32,
+    src_res: u32,
+    width: u32,
+    height: u32,
+) {
+    // VIRGL_CMD_RESOURCE_COPY_REGION_SIZE = 13 dwords payload.
+    buf.push(virgl_cmd0(VIRGL_CCMD_RESOURCE_COPY_REGION, 0, 13));
+    buf.push(dst_res);
+    buf.push(0); // dst_level
+    buf.push(0); // dst_x
+    buf.push(0); // dst_y
+    buf.push(0); // dst_z
+    buf.push(src_res);
+    buf.push(0); // src_level
+    buf.push(0); // src_x
+    buf.push(0); // src_y
+    buf.push(0); // src_z
+    buf.push(width);
+    buf.push(height);
+    buf.push(1); // depth
+}
+
 fn encode_set_viewport(buf: &mut VirglCmdBuf, width: u32, height: u32) {
     // VIRGL_SET_VIEWPORT_STATE_SIZE(num) = 6*num + 1
     buf.push(virgl_cmd0(VIRGL_CCMD_SET_VIEWPORT_STATE, 0, 7));
@@ -1264,30 +1372,6 @@ fn encode_draw_vbo(buf: &mut VirglCmdBuf) {
     buf.push(0); // count_from_so
 }
 
-fn encode_resource_copy_region(
-    buf: &mut VirglCmdBuf,
-    dst_res: u32,
-    src_res: u32,
-    width: u32,
-    height: u32,
-) {
-    // VIRGL_CMD_RESOURCE_COPY_REGION_SIZE = 13
-    buf.push(virgl_cmd0(VIRGL_CCMD_RESOURCE_COPY_REGION, 0, 13));
-    buf.push(dst_res);
-    buf.push(0); // dst_level
-    buf.push(0); // dst_x
-    buf.push(0); // dst_y
-    buf.push(0); // dst_z
-    buf.push(src_res);
-    buf.push(0); // src_level
-    buf.push(0); // src_x
-    buf.push(0); // src_y
-    buf.push(0); // src_z
-    buf.push(width);
-    buf.push(height);
-    buf.push(1); // depth
-}
-
 /// Manual bring-up helper: create a virgl context and issue a single DRAW_VBO triangle.
 ///
 /// This is intentionally not wired into the default boot path; call it from a debug hook.
@@ -1319,6 +1403,38 @@ pub fn demo_issue_draw_once() {
 
     if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, w, h) {
         crate::log!("virgl: scanout resource_create_2d failed\n");
+        return;
+    }
+
+    let scanout_bytes = (w as usize)
+        .saturating_mul(h as usize)
+        .saturating_mul(4);
+    let scanout_backing = match DmaRegion::alloc(scanout_bytes.max(4096), 4096) {
+        Some(v) => v,
+        None => {
+            crate::log!("virgl: scanout backing alloc failed\n");
+            return;
+        }
+    };
+    unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
+    if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_backing.len() as u32) {
+        crate::log!("virgl: scanout attach_backing failed\n");
+        return;
+    }
+
+    let scanout_bytes = (w as usize)
+        .saturating_mul(h as usize)
+        .saturating_mul(4);
+    let scanout_backing = match DmaRegion::alloc(scanout_bytes.max(4096), 4096) {
+        Some(v) => v,
+        None => {
+            crate::log!("virgl: scanout backing alloc failed\n");
+            return;
+        }
+    };
+    unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
+    if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_backing.len() as u32) {
+        crate::log!("virgl: scanout attach_backing failed\n");
         return;
     }
 
@@ -1442,6 +1558,7 @@ pub fn demo_issue_draw_once() {
         return;
     }
 
+    let _ = gpu.transfer_to_host_2d(scanout_res, w, h);
     let _ = gpu.resource_flush(scanout_res, w, h);
     crate::log!("virgl: issued DRAW_VBO triangle (w={} h={})\n", w, h);
 }
@@ -1632,6 +1749,7 @@ pub fn demo_spin_triangle_60hz() {
             crate::log!("virgl: submit_3d failed\n");
             return;
         }
+        let _ = gpu.transfer_to_host_2d(scanout_res, w, h);
         let _ = gpu.resource_flush(scanout_res, w, h);
     }
 }
@@ -1723,6 +1841,25 @@ async fn virgl_spin_task() {
 
     if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, w, h) {
         crate::log!("virgl: scanout resource_create_2d failed\n");
+        VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
+        return;
+    }
+
+    // 2D scanout resources require backing + transfer_to_host to become visible.
+    let scanout_bytes = (w as usize)
+        .saturating_mul(h as usize)
+        .saturating_mul(4);
+    let scanout_backing = match DmaRegion::alloc(scanout_bytes.max(4096), 4096) {
+        Some(v) => v,
+        None => {
+            crate::log!("virgl: scanout backing alloc failed\n");
+            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
+            return;
+        }
+    };
+    unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
+    if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_backing.len() as u32) {
+        crate::log!("virgl: scanout attach_backing failed\n");
         VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
         return;
     }
@@ -1879,6 +2016,7 @@ async fn virgl_spin_task() {
             crate::log!("virgl: submit_3d failed\n");
             break;
         }
+        let _ = gpu.transfer_to_host_2d(scanout_res, w, h);
         let _ = gpu.resource_flush(scanout_res, w, h);
 
         if frame % 60 == 0 {

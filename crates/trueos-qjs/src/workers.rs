@@ -39,6 +39,7 @@ pub const CORE_KIND_EFF: u8 = 2;
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> = Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
+static WARNED_SINGLE_CORE_FALLBACK: AtomicBool = AtomicBool::new(false);
 
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
@@ -103,11 +104,13 @@ fn pick_spawner_affinity_first() -> Option<embassy_executor::SendSpawner> {
 
     let kinds = CORE_KINDS.lock();
 
+    let mut bsp: Option<embassy_executor::SendSpawner> = None;
     let mut perf: Vec<embassy_executor::SendSpawner> = Vec::new();
     let mut any: Vec<embassy_executor::SendSpawner> = Vec::new();
     for (slot, sp) in map.iter() {
         // Policy: never schedule QJS workers on the BSP (slot 0).
         if *slot == 0 {
+            bsp = Some(sp.clone());
             continue;
         }
         any.push(sp.clone());
@@ -117,6 +120,14 @@ fn pick_spawner_affinity_first() -> Option<embassy_executor::SendSpawner> {
     }
 
     if any.is_empty() {
+        // Single-core / BSP-only system: allow a soft fallback so Worker works at all.
+        // This is intentionally one-time logged so it doesn't spam the console.
+        if let Some(bsp) = bsp {
+            if !WARNED_SINGLE_CORE_FALLBACK.swap(true, Ordering::AcqRel) {
+                log_str("qjs-worker: only BSP core available; allowing worker fallback to slot0\n");
+            }
+            return Some(bsp);
+        }
         return None;
     }
 
