@@ -63,6 +63,7 @@ pub fn with_framebuffers<R>(f: impl FnOnce(Option<&'static ::limine::response::F
 }
 
 #[cfg(feature = "gfx_virgl")]
+#[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {
     crate::log!("gfx: switch_to_virgl: disabled (A/B swap mode)\n");
     false
@@ -106,6 +107,7 @@ pub fn switch_to_limine_fb() -> bool {
 }
 
 #[cfg(feature = "gfx_intel")]
+#[allow(dead_code)]
 pub fn switch_to_intel() -> bool {
     with_system(|sys| {
         let Some(b) = backends::Backend::init_intel(sys.framebuffers) else {

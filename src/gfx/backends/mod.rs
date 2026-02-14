@@ -25,6 +25,17 @@ pub enum Backend {
     None(limine_fb::NullBackend),
 }
 
+fn ensure_pci_enumerated_if_empty() {
+    let mut count: usize = 0;
+    crate::pci::with_devices(|list| {
+        count = list.len();
+    });
+    if count == 0 {
+        crate::log!("gfx: pci device list empty; enumerating before backend init\n");
+        crate::pci::enumerate_impl();
+    }
+}
+
 impl Backend {
     pub fn init_auto(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
@@ -38,11 +49,13 @@ impl Backend {
     pub fn init_virgl(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
+        ensure_pci_enumerated_if_empty();
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(|b| Backend::Virgl(b))
     }
 
     #[cfg(feature = "gfx_virgl")]
     pub fn init_virtio_sw() -> Option<Self> {
+        ensure_pci_enumerated_if_empty();
         virtio_sw::VirtioSwBackend::init().map(Backend::VirtioSw)
     }
 
@@ -50,6 +63,7 @@ impl Backend {
     pub fn init_intel(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
+        ensure_pci_enumerated_if_empty();
         intel_gpu::IntelGpuBackend::init(framebuffers).map(Backend::Intel)
     }
 

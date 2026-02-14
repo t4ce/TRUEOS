@@ -1,11 +1,13 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_time::{Duration, Timer};
+use alloc::borrow::ToOwned;
 
 use crate::shell::{CommandAction, ShellBackend};
 use crate::shell::interface::ShellIo;
-use crate::v::net::wss::WssConnection;
 use crate::shell::output::ReverseOutput;
+use crate::shell::statusbar;
+use crate::v::net::https::post_https_json_async;
 
 pub fn cmd_ai(_ctx: &mut crate::shell::cmd::registry::ShellCommandCtx, args: Option<&crate::shell::cmd::registry::ParsedArgs>) -> CommandAction {
     let first = args.and_then(|a| a.get_str(0)).unwrap_or("");
@@ -23,147 +25,119 @@ pub async fn run_ai_wizard(
     history: &mut Vec<String>,
     initial_prompt: &str,
 ) {
-    const MODEL: &str = "gpt-5.2";
     const API_KEY: &str = "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";
-    const BETA_HDR: &str = "OpenAI-Beta: realtime=v1";
+    const URL: &str = "https://api.openai.com/v1/responses";
+    
+    // Ensure correct scroll region (Row 3..Bottom)
+    crate::shell::output::apply_shell_scroll_region(io, term_rows);
 
     let out = ReverseOutput::new(io, term_cols, term_rows, history);
-    
-    // Initial status
-    out.write_str("ai: connecting to ");
-    out.write_str(MODEL);
-    out.write_str("... (Ctrl-C to disconnect)\n");
 
-    let url = alloc::format!("wss://api.openai.com/v1/realtime?model={}", MODEL);
-    let auth = alloc::format!("Authorization: Bearer {}", API_KEY);
-    let headers: [&str; 2] = [auth.as_str(), BETA_HDR];
-
-    let mut wss = match WssConnection::connect_with_headers(url.as_str(), &headers).await {
-        Ok(c) => c,
-        Err(e) => {
-            out.write_fmt(format_args!("ai: connection failed {:?}\n", e));
-            return;
-        }
-    };
-    
-    // Session Init
-    let session_update = "{\"type\":\"session.update\",\"session\":{\"modalities\":[\"text\"],\"instructions\":\"You are a concise shell assistant running inside TRUEOS.\"}}";
-    if let Err(_) = wss.send(session_update) {
-         out.write_str("ai: session handshake failed\n");
-    }
-
-    out.write_str("ai: connected\n");
-    
-    // If there's an initial prompt, send it
     if !initial_prompt.trim().is_empty() {
-        send_user_message(&mut wss, initial_prompt).await;
+        {
+             let mut echoed = String::new();
+             echoed.push_str("ai> ");
+             echoed.push_str(initial_prompt);
+             out.echo_command(echoed.as_str());
+        }
+        process_input(&out, io, term_cols, term_rows, initial_prompt, URL, API_KEY).await;
     }
-
-    io.write_str("ai> ");
 
     let mut line = String::new();
-    let mut response_buf = String::new();
-    let mut saw_cr = false;
 
     loop {
-        // 1. Network Processing
-        while let Some(frame) = wss.recv() {
-            if frame.contains("\"type\":\"response.create\"") {
-                response_buf.clear();
-            }
+        // Position cursor at the prompt line (Row 2), clear it, and show prompt
+        io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+        io.write_str(crate::ecma48::CLEAR_LINE);
+        io.write_str("ai> ");
+        io.write_str(&line);
 
-            if let Some(delta) = extract_json_string_field(&frame, "\"delta\":")
-                .or_else(|| extract_json_string_field(&frame, "\"text\":"))
-            {
-                response_buf.push_str(&delta);
-            }
+        // Wait for input
+        let b = loop {
+             if let Some(Byte) = io.read_byte() {
+                 break Byte;
+             }
+             Timer::after(Duration::from_millis(10)).await;
+        };
 
-            if frame.contains("\"type\":\"response.output_text.done\"")
-                || frame.contains("\"type\":\"response.done\"")
-                || frame.contains("\"type\":\"response.completed\"")
-            {
-                if !response_buf.trim().is_empty() {
-                    log_entry(&out, "ai: ", response_buf.trim());
-                    response_buf.clear();
-                    io.write_str("ai> ");
+        match b {
+            b'\r' | b'\n' => {
+                let input = line.trim().to_owned();
+                line.clear();
+                
+                if input.eq_ignore_ascii_case("exit") {
+                    break;
                 }
-            }
-        }
-
-        // 2. Input Processing
-        if let Some(b) = io.read_byte() {
-            if saw_cr && b == b'\n' {
-                saw_cr = false;
-                continue;
-            }
-            saw_cr = b == b'\r';
-
-            match b {
-                0x03 => { // Ctrl-C
-                    out.write_str("ai: disconnected\n");
-                    return;
-                }
-                b'\r' | b'\n' => {
-                    let input = String::from(line.trim());
-                    line.clear();
-                    // Do NOT print newline to IO if we want to keep prompt fixed?
-                    // Usually enter prints newline.
-                    // "user curser stays in promt row"
-                    // If we print \r\n, we go down.
-                    // If we clear line and reprint prompt, we stay.
-                    
-                    io.write_str("\r"); // CR
-                    io.write_str(crate::ecma48::CLEAR_LINE);
-                    
-                    if input.eq_ignore_ascii_case(".exit") || input.eq_ignore_ascii_case("exit") {
-                        out.write_str("ai: bye\n");
-                        return;
+                if !input.is_empty() {
+                    {
+                        let mut echoed = String::new();
+                        echoed.push_str("ai> ");
+                        echoed.push_str(&input);
+                        out.echo_command(echoed.as_str());
                     }
-
-                    if !input.is_empty() {
-                        log_entry(&out, "you: ", &input);
-                        
-                        send_user_message(&mut wss, &input).await;
-                        response_buf.clear();
-                    }
-                    
-                    io.write_str("ai> ");
+                    process_input(&out, io, term_cols, term_rows, &input, URL, API_KEY).await;
                 }
-                0x08 | 0x7F => { // Backspace
-                    if !line.is_empty() {
+            }
+            0x7F | 0x08 => { // Backspace
+                     if !line.is_empty() {
                         line.pop();
-                        io.write_str("\x08 \x08");
-                    }
-                }
-                c => {
-                    line.push(c as char);
-                    io.write_byte(c);
-                }
+                     }
             }
-        } else {
-            Timer::after(Duration::from_millis(10)).await;
+            c => {
+                line.push(c as char);
+            }
         }
     }
 }
 
-
-fn log_entry(out: &ReverseOutput, prefix: &str, msg: &str) {
-    if msg.is_empty() { return; }
-    // ReverseOutput expects simple strings and handles alignment/scrolling
-    out.write_str(prefix);
-    out.write_str(msg);
-    out.write_str("\n");
-}
-
-async fn send_user_message(wss: &mut WssConnection, text: &str) {
+async fn process_input(
+    out: &ReverseOutput<'_>,
+    io: &dyn ShellBackend,
+    term_cols: usize,
+    term_rows: usize,
+    input: &str,
+    url: &str,
+    key: &str
+) {
     let mut esc = String::new();
-    json_escape_into(&mut esc, text);
-    let msg = alloc::format!(
-        "{{\"type\":\"conversation.item.create\",\"item\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}}}",
+    json_escape_into(&mut esc, input);
+    let body = alloc::format!(
+        "{{\"model\": \"gpt-5.2\", \"input\": \"{}\", \"text\": {{\"verbosity\": \"medium\"}}, \"tools\": [{{ \"type\": \"web_search\" }}]}}",
         esc
     );
-    let _ = wss.send(&msg);
-    let _ = wss.send("{\"type\":\"response.create\"}");
+
+    // out.write_str("ai: thinking...\n");
+    statusbar::set_right_active("thinking");
+    statusbar::refresh(io, term_cols, term_rows);
+
+    // 10s timeout, max 64KB response
+    let res = post_https_json_async(url, body, Some(key), 10_000, 64 * 1024).await;
+    
+    statusbar::set_right_active("");
+    statusbar::refresh(io, term_cols, term_rows);
+
+    match res {
+        Ok(bytes) => {
+            if let Ok(s) = core::str::from_utf8(&bytes) {
+                // OpenAI responses are JSON. We should try to extract the text.
+                if let Some(content) = extract_json_string_field(s, "\"text\":") {
+                    out.write_str("ai: ");
+                    out.write_str(&content);
+                    out.write_str("\n");
+                } else {
+                     // Fallback: print the whole thing
+                     out.write_str("ai: [raw] ");
+                     out.write_str(s);
+                     out.write_str("\n");
+                }
+            } else {
+                out.write_str("ai: error decoding utf8\n");
+            }
+        }
+        Err(e) => {
+            out.write_fmt(format_args!("ai: network error {:?}\n", e));
+        }
+    }
 }
 
 fn json_escape_into(out: &mut String, s: &str) {
@@ -184,7 +158,14 @@ fn json_escape_into(out: &mut String, s: &str) {
 fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
     let i = json.find(needle)?;
     let mut j = i + needle.len();
-    if !json.as_bytes().get(j).copied().is_some_and(|b| b == b'"') { return None; }
+    while j < json.len() {
+        let b = json.as_bytes()[j];
+        if b == b'"' { break; }
+        if b != b' ' && b != b':' && b != b'\n' && b != b'\r' { return None; }
+        j += 1;
+    }
+    if j >= json.len() { return None; }
+    
     j += 1;
     let bytes = json.as_bytes();
     let mut out = String::new();
@@ -201,6 +182,19 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
                 b'n' => out.push('\n'),
                 b'r' => out.push('\r'),
                 b't' => out.push('\t'),
+                b'u' => {
+                    // Primitive \uXXXX support
+                    if j + 4 < bytes.len() {
+                        if let Ok(hex_str) = core::str::from_utf8(&bytes[j+1..j+5]) {
+                             if let Ok(cp) = u32::from_str_radix(hex_str, 16) {
+                                 if let Some(ch) = core::char::from_u32(cp) {
+                                     out.push(ch);
+                                     j += 4;
+                                 }
+                             }
+                        }
+                    }
+                }
                 _ => {}
             }
             j += 1;

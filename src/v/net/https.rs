@@ -506,6 +506,7 @@ async fn fetch_on_device(
     timeout_ms: u32,
     max_bytes: usize,
     body_json: Option<&str>,
+    auth_token: Option<&str>,
 ) -> Result<Vec<u8>, FetchError> {
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
         Ok(ip) => ip,
@@ -573,11 +574,29 @@ async fn fetch_on_device(
                         continue;
                     }
                     if !http_sent {
-                        let req = format!(
-                            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                            parsed.path,
-                            parsed.host
-                        );
+                        let auth = if let Some(token) = auth_token {
+                            format!("Authorization: Bearer {}\r\n", token)
+                        } else {
+                            String::new()
+                        };
+                        let req = if let Some(body) = body_json {
+                            let len = body.len();
+                            format!(
+                                "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nAccept: */*\r\n\r\n{}",
+                                parsed.path,
+                                parsed.host,
+                                auth,
+                                len,
+                                body
+                            )
+                        } else {
+                            format!(
+                                "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\n{}Accept: */*\r\nConnection: close\r\n\r\n",
+                                parsed.path,
+                                parsed.host,
+                                auth
+                            )
+                        };
                         let _ = cmds.push(TlsCommand::Send {
                             handle,
                             data: req.into_bytes(),
@@ -1847,7 +1866,53 @@ pub async fn fetch_https_body_async(
         let mut redirect: Option<(u16, String)> = None;
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes).await {
+            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None).await {
+                Ok(v) => return Ok(v),
+                Err(FetchError::Redirect { status, url }) => {
+                    redirect = Some((status, url));
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        if let Some((status, next_url)) = redirect {
+            if hop >= MAX_REDIRECTS {
+                return Err(FetchError::Http(status));
+            }
+            current_url = next_url;
+            continue;
+        }
+
+        return Err(last_err.unwrap_or(FetchError::DnsFailed));
+    }
+
+    Err(FetchError::Http(0))
+}
+
+pub async fn post_https_json_async(
+    url: &str,
+    body_json: String,
+    auth_token: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return Err(FetchError::NoNic);
+    }
+
+    const MAX_REDIRECTS: usize = 3;
+    let mut current_url = String::from(url);
+
+    for hop in 0..=MAX_REDIRECTS {
+        let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
+
+        let mut last_err: Option<FetchError> = None;
+        let mut redirect: Option<(u16, String)> = None;
+
+        for dev_idx in 0..dev_count {
+            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, Some(body_json.as_str()), auth_token).await {
                 Ok(v) => return Ok(v),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
