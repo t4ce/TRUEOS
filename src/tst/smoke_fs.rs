@@ -168,8 +168,9 @@ pub(crate) async fn bsp_smoke_test_once_async() {
         // Disks can briefly report transient I/O errors right after bring-up.
         // Retry a handful of times so BSP logs reflect the steady state.
         let mut last = (crate::v::disc::detect::DiscStatus::Unknown, None);
+        let max_detect_tries = if h.info().kind == block::DeviceKind::Nvme { 1 } else { 10 };
         let mut tries = 0u8;
-        while tries < 10 {
+        while tries < max_detect_tries {
             let r = crate::v::disc::detect::detect_physical_disk_detail(h).await;
             match r.1 {
                 Some(e) if is_transient_io(e) => {

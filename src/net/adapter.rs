@@ -9,7 +9,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxTo
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    DhcpOption, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
     Icmpv4Packet, Icmpv4Repr,
 };
 
@@ -34,7 +34,7 @@ const NET_LOG_DHCP_VERBOSE: bool = false;
 const DHCP_DNS_MAX: usize = 4;
 pub const MAX_NET_DEVICES: usize = 8;
 const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
-const STATIC_FALLBACK_IPV4: [u8; 4] = [192, 168, 178, 111];
+const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 111];
 const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
 // Best-effort primary DNS server snapshot (used by v-layer defaults).
@@ -42,6 +42,7 @@ const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 static PRIMARY_DHCP_DNS: spin::Mutex<([[u8; 4]; DHCP_DNS_MAX], u8)> =
     spin::Mutex::new(([[0u8; 4]; DHCP_DNS_MAX], 0));
 static PRIMARY_DEVICE_LOCKED: AtomicBool = AtomicBool::new(false);
+static PRIMARY_REACHABLE_LOCKED: AtomicBool = AtomicBool::new(false);
 
 pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
     *PRIMARY_DHCP_DNS.lock()
@@ -53,6 +54,13 @@ pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
     services.get(index).and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
 }
 
+pub fn dhcp_has_lease_at(index: usize) -> Option<bool> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    let svc = services.get(index)?;
+    Some(svc.dhcp_has_lease)
+}
+
 static HOSTNAME: spin::Mutex<Option<alloc::string::String>> = spin::Mutex::new(None);
 
 pub fn get_hostname() -> alloc::string::String {
@@ -61,20 +69,6 @@ pub fn get_hostname() -> alloc::string::String {
 
 pub fn set_hostname(name: &str) {
     *HOSTNAME.lock() = Some(alloc::string::String::from(name));
-    
-    // Update running sockets
-    // Note: smoltcp copies options, so we can pass a temporary slice.
-    let mut guard = NET_SERVICES.lock();
-    if let Some(services) = guard.as_mut() {
-        let name_owned = alloc::string::String::from(name);
-        for svc in services {
-            let socket = svc.sockets.get_mut::<dhcpv4::Socket>(svc.dhcp);
-            // socket.set_outgoing_options(&[DhcpOption {
-            //     kind: 12,
-            //     data: name_owned.as_bytes(),
-            // }]);
-        }
-    }
 }
 
 static NET_RX_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -101,17 +95,6 @@ static NET_TX_FRAMES_AT: [AtomicU64; MAX_NET_DEVICES] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
 ];
-static NET_TX_DROPPED_AT: [AtomicU64; MAX_NET_DEVICES] = [
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-    AtomicU64::new(0),
-];
-
 static NET_DHCP_OFFERS_RX_AT: [AtomicU64; MAX_NET_DEVICES] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -132,41 +115,6 @@ const DHCP_FORCE_BROADCAST_FLAG: bool = true;
 // Useful if we're accidentally producing an invalid checksum due to offload or
 // descriptor behavior.
 const DHCP_FORCE_UDP_CHECKSUM_ZERO: bool = true;
-
-fn is_dhcp_client_udp(buf: &[u8]) -> bool {
-    if buf.len() < 14 {
-        return false;
-    }
-
-    let mut et = u16::from_be_bytes([buf[12], buf[13]]);
-    let mut l2_off = 14usize;
-    if et == 0x8100 {
-        if buf.len() < 18 {
-            return false;
-        }
-        et = u16::from_be_bytes([buf[16], buf[17]]);
-        l2_off = 18;
-    }
-    if et != 0x0800 || buf.len() < l2_off + 20 {
-        return false;
-    }
-
-    let ver_ihl = buf[l2_off];
-    if (ver_ihl >> 4) != 4 {
-        return false;
-    }
-    let ihl = ((ver_ihl & 0x0f) as usize) * 4;
-    if ihl < 20 || buf.len() < l2_off + ihl + 8 {
-        return false;
-    }
-    if buf[l2_off + 9] != 17 {
-        return false;
-    }
-    let udp_off = l2_off + ihl;
-    let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
-    let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
-    sport == 68 && dport == 67
-}
 
 fn dhcp_fixup_broadcast_and_udp_checksum(buf: &mut [u8]) {
     if buf.len() < 14 {
@@ -1021,7 +969,7 @@ impl NetService {
         };
         let mut iface = Interface::new(cfg, &mut device, now());
         // Bring-up default: install static IPv4 before DHCP starts.
-        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface);
+        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface, device_index);
         let ip_o = fallback_ip.octets();
         let gw_o = fallback_gw.octets();
         crate::log!(
@@ -1049,7 +997,7 @@ impl NetService {
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
 
-        let mut dhcp_socket = dhcpv4::Socket::new();
+        let dhcp_socket = dhcpv4::Socket::new();
         // let current_hostname = get_hostname();
         // dhcp_socket.set_outgoing_options(&[DhcpOption {
         //     kind: 12,
@@ -1685,7 +1633,8 @@ impl NetService {
             Some(dhcpv4::Event::Deconfigured) => {
                 if self.dhcp_has_lease {
                     self.dhcp_has_lease = false;
-                    let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut self.iface);
+                    let (fallback_ip, fallback_gw) =
+                        apply_static_fallback_ipv4(&mut self.iface, self.device_index);
                     self.local_ipv4 = Some(fallback_ip);
                     self.router_ipv4 = Some(fallback_gw);
                     self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
@@ -1708,6 +1657,7 @@ impl NetService {
                     if self.device_index == crate::net::primary_device_index() {
                         *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
                         PRIMARY_DEVICE_LOCKED.store(false, Ordering::SeqCst);
+                        PRIMARY_REACHABLE_LOCKED.store(false, Ordering::SeqCst);
                     }
                 }
             }
@@ -1723,6 +1673,12 @@ impl NetService {
     }
 
     fn maybe_send_icmp_ping(&mut self, timestamp: Instant) {
+        if PRIMARY_REACHABLE_LOCKED.load(Ordering::Relaxed)
+            && self.device_index != crate::net::primary_device_index()
+        {
+            return;
+        }
+
         if self.icmp_ping_pongs >= 1 {
             return;
         }
@@ -1847,6 +1803,22 @@ impl NetService {
                                     self.device_index
                                 );
                                 crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
+
+                                // Prefer the first NIC that has proven end-to-end
+                                // L2/L3 reachability to the gateway for default vnet users.
+                                if PRIMARY_REACHABLE_LOCKED
+                                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                                    .is_ok()
+                                {
+                                    crate::net::set_primary_device_index(self.device_index);
+                                    if self.device_index == crate::net::primary_device_index() {
+                                        *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
+                                    }
+                                    crate::log!(
+                                        "net: primary locked by reachability dev={}\n",
+                                        self.device_index
+                                    );
+                                }
                             }
                         }
                     }
@@ -1864,13 +1836,16 @@ fn now() -> Instant {
     Instant::from_millis(ms)
 }
 
-fn apply_static_fallback_ipv4(iface: &mut Interface) -> (Ipv4Address, Ipv4Address) {
-    let ip = Ipv4Address::new(
-        STATIC_FALLBACK_IPV4[0],
-        STATIC_FALLBACK_IPV4[1],
-        STATIC_FALLBACK_IPV4[2],
-        STATIC_FALLBACK_IPV4[3],
-    );
+fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {
+    let mut octets = STATIC_FALLBACK_BASE_IPV4;
+    let base = octets[3] as usize;
+    let host = (base + (device_index % 64)).clamp(2, 254) as u8;
+    octets[3] = host;
+    Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
+}
+
+fn apply_static_fallback_ipv4(iface: &mut Interface, device_index: usize) -> (Ipv4Address, Ipv4Address) {
+    let ip = fallback_ipv4_for_device(device_index);
     let gw = Ipv4Address::new(
         STATIC_FALLBACK_GATEWAY[0],
         STATIC_FALLBACK_GATEWAY[1],

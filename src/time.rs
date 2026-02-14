@@ -54,6 +54,17 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
+    if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
+        if let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet) {
+            crate::log!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
+            return calibrated_hz;
+        }
+    }
+
+    detect_tsc_hz_from_cpuid()
+}
+
+fn detect_tsc_hz_from_cpuid() -> u64 {
     let r15 = __cpuid(0x15);
     let denom = r15.eax as u64;
     let numer = r15.ebx as u64;
@@ -84,6 +95,37 @@ fn detect_tsc_hz() -> u64 {
     }
 
     1_000_000_000
+}
+
+fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64> {
+    let hpet_hz = hpet.frequency_hz();
+    if hpet_hz == 0 {
+        return None;
+    }
+
+    const SAMPLE_MS: u64 = 50;
+    let target_hpet_ticks = ((hpet_hz as u128) * (SAMPLE_MS as u128) / 1000u128) as u64;
+    if target_hpet_ticks == 0 {
+        return None;
+    }
+
+    let hpet_start = hpet.main_counter();
+    let tsc_start = unsafe { _rdtsc() as u64 };
+
+    loop {
+        let hpet_now = hpet.main_counter();
+        let elapsed = hpet.counter_delta(hpet_start, hpet_now);
+        if elapsed >= target_hpet_ticks {
+            let tsc_end = unsafe { _rdtsc() as u64 };
+            let tsc_delta = tsc_end.wrapping_sub(tsc_start);
+            let hz = ((tsc_delta as u128) * 1000u128 / (SAMPLE_MS as u128)) as u64;
+            if hz >= 1_000_000 {
+                return Some(hz);
+            }
+            return None;
+        }
+        core::hint::spin_loop();
+    }
 }
 
 fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64) -> u64 {
