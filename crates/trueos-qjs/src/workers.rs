@@ -650,7 +650,7 @@ pub unsafe fn install_worker_threads_exports(ctx: *mut qjs::JSContext, m: *mut q
                 Some(js_worker_ctor),
                 b"Worker\0".as_ptr() as *const c_char,
                 1,
-                qjs::JS_CFUNC_GENERIC,
+                qjs::JS_CFUNC_CONSTRUCTOR,
                 0,
             );
             let _ = qjs::JS_SetModuleExport(ctx, m, b"Worker\0".as_ptr() as *const c_char, worker_fn);

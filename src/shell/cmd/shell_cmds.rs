@@ -195,18 +195,14 @@ pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_
 }
 
 pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let src = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    let src = src.trim();
-    if src.is_empty() {
+    // Shell UX: default to the QJS REPL.
+    // Keep only a minimal help escape hatch so users can discover REPL commands.
+    let rest = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
+    if rest == "-h" || rest == "--help" {
         crate::shell::shellqjs::help(ctx.io);
-        CommandAction::None
-    } else {
-        let mut buf: heapless::String<192> = heapless::String::new();
-        for ch in src.chars() {
-            if buf.push(ch).is_err() {
-                break;
-            }
-        }
-        CommandAction::Qjs { src: buf }
+        return CommandAction::None;
     }
+
+    // (Other execution paths still exist for internal callers like the AI bridge.)
+    CommandAction::Qjs { src: heapless::String::new() }
 }
