@@ -137,26 +137,21 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         crate::gfx::BackendKind::Virgl => ctx.io.write_str("gfx: backend=virgl\r\n"),
         crate::gfx::BackendKind::LimineFb => ctx.io.write_str("gfx: backend=liminefb\r\n"),
         #[cfg(feature = "gfx_intel")]
-        crate::gfx::BackendKind::IntelGpu => ctx.io.write_str("gfx: backend=intel_gpu\r\n"),
+        crate::gfx::BackendKind::Intel => ctx.io.write_str("gfx: backend=intel\r\n"),
         crate::gfx::BackendKind::None => ctx.io.write_str("gfx: backend=none\r\n"),
     };
 
-    if crate::gfx::rect_demo::spawn_moving_rect(ctx.spawner) {
-        ctx.io.write_str("gfx: moving rect started\r\n");
-    } else {
-        ctx.io.write_str("gfx: moving rect already running\r\n");
-    }
+    crate::gfx::demo::spawn_spin_rect_60hz(ctx.spawner);
+    ctx.io.write_str("gfx: spin rect started\r\n");
     CommandAction::None
 }
 
 #[cfg(not(feature = "gfx_virgl"))]
 pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
     ctx.io.write_str("gfx: virgl not built (feature gfx_virgl disabled)\r\n");
-    if crate::gfx::rect_demo::spawn_moving_rect(ctx.spawner) {
-        ctx.io.write_str("gfx: moving rect started\r\n");
-    } else {
-        ctx.io.write_str("gfx: moving rect already running\r\n");
-    }
+
+    crate::gfx::demo::spawn_spin_rect_60hz(ctx.spawner);
+    ctx.io.write_str("gfx: spin rect started\r\n");
     CommandAction::None
 }
 

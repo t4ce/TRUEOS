@@ -4,9 +4,11 @@ use trueos_gfx_core::{
 };
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicU64;
 
 static DEMO_READY: AtomicBool = AtomicBool::new(false);
 static DEMO_SPIN_RUNNING: AtomicBool = AtomicBool::new(false);
+static DEMO_EPOCH: AtomicU64 = AtomicU64::new(0);
 static mut PIPELINE: trueos_gfx_core::PipelineId = trueos_gfx_core::PipelineId::invalid();
 static mut VERTEX_BUF: trueos_gfx_core::BufferId = trueos_gfx_core::BufferId::invalid();
 
@@ -19,6 +21,18 @@ struct Vertex {
 }
 
 fn ensure_resources(ctx: &mut dyn GfxContext) {
+    let epoch = crate::gfx::backend_epoch();
+    let prev = DEMO_EPOCH.load(Ordering::Relaxed);
+    if prev != epoch {
+        // Backend changed; any cached IDs belong to the old backend.
+        unsafe {
+            PIPELINE = trueos_gfx_core::PipelineId::invalid();
+            VERTEX_BUF = trueos_gfx_core::BufferId::invalid();
+        }
+        DEMO_READY.store(false, Ordering::Release);
+        DEMO_EPOCH.store(epoch, Ordering::Relaxed);
+    }
+
     if DEMO_READY.load(Ordering::Acquire) {
         return;
     }
@@ -65,10 +79,7 @@ fn ensure_resources(ctx: &mut dyn GfxContext) {
     let verts = rect_verts(0.0);
 
     let bytes: &[u8] = unsafe {
-        core::slice::from_raw_parts(
-            verts.as_ptr() as *const u8,
-            core::mem::size_of_val(&verts),
-        )
+        core::slice::from_raw_parts(verts.as_ptr() as *const u8, core::mem::size_of_val(&verts))
     };
 
     if ctx.write_buffer(vbuf, 0, bytes).is_err() {
@@ -111,10 +122,7 @@ pub fn tick_rotating_rect(ctx: &mut dyn GfxContext, angle_rad: f32) {
 
     let verts = rect_verts(angle_rad);
     let bytes: &[u8] = unsafe {
-        core::slice::from_raw_parts(
-            verts.as_ptr() as *const u8,
-            core::mem::size_of_val(&verts),
-        )
+        core::slice::from_raw_parts(verts.as_ptr() as *const u8, core::mem::size_of_val(&verts))
     };
     let _ = ctx.write_buffer(vbuf, 0, bytes);
 
@@ -128,7 +136,10 @@ pub fn tick_rotating_rect(ctx: &mut dyn GfxContext, angle_rad: f32) {
         height: swap.extent.height,
     });
     list.push(Command::BindPipeline(pipeline));
-    list.push(Command::BindVertexBuffer { buffer: vbuf, offset: 0 });
+    list.push(Command::BindVertexBuffer {
+        buffer: vbuf,
+        offset: 0,
+    });
     list.push(Command::Draw {
         vertex_count: 6,
         first_vertex: 0,
@@ -159,12 +170,36 @@ fn rect_verts(angle_rad: f32) -> [Vertex; 6] {
 
     // Two triangles: (p0,p1,p2) and (p0,p2,p3)
     [
-        Vertex { pos: p0, rgb: [255, 0, 255], _pad: 0 },
-        Vertex { pos: p1, rgb: [0, 255, 255], _pad: 0 },
-        Vertex { pos: p2, rgb: [255, 255, 0], _pad: 0 },
-        Vertex { pos: p0, rgb: [255, 0, 255], _pad: 0 },
-        Vertex { pos: p2, rgb: [255, 255, 0], _pad: 0 },
-        Vertex { pos: p3, rgb: [0, 255, 0], _pad: 0 },
+        Vertex {
+            pos: p0,
+            rgb: [255, 0, 255],
+            _pad: 0,
+        },
+        Vertex {
+            pos: p1,
+            rgb: [0, 255, 255],
+            _pad: 0,
+        },
+        Vertex {
+            pos: p2,
+            rgb: [255, 255, 0],
+            _pad: 0,
+        },
+        Vertex {
+            pos: p0,
+            rgb: [255, 0, 255],
+            _pad: 0,
+        },
+        Vertex {
+            pos: p2,
+            rgb: [255, 255, 0],
+            _pad: 0,
+        },
+        Vertex {
+            pos: p3,
+            rgb: [0, 255, 0],
+            _pad: 0,
+        },
     ]
 }
 

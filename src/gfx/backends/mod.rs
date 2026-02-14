@@ -11,7 +11,7 @@ pub enum Backend {
     LimineFb(limine_fb::LimineFbBackend),
 
     #[cfg(feature = "gfx_intel")]
-    IntelGpu(intel_gpu::IntelGpuBackend),
+    Intel(intel_gpu::IntelGpuBackend),
 
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
@@ -36,10 +36,10 @@ impl Backend {
     }
 
     #[cfg(feature = "gfx_intel")]
-    pub fn init_intel_gpu(
+    pub fn init_intel(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
-        intel_gpu::IntelGpuBackend::init(framebuffers).map(Backend::IntelGpu)
+        intel_gpu::IntelGpuBackend::init(framebuffers).map(Backend::Intel)
     }
 
     pub fn init_limine_fb(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) -> Self {
@@ -59,7 +59,7 @@ impl Backend {
             Backend::LimineFb(b) => b,
 
             #[cfg(feature = "gfx_intel")]
-            Backend::IntelGpu(b) => b,
+            Backend::Intel(b) => b,
 
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
