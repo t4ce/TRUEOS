@@ -28,6 +28,7 @@ libm = { version = "0.2", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-v = { path = "crates/trueos-v" }
+trueos-tetris = { path = "crates/trueos-tetris" }
 hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
 twoway = { version = "0.2", default-features = false }

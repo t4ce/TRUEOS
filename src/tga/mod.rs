@@ -1,4 +1,4 @@
-use core::ptr::{write_volatile, NonNull};
+use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::{Mutex, Once};
@@ -46,7 +46,10 @@ unsafe impl Send for Tga {}
 impl Tga {
     #[inline(always)]
     fn write_led(&self, value: u32) {
-        unsafe { write_volatile(self.led_reg as *mut u32, value) };
+        unsafe {
+            write_volatile(self.led_reg as *mut u32, value);
+            let _ = read_volatile(self.led_reg as *const u32);
+        };
     }
 }
 
@@ -60,6 +63,10 @@ static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
+const TGA_OFFLINE_RETRY_MS: u64 = 250;
+const TGA_PRESENCE_MISS_THRESHOLD: u8 = 10;
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
@@ -379,7 +386,10 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         // Hotplug path: firmware may not have assigned BARs for devices appearing later.
         // Allocate a fixed 1 KiB window and program BAR0/BAR1.
         let size = TGA_EXPECTED_BAR0_SIZE;
-        let align = TGA_EXPECTED_BAR0_SIZE;
+        // Keep BAR base at least 4KiB aligned.
+        // The current FPGA-side write decode matches BAR0 + 0x00 via address low bits,
+        // so non-page-aligned hotplug bases (e.g. ...FC00) can miss that match.
+        let align = TGA_EXPECTED_BAR0_SIZE.max(0x1000);
 
         let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
         crate::log!(
@@ -477,11 +487,13 @@ pub(crate) async fn tga_task() {
     TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
         crate::log!("tga: task started\n");
     });
+    let mut presence_miss_streak: u8 = 0;
     loop {
         if !is_online() {
             crate::pci::enumerate_impl();
             let _ = try_init();
-            Timer::after(EmbassyDuration::from_secs(5)).await;
+            presence_miss_streak = 0;
+            Timer::after(EmbassyDuration::from_millis(TGA_OFFLINE_RETRY_MS)).await;
             continue;
         }
 
@@ -491,6 +503,12 @@ pub(crate) async fn tga_task() {
             guard.as_ref().map(is_present).unwrap_or(false)
         };
         if !present {
+            presence_miss_streak = presence_miss_streak.saturating_add(1);
+            if presence_miss_streak < TGA_PRESENCE_MISS_THRESHOLD {
+                Timer::after(EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS)).await;
+                continue;
+            }
+
             {
                 let mut guard = TGA.lock();
                 if let Some(old) = guard.take() {
@@ -498,14 +516,17 @@ pub(crate) async fn tga_task() {
                     log_tga_state("disconnected", &old);
                 }
             }
-            Timer::after(EmbassyDuration::from_secs(5)).await;
+            presence_miss_streak = 0;
+            Timer::after(EmbassyDuration::from_millis(TGA_OFFLINE_RETRY_MS)).await;
             continue;
         }
+
+        presence_miss_streak = 0;
 
         let t = TGA_HEARTBEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
         // Send 0..31 then wrap.
         write_led_raw(t & 0x1F);
 
-        Timer::after(EmbassyDuration::from_millis(100)).await;
+        Timer::after(EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS)).await;
     }
 }

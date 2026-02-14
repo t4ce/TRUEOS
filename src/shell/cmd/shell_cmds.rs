@@ -147,6 +147,10 @@ pub(crate) fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::EnterTxtEdt { filename, slot_id }
 }
 
+pub(crate) fn cmd_tetris(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+    CommandAction::EnterTetris
+}
+
 pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let cols = (*ctx.term_cols).max(1);
     ctx.io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
