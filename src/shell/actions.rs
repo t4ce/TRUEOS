@@ -32,7 +32,7 @@ pub(super) async fn handle_command_action(
             super::print_netbench_nic_table(io).await;
             io.write_str("netbench: enter nic id (blank/q cancels)\r\n");
         }
-        CommandAction::Qjs { src } => handle_qjs(io, spawner, src).await,
+        CommandAction::Qjs { src } => handle_qjs(io, term_cols, term_rows, spawner, history, src).await,
         CommandAction::EnterCube => handle_enter_cube(cube_mode, cube, io, term_cols, term_rows),
         CommandAction::EnterIco => handle_enter_ico(cube_mode, cube, io, term_cols, term_rows),
         CommandAction::EnterGo => handle_enter_go(io).await,
@@ -87,9 +87,20 @@ fn handle_pending(mode: &mut ShellMode, pending: PendingAction) {
     }
 }
 
-async fn handle_qjs(io: &'static dyn ShellBackend, spawner: &Spawner, src: heapless::String<192>) {
+async fn handle_qjs(
+    io: &'static dyn ShellBackend,
+    term_cols: &mut usize,
+    term_rows: &mut usize,
+    spawner: &Spawner,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+    src: heapless::String<192>,
+) {
     if trueos_qjs::async_fs::ensure_service_started(spawner) {
-        super::shellqjs::run(io, src.as_str()).await;
+        if src.trim().is_empty() {
+            super::shellqjs::repl_shell(io, *term_cols, *term_rows, history).await;
+        } else {
+            super::shellqjs::run(io, src.as_str()).await;
+        }
     } else {
         io.write_str("qjs: async fs service unavailable\r\n");
     }
