@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -68,15 +68,31 @@ pub async fn ai_tcp_bridge_task() {
             return;
         }
 
-        const OWNER: &'static str = "ai-qjs";
-        let cmds = NetQueue::new_leaked("ai-qjs-cmd", 256);
-        let events = NetQueue::new_leaked("ai-qjs-evt", 256);
-        register_app_queues(OWNER, cmds, events);
+        // Route the debug bridge over a non-primary NIC when available, so we can still
+        // interact even if the primary adapter is wedged (e.g. r8125 TX).
+        let device_index = if crate::net::device_count() > 1 { 1 } else { 0 };
+        let owner: &'static str = {
+            let s = alloc::format!("ai-qjs@{}", device_index);
+            Box::leak(s.into_boxed_str())
+        };
+        let cmds_name: &'static str = {
+            let s = alloc::format!("{}-cmd", owner);
+            Box::leak(s.into_boxed_str())
+        };
+        let events_name: &'static str = {
+            let s = alloc::format!("{}-evt", owner);
+            Box::leak(s.into_boxed_str())
+        };
+        let cmds = NetQueue::new_leaked(cmds_name, 256);
+        let events = NetQueue::new_leaked(events_name, 256);
+        register_app_queues(owner, cmds, events);
 
         let _ = cmds.push(NetCommand::OpenTcpListen { port: AI_TCP_PORT });
         crate::log!(
-            "ai-qjs: listening on tcp {} (hostfwd localhost:{} -> guest)\n",
+            "ai-qjs: listening on tcp {} dev={} owner={} (hostfwd localhost:{} -> guest)\n",
             AI_TCP_PORT,
+            device_index,
+            owner,
             AI_TCP_PORT
         );
 
@@ -265,6 +281,24 @@ pub async fn ai_qjs_repl_task() {
                         b'\r' | b'\n' => {
                             if b == b'\r' {
                                 ignore_lf = true;
+                            }
+
+                            let line_len_before = line.len();
+                            let mut stripped_nuls: usize = 0;
+                            line.retain(|&byte| {
+                                if byte == 0x00 {
+                                    stripped_nuls += 1;
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            if stripped_nuls != 0 {
+                                crate::log!(
+                                    "ai-qjs: stripped NULs count={} line_len={}\n",
+                                    stripped_nuls,
+                                    line_len_before
+                                );
                             }
 
                             let cmd = match core::str::from_utf8(&line) {
