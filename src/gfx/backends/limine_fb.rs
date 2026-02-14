@@ -1,5 +1,8 @@
 use alloc::vec::Vec;
 
+#[cfg(not(target_arch = "x86_64"))]
+use core::sync::atomic::{compiler_fence, Ordering};
+
 use libm::{ceilf, floorf};
 
 use trueos_gfx_core::{
@@ -125,6 +128,16 @@ impl FramebufferSurface {
                 unsafe { row_ptr.add(x).write_volatile(src_row[x]) };
             }
         }
+
+        // Ensure framebuffer writes become visible promptly.
+        // On x86, the framebuffer is often mapped WC; without an sfence, QEMU/virt can appear
+        // to update only on window resizes or other implicit flush events.
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::x86_64::_mm_sfence();
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        compiler_fence(Ordering::SeqCst);
     }
 }
 
