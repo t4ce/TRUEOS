@@ -599,15 +599,17 @@ async fn drain_jobs_and_promises(
 
     loop {
         let _progress = unsafe { trueos_qjs::async_ops::pump(ctx) };
+        let _worker_progress = unsafe { trueos_qjs::workers::pump(ctx) };
 
         // Drain QuickJS microtasks (Promise continuations).
         if !unsafe { drain_pending_jobs(io, rt, ctx) } {
             return false;
         }
 
-        let pending = unsafe { trueos_qjs::async_ops::has_pending(ctx) };
+        let pending_async = unsafe { trueos_qjs::async_ops::has_pending(ctx) };
+        let pending_workers = trueos_qjs::workers::has_pending_for_ctx(ctx);
         let jobs_pending = unsafe { trueos_qjs::JS_IsJobPending(rt) } > 0;
-        if !pending && !jobs_pending {
+        if !pending_async && !pending_workers && !jobs_pending {
             break;
         }
 
@@ -616,7 +618,7 @@ async fn drain_jobs_and_promises(
             break;
         }
 
-        if pending {
+        if pending_async {
             let remaining_ms = if max_ticks == 0 {
                 0
             } else {
@@ -790,6 +792,7 @@ async fn repl(io: &'static dyn ShellBackend) {
         }
 
         trueos_qjs::async_ops::drain_all_for_context(ctx);
+        trueos_qjs::workers::drain_all_for_context(ctx);
 
         let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
         if !opaque_ptr.is_null() {
@@ -1024,6 +1027,7 @@ pub(crate) async fn eval_bytes_opts_async(
 
         // Best-effort: reject/cleanup any unresolved async fs ops.
         trueos_qjs::async_ops::drain_all_for_context(ctx);
+        trueos_qjs::workers::drain_all_for_context(ctx);
 
         let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
         if !opaque_ptr.is_null() {
