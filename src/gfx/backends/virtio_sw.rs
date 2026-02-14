@@ -9,7 +9,7 @@ use trueos_gfx_core::{
     VertexLayout, Viewport,
 };
 
-use crate::gfx::virtio_gpu_3d::VirtioGpu3d;
+use crate::gfx::virtio_gpu_3d::with_global_gpu;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -70,7 +70,6 @@ impl Drop for DmaRegion {
 }
 
 struct VirtioScanout {
-    gpu: VirtioGpu3d,
     scanout_id: u32,
     width: u32,
     height: u32,
@@ -80,11 +79,21 @@ struct VirtioScanout {
 
 impl VirtioScanout {
     fn init() -> Option<Self> {
-        let mut gpu = VirtioGpu3d::init_first()?;
-        let (scanout_id, width, height) = gpu.get_display_info()?;
+        let (scanout_id, width, height) = with_global_gpu(|gpu| gpu.get_display_info())??;
+
+        crate::log!(
+            "virtio-scanout: display_info scanout={} {}x{}\n",
+            scanout_id,
+            width,
+            height
+        );
 
         let scanout_res = alloc_res_id();
-        if !gpu.resource_create_2d(scanout_res, FORMAT_B8G8R8X8_UNORM, width, height) {
+        let ok_create = with_global_gpu(|gpu| {
+            gpu.resource_create_2d(scanout_res, FORMAT_B8G8R8X8_UNORM, width, height)
+        })
+        .unwrap_or(false);
+        if !ok_create {
             crate::log!("virtio-scanout: resource_create_2d failed\n");
             return None;
         }
@@ -96,17 +105,30 @@ impl VirtioScanout {
         let backing = DmaRegion::alloc(bytes, 4096)?;
         unsafe { core::ptr::write_bytes(backing.virt(), 0, backing.len()) };
 
-        if !gpu.resource_attach_backing(scanout_res, backing.phys(), bytes as u32) {
+        let ok_attach = with_global_gpu(|gpu| {
+            gpu.resource_attach_backing(scanout_res, backing.phys(), bytes as u32)
+        })
+        .unwrap_or(false);
+        if !ok_attach {
             crate::log!("virtio-scanout: attach_backing failed\n");
             return None;
         }
-        if !gpu.set_scanout(scanout_id, scanout_res, width, height) {
+
+        let ok_scanout = with_global_gpu(|gpu| gpu.set_scanout(scanout_id, scanout_res, width, height))
+            .unwrap_or(false);
+        if !ok_scanout {
             crate::log!("virtio-scanout: set_scanout failed\n");
             return None;
         }
 
+        crate::log!(
+            "virtio-scanout: ready res={} bytes={} backing_phys=0x{:X}\n",
+            scanout_res,
+            bytes,
+            backing.phys()
+        );
+
         Some(Self {
-            gpu,
             scanout_id,
             width,
             height,
@@ -139,8 +161,19 @@ impl VirtioScanout {
             }
         }
 
-        let _ = self.gpu.transfer_to_host_2d(self.scanout_res, self.width, self.height);
-        let _ = self.gpu.resource_flush(self.scanout_res, self.width, self.height);
+        let (ok_tth, ok_flush) = with_global_gpu(|gpu| {
+            let ok_tth = gpu.transfer_to_host_2d(self.scanout_res, self.width, self.height);
+            let ok_flush = gpu.resource_flush(self.scanout_res, self.width, self.height);
+            (ok_tth, ok_flush)
+        })
+        .unwrap_or((false, false));
+        if !ok_tth || !ok_flush {
+            crate::log!(
+                "virtio-scanout: present transfer_to_host={} flush={}\n",
+                ok_tth as u8,
+                ok_flush as u8
+            );
+        }
     }
 }
 

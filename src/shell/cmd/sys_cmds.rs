@@ -132,21 +132,33 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
 
 #[cfg(feature = "gfx_virgl")]
 pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static GFX_CMD_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    let seq = GFX_CMD_SEQ.fetch_add(1, Ordering::Relaxed);
     let requested = _args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
+
+    let prev = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
+    ctx.io.write_fmt(format_args!(
+        "gfx[{}]: begin requested='{}' prev={:?}\r\n",
+        seq,
+        requested,
+        prev
+    ));
 
     // If we're leaving LimineFB mode (or leaving mirror mode), stop mirroring it into virtio scanout.
     if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::LimineFb) {
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: mirror disable (leaving liminefb)\r\n", seq));
         crate::gfx::virtio_limine::disable();
     }
 
     let kind = if requested.is_empty() || requested.eq_ignore_ascii_case("toggle") {
         crate::gfx::toggle_backend()
     } else if requested.eq_ignore_ascii_case("virgl") {
-        if crate::gfx::switch_to_virgl() {
-            crate::gfx::BackendKind::Virgl
-        } else {
-            crate::gfx::BackendKind::None
-        }
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: virgl disabled (A/B swap mode)\r\n", seq));
+        crate::gfx::BackendKind::None
     } else if requested.eq_ignore_ascii_case("sw")
         || requested.eq_ignore_ascii_case("soft")
         || requested.eq_ignore_ascii_case("virtio_sw")
@@ -163,33 +175,47 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         let _ = crate::gfx::switch_to_limine_fb();
         crate::gfx::BackendKind::LimineFb
     } else {
-        ctx.io.write_str("gfx: usage gfx [toggle|virgl|sw|liminefb]\r\n");
+        ctx.io.write_str("gfx: usage gfx [toggle|sw|liminefb]\r\n");
+        ctx.io.write_str("gfx: note: virgl is currently disabled (A/B swap mode)\r\n");
         return CommandAction::None;
     };
 
     match kind {
-        crate::gfx::BackendKind::Virgl => ctx.io.write_str("gfx: backend=virgl\r\n"),
-        crate::gfx::BackendKind::VirtioSw => ctx.io.write_str("gfx: backend=virtio_sw\r\n"),
-        crate::gfx::BackendKind::LimineFb => ctx.io.write_str("gfx: backend=liminefb\r\n"),
+        crate::gfx::BackendKind::Virgl => ctx.io.write_fmt(format_args!("gfx[{}]: backend=virgl\r\n", seq)),
+        crate::gfx::BackendKind::VirtioSw => ctx.io.write_fmt(format_args!("gfx[{}]: backend=virtio_sw\r\n", seq)),
+        crate::gfx::BackendKind::LimineFb => ctx.io.write_fmt(format_args!("gfx[{}]: backend=liminefb\r\n", seq)),
         #[cfg(feature = "gfx_intel")]
-        crate::gfx::BackendKind::Intel => ctx.io.write_str("gfx: backend=intel\r\n"),
-        crate::gfx::BackendKind::None => ctx.io.write_str("gfx: backend=none\r\n"),
+        crate::gfx::BackendKind::Intel => ctx.io.write_fmt(format_args!("gfx[{}]: backend=intel\r\n", seq)),
+        crate::gfx::BackendKind::None => ctx.io.write_fmt(format_args!("gfx[{}]: backend=none\r\n", seq)),
     };
 
     // If we entered LimineFB mode, mirror the Limine framebuffer into virtio scanout.
     if kind == crate::gfx::BackendKind::LimineFb {
         crate::gfx::virtio_limine::ensure_task_started(ctx.spawner);
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: mirror enable\r\n", seq));
         let ok = crate::gfx::with_framebuffers(|fbs| crate::gfx::virtio_limine::enable(fbs))
             .unwrap_or(false);
         if ok {
-            ctx.io.write_str("gfx: virtio-limine mirror enabled\r\n");
+            ctx.io
+                .write_fmt(format_args!("gfx[{}]: virtio-limine mirror enabled\r\n", seq));
         } else {
-            ctx.io.write_str("gfx: virtio-limine mirror failed\r\n");
+            ctx.io
+                .write_fmt(format_args!("gfx[{}]: virtio-limine mirror failed\r\n", seq));
         }
     }
 
-    crate::gfx::demo::spawn_spin_rect_60hz(ctx.spawner);
-    ctx.io.write_str("gfx: spin rect started\r\n");
+    ctx.io
+        .write_fmt(format_args!("gfx[{}]: end next={:?}\r\n", seq, kind));
+
+    if kind == crate::gfx::BackendKind::VirtioSw {
+        crate::gfx::demo::spawn_spin_rect_60hz(ctx.spawner);
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: spin rect started\r\n", seq));
+    } else {
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: spin rect skipped (non-gfx mode)\r\n", seq));
+    }
     CommandAction::None
 }
 

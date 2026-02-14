@@ -64,15 +64,8 @@ pub fn with_framebuffers<R>(f: impl FnOnce(Option<&'static ::limine::response::F
 
 #[cfg(feature = "gfx_virgl")]
 pub fn switch_to_virgl() -> bool {
-    with_system(|sys| {
-        let Some(b) = backends::Backend::init_virgl(sys.framebuffers) else {
-            return false;
-        };
-        sys.backend = b;
-        bump_backend_epoch();
-        true
-    })
-    .unwrap_or(false)
+    crate::log!("gfx: switch_to_virgl: disabled (A/B swap mode)\n");
+    false
 }
 
 #[cfg(not(feature = "gfx_virgl"))]
@@ -83,11 +76,14 @@ pub fn switch_to_virgl() -> bool {
 #[cfg(feature = "gfx_virgl")]
 pub fn switch_to_virtio_sw() -> bool {
     with_system(|sys| {
+        crate::log!("gfx: switch_to_virtio_sw: begin\n");
         let Some(b) = backends::Backend::init_virtio_sw() else {
+            crate::log!("gfx: switch_to_virtio_sw: init_virtio_sw failed\n");
             return false;
         };
         sys.backend = b;
         bump_backend_epoch();
+        crate::log!("gfx: switch_to_virtio_sw: ok epoch={}\n", backend_epoch());
         true
     })
     .unwrap_or(false)
@@ -100,8 +96,10 @@ pub fn switch_to_virtio_sw() -> bool {
 
 pub fn switch_to_limine_fb() -> bool {
     with_system(|sys| {
+        crate::log!("gfx: switch_to_limine_fb: begin\n");
         sys.backend = backends::Backend::init_limine_fb(sys.framebuffers);
         bump_backend_epoch();
+        crate::log!("gfx: switch_to_limine_fb: ok epoch={}\n", backend_epoch());
         true
     })
     .unwrap_or(false)
@@ -148,7 +146,14 @@ pub fn backend_kind() -> Option<BackendKind> {
     })
 }
 
-/// Toggle between LimineFB and virgl (if built). If virgl init fails, stay on LimineFB.
+/// Toggle the gfx backend.
+///
+/// A/B swap cycle:
+/// - VirtioSw (gfx) <-> LimineFb (visible via virtio_limine mirror)
+///
+/// Notes:
+/// - `LimineFb` here is intended to be made visible via `virtio_limine` (virtio scanout backed
+///   by the Limine framebuffer + periodic transfer/flush), not by "making VGA the display".
 pub fn toggle_backend() -> BackendKind {
     let Some(kind) = backend_kind() else {
         return BackendKind::None;
@@ -163,27 +168,25 @@ pub fn toggle_backend() -> BackendKind {
             BackendKind::LimineFb
         }
         BackendKind::Virgl => {
-            // Swap to software renderer while keeping virtio scanout ownership.
+            // Virgl is disabled in A/B swap mode, but handle the state anyway.
+            // Prefer moving into the virtio-owned software scanout.
             if switch_to_virtio_sw() {
                 return BackendKind::VirtioSw;
             }
-
-            // Fallback: go back to LimineFB.
             let _ = switch_to_limine_fb();
             BackendKind::LimineFb
         }
         BackendKind::VirtioSw => {
-            if switch_to_virgl() {
-                return BackendKind::Virgl;
-            }
-            BackendKind::VirtioSw
+            let _ = switch_to_limine_fb();
+            BackendKind::LimineFb
         }
-        BackendKind::LimineFb | BackendKind::None => {
-            if switch_to_virgl() {
-                return BackendKind::Virgl;
+        BackendKind::LimineFb => {
+            if switch_to_virtio_sw() {
+                return BackendKind::VirtioSw;
             }
-
-            // If virgl init fails, still enter virtio scanout world with software.
+            BackendKind::LimineFb
+        }
+        BackendKind::None => {
             if switch_to_virtio_sw() {
                 return BackendKind::VirtioSw;
             }
