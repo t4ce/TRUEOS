@@ -240,6 +240,7 @@ async fn gfx_spin_task() {
     let mut kind = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
     hz = match kind {
         crate::gfx::BackendKind::Virgl => 60,
+        crate::gfx::BackendKind::VirtioSw => 60,
         crate::gfx::BackendKind::LimineFb => 10,
         #[cfg(feature = "gfx_intel")]
         crate::gfx::BackendKind::Intel => 60,
@@ -257,6 +258,7 @@ async fn gfx_spin_task() {
             kind = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
             hz = match kind {
                 crate::gfx::BackendKind::Virgl => 60,
+                crate::gfx::BackendKind::VirtioSw => 60,
                 crate::gfx::BackendKind::LimineFb => 10,
                 #[cfg(feature = "gfx_intel")]
                 crate::gfx::BackendKind::Intel => 60,

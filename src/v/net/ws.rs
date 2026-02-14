@@ -186,26 +186,18 @@ impl WsConnection {
         let mut buf = [0u8; RX_BUF_SIZE];
 
         let len = self
-            .client
-            .write(
+            .client.write(
                 WebSocketSendMessageType::Text,
                 true, // fin
                 text.as_bytes(),
                 &mut buf,
-            )
-            .map_err(|e| {
-                crate::log!("ws: client.write failed err={:?}\n", e);
-                WsError::Io
-            })?;
+            ).map_err(|_| WsError::Protocol)?;
 
         if let Some(h) = self.handle {
             self.net.submit(Command::SendTcp {
                 handle: h,
                 data: ByteBuf::from_slice_trunc(&buf[..len]),
-            }).map_err(|_| {
-                crate::log!("ws: vnet SendTcp failed (queue full?)\n");
-                WsError::Io
-            })?;
+            }).map_err(|_| WsError::Io)?;
         }
         Ok(())
     }
@@ -241,8 +233,45 @@ impl WsConnection {
                         Some(String::from(s))
                     }
                     WebSocketReceiveMessageType::Binary => None,
-                    WebSocketReceiveMessageType::Ping => None,
+                    WebSocketReceiveMessageType::Ping => {
+                        // RFC6455: reply to Ping with Pong including identical payload.
+                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let mut payload = Vec::from(&out_buf[..read_result.len_to]);
+                        if let Ok(len) = self.client.write(
+                            WebSocketSendMessageType::Pong,
+                            true,
+                            &mut buf,
+                            &mut payload,
+                        ) {
+                            if let Some(h) = self.handle {
+                                let _ = self.net.submit(Command::SendTcp {
+                                    handle: h,
+                                    data: ByteBuf::from_slice_trunc(&buf[..len]),
+                                });
+                            }
+                        }
+                        None
+                    }
                     WebSocketReceiveMessageType::Pong => None,
+                    WebSocketReceiveMessageType::CloseMustReply => {
+                        // Reply to Close with CloseReply (same payload).
+                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let mut payload = Vec::from(&out_buf[..read_result.len_to]);
+                        if let Ok(len) = self.client.write(
+                            WebSocketSendMessageType::CloseReply,
+                            true,
+                            &mut buf,
+                            &mut payload,
+                        ) {
+                            if let Some(h) = self.handle {
+                                let _ = self.net.submit(Command::SendTcp {
+                                    handle: h,
+                                    data: ByteBuf::from_slice_trunc(&buf[..len]),
+                                });
+                            }
+                        }
+                        None
+                    }
                     WebSocketReceiveMessageType::CloseCompleted => {
                         self.closed = true;
                         None
