@@ -776,7 +776,12 @@ unsafe impl Send for VirtioGpu3d {}
 
 impl VirtioGpu3d {
     pub fn init_first() -> Option<Self> {
-        let dev = find_device()?;
+        let dev = find_device().or_else(|| {
+            // Backend switching can be invoked from the shell; if the PCI list is empty or stale,
+            // re-enumerate once before failing.
+            pci::enumerate_impl();
+            find_device()
+        })?;
         let caps = parse_modern_caps(&dev)?;
         enable_mem_and_bus_master(&dev);
 

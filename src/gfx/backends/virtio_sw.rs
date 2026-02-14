@@ -70,7 +70,6 @@ impl Drop for DmaRegion {
 }
 
 struct VirtioScanout {
-    scanout_id: u32,
     width: u32,
     height: u32,
     scanout_res: u32,
@@ -129,7 +128,6 @@ impl VirtioScanout {
         );
 
         Some(Self {
-            scanout_id,
             width,
             height,
             scanout_res,

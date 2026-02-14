@@ -235,7 +235,7 @@ async fn virtio_limine_mirror_task() {
 
     loop {
         if ENABLED.load(Ordering::Acquire) {
-            let mut guard = STATE.lock();
+            let guard = STATE.lock();
             let w = guard.present_w;
             let h = guard.present_h;
             let res = guard.res_id;
