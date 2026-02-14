@@ -187,9 +187,11 @@ async fn handle_ai_realtime_chat(
     };
 
     // Best-effort session init.
-    let _ = wss.send(
+    if let Err(e) = wss.send(
         "{\"type\":\"session.update\",\"session\":{\"modalities\":[\"text\"],\"instructions\":\"You are a concise shell assistant running inside TRUEOS.\"}}",
-    );
+    ) {
+        out.write_fmt(format_args!("ai: session.update send failed {:?}\n", e));
+    }
 
     if !first.trim().is_empty() {
         log_prefixed_lines(&out, "you: ", first.trim());
@@ -199,8 +201,14 @@ async fn handle_ai_realtime_chat(
             "{{\"type\":\"conversation.item.create\",\"item\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}}}",
             esc
         );
-        let _ = wss.send(&msg);
-        let _ = wss.send("{\"type\":\"response.create\"}");
+        if let Err(e) = wss.send(&msg) {
+            out.write_fmt(format_args!("ai: first message send failed {:?}\n", e));
+            return;
+        }
+        if let Err(e) = wss.send("{\"type\":\"response.create\"}") {
+            out.write_fmt(format_args!("ai: response.create failed {:?}\n", e));
+            return;
+        }
     }
 
     out.write_str("ai: connected\n");
@@ -301,8 +309,12 @@ async fn handle_ai_realtime_chat(
                         "{{\"type\":\"conversation.item.create\",\"item\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}}}",
                         esc
                     );
-                    if wss.send(&msg).is_err() || wss.send("{\"type\":\"response.create\"}").is_err() {
-                        out.write_str("ai: send failed\n");
+                    if let Err(e) = wss.send(&msg) {
+                        out.write_fmt(format_args!("ai: message send failed {:?}\n", e));
+                        return;
+                    }
+                    if let Err(e) = wss.send("{\"type\":\"response.create\"}") {
+                        out.write_fmt(format_args!("ai: response.create failed {:?}\n", e));
                         return;
                     }
 

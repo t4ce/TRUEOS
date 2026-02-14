@@ -2,6 +2,8 @@ pub mod backends;
 pub mod demo;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
+#[cfg(feature = "gfx_virgl")]
+pub mod virtio_limine;
 
 use spin::{Once, Mutex};
 
@@ -56,6 +58,10 @@ pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
     with_system(|sys| f(sys.context_mut()))
 }
 
+pub fn with_framebuffers<R>(f: impl FnOnce(Option<&'static ::limine::response::FramebufferResponse>) -> R) -> Option<R> {
+    with_system(|sys| f(sys.framebuffers))
+}
+
 #[cfg(feature = "gfx_virgl")]
 pub fn switch_to_virgl() -> bool {
     with_system(|sys| {
@@ -71,6 +77,24 @@ pub fn switch_to_virgl() -> bool {
 
 #[cfg(not(feature = "gfx_virgl"))]
 pub fn switch_to_virgl() -> bool {
+    false
+}
+
+#[cfg(feature = "gfx_virgl")]
+pub fn switch_to_virtio_sw() -> bool {
+    with_system(|sys| {
+        let Some(b) = backends::Backend::init_virtio_sw() else {
+            return false;
+        };
+        sys.backend = b;
+        bump_backend_epoch();
+        true
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(not(feature = "gfx_virgl"))]
+pub fn switch_to_virtio_sw() -> bool {
     false
 }
 
@@ -107,6 +131,7 @@ pub enum BackendKind {
     #[cfg(feature = "gfx_intel")]
     Intel,
     Virgl,
+    VirtioSw,
     None,
 }
 
@@ -117,6 +142,8 @@ pub fn backend_kind() -> Option<BackendKind> {
         backends::Backend::Intel(_) => BackendKind::Intel,
         #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
+        #[cfg(feature = "gfx_virgl")]
+        backends::Backend::VirtioSw(_) => BackendKind::VirtioSw,
         backends::Backend::None(_) => BackendKind::None,
     })
 }
@@ -136,13 +163,31 @@ pub fn toggle_backend() -> BackendKind {
             BackendKind::LimineFb
         }
         BackendKind::Virgl => {
+            // Swap to software renderer while keeping virtio scanout ownership.
+            if switch_to_virtio_sw() {
+                return BackendKind::VirtioSw;
+            }
+
+            // Fallback: go back to LimineFB.
             let _ = switch_to_limine_fb();
             BackendKind::LimineFb
+        }
+        BackendKind::VirtioSw => {
+            if switch_to_virgl() {
+                return BackendKind::Virgl;
+            }
+            BackendKind::VirtioSw
         }
         BackendKind::LimineFb | BackendKind::None => {
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }
+
+            // If virgl init fails, still enter virtio scanout world with software.
+            if switch_to_virtio_sw() {
+                return BackendKind::VirtioSw;
+            }
+
             let _ = switch_to_limine_fb();
             BackendKind::LimineFb
         }

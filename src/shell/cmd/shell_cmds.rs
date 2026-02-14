@@ -208,6 +208,30 @@ pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
 }
 
 pub(crate) fn cmd_ai(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    fn looks_like_token(s: &str) -> bool {
+        let t = s.trim();
+        if t.is_empty() {
+            return false;
+        }
+        if t.len() < 16 || t.len() > 192 {
+            return false;
+        }
+        if !t.starts_with("sk-") {
+            return false;
+        }
+        // Reject whitespace and control chars; allow typical key charset.
+        for b in t.bytes() {
+            if b.is_ascii_whitespace() || b.is_ascii_control() {
+                return false;
+            }
+            let ok = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.');
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
     let Some(args) = args else {
         ctx.io.write_str("ai: usage ai <token> [first_message...]\r\n");
         return CommandAction::None;
@@ -218,6 +242,13 @@ pub(crate) fn cmd_ai(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
         ctx.io.write_str("ai: usage ai <token> [first_message...]\r\n");
         ctx.io.write_str("ai: note: <token> is your API token; avoid committing it\r\n");
         ctx.io.write_str("ai: exit with .exit/.quit or Ctrl-C\r\n");
+        return CommandAction::None;
+    }
+
+    if !looks_like_token(token_raw) {
+        ctx.io.write_str("ai: token format invalid\r\n");
+        ctx.io.write_str("ai: expected something like 'sk-...' with no spaces\r\n");
+        ctx.io.write_str("ai: usage ai <token> [first_message...]\r\n");
         return CommandAction::None;
     }
 

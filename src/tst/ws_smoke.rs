@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use crate::v::net::ws::WsConnection;
 use crate::v::net::wss::WssConnection;
 
@@ -61,6 +63,69 @@ pub async fn boot_ws_smoke_task() {
              crate::log!("ws-smoke: secure connect failed {:?}\n", e);
         }
     }
+
+    /*
+    static OPENAI_DEMO_KEY: &str = "***";
+    let auth_header = alloc::format!("Authorization: Bearer {}", OPENAI_DEMO_KEY);
+    let temp_headers = [
+        auth_header.as_str(),
+        "OpenAI-Beta: realtime=v1",
+    ];
+    let headers = &temp_headers[..];
+    let openai_res = WssConnection::connect_with_headers(
+        "wss://api.openai.com/v1/realtime?model=gpt-realtime-2025-08-28",
+        headers
+    ).await;
+    match openai_res {
+        Ok(mut wss) => {
+            crate::log!("ws-smoke: connected to openai (unexpected success with dummy key!)\n");
+            
+            // Send a user message asking for the time
+            let event = r#"{
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Hello? What time is it?"
+                        }
+                    ]
+                }
+            }"#;
+
+            if let Err(e) = wss.send(event) {
+                 crate::log!("ws-smoke: openai send failed {:?}\n", e);
+            } else {
+                 // Trigger the response generation immediately after
+                 let _ = wss.send(r#"{"type": "response.create"}"#);
+
+                 // Poll for details/audio
+                 let mut audio_packets = 0;
+                 for _ in 0..50 {
+                     if let Some(msg) = wss.recv() {
+                         if msg.contains("response.audio.delta") {
+                             audio_packets += 1;
+                             crate::log!("ws-smoke: recv audio delta #{}\n", audio_packets);
+                         } else if msg.contains("response.audio_transcript.delta") {
+                             crate::log!("ws-smoke: recv transcript delta: {}\n", msg);
+                         } else {
+                            crate::log!("ws-smoke: recv openai control: {}\n", msg);
+                         }
+                         
+                         // Don't break immediately, let it stream a bit
+                         if audio_packets > 5 { break; }
+                     }
+                     embassy_time::Timer::after(embassy_time::Duration::from_millis(50)).await;
+                 }
+            }
+        }
+        Err(e) => {
+             crate::log!("ws-smoke: openai connect result: {:?} (likely expected due to invalid key)\n", e);
+        }
+    }
+    */
 
     crate::log!(
         "ws-smoke: summary plain={} secure={}\n",
