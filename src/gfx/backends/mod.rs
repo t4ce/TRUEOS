@@ -1,11 +1,17 @@
 mod limine_fb;
 use trueos_gfx_core::GfxContext;
 
+#[cfg(feature = "gfx_intel")]
+mod intel_gpu;
+
 #[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
     LimineFb(limine_fb::LimineFbBackend),
+
+    #[cfg(feature = "gfx_intel")]
+    IntelGpu(intel_gpu::IntelGpuBackend),
 
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
@@ -23,8 +29,17 @@ impl Backend {
     }
 
     #[cfg(feature = "gfx_virgl")]
-    pub fn init_virgl() -> Option<Self> {
-        virtio_gpu_3d::VirglGfxBackend::init().map(|b| Backend::Virgl(b))
+    pub fn init_virgl(
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+    ) -> Option<Self> {
+        virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(|b| Backend::Virgl(b))
+    }
+
+    #[cfg(feature = "gfx_intel")]
+    pub fn init_intel_gpu(
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+    ) -> Option<Self> {
+        intel_gpu::IntelGpuBackend::init(framebuffers).map(Backend::IntelGpu)
     }
 
     pub fn init_limine_fb(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) -> Self {
@@ -42,6 +57,9 @@ impl Backend {
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
             Backend::LimineFb(b) => b,
+
+            #[cfg(feature = "gfx_intel")]
+            Backend::IntelGpu(b) => b,
 
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,

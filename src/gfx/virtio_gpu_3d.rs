@@ -250,6 +250,40 @@ impl Drop for DmaRegion {
     }
 }
 
+enum ScanoutBacking {
+    Owned(DmaRegion),
+    Borrowed {
+        phys: u64,
+        virt: *mut u8,
+        len: usize,
+    },
+}
+
+unsafe impl Send for ScanoutBacking {}
+
+impl ScanoutBacking {
+    fn phys(&self) -> u64 {
+        match self {
+            ScanoutBacking::Owned(r) => r.phys(),
+            ScanoutBacking::Borrowed { phys, .. } => *phys,
+        }
+    }
+
+    fn virt(&self) -> *mut u8 {
+        match self {
+            ScanoutBacking::Owned(r) => r.virt(),
+            ScanoutBacking::Borrowed { virt, .. } => *virt,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            ScanoutBacking::Owned(r) => r.len(),
+            ScanoutBacking::Borrowed { len, .. } => *len,
+        }
+    }
+}
+
 struct VirtQueue {
     size: u16,
     _mem: DmaRegion,
@@ -1184,7 +1218,7 @@ pub struct VirglGfxBackend {
     width: u32,
     height: u32,
     scanout_res: u32,
-    scanout_backing: DmaRegion,
+    scanout_backing: ScanoutBacking,
     rt_res: u32,
 
     // VBO resource for virgl vertices.
@@ -1213,7 +1247,9 @@ pub struct VirglGfxBackend {
 }
 
 impl VirglGfxBackend {
-    pub fn init() -> Option<Self> {
+    pub fn init(
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+    ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
         let (scanout_id, width, height) = gpu.get_display_info()?;
 
@@ -1236,9 +1272,27 @@ impl VirglGfxBackend {
             .saturating_mul(height as usize)
             .saturating_mul(4)
             .max(4096);
-        let scanout_backing = DmaRegion::alloc(scanout_bytes, 4096)?;
-        unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
-        if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_backing.len() as u32) {
+
+        let scanout_backing = if let Some(b) =
+            Self::try_borrow_limine_scanout(framebuffers, width, height)
+        {
+            crate::log!("virgl-backend: scanout backing=limine-fb\n");
+            b
+        } else {
+            crate::log!("virgl-backend: scanout backing=dma\n");
+            ScanoutBacking::Owned(DmaRegion::alloc(scanout_bytes, 4096)?)
+        };
+
+        // Clear the scanout backing so we start from a known state.
+        let clear_len = scanout_bytes.min(scanout_backing.len());
+        unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, clear_len) };
+
+        if scanout_backing.len() < scanout_bytes {
+            crate::log!("virgl-backend: scanout backing too small len={} need={}\n", scanout_backing.len(), scanout_bytes);
+            return None;
+        }
+
+        if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_bytes as u32) {
             crate::log!("virgl-backend: attach_backing failed\n");
             return None;
         }
@@ -1369,6 +1423,39 @@ impl VirglGfxBackend {
             next_fence: 1,
             completed_fence: 0,
         })
+    }
+
+    fn try_borrow_limine_scanout(
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        width: u32,
+        height: u32,
+    ) -> Option<ScanoutBacking> {
+        let fb = framebuffers?.framebuffers().next()?;
+
+        if fb.bpp() != 32 {
+            return None;
+        }
+        if fb.width() as u32 != width || fb.height() as u32 != height {
+            return None;
+        }
+        let pitch = fb.pitch() as usize;
+        let expected_pitch = (width as usize).saturating_mul(4);
+        if pitch != expected_pitch {
+            return None;
+        }
+
+        let len = pitch.saturating_mul(height as usize);
+        if len < expected_pitch.saturating_mul(height as usize) {
+            return None;
+        }
+
+        let virt = fb.addr();
+        if virt.is_null() {
+            return None;
+        }
+        let phys = crate::phys::virt_to_phys_checked(virt as *const u8)?;
+
+        Some(ScanoutBacking::Borrowed { phys, virt, len })
     }
 
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> usize {
@@ -1718,7 +1805,11 @@ impl GfxDevice for VirglGfxBackend {
             encode_draw_vbo_count(&mut cmd, verts.len() as u32);
         }
 
-        // Present: copy to 2D scanout, then transfer+flush.
+        // Present: copy to 2D scanout and flush.
+        // NOTE: `transfer_to_host_2d` copies *guest* backing into the host resource.
+        // Our scanout is produced via virgl/host-side rendering + copy, so a transfer-to-host
+        // here can overwrite the freshly rendered image with stale (often zeroed) guest memory,
+        // resulting in a persistent black screen.
         encode_resource_copy_region(&mut cmd, self.scanout_res, self.rt_res, self.width, self.height);
         let fence = self.next_fence;
         self.next_fence = self.next_fence.wrapping_add(1);
@@ -1727,7 +1818,6 @@ impl GfxDevice for VirglGfxBackend {
             return Err(Error::Unsupported);
         }
 
-        let _ = self.gpu.transfer_to_host_2d(self.scanout_res, self.width, self.height);
         let _ = self.gpu.resource_flush(self.scanout_res, self.width, self.height);
 
         self.completed_fence = fence;
