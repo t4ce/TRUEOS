@@ -23,21 +23,28 @@ const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 const POLL_STATE_LOG_EVERY: u64 = 10_000;
 const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
 const EXP_R8125_SKIP_DESC0: bool = false;
-const EXP_R8125_TXPOLL_ALT: bool = false;
+const EXP_R8125_TXPOLL_ALT: bool = true;
 const EXP_R8125_TXPOLL_ALT_VALUE: u8 = 0x80;
+const EXP_R8125_TXPOLL_PRIMARY: u8 = 0x40;
+const EXP_R8125_TXPOLL_90_ENABLE: bool = true;
+const EXP_R8125_TXPOLL_90_VALUE: u16 = 0x0001;
+const EXP_R8125_TCR_OVERRIDE: Option<u32> = Some(0x67100f00);
 const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
 const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
-const EXP_R8125_CLFLUSH_TX: bool = false;
+const EXP_R8125_CLFLUSH_TX: bool = true;
 const TX_WEDGE_QUARANTINE_RESETS: u64 = 3;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
 const REG_TNPDS: u16 = 0x20; // Tx desc start addr (low)
 const REG_TNPDS_HI: u16 = 0x24;
+const REG_THPDS: u16 = 0x28;
+const REG_THPDS_HI: u16 = 0x2C;
 const REG_CMD: u16 = 0x37;
 const REG_IMR: u16 = 0x3C;
 const REG_ISR: u16 = 0x3E;
 const REG_TXPOLL: u16 = 0x38;
+const REG_TXPOLL_90: u16 = 0x90;
 const REG_RCR: u16 = 0x44;
 const REG_TCR: u16 = 0x40;
 const REG_RDSAR: u16 = 0xE4; // Rx desc start addr (low)
@@ -218,28 +225,40 @@ impl R8125Adapter {
 
     fn ring_tx_doorbell(&mut self, reason: &str) {
         unsafe {
-            // Baseline NPQ kick used by 8168-family.
-            self.mmio.write_u8(REG_TXPOLL, 0x40);
+            // 8125 variants can require a different TXPOLL trigger than 8168.
+            self.mmio.write_u8(REG_TXPOLL, EXP_R8125_TXPOLL_PRIMARY);
 
             // Diagnostic experiment for 8125: try an alternate kick value in between.
             if EXP_R8125_TXPOLL_ALT {
                 self.mmio.write_u8(REG_TXPOLL, EXP_R8125_TXPOLL_ALT_VALUE);
-                self.mmio.write_u8(REG_TXPOLL, 0x40);
+            }
+
+            // Optional experiment: alternate TX doorbell register.
+            if EXP_R8125_TXPOLL_90_ENABLE {
+                self.mmio
+                    .write_u16(REG_TXPOLL_90, EXP_R8125_TXPOLL_90_VALUE);
             }
 
             let poll_rb = self.mmio.read_u8(REG_TXPOLL);
+            let poll90_rb = if EXP_R8125_TXPOLL_90_ENABLE {
+                self.mmio.read_u16(REG_TXPOLL_90)
+            } else {
+                0
+            };
             let cmd_rb = self.mmio.read_u8(REG_CMD);
             let isr_rb = self.mmio.read_u16(REG_ISR);
 
             self.dbg_doorbells = self.dbg_doorbells.saturating_add(1);
             if self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST || (self.dbg_doorbells & 0x3FF) == 0 {
                 crate::log!(
-                    "net/r8125: tx doorbell count={} reason={} poll_rb=0x{:02x} cmd=0x{:02x} isr=0x{:04x} alt={} alt_val=0x{:02x}\n",
+                    "net/r8125: tx doorbell count={} reason={} poll_rb=0x{:02x} poll90_rb=0x{:04x} cmd=0x{:02x} isr=0x{:04x} primary=0x{:02x} alt={} alt_val=0x{:02x}\n",
                     self.dbg_doorbells,
                     reason,
                     poll_rb,
+                    poll90_rb,
                     cmd_rb,
                     isr_rb,
+                    EXP_R8125_TXPOLL_PRIMARY,
                     EXP_R8125_TXPOLL_ALT as u8,
                     EXP_R8125_TXPOLL_ALT_VALUE
                 );
@@ -518,11 +537,13 @@ impl R8125Adapter {
             mmio.write_u32(REG_RDSAR_HI, (rx_desc_phys >> 32) as u32);
             mmio.write_u32(REG_TNPDS, tx_desc_phys as u32);
             mmio.write_u32(REG_TNPDS_HI, (tx_desc_phys >> 32) as u32);
+            mmio.write_u32(REG_THPDS, tx_desc_phys as u32);
+            mmio.write_u32(REG_THPDS_HI, (tx_desc_phys >> 32) as u32);
 
             // Basic RX/TX config (promiscuous off; accept broadcast/multicast).
             // Values here are intentionally conservative for bring-up.
             mmio.write_u32(REG_RCR, 0x0000E70F);
-            mmio.write_u32(REG_TCR, 0x03000700);
+            let tcr = EXP_R8125_TCR_OVERRIDE.unwrap_or(0x03000700); mmio.write_u32(REG_TCR, tcr);
 
             // Enable Rx/Tx
             mmio.write_u8(REG_CMD, CMD_RX_EN | CMD_TX_EN);
@@ -601,6 +622,9 @@ impl R8125Adapter {
             self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
             self.mmio
                 .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
+            self.mmio.write_u32(REG_THPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_THPDS_HI, (self.tx_desc_phys >> 32) as u32);
 
             let cmd = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
@@ -684,6 +708,9 @@ impl R8125Adapter {
             self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
             self.mmio
                 .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
+            self.mmio.write_u32(REG_THPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_THPDS_HI, (self.tx_desc_phys >> 32) as u32);
 
             self.tx_head = Self::tx_start_index();
             self.tx_tail = Self::tx_start_index();

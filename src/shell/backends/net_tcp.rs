@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,16 +56,36 @@ pub async fn net_shell_task() {
             return;
         }
 
-        const OWNER: &'static str = "net-shell";
+        // Prefer a non-primary NIC when available so this debug channel remains usable even
+        // if the primary adapter is misbehaving.
+        let device_index = if crate::net::device_count() > 1 { 1 } else { 0 };
+        let owner: &'static str = {
+            let s = alloc::format!("net-shell@{}", device_index);
+            Box::leak(s.into_boxed_str())
+        };
+        let cmds_name: &'static str = {
+            let s = alloc::format!("{}-cmd", owner);
+            Box::leak(s.into_boxed_str())
+        };
+        let events_name: &'static str = {
+            let s = alloc::format!("{}-evt", owner);
+            Box::leak(s.into_boxed_str())
+        };
 
-        let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
-        let events = NetQueue::new_leaked("net-shell-evt", 256);
-        register_app_queues(OWNER, cmds, events);
+        let cmds = NetQueue::new_leaked(cmds_name, 256);
+        let events = NetQueue::new_leaked(events_name, 256);
+        register_app_queues(owner, cmds, events);
 
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
-        crate::log!("net-shell: listening on tcp {} (hostfwd localhost:{} -> guest)\n", NET_SHELL_TCP_PORT, NET_SHELL_TCP_PORT);
+        crate::log!(
+            "net-shell: listening on tcp {} dev={} owner={} (hostfwd localhost:{} -> guest)\n",
+            NET_SHELL_TCP_PORT,
+            device_index,
+            owner,
+            NET_SHELL_TCP_PORT
+        );
 
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;

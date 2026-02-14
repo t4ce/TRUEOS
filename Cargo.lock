@@ -33,6 +33,7 @@ dependencies = [
  "smoltcp",
  "spin 0.10.0",
  "trueos-fs",
+ "trueos-gfx-core",
  "trueos-limloader",
  "trueos-math",
  "trueos-qjs",
@@ -1665,6 +1666,10 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "trueos-fs"
 version = "0.0.1"
+
+[[package]]
+name = "trueos-gfx-core"
+version = "0.1.0"
 
 [[package]]
 name = "trueos-limloader"
