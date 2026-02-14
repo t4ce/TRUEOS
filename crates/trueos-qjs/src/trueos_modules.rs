@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use alloc::vec;
 use core::ffi::{c_char, c_int, CStr};
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time_driver::{now, TICK_HZ};
 use spin::Mutex;
 
@@ -23,6 +24,10 @@ include!("../../../src/surface/cabi_codes.rs");
 
 static PROCESS_ARGV: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+// --- Minimal WebGL-ish shim state ---
+
+static WEBGL_NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub fn set_process_argv(args: &[&str]) {
     let mut out: Vec<Vec<u8>> = Vec::new();
@@ -189,6 +194,14 @@ fn js_int32(v: i32) -> qjs::JSValue {
     qjs::JSValue {
         u: qjs::JSValueUnion { int32: v },
         tag: qjs::JS_TAG_INT,
+    }
+}
+
+#[inline]
+fn js_null() -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: 0 },
+        tag: qjs::JS_TAG_NULL,
     }
 }
 
@@ -780,6 +793,429 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     };
     // Keep globalThis.process installed; drop our local handle.
     qjs::js_free_value(ctx, proc);
+
+    // Minimal browser-ish globals for early library bring-up.
+    // This is intentionally tiny: enough for feature-detection and import-time code paths.
+    let _ = ensure_global_window_document_webgl(ctx);
+}
+
+unsafe fn ensure_global_window_document_webgl(ctx: *mut qjs::JSContext) -> Result<(), ()> {
+    if ctx.is_null() {
+        return Err(());
+    }
+
+    // globalThis
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return Err(());
+    }
+
+    // window/self -> globalThis
+    {
+        let win_key = b"window\0";
+        let self_key = b"self\0";
+        let win_val = qjs::js_dup_value(ctx, global);
+        let self_val = qjs::js_dup_value(ctx, global);
+        let _ = qjs::JS_SetPropertyStr(ctx, global, win_key.as_ptr() as *const c_char, win_val);
+        let _ = qjs::JS_SetPropertyStr(ctx, global, self_key.as_ptr() as *const c_char, self_val);
+    }
+
+    // navigator
+    {
+        let nav_key = b"navigator\0";
+        let nav = qjs::JS_NewObject(ctx);
+        if !nav.is_exception() {
+            let ua_key = b"userAgent\0";
+            let ua = b"TRUEOS-QJS\0";
+            let ua_val = qjs::JS_NewStringLen(ctx, ua.as_ptr() as *const c_char, ua.len() - 1);
+            let _ = qjs::JS_SetPropertyStr(ctx, nav, ua_key.as_ptr() as *const c_char, ua_val);
+            let _ = qjs::JS_SetPropertyStr(ctx, global, nav_key.as_ptr() as *const c_char, nav);
+        } else {
+            // nav is exception; drop it
+            qjs::js_free_value(ctx, nav);
+        }
+    }
+
+    // Install a singleton `__trueos_gl` object and a `document.createElement('canvas')` that
+    // returns a canvas object whose getContext() returns the singleton.
+    let gl_obj = ensure_global_trueos_webgl_singleton(ctx, global);
+    let doc_obj = ensure_global_document(ctx, global, gl_obj);
+    qjs::js_free_value(ctx, doc_obj);
+    qjs::js_free_value(ctx, gl_obj);
+    qjs::js_free_value(ctx, global);
+    Ok(())
+}
+
+unsafe fn ensure_global_trueos_webgl_singleton(
+    ctx: *mut qjs::JSContext,
+    global: qjs::JSValue,
+) -> qjs::JSValue {
+    let key = b"__trueos_gl\0";
+    let existing = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+    if !existing.is_exception() && existing.tag != qjs::JS_TAG_UNDEFINED {
+        return existing;
+    }
+    qjs::js_free_value(ctx, existing);
+
+    unsafe extern "C" fn gl_noop(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_return_null(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_null()
+    }
+
+    unsafe extern "C" fn gl_return_true(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 1 },
+            tag: qjs::JS_TAG_BOOL,
+        }
+    }
+
+    unsafe extern "C" fn gl_return_false(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 0 },
+            tag: qjs::JS_TAG_BOOL,
+        }
+    }
+
+    unsafe extern "C" fn gl_create_handle(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let id = WEBGL_NEXT_ID.fetch_add(1, Ordering::Relaxed) as i32;
+        js_int32(id)
+    }
+
+    unsafe extern "C" fn gl_get_parameter(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        // Return safe defaults for common queries.
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut pname_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut pname_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let pname = pname_f as i32;
+        match pname as u32 {
+            // MAX_TEXTURE_SIZE
+            0x0D33 => js_int32(4096),
+            // MAX_TEXTURE_IMAGE_UNITS
+            0x8872 => js_int32(8),
+            // MAX_VERTEX_ATTRIBS
+            0x8869 => js_int32(8),
+            // VERSION
+            0x1F02 => {
+                let s = b"WebGL 1.0 (TRUEOS shim)\0";
+                qjs::JS_NewStringLen(ctx, s.as_ptr() as *const c_char, s.len() - 1)
+            }
+            // VENDOR
+            0x1F00 => {
+                let s = b"TRUEOS\0";
+                qjs::JS_NewStringLen(ctx, s.as_ptr() as *const c_char, s.len() - 1)
+            }
+            // RENDERER
+            0x1F01 => {
+                let s = b"software\0";
+                qjs::JS_NewStringLen(ctx, s.as_ptr() as *const c_char, s.len() - 1)
+            }
+            _ => js_null(),
+        }
+    }
+
+    unsafe extern "C" fn gl_get_error(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        // NO_ERROR
+        js_int32(0)
+    }
+
+    // Build the gl object.
+    let gl = qjs::JS_NewObject(ctx);
+    if gl.is_exception() {
+        return gl;
+    }
+
+    // A small set of WebGL constants Pixi-like stacks commonly touch.
+    macro_rules! gl_const {
+        ($name:literal, $val:expr) => {{
+            let k = concat!($name, "\0");
+            let _ = qjs::JS_SetPropertyStr(ctx, gl, k.as_ptr() as *const c_char, js_int32($val));
+        }};
+    }
+
+    gl_const!("NO_ERROR", 0);
+    gl_const!("INVALID_ENUM", 0x0500);
+    gl_const!("INVALID_VALUE", 0x0501);
+    gl_const!("INVALID_OPERATION", 0x0502);
+    gl_const!("OUT_OF_MEMORY", 0x0505);
+
+    gl_const!("ARRAY_BUFFER", 0x8892);
+    gl_const!("ELEMENT_ARRAY_BUFFER", 0x8893);
+    gl_const!("STATIC_DRAW", 0x88E4);
+    gl_const!("DYNAMIC_DRAW", 0x88E8);
+
+    gl_const!("TEXTURE_2D", 0x0DE1);
+    gl_const!("TEXTURE0", 0x84C0);
+    gl_const!("RGBA", 0x1908);
+    gl_const!("RGB", 0x1907);
+    gl_const!("UNSIGNED_BYTE", 0x1401);
+    gl_const!("UNSIGNED_SHORT", 0x1403);
+
+    gl_const!("TRIANGLES", 0x0004);
+    gl_const!("BLEND", 0x0BE2);
+    gl_const!("SCISSOR_TEST", 0x0C11);
+    gl_const!("CULL_FACE", 0x0B44);
+
+    gl_const!("ONE", 1);
+    gl_const!("ONE_MINUS_SRC_ALPHA", 0x0303);
+    gl_const!("SRC_ALPHA", 0x0302);
+
+    gl_const!("MAX_TEXTURE_SIZE", 0x0D33);
+    gl_const!("MAX_TEXTURE_IMAGE_UNITS", 0x8872);
+    gl_const!("MAX_VERTEX_ATTRIBS", 0x8869);
+    gl_const!("VERSION", 0x1F02);
+    gl_const!("VENDOR", 0x1F00);
+    gl_const!("RENDERER", 0x1F01);
+
+    // Methods: mostly no-op, but creation returns handles and getParameter/getError return useful values.
+    macro_rules! gl_fn {
+        ($name:literal, $func:expr, $argc:expr) => {{
+            let k = concat!($name, "\0");
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some($func),
+                k.as_ptr() as *const c_char,
+                $argc,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(ctx, gl, k.as_ptr() as *const c_char, f);
+        }};
+    }
+
+    gl_fn!("getError", gl_get_error, 0);
+    gl_fn!("getParameter", gl_get_parameter, 1);
+    gl_fn!("getExtension", gl_return_null, 1);
+    gl_fn!("isContextLost", gl_return_false, 0);
+
+    // Object creation helpers
+    gl_fn!("createBuffer", gl_create_handle, 0);
+    gl_fn!("createTexture", gl_create_handle, 0);
+    gl_fn!("createShader", gl_create_handle, 1);
+    gl_fn!("createProgram", gl_create_handle, 0);
+    gl_fn!("getUniformLocation", gl_create_handle, 2);
+
+    // Generic no-ops (extend as Pixi tells us what it needs)
+    gl_fn!("bindBuffer", gl_noop, 2);
+    gl_fn!("bufferData", gl_noop, 3);
+    gl_fn!("bufferSubData", gl_noop, 3);
+    gl_fn!("bindTexture", gl_noop, 2);
+    gl_fn!("activeTexture", gl_noop, 1);
+    gl_fn!("texParameteri", gl_noop, 3);
+    gl_fn!("texImage2D", gl_noop, 9);
+    gl_fn!("texSubImage2D", gl_noop, 9);
+    gl_fn!("pixelStorei", gl_noop, 2);
+    gl_fn!("shaderSource", gl_noop, 2);
+    gl_fn!("compileShader", gl_noop, 1);
+    gl_fn!("attachShader", gl_noop, 2);
+    gl_fn!("linkProgram", gl_noop, 1);
+    gl_fn!("useProgram", gl_noop, 1);
+    gl_fn!("enableVertexAttribArray", gl_noop, 1);
+    gl_fn!("vertexAttribPointer", gl_noop, 6);
+    gl_fn!("uniform1i", gl_noop, 2);
+    gl_fn!("uniform1f", gl_noop, 2);
+    gl_fn!("uniform2f", gl_noop, 3);
+    gl_fn!("uniform4f", gl_noop, 5);
+    gl_fn!("uniformMatrix3fv", gl_noop, 3);
+    gl_fn!("uniformMatrix4fv", gl_noop, 3);
+    gl_fn!("viewport", gl_noop, 4);
+    gl_fn!("scissor", gl_noop, 4);
+    gl_fn!("enable", gl_noop, 1);
+    gl_fn!("disable", gl_noop, 1);
+    gl_fn!("blendFunc", gl_noop, 2);
+    gl_fn!("blendFuncSeparate", gl_noop, 4);
+    gl_fn!("clearColor", gl_noop, 4);
+    gl_fn!("clear", gl_noop, 1);
+    gl_fn!("drawElements", gl_noop, 4);
+    gl_fn!("drawArrays", gl_noop, 3);
+    gl_fn!("flush", gl_noop, 0);
+
+    // Minimal success-y queries
+    gl_fn!("getShaderParameter", gl_return_true, 2);
+    gl_fn!("getProgramParameter", gl_return_true, 2);
+    gl_fn!("getAttribLocation", gl_create_handle, 2);
+    gl_fn!("getShaderInfoLog", gl_return_null, 1);
+    gl_fn!("getProgramInfoLog", gl_return_null, 1);
+
+    let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, gl);
+    // Return a borrowed handle from global
+    qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char)
+}
+
+unsafe fn ensure_global_document(
+    ctx: *mut qjs::JSContext,
+    global: qjs::JSValue,
+    gl_obj: qjs::JSValue,
+) -> qjs::JSValue {
+    let key = b"document\0";
+    let existing = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+    if !existing.is_exception() && existing.tag != qjs::JS_TAG_UNDEFINED {
+        return existing;
+    }
+    qjs::js_free_value(ctx, existing);
+
+    unsafe extern "C" fn doc_create_element(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JS_NewObject(ctx);
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let cstr = qjs::js_to_cstring(ctx, args[0]);
+        if cstr.is_null() {
+            return qjs::JS_NewObject(ctx);
+        }
+        let tag = CStr::from_ptr(cstr).to_bytes();
+        qjs::JS_FreeCString(ctx, cstr);
+
+        // We only special-case canvas for now.
+        if tag.eq_ignore_ascii_case(b"canvas") {
+            // Canvas object with getContext().
+            unsafe extern "C" fn canvas_get_context(
+                ctx: *mut qjs::JSContext,
+                this_val: qjs::JSValueConst,
+                argc: c_int,
+                argv: *const qjs::JSValueConst,
+            ) -> qjs::JSValue {
+                // Ignore context type and return the shared singleton.
+                let global = qjs::JS_GetGlobalObject(ctx);
+                let gl = qjs::JS_GetPropertyStr(ctx, global, b"__trueos_gl\0".as_ptr() as *const c_char);
+                qjs::js_free_value(ctx, global);
+                if gl.is_exception() {
+                    return js_null();
+                }
+                // If the caller asked for "2d", return null for now (explicitly not supported).
+                if !argv.is_null() && argc >= 1 {
+                    let args = core::slice::from_raw_parts(argv, argc as usize);
+                    let cstr = qjs::js_to_cstring(ctx, args[0]);
+                    if !cstr.is_null() {
+                        let kind = CStr::from_ptr(cstr).to_bytes();
+                        qjs::JS_FreeCString(ctx, cstr);
+                        if kind.eq_ignore_ascii_case(b"2d") {
+                            qjs::js_free_value(ctx, gl);
+                            return js_null();
+                        }
+                    }
+                }
+
+                // Store last_context on the canvas for debugging.
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    this_val,
+                    b"__trueos_last_context\0".as_ptr() as *const c_char,
+                    qjs::js_dup_value(ctx, gl),
+                );
+
+                gl
+            }
+
+            let canvas = qjs::JS_NewObject(ctx);
+            if canvas.is_exception() {
+                return canvas;
+            }
+
+            // width/height default
+            let _ = qjs::JS_SetPropertyStr(ctx, canvas, b"width\0".as_ptr() as *const c_char, js_int32(1));
+            let _ = qjs::JS_SetPropertyStr(ctx, canvas, b"height\0".as_ptr() as *const c_char, js_int32(1));
+
+            let name = b"getContext\0";
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some(canvas_get_context),
+                name.as_ptr() as *const c_char,
+                1,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(ctx, canvas, name.as_ptr() as *const c_char, f);
+
+            return canvas;
+        }
+
+        qjs::JS_NewObject(ctx)
+    }
+
+    // Create document object
+    let doc = qjs::JS_NewObject(ctx);
+    if doc.is_exception() {
+        return doc;
+    }
+
+    // document.body placeholder
+    let body = qjs::JS_NewObject(ctx);
+    if !body.is_exception() {
+        let _ = qjs::JS_SetPropertyStr(ctx, doc, b"body\0".as_ptr() as *const c_char, body);
+    } else {
+        qjs::js_free_value(ctx, body);
+    }
+
+    // document.createElement
+    let name = b"createElement\0";
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(doc_create_element),
+        name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, doc, name.as_ptr() as *const c_char, f);
+
+    // Also expose the gl object in case libraries probe for it.
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        doc,
+        b"__trueos_gl\0".as_ptr() as *const c_char,
+        qjs::js_dup_value(ctx, gl_obj),
+    );
+
+    let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, doc);
+    qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char)
 }
 
 unsafe fn js_read_complex(
