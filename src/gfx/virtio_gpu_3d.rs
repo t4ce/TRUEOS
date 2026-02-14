@@ -1,11 +1,9 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use crate::{pci, wait};
-
-static VIRTIO_GPU3D_CLAIMED: AtomicBool = AtomicBool::new(false);
 // a Rectangle is just two triangles
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Virtio 1.0 GPU device id (0x1040 + virtio device id 16).
@@ -714,32 +712,8 @@ pub struct VirtioGpu3d {
 
 unsafe impl Send for VirtioGpu3d {}
 
-impl Drop for VirtioGpu3d {
-    fn drop(&mut self) {
-        VIRTIO_GPU3D_CLAIMED.store(false, Ordering::Release);
-    }
-}
-
 impl VirtioGpu3d {
     pub fn init_first() -> Option<Self> {
-        // The device has a single control queue in our driver; (re-)initializing it from
-        // multiple call sites will overwrite queue addresses and break the display.
-        if VIRTIO_GPU3D_CLAIMED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            crate::log!("virtio-gpu3d: device already initialized (refusing second init)\n");
-            return None;
-        }
-
-        struct ClaimGuard;
-        impl Drop for ClaimGuard {
-            fn drop(&mut self) {
-                VIRTIO_GPU3D_CLAIMED.store(false, Ordering::Release);
-            }
-        }
-        let guard = ClaimGuard;
-
         let dev = find_device()?;
         let caps = parse_modern_caps(&dev)?;
         enable_mem_and_bus_master(&dev);
@@ -774,17 +748,14 @@ impl VirtioGpu3d {
         let req = DmaRegion::alloc(64 * 1024, 16)?;
         let resp = DmaRegion::alloc(4 * 1024, 16)?;
 
-        let this = Self {
+        Some(Self {
             common,
             notify,
             notify_mult: caps.notify_mult,
             ctrlq,
             req,
             resp,
-        };
-
-        core::mem::forget(guard);
-        Some(this)
+        })
     }
 
     pub fn ctx_create(&mut self, ctx_id: u32) -> bool {
@@ -1275,11 +1246,6 @@ impl VirglGfxBackend {
             crate::log!("virgl-backend: set_scanout failed\n");
             return None;
         }
-
-        // Present the cleared (zeroed) scanout once so switching to this backend doesn't
-        // leave whatever the previous backend last drew on screen.
-        let _ = gpu.transfer_to_host_2d(scanout_res, width, height);
-        let _ = gpu.resource_flush(scanout_res, width, height);
 
         // Render target (3D texture).
         let rt_bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE;
@@ -2038,7 +2004,6 @@ fn encode_draw_vbo(buf: &mut VirglCmdBuf) {
     buf.push(0); // count_from_so
 }
 
-static VIRGL_SPIN_RUNNING: AtomicBool = AtomicBool::new(false);
 static VIRGL_NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static VIRGL_NEXT_RES_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -2060,307 +2025,6 @@ fn alloc_res_triple() -> (u32, u32, u32) {
     let base = VIRGL_NEXT_RES_ID.fetch_add(3, Ordering::Relaxed);
     let base = if base == 0 { 1 } else { base };
     (base, base.wrapping_add(1), base.wrapping_add(2))
-}
-
-/// Spawn the rotating virgl triangle as a background task.
-///
-/// This avoids freezing the BSP executor (shell command handlers are synchronous).
-pub fn spawn_spin_triangle_60hz(spawner: &embassy_executor::Spawner) {
-    if VIRGL_SPIN_RUNNING
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("virgl: spin already running\n");
-        return;
-    }
-
-    // Prefer AP1 so BSP remains responsive.
-    if let Some(ap) = crate::runtime::first_ap_spawner() {
-        if ap.spawn(virgl_spin_task()).is_ok() {
-            crate::log!("virgl: spin task spawned on AP1\n");
-            return;
-        }
-        crate::log!("virgl: failed to spawn on AP1, falling back to BSP\n");
-    }
-
-    if spawner.spawn(virgl_spin_task()).is_err() {
-        VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-        crate::log!("virgl: spin task spawn failed\n");
-    } else {
-        crate::log!("virgl: spin task spawned on BSP\n");
-    }
-}
-
-#[embassy_executor::task]
-async fn virgl_spin_task() {
-    use embassy_time::{Duration as EmbassyDuration, Timer};
-
-    // If anything fails during init, allow retry.
-    let mut gpu = match VirtioGpu3d::init_first() {
-        Some(g) => g,
-        None => {
-            crate::log!("virgl: virtio-gpu 3d init failed\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-    };
-
-    let (scanout, w, h) = match gpu.get_display_info() {
-        Some(v) => v,
-        None => {
-            crate::log!("virgl: display info unavailable\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-    };
-
-    let ctx_id = alloc_ctx_id();
-    if !gpu.ctx_create(ctx_id) {
-        crate::log!("virgl: ctx_create failed\n");
-        VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-        return;
-    }
-
-    let (scanout_res_primary, rt_res, vbo_res) = alloc_res_triple();
-
-    // If we fall back to a 2D scanout resource, its attached backing must remain
-    // valid for as long as the scanout is in use.
-    let mut scanout_backing_keepalive: Option<DmaRegion> = None;
-    let _ = scanout_backing_keepalive.as_ref();
-
-    enum PresentMode {
-        Direct3dScanout,
-        CopyTo2dScanout,
-    }
-
-    let mut present_mode = PresentMode::Direct3dScanout;
-    let mut scanout_res = scanout_res_primary;
-    let mut render_res = scanout_res_primary;
-
-    let scanout_bind =
-        PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE | PIPE_BIND_SCANOUT | PIPE_BIND_DISPLAY_TARGET;
-    if gpu.resource_create_3d(
-        ctx_id,
-        scanout_res_primary,
-        PIPE_TEXTURE_2D,
-        VIRGL_FORMAT_B8G8R8X8_UNORM,
-        scanout_bind,
-        w,
-        h,
-        1,
-        1,
-        0,
-        0,
-        0,
-    ) && gpu.set_scanout(scanout, scanout_res_primary, w, h)
-    {
-        crate::log!("virgl: using direct 3D scanout\n");
-    } else {
-        present_mode = PresentMode::CopyTo2dScanout;
-        render_res = rt_res;
-
-        // If the primary id might already be bound to a 3D resource, avoid reusing it.
-        if gpu.set_scanout(scanout, scanout_res_primary, w, h) {
-            scanout_res = alloc_res_pair().0;
-        }
-
-        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, w, h) {
-            crate::log!("virgl: scanout resource_create_2d failed\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-
-        // 2D scanout resources require backing + transfer_to_host to become visible.
-        let scanout_bytes = (w as usize)
-            .saturating_mul(h as usize)
-            .saturating_mul(4);
-        let scanout_backing = match DmaRegion::alloc(scanout_bytes.max(4096), 4096) {
-            Some(v) => v,
-            None => {
-                crate::log!("virgl: scanout backing alloc failed\n");
-                VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-                return;
-            }
-        };
-        unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
-        if !gpu.resource_attach_backing(
-            scanout_res,
-            scanout_backing.phys(),
-            scanout_backing.len() as u32,
-        ) {
-            crate::log!("virgl: scanout attach_backing failed\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-
-        // Keep it alive for the duration of the task.
-        scanout_backing_keepalive = Some(scanout_backing);
-        let _ = scanout_backing_keepalive.as_ref().map(|b| b.phys());
-
-        if !gpu.set_scanout(scanout, scanout_res, w, h) {
-            crate::log!("virgl: scanout not active; stopping spin\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-
-        let rt_bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE;
-        if !gpu.resource_create_3d(
-            ctx_id,
-            rt_res,
-            PIPE_TEXTURE_2D,
-            VIRGL_FORMAT_B8G8R8X8_UNORM,
-            rt_bind,
-            w,
-            h,
-            1,
-            1,
-            0,
-            0,
-            0,
-        ) {
-            crate::log!("virgl: rt resource_create_3d failed\n");
-            VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-            return;
-        }
-        crate::log!("virgl: using 2D scanout fallback\n");
-    }
-
-    if !gpu.resource_create_3d(
-        ctx_id,
-        vbo_res,
-        PIPE_BUFFER,
-        VIRGL_FORMAT_R8_UNORM,
-        PIPE_BIND_VERTEX_BUFFER,
-        core::mem::size_of::<[Vertex; 3]>() as u32,
-        1,
-        1,
-        1,
-        0,
-        0,
-        0,
-    ) {
-        crate::log!("virgl: vbo resource_create_3d failed\n");
-        VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-        return;
-    }
-
-    let _ = gpu.ctx_attach_resource(ctx_id, scanout_res);
-    if matches!(present_mode, PresentMode::CopyTo2dScanout) {
-        let _ = gpu.ctx_attach_resource(ctx_id, rt_res);
-    }
-    let _ = gpu.ctx_attach_resource(ctx_id, vbo_res);
-
-    // One-time state/program setup.
-    let mut init = VirglCmdBuf::new();
-    let surf_handle = 10u32;
-    encode_create_surface(&mut init, surf_handle, render_res, VIRGL_FORMAT_B8G8R8X8_UNORM);
-    encode_set_framebuffer(&mut init, surf_handle);
-
-    let ve_handle = 11u32;
-    encode_create_vertex_elements(&mut init, ve_handle);
-    encode_bind_object(&mut init, VIRGL_OBJECT_VERTEX_ELEMENTS, ve_handle);
-
-    encode_set_vertex_buffer(&mut init, core::mem::size_of::<Vertex>() as u32, 0, vbo_res);
-
-    let vs_handle = 20u32;
-    let fs_handle = 21u32;
-    encode_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX, VS_TEXT);
-    encode_bind_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX);
-    encode_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT, FS_TEXT);
-    encode_bind_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT);
-    encode_link_shader(&mut init, vs_handle, fs_handle);
-
-    let blend_handle = 30u32;
-    encode_create_blend(&mut init, blend_handle);
-    encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle);
-    let dsa_handle = 31u32;
-    encode_create_dsa(&mut init, dsa_handle);
-    encode_bind_object(&mut init, VIRGL_OBJECT_DSA, dsa_handle);
-    let rs_handle = 32u32;
-    encode_create_rasterizer(&mut init, rs_handle);
-    encode_bind_object(&mut init, VIRGL_OBJECT_RASTERIZER, rs_handle);
-
-    encode_set_viewport(&mut init, w, h);
-
-    if !gpu.submit_3d(ctx_id, init.as_bytes(), 1) {
-        crate::log!("virgl: submit_3d init failed\n");
-        VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
-        return;
-    }
-
-    // 60 Hz frame pacing based on embassy ticks (typically 1kHz): schedule frame N at
-    // start + floor(N * TICK_HZ / 60), which yields an exact long-term average.
-    let start_ticks = embassy_time_driver::now();
-    let tick_hz = embassy_time_driver::TICK_HZ as u64;
-    let omega = (2.0 * core::f32::consts::PI) / 3.0; // rad/s
-
-    crate::log!("virgl: spinning triangle @60Hz (cw, 360deg/3s)\n");
-    let mut frame: u64 = 0;
-    loop {
-        frame = frame.wrapping_add(1);
-        let target = start_ticks.saturating_add(frame.saturating_mul(tick_hz) / 60);
-        while embassy_time_driver::now() < target {
-            // Yield to keep the executor responsive.
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-        }
-
-        let t = (frame as f32) * (1.0 / 60.0);
-        let angle = -omega * t;
-        let c = libm::cosf(angle);
-        let s = libm::sinf(angle);
-
-        let base = [(0.0f32, 0.65f32), (-0.7f32, -0.55f32), (0.7f32, -0.55f32)];
-        let colors = [
-            [1.0f32, 0.0f32, 0.0f32, 1.0f32],
-            [0.0f32, 1.0f32, 0.0f32, 1.0f32],
-            [0.0f32, 0.0f32, 1.0f32, 1.0f32],
-        ];
-
-        let mut verts = [
-            Vertex {
-                pos: [0.0, 0.0, 0.0, 1.0],
-                color: colors[0],
-            },
-            Vertex {
-                pos: [0.0, 0.0, 0.0, 1.0],
-                color: colors[1],
-            },
-            Vertex {
-                pos: [0.0, 0.0, 0.0, 1.0],
-                color: colors[2],
-            },
-        ];
-
-        for (i, (x, y)) in base.iter().copied().enumerate() {
-            let xr = x * c - y * s;
-            let yr = x * s + y * c;
-            verts[i].pos = [xr, yr, 0.0, 1.0];
-        }
-
-        let vert_bytes: &[u8] = unsafe {
-            core::slice::from_raw_parts(
-                verts.as_ptr() as *const u8,
-                core::mem::size_of_val(&verts),
-            )
-        };
-
-        let mut cmd = VirglCmdBuf::new();
-        encode_clear_color(&mut cmd, 0.0, 0.1, 0.2, 1.0);
-        encode_inline_write_buffer(&mut cmd, vbo_res, vert_bytes);
-        encode_draw_vbo(&mut cmd);
-        if matches!(present_mode, PresentMode::CopyTo2dScanout) {
-            encode_resource_copy_region(&mut cmd, scanout_res, rt_res, w, h);
-        }
-
-        if !gpu.submit_3d(ctx_id, cmd.as_bytes(), frame.wrapping_add(1)) {
-            crate::log!("virgl: submit_3d failed\n");
-            break;
-        }
-        if matches!(present_mode, PresentMode::CopyTo2dScanout) {
-            let _ = gpu.transfer_to_host_2d(scanout_res, w, h);
-        }
-        let _ = gpu.resource_flush(scanout_res, w, h);
-    }
 }
 
 fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
