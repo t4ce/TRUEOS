@@ -117,8 +117,10 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     pci::dma::init_from_limine();
     vga::init(limine::framebuffer_response());
-    gfx::init(limine::framebuffer_response());
     pci::enumerate_impl();
+    gfx::init(limine::framebuffer_response());
+    // Render the gfx proof tile immediately (one-shot) so display output is validated early.
+    vga::cube::tick();
     usb::xhci::init_once();
     usb::truekey::init();
     pci::vrng::init_once();

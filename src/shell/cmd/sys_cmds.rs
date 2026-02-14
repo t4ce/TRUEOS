@@ -359,8 +359,8 @@ pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     let t = Table::new(&cols);
     t.print_header(ctx.io);
 
-    t.print_row(ctx.io, &["net.icmp", "<target>"]);
-    t.print_row(ctx.io, &["net.nic", "[index]"]);
+    t.print_row(ctx.io, &["net.icmp", "<target> [index|vid:pid|bb:dd.f]"]);
+    t.print_row(ctx.io, &["net.nic", "[index|vid:pid|bb:dd.f]"]);
     t.print_row(ctx.io, &["net.hostname", "[name]"]);
     t.print_row(ctx.io, &["net.http", "<url>"]);
     t.print_row(ctx.io, &["net.https", "<host>"]);
@@ -371,9 +371,37 @@ pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
 pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
     let target_str = args.and_then(|a| a.get_str(0)).unwrap_or("");
     if target_str.is_empty() {
-        ctx.io.write_str("net.icmp: usage net.icmp <host>\r\n");
+        ctx.io.write_str("net.icmp: usage net.icmp <host> [index|vid:pid|bb:dd.f]\r\n");
         return CommandAction::None;
     }
+
+    let device_index = args.and_then(|a| a.get_str(1)).and_then(|sel| {
+        let t = sel.trim();
+        if t.is_empty() {
+            return None;
+        }
+        if t.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return t.parse::<usize>().ok();
+        }
+        if t.contains('.') && t.contains(':') {
+            let (bus_s, rest) = t.split_once(':')?;
+            let (slot_s, func_s) = rest.split_once('.')?;
+            let bus = u8::from_str_radix(bus_s.trim(), 16).ok()?;
+            let slot = u8::from_str_radix(slot_s.trim(), 16).ok()?;
+            let func = func_s
+                .trim()
+                .parse::<u8>()
+                .ok()
+                .or_else(|| u8::from_str_radix(func_s.trim(), 16).ok())?;
+            return crate::net::find_device_by_bdf(bus, slot, func);
+        }
+        if let Some((vid_s, pid_s)) = t.split_once(':') {
+            let vid = u16::from_str_radix(vid_s.trim(), 16).ok()?;
+            let pid = u16::from_str_radix(pid_s.trim(), 16).ok()?;
+            return crate::net::find_device_by_vidpid(vid, pid);
+        }
+        None
+    });
     
     let mut target: heapless::String<128> = heapless::String::new();
     if target.push_str(target_str).is_err() {
@@ -399,9 +427,13 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
             target.as_str(), ip[0], ip[1], ip[2], ip[3]
         ));
 
-        let Some(vnet) = VNet::open_primary() else {
-             io_static.write_str("net.icmp: no network device\r\n");
-             return;
+        let vnet = match device_index {
+            Some(i) => VNet::open(i),
+            None => VNet::open_primary(),
+        };
+        let Some(vnet) = vnet else {
+            io_static.write_str("net.icmp: no network device\r\n");
+            return;
         };
 
         let mut seq = 1u16;
@@ -446,12 +478,44 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     let specific_index = if target.is_empty() {
         None
     } else {
-        match target.parse::<usize>() {
-            Ok(i) => Some(i),
-            Err(_) => {
-                ctx.io.write_str("net.nic: usage net.nic [index]\r\n");
-                return CommandAction::None;
+        let t = target.trim();
+        if t.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            match t.parse::<usize>() {
+                Ok(i) => Some(i),
+                Err(_) => {
+                    ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                    return CommandAction::None;
+                }
             }
+        } else if t.contains('.') && t.contains(':') {
+            // BDF selector: bb:dd.f (hex bus/slot; func dec/hex)
+            let Some((bus_s, rest)) = t.split_once(':') else {
+                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                return CommandAction::None;
+            };
+            let Some((slot_s, func_s)) = rest.split_once('.') else {
+                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                return CommandAction::None;
+            };
+            let bus = u8::from_str_radix(bus_s.trim(), 16).ok();
+            let slot = u8::from_str_radix(slot_s.trim(), 16).ok();
+            let func = func_s.trim().parse::<u8>().ok().or_else(|| u8::from_str_radix(func_s.trim(), 16).ok());
+            let Some((bus, slot, func)) = bus.zip(slot).zip(func).map(|((b,s),f)| (b,s,f)) else {
+                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                return CommandAction::None;
+            };
+            crate::net::find_device_by_bdf(bus, slot, func)
+        } else if let Some((vid_s, pid_s)) = t.split_once(':') {
+            let vid = u16::from_str_radix(vid_s.trim(), 16).ok();
+            let pid = u16::from_str_radix(pid_s.trim(), 16).ok();
+            let Some((vid, pid)) = vid.zip(pid) else {
+                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                return CommandAction::None;
+            };
+            crate::net::find_device_by_vidpid(vid, pid)
+        } else {
+            ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+            return CommandAction::None;
         }
     };
 
@@ -463,6 +527,8 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
 
     let cols = [
         TableColumn { header: "Idx", width: 4 },
+        TableColumn { header: "BDF", width: 8 },
+        TableColumn { header: "VID:PID", width: 9 },
         TableColumn { header: "Interface", width: 20 },
         TableColumn { header: "MAC Address", width: 17 },
         TableColumn { header: "IPv4", width: 15 },
@@ -480,6 +546,19 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         }
 
         let name = crate::net::device_name_at(index).unwrap_or("Unknown");
+
+        let bdf = if let Some((bus, slot, func)) = crate::net::bdf_at(index) {
+            alloc::format!("{:02x}:{:02x}.{}", bus, slot, func)
+        } else {
+            alloc::string::String::from("-")
+        };
+
+        let vidpid = if let Some((vid, pid)) = crate::net::pci_id_at(index) {
+            alloc::format!("{:04x}:{:04x}", vid, pid)
+        } else {
+            alloc::string::String::from("-")
+        };
+
         let mac_raw = crate::net::mac_address_at(index).unwrap_or([0; 6]);
         let mac = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", 
             mac_raw[0], mac_raw[1], mac_raw[2], mac_raw[3], mac_raw[4], mac_raw[5]);
@@ -497,7 +576,7 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         };
 
         let idx_s = alloc::format!("{}", index);
-        t.print_row(ctx.io, &[idx_s, name.into(), mac, ip, mode.into(), "::".into()]);
+        t.print_row(ctx.io, &[idx_s, bdf, vidpid, name.into(), mac, ip, mode.into(), "::".into()]);
     }
 
     CommandAction::None

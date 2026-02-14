@@ -11,6 +11,11 @@ pub trait VendorAdapter {
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
 
+    #[inline]
+    fn pci_device(&self) -> Option<crate::pci::PciDevice> {
+        None
+    }
+
     fn bind_ring(&mut self, _ring: *mut NetRing) {}
 }
 
@@ -29,6 +34,11 @@ impl<A: VendorAdapter> NetCore<A> {
             ring,
             rx_queue: VecDeque::new(),
         }
+    }
+
+    #[inline]
+    pub fn pci_device(&self) -> Option<crate::pci::PciDevice> {
+        self.adapter.pci_device()
     }
 }
 

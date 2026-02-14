@@ -300,6 +300,13 @@ impl DeviceCaps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     ClearColor { rgb: u32 },
+    ClearRect {
+        rgb: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
     BindPipeline(PipelineId),
     BindVertexBuffer { buffer: BufferId, offset: u64 },
     SetViewport(Viewport),
@@ -370,3 +377,11 @@ pub trait GfxPresent {
     fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()>;
     fn swapchain_desc(&self) -> SwapchainDesc;
 }
+
+/// Convenience trait for backends that implement both the device and present sides.
+///
+/// This keeps the decoupling seam (`GfxDevice` vs `GfxPresent`) while allowing
+/// callers to borrow a single mutable context when the backend is a single object.
+pub trait GfxContext: GfxDevice + GfxPresent {}
+
+impl<T: GfxDevice + GfxPresent + ?Sized> GfxContext for T {}

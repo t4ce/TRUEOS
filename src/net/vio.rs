@@ -105,6 +105,7 @@ impl VirtQueue {
 
 pub struct VirtioNetAdapter {
     ring: Option<*mut NetRing>,
+    pci: pci::PciDevice,
     io_base: u16,
     mac: [u8; 6],
     rxq: VirtQueue,
@@ -193,6 +194,7 @@ impl VirtioNetAdapter {
 
         Ok(Self {
             ring: None,
+            pci: dev,
             io_base,
             mac,
             rxq,
@@ -220,6 +222,11 @@ impl VendorAdapter for VirtioNetAdapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.tx_submit_hw(frame)
+    }
+
+    #[inline]
+    fn pci_device(&self) -> Option<pci::PciDevice> {
+        Some(self.pci)
     }
 
     fn bind_ring(&mut self, ring: *mut NetRing) {

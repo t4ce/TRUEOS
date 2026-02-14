@@ -3,7 +3,7 @@ pub mod demo;
 
 use spin::{Once, Mutex};
 
-use trueos_gfx_core::{GfxDevice, GfxPresent};
+use trueos_gfx_core::GfxContext;
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 
@@ -16,18 +16,14 @@ impl System {
         Self { backend }
     }
 
-    pub fn device_mut(&mut self) -> &mut dyn GfxDevice {
-        self.backend.device_mut()
-    }
-
-    pub fn present_mut(&mut self) -> &mut dyn GfxPresent {
-        self.backend.present_mut()
+    pub fn context_mut(&mut self) -> &mut dyn GfxContext {
+        self.backend.context_mut()
     }
 }
 
 pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
     let _ = SYSTEM.call_once(|| {
-        let backend = backends::Backend::init_limine_fb(framebuffers);
+        let backend = backends::Backend::init_auto(framebuffers);
         Mutex::new(System::new(backend))
     });
 }
@@ -38,10 +34,6 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
     Some(f(&mut *guard))
 }
 
-pub fn with_device<R>(f: impl FnOnce(&mut dyn GfxDevice, &mut dyn GfxPresent) -> R) -> Option<R> {
-    with_system(|sys| {
-        let dev = sys.device_mut();
-        let pres = sys.present_mut();
-        f(dev, pres)
-    })
+pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
+    with_system(|sys| f(sys.context_mut()))
 }

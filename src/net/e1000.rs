@@ -96,6 +96,7 @@ impl Mmio {
 
 pub struct E1000Adapter {
     mmio: Mmio,
+    pci: pci::PciDevice,
     mac: [u8; 6],
     ring: Option<*mut NetRing>,
 
@@ -192,9 +193,10 @@ impl E1000Adapter {
             }
         };
 
-        let mut adapter = Self {
-            mmio,
-            mac: [0; 6],
+            let mut adapter = Self {
+                mmio,
+                pci: dev,
+                mac: [0; 6],
             ring: None,
             rx_desc: rx_desc_mem.virt() as *mut RxDesc,
             rx_desc_mem,
@@ -459,6 +461,11 @@ impl VendorAdapter for E1000Adapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.transmit_hw(frame)
+    }
+
+    #[inline]
+    fn pci_device(&self) -> Option<pci::PciDevice> {
+        Some(self.pci)
     }
 
     fn bind_ring(&mut self, ring: *mut NetRing) {

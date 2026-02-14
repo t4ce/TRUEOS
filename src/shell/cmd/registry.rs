@@ -527,7 +527,10 @@ pub(crate) fn init_builtin_shell_commands() {
         static DMAFPGA_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest).mandatory()];
         static NO_ARGS: [ArgSpec; 0] = [];
         static NET_ARGS: [ArgSpec; 0] = [];
-        static NET_ICMP_ARGS: [ArgSpec; 1] = [ArgSpec::new("target", ArgType::Str).mandatory()];
+        static NET_ICMP_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("target", ArgType::Str).mandatory(),
+            ArgSpec::new("nic", ArgType::Str),
+        ];
         static NET_NIC_ARGS: [ArgSpec; 1] = [ArgSpec::new("index", ArgType::Rest)];
         static NET_HOSTNAME_ARGS: [ArgSpec; 1] = [ArgSpec::new("name", ArgType::Str)];
         static NET_HTTP_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];

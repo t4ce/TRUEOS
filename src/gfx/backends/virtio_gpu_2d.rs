@@ -5,128 +5,10 @@ use libm::{ceilf, floorf};
 use trueos_gfx_core::{
     BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
     Extent2D, FenceId, GfxDevice, GfxPresent, ImageFormat, MapMode, MappedRange, MemoryType,
-    PipelineDesc, PipelineId, Result, ShaderDesc, ShaderFormat, ShaderId, SwapchainDesc, VertexLayout,
-    Viewport,
+    PipelineDesc, PipelineId, Result, ShaderDesc, ShaderId, SwapchainDesc, VertexLayout, Viewport,
 };
 
-pub struct NullBackend;
-
-impl GfxDevice for NullBackend {
-    fn caps(&self) -> DeviceCaps {
-        DeviceCaps {
-            supports_rgbx8888: false,
-            supports_host_visible_buffers: false,
-        }
-    }
-
-    fn create_buffer(&mut self, _desc: BufferDesc) -> Result<BufferId> {
-        Err(Error::Unsupported)
-    }
-
-    fn destroy_buffer(&mut self, _id: BufferId) {}
-
-    fn create_shader(&mut self, _desc: ShaderDesc<'_>) -> Result<ShaderId> {
-        Err(Error::Unsupported)
-    }
-
-    fn destroy_shader(&mut self, _id: ShaderId) {}
-
-    fn create_pipeline(&mut self, _desc: PipelineDesc) -> Result<PipelineId> {
-        Err(Error::Unsupported)
-    }
-
-    fn destroy_pipeline(&mut self, _id: PipelineId) {}
-
-    fn write_buffer(&mut self, _id: BufferId, _offset: u64, _data: &[u8]) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
-    fn submit(&mut self, _cmds: CommandBuffer<'_>) -> Result<FenceId> {
-        Err(Error::Unsupported)
-    }
-
-    fn poll(&mut self, _fence: FenceId) -> bool {
-        false
-    }
-
-    fn device_idle(&mut self) {}
-}
-
-impl GfxPresent for NullBackend {
-    fn configure_swapchain(&mut self, _desc: SwapchainDesc) -> Result<()> {
-        Err(Error::Unsupported)
-    }
-
-    fn swapchain_desc(&self) -> SwapchainDesc {
-        SwapchainDesc {
-            format: ImageFormat::Rgbx8888,
-            extent: Extent2D {
-                width: 0,
-                height: 0,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct FramebufferSurface {
-    addr: *mut u8,
-    pitch: usize,
-    bytes_per_pixel: usize,
-    width: usize,
-    height: usize,
-}
-
-unsafe impl Send for FramebufferSurface {}
-unsafe impl Sync for FramebufferSurface {}
-
-impl FramebufferSurface {
-    fn from_limine(fb: ::limine::framebuffer::Framebuffer<'static>) -> Option<Self> {
-        use ::limine::framebuffer::MemoryModel;
-
-        if fb.memory_model() != MemoryModel::RGB {
-            return None;
-        }
-        let bpp = fb.bpp();
-        if bpp != 32 {
-            return None;
-        }
-        Some(Self {
-            addr: fb.addr(),
-            pitch: fb.pitch() as usize,
-            bytes_per_pixel: (bpp / 8) as usize,
-            width: fb.width() as usize,
-            height: fb.height() as usize,
-        })
-    }
-
-    fn write_pixel(&self, x: usize, y: usize, color: u32) {
-        let offset = y
-            .saturating_mul(self.pitch)
-            .saturating_add(x.saturating_mul(self.bytes_per_pixel));
-        unsafe {
-            core::ptr::write_volatile(self.addr.add(offset) as *mut u32, color);
-        }
-    }
-
-    fn present_from_rgb32(&self, src: &[u32]) {
-        if self.width == 0 || self.height == 0 {
-            return;
-        }
-        let expected = self.width.saturating_mul(self.height);
-        if src.len() < expected {
-            return;
-        }
-
-        for y in 0..self.height {
-            let row_ptr = unsafe { self.addr.add(y.saturating_mul(self.pitch)) as *mut u32 };
-            let src_row = &src[y.saturating_mul(self.width)..][..self.width];
-            for x in 0..self.width {
-                unsafe { row_ptr.add(x).write_volatile(src_row[x]) };
-            }
-        }
-    }
-}
+use crate::pci::virtio_gpu::{Rect, VirtioGpu2d};
 
 struct Buffer {
     desc: BufferDesc,
@@ -134,26 +16,19 @@ struct Buffer {
     mapped: bool,
 }
 
-struct Shader {
-    _stage: trueos_gfx_core::ShaderStage,
-    _format: ShaderFormat,
-    _bytes: Vec<u8>,
-}
-
 struct Pipeline {
     desc: PipelineDesc,
 }
 
-pub struct LimineFbBackend {
-    fb: FramebufferSurface,
+pub struct VirtioGpu2dBackend {
+    gpu: VirtioGpu2d,
     swapchain: SwapchainDesc,
-    backbuffer: Vec<u32>,
 
     buffers: Vec<Option<Buffer>>,
-    shaders: Vec<Option<Shader>>,
     pipelines: Vec<Option<Pipeline>>,
 
     state: DrawState,
+    dirty: Option<Rect>,
 
     next_fence: u64,
     completed_fence: u64,
@@ -172,48 +47,42 @@ struct BufferBinding {
     offset: u64,
 }
 
-impl LimineFbBackend {
-    pub fn from_limine(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
-    ) -> Option<Self> {
-        let fb = framebuffers
-            .and_then(|resp| resp.framebuffers().next())
-            .and_then(FramebufferSurface::from_limine)?;
+impl VirtioGpu2dBackend {
+    pub fn init_first() -> Option<Self> {
+        let mut gpu = VirtioGpu2d::init_first()?;
+        let (w, h) = gpu.extent();
+        if w == 0 || h == 0 {
+            return None;
+        }
 
         let swapchain = SwapchainDesc {
             format: ImageFormat::Rgbx8888,
-            extent: Extent2D {
-                width: fb.width as u32,
-                height: fb.height as u32,
-            },
+            extent: Extent2D { width: w, height: h },
         };
-
-        let expected = fb.width.saturating_mul(fb.height);
-        let mut backbuffer = Vec::new();
-        backbuffer.resize(expected, 0);
 
         let viewport = Viewport {
             x: 0,
             y: 0,
-            width: fb.width as i32,
-            height: fb.height as i32,
+            width: w as i32,
+            height: h as i32,
         };
 
+        // Clear once so the scanout resource isn't uninitialized.
+        let full = Rect { x: 0, y: 0, width: w, height: h };
+        Self::clear_rect(Self::backbuffer_mut(&mut gpu), swapchain.extent, full, 0x00_08_18_30);
+        let _ = gpu.transfer_and_flush(full);
+
         Some(Self {
-            fb,
+            gpu,
             swapchain,
-            backbuffer,
             buffers: Vec::new(),
-            shaders: Vec::new(),
             pipelines: Vec::new(),
             state: DrawState {
                 pipeline: PipelineId::invalid(),
-                vertex: BufferBinding {
-                    id: BufferId::invalid(),
-                    offset: 0,
-                },
+                vertex: BufferBinding { id: BufferId::invalid(), offset: 0 },
                 viewport,
             },
+            dirty: None,
             next_fence: 1,
             completed_fence: 0,
         })
@@ -230,12 +99,13 @@ impl LimineFbBackend {
         list.len() as u32
     }
 
-    fn get_buffer(&self, id: BufferId) -> Result<&Buffer> {
-        let idx = id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
-        self.buffers
-            .get(idx)
-            .and_then(|b| b.as_ref())
-            .ok_or(Error::NotFound)
+    fn backbuffer_mut(gpu: &mut VirtioGpu2d) -> &mut [u32] {
+        let ptr = gpu.backing_ptr_u32();
+        let len = gpu.backing_len_u32();
+        if ptr.is_null() || len == 0 {
+            return &mut [];
+        }
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
     }
 
     fn get_buffer_mut(&mut self, id: BufferId) -> Result<&mut Buffer> {
@@ -246,31 +116,27 @@ impl LimineFbBackend {
             .ok_or(Error::NotFound)
     }
 
-    fn get_pipeline(&self, id: PipelineId) -> Result<&Pipeline> {
+    fn get_pipeline_layout(&self, id: PipelineId) -> Result<VertexLayout> {
         let idx = id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
-        self.pipelines
+        let p = self
+            .pipelines
             .get(idx)
             .and_then(|p| p.as_ref())
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound)?;
+        Ok(p.desc.vertex_layout)
     }
 
-    fn clear_backbuffer(&mut self, rgb: u32) {
-        for px in self.backbuffer.iter_mut() {
-            *px = rgb & 0x00FF_FFFF;
-        }
-    }
-
-    fn clear_rect(backbuffer: &mut [u32], extent: Extent2D, x: u32, y: u32, width: u32, height: u32, rgb: u32) {
+    fn clear_rect(backbuffer: &mut [u32], extent: Extent2D, rect: Rect, rgb: u32) {
         let w = extent.width as usize;
         let h = extent.height as usize;
         if w == 0 || h == 0 {
             return;
         }
 
-        let x0 = (x as usize).min(w);
-        let y0 = (y as usize).min(h);
-        let x1 = x0.saturating_add(width as usize).min(w);
-        let y1 = y0.saturating_add(height as usize).min(h);
+        let x0 = (rect.x as usize).min(w);
+        let y0 = (rect.y as usize).min(h);
+        let x1 = x0.saturating_add(rect.width as usize).min(w);
+        let y1 = y0.saturating_add(rect.height as usize).min(h);
         if x1 <= x0 || y1 <= y0 {
             return;
         }
@@ -285,6 +151,15 @@ impl LimineFbBackend {
                 }
             }
         }
+    }
+
+    fn ndc_to_screen(x_ndc: f32, y_ndc: f32, vp: Viewport) -> (f32, f32) {
+        let vw = vp.width.max(1) as f32;
+        let vh = vp.height.max(1) as f32;
+
+        let sx = (x_ndc * 0.5 + 0.5) * vw + (vp.x as f32);
+        let sy = (-y_ndc * 0.5 + 0.5) * vh + (vp.y as f32);
+        (sx, sy)
     }
 
     fn draw_triangles_pos_color_rgbu8(
@@ -356,10 +231,7 @@ impl LimineFbBackend {
                     vbuf[pos_off + 7],
                 ]);
 
-                let vw = vp.width.max(1) as f32;
-                let vh = vp.height.max(1) as f32;
-                let sx = (x * 0.5 + 0.5) * vw + (vp.x as f32);
-                let sy = (-y * 0.5 + 0.5) * vh + (vp.y as f32);
+                let (sx, sy) = Self::ndc_to_screen(x, y, vp);
                 px[i] = sx;
                 py[i] = sy;
 
@@ -425,32 +297,27 @@ impl LimineFbBackend {
     fn process(&mut self, cmd: Command) -> Result<()> {
         match cmd {
             Command::ClearColor { rgb } => {
-                self.clear_backbuffer(rgb);
+                let full = Rect {
+                    x: 0,
+                    y: 0,
+                    width: self.swapchain.extent.width,
+                    height: self.swapchain.extent.height,
+                };
+                Self::clear_rect(Self::backbuffer_mut(&mut self.gpu), self.swapchain.extent, full, rgb);
+                self.dirty = Some(full);
                 Ok(())
             }
-            Command::ClearRect {
-                rgb,
-                x,
-                y,
-                width,
-                height,
-            } => {
-                Self::clear_rect(
-                    &mut self.backbuffer,
-                    self.swapchain.extent,
-                    x,
-                    y,
-                    width,
-                    height,
-                    rgb,
-                );
+            Command::ClearRect { rgb, x, y, width, height } => {
+                let rect = Rect { x, y, width, height };
+                Self::clear_rect(Self::backbuffer_mut(&mut self.gpu), self.swapchain.extent, rect, rgb);
+                self.dirty = Some(rect);
                 Ok(())
             }
             Command::BindPipeline(pid) => {
                 if !pid.is_valid() {
                     return Err(Error::Invalid);
                 }
-                let _ = self.get_pipeline(pid)?;
+                let _ = self.get_pipeline_layout(pid)?;
                 self.state.pipeline = pid;
                 Ok(())
             }
@@ -458,7 +325,12 @@ impl LimineFbBackend {
                 if !buffer.is_valid() {
                     return Err(Error::Invalid);
                 }
-                let _ = self.get_buffer(buffer)?;
+                let idx = buffer.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
+                let _ = self
+                    .buffers
+                    .get(idx)
+                    .and_then(|b| b.as_ref())
+                    .ok_or(Error::NotFound)?;
                 self.state.vertex = BufferBinding { id: buffer, offset };
                 Ok(())
             }
@@ -466,27 +338,18 @@ impl LimineFbBackend {
                 self.state.viewport = vp;
                 Ok(())
             }
-            Command::Draw {
-                vertex_count,
-                first_vertex,
-            } => {
+            Command::Draw { vertex_count, first_vertex } => {
                 let pipeline_id = self.state.pipeline;
                 if !pipeline_id.is_valid() {
                     return Err(Error::Invalid);
                 }
-                let pidx = pipeline_id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
-                let layout = self
-                    .pipelines
-                    .get(pidx)
-                    .and_then(|p| p.as_ref())
-                    .ok_or(Error::NotFound)?
-                    .desc
-                    .vertex_layout;
+                let layout = self.get_pipeline_layout(pipeline_id)?;
 
                 let vb = self.state.vertex;
                 if !vb.id.is_valid() {
                     return Err(Error::Invalid);
                 }
+
                 let bidx = vb.id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
                 let buffer = self
                     .buffers
@@ -504,7 +367,7 @@ impl LimineFbBackend {
                 let vbuf = &buffer.bytes[start..];
 
                 Self::draw_triangles_pos_color_rgbu8(
-                    &mut self.backbuffer,
+                    Self::backbuffer_mut(&mut self.gpu),
                     self.swapchain.extent,
                     self.state.viewport,
                     vbuf,
@@ -512,19 +375,41 @@ impl LimineFbBackend {
                     first_vertex,
                     vertex_count,
                 );
+
+                // Track viewport as dirty region (best-effort).
+                if self.state.viewport.width > 0 && self.state.viewport.height > 0 {
+                    self.dirty = Some(Rect {
+                        x: self.state.viewport.x.max(0) as u32,
+                        y: self.state.viewport.y.max(0) as u32,
+                        width: self.state.viewport.width as u32,
+                        height: self.state.viewport.height as u32,
+                    });
+                }
+
                 Ok(())
             }
             Command::Present => {
-                self.fb.present_from_rgb32(&self.backbuffer);
+                let rect = self.dirty.take().unwrap_or(Rect {
+                    x: 0,
+                    y: 0,
+                    width: self.swapchain.extent.width,
+                    height: self.swapchain.extent.height,
+                });
+                if !self.gpu.transfer_and_flush(rect) {
+                    return Err(Error::Unsupported);
+                }
                 Ok(())
             }
         }
     }
 }
 
-impl GfxDevice for LimineFbBackend {
+impl GfxDevice for VirtioGpu2dBackend {
     fn caps(&self) -> DeviceCaps {
-        DeviceCaps::minimal_software()
+        DeviceCaps {
+            supports_rgbx8888: true,
+            supports_host_visible_buffers: true,
+        }
     }
 
     fn create_buffer(&mut self, desc: BufferDesc) -> Result<BufferId> {
@@ -561,32 +446,11 @@ impl GfxDevice for LimineFbBackend {
         }
     }
 
-    fn create_shader(&mut self, desc: ShaderDesc<'_>) -> Result<ShaderId> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(desc.bytes);
-
-        let slot = Self::alloc_slot(
-            &mut self.shaders,
-            Shader {
-                _stage: desc.stage,
-                _format: desc.format,
-                _bytes: bytes,
-            },
-        );
-        Ok(ShaderId::from_raw(slot))
+    fn create_shader(&mut self, _desc: ShaderDesc<'_>) -> Result<ShaderId> {
+        Err(Error::Unsupported)
     }
 
-    fn destroy_shader(&mut self, id: ShaderId) {
-        if !id.is_valid() {
-            return;
-        }
-        let Some(idx) = id.raw().checked_sub(1).map(|v| v as usize) else {
-            return;
-        };
-        if let Some(slot) = self.shaders.get_mut(idx) {
-            *slot = None;
-        }
-    }
+    fn destroy_shader(&mut self, _id: ShaderId) {}
 
     fn create_pipeline(&mut self, desc: PipelineDesc) -> Result<PipelineId> {
         if desc.vertex_layout.stride == 0 {
@@ -662,24 +526,15 @@ impl GfxDevice for LimineFbBackend {
     }
 }
 
-impl GfxPresent for LimineFbBackend {
+impl GfxPresent for VirtioGpu2dBackend {
     fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()> {
-        if desc.format != ImageFormat::Rgbx8888 {
+        // For now: scanout size is fixed by the device bootstrap.
+        if desc.format != self.swapchain.format {
             return Err(Error::Unsupported);
         }
-        if desc.extent.width == 0 || desc.extent.height == 0 {
-            return Err(Error::Invalid);
+        if desc.extent != self.swapchain.extent {
+            return Err(Error::Unsupported);
         }
-
-        let expected = (desc.extent.width as usize).saturating_mul(desc.extent.height as usize);
-        self.backbuffer.resize(expected, 0);
-        self.swapchain = desc;
-        self.state.viewport = Viewport {
-            x: 0,
-            y: 0,
-            width: desc.extent.width as i32,
-            height: desc.extent.height as i32,
-        };
         Ok(())
     }
 

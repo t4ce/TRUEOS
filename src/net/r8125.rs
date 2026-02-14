@@ -23,15 +23,15 @@ const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 const POLL_STATE_LOG_EVERY: u64 = 10_000;
 const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
 const EXP_R8125_SKIP_DESC0: bool = false;
-const EXP_R8125_TXPOLL_ALT: bool = true;
+const EXP_R8125_TXPOLL_ALT: bool = false;
 const EXP_R8125_TXPOLL_ALT_VALUE: u8 = 0x80;
 const EXP_R8125_TXPOLL_PRIMARY: u8 = 0x40;
-const EXP_R8125_TXPOLL_90_ENABLE: bool = true;
+const EXP_R8125_TXPOLL_90_ENABLE: bool = false;
 const EXP_R8125_TXPOLL_90_VALUE: u16 = 0x0001;
-const EXP_R8125_TCR_OVERRIDE: Option<u32> = Some(0x67100f00);
+const EXP_R8125_TCR_OVERRIDE: Option<u32> = None;
 const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
 const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
-const EXP_R8125_CLFLUSH_TX: bool = true;
+const EXP_R8125_CLFLUSH_TX: bool = false;
 const TX_WEDGE_QUARANTINE_RESETS: u64 = 3;
 
 // MMIO registers (RTL8125 family)
@@ -134,6 +134,7 @@ impl Mmio {
 
 pub struct R8125Adapter {
     mmio: Mmio,
+    pci: pci::PciDevice,
     mac: [u8; 6],
     ring: Option<*mut NetRing>,
 
@@ -576,6 +577,7 @@ impl R8125Adapter {
 
         Ok(Self {
             mmio,
+            pci: dev,
             mac,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
@@ -1157,6 +1159,11 @@ impl VendorAdapter for R8125Adapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.transmit_hw(frame)
+    }
+
+    #[inline]
+    fn pci_device(&self) -> Option<pci::PciDevice> {
+        Some(self.pci)
     }
 
     fn bind_ring(&mut self, ring: *mut NetRing) {
