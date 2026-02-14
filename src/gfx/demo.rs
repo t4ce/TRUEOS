@@ -229,20 +229,50 @@ pub fn spawn_spin_rect_60hz(spawner: &embassy_executor::Spawner) {
 async fn gfx_spin_task() {
     use embassy_time::{Duration as EmbassyDuration, Timer};
 
-    let start_ticks = embassy_time_driver::now();
     let tick_hz = embassy_time_driver::TICK_HZ as u64;
     let omega = (2.0 * core::f32::consts::PI) / 3.0; // rad/s
 
-    crate::log!("gfx: spinning rect @60Hz (cw, 360deg/3s)\n");
+    let mut last_epoch = crate::gfx::backend_epoch();
+    let mut start_ticks = embassy_time_driver::now();
     let mut frame: u64 = 0;
+
+    let mut hz: u64;
+    let mut kind = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
+    hz = match kind {
+        crate::gfx::BackendKind::Virgl => 60,
+        crate::gfx::BackendKind::LimineFb => 10,
+        #[cfg(feature = "gfx_intel")]
+        crate::gfx::BackendKind::Intel => 60,
+        crate::gfx::BackendKind::None => 2,
+    };
+
+    crate::log!("gfx: spinning rect start backend={:?} hz={}\n", kind, hz);
+
     loop {
+        let epoch = crate::gfx::backend_epoch();
+        if epoch != last_epoch {
+            last_epoch = epoch;
+            start_ticks = embassy_time_driver::now();
+            frame = 0;
+            kind = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
+            hz = match kind {
+                crate::gfx::BackendKind::Virgl => 60,
+                crate::gfx::BackendKind::LimineFb => 10,
+                #[cfg(feature = "gfx_intel")]
+                crate::gfx::BackendKind::Intel => 60,
+                crate::gfx::BackendKind::None => 2,
+            };
+            crate::log!("gfx: spinning rect switch backend={:?} hz={}\n", kind, hz);
+        }
+
+        let hz = hz.max(1);
         frame = frame.wrapping_add(1);
-        let target = start_ticks.saturating_add(frame.saturating_mul(tick_hz) / 60);
+        let target = start_ticks.saturating_add(frame.saturating_mul(tick_hz) / hz);
         while embassy_time_driver::now() < target {
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
 
-        let t = (frame as f32) * (1.0 / 60.0);
+        let t = (frame as f32) * (1.0 / (hz as f32));
         let angle = -omega * t;
         let _ = crate::gfx::with_context(|ctx| {
             tick_rotating_rect(ctx, angle);

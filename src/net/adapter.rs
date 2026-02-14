@@ -6,11 +6,13 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, PollResult};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
-use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
+use smoltcp::socket::{dhcpv4, icmp, raw, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpProtocol, IpVersion, Ipv4Address,
     Icmpv4Packet, Icmpv4Repr,
+    Icmpv6Packet, Icmpv6Repr, Ipv6Address, Ipv6Packet, Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr,
+    RawHardwareAddress,
 };
 
 use crate::log;
@@ -37,6 +39,10 @@ const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
 const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 111];
 const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
+const IPV6_LINK_LOCAL_PREFIX: [u8; 8] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0];
+const IPV6_LINK_LOCAL_PREFIX_LEN: u8 = 64;
+const IPV6_RS_RETRY_MS: i64 = 5_000;
+
 // Best-effort primary DNS server snapshot (used by v-layer defaults).
 // Kept intentionally simple: we record what DHCP reports for the active primary NIC.
 static PRIMARY_DHCP_DNS: spin::Mutex<([[u8; 4]; DHCP_DNS_MAX], u8)> =
@@ -50,6 +56,18 @@ pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
     services.get(index).and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
+}
+
+pub fn ipv6_link_local_at(index: usize) -> Option<[u8; 16]> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    services.get(index).map(|s| s.local_ipv6_ll.octets())
+}
+
+pub fn ipv6_global_at(index: usize) -> Option<[u8; 16]> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    services.get(index).and_then(|s| s.local_ipv6_global.map(|ip| ip.octets()))
 }
 
 pub fn dhcp_has_lease_at(index: usize) -> Option<bool> {
@@ -246,6 +264,12 @@ pub struct NetEndpoint {
     pub port: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetEndpointV6 {
+    pub addr: [u8; 16],
+    pub port: u16,
+}
+
 #[derive(Clone, Debug)]
 pub enum NetCommand {
     OpenUdp {
@@ -257,9 +281,17 @@ pub enum NetCommand {
     OpenTcpConnect {
         remote: NetEndpoint,
     },
+    OpenTcpConnectV6 {
+        remote: NetEndpointV6,
+    },
     SendUdp {
         handle: NetHandle,
         remote: NetEndpoint,
+        data: Vec<u8>,
+    },
+    SendUdpV6 {
+        handle: NetHandle,
+        remote: NetEndpointV6,
         data: Vec<u8>,
     },
     SendTcp {
@@ -268,6 +300,11 @@ pub enum NetCommand {
     },
     IcmpEcho {
         target: [u8; 4],
+        seq: u16,
+        data: Vec<u8>,
+    },
+    IcmpEchoV6 {
+        target: [u8; 16],
         seq: u16,
         data: Vec<u8>,
     },
@@ -293,6 +330,11 @@ pub enum NetEvent {
         from: NetEndpoint,
         data: Vec<u8>,
     },
+    UdpPacketV6 {
+        handle: NetHandle,
+        from: NetEndpointV6,
+        data: Vec<u8>,
+    },
     TcpEstablished {
         handle: NetHandle,
     },
@@ -306,6 +348,12 @@ pub enum NetEvent {
     },
     IcmpReply {
         from: [u8; 4],
+        seq: u16,
+        rtt_ms: u32,
+        data: Vec<u8>,
+    },
+    IcmpReplyV6 {
+        from: [u8; 16],
         seq: u16,
         rtt_ms: u32,
         data: Vec<u8>,
@@ -933,10 +981,16 @@ struct NetService {
     next_handle: AtomicU32,
     icmp: SocketHandle,
 
+    raw_icmpv6: SocketHandle,
+
     dhcp: SocketHandle,
     dhcp_has_lease: bool,
     local_ipv4: Option<Ipv4Address>,
     router_ipv4: Option<Ipv4Address>,
+    local_ipv6_ll: Ipv6Address,
+    local_ipv6_global: Option<Ipv6Address>,
+    router_ipv6: Option<Ipv6Address>,
+    rs_last_sent: Option<Instant>,
     dhcp_dns: [[u8; 4]; DHCP_DNS_MAX],
     dhcp_dns_count: u8,
 
@@ -966,8 +1020,11 @@ impl NetService {
             tx_buffer: &mut tx_buffer,
         };
         let mut iface = Interface::new(cfg, &mut device, now());
+        // Always install an IPv6 link-local address derived from the MAC.
+        let ipv6_ll = ipv6_link_local_from_mac(mac);
+
         // Bring-up default: install static IPv4 before DHCP starts.
-        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface, device_index);
+        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll);
         let ip_o = fallback_ip.octets();
         let gw_o = fallback_gw.octets();
         crate::log!(
@@ -992,8 +1049,19 @@ impl NetService {
         let mut icmp_socket = icmp::Socket::new(rx, tx);
         let _ = icmp_socket.bind(icmp::Endpoint::Ident(ICMP_IDENT));
 
+        // Raw ICMPv6 socket (for Router Advertisements / NDISC). ICMP sockets
+        // only accept echo or UDP-related errors.
+        let raw_rx_meta = vec![raw::PacketMetadata::EMPTY; 8];
+        let raw_rx_buf = vec![0u8; 2048];
+        let raw_tx_meta = vec![raw::PacketMetadata::EMPTY; 4];
+        let raw_tx_buf = vec![0u8; 256];
+        let raw_rx = raw::PacketBuffer::new(raw_rx_meta, raw_rx_buf);
+        let raw_tx = raw::PacketBuffer::new(raw_tx_meta, raw_tx_buf);
+        let raw_icmpv6_socket = raw::Socket::new(IpVersion::Ipv6, IpProtocol::Icmpv6, raw_rx, raw_tx);
+
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
+        let raw_icmpv6 = sockets.add(raw_icmpv6_socket);
 
         let dhcp_socket = dhcpv4::Socket::new();
         // let current_hostname = get_hostname();
@@ -1014,10 +1082,16 @@ impl NetService {
             next_handle: AtomicU32::new(1),
             icmp,
 
+            raw_icmpv6,
+
             dhcp,
             dhcp_has_lease: false,
             local_ipv4: Some(fallback_ip),
             router_ipv4: Some(fallback_gw),
+            local_ipv6_ll: ipv6_ll,
+            local_ipv6_global: None,
+            router_ipv6: None,
+            rs_last_sent: None,
             dhcp_dns: [[0u8; 4]; DHCP_DNS_MAX],
             dhcp_dns_count: 0,
 
@@ -1166,6 +1240,58 @@ impl NetService {
         Ok(handle)
     }
 
+    fn open_tcp_connect_v6(
+        &mut self,
+        owner: &'static str,
+        remote: NetEndpointV6,
+    ) -> Result<NetHandle, &'static str> {
+        if self.records.len() >= MAX_SOCKETS {
+            return Err("no sockets available");
+        }
+
+        let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+        let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
+        let mut socket = tcp::Socket::new(rx, tx);
+        socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
+
+        let local_port = self.tcp_next_ephemeral;
+        self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+
+        let local_ip = self.local_ipv6_global.unwrap_or(self.local_ipv6_ll);
+        let local = IpEndpoint::new(IpAddress::Ipv6(local_ip), local_port);
+
+        let remote_ip = Ipv6Address::from_octets(remote.addr);
+        let remote = IpEndpoint::new(IpAddress::Ipv6(remote_ip), remote.port);
+
+        crate::log!(
+            "net: tcp6 connect owner={} local=[{}]:{} remote=[{}]:{}\n",
+            owner,
+            local_ip,
+            local_port,
+            remote_ip,
+            remote.port
+        );
+
+        socket
+            .connect(self.iface.context(), remote, local)
+            .map_err(|_| "connect failed")?;
+
+        let initial_state = socket.state();
+
+        let handle = self.alloc_handle();
+        let sh = self.sockets.add(socket);
+        self.records.push(SocketRecord {
+            owner,
+            handle,
+            kind: SocketKind::Tcp,
+            socket: sh,
+            tcp_tx: VecDeque::new(),
+            established: false,
+            last_tcp_state: Some(initial_state),
+        });
+        Ok(handle)
+    }
+
     fn flush_tcp_tx(&mut self, idx: usize) {
         if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
             return;
@@ -1253,10 +1379,168 @@ impl NetService {
         }
     }
 
+    fn send_icmp_echo_v6(&mut self, owner: &'static str, target: [u8; 16], seq: u16, data: Vec<u8>) {
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        if !socket.can_send() {
+            let _ = push_event(owner, NetEvent::Error { msg: "icmp6 send blocked" });
+            return;
+        }
+
+        let dst = Ipv6Address::from_octets(target);
+        let req = Icmpv6Repr::EchoRequest {
+            ident: ICMP_IDENT,
+            seq_no: seq,
+            data: &data,
+        };
+        let mut out = vec![0u8; req.buffer_len()];
+        req.emit(
+            &self.local_ipv6_ll,
+            &dst,
+            &mut Icmpv6Packet::new_unchecked(&mut out),
+            &ChecksumCapabilities::default(),
+        );
+
+        if socket.send_slice(&out, IpAddress::Ipv6(dst)).is_ok() {
+            if self.icmp_vnet_inflight.len() >= ICMP_VNET_MAX_INFLIGHT {
+                self.icmp_vnet_inflight.remove(0);
+            }
+            self.icmp_vnet_inflight.push(IcmpInflight {
+                owner,
+                seq,
+                sent_at: now(),
+            });
+        } else {
+            let _ = push_event(owner, NetEvent::Error { msg: "icmp6 send fail" });
+        }
+    }
+
     fn prune_icmp_inflight(&mut self, timestamp: Instant) {
         let timeout = SmolDuration::from_millis(ICMP_VNET_TIMEOUT_MS as u64);
         self.icmp_vnet_inflight
             .retain(|p| timestamp < p.sent_at + timeout);
+    }
+
+    fn maybe_send_router_solicit(&mut self, timestamp: Instant) {
+        if self.router_ipv6.is_some() || self.local_ipv6_global.is_some() {
+            return;
+        }
+
+        if let Some(last) = self.rs_last_sent {
+            if timestamp < last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64) {
+                return;
+            }
+        }
+
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        if !socket.can_send() {
+            return;
+        }
+
+        let mac = crate::net::mac_address_at(self.device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
+        let dst = Ipv6Address::new(0xff02, 0, 0, 0, 0, 0, 0, 0x0002); // ff02::2 all-routers
+        let rs = Icmpv6Repr::Ndisc(NdiscRepr::RouterSolicit {
+            lladdr: Some(RawHardwareAddress::from_bytes(&mac)),
+        });
+
+        let mut out = vec![0u8; rs.buffer_len()];
+        rs.emit(
+            &self.local_ipv6_ll,
+            &dst,
+            &mut Icmpv6Packet::new_unchecked(&mut out),
+            &ChecksumCapabilities::default(),
+        );
+
+        if socket.send_slice(&out, IpAddress::Ipv6(dst)).is_ok() {
+            self.rs_last_sent = Some(timestamp);
+        }
+    }
+
+    fn poll_router_advertisements(&mut self) {
+        let socket = self.sockets.get_mut::<raw::Socket>(self.raw_icmpv6);
+        let mut scratch = POLL_SCRATCH_BUF.lock();
+
+        while socket.can_recv() {
+            let Ok(len) = socket.recv_slice(&mut scratch[..]) else {
+                break;
+            };
+
+            let ipv6 = match Ipv6Packet::new_checked(&scratch[..len]) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let ip_repr = match Ipv6Repr::parse(&ipv6) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if ip_repr.next_header != IpProtocol::Icmpv6 {
+                continue;
+            }
+
+            let icmp = match Icmpv6Packet::new_checked(ipv6.payload()) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let icmp_repr = match Icmpv6Repr::parse(
+                &ip_repr.src_addr,
+                &ip_repr.dst_addr,
+                &icmp,
+                // We don't have access to Interface's internal checksum caps.
+                // For RA bring-up, accept packets even if checksum offload/caps
+                // are not modeled perfectly.
+                &ChecksumCapabilities::ignored(),
+            ) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert { router_lifetime, prefix_info, .. }) = icmp_repr else {
+                continue;
+            };
+
+            if router_lifetime.total_millis() != 0 {
+                let routes = self.iface.routes_mut();
+                routes.remove_default_ipv6_route();
+                let _ = routes.add_default_ipv6_route(ip_repr.src_addr);
+                self.router_ipv6 = Some(ip_repr.src_addr);
+            }
+
+            let Some(prefix) = prefix_info else {
+                continue;
+            };
+            if prefix.prefix_len != 64 {
+                continue;
+            }
+            if !prefix.flags.contains(NdiscPrefixInfoFlags::ADDRCONF) {
+                continue;
+            }
+
+            let mac = crate::net::mac_address_at(self.device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
+            let iid = eui64_interface_id(mac);
+            let mut addr = prefix.prefix.octets();
+            addr[8..16].copy_from_slice(&iid);
+            let global = Ipv6Address::from_octets(addr);
+
+            self.local_ipv6_global = Some(global);
+
+            // Preserve current IPv4 CIDR(s) while updating IPv6.
+            let mut v4_addrs = Vec::new();
+            for cidr in self.iface.ip_addrs().iter().copied() {
+                if let IpAddress::Ipv4(_) = cidr.address() {
+                    v4_addrs.push(cidr);
+                }
+            }
+
+            let v6_ll = IpCidr::new(IpAddress::Ipv6(self.local_ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN);
+            let v6_global = IpCidr::new(IpAddress::Ipv6(global), 64);
+            self.iface.update_ip_addrs(|addrs| {
+                addrs.clear();
+                let _ = addrs.push(v6_ll);
+                let _ = addrs.push(v6_global);
+                for c in v4_addrs.iter().copied() {
+                    let _ = addrs.push(c);
+                }
+            });
+        }
     }
 
     fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {
@@ -1305,6 +1589,22 @@ impl NetService {
                     }
                 }
             }
+            NetCommand::OpenTcpConnectV6 { remote } => {
+                match self.open_tcp_connect_v6(owner, remote) {
+                    Ok(handle) => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Opened {
+                                handle,
+                                kind: SocketKind::Tcp,
+                            },
+                        );
+                    }
+                    Err(msg) => {
+                        let _ = push_event(owner, NetEvent::Error { msg });
+                    }
+                }
+            }
             NetCommand::SendUdp {
                 handle,
                 remote,
@@ -1333,6 +1633,29 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
                 }
             }
+            NetCommand::SendUdpV6 {
+                handle,
+                remote,
+                data,
+            } => {
+                if let Some(rec) = self.find_record(handle) {
+                    if rec.kind != SocketKind::Udp {
+                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
+                        return;
+                    }
+                    let socket_handle = rec.socket;
+                    let endpoint = IpEndpoint::new(
+                        IpAddress::Ipv6(Ipv6Address::from_octets(remote.addr)),
+                        remote.port,
+                    );
+                    let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
+                    if socket.send_slice(&data, endpoint).is_err() {
+                        let _ = push_event(owner, NetEvent::Error { msg: "udp6 send fail" });
+                    }
+                } else {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                }
+            }
             NetCommand::SendTcp { handle, data } => {
                 if let Some(idx) = self.records.iter().position(|r| r.handle == handle) {
                     if self.records[idx].kind != SocketKind::Tcp {
@@ -1349,6 +1672,9 @@ impl NetService {
             }
             NetCommand::IcmpEcho { target, seq, data } => {
                 self.send_icmp_echo(owner, target, seq, data);
+            }
+            NetCommand::IcmpEchoV6 { target, seq, data } => {
+                self.send_icmp_echo_v6(owner, target, seq, data);
             }
             NetCommand::Close { handle } => {
                 self.remove_record(handle);
@@ -1369,21 +1695,39 @@ impl NetService {
         let mut bounce = [0u8; 1500];
         while let Ok((len, meta)) = socket.recv_slice(&mut bounce) {
             let endpoint = meta.endpoint;
-            let IpAddress::Ipv4(addr) = endpoint.addr;
-            let addr = addr.octets();
-            let ep = NetEndpoint {
-                addr,
-                port: endpoint.port,
-            };
             let data = bounce[..len].to_vec();
-            let _ = push_event(
-                owner,
-                NetEvent::UdpPacket {
-                    handle,
-                    from: ep,
-                    data,
-                },
-            );
+
+            match endpoint.addr {
+                IpAddress::Ipv4(addr) => {
+                    let addr = addr.octets();
+                    let ep = NetEndpoint {
+                        addr,
+                        port: endpoint.port,
+                    };
+                    let _ = push_event(
+                        owner,
+                        NetEvent::UdpPacket {
+                            handle,
+                            from: ep,
+                            data,
+                        },
+                    );
+                }
+                IpAddress::Ipv6(addr) => {
+                    let ep = NetEndpointV6 {
+                        addr: addr.octets(),
+                        port: endpoint.port,
+                    };
+                    let _ = push_event(
+                        owner,
+                        NetEvent::UdpPacketV6 {
+                            handle,
+                            from: ep,
+                            data,
+                        },
+                    );
+                }
+            }
         }
     }
 
@@ -1539,6 +1883,11 @@ impl NetService {
                 crate::net::transmit_batch_at(device_index, self.tx_buffer.drain(..));
             }
         }
+
+        // IPv6 bring-up (RA-based): process any Router Advertisements first,
+        // then periodically solicit one while we have no router/global address.
+        self.poll_router_advertisements();
+        self.maybe_send_router_solicit(timestamp);
         
         // Also drain the TX queue for sockets (esp. TCP)
          if let Some(idx) = self.records.iter().position(|r| r.kind == SocketKind::Tcp) {
@@ -1586,8 +1935,18 @@ impl NetService {
                     );
                 }
 
+                // Keep IPv6 CIDRs while updating IPv4.
+                let mut v6_addrs = Vec::new();
+                for cidr in self.iface.ip_addrs().iter().copied() {
+                    if let IpAddress::Ipv6(_) = cidr.address() {
+                        v6_addrs.push(cidr);
+                    }
+                }
                 self.iface.update_ip_addrs(|addrs| {
                     addrs.clear();
+                    for c in v6_addrs.iter().copied() {
+                        let _ = addrs.push(c);
+                    }
                     let _ = addrs.push(IpCidr::Ipv4(config.address));
                 });
 
@@ -1625,7 +1984,7 @@ impl NetService {
                 if self.dhcp_has_lease {
                     self.dhcp_has_lease = false;
                     let (fallback_ip, fallback_gw) =
-                        apply_static_fallback_ipv4(&mut self.iface, self.device_index);
+                        apply_static_fallback_ipv4(&mut self.iface, self.device_index, self.local_ipv6_ll);
                     self.local_ipv4 = Some(fallback_ip);
                     self.router_ipv4 = Some(fallback_gw);
                     self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
@@ -1728,69 +2087,102 @@ impl NetService {
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         while socket.can_recv() {
             let Ok((len, from)) = socket.recv_slice(&mut buf) else { break };
-            let Ok(pkt) = Icmpv4Packet::new_checked(&buf[..len]) else { continue };
-            let Ok(repr) = Icmpv4Repr::parse(&pkt, &ChecksumCapabilities::ignored()) else { continue };
+            match from {
+                IpAddress::Ipv4(src_v4) => {
+                    let Ok(pkt) = Icmpv4Packet::new_checked(&buf[..len]) else { continue };
+                    let Ok(repr) = Icmpv4Repr::parse(&pkt, &ChecksumCapabilities::ignored()) else { continue };
 
-            match repr {
-                Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
-                    // Only reply to our bound ident; smoltcp already filters, but keep it explicit.
-                    if ident != ICMP_IDENT {
-                        continue;
+                    match repr {
+                        Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
+                            // Only reply to our bound ident; smoltcp already filters, but keep it explicit.
+                            if ident != ICMP_IDENT {
+                                continue;
+                            }
+
+                            let reply = Icmpv4Repr::EchoReply { ident, seq_no, data };
+                            let mut out = vec![0u8; reply.buffer_len()];
+                            reply.emit(
+                                &mut Icmpv4Packet::new_unchecked(&mut out),
+                                &ChecksumCapabilities::default(),
+                            );
+                            let _ = socket.send_slice(&out, IpAddress::Ipv4(src_v4));
+                        }
+                        Icmpv4Repr::EchoReply { ident, seq_no, .. } => {
+                            if ident != ICMP_IDENT {
+                                continue;
+                            }
+
+                            if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
+                                let inflight = self.icmp_vnet_inflight.remove(pos);
+                                let rtt = now() - inflight.sent_at;
+                                let _ = push_event(
+                                    inflight.owner,
+                                    NetEvent::IcmpReply {
+                                        from: src_v4.octets(),
+                                        seq: seq_no,
+                                        rtt_ms: rtt.total_millis() as u32,
+                                        data: buf[..len].to_vec(),
+                                    },
+                                );
+                                continue;
+                            }
+
+                            if let Some((inflight_seq, sent_at)) = self.icmp_ping_inflight {
+                                if inflight_seq == seq_no {
+                                    let rtt = now() - sent_at;
+                                    crate::log!(
+                                        "net: icmp pong dev={} seq={} rtt={}ms\n",
+                                        self.device_index,
+                                        seq_no,
+                                        rtt.total_millis()
+                                    );
+                                    self.icmp_ping_inflight = None;
+
+                                    // Consider the network reachable on the first successful pong.
+                                    if self.icmp_ping_pongs == 0 {
+                                        self.icmp_ping_pongs = 1;
+                                        crate::log!(
+                                            "net: icmp ok dev={} (gateway reachable)\n",
+                                            self.device_index
+                                        );
+                                        crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-
-                    let reply = Icmpv4Repr::EchoReply { ident, seq_no, data };
-                    let mut out = vec![0u8; reply.buffer_len()];
-                    reply.emit(
-                        &mut Icmpv4Packet::new_unchecked(&mut out),
-                        &ChecksumCapabilities::default(),
-                    );
-                    let _ = socket.send_slice(&out, from);
                 }
-                Icmpv4Repr::EchoReply { ident, seq_no, .. } => {
+                IpAddress::Ipv6(src_v6) => {
+                    // Buffer layout for ICMPv6 echo:
+                    // [0]=type [1]=code [2..4]=cksum [4..6]=ident [6..8]=seq.
+                    if len < 8 {
+                        continue;
+                    }
+                    let icmp_type = buf[0];
+                    if icmp_type != 129 {
+                        continue;
+                    }
+                    let ident = u16::from_be_bytes([buf[4], buf[5]]);
                     if ident != ICMP_IDENT {
                         continue;
                     }
+                    let seq_no = u16::from_be_bytes([buf[6], buf[7]]);
 
                     if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
                         let inflight = self.icmp_vnet_inflight.remove(pos);
                         let rtt = now() - inflight.sent_at;
-                        let IpAddress::Ipv4(addr) = from;
                         let _ = push_event(
-                                inflight.owner,
-                                NetEvent::IcmpReply {
-                                    from: addr.octets(),
-                                    seq: seq_no,
-                                    rtt_ms: rtt.total_millis() as u32,
-                                    data: buf[..len].to_vec(),
-                                },
-                            );
-                        continue;
-                    }
-
-                    if let Some((inflight_seq, sent_at)) = self.icmp_ping_inflight {
-                        if inflight_seq == seq_no {
-                            let rtt = now() - sent_at;
-                            crate::log!(
-                                "net: icmp pong dev={} seq={} rtt={}ms\n",
-                                self.device_index,
-                                seq_no,
-                                rtt.total_millis()
-                            );
-                            self.icmp_ping_inflight = None;
-
-                            // Consider the network reachable on the first successful pong.
-                            if self.icmp_ping_pongs == 0 {
-                                self.icmp_ping_pongs = 1;
-                                crate::log!(
-                                    "net: icmp ok dev={} (gateway reachable)\n",
-                                    self.device_index
-                                );
-                                crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
-                            }
-                        }
+                            inflight.owner,
+                            NetEvent::IcmpReplyV6 {
+                                from: src_v6.octets(),
+                                seq: seq_no,
+                                rtt_ms: rtt.total_millis() as u32,
+                                data: buf[..len].to_vec(),
+                            },
+                        );
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -1803,6 +2195,28 @@ fn now() -> Instant {
     Instant::from_millis(ms)
 }
 
+fn eui64_interface_id(mac: [u8; 6]) -> [u8; 8] {
+    // RFC 4291: interface identifier from MAC via EUI-64 (flip the U/L bit).
+    [
+        mac[0] ^ 0x02,
+        mac[1],
+        mac[2],
+        0xff,
+        0xfe,
+        mac[3],
+        mac[4],
+        mac[5],
+    ]
+}
+
+fn ipv6_link_local_from_mac(mac: [u8; 6]) -> Ipv6Address {
+    let iid = eui64_interface_id(mac);
+    let mut octets = [0u8; 16];
+    octets[..8].copy_from_slice(&IPV6_LINK_LOCAL_PREFIX);
+    octets[8..16].copy_from_slice(&iid);
+    Ipv6Address::from_octets(octets)
+}
+
 fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {
     let mut octets = STATIC_FALLBACK_BASE_IPV4;
     let base = octets[3] as usize;
@@ -1811,7 +2225,11 @@ fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {
     Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])
 }
 
-fn apply_static_fallback_ipv4(iface: &mut Interface, device_index: usize) -> (Ipv4Address, Ipv4Address) {
+fn apply_static_fallback_ipv4(
+    iface: &mut Interface,
+    device_index: usize,
+    ipv6_ll: Ipv6Address,
+) -> (Ipv4Address, Ipv4Address) {
     let ip = fallback_ipv4_for_device(device_index);
     let gw = Ipv4Address::new(
         STATIC_FALLBACK_GATEWAY[0],
@@ -1822,6 +2240,7 @@ fn apply_static_fallback_ipv4(iface: &mut Interface, device_index: usize) -> (Ip
 
     iface.update_ip_addrs(|addrs| {
         addrs.clear();
+        let _ = addrs.push(IpCidr::new(IpAddress::Ipv6(ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN));
         let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), STATIC_FALLBACK_PREFIX_LEN));
     });
     let routes = iface.routes_mut();

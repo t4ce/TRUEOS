@@ -558,7 +558,7 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         TableColumn { header: "MAC Address", width: 17 },
         TableColumn { header: "IPv4", width: 15 },
         TableColumn { header: "Mode", width: 8 },
-        TableColumn { header: "IPv6", width: 4 },
+        TableColumn { header: "IPv6", width: 39 },
     ];
     let t = Table::new(&cols);
     t.print_header(ctx.io);
@@ -600,8 +600,24 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
             "-"
         };
 
+        let ipv6 = if let Some(ip) = crate::net::adapter::ipv6_global_at(index) {
+            alloc::format!(
+                "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
+                ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
+                ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]
+            )
+        } else if let Some(ip) = crate::net::adapter::ipv6_link_local_at(index) {
+            alloc::format!(
+                "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
+                ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
+                ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]
+            )
+        } else {
+            alloc::string::String::from("::")
+        };
+
         let idx_s = alloc::format!("{}", index);
-        t.print_row(ctx.io, &[idx_s, bdf, vidpid, name.into(), mac, ip, mode.into(), "::".into()]);
+        t.print_row(ctx.io, &[idx_s, bdf, vidpid, name.into(), mac, ip, mode.into(), ipv6]);
     }
 
     CommandAction::None

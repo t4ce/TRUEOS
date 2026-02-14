@@ -176,7 +176,9 @@ pub async fn ai_tcp_bridge_task() {
                         crate::log!("ai-qjs: net error {}\n", msg);
                     }
                     NetEvent::UdpPacket { .. } => {}
+                    NetEvent::UdpPacketV6 { .. } => {}
                     NetEvent::IcmpReply { .. } => {}
+                    NetEvent::IcmpReplyV6 { .. } => {}
                 }
             }
 

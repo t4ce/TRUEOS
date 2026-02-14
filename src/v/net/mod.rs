@@ -12,7 +12,7 @@ use trueos_v::vnet as api;
 
 use spin::Mutex;
 
-use crate::net::adapter::{self, NetCommand, NetEndpoint, NetEvent, NetHandle, NetQueue, SocketKind};
+use crate::net::adapter::{self, NetCommand, NetEndpoint, NetEndpointV6, NetEvent, NetHandle, NetQueue, SocketKind};
 
 pub type Queue<T> = adapter::NetQueue<T>;
 
@@ -170,12 +170,22 @@ fn to_kernel_endpoint(ep: api::EndpointV4) -> NetEndpoint {
   }
 }
 
+fn to_kernel_endpoint_v6(ep: api::EndpointV6) -> NetEndpointV6 {
+  NetEndpointV6 {
+    addr: ep.addr,
+    port: ep.port,
+  }
+}
+
 fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
   Ok(match cmd {
     api::Command::OpenUdp { port } => NetCommand::OpenUdp { port },
     api::Command::OpenTcpListen { port } => NetCommand::OpenTcpListen { port },
     api::Command::OpenTcpConnect { remote } => NetCommand::OpenTcpConnect {
       remote: to_kernel_endpoint(remote),
+    },
+    api::Command::OpenTcpConnectV6 { remote } => NetCommand::OpenTcpConnectV6 {
+      remote: to_kernel_endpoint_v6(remote),
     },
     api::Command::SendUdp {
       handle,
@@ -186,6 +196,15 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
       remote: to_kernel_endpoint(remote),
       data: Vec::from(data.as_slice()),
     },
+    api::Command::SendUdpV6 {
+      handle,
+      remote,
+      data,
+    } => NetCommand::SendUdpV6 {
+      handle: NetHandle(handle.0),
+      remote: to_kernel_endpoint_v6(remote),
+      data: Vec::from(data.as_slice()),
+    },
     api::Command::SendTcp { handle, data } => NetCommand::SendTcp {
       handle: NetHandle(handle.0),
       data: Vec::from(data.as_slice()),
@@ -194,6 +213,11 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
       handle: NetHandle(handle.0),
     },
     api::Command::IcmpEcho { target, seq, data } => NetCommand::IcmpEcho {
+      target,
+      seq,
+      data: Vec::from(data.as_slice()),
+    },
+    api::Command::IcmpEchoV6 { target, seq, data } => NetCommand::IcmpEchoV6 {
       target,
       seq,
       data: Vec::from(data.as_slice()),
@@ -226,6 +250,14 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
       },
       data: api::ByteBuf::from_slice_trunc(&data[..]),
     },
+    NetEvent::UdpPacketV6 { handle, from, data } => api::Event::UdpPacketV6 {
+      handle: api::NetHandle(handle.0),
+      from: api::EndpointV6 {
+        addr: from.addr,
+        port: from.port,
+      },
+      data: api::ByteBuf::from_slice_trunc(&data[..]),
+    },
     NetEvent::TcpEstablished { handle } => api::Event::TcpEstablished {
       handle: api::NetHandle(handle.0),
     },
@@ -243,6 +275,17 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
       rtt_ms,
       data,
     } => api::Event::IcmpReply {
+      from,
+      seq,
+      rtt_ms,
+      data: api::ByteBuf::from_slice_trunc(&data[..]),
+    },
+    NetEvent::IcmpReplyV6 {
+      from,
+      seq,
+      rtt_ms,
+      data,
+    } => api::Event::IcmpReplyV6 {
       from,
       seq,
       rtt_ms,
