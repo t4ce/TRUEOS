@@ -300,6 +300,54 @@ globalThis.print('parse5 ok', root.nodeName, count);\n\
     drop(vm);
 }
 
+/// Boot-time smoke for importing a few very common, small ESM modules via jsDelivr.
+///
+/// Goal:
+/// - Exercise URL module loading + caching (including relative URL imports inside a package).
+/// - Keep the workload small enough for boot-time use.
+pub unsafe fn run_common_modules_smoke() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    };
+    let ctx = vm.ctx_ptr();
+
+    install_print(ctx);
+    qjs::node::install_globals(ctx);
+
+    let mod_filename = b"<smoke-common-modules>\0";
+    let mod_script = b"globalThis.print('common-modules: start');\n\
+import { __extends } from 'https://cdn.jsdelivr.net/npm/tslib@2.6.2/tslib.es6.mjs';\n\
+if (typeof __extends !== 'function') throw new Error('tslib.__extends missing');\n\
+globalThis.print('common-modules: tslib ok');\n\
+import _ from 'https://cdn.jsdelivr.net/npm/lodash@4.17.21/+esm';\n\
+if (typeof _ !== 'function' && (typeof _ !== 'object' || _ === null)) throw new Error('lodash default export unexpected');\n\
+if (typeof _.camelCase !== 'function') throw new Error('lodash.camelCase missing');\n\
+const cc = _.camelCase('Foo Bar');\n\
+if (cc !== 'fooBar') throw new Error('lodash.camelCase unexpected: ' + cc);\n\
+globalThis.print('common-modules: lodash ok', cc);\n\
+0\n\
+\0";
+
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        mod_script.as_ptr() as *const c_char,
+        mod_script.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if mod_ret.is_exception() {
+        log_str("quickjs: common-modules JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: common-modules eval ok\n");
+    }
+
+    drop(vm);
+}
+
 /// Temporary boot-time smoke for importing PixiJS via esm.sh.
 ///
 /// Goal: validate that our ESM URL loader can fetch a large real-world UI library.

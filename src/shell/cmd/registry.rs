@@ -552,7 +552,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
 
-        static GFX_ARGS: [ArgSpec; 0] = [];
+        static GFX_ARGS: [ArgSpec; 1] = [ArgSpec::new("backend", ArgType::Str)];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd);

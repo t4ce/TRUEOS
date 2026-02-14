@@ -787,6 +787,7 @@ pub mod cabi {
 		pipeline: PipelineId,
 		vbuf: BufferId,
 		capacity: usize,
+		epoch: u64,
 	}
 
 	impl GfxCabiState {
@@ -795,6 +796,7 @@ pub mod cabi {
 				pipeline: PipelineId::invalid(),
 				vbuf: BufferId::invalid(),
 				capacity: 0,
+				epoch: 0,
 			}
 		}
 	}
@@ -802,6 +804,7 @@ pub mod cabi {
 	static GFX_CABI_STATE: spin::Mutex<GfxCabiState> = spin::Mutex::new(GfxCabiState::new());
 
 	fn ensure_gfx_resources(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId)> {
+		let epoch = crate::gfx::backend_epoch();
 		let swap = ctx.swapchain_desc();
 		if swap.extent.width == 0 || swap.extent.height == 0 {
 			return None;
@@ -812,6 +815,13 @@ pub mod cabi {
 		});
 
 		let mut st = GFX_CABI_STATE.lock();
+		if st.epoch != epoch {
+			// Backend changed; cached IDs belong to a different backend.
+			st.pipeline = PipelineId::invalid();
+			st.vbuf = BufferId::invalid();
+			st.capacity = 0;
+			st.epoch = epoch;
+		}
 
 		if !st.pipeline.is_valid() {
 			let layout = VertexLayout {
