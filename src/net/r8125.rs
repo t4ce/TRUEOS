@@ -16,6 +16,10 @@ const TX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
 const TX_BUF_SIZE: usize = 2048;
 const RX_POLL_BUDGET: usize = 32;
+const TX_RING_FULL_LOG_EVERY: u64 = 256;
+const RX_BAD_FLAGS_LOG_EVERY: u64 = 1024;
+const TX_STALL_KICK_THRESHOLD: u64 = 10_000;
+const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
@@ -134,6 +138,8 @@ pub struct R8125Adapter {
     dbg_tx_reclaimed: u64,
     dbg_tx_ring_full: u64,
     dbg_tx_stall_checks: u64,
+    dbg_tx_recovery_kicks: u64,
+    dbg_tx_resets: u64,
     dbg_rx_ok: u64,
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
@@ -355,6 +361,8 @@ impl R8125Adapter {
             dbg_tx_reclaimed: 0,
             dbg_tx_ring_full: 0,
             dbg_tx_stall_checks: 0,
+            dbg_tx_recovery_kicks: 0,
+            dbg_tx_resets: 0,
             dbg_rx_ok: 0,
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
@@ -367,6 +375,7 @@ impl R8125Adapter {
     }
 
     fn kick_tx_engine(&mut self) {
+        self.dbg_tx_recovery_kicks = self.dbg_tx_recovery_kicks.saturating_add(1);
         unsafe {
             self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
             self.mmio
@@ -375,6 +384,67 @@ impl R8125Adapter {
             let cmd = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
 
+            self.mmio.write_u8(REG_TXPOLL, 0x40);
+        }
+    }
+
+    fn reset_tx_ring_controlled(&mut self, reason: &str) {
+        self.dbg_tx_resets = self.dbg_tx_resets.saturating_add(1);
+
+        let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
+            (
+                self.mmio.read_u8(REG_CMD),
+                self.mmio.read_u32(REG_TCR),
+                self.mmio.read_u32(REG_TNPDS),
+                self.mmio.read_u32(REG_TNPDS_HI),
+                self.mmio.read_u16(REG_ISR),
+                self.mmio.read_u8(REG_PHYSTAT),
+            )
+        };
+
+        crate::log!(
+            "net/r8125: tx reset reason={} resets={} head={} tail={} checks={} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x} phystat=0x{:02x}\n",
+            reason,
+            self.dbg_tx_resets,
+            self.tx_head,
+            self.tx_tail,
+            self.dbg_tx_stall_checks,
+            cmd,
+            tcr,
+            tn_hi,
+            tn_lo,
+            isr,
+            phy
+        );
+
+        unsafe {
+            let cmd_now = self.mmio.read_u8(REG_CMD);
+            self.mmio.write_u8(REG_CMD, cmd_now & !CMD_TX_EN);
+
+            for i in 0..TX_DESC_COUNT {
+                let eor = if i + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
+                write_volatile(
+                    self.tx_desc.add(i),
+                    TxDesc {
+                        opts1: eor,
+                        opts2: 0,
+                        addr: self.tx_bufs[i].phys(),
+                    },
+                );
+            }
+
+            fence(Ordering::Release);
+
+            self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
+
+            self.tx_head = 0;
+            self.tx_tail = 0;
+            self.dbg_tx_stall_checks = 0;
+
+            let cmd_re = self.mmio.read_u8(REG_CMD);
+            self.mmio.write_u8(REG_CMD, cmd_re | CMD_TX_EN | CMD_RX_EN);
             self.mmio.write_u8(REG_TXPOLL, 0x40);
         }
     }
@@ -388,33 +458,25 @@ impl R8125Adapter {
                 // Seeing OWN set immediately after submission is normal; only treat it as a
                 // stall if it persists across many polls.
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
-                if self.dbg_tx_reclaimed == 0
-                    && self.dbg_tx_submitted != 0
-                    && self.dbg_tx_stall_checks == 10_000
+                if self.dbg_tx_submitted != 0
+                    && (self.dbg_tx_stall_checks % TX_STALL_KICK_THRESHOLD) == 0
                 {
-                    // let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
-                    //     (
-                    //         self.mmio.read_u8(REG_CMD),
-                    //         self.mmio.read_u32(REG_TCR),
-                    //         self.mmio.read_u32(REG_TNPDS),
-                    //         self.mmio.read_u32(REG_TNPDS_HI),
-                    //         self.mmio.read_u16(REG_ISR),
-                    //     )
-                    // };
-                    // crate::log!(
-                    //     "net/r8125: tx stall? head={} tail={} desc_opts1=0x{:08x} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x}\n",
-                    //     self.tx_head,
-                    //     self.tx_tail,
-                    //     desc_opts1,
-                    //     cmd,
-                    //     tcr,
-                    //     tn_hi,
-                    //     tn_lo,
-                    //     isr
-                    // );
-
-                    // Attempt a one-time recovery kick.
+                    crate::log!(
+                        "net/r8125: tx stall checks={} head={} tail={} desc_opts1=0x{:08x} kicks={} resets={}\n",
+                        self.dbg_tx_stall_checks,
+                        self.tx_head,
+                        self.tx_tail,
+                        desc_opts1,
+                        self.dbg_tx_recovery_kicks,
+                        self.dbg_tx_resets
+                    );
                     self.kick_tx_engine();
+                }
+
+                if self.dbg_tx_submitted != 0
+                    && self.dbg_tx_stall_checks >= TX_STALL_RESET_THRESHOLD
+                {
+                    self.reset_tx_ring_controlled("stall-threshold");
                 }
                 break;
             }
@@ -452,7 +514,6 @@ impl R8125Adapter {
             let desc = unsafe { read_volatile(self.rx_desc.add(idx)) };
 
             let opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
-            let opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts2)) };
 
             if (opts1 & DESC_OWN) != 0 {
                 break;
@@ -461,11 +522,13 @@ impl R8125Adapter {
             let had_errsum = (opts1 & RX_ERR_SUM) != 0;
 
             if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
-                if self.dbg_rx_bad_flags == 0 {
-                    // crate::log!(
-                    //     "net/r8125: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
-                    //     opts1
-                    // );
+                self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
+                if self.dbg_rx_bad_flags == 1 || (self.dbg_rx_bad_flags % RX_BAD_FLAGS_LOG_EVERY) == 0 {
+                    crate::log!(
+                        "net/r8125: rx flags missing fs/ls count={} opts1=0x{:08x} (continuing)\n",
+                        self.dbg_rx_bad_flags,
+                        opts1
+                    );
                 }
             }
 
@@ -473,45 +536,6 @@ impl R8125Adapter {
 
             if had_errsum {
                 self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
-                // Log the first few errsum frames with minimal decoding.
-                if false && self.dbg_rx_errsum <= 8 {
-                    let buf_ptr = self.rx_bufs[idx].virt();
-                    let peek_len = core::cmp::min(raw_len, 64);
-                    let peek = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, peek_len) };
-
-                    let (ethertype, ip_proto, udp_src, udp_dst) = if peek_len >= 14 {
-                        let et = u16::from_be_bytes([peek[12], peek[13]]);
-                        if et == 0x0800 && peek_len >= 14 + 20 {
-                            let ihl = (peek[14] & 0x0f) as usize * 4;
-                            let proto = peek.get(23).copied().unwrap_or(0);
-                            if proto == 17 && peek_len >= 14 + ihl + 8 {
-                                let u = 14 + ihl;
-                                let s = u16::from_be_bytes([peek[u], peek[u + 1]]);
-                                let d = u16::from_be_bytes([peek[u + 2], peek[u + 3]]);
-                                (et, proto, s, d)
-                            } else {
-                                (et, proto, 0, 0)
-                            }
-                        } else {
-                            (et, 0, 0, 0)
-                        }
-                    } else {
-                        (0u16, 0u8, 0u16, 0u16)
-                    };
-
-                    // crate::log!(
-                    //     "net/r8125: rx errsum#{:>2} opts1=0x{:08x} opts2=0x{:08x} raw_len={} et=0x{:04x} ip_proto={} udp={}:{}\n",
-                    //     self.dbg_rx_errsum,
-                    //     opts1,
-                    //     opts2,
-                    //     raw_len,
-                    //     ethertype,
-                    //     ip_proto,
-                    //     udp_src,
-                    //     udp_dst
-                    // );
-                }
-
                 if !ACCEPT_RX_ERR_SUM_FRAMES {
                     let eor = opts1 & DESC_EOR;
                     unsafe {
@@ -616,17 +640,62 @@ impl R8125Adapter {
         let next_tail = (self.tx_tail + 1) % TX_DESC_COUNT;
         if next_tail == self.tx_head {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
-            if self.dbg_tx_ring_full == 1 {
-                crate::log!("net/r8125: tx ring full\n");
+            self.kick_tx_engine();
+            self.reclaim_tx();
+            if (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head {
+                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0 {
+                    let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
+                        (
+                            self.mmio.read_u8(REG_CMD),
+                            self.mmio.read_u32(REG_TCR),
+                            self.mmio.read_u32(REG_TNPDS),
+                            self.mmio.read_u32(REG_TNPDS_HI),
+                            self.mmio.read_u16(REG_ISR),
+                            self.mmio.read_u8(REG_PHYSTAT),
+                        )
+                    };
+                    crate::log!(
+                        "net/r8125: tx ring full count={} head={} tail={} cmd=0x{:02x} tcr=0x{:08x} tnpds=0x{:08x}{:08x} isr=0x{:04x} phystat=0x{:02x} kicks={}\n",
+                        self.dbg_tx_ring_full,
+                        self.tx_head,
+                        self.tx_tail,
+                        cmd,
+                        tcr,
+                        tn_hi,
+                        tn_lo,
+                        isr,
+                        phy,
+                        self.dbg_tx_recovery_kicks
+                    );
+                }
+                return Err(());
             }
-            return Err(());
         }
 
         let idx = self.tx_tail;
         let cur = unsafe { read_volatile(self.tx_desc.add(idx)) };
-        if (cur.opts1 & DESC_OWN) != 0 {
+        let cur_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur.opts1)) };
+        if (cur_opts1 & DESC_OWN) != 0 {
             self.dbg_tx_ring_full = self.dbg_tx_ring_full.saturating_add(1);
-            return Err(());
+            self.kick_tx_engine();
+            self.reclaim_tx();
+
+            let cur2 = unsafe { read_volatile(self.tx_desc.add(idx)) };
+            let cur2_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur2.opts1)) };
+            if (cur2_opts1 & DESC_OWN) != 0 {
+                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0 {
+                    crate::log!(
+                        "net/r8125: tx desc busy count={} idx={} head={} tail={} opts1=0x{:08x} kicks={}\n",
+                        self.dbg_tx_ring_full,
+                        idx,
+                        self.tx_head,
+                        self.tx_tail,
+                        cur2_opts1,
+                        self.dbg_tx_recovery_kicks
+                    );
+                }
+                return Err(());
+            }
         }
 
         unsafe {
