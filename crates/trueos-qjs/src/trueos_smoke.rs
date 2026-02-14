@@ -41,6 +41,29 @@ unsafe fn dump_exception(ctx: *mut qjs::JSContext) {
         log_str("<toString failed>");
     }
     log_nl();
+
+    // Best-effort: print `exc.stack` if present.
+    // Many JS libraries throw rich Error objects; the stack often contains the missing global.
+    {
+        let stack_key = b"stack\0";
+        let stack_val = qjs::JS_GetPropertyStr(ctx, exc, stack_key.as_ptr() as *const c_char);
+        if !stack_val.is_exception() {
+            let stack_cstr = qjs::js_to_cstring(ctx, stack_val);
+            if !stack_cstr.is_null() {
+                let bytes = CStr::from_ptr(stack_cstr).to_bytes();
+                log_str("quickjs: exception.stack: ");
+                if let Ok(s) = core::str::from_utf8(bytes) {
+                    log_str(s);
+                } else {
+                    log_bytes(bytes);
+                }
+                log_nl();
+                qjs::JS_FreeCString(ctx, stack_cstr);
+            }
+        }
+        qjs::js_free_value(ctx, stack_val);
+    }
+
     qjs::js_free_value(ctx, exc);
 }
 
@@ -272,6 +295,51 @@ globalThis.print('parse5 ok', root.nodeName, count);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: parse5 eval ok\n");
+    }
+
+    drop(vm);
+}
+
+/// Temporary boot-time smoke for importing PixiJS via esm.sh.
+///
+/// Goal: validate that our ESM URL loader can fetch a large real-world UI library.
+/// Rendering is intentionally out of scope here; this is import-only.
+pub unsafe fn run_pixi_import_smoke() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    };
+    let ctx = vm.ctx_ptr();
+
+    install_print(ctx);
+    qjs::node::install_globals(ctx);
+
+    // Pin a specific version so smoke output is stable and caching is effective.
+    // Note: this will likely fail until the WebGL shim exists; that is still useful
+    // because the exception message tells us which globals/APIs Pixi expects.
+    let mod_filename = b"<smoke-pixi-import>\0";
+    let mod_script = b"globalThis.print('pixi import: start');\n\
+import * as PIXI from 'pixi.js@7.4.0';\n\
+globalThis.print('pixi import: ok');\n\
+globalThis.print('pixi VERSION', (PIXI && PIXI.VERSION) ? PIXI.VERSION : 'unknown');\n\
+globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
+0\n\
+\0";
+
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        mod_script.as_ptr() as *const c_char,
+        mod_script.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if mod_ret.is_exception() {
+        log_str("quickjs: pixi-import JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: pixi-import eval ok\n");
     }
 
     drop(vm);
