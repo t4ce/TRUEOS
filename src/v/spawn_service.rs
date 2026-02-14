@@ -337,19 +337,19 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "net-shell",
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: 0,
         started: &NET_SHELL_STARTED,
         spawn: spawn_net_shell,
     },
     TaskSpec {
         name: "ai-tcp-bridge",
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: 0,
         started: &AI_TCP_BRIDGE_STARTED,
         spawn: spawn_ai_tcp_bridge,
     },
     TaskSpec {
         name: "ai-qjs-repl",
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: 0,
         started: &AI_QJS_REPL_STARTED,
         spawn: spawn_ai_qjs_repl,
     },

@@ -36,6 +36,7 @@ mod rng;
 mod power;
 mod globalog;
 mod hv;
+mod gfx;
 mod runtime;
 mod shell;
 mod tst;
@@ -116,6 +117,7 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     pci::dma::init_from_limine();
     vga::init(limine::framebuffer_response());
+    gfx::init(limine::framebuffer_response());
     pci::enumerate_impl();
     usb::xhci::init_once();
     usb::truekey::init();

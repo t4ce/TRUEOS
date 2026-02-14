@@ -2,7 +2,7 @@
 name: baremetalshell
 description: TRUEOS iteration loop: build ISO, connect QJS via nc, reboot, repeat.
 ---
-TRUEOS bare-metal AI bridge cycle (QJS REPL over TCP).
+TRUEOS bare-metal AI bridge cycle (QJS command bridge over TCP).
 
 This skill is intentionally strict and copy-paste safe for agents.
 
@@ -31,7 +31,7 @@ timeout 12 sh -c '{
 3) Wait for reboot:
 
 ```sh
-sleep 30
+host=192.168.178.78 port=4246 timeout_s=180; i=0; while [ "$i" -lt "$timeout_s" ]; do if nc -z -w 1 "$host" "$port" >/dev/null 2>&1; then echo "bridge_ready port=${port} after=${i}s"; break; fi; i=$((i+1)); sleep 1; done; [ "$i" -ge "$timeout_s" ] && { echo "bridge_timeout port=${port} after=${timeout_s}s"; exit 1; }
 ```
 
 4) Validate bridge + TRUEOS API on new boot:

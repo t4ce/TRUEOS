@@ -40,9 +40,16 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'
     if len == 0 {
         crate::pci::enumerate_impl();
     }
-    
-    // Best effort loading of strings
-    let _ = crate::pci::pciids::load_sanitized_from_root_blocking();
+
+    let db = if crate::v::readiness::is_set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED) {
+        crate::pci::pciids::load_sanitized_from_root_blocking()
+            .ok()
+            .flatten()
+    } else {
+        ctx.io.write_str("tlb.pci: no filesystem readiness\r\n");
+        None
+    };
+    let db = db.as_deref();
 
     let term_width = (*ctx.term_cols).saturating_sub(2);
     // Overhead = Address(10) + VID(6) + PID(6) + 4 * 2 (padding) = 30
@@ -64,14 +71,14 @@ pub(crate) fn cmd_tlb_pci(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'
             let vid = alloc::format!("{:04X}", dev.vendor);
             let did = alloc::format!("{:04X}", dev.device);
             
-            let name = if let Some(db) = crate::pci::pciids::load_sanitized_from_root_blocking().ok().flatten() {
-                 if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(&db, dev.vendor, dev.device) {
-                     let v_s = String::from_utf8_lossy(v).trim().to_string();
-                     let d_s = String::from_utf8_lossy(d).trim().to_string();
-                     alloc::format!("{} {}", v_s, d_s)
-                 } else {
-                     String::new()
-                 }
+            let name = if let Some(db) = db {
+                if let Some((v, d)) = crate::pci::pciids::lookup_vendor_device_from_db(db, dev.vendor, dev.device) {
+                    let v_s = String::from_utf8_lossy(v).trim().to_string();
+                    let d_s = String::from_utf8_lossy(d).trim().to_string();
+                    alloc::format!("{} {}", v_s, d_s)
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };
