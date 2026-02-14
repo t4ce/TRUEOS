@@ -8,7 +8,8 @@ use crate::shell::table::{Table, TableColumn};
 
 #[repr(C)]
 struct QjsShellOpaque {
-    io: &'static dyn ShellBackend,
+    // Points to a `&dyn ShellBackend` value that stays alive for the lifetime of the JS context.
+    io_ref: *const core::ffi::c_void,
 }
 
 #[inline]
@@ -24,7 +25,7 @@ fn qjs_log(ctx: *mut trueos_qjs::JSContext, msg: &str) {
     if opaque.is_null() {
         return;
     }
-    let io = unsafe { (*opaque).io };
+    let io = unsafe { *((*opaque).io_ref as *const &dyn ShellBackend) };
     io.write_str("qjs: ");
     io.write_str(msg);
     io.write_str("\r\n");
@@ -40,7 +41,7 @@ unsafe extern "C" fn qjs_shell_print(
     let io = if opaque.is_null() {
         return trueos_qjs::JSValue::undefined();
     } else {
-        unsafe { (*opaque).io }
+        unsafe { *((*opaque).io_ref as *const &dyn ShellBackend) }
     };
 
     io.write_str("qjs: ");
@@ -655,6 +656,7 @@ async fn read_line(
     io: &'static dyn ShellBackend,
     buf: &mut Vec<u8>,
     ignore_lf: &mut bool,
+    echo_newline: bool,
 ) -> bool {
     buf.clear();
 
@@ -676,11 +678,15 @@ async fn read_line(
                     }
                     b'\r' => {
                         *ignore_lf = true;
-                        io.write_str("\r\n");
+                        if echo_newline {
+                            io.write_str("\r\n");
+                        }
                         return true;
                     }
                     b'\n' => {
-                        io.write_str("\r\n");
+                        if echo_newline {
+                            io.write_str("\r\n");
+                        }
                         return true;
                     }
                     0x04 => {
@@ -717,9 +723,11 @@ async fn repl(io: &'static dyn ShellBackend) {
         let rt = vm.rt_ptr();
         let ctx = vm.ctx_ptr();
 
-        let opaque = Box::new(QjsShellOpaque { io });
-        let opaque_ptr = Box::into_raw(opaque);
-        trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
+        let backend_ref: &dyn ShellBackend = io;
+        let opaque = QjsShellOpaque {
+            io_ref: (&backend_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
+        };
+        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
 
         install_qjs_shell_globals(ctx);
 
@@ -730,7 +738,7 @@ async fn repl(io: &'static dyn ShellBackend) {
 
         loop {
             io.write_str("qjs> ");
-            if !read_line(io, &mut line, &mut ignore_lf).await {
+            if !read_line(io, &mut line, &mut ignore_lf, true).await {
                 break;
             }
 
@@ -812,49 +820,188 @@ async fn repl(io: &'static dyn ShellBackend) {
         trueos_qjs::async_ops::drain_all_for_context(ctx);
         trueos_qjs::workers::drain_all_for_context(ctx);
 
-        let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
-        if !opaque_ptr.is_null() {
-            trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
-            drop(Box::from_raw(opaque_ptr));
+        trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+        drop(vm);
+    }
+}
+
+/// Shell-integrated REPL:
+/// - Input prompt stays on the shell prompt line.
+/// - User-entered lines are echoed into the reverse scrollback (left-aligned).
+/// - QJS output is written via `ReverseOutput` (right-aligned) and respects the scroll region.
+pub(crate) async fn repl_shell(
+    raw: &'static dyn ShellBackend,
+    term_cols: usize,
+    term_rows: usize,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+) {
+    // Ensure scrolling region is set correctly (e.g. if term resized).
+    crate::shell::output::apply_shell_scroll_region(raw, term_rows);
+
+    let sys = crate::shell::output::ReverseOutput::new(raw, term_cols, term_rows, history);
+
+    unsafe {
+        let vm = match trueos_qjs::vm::QjsVm::new_node() {
+            Some(vm) => vm,
+            None => {
+                sys.write_str("qjs: JS_NewRuntime failed\r\n");
+                return;
+            }
+        };
+        let rt = vm.rt_ptr();
+        let ctx = vm.ctx_ptr();
+
+        // Route JS-side print/log output into the reverse scroll area (right-aligned).
+        // `JS_SetContextOpaque` stores this pointer in the VM, so it must remain valid until we clear it.
+        let sys_ref: &dyn ShellBackend = &sys;
+        let opaque = QjsShellOpaque {
+            io_ref: (&sys_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
+        };
+        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
+
+        install_qjs_shell_globals(ctx);
+        trueos_qjs::node::install_globals(ctx);
+
+        let mut line: Vec<u8> = Vec::with_capacity(256);
+        let mut ignore_lf = false;
+
+        loop {
+            // Prompt on shell input line (Row 2).
+            raw.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+            raw.write_str(crate::ecma48::CLEAR_LINE);
+            raw.write_str("qjs> ");
+
+            if !read_line(raw, &mut line, &mut ignore_lf, false).await {
+                break;
+            }
+
+            let src = match core::str::from_utf8(&line) {
+                Ok(s) => s.trim(),
+                Err(_) => {
+                    sys.write_str("qjs: invalid UTF-8\r\n");
+                    continue;
+                }
+            };
+
+            if src.is_empty() {
+                continue;
+            }
+
+            if src == "help" || src == "h" || src == ".help" || src == ".h" || src == "?" {
+                help(&sys);
+                continue;
+            }
+            if src == "exit" || src == "quit" || src == ".exit" || src == ".quit" {
+                break;
+            }
+
+            // Echo user input into scrollback (left-aligned).
+            {
+                let mut echoed = alloc::string::String::new();
+                echoed.push_str("qjs> ");
+                echoed.push_str(src);
+                sys.echo_command(echoed.as_str());
+            }
+
+            let flags = if looks_like_module_src(src) {
+                trueos_qjs::JS_EVAL_TYPE_MODULE
+            } else {
+                trueos_qjs::JS_EVAL_TYPE_GLOBAL
+            };
+
+            let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
+                b"<repl-module>\0".as_ptr() as *const c_char
+            } else {
+                b"<repl>\0".as_ptr() as *const c_char
+            };
+
+            let val = trueos_qjs::JS_Eval(
+                ctx,
+                src.as_ptr() as *const c_char,
+                src.len(),
+                filename,
+                flags,
+            );
+
+            if val.is_exception() {
+                dump_exception(&sys, ctx);
+            } else {
+                let _ = drain_jobs_and_promises(&sys, rt, ctx, 30_000).await;
+
+                if val.tag != trueos_qjs::JS_TAG_UNDEFINED {
+                    let cstr = trueos_qjs::js_to_cstring(ctx, val);
+                    sys.write_str("qjs: => ");
+                    if !cstr.is_null() {
+                        let bytes = CStr::from_ptr(cstr).to_bytes();
+                        if let Ok(s) = core::str::from_utf8(bytes) {
+                            sys.write_str(s);
+                        } else {
+                            for &b in bytes {
+                                sys.write_byte(b);
+                            }
+                        }
+                        trueos_qjs::JS_FreeCString(ctx, cstr);
+                    } else {
+                        sys.write_str("<toString failed>");
+                    }
+                    sys.write_str("\r\n");
+                }
+            }
+            trueos_qjs::js_free_value(ctx, val);
         }
+
+        trueos_qjs::async_ops::drain_all_for_context(ctx);
+        trueos_qjs::workers::drain_all_for_context(ctx);
+
+        trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);
     }
 }
 
 pub(crate) fn help(io: &dyn ShellIo) {
-    // Single-column, paste-proof examples.
-    // If you copy a whole line from the table, it should still be valid input.
-    const EX_W: usize = 190;
-    let cols = [TableColumn {
-        header: "REPL paste (20 commands)",
-        width: EX_W,
-    }];
+    // Compact, readable table for the reverse shell display.
+    const CMD_W: usize = 34;
+    const DESC_W: usize = 64;
+    let cols = [
+        TableColumn {
+            header: "Cmd",
+            width: CMD_W,
+        },
+        TableColumn {
+            header: "Description",
+            width: DESC_W,
+        },
+    ];
 
     {
-        let t = Table::new_forward(&cols);
+        // Default order is correct for the reverse-insert scroll area.
+        let t = Table::new(&cols);
         t.print_header(io);
 
-        // Exactly 20 REPL inputs.
-        t.print_row(io, &[".help  // show this table"]);
-        t.print_row(io, &[".exit  // leave REPL (also: .quit, Ctrl-D)"]);
-        t.print_row(io, &["print(1+2);  // arithmetic"]);
-        t.print_row(io, &["let x=3; print(x*7);  // variables"]);
-        t.print_row(io, &["function add(a,b){return a+b;} print(add(2,3));  // function"]);
-        t.print_row(io, &["for (let i=0;i<3;i++) print(i);  // loop"]);
-        t.print_row(io, &["const a=[1,2,3]; a.push(4); print(a.join());  // array"]);
-        t.print_row(io, &["const m=new Map([[1,\"a\"],[2,\"b\"]]); print(m.get(2));  // Map"]);
-        t.print_row(io, &["const s=new Set([1,2,2,3]); print(s.has(2));  // Set"]);
-        t.print_row(io, &["const o={a:1,b:2}; print(JSON.stringify(o));  // JSON"]);
-        t.print_row(io, &["print(/a+b*/.test(\"aaab\"));  // RegExp"]);
-        t.print_row(io, &["try { throw new Error(\"boom\"); } catch(e) { print(e.message); }  // try/catch"]);
-        t.print_row(io, &["Promise.resolve(1).then(v=>print(\"then\",v));  // Promise microtask"]);
-        t.print_row(io, &["print(TRUEOS.logs(256).slice(0,80));  // TRUEOS logs"]);
-        t.print_row(io, &["print(TRUEOS.acpi(\"s0\"));  // TRUEOS acpi"]);
-        t.print_row(io, &["import * as path from \"path\"; print(path.join(\"a\",\"b\"));  // import builtin"]);
-        t.print_row(io, &["import leftPad from \"left-pad@1.3.0\"; print(leftPad(\"a\",3,\".\"));  // import pkg"]);
-        t.print_row(io, &["import(\"node:worker_threads\").then(m=>{ globalThis.Worker=m.Worker; print(\"Worker ready\"); });  // load Worker"]);
-        t.print_row(io, &["const w=new Worker('import { parentPort } from \"node:worker_threads\"; parentPort.onMessage(m=>parentPort.postMessage(\"pong:\"+m));');  // spawn worker"]);
-        t.print_row(io, &["w.onMessage(m=>print(\"main:\",m)); w.postMessage(\"ping\");  // message worker"]);
+        t.print_row(io, &["qjs", "Start REPL (default)"]);
+        t.print_row(io, &["qjs -h", "Show this help"]);
+
+        t.print_row(io, &[".help / ?", "Show help (REPL)"]);
+        t.print_row(io, &[".exit / .quit", "Leave REPL (Ctrl-D also works)"]);
+
+        t.print_row(io, &["print(1+2);", "Arithmetic"]);
+        t.print_row(io, &["let x=3; print(x*7);", "Variables"]);
+        t.print_row(io, &["function add(a,b){...}", "Define + call a function"]);
+        t.print_row(io, &["for (let i=0;i<3;i++)", "Loop"]);
+        t.print_row(io, &["const a=[1,2,3]; ...", "Arrays"]);
+        t.print_row(io, &["const m=new Map(...);", "Map"]);
+        t.print_row(io, &["const s=new Set(...);", "Set"]);
+        t.print_row(io, &["JSON.stringify(...)", "JSON"]);
+        t.print_row(io, &["/a+b*/.test(\"aaab\")", "RegExp"]);
+        t.print_row(io, &["try/catch", "Exceptions"]);
+        t.print_row(io, &["Promise.resolve(...)", "Microtasks"]);
+        t.print_row(io, &["TRUEOS.logs(256)", "Kernel log tail"]);
+        t.print_row(io, &["TRUEOS.acpi(\"s0\")", "ACPI helper"]);
+        t.print_row(io, &["import * as path from ...", "Builtin module"]);
+        t.print_row(io, &["import leftPad from ...", "3rd-party module"]);
+        t.print_row(io, &["import(\"node:worker_threads\")", "Worker demo: load module"]);
+        t.print_row(io, &["new Worker('...')", "Worker demo: spawn"]);
+        t.print_row(io, &["w.onMessage(...); w.postMessage(...)", "Worker demo: ping/pong"]);
     }
 }
 
@@ -1022,7 +1169,9 @@ pub(crate) async fn eval_bytes_opts_async(
         let rt = vm.rt_ptr();
         let ctx = vm.ctx_ptr();
 
-        let opaque = Box::new(QjsShellOpaque { io });
+        let opaque = Box::new(QjsShellOpaque {
+            io: (io as &dyn ShellBackend) as *const dyn ShellBackend,
+        });
         let opaque_ptr = Box::into_raw(opaque);
         trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
 

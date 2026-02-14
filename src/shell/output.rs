@@ -61,6 +61,10 @@ impl<'a> ReverseOutput<'a> {
     }
     
     fn flush_line(&self, s: &str) {
+        // Normalize CRLF writers: `do_write` splits on `\n`, so lines may carry a trailing `\r`.
+        // Keeping `\r` would cause cursor-return artifacts and break alignment.
+        let s = s.trim_end_matches('\r');
+
         // Add to history
         self.history.borrow_mut().push(String::from(s));
         
