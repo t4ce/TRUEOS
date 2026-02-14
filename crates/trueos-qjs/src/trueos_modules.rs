@@ -2,6 +2,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use alloc::vec;
+use alloc::collections::BTreeMap;
 use core::ffi::{c_char, c_int, CStr};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time_driver::{now, TICK_HZ};
@@ -12,6 +13,9 @@ use crate as qjs;
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_poll_once();
+    // NOTE: The WebGL shim targets the stable gfx layer (trueos_gfx_core), not a concrete GPU.
+    // Backends (software / virtio-gpu / Xe) sit behind this ABI.
+    fn trueos_cabi_gfx_draw_rgb_triangles(clear_rgb: u32, vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,
         path_len: usize,
@@ -28,6 +32,20 @@ static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 // --- Minimal WebGL-ish shim state ---
 
 static WEBGL_NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Default)]
+struct WebGlState {
+    array_buffer: u32,
+    buffers: BTreeMap<u32, Vec<u8>>,
+    clear_rgb: u32,
+}
+
+static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
+    array_buffer: 0,
+    buffers: BTreeMap::new(),
+    // TRUEOS default console blue.
+    clear_rgb: 0x00_08_18_30,
+});
 
 pub fn set_process_argv(args: &[&str]) {
     let mut out: Vec<Vec<u8>> = Vec::new();
@@ -857,6 +875,9 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     }
     qjs::js_free_value(ctx, existing);
 
+    // --- WebGL shim functions (minimal) ---
+    // These implement just enough flow to bridge a triangle/rect draw into the kernel gfx layer.
+
     unsafe extern "C" fn gl_noop(
         _ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -905,8 +926,181 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         _argc: c_int,
         _argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        let id = WEBGL_NEXT_ID.fetch_add(1, Ordering::Relaxed) as i32;
-        js_int32(id)
+        let id = WEBGL_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut st = WEBGL_STATE.lock();
+            st.buffers.entry(id).or_insert_with(Vec::new);
+        }
+        js_int32(id as i32)
+    }
+
+    unsafe extern "C" fn gl_bind_buffer(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        // target ignored for now (ARRAY_BUFFER only)
+        let mut buf_id_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut buf_id_f as *mut f64, args[1]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let buf_id = buf_id_f as i32;
+        let mut st = WEBGL_STATE.lock();
+        st.array_buffer = if buf_id > 0 { buf_id as u32 } else { 0 };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe fn js_get_arraybuffer_view(
+        ctx: *mut qjs::JSContext,
+        val: qjs::JSValueConst,
+    ) -> Option<(*const u8, usize)> {
+        // Try TypedArray first.
+        let mut byte_off: usize = 0;
+        let mut byte_len: usize = 0;
+        let mut bpe: usize = 0;
+        let ab = qjs::JS_GetTypedArrayBuffer(
+            ctx,
+            val,
+            &mut byte_off as *mut usize,
+            &mut byte_len as *mut usize,
+            &mut bpe as *mut usize,
+        );
+        if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED {
+            let mut total: usize = 0;
+            let ptr = qjs::JS_GetArrayBuffer(ctx, &mut total as *mut usize, ab);
+            qjs::js_free_value(ctx, ab);
+            if !ptr.is_null() {
+                let start = byte_off.min(total);
+                let end = start.saturating_add(byte_len).min(total);
+                return Some((unsafe { ptr.add(start) } as *const u8, end.saturating_sub(start)));
+            }
+        } else {
+            qjs::js_free_value(ctx, ab);
+        }
+
+        // Then plain ArrayBuffer.
+        let mut total: usize = 0;
+        let ptr = qjs::JS_GetArrayBuffer(ctx, &mut total as *mut usize, val);
+        if ptr.is_null() {
+            return None;
+        }
+        Some((ptr as *const u8, total))
+    }
+
+    unsafe extern "C" fn gl_buffer_data(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[1]) else {
+            return qjs::JSValue::undefined();
+        };
+
+        let mut st = WEBGL_STATE.lock();
+        let buf_id = st.array_buffer;
+        if buf_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+        st.buffers.insert(buf_id, bytes.to_vec());
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_clear_color(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 3 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut rf: f64 = 0.0;
+        let mut gf: f64 = 0.0;
+        let mut bf: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut rf as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut gf as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut bf as *mut f64, args[2]);
+        let clamp = |v: f64| -> u8 {
+            let x = if v.is_nan() { 0.0 } else { v };
+            let x = x.max(0.0).min(1.0);
+            (x * 255.0 + 0.5) as u8
+        };
+        let r = clamp(rf);
+        let g = clamp(gf);
+        let b = clamp(bf);
+        let rgb = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+        WEBGL_STATE.lock().clear_rgb = rgb;
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_draw_arrays(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 3 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut mode_f: f64 = 0.0;
+        let mut first_f: f64 = 0.0;
+        let mut count_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut first_f as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut count_f as *mut f64, args[2]);
+        let mode = mode_f as i32;
+        // TRIANGLES only.
+        if mode != 0x0004 {
+            return qjs::JSValue::undefined();
+        }
+        let first = (first_f as i32).max(0) as usize;
+        let count = (count_f as i32).max(0) as usize;
+        if count == 0 {
+            return qjs::JSValue::undefined();
+        }
+
+        // Vertex ABI for milestone A:
+        //   struct { f32 x, f32 y, u8 r, u8 g, u8 b, u8 pad }
+        const VTX_SIZE: usize = 12;
+
+        let start = first.saturating_mul(VTX_SIZE);
+        let want = count.saturating_mul(VTX_SIZE);
+
+        // Copy the exact byte range we need while holding the lock.
+        let (clear_rgb, owned) = {
+            let st = WEBGL_STATE.lock();
+            let buf_id = st.array_buffer;
+            let Some(bytes) = st.buffers.get(&buf_id) else {
+                return qjs::JSValue::undefined();
+            };
+            if start >= bytes.len() {
+                return qjs::JSValue::undefined();
+            }
+            let mut end = start.saturating_add(want).min(bytes.len());
+            end -= (end - start) % VTX_SIZE;
+            if end <= start {
+                return qjs::JSValue::undefined();
+            }
+            (st.clear_rgb, bytes[start..end].to_vec())
+        };
+
+        unsafe {
+            let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, owned.as_ptr(), owned.len());
+        }
+        qjs::JSValue::undefined()
     }
 
     unsafe extern "C" fn gl_get_parameter(
@@ -1038,8 +1232,8 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("getUniformLocation", gl_create_handle, 2);
 
     // Generic no-ops (extend as Pixi tells us what it needs)
-    gl_fn!("bindBuffer", gl_noop, 2);
-    gl_fn!("bufferData", gl_noop, 3);
+    gl_fn!("bindBuffer", gl_bind_buffer, 2);
+    gl_fn!("bufferData", gl_buffer_data, 3);
     gl_fn!("bufferSubData", gl_noop, 3);
     gl_fn!("bindTexture", gl_noop, 2);
     gl_fn!("activeTexture", gl_noop, 1);
@@ -1066,10 +1260,10 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("disable", gl_noop, 1);
     gl_fn!("blendFunc", gl_noop, 2);
     gl_fn!("blendFuncSeparate", gl_noop, 4);
-    gl_fn!("clearColor", gl_noop, 4);
+    gl_fn!("clearColor", gl_clear_color, 4);
     gl_fn!("clear", gl_noop, 1);
     gl_fn!("drawElements", gl_noop, 4);
-    gl_fn!("drawArrays", gl_noop, 3);
+    gl_fn!("drawArrays", gl_draw_arrays, 3);
     gl_fn!("flush", gl_noop, 0);
 
     // Minimal success-y queries

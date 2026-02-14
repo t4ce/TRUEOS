@@ -136,6 +136,16 @@ pub(crate) fn cmd_virgl_tri(ctx: &mut ShellCommandCtx<'_>, _args: Option<&Parsed
     CommandAction::None
 }
 
+#[cfg(feature = "gfx_virgl")]
+pub(crate) fn cmd_virgl_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    if crate::gfx::switch_to_virgl() {
+        ctx.io.write_str("gfx: switched to virgl backend\r\n");
+    } else {
+        ctx.io.write_str("gfx: virgl backend init failed\r\n");
+    }
+    CommandAction::None
+}
+
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",

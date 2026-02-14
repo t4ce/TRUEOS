@@ -55,7 +55,6 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -246,13 +245,6 @@ fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_pixi_smoke_task(),
-    ) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task(),
@@ -438,12 +430,6 @@ static TASKS: &[TaskSpec] = &[
         required: PARSE5_BOOT_READY,
         started: &BOOT_PARSE5_SMOKE_STARTED,
         spawn: spawn_boot_parse5_smoke,
-    },
-    TaskSpec {
-        name: "boot-pixi-smoke",
-        required: PARSE5_BOOT_READY,
-        started: &BOOT_PIXI_SMOKE_STARTED,
-        spawn: spawn_boot_pixi_smoke,
     },
     TaskSpec {
         name: "boot-ws-smoke",

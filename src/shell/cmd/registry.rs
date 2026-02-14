@@ -537,6 +537,10 @@ pub(crate) fn init_builtin_shell_commands() {
         static NET_HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
         
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
+        static OPENAI_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("code", ArgType::Str).mandatory(),
+            ArgSpec::new("first", ArgType::Rest),
+        ];
 
         static TURBO_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("op", ArgType::Str),
@@ -554,6 +558,8 @@ pub(crate) fn init_builtin_shell_commands() {
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
         #[cfg(feature = "gfx_virgl")]
         static VIRGL_TRI_ARGS: [ArgSpec; 0] = [];
+        #[cfg(feature = "gfx_virgl")]
+        static VIRGL_GFX_ARGS: [ArgSpec; 0] = [];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd); 
@@ -576,6 +582,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
+        let _ = REGSHCMD("ai", &OPENAI_ARGS, cmd::cmd_openai);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         // let _ = REGSHCMD("https", &HTTPS_ARGS, cmd::cmd_https);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
@@ -610,5 +617,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
         #[cfg(feature = "gfx_virgl")]
         let _ = REGSHCMD("virgl.tri", &VIRGL_TRI_ARGS, cmd::cmd_virgl_tri);
+        #[cfg(feature = "gfx_virgl")]
+        let _ = REGSHCMD("virgl.gfx", &VIRGL_GFX_ARGS, cmd::cmd_virgl_gfx);
     });
 }
