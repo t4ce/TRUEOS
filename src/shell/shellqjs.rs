@@ -141,6 +141,34 @@ unsafe extern "C" fn qjs_trueos_acpi(
     js_bool(ok)
 }
 
+unsafe extern "C" fn qjs_trueos_logs(
+    ctx: *mut trueos_qjs::JSContext,
+    _this_val: trueos_qjs::JSValueConst,
+    argc: c_int,
+    argv: *const trueos_qjs::JSValueConst,
+) -> trueos_qjs::JSValue {
+    const DEFAULT_MAX_BYTES: usize = 64 * 1024;
+    const ABS_MAX_BYTES: usize = 256 * 1024;
+
+    let mut max_bytes = DEFAULT_MAX_BYTES;
+    if !argv.is_null() && argc > 0 {
+        let arg0 = unsafe { *argv };
+        let cstr = unsafe { trueos_qjs::js_to_cstring(ctx, arg0) };
+        if !cstr.is_null() {
+            let bytes = unsafe { CStr::from_ptr(cstr).to_bytes() };
+            if let Ok(s) = core::str::from_utf8(bytes) {
+                if let Ok(v) = s.trim().parse::<usize>() {
+                    max_bytes = core::cmp::min(v, ABS_MAX_BYTES);
+                }
+            }
+            unsafe { trueos_qjs::JS_FreeCString(ctx, cstr) };
+        }
+    }
+
+    let logs = crate::globalog::bringup_log_tail(max_bytes);
+    trueos_qjs::JS_NewStringLen(ctx, logs.as_ptr() as *const c_char, logs.len())
+}
+
 unsafe fn install_qjs_shell_globals(ctx: *mut trueos_qjs::JSContext) {
     // Install globalThis.print(...)
     let global = trueos_qjs::JS_GetGlobalObject(ctx);
@@ -188,6 +216,22 @@ unsafe fn install_qjs_shell_globals(ctx: *mut trueos_qjs::JSContext) {
         trueos_obj,
         acpi_name.as_ptr() as *const c_char,
         acpi_fn,
+    );
+
+    let logs_name = b"logs\0";
+    let logs_fn = trueos_qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_trueos_logs),
+        logs_name.as_ptr() as *const c_char,
+        1,
+        trueos_qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = trueos_qjs::JS_SetPropertyStr(
+        ctx,
+        trueos_obj,
+        logs_name.as_ptr() as *const c_char,
+        logs_fn,
     );
 
     let trueos_name = b"TRUEOS\0";

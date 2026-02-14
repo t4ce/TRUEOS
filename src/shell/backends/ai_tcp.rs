@@ -242,6 +242,67 @@ pub async fn ai_tcp_bridge_task() {
 
 #[task]
 pub async fn ai_qjs_repl_task() {
+    async fn run_line_command_session(io: &'static dyn ShellBackend) {
+        let mut line: Vec<u8> = Vec::with_capacity(1024);
+        let mut ignore_lf = false;
+
+        loop {
+            if !ai_is_connected() {
+                break;
+            }
+
+            match io.read_byte() {
+                Some(b) => {
+                    if ignore_lf {
+                        if b == b'\n' {
+                            ignore_lf = false;
+                            continue;
+                        }
+                        ignore_lf = false;
+                    }
+
+                    match b {
+                        b'\r' | b'\n' => {
+                            if b == b'\r' {
+                                ignore_lf = true;
+                            }
+
+                            let cmd = match core::str::from_utf8(&line) {
+                                Ok(s) => s.trim(),
+                                Err(_) => {
+                                    io.write_str("qjs: invalid UTF-8\r\n");
+                                    line.clear();
+                                    continue;
+                                }
+                            };
+
+                            if !cmd.is_empty() {
+                                if cmd == ".exit" || cmd == ".quit" {
+                                    break;
+                                }
+                                crate::shell::shellqjs::run(io, cmd).await;
+                            }
+
+                            line.clear();
+                        }
+                        0x04 => break,
+                        0x08 | 0x7f => {
+                            let _ = line.pop();
+                        }
+                        _ => {
+                            if line.len() < 8192 {
+                                line.push(b);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    Timer::after(EmbassyDuration::from_millis(10)).await;
+                }
+            }
+        }
+    }
+
     async move {
         if AI_TCP_REPL_STARTED.swap(true, Ordering::SeqCst) {
             return;
@@ -253,10 +314,10 @@ pub async fn ai_qjs_repl_task() {
                 continue;
             }
 
-            crate::log!("ai-qjs: repl attached\n");
-            crate::shell::shellqjs::run(&AI_TCP_BACKEND, "--repl").await;
+            crate::log!("ai-qjs: command bridge attached\n");
+            run_line_command_session(&AI_TCP_BACKEND).await;
 
-            // End the TCP session when REPL exits (`.exit` / EOF), so scripted
+            // End the TCP session when command session exits (`.exit` / EOF), so scripted
             // clients terminate cleanly instead of relying on external timeout.
             AI_TCP_CLOSE_REQUEST.store(true, Ordering::Release);
             let mut wait_loops: u32 = 0;
