@@ -4,6 +4,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use super::cube::{CubeState, WireShape};
 use super::{CommandAction, PendingAction, ShellBackend, ShellMode};
 
+use crate::v::net::wss::WssConnection;
+
 pub(super) async fn handle_command_action(
     action: CommandAction,
     mode: &mut ShellMode,
@@ -69,7 +71,184 @@ pub(super) async fn handle_command_action(
             clear_statusbar(io, *term_cols, *term_rows);
             *mode = ShellMode::Idle;
         }
+        CommandAction::OpenAiChat { token, first } => {
+            handle_openai_realtime_chat(io, token.as_str(), first.as_str()).await;
+        }
         CommandAction::None => {}
+    }
+}
+
+fn json_escape_into(out: &mut alloc::string::String, s: &str) {
+    use core::fmt::Write;
+
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+}
+
+fn extract_json_string_field(json: &str, needle: &str) -> Option<alloc::string::String> {
+    // Tiny extractor for patterns like: "delta":"...".
+    // Not a general JSON parser.
+    let i = json.find(needle)?;
+    let mut j = i + needle.len();
+    if !json.as_bytes().get(j).copied().is_some_and(|b| b == b'"') {
+        return None;
+    }
+    j += 1; // opening quote
+
+    let bytes = json.as_bytes();
+    let mut out = alloc::string::String::new();
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == b'"' {
+            return Some(out);
+        }
+        if b == b'\\' {
+            j += 1;
+            if j >= bytes.len() {
+                break;
+            }
+            match bytes[j] {
+                b'"' => out.push('"'),
+                b'\\' => out.push('\\'),
+                b'/' => out.push('/'),
+                b'n' => out.push('\n'),
+                b'r' => out.push('\r'),
+                b't' => out.push('\t'),
+                _ => {}
+            }
+            j += 1;
+            continue;
+        }
+
+        out.push(b as char);
+        j += 1;
+    }
+    None
+}
+
+async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str, first: &str) {
+    // Model string is intentionally fixed per user request.
+    const MODEL: &str = "gpt-5.2-codex";
+    const BETA_HDR: &str = "OpenAI-Beta: realtime=v1";
+
+    io.write_str("\r\nopenai: connecting... (type .exit or Ctrl-C to leave)\r\n");
+
+    let url = alloc::format!("wss://api.openai.com/v1/realtime?model={}", MODEL);
+    let auth = alloc::format!("Authorization: Bearer {}", token);
+    let headers: [&str; 2] = [auth.as_str(), BETA_HDR];
+
+    let mut wss = match WssConnection::connect_with_headers(url.as_str(), &headers).await {
+        Ok(c) => c,
+        Err(e) => {
+            io.write_fmt(format_args!("openai: connect failed {:?}\r\n", e));
+            return;
+        }
+    };
+
+    // Best-effort session init.
+    let _ = wss.send(
+        "{\"type\":\"session.update\",\"session\":{\"modalities\":[\"text\"],\"instructions\":\"You are a concise shell assistant running inside TRUEOS.\"}}",
+    );
+
+    if !first.trim().is_empty() {
+        let mut esc = alloc::string::String::new();
+        json_escape_into(&mut esc, first.trim());
+        let msg = alloc::format!(
+            "{{\"type\":\"conversation.item.create\",\"item\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}}}",
+            esc
+        );
+        let _ = wss.send(&msg);
+        let _ = wss.send("{\"type\":\"response.create\"}");
+    }
+
+    io.write_str("openai: connected\r\n");
+    io.write_str("oa> ");
+
+    let mut line = alloc::string::String::new();
+    let mut saw_cr = false;
+    let mut started_output = false;
+
+    loop {
+        while let Some(frame) = wss.recv() {
+            if let Some(delta) = extract_json_string_field(&frame, "\"delta\":")
+                .or_else(|| extract_json_string_field(&frame, "\"text\":"))
+            {
+                if !started_output {
+                    io.write_str("\r\n");
+                    started_output = true;
+                }
+                io.write_str(delta.as_str());
+            }
+        }
+
+        if let Some(b) = io.read_byte() {
+            if saw_cr && b == b'\n' {
+                saw_cr = false;
+                continue;
+            }
+            saw_cr = b == b'\r';
+
+            match b {
+                0x03 => {
+                    io.write_str("\r\nopenai: exit\r\n");
+                    return;
+                }
+                b'\r' | b'\n' => {
+                    let input = alloc::string::String::from(line.trim());
+                    line.clear();
+
+                    io.write_str("\r\n");
+                    started_output = false;
+
+                    if input.eq_ignore_ascii_case(".exit") || input.eq_ignore_ascii_case(".quit") {
+                        io.write_str("openai: bye\r\n");
+                        return;
+                    }
+
+                    if input.is_empty() {
+                        io.write_str("oa> ");
+                        continue;
+                    }
+
+                    let mut esc = alloc::string::String::new();
+                    json_escape_into(&mut esc, input.as_str());
+                    let msg = alloc::format!(
+                        "{{\"type\":\"conversation.item.create\",\"item\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}}}",
+                        esc
+                    );
+                    if wss.send(&msg).is_err() || wss.send("{\"type\":\"response.create\"}").is_err() {
+                        io.write_str("openai: send failed\r\n");
+                        return;
+                    }
+
+                    io.write_str("oa> ");
+                }
+                0x08 | 0x7F => {
+                    if !line.is_empty() {
+                        line.pop();
+                        io.write_str("\x08 \x08");
+                    }
+                }
+                _ => {
+                    // Minimal line editing: accept bytes as chars.
+                    line.push(b as char);
+                    io.write_byte(b);
+                }
+            }
+        } else {
+            Timer::after(EmbassyDuration::from_millis(20)).await;
+        }
     }
 }
 

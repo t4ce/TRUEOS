@@ -5,6 +5,8 @@ use core::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 
 use crate::{pci, wait};
 
+static VIRTIO_GPU3D_CLAIMED: AtomicBool = AtomicBool::new(false);
+// a Rectangle is just two triangles
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Virtio 1.0 GPU device id (0x1040 + virtio device id 16).
 const VIRTIO_GPU_DEVICE_MODERN: u16 = 0x1050;
@@ -712,8 +714,32 @@ pub struct VirtioGpu3d {
 
 unsafe impl Send for VirtioGpu3d {}
 
+impl Drop for VirtioGpu3d {
+    fn drop(&mut self) {
+        VIRTIO_GPU3D_CLAIMED.store(false, Ordering::Release);
+    }
+}
+
 impl VirtioGpu3d {
     pub fn init_first() -> Option<Self> {
+        // The device has a single control queue in our driver; (re-)initializing it from
+        // multiple call sites will overwrite queue addresses and break the display.
+        if VIRTIO_GPU3D_CLAIMED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            crate::log!("virtio-gpu3d: device already initialized (refusing second init)\n");
+            return None;
+        }
+
+        struct ClaimGuard;
+        impl Drop for ClaimGuard {
+            fn drop(&mut self) {
+                VIRTIO_GPU3D_CLAIMED.store(false, Ordering::Release);
+            }
+        }
+        let guard = ClaimGuard;
+
         let dev = find_device()?;
         let caps = parse_modern_caps(&dev)?;
         enable_mem_and_bus_master(&dev);
@@ -748,14 +774,17 @@ impl VirtioGpu3d {
         let req = DmaRegion::alloc(64 * 1024, 16)?;
         let resp = DmaRegion::alloc(4 * 1024, 16)?;
 
-        Some(Self {
+        let this = Self {
             common,
             notify,
             notify_mult: caps.notify_mult,
             ctrlq,
             req,
             resp,
-        })
+        };
+
+        core::mem::forget(guard);
+        Some(this)
     }
 
     pub fn ctx_create(&mut self, ctx_id: u32) -> bool {
@@ -1115,6 +1144,669 @@ DCL OUT[0], COLOR\n\
   0: MOV OUT[0], IN[0]\n\
   1: END\n";
 
+// --- gfx-core backend (virgl) ---
+
+use trueos_gfx_core::{
+    BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
+    FenceId, GfxDevice, GfxPresent, ImageFormat, MapMode, MappedRange, MemoryType, PipelineDesc,
+    PipelineId, ShaderDesc, ShaderId, SwapchainDesc, VertexLayout, Viewport,
+};
+
+// NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
+// This file already uses `Result<T, ()>` in virtio setup code.
+use trueos_gfx_core::Result as GfxResult;
+
+#[derive(Clone)]
+struct HostBuffer {
+    desc: BufferDesc,
+    bytes: Vec<u8>,
+    mapped: bool,
+}
+
+struct HostPipeline {
+    desc: PipelineDesc,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VirglDrawState {
+    pipeline: PipelineId,
+    vertex: VirglBufferBinding,
+    viewport: Viewport,
+    clear_rgb: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VirglBufferBinding {
+    id: BufferId,
+    offset: u64,
+}
+
+impl Default for VirglDrawState {
+    fn default() -> Self {
+        Self {
+            pipeline: PipelineId::invalid(),
+            vertex: VirglBufferBinding {
+                id: BufferId::invalid(),
+                offset: 0,
+            },
+            viewport: Viewport {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            clear_rgb: 0x00_08_18_30,
+        }
+    }
+}
+
+/// Minimal virgl-backed gfx-core context.
+///
+/// Scope: supports the current gfx-core command set (colored triangles) so the WebGL shim can
+/// draw moving rectangles (two triangles) without caring which backend is active.
+pub struct VirglGfxBackend {
+    gpu: VirtioGpu3d,
+    ctx_id: u32,
+
+    // Present via 2D scanout for compatibility.
+    scanout_id: u32,
+    width: u32,
+    height: u32,
+    scanout_res: u32,
+    scanout_backing: DmaRegion,
+    rt_res: u32,
+
+    // VBO resource for virgl vertices.
+    vbo_res: u32,
+    vbo_cap_bytes: u32,
+
+    // One-time virgl state handles.
+    surf_handle: u32,
+    ve_handle: u32,
+    vs_handle: u32,
+    fs_handle: u32,
+    blend_handle: u32,
+    dsa_handle: u32,
+    rs_handle: u32,
+
+    swapchain: SwapchainDesc,
+
+    buffers: Vec<Option<HostBuffer>>,
+    shaders: Vec<Option<Vec<u8>>>,
+    pipelines: Vec<Option<HostPipeline>>,
+
+    state: VirglDrawState,
+
+    next_fence: u64,
+    completed_fence: u64,
+}
+
+impl VirglGfxBackend {
+    pub fn init() -> Option<Self> {
+        let mut gpu = VirtioGpu3d::init_first()?;
+        let (scanout_id, width, height) = gpu.get_display_info()?;
+
+        let ctx_id = alloc_ctx_id();
+        if !gpu.ctx_create(ctx_id) {
+            crate::log!("virgl-backend: ctx_create failed\n");
+            return None;
+        }
+
+        // Allocate resource ids.
+        let (scanout_res, rt_res) = alloc_res_pair();
+        let vbo_res = alloc_res_pair().0;
+
+        // 2D scanout + backing.
+        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, width, height) {
+            crate::log!("virgl-backend: resource_create_2d scanout failed\n");
+            return None;
+        }
+        let scanout_bytes = (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+            .max(4096);
+        let scanout_backing = DmaRegion::alloc(scanout_bytes, 4096)?;
+        unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, scanout_backing.len()) };
+        if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), scanout_backing.len() as u32) {
+            crate::log!("virgl-backend: attach_backing failed\n");
+            return None;
+        }
+        if !gpu.set_scanout(scanout_id, scanout_res, width, height) {
+            crate::log!("virgl-backend: set_scanout failed\n");
+            return None;
+        }
+
+        // Present the cleared (zeroed) scanout once so switching to this backend doesn't
+        // leave whatever the previous backend last drew on screen.
+        let _ = gpu.transfer_to_host_2d(scanout_res, width, height);
+        let _ = gpu.resource_flush(scanout_res, width, height);
+
+        // Render target (3D texture).
+        let rt_bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE;
+        if !gpu.resource_create_3d(
+            ctx_id,
+            rt_res,
+            PIPE_TEXTURE_2D,
+            VIRGL_FORMAT_B8G8R8X8_UNORM,
+            rt_bind,
+            width,
+            height,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ) {
+            crate::log!("virgl-backend: resource_create_3d rt failed\n");
+            return None;
+        }
+
+        // VBO resource (PIPE_BUFFER). Start with a modest capacity and grow as needed.
+        let vbo_cap_bytes = 64 * 1024u32;
+        if !gpu.resource_create_3d(
+            ctx_id,
+            vbo_res,
+            PIPE_BUFFER,
+            VIRGL_FORMAT_R8_UNORM,
+            PIPE_BIND_VERTEX_BUFFER,
+            vbo_cap_bytes,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ) {
+            crate::log!("virgl-backend: resource_create_3d vbo failed\n");
+            return None;
+        }
+
+        let _ = gpu.ctx_attach_resource(ctx_id, scanout_res);
+        let _ = gpu.ctx_attach_resource(ctx_id, rt_res);
+        let _ = gpu.ctx_attach_resource(ctx_id, vbo_res);
+
+        // One-time state/program setup.
+        let surf_handle = 10u32;
+        let ve_handle = 11u32;
+        let vs_handle = 20u32;
+        let fs_handle = 21u32;
+        let blend_handle = 30u32;
+        let dsa_handle = 31u32;
+        let rs_handle = 32u32;
+
+        let mut init = VirglCmdBuf::new();
+        encode_create_surface(&mut init, surf_handle, rt_res, VIRGL_FORMAT_B8G8R8X8_UNORM);
+        encode_set_framebuffer(&mut init, surf_handle);
+
+        encode_create_vertex_elements(&mut init, ve_handle);
+        encode_bind_object(&mut init, VIRGL_OBJECT_VERTEX_ELEMENTS, ve_handle);
+
+        // Virgl vertex format is fixed for this minimal backend.
+        encode_set_vertex_buffer(&mut init, core::mem::size_of::<Vertex>() as u32, 0, vbo_res);
+
+        encode_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX, VS_TEXT);
+        encode_bind_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX);
+        encode_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT, FS_TEXT);
+        encode_bind_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_handle, fs_handle);
+
+        encode_create_blend(&mut init, blend_handle);
+        encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle);
+        encode_create_dsa(&mut init, dsa_handle);
+        encode_bind_object(&mut init, VIRGL_OBJECT_DSA, dsa_handle);
+        encode_create_rasterizer(&mut init, rs_handle);
+        encode_bind_object(&mut init, VIRGL_OBJECT_RASTERIZER, rs_handle);
+
+        encode_set_viewport(&mut init, width, height);
+
+        if !gpu.submit_3d(ctx_id, init.as_bytes(), 1) {
+            crate::log!("virgl-backend: submit_3d init failed\n");
+            return None;
+        }
+
+        let swapchain = SwapchainDesc {
+            format: ImageFormat::Rgbx8888,
+            extent: trueos_gfx_core::Extent2D { width, height },
+        };
+
+        Some(Self {
+            gpu,
+            ctx_id,
+            scanout_id,
+            width,
+            height,
+            scanout_res,
+            scanout_backing,
+            rt_res,
+            vbo_res,
+            vbo_cap_bytes,
+            surf_handle,
+            ve_handle,
+            vs_handle,
+            fs_handle,
+            blend_handle,
+            dsa_handle,
+            rs_handle,
+            swapchain,
+            buffers: Vec::new(),
+            shaders: Vec::new(),
+            pipelines: Vec::new(),
+            state: VirglDrawState {
+                viewport: Viewport {
+                    x: 0,
+                    y: 0,
+                    width: width as i32,
+                    height: height as i32,
+                },
+                ..VirglDrawState::default()
+            },
+            next_fence: 1,
+            completed_fence: 0,
+        })
+    }
+
+    fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> usize {
+        for (i, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(value);
+                return i;
+            }
+        }
+        slots.push(Some(value));
+        slots.len() - 1
+    }
+
+    fn ensure_vbo_capacity(&mut self, need: usize) -> bool {
+        let need_u32 = need.min(u32::MAX as usize) as u32;
+        if need_u32 <= self.vbo_cap_bytes {
+            return true;
+        }
+
+        // Allocate a new resource id and bind it as the vertex buffer.
+        let new_vbo_res = alloc_res_pair().0;
+        let new_cap = need_u32.next_power_of_two().max(64 * 1024);
+
+        if !self.gpu.resource_create_3d(
+            self.ctx_id,
+            new_vbo_res,
+            PIPE_BUFFER,
+            VIRGL_FORMAT_R8_UNORM,
+            PIPE_BIND_VERTEX_BUFFER,
+            new_cap,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ) {
+            return false;
+        }
+        let _ = self.gpu.ctx_attach_resource(self.ctx_id, new_vbo_res);
+
+        // Re-bind the vertex buffer state.
+        let mut cmd = VirglCmdBuf::new();
+        encode_set_vertex_buffer(&mut cmd, core::mem::size_of::<Vertex>() as u32, 0, new_vbo_res);
+        if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), 0) {
+            return false;
+        }
+
+        self.vbo_res = new_vbo_res;
+        self.vbo_cap_bytes = new_cap;
+        true
+    }
+
+    fn rgb_to_f32(rgb: u32) -> (f32, f32, f32) {
+        let r = ((rgb >> 16) & 0xFF) as f32 / 255.0;
+        let g = ((rgb >> 8) & 0xFF) as f32 / 255.0;
+        let b = (rgb & 0xFF) as f32 / 255.0;
+        (r, g, b)
+    }
+
+    fn build_virgl_vertices(&self, buf: &[u8], pipe: &HostPipeline, binding: VirglBufferBinding, draw: (u32, u32)) -> Option<Vec<Vertex>> {
+        let PipelineDesc { vertex_layout, .. } = pipe.desc;
+        let VertexLayout {
+            stride,
+            pos_offset,
+            color_offset,
+            color_format,
+        } = vertex_layout;
+
+        let stride = stride as usize;
+        if stride == 0 {
+            return None;
+        }
+
+        let first = draw.1 as usize;
+        let count = draw.0 as usize;
+
+        let base = (binding.offset as usize).saturating_add(first.saturating_mul(stride));
+        let needed = count.saturating_mul(stride);
+        if base >= buf.len() {
+            return None;
+        }
+        let end = base.saturating_add(needed).min(buf.len());
+        let available = end.saturating_sub(base);
+        let vcount = available / stride;
+        if vcount == 0 {
+            return None;
+        }
+
+        let mut out: Vec<Vertex> = Vec::with_capacity(vcount);
+        for i in 0..vcount {
+            let off = base + i * stride;
+            if off + stride > buf.len() {
+                break;
+            }
+            let pos_off = off + (pos_offset as usize);
+            if pos_off + 8 > buf.len() {
+                break;
+            }
+            let x = f32::from_le_bytes(buf[pos_off..pos_off + 4].try_into().ok()?);
+            let y = f32::from_le_bytes(buf[pos_off + 4..pos_off + 8].try_into().ok()?);
+
+            let mut r_u8 = 255u8;
+            let mut g_u8 = 255u8;
+            let mut b_u8 = 255u8;
+            let col_off = off + (color_offset as usize);
+            match color_format {
+                ColorFormat::RgbU8 => {
+                    if col_off + 3 <= buf.len() {
+                        r_u8 = buf[col_off];
+                        g_u8 = buf[col_off + 1];
+                        b_u8 = buf[col_off + 2];
+                    }
+                }
+                ColorFormat::RgbaU8 => {
+                    if col_off + 4 <= buf.len() {
+                        r_u8 = buf[col_off];
+                        g_u8 = buf[col_off + 1];
+                        b_u8 = buf[col_off + 2];
+                    }
+                }
+            }
+
+            let rf = (r_u8 as f32) / 255.0;
+            let gf = (g_u8 as f32) / 255.0;
+            let bf = (b_u8 as f32) / 255.0;
+
+            out.push(Vertex {
+                pos: [x, y, 0.0, 1.0],
+                color: [rf, gf, bf, 1.0],
+            });
+        }
+        Some(out)
+    }
+}
+
+impl GfxDevice for VirglGfxBackend {
+    fn caps(&self) -> DeviceCaps {
+        // For now, advertise the minimal set that matches our host-visible buffer strategy.
+        DeviceCaps::minimal_software()
+    }
+
+    fn create_buffer(&mut self, desc: BufferDesc) -> GfxResult<BufferId> {
+        if desc.size == 0 {
+            return Err(Error::Invalid);
+        }
+        if desc.memory != MemoryType::HostVisible {
+            return Err(Error::Unsupported);
+        }
+        let mut bytes = Vec::new();
+        let size = desc.size.min(usize::MAX as u64) as usize;
+        bytes.resize(size, 0);
+        let slot = Self::alloc_slot(
+            &mut self.buffers,
+            HostBuffer {
+                desc,
+                bytes,
+                mapped: false,
+            },
+        );
+        Ok(BufferId::from_raw(slot as u32 + 1))
+    }
+
+    fn destroy_buffer(&mut self, id: BufferId) {
+        let raw = id.raw();
+        if raw == 0 {
+            return;
+        }
+        let idx = (raw - 1) as usize;
+        if idx < self.buffers.len() {
+            self.buffers[idx] = None;
+        }
+    }
+
+    fn create_shader(&mut self, desc: ShaderDesc<'_>) -> GfxResult<ShaderId> {
+        // Shaders are currently ignored; we use the fixed TGSI pair.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(desc.bytes);
+        let slot = Self::alloc_slot(&mut self.shaders, bytes);
+        Ok(ShaderId::from_raw(slot as u32 + 1))
+    }
+
+    fn destroy_shader(&mut self, id: ShaderId) {
+        let raw = id.raw();
+        if raw == 0 {
+            return;
+        }
+        let idx = (raw - 1) as usize;
+        if idx < self.shaders.len() {
+            self.shaders[idx] = None;
+        }
+    }
+
+    fn create_pipeline(&mut self, desc: PipelineDesc) -> GfxResult<PipelineId> {
+        // Accept the pipeline but only support simple pos+color layouts.
+        if desc.vertex_layout.stride == 0 {
+            return Err(Error::Invalid);
+        }
+        let slot = Self::alloc_slot(&mut self.pipelines, HostPipeline { desc });
+        Ok(PipelineId::from_raw(slot as u32 + 1))
+    }
+
+    fn destroy_pipeline(&mut self, id: PipelineId) {
+        let raw = id.raw();
+        if raw == 0 {
+            return;
+        }
+        let idx = (raw - 1) as usize;
+        if idx < self.pipelines.len() {
+            self.pipelines[idx] = None;
+        }
+    }
+
+    fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> GfxResult<()> {
+        let raw = id.raw();
+        if raw == 0 {
+            return Err(Error::Invalid);
+        }
+        let idx = (raw - 1) as usize;
+        let Some(buf) = self.buffers.get_mut(idx).and_then(|b| b.as_mut()) else {
+            return Err(Error::NotFound);
+        };
+        let off = offset.min(usize::MAX as u64) as usize;
+        if off > buf.bytes.len() {
+            return Err(Error::Invalid);
+        }
+        let end = off.saturating_add(data.len());
+        if end > buf.bytes.len() {
+            return Err(Error::Invalid);
+        }
+        buf.bytes[off..end].copy_from_slice(data);
+        Ok(())
+    }
+
+    fn map_buffer(&mut self, id: BufferId, _mode: MapMode) -> GfxResult<MappedRange> {
+        let raw = id.raw();
+        if raw == 0 {
+            return Err(Error::Invalid);
+        }
+        let idx = (raw - 1) as usize;
+        let Some(buf) = self.buffers.get_mut(idx).and_then(|b| b.as_mut()) else {
+            return Err(Error::NotFound);
+        };
+        if buf.mapped {
+            return Err(Error::Invalid);
+        }
+        buf.mapped = true;
+        Ok(MappedRange {
+            ptr: buf.bytes.as_mut_ptr(),
+            len: buf.bytes.len(),
+        })
+    }
+
+    fn unmap_buffer(&mut self, id: BufferId) -> GfxResult<()> {
+        let raw = id.raw();
+        if raw == 0 {
+            return Err(Error::Invalid);
+        }
+        let idx = (raw - 1) as usize;
+        let Some(buf) = self.buffers.get_mut(idx).and_then(|b| b.as_mut()) else {
+            return Err(Error::NotFound);
+        };
+        buf.mapped = false;
+        Ok(())
+    }
+
+    fn submit(&mut self, cmds: CommandBuffer<'_>) -> GfxResult<FenceId> {
+        // Translate gfx-core commands into a single virgl command stream per submit.
+        let mut draw_vertex_count: Option<(u32, u32)> = None;
+        for cmd in cmds.commands {
+            match *cmd {
+                Command::SetViewport(vp) => {
+                    self.state.viewport = vp;
+                }
+                Command::ClearColor { rgb } => {
+                    self.state.clear_rgb = rgb;
+                }
+                Command::ClearRect { rgb, .. } => {
+                    // Rect clears are not supported yet; approximate with full clear.
+                    self.state.clear_rgb = rgb;
+                }
+                Command::BindPipeline(p) => {
+                    self.state.pipeline = p;
+                }
+                Command::BindVertexBuffer { buffer, offset } => {
+                    self.state.vertex = VirglBufferBinding { id: buffer, offset };
+                }
+                Command::Draw {
+                    vertex_count,
+                    first_vertex,
+                } => {
+                    draw_vertex_count = Some((vertex_count, first_vertex));
+                }
+                Command::Present => {
+                    // handled after loop
+                }
+            }
+        }
+
+        let (vertex_count, first_vertex) = draw_vertex_count.unwrap_or((0, 0));
+        if vertex_count == 0 {
+            // Still allow present-only clears.
+        }
+
+        let mut cmd = VirglCmdBuf::new();
+
+        // Ensure viewport matches our swapchain.
+        let vp_w = self.state.viewport.width.max(0) as u32;
+        let vp_h = self.state.viewport.height.max(0) as u32;
+        let vp_w = if vp_w == 0 { self.width } else { vp_w.min(self.width) };
+        let vp_h = if vp_h == 0 { self.height } else { vp_h.min(self.height) };
+        encode_set_viewport(&mut cmd, vp_w, vp_h);
+
+        // Clear.
+        let (r, g, b) = Self::rgb_to_f32(self.state.clear_rgb);
+        encode_clear_color(&mut cmd, r, g, b, 1.0);
+
+        // Draw.
+        if vertex_count != 0 {
+            let pipeline_raw = self.state.pipeline.raw();
+            let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
+            let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
+                return Err(Error::NotFound);
+            };
+
+            let vraw = self.state.vertex.id.raw();
+            let vidx = vraw.saturating_sub(1) as usize;
+            let Some(vb) = self.buffers.get(vidx).and_then(|b| b.as_ref()) else {
+                return Err(Error::NotFound);
+            };
+
+            let verts = self
+                .build_virgl_vertices(&vb.bytes, pipe, self.state.vertex, (vertex_count, first_vertex))
+                .ok_or(Error::Invalid)?;
+
+            let vbytes: &[u8] = unsafe {
+                core::slice::from_raw_parts(
+                    verts.as_ptr() as *const u8,
+                    core::mem::size_of_val(verts.as_slice()),
+                )
+            };
+            if !self.ensure_vbo_capacity(vbytes.len()) {
+                return Err(Error::OutOfMemory);
+            }
+
+            encode_inline_write_buffer(&mut cmd, self.vbo_res, vbytes);
+            encode_draw_vbo_count(&mut cmd, verts.len() as u32);
+        }
+
+        // Present: copy to 2D scanout, then transfer+flush.
+        encode_resource_copy_region(&mut cmd, self.scanout_res, self.rt_res, self.width, self.height);
+        let fence = self.next_fence;
+        self.next_fence = self.next_fence.wrapping_add(1);
+
+        if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), fence) {
+            return Err(Error::Unsupported);
+        }
+
+        let _ = self.gpu.transfer_to_host_2d(self.scanout_res, self.width, self.height);
+        let _ = self.gpu.resource_flush(self.scanout_res, self.width, self.height);
+
+        self.completed_fence = fence;
+        Ok(FenceId::from_raw(fence))
+    }
+
+    fn poll(&mut self, fence: FenceId) -> bool {
+        fence.raw() <= self.completed_fence
+    }
+
+    fn device_idle(&mut self) {
+        // No fences/waits yet.
+        self.completed_fence = self.next_fence.saturating_sub(1);
+    }
+}
+
+impl GfxPresent for VirglGfxBackend {
+    fn configure_swapchain(&mut self, desc: SwapchainDesc) -> GfxResult<()> {
+        // Keep the stored swapchain; virgl swapchain is fixed at init for now.
+        self.swapchain = desc;
+        Ok(())
+    }
+
+    fn swapchain_desc(&self) -> SwapchainDesc {
+        self.swapchain
+    }
+}
+
+fn encode_draw_vbo_count(buf: &mut VirglCmdBuf, count: u32) {
+    // VIRGL_DRAW_VBO_SIZE = 12
+    buf.push(virgl_cmd0(VIRGL_CCMD_DRAW_VBO, 0, 12));
+    buf.push(0); // start
+    buf.push(count); // count
+    buf.push(PIPE_PRIM_TRIANGLES);
+    buf.push(0); // indexed
+    buf.push(1); // instance_count
+    buf.push(0); // index_bias
+    buf.push(0); // start_instance
+    buf.push(0); // primitive_restart
+    buf.push(0); // restart_index
+    buf.push(0); // min_index
+    buf.push(0); // max_index
+    buf.push(0); // count_from_so
+}
+
 fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &str) {
     // Matches virgl_encode_shader_state() with a provided shad_str: num_tokens is a dummy.
     let mut bytes = Vec::new();
@@ -1431,6 +2123,11 @@ async fn virgl_spin_task() {
 
     let (scanout_res_primary, rt_res, vbo_res) = alloc_res_triple();
 
+    // If we fall back to a 2D scanout resource, its attached backing must remain
+    // valid for as long as the scanout is in use.
+    let mut scanout_backing_keepalive: Option<DmaRegion> = None;
+    let _ = scanout_backing_keepalive.as_ref();
+
     enum PresentMode {
         Direct3dScanout,
         CopyTo2dScanout,
@@ -1495,6 +2192,10 @@ async fn virgl_spin_task() {
             VIRGL_SPIN_RUNNING.store(false, Ordering::Release);
             return;
         }
+
+        // Keep it alive for the duration of the task.
+        scanout_backing_keepalive = Some(scanout_backing);
+        let _ = scanout_backing_keepalive.as_ref().map(|b| b.phys());
 
         if !gpu.set_scanout(scanout, scanout_res, w, h) {
             crate::log!("virgl: scanout not active; stopping spin\n");
@@ -1659,10 +2360,6 @@ async fn virgl_spin_task() {
             let _ = gpu.transfer_to_host_2d(scanout_res, w, h);
         }
         let _ = gpu.resource_flush(scanout_res, w, h);
-
-        if frame % 60 == 0 {
-            crate::log!("virgl: spin alive frame={}\n", frame);
-        }
     }
 }
 
