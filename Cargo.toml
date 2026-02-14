@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 dma_nic_fpga = []
+gfx_virgl = []
 
 
 [dependencies]
