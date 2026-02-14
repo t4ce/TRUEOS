@@ -27,7 +27,12 @@ pub struct IntelGpuBackend {
 
 impl IntelGpuBackend {
     pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) -> Option<Self> {
-        let dev = find_intel_display_device()?;
+        let dev = find_intel_display_device().or_else(|| {
+            // Shell-initiated backend switching can happen long after boot; ensure the PCI device
+            // list is populated before we give up.
+            crate::pci::enumerate_impl();
+            find_intel_display_device()
+        })?;
         crate::log!(
             "gfx/intel_gpu: probed intel display dev bdf={:02X}:{:02X}.{} vid=0x{:04X} did=0x{:04X} class=0x{:02X}/0x{:02X} pi=0x{:02X}\n",
             dev.bus,
