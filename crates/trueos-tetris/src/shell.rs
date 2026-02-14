@@ -1,8 +1,9 @@
 use crate::{Game, Lcg32, NoopEvents, RandomSource, Rotation};
 
-const BOARD_W: usize = 10;
-const BOARD_H: usize = 24;
-const BOARD_HIDDEN: usize = 4;
+const BOARD_W: usize = 20;
+const BOARD_H: usize = 48;
+const BOARD_HIDDEN: usize = 8;
+const VIEW_H: usize = BOARD_H - BOARD_HIDDEN;
 
 pub trait ShellIo {
     fn write_str(&self, s: &str);
@@ -26,6 +27,13 @@ pub struct ShellApp {
     paused: bool,
     redraw: bool,
     drop_accum_ms: u32,
+    prev_cells: [[Option<crate::CellView>; VIEW_H]; BOARD_W],
+    prev_level: u8,
+    prev_rows: u32,
+    prev_points: u32,
+    prev_paused: bool,
+    prev_game_over: bool,
+    prev_valid: bool,
 }
 
 impl ShellApp {
@@ -45,6 +53,13 @@ impl ShellApp {
             paused: false,
             redraw: true,
             drop_accum_ms: 0,
+            prev_cells: [[None; VIEW_H]; BOARD_W],
+            prev_level: 0,
+            prev_rows: 0,
+            prev_points: 0,
+            prev_paused: false,
+            prev_game_over: false,
+            prev_valid: false,
         }
     }
 
@@ -52,6 +67,7 @@ impl ShellApp {
         self.cols = cols.max(24);
         self.rows = rows.max(14);
         self.redraw = true;
+        self.prev_valid = false;
     }
 
     pub fn consume_redraw(&mut self) -> bool {
@@ -171,73 +187,90 @@ impl ShellApp {
         let start_row = (self.rows.saturating_sub(board_rows + 4) / 2).max(1);
 
         io.write_str("\x1b[?25l");
-        io.write_str("\x1b[2J\x1b[H");
 
-        self.write_at(
-            io,
-            start_row,
-            1,
-            "TETRIS  |  A/D move  W rotate  Space drop  P pause  R restart  Q exit",
-        );
+        if !self.prev_valid {
+            io.write_str("\x1b[2J\x1b[H");
+            self.write_at(
+                io,
+                start_row,
+                1,
+                "TETRIS  |  A/D move  W rotate  Space drop  P pause  R restart  Q exit",
+            );
+            self.write_at(io, start_row + 1, start_col, "┌────────────────────────────────────────┐");
 
-        self.write_at(io, start_row + 1, start_col, "┌────────────────────┐");
+            for view_y in 0..self.game.visible_height() {
+                let row = start_row + 2 + view_y;
+                self.write_at(io, row, start_col, "│");
+                self.write_at(io, row, start_col + 1 + BOARD_W * 2, "│");
+            }
+
+            self.write_at(
+                io,
+                start_row + 2 + self.game.visible_height(),
+                start_col,
+                "└────────────────────────────────────────┘",
+            );
+        }
 
         for view_y in 0..self.game.visible_height() {
             let row = start_row + 2 + view_y;
-            self.write_at(io, row, start_col, "│");
-
             let board_y = BOARD_HIDDEN + view_y;
             for x in 0..BOARD_W {
-                let col = start_col + 1 + x * 2;
-                match self.game.cell_view_at(x, board_y, true) {
-                    Some(cell) => {
-                        let r = cell.color.r;
-                        let g = cell.color.g;
-                        let b = cell.color.b;
-                        match cell.layer {
-                            crate::Layer::Ghost => {
-                                self.write_at_fmt(
-                                    io,
-                                    row,
-                                    col,
-                                    format_args!("\x1b[38;2;{};{};{}m░░\x1b[0m", r, g, b),
-                                );
-                            }
-                            _ => {
-                                self.write_at_fmt(
-                                    io,
-                                    row,
-                                    col,
-                                    format_args!("\x1b[48;2;{};{};{}m  \x1b[0m", r, g, b),
-                                );
+                let current = self.game.cell_view_at(x, board_y, true);
+                let prev = self.prev_cells[x][view_y];
+                if !self.prev_valid || current != prev {
+                    let col = start_col + 1 + x * 2;
+                    match current {
+                        Some(cell) => {
+                            let r = cell.color.r;
+                            let g = cell.color.g;
+                            let b = cell.color.b;
+                            match cell.layer {
+                                crate::Layer::Ghost => {
+                                    self.write_at_fmt(
+                                        io,
+                                        row,
+                                        col,
+                                        format_args!("\x1b[38;2;{};{};{}m░░\x1b[0m", r, g, b),
+                                    );
+                                }
+                                _ => {
+                                    self.write_at_fmt(
+                                        io,
+                                        row,
+                                        col,
+                                        format_args!("\x1b[48;2;{};{};{}m  \x1b[0m", r, g, b),
+                                    );
+                                }
                             }
                         }
+                        None => self.write_at(io, row, col, "  "),
                     }
-                    None => self.write_at(io, row, col, "  "),
                 }
             }
-
-            self.write_at(io, row, start_col + 1 + BOARD_W * 2, "│");
         }
-
-        self.write_at(
-            io,
-            start_row + 2 + self.game.visible_height(),
-            start_col,
-            "└────────────────────┘",
-        );
 
         let stats_row = start_row + 2;
         let stats_col = start_col + board_cols + 3;
-        self.write_at_fmt(io, stats_row, stats_col, format_args!("level   {}", self.game.level.current_level));
-        self.write_at_fmt(io, stats_row + 1, stats_col, format_args!("rows    {}", self.game.level.rows_deleted));
-        self.write_at_fmt(io, stats_row + 2, stats_col, format_args!("points  {}", self.game.level.total_points));
+        if !self.prev_valid || self.prev_level != self.game.level.current_level {
+            self.write_status_line(io, stats_row, stats_col, format_args!("level   {}", self.game.level.current_level));
+        }
+        if !self.prev_valid || self.prev_rows != self.game.level.rows_deleted {
+            self.write_status_line(io, stats_row + 1, stats_col, format_args!("rows    {}", self.game.level.rows_deleted));
+        }
+        if !self.prev_valid || self.prev_points != self.game.level.total_points {
+            self.write_status_line(io, stats_row + 2, stats_col, format_args!("points  {}", self.game.level.total_points));
+        }
 
-        if self.paused {
-            self.write_at(io, stats_row + 4, stats_col, "[PAUSED]");
-        } else if self.game.is_game_over() {
-            self.write_at(io, stats_row + 4, stats_col, "[GAME OVER]");
-            self.write_at(io, stats_row + 5, stats_col, "press R to restart");
+        if !self.prev_valid || self.prev_paused != self.paused || self.prev_game_over != self.game.is_game_over() {
+            self.clear_status_line(io, stats_row + 4, stats_col);
+            self.clear_status_line(io, stats_row + 5, stats_col);
+            if self.paused {
+                self.write_at(io, stats_row + 4, stats_col, "[PAUSED]");
+            } else if self.game.is_game_over() {
+                self.write_at(io, stats_row + 4, stats_col, "[GAME OVER]");
+                self.write_at(io, stats_row + 5, stats_col, "press R to restart");
+            }
         }
     }
 
@@ -247,6 +280,22 @@ impl ShellApp {
         self.game = Game::new(&mut self.rng, &mut self.events);
         self.paused = false;
         self.drop_accum_ms = 0;
+        self.prev_valid = false;
+    }
+
+    pub fn finalize_frame(&mut self) {
+        for view_y in 0..self.game.visible_height() {
+            let board_y = BOARD_HIDDEN + view_y;
+            for x in 0..BOARD_W {
+                self.prev_cells[x][view_y] = self.game.cell_view_at(x, board_y, true);
+            }
+        }
+        self.prev_level = self.game.level.current_level;
+        self.prev_rows = self.game.level.rows_deleted;
+        self.prev_points = self.game.level.total_points;
+        self.prev_paused = self.paused;
+        self.prev_game_over = self.game.is_game_over();
+        self.prev_valid = true;
     }
 
     #[inline]
@@ -259,5 +308,16 @@ impl ShellApp {
     fn write_at_fmt(&self, io: &dyn ShellIo, row: usize, col: usize, args: core::fmt::Arguments<'_>) {
         io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
         io.write_fmt(args);
+    }
+
+    #[inline]
+    fn clear_status_line(&self, io: &dyn ShellIo, row: usize, col: usize) {
+        self.write_at(io, row, col, "                      ");
+    }
+
+    #[inline]
+    fn write_status_line(&self, io: &dyn ShellIo, row: usize, col: usize, args: core::fmt::Arguments<'_>) {
+        self.clear_status_line(io, row, col);
+        self.write_at_fmt(io, row, col, args);
     }
 }

@@ -21,6 +21,12 @@ const RX_BAD_FLAGS_LOG_EVERY: u64 = 1024;
 const TX_STALL_KICK_THRESHOLD: u64 = 10_000;
 const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 const POLL_STATE_LOG_EVERY: u64 = 10_000;
+const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
+const EXP_R8125_SKIP_DESC0: bool = true;
+const EXP_R8125_TXPOLL_ALT: bool = true;
+const EXP_R8125_TXPOLL_ALT_VALUE: u8 = 0x80;
+const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
+const EXP_R8125_FORCE_CPLUS_OFF: bool = true;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
@@ -152,12 +158,104 @@ pub struct R8125Adapter {
     dbg_poll_ticks: u64,
     dbg_state_dumps: u64,
     dbg_isr_nonzero: u64,
+    dbg_last_cmd: u8,
+    dbg_last_imr: u16,
+    dbg_last_tnpds_lo: u32,
+    dbg_last_tnpds_hi: u32,
+    dbg_kick_readbacks: u64,
+    dbg_doorbells: u64,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    #[inline]
+    fn tx_start_index() -> usize {
+        if EXP_R8125_SKIP_DESC0 { 1 } else { 0 }
+    }
+
+    fn cplus_programmed(current: u16) -> u16 {
+        let mut out = current;
+        if EXP_R8125_FORCE_CPLUS_OFF {
+            out &= !CPLUS_ENABLE;
+            out &= !CPLUS_RX_CHKSUM;
+        } else {
+            out |= CPLUS_ENABLE;
+            if ENABLE_RX_CHKSUM_OFFLOAD {
+                out |= CPLUS_RX_CHKSUM;
+            } else {
+                out &= !CPLUS_RX_CHKSUM;
+            }
+        }
+        out
+    }
+
+    fn ring_tx_doorbell(&mut self, reason: &str) {
+        unsafe {
+            // Baseline NPQ kick used by 8168-family.
+            self.mmio.write_u8(REG_TXPOLL, 0x40);
+
+            // Diagnostic experiment for 8125: try an alternate kick value in between.
+            if EXP_R8125_TXPOLL_ALT {
+                self.mmio.write_u8(REG_TXPOLL, EXP_R8125_TXPOLL_ALT_VALUE);
+                self.mmio.write_u8(REG_TXPOLL, 0x40);
+            }
+
+            let poll_rb = self.mmio.read_u8(REG_TXPOLL);
+            let cmd_rb = self.mmio.read_u8(REG_CMD);
+            let isr_rb = self.mmio.read_u16(REG_ISR);
+
+            self.dbg_doorbells = self.dbg_doorbells.saturating_add(1);
+            if self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST || (self.dbg_doorbells & 0x3FF) == 0 {
+                crate::log!(
+                    "net/r8125: tx doorbell count={} reason={} poll_rb=0x{:02x} cmd=0x{:02x} isr=0x{:04x} alt={} alt_val=0x{:02x}\n",
+                    self.dbg_doorbells,
+                    reason,
+                    poll_rb,
+                    cmd_rb,
+                    isr_rb,
+                    EXP_R8125_TXPOLL_ALT as u8,
+                    EXP_R8125_TXPOLL_ALT_VALUE
+                );
+            }
+        }
+    }
+
+    fn log_tx_window(&self, reason: &str) {
+        let h = self.tx_head;
+        let t = self.tx_tail;
+        let n = (h + 1) % TX_DESC_COUNT;
+
+        let hd = unsafe { read_volatile(self.tx_desc.add(h)) };
+        let nd = unsafe { read_volatile(self.tx_desc.add(n)) };
+        let td = unsafe { read_volatile(self.tx_desc.add(t)) };
+
+        let hd_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.opts1)) };
+        let hd_opts2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.opts2)) };
+        let nd_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(nd.opts1)) };
+        let td_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(td.opts1)) };
+
+        let hd_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hd.addr)) };
+        let nd_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(nd.addr)) };
+        let td_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(td.addr)) };
+
+        crate::log!(
+            "net/r8125: tx-window reason={} head={} tail={} next={} head[o1=0x{:08x} o2=0x{:08x} a=0x{:016x}] next[o1=0x{:08x} a=0x{:016x}] tail[o1=0x{:08x} a=0x{:016x}]\n",
+            reason,
+            h,
+            t,
+            n,
+            hd_opts1,
+            hd_opts2,
+            hd_addr,
+            nd_opts1,
+            nd_addr,
+            td_opts1,
+            td_addr
+        );
+    }
+
     fn log_hw_state(&mut self, reason: &str) {
         self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
 
@@ -381,10 +479,7 @@ impl R8125Adapter {
         unsafe {
             // C+ mode on (descriptor mode). Keep it minimal.
             let cplus = mmio.read_u16(REG_CPLUS_CMD);
-            let mut cplus_new = cplus | CPLUS_ENABLE;
-            if ENABLE_RX_CHKSUM_OFFLOAD {
-                cplus_new |= CPLUS_RX_CHKSUM;
-            }
+            let cplus_new = Self::cplus_programmed(cplus);
             mmio.write_u16(REG_CPLUS_CMD, cplus_new);
             mmio.write_u16(REG_RX_MAX_SIZE, RX_BUF_SIZE as u16);
 
@@ -413,6 +508,17 @@ impl R8125Adapter {
             RX_DESC_COUNT,
             TX_DESC_COUNT
         );
+        let cplus_after = unsafe { mmio.read_u16(REG_CPLUS_CMD) };
+        crate::log!(
+            "net/r8125: cplus=0x{:04x} force_off={}\n",
+            cplus_after,
+            EXP_R8125_FORCE_CPLUS_OFF as u8
+        );
+        crate::log!(
+            "net/r8125: tx start idx={} skip_desc0={}\n",
+            Self::tx_start_index(),
+            EXP_R8125_SKIP_DESC0 as u8
+        );
         let phy = unsafe { mmio.read_u8(REG_PHYSTAT) };
         crate::log!("net/r8125: phystat=0x{:02x} (raw)\n", phy);
 
@@ -428,8 +534,8 @@ impl R8125Adapter {
             tx_desc_phys,
             tx_desc,
             tx_bufs,
-            tx_head: 0,
-            tx_tail: 0,
+            tx_head: Self::tx_start_index(),
+            tx_tail: Self::tx_start_index(),
 
             dbg_tx_submitted: 0,
             dbg_tx_reclaimed: 0,
@@ -448,6 +554,12 @@ impl R8125Adapter {
             dbg_poll_ticks: 0,
             dbg_state_dumps: 0,
             dbg_isr_nonzero: 0,
+            dbg_last_cmd: CMD_RX_EN | CMD_TX_EN,
+            dbg_last_imr: 0,
+            dbg_last_tnpds_lo: tx_desc_phys as u32,
+            dbg_last_tnpds_hi: (tx_desc_phys >> 32) as u32,
+            dbg_kick_readbacks: 0,
+            dbg_doorbells: 0,
         })
     }
 
@@ -458,10 +570,33 @@ impl R8125Adapter {
             self.mmio
                 .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
 
+            let cplus = self.mmio.read_u16(REG_CPLUS_CMD);
+            let cplus_new = Self::cplus_programmed(cplus);
+            self.mmio.write_u16(REG_CPLUS_CMD, cplus_new);
+
             let cmd = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
+        }
 
-            self.mmio.write_u8(REG_TXPOLL, 0x40);
+        self.ring_tx_doorbell("kick");
+
+        unsafe {
+            let rb_cmd = self.mmio.read_u8(REG_CMD);
+            let rb_isr = self.mmio.read_u16(REG_ISR);
+            let rb_tnp_lo = self.mmio.read_u32(REG_TNPDS);
+            let rb_tnp_hi = self.mmio.read_u32(REG_TNPDS_HI);
+
+            self.dbg_kick_readbacks = self.dbg_kick_readbacks.saturating_add(1);
+            if self.dbg_kick_readbacks <= 8 || (self.dbg_kick_readbacks & 0x3FF) == 0 {
+                crate::log!(
+                    "net/r8125: tx kick rb count={} cmd=0x{:02x} isr=0x{:04x} tnpds=0x{:08x}{:08x}\n",
+                    self.dbg_kick_readbacks,
+                    rb_cmd,
+                    rb_isr,
+                    rb_tnp_hi,
+                    rb_tnp_lo
+                );
+            }
         }
     }
 
@@ -493,6 +628,7 @@ impl R8125Adapter {
             isr,
             phy
         );
+        self.log_tx_window("tx-reset-pre");
         self.log_hw_state("tx-reset");
 
         unsafe {
@@ -517,14 +653,22 @@ impl R8125Adapter {
             self.mmio
                 .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
 
-            self.tx_head = 0;
-            self.tx_tail = 0;
+            self.tx_head = Self::tx_start_index();
+            self.tx_tail = Self::tx_start_index();
             self.dbg_tx_stall_checks = 0;
 
             let cmd_re = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd_re | CMD_TX_EN | CMD_RX_EN);
-            self.mmio.write_u8(REG_TXPOLL, 0x40);
         }
+
+        self.ring_tx_doorbell("tx-reset-reinit");
+
+        crate::log!(
+            "net/r8125: tx reset reinit head={} tail={} skip_desc0={}\n",
+            self.tx_head,
+            self.tx_tail,
+            EXP_R8125_SKIP_DESC0 as u8
+        );
     }
 
     fn reclaim_tx(&mut self) {
@@ -548,6 +692,7 @@ impl R8125Adapter {
                         self.dbg_tx_recovery_kicks,
                         self.dbg_tx_resets
                     );
+                    self.log_tx_window("tx-stall");
                     self.log_hw_state("tx-stall");
                     self.kick_tx_engine();
                 }
@@ -575,6 +720,34 @@ impl R8125Adapter {
 
         if (self.dbg_poll_ticks % POLL_STATE_LOG_EVERY) == 0 {
             self.log_hw_state("periodic");
+        }
+
+        let cmd_now = unsafe { self.mmio.read_u8(REG_CMD) };
+        let imr_now = unsafe { self.mmio.read_u16(REG_IMR) };
+        let tnp_lo_now = unsafe { self.mmio.read_u32(REG_TNPDS) };
+        let tnp_hi_now = unsafe { self.mmio.read_u32(REG_TNPDS_HI) };
+
+        if cmd_now != self.dbg_last_cmd
+            || imr_now != self.dbg_last_imr
+            || tnp_lo_now != self.dbg_last_tnpds_lo
+            || tnp_hi_now != self.dbg_last_tnpds_hi
+        {
+            crate::log!(
+                "net/r8125: reg change cmd 0x{:02x}->0x{:02x} imr 0x{:04x}->0x{:04x} tnpds 0x{:08x}{:08x}->0x{:08x}{:08x}\n",
+                self.dbg_last_cmd,
+                cmd_now,
+                self.dbg_last_imr,
+                imr_now,
+                self.dbg_last_tnpds_hi,
+                self.dbg_last_tnpds_lo,
+                tnp_hi_now,
+                tnp_lo_now
+            );
+            self.dbg_last_cmd = cmd_now;
+            self.dbg_last_imr = imr_now;
+            self.dbg_last_tnpds_lo = tnp_lo_now;
+            self.dbg_last_tnpds_hi = tnp_hi_now;
+            self.log_hw_state("reg-change");
         }
 
         // Track PHY/link changes without spamming: only log on change.
@@ -769,6 +942,7 @@ impl R8125Adapter {
                         phy,
                         self.dbg_tx_recovery_kicks
                     );
+                    self.log_tx_window("tx-ring-full");
                     self.log_hw_state("tx-ring-full");
                 }
                 return Err(());
@@ -796,6 +970,7 @@ impl R8125Adapter {
                         cur2_opts1,
                         self.dbg_tx_recovery_kicks
                     );
+                    self.log_tx_window("tx-desc-busy");
                     self.log_hw_state("tx-desc-busy");
                 }
                 return Err(());
@@ -823,9 +998,37 @@ impl R8125Adapter {
 
             // Ensure descriptor writes are visible before we kick the device.
             fence(Ordering::Release);
+        }
 
-            // Kick TX (NPQ)
-            self.mmio.write_u8(REG_TXPOLL, 0x40);
+        self.ring_tx_doorbell("tx-submit");
+
+        if self.dbg_tx_submitted < TX_SUBMIT_DEBUG_FIRST {
+            let post = unsafe { read_volatile(self.tx_desc.add(idx)) };
+            let post_o1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.opts1)) };
+            let post_o2 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.opts2)) };
+            let post_a = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(post.addr)) };
+            let (cmd, isr, tnp_lo, tnp_hi) = unsafe {
+                (
+                    self.mmio.read_u8(REG_CMD),
+                    self.mmio.read_u16(REG_ISR),
+                    self.mmio.read_u32(REG_TNPDS),
+                    self.mmio.read_u32(REG_TNPDS_HI),
+                )
+            };
+
+            crate::log!(
+                "net/r8125: tx submit dbg idx={} len={} opts1=0x{:08x} rd[o1=0x{:08x} o2=0x{:08x} a=0x{:016x}] cmd=0x{:02x} isr=0x{:04x} tnpds=0x{:08x}{:08x}\n",
+                idx,
+                len,
+                opts1,
+                post_o1,
+                post_o2,
+                post_a,
+                cmd,
+                isr,
+                tnp_hi,
+                tnp_lo
+            );
         }
 
         self.tx_tail = next_tail;

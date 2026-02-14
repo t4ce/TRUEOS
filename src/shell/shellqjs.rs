@@ -10,6 +10,25 @@ struct QjsShellOpaque {
     io: &'static dyn ShellBackend,
 }
 
+#[inline]
+fn js_bool(v: bool) -> trueos_qjs::JSValue {
+    trueos_qjs::JSValue {
+        u: trueos_qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        tag: trueos_qjs::JS_TAG_BOOL,
+    }
+}
+
+fn qjs_log(ctx: *mut trueos_qjs::JSContext, msg: &str) {
+    let opaque = unsafe { trueos_qjs::JS_GetContextOpaque(ctx) } as *const QjsShellOpaque;
+    if opaque.is_null() {
+        return;
+    }
+    let io = unsafe { (*opaque).io };
+    io.write_str("qjs: ");
+    io.write_str(msg);
+    io.write_str("\r\n");
+}
+
 unsafe extern "C" fn qjs_shell_print(
     ctx: *mut trueos_qjs::JSContext,
     _this_val: trueos_qjs::JSValueConst,
@@ -48,6 +67,147 @@ unsafe extern "C" fn qjs_shell_print(
     }
     io.write_str("\r\n");
     trueos_qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_trueos_reboot(
+    ctx: *mut trueos_qjs::JSContext,
+    _this_val: trueos_qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const trueos_qjs::JSValueConst,
+) -> trueos_qjs::JSValue {
+    match crate::efi::acpi::facp::reset_system() {
+        Ok(()) => js_bool(true),
+        Err(e) => {
+            qjs_log(ctx, "reboot failed");
+            qjs_log(ctx, alloc::format!("reboot error: {:?}", e).as_str());
+            js_bool(false)
+        }
+    }
+}
+
+unsafe extern "C" fn qjs_trueos_acpi(
+    ctx: *mut trueos_qjs::JSContext,
+    _this_val: trueos_qjs::JSValueConst,
+    argc: c_int,
+    argv: *const trueos_qjs::JSValueConst,
+) -> trueos_qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        qjs_log(ctx, "usage: TRUEOS.acpi('s0'..'s5'|'reboot')");
+        return js_bool(false);
+    }
+
+    let arg0 = unsafe { *argv };
+    let cstr = unsafe { trueos_qjs::js_to_cstring(ctx, arg0) };
+    if cstr.is_null() {
+        qjs_log(ctx, "acpi: failed to parse argument");
+        return js_bool(false);
+    }
+
+    let mut ok = false;
+    let mut handled = false;
+    let bytes = unsafe { CStr::from_ptr(cstr).to_bytes() };
+    if let Ok(s) = core::str::from_utf8(bytes) {
+        let arg = s.trim();
+        if arg.eq_ignore_ascii_case("reboot") {
+            handled = true;
+            ok = crate::efi::acpi::facp::reset_system().is_ok();
+        } else if arg.len() == 2 && (arg.as_bytes()[0] == b's' || arg.as_bytes()[0] == b'S') {
+            match arg.as_bytes()[1] {
+                b'0' => {
+                    handled = true;
+                    // S0 is working state; no transition performed.
+                    ok = true;
+                }
+                b'1'..=b'5' => {
+                    handled = true;
+                    let state = (arg.as_bytes()[1] - b'0') as u8;
+                    ok = crate::efi::acpi::facp::enter_named_sleep_state(state).is_ok();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    unsafe { trueos_qjs::JS_FreeCString(ctx, cstr) };
+
+    if !handled {
+        qjs_log(ctx, "acpi: expected 's0'..'s5' or 'reboot'");
+        return js_bool(false);
+    }
+
+    if !ok {
+        qjs_log(ctx, "acpi command failed");
+    }
+    js_bool(ok)
+}
+
+unsafe fn install_qjs_shell_globals(ctx: *mut trueos_qjs::JSContext) {
+    // Install globalThis.print(...)
+    let global = trueos_qjs::JS_GetGlobalObject(ctx);
+
+    let print_name = b"print\0";
+    let print_fn = trueos_qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_shell_print),
+        print_name.as_ptr() as *const c_char,
+        1,
+        trueos_qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, print_name.as_ptr() as *const c_char, print_fn);
+
+    let trueos_obj = trueos_qjs::JS_NewObject(ctx);
+
+    let reboot_name = b"reboot\0";
+    let reboot_fn = trueos_qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_trueos_reboot),
+        reboot_name.as_ptr() as *const c_char,
+        0,
+        trueos_qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = trueos_qjs::JS_SetPropertyStr(
+        ctx,
+        trueos_obj,
+        reboot_name.as_ptr() as *const c_char,
+        reboot_fn,
+    );
+
+    let acpi_name = b"acpi\0";
+    let acpi_fn = trueos_qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_trueos_acpi),
+        acpi_name.as_ptr() as *const c_char,
+        1,
+        trueos_qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = trueos_qjs::JS_SetPropertyStr(
+        ctx,
+        trueos_obj,
+        acpi_name.as_ptr() as *const c_char,
+        acpi_fn,
+    );
+
+    let trueos_name = b"TRUEOS\0";
+    let _ = trueos_qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        trueos_name.as_ptr() as *const c_char,
+        unsafe { trueos_qjs::js_dup_value(ctx, trueos_obj) },
+    );
+
+    // UTF-8 for '§' + NUL
+    const SEC_NAME: [u8; 3] = [0xC2, 0xA7, 0x00];
+    let _ = trueos_qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        SEC_NAME.as_ptr() as *const c_char,
+        trueos_obj,
+    );
+
+    trueos_qjs::js_free_value(ctx, global);
 }
 
 fn dump_exception(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext) {
@@ -515,19 +675,7 @@ async fn repl(io: &'static dyn ShellBackend) {
         let opaque_ptr = Box::into_raw(opaque);
         trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
 
-        // Install globalThis.print(...)
-        let global = trueos_qjs::JS_GetGlobalObject(ctx);
-        let name = b"print\0";
-        let func = trueos_qjs::JS_NewCFunction2(
-            ctx,
-            Some(qjs_shell_print),
-            name.as_ptr() as *const c_char,
-            1,
-            trueos_qjs::JS_CFUNC_GENERIC,
-            0,
-        );
-        let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
-        trueos_qjs::js_free_value(ctx, global);
+        install_qjs_shell_globals(ctx);
 
         trueos_qjs::node::install_globals(ctx);
 
@@ -802,19 +950,7 @@ pub(crate) async fn eval_bytes_opts_async(
         let opaque_ptr = Box::into_raw(opaque);
         trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
 
-        // Install globalThis.print(...)
-        let global = trueos_qjs::JS_GetGlobalObject(ctx);
-        let name = b"print\0";
-        let func = trueos_qjs::JS_NewCFunction2(
-            ctx,
-            Some(qjs_shell_print),
-            name.as_ptr() as *const c_char,
-            1,
-            trueos_qjs::JS_CFUNC_GENERIC,
-            0,
-        );
-        let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
-        trueos_qjs::js_free_value(ctx, global);
+        install_qjs_shell_globals(ctx);
 
         trueos_qjs::node::install_globals(ctx);
 
