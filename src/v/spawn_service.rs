@@ -38,6 +38,8 @@ static NET_POLL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TLS_SOCKET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
+static AI_TCP_BRIDGE_STARTED: AtomicBool = AtomicBool::new(false);
+static AI_QJS_REPL_STARTED: AtomicBool = AtomicBool::new(false);
 static HTTP_TRUEOSFS_STARTED: AtomicBool = AtomicBool::new(false);
 static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -120,6 +122,20 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::backends::net_tcp::net_shell_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ai_tcp_bridge(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::shell::backends::ai_tcp::ai_tcp_bridge_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ai_qjs_repl(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::shell::backends::ai_tcp::ai_qjs_repl_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -324,6 +340,18 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::NET_GATEWAY_REACHABLE,
         started: &NET_SHELL_STARTED,
         spawn: spawn_net_shell,
+    },
+    TaskSpec {
+        name: "ai-tcp-bridge",
+        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        started: &AI_TCP_BRIDGE_STARTED,
+        spawn: spawn_ai_tcp_bridge,
+    },
+    TaskSpec {
+        name: "ai-qjs-repl",
+        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        started: &AI_QJS_REPL_STARTED,
+        spawn: spawn_ai_qjs_repl,
     },
     TaskSpec {
         name: "http-trueosfs",

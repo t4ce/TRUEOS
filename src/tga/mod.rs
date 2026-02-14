@@ -1,6 +1,6 @@
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::ptr::{write_volatile, NonNull};
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
 
 use crate::pci::PciDevice;
@@ -46,10 +46,7 @@ unsafe impl Send for Tga {}
 impl Tga {
     #[inline(always)]
     fn write_led(&self, value: u32) {
-        unsafe {
-            write_volatile(self.led_reg as *mut u32, value);
-            let _ = read_volatile(self.led_reg as *const u32);
-        };
+        unsafe { write_volatile(self.led_reg as *mut u32, value) };
     }
 }
 
@@ -65,6 +62,7 @@ static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
+const TGA_PRESENCE_PROBE_PERIOD_MS: u64 = 1000;
 const TGA_OFFLINE_RETRY_MS: u64 = 250;
 const TGA_PRESENCE_MISS_THRESHOLD: u8 = 10;
 
@@ -488,45 +486,59 @@ pub(crate) async fn tga_task() {
         crate::log!("tga: task started\n");
     });
     let mut presence_miss_streak: u8 = 0;
+    let period = EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS);
+    let presence_probe_period = EmbassyDuration::from_millis(TGA_PRESENCE_PROBE_PERIOD_MS);
+    let mut next_tick = Instant::now() + period;
+    let mut next_presence_probe = Instant::now() + presence_probe_period;
     loop {
         if !is_online() {
             crate::pci::enumerate_impl();
             let _ = try_init();
             presence_miss_streak = 0;
+            next_tick = Instant::now() + period;
+            next_presence_probe = Instant::now() + presence_probe_period;
             Timer::after(EmbassyDuration::from_millis(TGA_OFFLINE_RETRY_MS)).await;
             continue;
         }
 
-        // If device disappeared, go offline and stop writes.
-        let present = {
-            let guard = TGA.lock();
-            guard.as_ref().map(is_present).unwrap_or(false)
-        };
-        if !present {
-            presence_miss_streak = presence_miss_streak.saturating_add(1);
-            if presence_miss_streak < TGA_PRESENCE_MISS_THRESHOLD {
-                Timer::after(EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS)).await;
-                continue;
-            }
-
-            {
-                let mut guard = TGA.lock();
-                if let Some(old) = guard.take() {
-                    *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
-                    log_tga_state("disconnected", &old);
+        let now = Instant::now();
+        if now >= next_presence_probe {
+            // Probe less frequently than heartbeat writes to keep LED cadence stable.
+            let present = {
+                let guard = TGA.lock();
+                guard.as_ref().map(is_present).unwrap_or(false)
+            };
+            if !present {
+                presence_miss_streak = presence_miss_streak.saturating_add(1);
+                if presence_miss_streak >= TGA_PRESENCE_MISS_THRESHOLD {
+                    {
+                        let mut guard = TGA.lock();
+                        if let Some(old) = guard.take() {
+                            *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
+                            log_tga_state("disconnected", &old);
+                        }
+                    }
+                    presence_miss_streak = 0;
+                    next_tick = Instant::now() + period;
+                    next_presence_probe = Instant::now() + presence_probe_period;
+                    Timer::after(EmbassyDuration::from_millis(TGA_OFFLINE_RETRY_MS)).await;
+                    continue;
                 }
+            } else {
+                presence_miss_streak = 0;
             }
-            presence_miss_streak = 0;
-            Timer::after(EmbassyDuration::from_millis(TGA_OFFLINE_RETRY_MS)).await;
-            continue;
+            next_presence_probe = now + presence_probe_period;
         }
-
-        presence_miss_streak = 0;
 
         let t = TGA_HEARTBEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
         // Send 0..31 then wrap.
         write_led_raw(t & 0x1F);
 
-        Timer::after(EmbassyDuration::from_millis(TGA_HEARTBEAT_PERIOD_MS)).await;
+        let now = Instant::now();
+        if next_tick <= now {
+            next_tick = now + period;
+        }
+        Timer::at(next_tick).await;
+        next_tick = next_tick + period;
     }
 }

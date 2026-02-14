@@ -24,7 +24,6 @@ pub extern crate alloc;
 mod allocators;
 mod cpu;
 mod audio;
-mod ai;
 mod disc;
 mod exceptions;
 mod limine;

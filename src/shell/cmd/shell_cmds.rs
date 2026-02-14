@@ -87,6 +87,10 @@ pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
     CommandAction::EnterGo
 }
 
+pub(crate) fn cmd_go_two(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+    CommandAction::EnterGoTwo
+}
+
 pub(crate) fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     crate::vga::draw_mandelbrot();
     ctx.io.write_str("mandel ok\r\n");

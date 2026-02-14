@@ -458,9 +458,31 @@ impl NvmeController {
             let status = (cqe.dw3 >> 16) as u16;
             let phase = (status & 0x1) != 0;
 
+            // Some physical controllers appear to present the first CQE with the
+            // opposite initial phase bit compared to the conventional software
+            // expectation. If we already submitted work and see a non-zero CQE at
+            // head=0, adopt the observed phase once and continue.
             if phase != q.cq_phase {
-                (None, q.cq_head, q.depth)
-            } else {
+                let may_adopt_phase = q.cq_head == 0
+                    && q.sq_tail != 0
+                    && (cqe.dw3 != 0 || cqe.dw0 != 0);
+                if may_adopt_phase {
+                    crate::log!(
+                        "nvme: {} qid={} adopting cq_phase quirk exp={} got={} cqe_dw0=0x{:08X} cqe_dw3=0x{:08X}\n",
+                        self.pci,
+                        qid,
+                        q.cq_phase as u8,
+                        phase as u8,
+                        cqe.dw0,
+                        cqe.dw3,
+                    );
+                    q.cq_phase = phase;
+                } else {
+                    return None;
+                }
+            }
+
+            if phase == q.cq_phase {
                 let got_cid = (cqe.dw3 & 0xFFFF) as u16;
 
                 q.cq_pop();
@@ -473,6 +495,8 @@ impl NvmeController {
                     q.cq_head,
                     q.depth,
                 )
+            } else {
+                (None, q.cq_head, q.depth)
             }
         };
 
@@ -1151,6 +1175,7 @@ struct NvmeBlockDevice {
     block_size: u32,
     block_count: u64,
     max_transfer_bytes: u64,
+    admin_fallback_mode: bool,
 }
 
 unsafe impl Send for NvmeBlockDevice {}
@@ -1162,6 +1187,10 @@ impl NvmeBlockDevice {
 
     fn is_small_probe_write(lba: u64, blocks: usize) -> bool {
         blocks <= 2 && lba <= 2
+    }
+
+    fn should_use_admin_fallback(&self) -> bool {
+        self.admin_fallback_mode
     }
 }
 
@@ -1207,13 +1236,42 @@ impl block::BlockDevice for NvmeBlockDevice {
                 let bytes_here = blocks_here * bs;
                 unsafe { write_bytes(dma_virt, 0, bytes_here) };
 
-                match self
-                    .ctrl
-                    .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(block::Error::Timeout) if Self::is_small_probe_read(cur_lba, blocks_here) => {
+                if self.should_use_admin_fallback() {
+                    match self.ctrl.admin_rw_async(
+                        NVME_NVM_READ,
+                        self.nsid,
+                        cur_lba,
+                        blocks_here as u16,
+                        dma_phys,
+                        bytes_here,
+                        NVME_ADMIN_PROBE_TIMEOUT_MS,
+                    ).await {
+                        Ok(cpl) if cpl.is_success() => {}
+                        Ok(cpl) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            crate::log!(
+                                "nvme: {} admin-fallback read failed status=0x{:04X} (sct={} sc={})\n",
+                                self.ctrl.pci,
+                                cpl.status,
+                                cpl.status_type(),
+                                cpl.status_code(),
+                            );
+                            return Err(block::Error::Io);
+                        }
+                        Err(e) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            return Err(e);
+                        }
+                    }
+                } else {
+
+                    match self
+                        .ctrl
+                        .io_rw_async(NVME_NVM_READ, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(block::Error::Timeout) if Self::is_small_probe_read(cur_lba, blocks_here) => {
                         // crate::log!(
                         //     "nvme: {} probe-read fallback admin opcode=0x{:02X} nsid={} slba={} nlb={}\n",
                         //     self.ctrl.pci,
@@ -1248,10 +1306,11 @@ impl block::BlockDevice for NvmeBlockDevice {
                                 return Err(e);
                             }
                         }
-                    }
-                    Err(e) => {
-                        dma::dealloc(dma_virt, max_io_bytes);
-                        return Err(e);
+                        }
+                        Err(e) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            return Err(e);
+                        }
                     }
                 }
 
@@ -1298,13 +1357,42 @@ impl block::BlockDevice for NvmeBlockDevice {
                     core::ptr::copy_nonoverlapping(remaining.as_ptr(), dma_virt, bytes_here);
                 }
 
-                match self
-                    .ctrl
-                    .io_rw_async(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(block::Error::Timeout) if Self::is_small_probe_write(cur_lba, blocks_here) => {
+                if self.should_use_admin_fallback() {
+                    match self.ctrl.admin_rw_async(
+                        NVME_NVM_WRITE,
+                        self.nsid,
+                        cur_lba,
+                        blocks_here as u16,
+                        dma_phys,
+                        bytes_here,
+                        NVME_ADMIN_PROBE_TIMEOUT_MS,
+                    ).await {
+                        Ok(cpl) if cpl.is_success() => {}
+                        Ok(cpl) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            crate::log!(
+                                "nvme: {} admin-fallback write failed status=0x{:04X} (sct={} sc={})\n",
+                                self.ctrl.pci,
+                                cpl.status,
+                                cpl.status_type(),
+                                cpl.status_code(),
+                            );
+                            return Err(block::Error::Io);
+                        }
+                        Err(e) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            return Err(e);
+                        }
+                    }
+                } else {
+
+                    match self
+                        .ctrl
+                        .io_rw_async(NVME_NVM_WRITE, self.nsid, cur_lba, blocks_here as u16, dma_phys, bytes_here)
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(block::Error::Timeout) if Self::is_small_probe_write(cur_lba, blocks_here) => {
                         crate::log!(
                             "nvme: {} probe-write fallback sync opcode=0x{:02X} nsid={} slba={} nlb={}\n",
                             self.ctrl.pci,
@@ -1339,10 +1427,11 @@ impl block::BlockDevice for NvmeBlockDevice {
                                 return Err(e);
                             }
                         }
-                    }
-                    Err(e) => {
-                        dma::dealloc(dma_virt, max_io_bytes);
-                        return Err(e);
+                        }
+                        Err(e) => {
+                            dma::dealloc(dma_virt, max_io_bytes);
+                            return Err(e);
+                        }
                     }
                 }
 
@@ -1368,8 +1457,57 @@ impl block::BlockDevice for NvmeBlockDevice {
     }
 
     fn flush<'a>(&'a mut self) -> block::BoxFuture<'a, block::Result<()>> {
-        Box::pin(async move { self.ctrl.io_flush_async(self.nsid).await })
+        Box::pin(async move {
+            if self.should_use_admin_fallback() {
+                let cpl = self
+                    .ctrl
+                    .admin_rw_async(NVME_NVM_FLUSH, self.nsid, 0, 0, 0, 0, 2000)
+                    .await?;
+                if cpl.is_success() {
+                    Ok(())
+                } else {
+                    Err(block::Error::Io)
+                }
+            } else {
+                self.ctrl.io_flush_async(self.nsid).await
+            }
+        })
     }
+}
+
+fn admin_selftest_read(
+    ctrl: &mut NvmeController,
+    pci_addr: block::PciAddress,
+    nsid: u32,
+    block_size: u32,
+) -> bool {
+    let bs = block_size as usize;
+    let bytes = bs.max(512);
+    let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) else {
+        crate::log!("nvme: {} admin-selftest: DMA alloc failed\n", pci_addr);
+        return false;
+    };
+
+    unsafe { write_bytes(dma_virt, 0, bytes) };
+    let ok = match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
+        Ok(cpl) if cpl.is_success() => true,
+        Ok(cpl) => {
+            crate::log!(
+                "nvme: {} admin-selftest read failed status=0x{:04X} (sct={} sc={})\n",
+                pci_addr,
+                cpl.status,
+                cpl.status_type(),
+                cpl.status_code(),
+            );
+            false
+        }
+        Err(e) => {
+            crate::log!("nvme: {} admin-selftest read failed: {:?}\n", pci_addr, e);
+            false
+        }
+    };
+    dma::dealloc(dma_virt, bytes);
+    ok
 }
 
 fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
@@ -1519,6 +1657,7 @@ pub fn probe_once() {
 
             // Strict gate: IO queue must complete at least one NVM READ before registration.
             let mut io_ready = io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
+            let mut admin_fallback_mode = false;
             if !io_ready {
                 crate::log!(
                     "nvme: {} io-selftest failed; attempting one controller reinit\n",
@@ -1573,15 +1712,23 @@ pub fn probe_once() {
 
                 io_ready = io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
                 if !io_ready {
-                    crate::log!(
-                        "nvme: {} IO queue not operational after reinit; skipping controller\n",
-                        pci_addr
-                    );
-                    crate::log!(
-                        "nvme: {} probe outcome: skipped (io-selftest failed)\n",
-                        pci_addr
-                    );
-                    continue;
+                    if admin_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size) {
+                        crate::log!(
+                            "nvme: {} IO queue still not operational; enabling admin-fallback mode\n",
+                            pci_addr
+                        );
+                        admin_fallback_mode = true;
+                    } else {
+                        crate::log!(
+                            "nvme: {} IO queue not operational after reinit; skipping controller\n",
+                            pci_addr
+                        );
+                        crate::log!(
+                            "nvme: {} probe outcome: skipped (io-selftest failed)\n",
+                            pci_addr
+                        );
+                        continue;
+                    }
                 }
 
                 crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
@@ -1616,6 +1763,7 @@ pub fn probe_once() {
                 block_size,
                 block_count: blocks,
                 max_transfer_bytes,
+                admin_fallback_mode,
             };
             let handle = block::register_device(desc, dev);
             crate::v::fs::trueosfs::request_mount_root(handle.clone());
@@ -1628,6 +1776,9 @@ pub fn probe_once() {
                 block_size,
                 max_transfer_bytes,
             );
+            if admin_fallback_mode {
+                crate::log!("nvme: {} registered in admin-fallback mode\n", pci_addr);
+            }
             crate::log!("nvme: {} probe outcome: registered\n", pci_addr);
             registered_any = true;
 
