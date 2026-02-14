@@ -571,6 +571,10 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
     0
 }
 
+unsafe extern "C" fn qjs_worker_threads_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+    qjs::workers::install_worker_threads_exports(ctx, m)
+}
+
 unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue, qjs::JSValue> {
     let global = qjs::JS_GetGlobalObject(ctx);
     let name = b"process\0";
@@ -1105,6 +1109,17 @@ pub unsafe fn load_native_module(
 
     let (init, exports): (qjs::JSModuleInitFunc, &[&[u8]]) = if name == b"complex" {
         (qjs_complex_module_init, &[b"make\0", b"add\0", b"square\0"])
+    } else if name == b"worker_threads" || name == b"node:worker_threads" {
+        (
+            qjs_worker_threads_module_init,
+            &[
+                b"Worker\0",
+                b"isMainThread\0",
+                b"parentPort\0",
+                b"threadId\0",
+                b"workerData\0",
+            ],
+        )
     } else if name == b"fs" {
         (
             qjs_fs_module_init,
@@ -1599,8 +1614,10 @@ pub(crate) unsafe fn normalize_with_mode(
         // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"
+            || spec == b"worker_threads"
             || spec == b"process"
             || spec == b"node:process"
+            || spec == b"node:worker_threads"
             || spec == b"path"
             || spec == b"node:path"
         {

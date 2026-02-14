@@ -125,6 +125,9 @@ pub extern "C" fn kmain() -> ! {
     if trueos_qjs::async_fs::ensure_service_started(&spawner) {
         crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
     } 
+
+    // Worker threads (MVP) reuse the current executor's spawner (no cross-core scheduling policy).
+    let _ = trueos_qjs::workers::ensure_service_started(&spawner);
     tga::init_once();
     net::init();
 
