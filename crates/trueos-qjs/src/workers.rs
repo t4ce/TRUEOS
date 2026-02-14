@@ -192,7 +192,15 @@ pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
     match ctx_role(ctx) {
         CtxRole::Main => {
             let map = WORKERS.lock();
-            map.values().any(|st| !st.to_parent.is_empty())
+            // From the main context, treat both:
+            // - pending worker -> parent messages (to_parent)
+            // - pending parent -> worker messages (to_worker)
+            // as work that should keep the pump/drain loop running.
+            //
+            // Without including `to_worker`, the REPL can return to the prompt
+            // immediately after `w.postMessage(...)` before the worker has a chance
+            // to run and respond.
+            map.values().any(|st| !st.to_parent.is_empty() || !st.to_worker.is_empty())
         }
         CtxRole::Worker(id) => {
             let map = WORKERS.lock();
