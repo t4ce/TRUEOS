@@ -29,7 +29,9 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 CARGO_BUILD_FLAGS ?=
 
-QEMU_ISO_FLAGS = -display sdl -vga std -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+# Default display path: virgl-capable virtio GPU (no legacy VGA).
+# Override with `QEMU_ISO_FLAGS=...` if you need a different display device.
+QEMU_ISO_FLAGS = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \

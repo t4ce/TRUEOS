@@ -132,7 +132,7 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
 
 #[cfg(feature = "gfx_virgl")]
 pub(crate) fn cmd_virgl_tri(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    crate::gfx::virtio_gpu_3d::demo_issue_draw_once();
+    crate::gfx::virtio_gpu_3d::demo_spin_triangle_60hz();
     CommandAction::None
 }
 

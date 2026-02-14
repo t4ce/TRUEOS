@@ -4,7 +4,9 @@ use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 
 pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let mut cmds: heapless::Vec<&'static str, 64> = heapless::Vec::new();
+    // Keep this comfortably above the total command count because `list_command_names()` includes
+    // dotted subcommands, and we filter them out below.
+    let mut cmds: heapless::Vec<&'static str, 256> = heapless::Vec::new();
     crate::shell::cmd::registry::list_command_names(&mut cmds);
     cmds.as_mut_slice().sort_unstable();
 
