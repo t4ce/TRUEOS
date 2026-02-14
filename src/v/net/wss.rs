@@ -91,10 +91,11 @@ impl WssConnection {
         let rng = ChaCha20Rng::from_seed(seed);
 
         let mut client = WebSocketClient::new_client(rng);
+        let origin = alloc::format!("https://{}", host);
         let options = WebSocketOptions {
             path: path.as_str(),
             host: host.as_str(),
-            origin: "",
+            origin: origin.as_str(),
             sub_protocols: None,
             additional_headers,
         };
@@ -138,7 +139,7 @@ impl WssConnection {
                             cmds.push(TlsCommand::Send {
                                 handle: h,
                                 data: handshake_buffer.clone(),
-                            }).ok();
+                            }).map_err(|_| WssError::Io)?;
                             break;
                             
                         }
@@ -190,7 +191,34 @@ impl WssConnection {
                                     });
                                 }
                                 Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
-                                Err(_) => return Err(WssError::Protocol),
+                                Err(e) => {
+                                    if let Ok(s) = core::str::from_utf8(handshake_response.as_slice()) {
+                                        if let Some(line_end) = s.find("\r\n") {
+                                            let line = &s[..line_end];
+                                            crate::log!(
+                                                "wss: handshake failed url={} status-line='{}' err={:?}\n",
+                                                url,
+                                                line,
+                                                e
+                                            );
+                                        } else {
+                                            crate::log!(
+                                                "wss: handshake failed url={} bytes={} err={:?}\n",
+                                                url,
+                                                handshake_response.len(),
+                                                e
+                                            );
+                                        }
+                                    } else {
+                                        crate::log!(
+                                            "wss: handshake failed url={} bytes={} err={:?}\n",
+                                            url,
+                                            handshake_response.len(),
+                                            e
+                                        );
+                                    }
+                                    return Err(WssError::Protocol);
+                                }
                             }
                         }
                     }
@@ -211,20 +239,28 @@ impl WssConnection {
     pub fn send(&mut self, text: &str) -> Result<(), WssError> {
         if self.closed || !self.connected { return Err(WssError::Closed); }
         let mut buf = [0u8; RX_BUF_SIZE];
-        let mut input = Vec::from(text.as_bytes());
 
-        let len = self.client.write(
-            WebSocketSendMessageType::Text, 
-            true, // fin
-            &mut buf, 
-            &mut input, 
-        ).map_err(|_| WssError::Io)?;
+        let len = self
+            .client
+            .write(
+                WebSocketSendMessageType::Text,
+                true, // fin
+                text.as_bytes(),
+                &mut buf,
+            )
+            .map_err(|e| {
+                crate::log!("wss: client.write failed err={:?}\n", e);
+                WssError::Io
+            })?;
         
         if let Some(h) = self.handle {
              self.cmds.push(TlsCommand::Send {
                 handle: h,
                 data: Vec::from(&buf[..len]),
-            }).map_err(|_| WssError::Io)?;
+            }).map_err(|_| {
+                crate::log!("wss: cmds.push Send failed (queue full?)\n");
+                WssError::Io
+            })?;
         }
         Ok(())
     }

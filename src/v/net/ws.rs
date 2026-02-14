@@ -56,10 +56,11 @@ impl WsConnection {
         let rng = ChaCha20Rng::from_seed(seed);
 
         let mut client = WebSocketClient::new_client(rng);
+        let origin = alloc::format!("http://{}", host);
         let options = WebSocketOptions {
             path: path.as_str(),
             host: host.as_str(),
-            origin: "",
+            origin: origin.as_str(),
             sub_protocols: None,
             additional_headers: None,
         };
@@ -93,7 +94,7 @@ impl WsConnection {
                              net.submit(Command::SendTcp {
                                 handle: h,
                                 data: ByteBuf::from_slice_trunc(&handshake_data),
-                            }).ok();
+                            }).map_err(|_| WsError::Io)?;
                             break;
                         }
                     }
@@ -128,7 +129,35 @@ impl WsConnection {
                                     break;
                                 }
                                 Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
-                                Err(_) => return Err(WsError::Protocol),
+                                Err(e) => {
+                                    // Most common failure in the wild: server returns 301/302 to https.
+                                    if let Ok(s) = core::str::from_utf8(rx_buf.as_slice()) {
+                                        if let Some(line_end) = s.find("\r\n") {
+                                            let line = &s[..line_end];
+                                            crate::log!(
+                                                "ws: handshake failed url={} status-line='{}' err={:?}\n",
+                                                url,
+                                                line,
+                                                e
+                                            );
+                                        } else {
+                                            crate::log!(
+                                                "ws: handshake failed url={} bytes={} err={:?}\n",
+                                                url,
+                                                rx_buf.len(),
+                                                e
+                                            );
+                                        }
+                                    } else {
+                                        crate::log!(
+                                            "ws: handshake failed url={} bytes={} err={:?}\n",
+                                            url,
+                                            rx_buf.len(),
+                                            e
+                                        );
+                                    }
+                                    return Err(WsError::Protocol);
+                                }
                             }
                         }
                     }
@@ -155,22 +184,28 @@ impl WsConnection {
     pub fn send(&mut self, text: &str) -> Result<(), WsError> {
         if self.closed || !self.connected { return Err(WsError::Closed); }
         let mut buf = [0u8; RX_BUF_SIZE];
-        
-        // Client side write requires mutable input for masking
-        let mut input = Vec::from(text.as_bytes());
 
-        let len = self.client.write(
-            WebSocketSendMessageType::Text,
-            true, // fin
-            &mut buf,
-            &mut input
-        ).map_err(|_| WsError::Io)?;
+        let len = self
+            .client
+            .write(
+                WebSocketSendMessageType::Text,
+                true, // fin
+                text.as_bytes(),
+                &mut buf,
+            )
+            .map_err(|e| {
+                crate::log!("ws: client.write failed err={:?}\n", e);
+                WsError::Io
+            })?;
 
         if let Some(h) = self.handle {
             self.net.submit(Command::SendTcp {
                 handle: h,
                 data: ByteBuf::from_slice_trunc(&buf[..len]),
-            }).map_err(|_| WsError::Io)?;
+            }).map_err(|_| {
+                crate::log!("ws: vnet SendTcp failed (queue full?)\n");
+                WsError::Io
+            })?;
         }
         Ok(())
     }

@@ -844,7 +844,9 @@ pub async fn http_trueosfs_task() {
                     }
                 }
                 api::Event::UdpPacket { .. } => {},
+                api::Event::UdpPacketV6 { .. } => {},
                 api::Event::IcmpReply { .. } => {},
+                api::Event::IcmpReplyV6 { .. } => {},
             }
         }
 
