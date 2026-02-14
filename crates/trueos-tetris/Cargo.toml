@@ -1,0 +1,13 @@
+[package]
+name = "trueos-tetris"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+trueos-v = { path = "../trueos-v" }

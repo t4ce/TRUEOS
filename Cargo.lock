@@ -36,6 +36,7 @@ dependencies = [
  "trueos-limloader",
  "trueos-math",
  "trueos-qjs",
+ "trueos-tetris",
  "trueos-v",
  "twoway",
  "unicode-normalization",
@@ -1684,6 +1685,13 @@ dependencies = [
  "libm",
  "spin 0.10.0",
  "trueos-math",
+]
+
+[[package]]
+name = "trueos-tetris"
+version = "0.1.0"
+dependencies = [
+ "trueos-v",
 ]
 
 [[package]]

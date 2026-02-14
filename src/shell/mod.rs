@@ -9,6 +9,7 @@ pub(crate) mod ecma48;
 pub(crate) mod cube;
 pub(crate) mod shellqjs;
 pub(crate) mod txt;
+pub(crate) mod shelltetris;
 pub(crate) mod table;
 
 pub(crate) mod cmd;
@@ -284,6 +285,7 @@ pub(crate) enum CommandAction {
     EnterCube,
     EnterIco,
     EnterGo,
+    EnterTetris,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
     Qjs { src: String<192> },
     RunNetbench { nic_index: usize },
@@ -767,6 +769,16 @@ async fn handle_command_action(
             } else {
                 io.write_str("\r\ntxt: invalid slot\r\n");
             }
+            io.write_str(crate::ecma48::CLEAR_SCREEN);
+            io.write_str(crate::ecma48::HOME);
+            write_banner(io, *term_cols);
+            apply_shell_scroll_region(io, *term_rows);
+        }
+        CommandAction::EnterTetris => {
+            *cube_mode = false;
+            let cols = *term_cols;
+            let rows = *term_rows;
+            crate::shell::shelltetris::run(io, cols, rows).await;
             io.write_str(crate::ecma48::CLEAR_SCREEN);
             io.write_str(crate::ecma48::HOME);
             write_banner(io, *term_cols);

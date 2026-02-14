@@ -23,4 +23,18 @@ pub mod vled {
     }
 }
 
+pub mod vgeom {
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    pub struct Point2i {
+        pub x: i16,
+        pub y: i16,
+    }
+
+    impl Point2i {
+        pub const fn new(x: i16, y: i16) -> Self {
+            Self { x, y }
+        }
+    }
+}
+
 pub mod vnet;
