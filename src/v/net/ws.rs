@@ -46,7 +46,7 @@ impl WsConnection {
             Err(_) => return Err(WsError::DnsFailed),
         };
 
-        let seq = WS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let seq = WS_SEQ.fetch_add(1, Ordering::Relaxed) as u64;
         let net = VNet::open(dev_idx).ok_or(WsError::ConnectFailed)?;
 
         let mut seed = [0u8; 32];

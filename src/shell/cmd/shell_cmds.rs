@@ -207,16 +207,16 @@ pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::Qjs { src: heapless::String::new() }
 }
 
-pub(crate) fn cmd_openai(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_ai(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
     let Some(args) = args else {
-        ctx.io.write_str("ai: usage ai <code> [first_message...]\r\n");
+        ctx.io.write_str("ai: usage ai <token> [first_message...]\r\n");
         return CommandAction::None;
     };
 
-    let code = args.get_str(0).unwrap_or("").trim();
-    if code.is_empty() || code == "-h" || code == "--help" {
-        ctx.io.write_str("ai: usage ai <code> [first_message...]\r\n");
-        ctx.io.write_str("ai: note: <code> is your API token; avoid committing it\r\n");
+    let token_raw = args.get_str(0).unwrap_or("").trim();
+    if token_raw.is_empty() || token_raw == "-h" || token_raw == "--help" {
+        ctx.io.write_str("ai: usage ai <token> [first_message...]\r\n");
+        ctx.io.write_str("ai: note: <token> is your API token; avoid committing it\r\n");
         ctx.io.write_str("ai: exit with .exit/.quit or Ctrl-C\r\n");
         return CommandAction::None;
     }
@@ -224,8 +224,8 @@ pub(crate) fn cmd_openai(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs
     let first = args.get_str(1).unwrap_or("").trim();
 
     let mut token: heapless::String<192> = heapless::String::new();
-    if token.push_str(code).is_err() {
-        ctx.io.write_str("ai: code too long\r\n");
+    if token.push_str(token_raw).is_err() {
+        ctx.io.write_str("ai: token too long\r\n");
         return CommandAction::None;
     }
 

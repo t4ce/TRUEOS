@@ -2,9 +2,10 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use super::cube::{CubeState, WireShape};
-use super::{CommandAction, PendingAction, ShellBackend, ShellMode};
+use super::{CommandAction, PendingAction, ShellBackend, ShellIo, ShellMode};
 
 use crate::v::net::wss::WssConnection;
+use crate::shell::output::ReverseOutput;
 
 pub(super) async fn handle_command_action(
     action: CommandAction,
@@ -72,7 +73,7 @@ pub(super) async fn handle_command_action(
             *mode = ShellMode::Idle;
         }
         CommandAction::OpenAiChat { token, first } => {
-            handle_openai_realtime_chat(io, token.as_str(), first.as_str()).await;
+            handle_ai_realtime_chat(io, *term_cols, *term_rows, history, token.as_str(), first.as_str()).await;
         }
         CommandAction::None => {}
     }
@@ -137,12 +138,41 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<alloc::string::
     None
 }
 
-async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str, first: &str) {
+fn log_prefixed_lines(out: &ReverseOutput<'_>, prefix: &str, msg: &str) {
+    if msg.is_empty() {
+        out.write_str(prefix);
+        out.write_str("\n");
+        return;
+    }
+
+    let mut first_line = true;
+    for line in msg.split('\n') {
+        if first_line {
+            out.write_str(prefix);
+            first_line = false;
+        } else {
+            out.write_str(prefix);
+        }
+        out.write_str(line);
+        out.write_str("\n");
+    }
+}
+
+async fn handle_ai_realtime_chat(
+    io: &'static dyn ShellBackend,
+    term_cols: usize,
+    term_rows: usize,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+    token: &str,
+    first: &str,
+) {
     // Model string is intentionally fixed per user request.
-    const MODEL: &str = "gpt-5.2-codex";
+    const MODEL: &str = "gpt-5.3-codex";
     const BETA_HDR: &str = "OpenAI-Beta: realtime=v1";
 
-    io.write_str("\r\nopenai: connecting... (type .exit or Ctrl-C to leave)\r\n");
+    let out = ReverseOutput::new(io, term_cols, term_rows, history);
+
+    out.write_str("ai: connecting... (type .exit or Ctrl-C to leave)\n");
 
     let url = alloc::format!("wss://api.openai.com/v1/realtime?model={}", MODEL);
     let auth = alloc::format!("Authorization: Bearer {}", token);
@@ -151,7 +181,7 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
     let mut wss = match WssConnection::connect_with_headers(url.as_str(), &headers).await {
         Ok(c) => c,
         Err(e) => {
-            io.write_fmt(format_args!("openai: connect failed {:?}\r\n", e));
+            out.write_fmt(format_args!("ai: connect failed {:?}\n", e));
             return;
         }
     };
@@ -162,6 +192,7 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
     );
 
     if !first.trim().is_empty() {
+        log_prefixed_lines(&out, "you: ", first.trim());
         let mut esc = alloc::string::String::new();
         json_escape_into(&mut esc, first.trim());
         let msg = alloc::format!(
@@ -172,15 +203,22 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
         let _ = wss.send("{\"type\":\"response.create\"}");
     }
 
-    io.write_str("openai: connected\r\n");
-    io.write_str("oa> ");
+    out.write_str("ai: connected\n");
+    io.write_str("ai> ");
 
     let mut line = alloc::string::String::new();
     let mut saw_cr = false;
     let mut started_output = false;
+    let mut response_buf = alloc::string::String::new();
+    let mut response_active = false;
 
     loop {
         while let Some(frame) = wss.recv() {
+            if frame.contains("\"type\":\"response.create\"") {
+                response_active = true;
+                response_buf.clear();
+            }
+
             if let Some(delta) = extract_json_string_field(&frame, "\"delta\":")
                 .or_else(|| extract_json_string_field(&frame, "\"text\":"))
             {
@@ -189,6 +227,24 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
                     started_output = true;
                 }
                 io.write_str(delta.as_str());
+                if response_active {
+                    response_buf.push_str(delta.as_str());
+                }
+            }
+
+            // Heuristic end markers.
+            if frame.contains("\"type\":\"response.output_text.done\"")
+                || frame.contains("\"type\":\"response.done\"")
+                || frame.contains("\"type\":\"response.completed\"")
+            {
+                response_active = false;
+                if !response_buf.trim().is_empty() {
+                    log_prefixed_lines(&out, "ai: ", response_buf.trim_end());
+                    response_buf.clear();
+                }
+                // Restore prompt after logging into reverse buffer.
+                io.write_str("\r\nai> ");
+                started_output = false;
             }
         }
 
@@ -212,14 +268,32 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
                     started_output = false;
 
                     if input.eq_ignore_ascii_case(".exit") || input.eq_ignore_ascii_case(".quit") {
-                        io.write_str("openai: bye\r\n");
+                        if !response_buf.trim().is_empty() {
+                            response_active = false;
+                            log_prefixed_lines(&out, "ai: ", response_buf.trim_end());
+                            response_buf.clear();
+                        }
+                        out.write_str("ai: bye\n");
                         return;
                     }
 
                     if input.is_empty() {
-                        io.write_str("oa> ");
+                        if !response_buf.trim().is_empty() {
+                            response_active = false;
+                            log_prefixed_lines(&out, "ai: ", response_buf.trim_end());
+                            response_buf.clear();
+                        }
+                        io.write_str("ai> ");
                         continue;
                     }
+
+                    if !response_buf.trim().is_empty() {
+                        response_active = false;
+                        log_prefixed_lines(&out, "ai: ", response_buf.trim_end());
+                        response_buf.clear();
+                    }
+
+                    log_prefixed_lines(&out, "you: ", input.as_str());
 
                     let mut esc = alloc::string::String::new();
                     json_escape_into(&mut esc, input.as_str());
@@ -228,11 +302,13 @@ async fn handle_openai_realtime_chat(io: &'static dyn ShellBackend, token: &str,
                         esc
                     );
                     if wss.send(&msg).is_err() || wss.send("{\"type\":\"response.create\"}").is_err() {
-                        io.write_str("openai: send failed\r\n");
+                        out.write_str("ai: send failed\n");
                         return;
                     }
 
-                    io.write_str("oa> ");
+                    response_active = true;
+                    response_buf.clear();
+                    io.write_str("ai> ");
                 }
                 0x08 | 0x7F => {
                     if !line.is_empty() {
