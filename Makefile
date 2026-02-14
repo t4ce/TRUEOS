@@ -29,13 +29,10 @@ QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 
 CARGO_BUILD_FLAGS ?=
 
-QEMU_GPU_FLAGS ?= -vga none -device virtio-vga-gl
-
-QEMU_ISO_FLAGS = -display sdl,gl=on $(QEMU_GPU_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+QEMU_ISO_FLAGS = -display sdl -vga std -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	$(QEMU_VFIO_FLAGS) \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
@@ -47,10 +44,6 @@ QEMU_USB_FLAGS = \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 
 
-# Optional host PCI passthrough (VFIO). Example:
-#   make run QEMU_VFIO_FLAGS='-device vfio-pci,host=0000:06:00.0,rombar=1'
-QEMU_VFIO_FLAGS ?=
-	
 #-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
