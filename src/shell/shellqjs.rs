@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -888,7 +888,7 @@ pub(crate) async fn repl_shell(
             }
 
             if src == "help" || src == "h" || src == ".help" || src == ".h" || src == "?" {
-                help(&sys);
+                help_with_term_cols(&sys, term_cols);
                 continue;
             }
             if src == "exit" || src == "quit" || src == ".exit" || src == ".quit" {
@@ -959,17 +959,30 @@ pub(crate) async fn repl_shell(
 }
 
 pub(crate) fn help(io: &dyn ShellIo) {
-    // Compact, readable table for the reverse shell display.
-    const CMD_W: usize = 34;
-    const DESC_W: usize = 64;
+    // Fallback when we don't know the current terminal width.
+    help_with_term_cols(io, 200);
+}
+
+pub(crate) fn help_with_term_cols(io: &dyn ShellIo, term_cols: usize) {
+    // Use the full available terminal width (same idea as `tlb` tables).
+    // ReverseOutput reserves 2 columns for the scrollbar/border.
+    let term_width = term_cols.saturating_sub(2);
+    // Two spaces after each column in Table.
+    let min_desc = 20usize;
+    let max_cmd = term_width.saturating_sub(min_desc + 4);
+    let mut cmd_width = (term_width * 2) / 3;
+    cmd_width = core::cmp::max(24, cmd_width);
+    cmd_width = core::cmp::min(cmd_width, core::cmp::max(24, max_cmd));
+    let desc_width = term_width.saturating_sub(cmd_width + 4).max(min_desc);
+
     let cols = [
         TableColumn {
             header: "Cmd",
-            width: CMD_W,
+            width: cmd_width,
         },
         TableColumn {
             header: "Description",
-            width: DESC_W,
+            width: desc_width,
         },
     ];
 
@@ -1169,12 +1182,11 @@ pub(crate) async fn eval_bytes_opts_async(
         let rt = vm.rt_ptr();
         let ctx = vm.ctx_ptr();
 
-        let backend_ref: &'static dyn ShellBackend = io;
-        let opaque = Box::new(QjsShellOpaque {
+        let backend_ref: &dyn ShellBackend = io;
+        let opaque = QjsShellOpaque {
             io_ref: (&backend_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
-        });
-        let opaque_ptr = Box::into_raw(opaque);
-        trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
+        };
+        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
 
         install_qjs_shell_globals(ctx);
 
@@ -1219,11 +1231,7 @@ pub(crate) async fn eval_bytes_opts_async(
         trueos_qjs::async_ops::drain_all_for_context(ctx);
         trueos_qjs::workers::drain_all_for_context(ctx);
 
-        let opaque_ptr = trueos_qjs::JS_GetContextOpaque(ctx) as *mut QjsShellOpaque;
-        if !opaque_ptr.is_null() {
-            trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
-            drop(Box::from_raw(opaque_ptr));
-        }
+        trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);
     }
 }
