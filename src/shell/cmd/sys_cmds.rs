@@ -130,6 +130,12 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
     CommandAction::None
 }
 
+#[cfg(feature = "gfx_virgl")]
+pub(crate) fn cmd_virgl_tri(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+    crate::gfx::virtio_gpu_3d::demo_issue_draw_once();
+    CommandAction::None
+}
+
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",

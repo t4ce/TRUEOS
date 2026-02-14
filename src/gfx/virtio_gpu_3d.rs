@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use alloc::vec::Vec;
 use core::sync::atomic::{fence, Ordering};
 
 use crate::{pci, wait};
@@ -36,13 +37,111 @@ const VIRTIO_PCI_CAP_ISR_CFG: u8 = 3;
 const VIRTIO_PCI_CAP_DEVICE_CFG: u8 = 4;
 
 // Virtio-gpu command/response ids (subset).
+const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
+const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
 const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
 const VIRTIO_GPU_CMD_RESOURCE_CREATE_3D: u32 = 0x0201;
 const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0203;
+const VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE: u32 = 0x0204;
+const VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE: u32 = 0x0205;
 const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
+
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
+const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 
 const VIRTIO_GPU_FLAG_FENCE: u32 = 1;
+// --- Minimal virgl/Gallium constants we need for a triangle ---
+// From virglrenderer 1.0.0 headers (Gallium subset):
+const PIPE_SHADER_VERTEX: u32 = 0;
+const PIPE_SHADER_FRAGMENT: u32 = 1;
+const PIPE_PRIM_TRIANGLES: u32 = 4;
+
+const PIPE_CLEAR_COLOR0: u32 = 1 << 2;
+const PIPE_MASK_RGBA: u32 = 0xF;
+
+const PIPE_BUFFER: u32 = 0;
+const PIPE_TEXTURE_2D: u32 = 2;
+
+const PIPE_BIND_RENDER_TARGET: u32 = 1 << 1;
+const PIPE_BIND_BLENDABLE: u32 = 1 << 2;
+const PIPE_BIND_VERTEX_BUFFER: u32 = 1 << 4;
+const PIPE_BIND_DISPLAY_TARGET: u32 = 1 << 8;
+const PIPE_BIND_SCANOUT: u32 = 1 << 14;
+
+// Virgl format IDs (see virgl_hw.h):
+const VIRGL_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+const VIRGL_FORMAT_R8_UNORM: u32 = 64;
+const VIRGL_FORMAT_R32G32B32A32_FLOAT: u32 = 31;
+
+// --- Virgl protocol (see virgl_protocol.h) ---
+const VIRGL_OBJECT_BLEND: u8 = 1;
+const VIRGL_OBJECT_RASTERIZER: u8 = 2;
+const VIRGL_OBJECT_DSA: u8 = 3;
+const VIRGL_OBJECT_SHADER: u8 = 4;
+const VIRGL_OBJECT_VERTEX_ELEMENTS: u8 = 5;
+const VIRGL_OBJECT_SURFACE: u8 = 8;
+
+const VIRGL_CCMD_CREATE_OBJECT: u8 = 1;
+const VIRGL_CCMD_BIND_OBJECT: u8 = 2;
+const VIRGL_CCMD_SET_VIEWPORT_STATE: u8 = 4;
+const VIRGL_CCMD_SET_FRAMEBUFFER_STATE: u8 = 5;
+const VIRGL_CCMD_SET_VERTEX_BUFFERS: u8 = 6;
+const VIRGL_CCMD_CLEAR: u8 = 7;
+const VIRGL_CCMD_DRAW_VBO: u8 = 8;
+const VIRGL_CCMD_RESOURCE_INLINE_WRITE: u8 = 9;
+const VIRGL_CCMD_BIND_SHADER: u8 = 29;
+const VIRGL_CCMD_LINK_SHADER: u8 = 50;
+
+const VIRGL_LINK_SHADER_SIZE: u32 = 6;
+
+const VIRGL_OBJ_BLEND_SIZE: u32 = 11;
+const VIRGL_OBJ_DSA_SIZE: u32 = 5;
+const VIRGL_OBJ_RS_SIZE: u32 = 9;
+const VIRGL_OBJ_SURFACE_SIZE: u32 = 5;
+
+fn virgl_cmd0(cmd: u8, obj: u8, len_dwords: u32) -> u32 {
+    (cmd as u32) | ((obj as u32) << 8) | ((len_dwords as u32) << 16)
+}
+
+fn fui(v: f32) -> u32 {
+    u32::from_le_bytes(v.to_le_bytes())
+}
+
+struct VirglCmdBuf {
+    dwords: Vec<u32>,
+}
+
+impl VirglCmdBuf {
+    fn new() -> Self {
+        Self { dwords: Vec::new() }
+    }
+
+    fn push(&mut self, v: u32) {
+        self.dwords.push(v);
+    }
+
+    fn push_bytes_padded(&mut self, bytes: &[u8]) {
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut chunk = [0u8; 4];
+            let take = (bytes.len() - i).min(4);
+            chunk[..take].copy_from_slice(&bytes[i..i + take]);
+            self.dwords.push(u32::from_le_bytes(chunk));
+            i += take;
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            core::slice::from_raw_parts(
+                self.dwords.as_ptr() as *const u8,
+                self.dwords.len() * 4,
+            )
+        }
+    }
+}
+
 
 // Virtio queues.
 const QUEUE_CONTROL: u16 = 0;
@@ -456,11 +555,81 @@ struct CtrlHdr {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+struct Rect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+const MAX_SCANOUTS: usize = 16;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct DisplayOne {
+    r: Rect,
+    enabled: u32,
+    flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct RespDisplayInfo {
+    hdr: CtrlHdr,
+    pmodes: [DisplayOne; MAX_SCANOUTS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdGetDisplayInfo {
+    hdr: CtrlHdr,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdSetScanout {
+    hdr: CtrlHdr,
+    r: Rect,
+    scanout_id: u32,
+    resource_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdResourceFlush {
+    hdr: CtrlHdr,
+    r: Rect,
+    resource_id: u32,
+    padding: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct CmdCtxCreate {
     hdr: CtrlHdr,
-    // Spec: u32 debug_name_len; u32 context_init; followed by optional bytes.
+    // Linux virtio_gpu.h: nlen/context_init + fixed debug_name[64]
     debug_name_len: u32,
     context_init: u32,
+    debug_name: [u8; 64],
+}
+
+impl Default for CmdCtxCreate {
+    fn default() -> Self {
+        Self {
+            hdr: CtrlHdr::default(),
+            debug_name_len: 0,
+            context_init: 0,
+            debug_name: [0u8; 64],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CmdCtxResource {
+    hdr: CtrlHdr,
+    resource_id: u32,
+    padding: u32,
 }
 
 #[repr(C)]
@@ -566,6 +735,92 @@ impl VirtioGpu3d {
             },
             debug_name_len: 0,
             context_init: 0,
+            debug_name: [0u8; 64],
+        };
+        self.ctrl_submit_bytes(as_bytes(&req))
+    }
+
+    pub fn ctx_attach_resource(&mut self, ctx_id: u32, resource_id: u32) -> bool {
+        let req = CmdCtxResource {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE,
+                flags: 0,
+                fence_id: 0,
+                ctx_id,
+                padding: 0,
+            },
+            resource_id,
+            padding: 0,
+        };
+        self.ctrl_submit_bytes(as_bytes(&req))
+    }
+
+    pub fn ctx_detach_resource(&mut self, ctx_id: u32, resource_id: u32) -> bool {
+        let req = CmdCtxResource {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE,
+                flags: 0,
+                fence_id: 0,
+                ctx_id,
+                padding: 0,
+            },
+            resource_id,
+            padding: 0,
+        };
+        self.ctrl_submit_bytes(as_bytes(&req))
+    }
+
+    pub fn get_display_info(&mut self) -> Option<(u32, u32, u32)> {
+        let req = CmdGetDisplayInfo {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_GET_DISPLAY_INFO,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+        };
+        let resp_type = self.ctrl_submit_bytes_ret_type(as_bytes(&req))?;
+        if resp_type != VIRTIO_GPU_RESP_OK_DISPLAY_INFO {
+            return None;
+        }
+        let info = unsafe { &*(self.resp.virt() as *const RespDisplayInfo) };
+        for (i, m) in info.pmodes.iter().enumerate() {
+            if m.enabled != 0 && m.r.width != 0 && m.r.height != 0 {
+                return Some((i as u32, m.r.width, m.r.height));
+            }
+        }
+        Some((0, 1024, 768))
+    }
+
+    pub fn set_scanout(&mut self, scanout_id: u32, resource_id: u32, width: u32, height: u32) -> bool {
+        let req = CmdSetScanout {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_SET_SCANOUT,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            r: Rect { x: 0, y: 0, width, height },
+            scanout_id,
+            resource_id,
+        };
+        self.ctrl_submit_bytes(as_bytes(&req))
+    }
+
+    pub fn resource_flush(&mut self, resource_id: u32, width: u32, height: u32) -> bool {
+        let req = CmdResourceFlush {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_RESOURCE_FLUSH,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            r: Rect { x: 0, y: 0, width, height },
+            resource_id,
+            padding: 0,
         };
         self.ctrl_submit_bytes(as_bytes(&req))
     }
@@ -673,6 +928,23 @@ impl VirtioGpu3d {
         self.ctrl_submit_desc_chain(req_bytes.len())
     }
 
+    fn ctrl_submit_bytes_ret_type(&mut self, req_bytes: &[u8]) -> Option<u32> {
+        if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
+            return None;
+        }
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(req_bytes.as_ptr(), self.req.virt(), req_bytes.len());
+            core::ptr::write_bytes(self.resp.virt(), 0, self.resp.len());
+        }
+
+        if !self.ctrl_submit_desc_chain(req_bytes.len()) {
+            return None;
+        }
+        let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
+        Some(resp_hdr.type_)
+    }
+
     fn ctrl_submit_desc_chain(&mut self, req_len: usize) -> bool {
         // Fixed descriptor pair (0 -> req, 1 -> resp). Single outstanding.
         unsafe {
@@ -707,8 +979,384 @@ impl VirtioGpu3d {
         }
 
         let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
-        resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA
+        resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_DISPLAY_INFO
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    pos: [f32; 4],
+    color: [f32; 4],
+}
+
+const VS_TEXT: &str =
+    "VERT\n\
+DCL IN[0]\n\
+DCL IN[1]\n\
+DCL OUT[0], POSITION\n\
+DCL OUT[1], COLOR\n\
+  0: MOV OUT[1], IN[1]\n\
+  1: MOV OUT[0], IN[0]\n\
+  2: END\n";
+
+const FS_TEXT: &str =
+    "FRAG\n\
+DCL IN[0], COLOR, LINEAR\n\
+DCL OUT[0], COLOR\n\
+  0: MOV OUT[0], IN[0]\n\
+  1: END\n";
+
+fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &str) {
+    // Matches virgl_encode_shader_state() with a provided shad_str: num_tokens is a dummy.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.push(0);
+
+    let shader_len = bytes.len() as u32;
+    let num_tokens = 300u32;
+    let offlen = shader_len & 0x7fff_ffff;
+
+    // Base header size=5 dwords: handle, type, offlen, num_tokens, num_outputs.
+    let len_dwords = 5 + ((bytes.len() as u32 + 3) / 4);
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SHADER, len_dwords));
+    buf.push(handle);
+    buf.push(shader_type);
+    buf.push(offlen);
+    buf.push(num_tokens);
+    buf.push(0); // num streamout outputs
+    buf.push_bytes_padded(&bytes);
+}
+
+fn encode_bind_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_BIND_SHADER, 0, 2));
+    buf.push(handle);
+    buf.push(shader_type);
+}
+
+fn encode_link_shader(buf: &mut VirglCmdBuf, vs: u32, fs: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_LINK_SHADER, 0, VIRGL_LINK_SHADER_SIZE));
+    buf.push(vs);
+    buf.push(fs);
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+}
+
+fn encode_create_surface(buf: &mut VirglCmdBuf, surf_handle: u32, res_handle: u32, format: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SURFACE, VIRGL_OBJ_SURFACE_SIZE));
+    buf.push(surf_handle);
+    buf.push(res_handle);
+    buf.push(format);
+    buf.push(0); // level
+    buf.push(0); // first_layer | (last_layer<<16)
+}
+
+fn encode_set_framebuffer(buf: &mut VirglCmdBuf, surf_handle: u32) {
+    // VIRGL_SET_FRAMEBUFFER_STATE_SIZE(nr_cbufs) = nr + 2
+    let len = 1 + 2;
+    buf.push(virgl_cmd0(VIRGL_CCMD_SET_FRAMEBUFFER_STATE, 0, len));
+    buf.push(1); // nr_cbufs
+    buf.push(0); // zsbuf
+    buf.push(surf_handle);
+}
+
+fn encode_clear_color(buf: &mut VirglCmdBuf, r: f32, g: f32, b: f32, a: f32) {
+    // VIRGL_OBJ_CLEAR_SIZE = 8 dwords
+    buf.push(virgl_cmd0(VIRGL_CCMD_CLEAR, 0, 8));
+    buf.push(PIPE_CLEAR_COLOR0);
+    buf.push(fui(r));
+    buf.push(fui(g));
+    buf.push(fui(b));
+    buf.push(fui(a));
+    // depth is a double in the original encoder; we don't clear depth/stencil.
+    buf.push(0);
+    buf.push(0);
+}
+
+fn encode_create_vertex_elements(buf: &mut VirglCmdBuf, ve_handle: u32) {
+    // VIRGL_OBJ_VERTEX_ELEMENTS_SIZE(num) = num*4 + 1
+    let num = 2u32;
+    let len = 1 + num * 4;
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_VERTEX_ELEMENTS, len));
+    buf.push(ve_handle);
+
+    // element 0: position vec4 at offset 0 from vbo
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+    buf.push(VIRGL_FORMAT_R32G32B32A32_FLOAT);
+
+    // element 1: color vec4 at offset 16
+    buf.push(16);
+    buf.push(0);
+    buf.push(0);
+    buf.push(VIRGL_FORMAT_R32G32B32A32_FLOAT);
+}
+
+fn encode_bind_object(buf: &mut VirglCmdBuf, object: u8, handle: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_BIND_OBJECT, object, 1));
+    buf.push(handle);
+}
+
+fn encode_set_vertex_buffer(buf: &mut VirglCmdBuf, stride: u32, offset: u32, res_handle: u32) {
+    // VIRGL_SET_VERTEX_BUFFERS_SIZE(num) = num*3
+    buf.push(virgl_cmd0(VIRGL_CCMD_SET_VERTEX_BUFFERS, 0, 3));
+    buf.push(stride);
+    buf.push(offset);
+    buf.push(res_handle);
+}
+
+fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8]) {
+    // Matches virgl_encoder_inline_send_box for a PIPE_BUFFER upload.
+    // cmd length is data_dwords + 11
+    let data_dwords = ((data.len() as u32) + 3) / 4;
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_RESOURCE_INLINE_WRITE,
+        0,
+        data_dwords + 11,
+    ));
+    buf.push(res_handle);
+    buf.push(0); // level
+    buf.push(0); // usage
+    buf.push(data.len() as u32); // stride
+    buf.push(0); // layer_stride
+    buf.push(0); // box x
+    buf.push(0); // box y
+    buf.push(0); // box z
+    buf.push(data.len() as u32); // box width
+    buf.push(1); // box height
+    buf.push(1); // box depth
+    buf.push_bytes_padded(data);
+}
+
+fn encode_set_viewport(buf: &mut VirglCmdBuf, width: u32, height: u32) {
+    // VIRGL_SET_VIEWPORT_STATE_SIZE(num) = 6*num + 1
+    buf.push(virgl_cmd0(VIRGL_CCMD_SET_VIEWPORT_STATE, 0, 7));
+    buf.push(0); // start_slot
+
+    let half_w = width as f32 / 2.0;
+    let half_h = height as f32 / 2.0;
+    let half_d = 0.5;
+
+    // scale[3]
+    buf.push(fui(half_w));
+    buf.push(fui(half_h));
+    buf.push(fui(half_d));
+    // translate[3]
+    buf.push(fui(half_w));
+    buf.push(fui(half_h));
+    buf.push(fui(half_d));
+}
+
+fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_BLEND, VIRGL_OBJ_BLEND_SIZE));
+    buf.push(blend_handle);
+    buf.push(0); // s0
+    buf.push(0); // s1
+    for i in 0..8u32 {
+        let mut rt = 0u32;
+        if i == 0 {
+            rt |= (PIPE_MASK_RGBA & 0xF) << 27;
+        }
+        buf.push(rt);
+    }
+}
+
+fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_DSA, VIRGL_OBJ_DSA_SIZE));
+    buf.push(dsa_handle);
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+}
+
+fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_RASTERIZER, VIRGL_OBJ_RS_SIZE));
+    buf.push(rs_handle);
+
+    let mut s0 = 0u32;
+    // depth_clip=1
+    s0 |= 1 << 1;
+    // cull_face=PIPE_FACE_NONE(0) at bits 8..9 -> 0
+    // half_pixel_center=1
+    s0 |= 1 << 29;
+    // bottom_edge_rule=1
+    s0 |= 1 << 30;
+    buf.push(s0);
+    buf.push(fui(1.0)); // point_size
+    buf.push(0); // sprite_coord_enable
+    buf.push(0); // s3
+    buf.push(fui(1.0)); // line_width
+    buf.push(fui(0.0)); // offset_units
+    buf.push(fui(0.0)); // offset_scale
+    buf.push(fui(0.0)); // offset_clamp
+}
+
+fn encode_draw_vbo(buf: &mut VirglCmdBuf) {
+    // VIRGL_DRAW_VBO_SIZE = 12
+    buf.push(virgl_cmd0(VIRGL_CCMD_DRAW_VBO, 0, 12));
+    buf.push(0); // start
+    buf.push(3); // count
+    buf.push(PIPE_PRIM_TRIANGLES);
+    buf.push(0); // indexed
+    buf.push(1); // instance_count
+    buf.push(0); // index_bias
+    buf.push(0); // start_instance
+    buf.push(0); // primitive_restart
+    buf.push(0); // restart_index
+    buf.push(0); // min_index
+    buf.push(0); // max_index
+    buf.push(0); // count_from_so
+}
+
+/// Manual bring-up helper: create a virgl context and issue a single DRAW_VBO triangle.
+///
+/// This is intentionally not wired into the default boot path; call it from a debug hook.
+pub fn demo_issue_draw_once() {
+    let mut gpu = match VirtioGpu3d::init_first() {
+        Some(g) => g,
+        None => {
+            crate::log!("virgl: virtio-gpu 3d init failed\n");
+            return;
+        }
+    };
+
+    let (scanout, w, h) = match gpu.get_display_info() {
+        Some(v) => v,
+        None => {
+            crate::log!("virgl: display info unavailable\n");
+            return;
+        }
+    };
+
+    let ctx_id = 1u32;
+    if !gpu.ctx_create(ctx_id) {
+        crate::log!("virgl: ctx_create failed\n");
+        return;
+    }
+
+    // Resource IDs are virtio-gpu resource handles used by virgl commands.
+    let rt_res: u32 = 1;
+    let vbo_res: u32 = 2;
+
+    let rt_bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE | PIPE_BIND_SCANOUT | PIPE_BIND_DISPLAY_TARGET;
+    if !gpu.resource_create_3d(
+        ctx_id,
+        rt_res,
+        PIPE_TEXTURE_2D,
+        VIRGL_FORMAT_B8G8R8X8_UNORM,
+        rt_bind,
+        w,
+        h,
+        1,
+        1,
+        0,
+        0,
+        0,
+    ) {
+        crate::log!("virgl: rt resource_create_3d failed\n");
+        return;
+    }
+
+    if !gpu.resource_create_3d(
+        ctx_id,
+        vbo_res,
+        PIPE_BUFFER,
+        VIRGL_FORMAT_R8_UNORM,
+        PIPE_BIND_VERTEX_BUFFER,
+        core::mem::size_of::<[Vertex; 3]>() as u32,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+    ) {
+        crate::log!("virgl: vbo resource_create_3d failed\n");
+        return;
+    }
+
+    let _ = gpu.ctx_attach_resource(ctx_id, rt_res);
+    let _ = gpu.ctx_attach_resource(ctx_id, vbo_res);
+
+    // Present target.
+    let _ = gpu.set_scanout(scanout, rt_res, w, h);
+
+    // Build and submit virgl command stream.
+    let mut cmd = VirglCmdBuf::new();
+
+    // Create render surface and framebuffer.
+    let surf_handle = 10u32;
+    encode_create_surface(&mut cmd, surf_handle, rt_res, VIRGL_FORMAT_B8G8R8X8_UNORM);
+    encode_set_framebuffer(&mut cmd, surf_handle);
+
+    encode_clear_color(&mut cmd, 0.0, 0.1, 0.2, 1.0);
+
+    let ve_handle = 11u32;
+    encode_create_vertex_elements(&mut cmd, ve_handle);
+    encode_bind_object(&mut cmd, VIRGL_OBJECT_VERTEX_ELEMENTS, ve_handle);
+
+    // Upload vertex data.
+    let verts = [
+        Vertex {
+            pos: [0.0, 0.65, 0.0, 1.0],
+            color: [1.0, 0.0, 0.0, 1.0],
+        },
+        Vertex {
+            pos: [-0.7, -0.55, 0.0, 1.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+        },
+        Vertex {
+            pos: [0.7, -0.55, 0.0, 1.0],
+            color: [0.0, 0.0, 1.0, 1.0],
+        },
+    ];
+    let vert_bytes: &[u8] = unsafe {
+        core::slice::from_raw_parts(
+            verts.as_ptr() as *const u8,
+            core::mem::size_of_val(&verts),
+        )
+    };
+    encode_inline_write_buffer(&mut cmd, vbo_res, vert_bytes);
+    encode_set_vertex_buffer(
+        &mut cmd,
+        core::mem::size_of::<Vertex>() as u32,
+        0,
+        vbo_res,
+    );
+
+    // Shaders.
+    let vs_handle = 20u32;
+    let fs_handle = 21u32;
+    encode_shader(&mut cmd, vs_handle, PIPE_SHADER_VERTEX, VS_TEXT);
+    encode_bind_shader(&mut cmd, vs_handle, PIPE_SHADER_VERTEX);
+    encode_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT, FS_TEXT);
+    encode_bind_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT);
+    encode_link_shader(&mut cmd, vs_handle, fs_handle);
+
+    // Fixed-ish state.
+    let blend_handle = 30u32;
+    encode_create_blend(&mut cmd, blend_handle);
+    encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+    let dsa_handle = 31u32;
+    encode_create_dsa(&mut cmd, dsa_handle);
+    encode_bind_object(&mut cmd, VIRGL_OBJECT_DSA, dsa_handle);
+    let rs_handle = 32u32;
+    encode_create_rasterizer(&mut cmd, rs_handle);
+    encode_bind_object(&mut cmd, VIRGL_OBJECT_RASTERIZER, rs_handle);
+
+    encode_set_viewport(&mut cmd, w, h);
+    encode_draw_vbo(&mut cmd);
+
+    if !gpu.submit_3d(ctx_id, cmd.as_bytes(), 1) {
+        crate::log!("virgl: submit_3d failed\n");
+        return;
+    }
+
+    let _ = gpu.resource_flush(rt_res, w, h);
+    crate::log!("virgl: issued DRAW_VBO triangle (w={} h={})\n", w, h);
 }
 
 fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
