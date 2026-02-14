@@ -27,6 +27,7 @@ pub async fn run(io: &'static dyn ShellBackend, cols: usize, rows: usize) {
 
     let adapter = IoAdapter { io };
     app.draw(&adapter);
+    app.finalize_frame();
 
     let mut last_tick = Instant::now();
 
@@ -49,6 +50,7 @@ pub async fn run(io: &'static dyn ShellBackend, cols: usize, rows: usize) {
 
         if app.consume_redraw() {
             app.draw(&adapter);
+            app.finalize_frame();
         }
 
         Timer::after(EmbassyDuration::from_millis(16)).await;
