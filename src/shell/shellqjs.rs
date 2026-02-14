@@ -1169,8 +1169,9 @@ pub(crate) async fn eval_bytes_opts_async(
         let rt = vm.rt_ptr();
         let ctx = vm.ctx_ptr();
 
+        let backend_ref: &'static dyn ShellBackend = io;
         let opaque = Box::new(QjsShellOpaque {
-            io: (io as &dyn ShellBackend) as *const dyn ShellBackend,
+            io_ref: (&backend_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
         });
         let opaque_ptr = Box::into_raw(opaque);
         trueos_qjs::JS_SetContextOpaque(ctx, opaque_ptr as *mut core::ffi::c_void);
