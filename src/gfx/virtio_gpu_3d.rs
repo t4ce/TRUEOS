@@ -755,6 +755,23 @@ pub struct VirtioGpu3d {
     resp: DmaRegion,
 }
 
+use spin::{Once, Mutex};
+
+static GLOBAL_GPU: Once<Mutex<Option<VirtioGpu3d>>> = Once::new();
+
+/// Execute a closure with the single global virtio-gpu device instance.
+///
+/// Important: we must not re-run virtio-gpu init/negotiate/queue setup from multiple
+/// subsystems (virgl backend, virtio_sw scanout, virtio_limine mirror). Doing so can
+/// corrupt queue/device state and make scanout swaps appear nondeterministic.
+pub fn with_global_gpu<R>(f: impl FnOnce(&mut VirtioGpu3d) -> R) -> Option<R> {
+    let _ = GLOBAL_GPU.call_once(|| Mutex::new(VirtioGpu3d::init_first()));
+    let slot = GLOBAL_GPU.get()?;
+    let mut guard = slot.lock();
+    let gpu = guard.as_mut()?;
+    Some(f(gpu))
+}
+
 unsafe impl Send for VirtioGpu3d {}
 
 impl VirtioGpu3d {

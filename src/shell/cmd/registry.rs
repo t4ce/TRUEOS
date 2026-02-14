@@ -532,8 +532,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static NET_HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
 
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
-        static AI_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("token", ArgType::Str).mandatory(),
+        static AI_ARGS: [ArgSpec; 1] = [
             ArgSpec::new("first", ArgType::Rest),
         ];
 

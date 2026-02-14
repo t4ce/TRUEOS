@@ -505,6 +505,7 @@ async fn fetch_on_device(
     dev_idx: usize,
     timeout_ms: u32,
     max_bytes: usize,
+    body_json: Option<&str>,
 ) -> Result<Vec<u8>, FetchError> {
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
         Ok(ip) => ip,

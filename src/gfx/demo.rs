@@ -238,9 +238,11 @@ async fn gfx_spin_task() {
 
     let mut hz: u64;
     let mut kind = crate::gfx::backend_kind().unwrap_or(crate::gfx::BackendKind::None);
+    let mut paused_logged_epoch: u64 = 0;
     hz = match kind {
         crate::gfx::BackendKind::Virgl => 60,
         crate::gfx::BackendKind::VirtioSw => 60,
+        // LimineFb is the console buffer. Never draw the demo into it.
         crate::gfx::BackendKind::LimineFb => 10,
         #[cfg(feature = "gfx_intel")]
         crate::gfx::BackendKind::Intel => 60,
@@ -259,7 +261,9 @@ async fn gfx_spin_task() {
             hz = match kind {
                 crate::gfx::BackendKind::Virgl => 60,
                 crate::gfx::BackendKind::VirtioSw => 60,
-                crate::gfx::BackendKind::LimineFb => 10,
+                // In LimineFb mode, the shell/VGA console also writes to the same framebuffer.
+                // To keep A/B swapping deterministic, pause demo rendering in LimineFb.
+                crate::gfx::BackendKind::LimineFb => 1,
                 #[cfg(feature = "gfx_intel")]
                 crate::gfx::BackendKind::Intel => 60,
                 crate::gfx::BackendKind::None => 2,
@@ -267,11 +271,27 @@ async fn gfx_spin_task() {
             crate::log!("gfx: spinning rect switch backend={:?} hz={}\n", kind, hz);
         }
 
+        if kind == crate::gfx::BackendKind::LimineFb {
+            // Let the console own the Limine framebuffer.
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+            continue;
+        }
+
         let hz = hz.max(1);
         frame = frame.wrapping_add(1);
         let target = start_ticks.saturating_add(frame.saturating_mul(tick_hz) / hz);
         while embassy_time_driver::now() < target {
             Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+
+        // A = console buffer: avoid any gfx writes into the Limine framebuffer.
+        // The virtio-limine mirror (if enabled) will make console output visible on the virtio scanout.
+        if kind == crate::gfx::BackendKind::LimineFb {
+            if paused_logged_epoch != last_epoch {
+                paused_logged_epoch = last_epoch;
+                crate::log!("gfx: spinning rect paused (backend=LimineFb)\n");
+            }
+            continue;
         }
 
         let t = (frame as f32) * (1.0 / (hz as f32));
