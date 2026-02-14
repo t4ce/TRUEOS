@@ -1,20 +1,3 @@
-/* TRUE OS (§) ® 2026
-██████████████████████████████████████████████████████████████████████
-██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
-██▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒██
-██▓▓▓▓  ▓▓▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓      ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓  ▓▓▓      ▓▓██
-██████  █████  ███  ███  ████  ██  ██████████████  ████  ████████  ███
-██████  █████  ████  ███      ███        █████████      ████      ████
-██████████████████████████████████████████████████████████████████████
-A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at Intel and GOWIN
-
-Think of rust as the world’s quiet, slow-moving “entropy tax”:
-A constant drain of resources, money, and safety.
-
-Think of TRUE OS as the world’s fast-moving “entropy dividend”:
-A constant influx of resources, money, and safety.
-*/
-
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt, alloc_error_handler, f16, f128)]
