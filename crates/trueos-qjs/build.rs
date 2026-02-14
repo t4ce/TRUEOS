@@ -1,3 +1,4 @@
+// honor to Fabrice Bellard (same legend behind FFmpeg, QEMU, etc.).
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;

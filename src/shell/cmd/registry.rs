@@ -552,10 +552,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
 
-        #[cfg(feature = "gfx_virgl")]
-        static VIRGL_GFX_ARGS: [ArgSpec; 0] = [];
-        #[cfg(feature = "gfx_virgl")]
-        static GFX_SPIN_ARGS: [ArgSpec; 0] = [];
+        static GFX_ARGS: [ArgSpec; 0] = [];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd);
@@ -615,9 +612,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
 
-        #[cfg(feature = "gfx_virgl")]
-        let _ = REGSHCMD("virgl.gfx", &VIRGL_GFX_ARGS, cmd::cmd_virgl_gfx);
-        #[cfg(feature = "gfx_virgl")]
-        let _ = REGSHCMD("gfx.spin", &GFX_SPIN_ARGS, cmd::cmd_gfx_spin);
+        let _ = REGSHCMD("gfx", &GFX_ARGS, cmd::cmd_gfx);
     });
 }
