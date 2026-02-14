@@ -20,6 +20,7 @@ const TX_RING_FULL_LOG_EVERY: u64 = 256;
 const RX_BAD_FLAGS_LOG_EVERY: u64 = 1024;
 const TX_STALL_KICK_THRESHOLD: u64 = 10_000;
 const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
+const POLL_STATE_LOG_EVERY: u64 = 10_000;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
@@ -148,12 +149,85 @@ pub struct R8125Adapter {
     dbg_last_phystat: u8,
     dbg_logged_first_tx: bool,
     dbg_logged_first_rx: bool,
+    dbg_poll_ticks: u64,
+    dbg_state_dumps: u64,
+    dbg_isr_nonzero: u64,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    fn log_hw_state(&mut self, reason: &str) {
+        self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
+
+        let (cmd, isr, imr, rcr, tcr, cplus, rms, phy, rds_lo, rds_hi, tnp_lo, tnp_hi) = unsafe {
+            (
+                self.mmio.read_u8(REG_CMD),
+                self.mmio.read_u16(REG_ISR),
+                self.mmio.read_u16(REG_IMR),
+                self.mmio.read_u32(REG_RCR),
+                self.mmio.read_u32(REG_TCR),
+                self.mmio.read_u16(REG_CPLUS_CMD),
+                self.mmio.read_u16(REG_RX_MAX_SIZE),
+                self.mmio.read_u8(REG_PHYSTAT),
+                self.mmio.read_u32(REG_RDSAR),
+                self.mmio.read_u32(REG_RDSAR_HI),
+                self.mmio.read_u32(REG_TNPDS),
+                self.mmio.read_u32(REG_TNPDS_HI),
+            )
+        };
+
+        let head_idx = self.tx_head;
+        let tail_idx = self.tx_tail;
+        let rx_idx = self.rx_idx;
+
+        let tx_head_desc = unsafe { read_volatile(self.tx_desc.add(head_idx)) };
+        let tx_tail_desc = unsafe { read_volatile(self.tx_desc.add(tail_idx)) };
+        let rx_desc = unsafe { read_volatile(self.rx_desc.add(rx_idx)) };
+
+        let tx_head_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_head_desc.opts1)) };
+        let tx_tail_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_tail_desc.opts1)) };
+        let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
+
+        crate::log!(
+            "net/r8125: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:04x} imr=0x{:04x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} tx_desc_phys=0x{:016x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_tail_opts1=0x{:08x} rx_idx={} rx_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} tx_checks={} kicks={} resets={} rx_ok={} rx_drop={} rx_bad={} rx_errsum={} rx_len_bad={}\n",
+            reason,
+            self.dbg_state_dumps,
+            self.dbg_poll_ticks,
+            cmd,
+            isr,
+            imr,
+            phy,
+            rcr,
+            tcr,
+            cplus,
+            rms,
+            rds_hi,
+            rds_lo,
+            tnp_hi,
+            tnp_lo,
+            self.tx_desc_phys,
+            head_idx,
+            tail_idx,
+            tx_head_opts1,
+            tx_tail_opts1,
+            rx_idx,
+            rx_opts1,
+            self.dbg_tx_submitted,
+            self.dbg_tx_reclaimed,
+            self.dbg_tx_ring_full,
+            self.dbg_tx_stall_checks,
+            self.dbg_tx_recovery_kicks,
+            self.dbg_tx_resets,
+            self.dbg_rx_ok,
+            self.dbg_rx_ring_full,
+            self.dbg_rx_bad_flags,
+            self.dbg_rx_errsum,
+            self.dbg_rx_len_bad
+        );
+    }
+
     pub fn init_all() -> alloc::vec::Vec<Self> {
         let mut out = alloc::vec::Vec::new();
         let devs = find_r8125_devices();
@@ -371,6 +445,9 @@ impl R8125Adapter {
             dbg_last_phystat: phy,
             dbg_logged_first_tx: false,
             dbg_logged_first_rx: false,
+            dbg_poll_ticks: 0,
+            dbg_state_dumps: 0,
+            dbg_isr_nonzero: 0,
         })
     }
 
@@ -416,6 +493,7 @@ impl R8125Adapter {
             isr,
             phy
         );
+        self.log_hw_state("tx-reset");
 
         unsafe {
             let cmd_now = self.mmio.read_u8(REG_CMD);
@@ -470,6 +548,7 @@ impl R8125Adapter {
                         self.dbg_tx_recovery_kicks,
                         self.dbg_tx_resets
                     );
+                    self.log_hw_state("tx-stall");
                     self.kick_tx_engine();
                 }
 
@@ -492,11 +571,34 @@ impl R8125Adapter {
     }
 
     fn poll_rx_ring(&mut self) {
+        self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
+
+        if (self.dbg_poll_ticks % POLL_STATE_LOG_EVERY) == 0 {
+            self.log_hw_state("periodic");
+        }
+
         // Track PHY/link changes without spamming: only log on change.
         let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
         if phy != self.dbg_last_phystat {
             self.dbg_last_phystat = phy;
             crate::log!("net/r8125: phystat=0x{:02x} (changed)\n", phy);
+            self.log_hw_state("phystat-change");
+        }
+
+        let isr = unsafe { self.mmio.read_u16(REG_ISR) };
+        if isr != 0 {
+            self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
+            if self.dbg_isr_nonzero <= 8 || (self.dbg_isr_nonzero & 0x3FF) == 0 {
+                crate::log!(
+                    "net/r8125: isr nonzero count={} isr=0x{:04x}\n",
+                    self.dbg_isr_nonzero,
+                    isr
+                );
+                self.log_hw_state("isr-nonzero");
+            }
+            unsafe {
+                self.mmio.write_u16(REG_ISR, isr);
+            }
         }
 
         let Some(ring_ptr) = self.ring else {
@@ -667,6 +769,7 @@ impl R8125Adapter {
                         phy,
                         self.dbg_tx_recovery_kicks
                     );
+                    self.log_hw_state("tx-ring-full");
                 }
                 return Err(());
             }
@@ -693,6 +796,7 @@ impl R8125Adapter {
                         cur2_opts1,
                         self.dbg_tx_recovery_kicks
                     );
+                    self.log_hw_state("tx-desc-busy");
                 }
                 return Err(());
             }

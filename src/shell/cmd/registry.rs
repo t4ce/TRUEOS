@@ -601,6 +601,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("cube", &[], cmd::cmd_cube);
         let _ = REGSHCMD("cube.ico", &[], cmd::cmd_ico);
         let _ = REGSHCMD("txt", &NO_ARGS, cmd::cmd_txt);
+        let _ = REGSHCMD("tetris", &NO_ARGS, cmd::cmd_tetris);
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);

@@ -1,0 +1,263 @@
+use crate::{Game, Lcg32, NoopEvents, RandomSource, Rotation};
+
+const BOARD_W: usize = 10;
+const BOARD_H: usize = 24;
+const BOARD_HIDDEN: usize = 4;
+
+pub trait ShellIo {
+    fn write_str(&self, s: &str);
+    fn write_fmt(&self, args: core::fmt::Arguments<'_>);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellControl {
+    Continue,
+    Exit,
+}
+
+pub struct ShellApp {
+    game: Game<BOARD_W, BOARD_H, BOARD_HIDDEN>,
+    rng: Lcg32,
+    events: NoopEvents,
+    cols: usize,
+    rows: usize,
+    esc_state: u8,
+    saw_cr: bool,
+    paused: bool,
+    redraw: bool,
+    drop_accum_ms: u32,
+}
+
+impl ShellApp {
+    pub fn new(seed: u32, cols: usize, rows: usize) -> Self {
+        let mut rng = Lcg32::new(seed.max(1));
+        let mut events = NoopEvents;
+        let game = Game::new(&mut rng, &mut events);
+
+        Self {
+            game,
+            rng,
+            events,
+            cols: cols.max(24),
+            rows: rows.max(14),
+            esc_state: 0,
+            saw_cr: false,
+            paused: false,
+            redraw: true,
+            drop_accum_ms: 0,
+        }
+    }
+
+    pub fn set_terminal_size(&mut self, cols: usize, rows: usize) {
+        self.cols = cols.max(24);
+        self.rows = rows.max(14);
+        self.redraw = true;
+    }
+
+    pub fn consume_redraw(&mut self) -> bool {
+        let out = self.redraw || self.game.consume_changed();
+        self.redraw = false;
+        out
+    }
+
+    pub fn handle_input_byte(&mut self, b: u8) -> ShellControl {
+        if self.saw_cr && b == b'\n' {
+            self.saw_cr = false;
+            return ShellControl::Continue;
+        }
+        self.saw_cr = b == b'\r';
+
+        if self.esc_state == 1 {
+            if b == b'[' {
+                self.esc_state = 2;
+            } else {
+                self.esc_state = 0;
+            }
+            return ShellControl::Continue;
+        }
+
+        if self.esc_state == 2 {
+            self.esc_state = 0;
+            match b {
+                b'A' => {
+                    self.game.rotate(Rotation::Cw);
+                    self.redraw = true;
+                }
+                b'B' => {
+                    self.game.rotate(Rotation::Ccw);
+                    self.redraw = true;
+                }
+                b'C' => {
+                    self.game.move_right();
+                    self.redraw = true;
+                }
+                b'D' => {
+                    self.game.move_left();
+                    self.redraw = true;
+                }
+                _ => {}
+            }
+            return ShellControl::Continue;
+        }
+
+        match b {
+            0x1B => {
+                self.esc_state = 1;
+            }
+            b'q' | b'Q' | 0x03 | 0x04 => {
+                return ShellControl::Exit;
+            }
+            b'r' | b'R' => {
+                self.reset_game();
+                self.redraw = true;
+            }
+            b'p' | b'P' => {
+                self.paused = !self.paused;
+                self.redraw = true;
+            }
+            b'a' | b'h' | b'H' => {
+                self.game.move_left();
+                self.redraw = true;
+            }
+            b'd' | b'l' | b'L' => {
+                self.game.move_right();
+                self.redraw = true;
+            }
+            b's' | b'j' | b'J' => {
+                let _ = self.game.soft_drop(&mut self.rng, &mut self.events);
+                self.redraw = true;
+            }
+            b'w' | b'k' | b'K' => {
+                self.game.rotate(Rotation::Cw);
+                self.redraw = true;
+            }
+            b'z' | b'Z' => {
+                self.game.rotate(Rotation::Ccw);
+                self.redraw = true;
+            }
+            b' ' => {
+                let _ = self.game.hard_drop(&mut self.rng, &mut self.events);
+                self.redraw = true;
+            }
+            _ => {}
+        }
+
+        ShellControl::Continue
+    }
+
+    pub fn tick(&mut self, elapsed_ms: u32) {
+        if self.paused || self.game.is_game_over() {
+            return;
+        }
+
+        self.drop_accum_ms = self.drop_accum_ms.saturating_add(elapsed_ms);
+        let step_ms = self.game.level.level_speed_seconds();
+
+        while self.drop_accum_ms >= step_ms {
+            self.drop_accum_ms -= step_ms;
+            let _ = self.game.soft_drop(&mut self.rng, &mut self.events);
+            self.redraw = true;
+            if self.game.is_game_over() {
+                break;
+            }
+        }
+    }
+
+    pub fn draw(&self, io: &dyn ShellIo) {
+        let board_cols = BOARD_W * 2 + 2;
+        let board_rows = self.game.visible_height() + 2;
+
+        let start_col = (self.cols.saturating_sub(board_cols + 2) / 2).max(1);
+        let start_row = (self.rows.saturating_sub(board_rows + 4) / 2).max(1);
+
+        io.write_str("\x1b[?25l");
+        io.write_str("\x1b[2J\x1b[H");
+
+        self.write_at(
+            io,
+            start_row,
+            1,
+            "TETRIS  |  A/D move  W rotate  Space drop  P pause  R restart  Q exit",
+        );
+
+        self.write_at(io, start_row + 1, start_col, "┌────────────────────┐");
+
+        for view_y in 0..self.game.visible_height() {
+            let row = start_row + 2 + view_y;
+            self.write_at(io, row, start_col, "│");
+
+            let board_y = BOARD_HIDDEN + view_y;
+            for x in 0..BOARD_W {
+                let col = start_col + 1 + x * 2;
+                match self.game.cell_view_at(x, board_y, true) {
+                    Some(cell) => {
+                        let r = cell.color.r;
+                        let g = cell.color.g;
+                        let b = cell.color.b;
+                        match cell.layer {
+                            crate::Layer::Ghost => {
+                                self.write_at_fmt(
+                                    io,
+                                    row,
+                                    col,
+                                    format_args!("\x1b[38;2;{};{};{}m░░\x1b[0m", r, g, b),
+                                );
+                            }
+                            _ => {
+                                self.write_at_fmt(
+                                    io,
+                                    row,
+                                    col,
+                                    format_args!("\x1b[48;2;{};{};{}m  \x1b[0m", r, g, b),
+                                );
+                            }
+                        }
+                    }
+                    None => self.write_at(io, row, col, "  "),
+                }
+            }
+
+            self.write_at(io, row, start_col + 1 + BOARD_W * 2, "│");
+        }
+
+        self.write_at(
+            io,
+            start_row + 2 + self.game.visible_height(),
+            start_col,
+            "└────────────────────┘",
+        );
+
+        let stats_row = start_row + 2;
+        let stats_col = start_col + board_cols + 3;
+        self.write_at_fmt(io, stats_row, stats_col, format_args!("level   {}", self.game.level.current_level));
+        self.write_at_fmt(io, stats_row + 1, stats_col, format_args!("rows    {}", self.game.level.rows_deleted));
+        self.write_at_fmt(io, stats_row + 2, stats_col, format_args!("points  {}", self.game.level.total_points));
+
+        if self.paused {
+            self.write_at(io, stats_row + 4, stats_col, "[PAUSED]");
+        } else if self.game.is_game_over() {
+            self.write_at(io, stats_row + 4, stats_col, "[GAME OVER]");
+            self.write_at(io, stats_row + 5, stats_col, "press R to restart");
+        }
+    }
+
+    fn reset_game(&mut self) {
+        let seed = self.rng.next_u32().max(1);
+        self.rng = Lcg32::new(seed);
+        self.game = Game::new(&mut self.rng, &mut self.events);
+        self.paused = false;
+        self.drop_accum_ms = 0;
+    }
+
+    #[inline]
+    fn write_at(&self, io: &dyn ShellIo, row: usize, col: usize, text: &str) {
+        io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
+        io.write_str(text);
+    }
+
+    #[inline]
+    fn write_at_fmt(&self, io: &dyn ShellIo, row: usize, col: usize, args: core::fmt::Arguments<'_>) {
+        io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
+        io.write_fmt(args);
+    }
+}
