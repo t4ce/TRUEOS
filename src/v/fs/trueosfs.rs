@@ -1261,6 +1261,14 @@ async fn read_blocks_aligned_retry_async(
     blocks: usize,
     attempts: u8,
 ) -> Result<Vec<u8>, block::Error> {
+    let attempts = if is_nvme_handle(handle) {
+        // On a wedged NVMe IO queue, repeated retries just enqueue more doomed
+        // commands and amplify timeout storms. Fail fast for probe-time reads.
+        attempts.min(1)
+    } else {
+        attempts
+    };
+
     let mut last: Option<block::Error> = None;
     let mut i = 0u8;
     while i < attempts {
@@ -1299,8 +1307,9 @@ pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFs
 
     // Prefer GPT-partitioned layouts (bootable-capable).
     {
+        let max_gpt_tries = if is_nvme_handle(handle) { 1 } else { 5 };
         let mut tries = 0u8;
-        while tries < 5 {
+        while tries < max_gpt_tries {
             match partition::read_gpt_partitions(handle).await {
                 Ok(parts) => {
                     let mut has_esp = false;

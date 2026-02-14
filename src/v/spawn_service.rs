@@ -39,6 +39,7 @@ static NET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TLS_SOCKET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static HTTP_TRUEOSFS_STARTED: AtomicBool = AtomicBool::new(false);
+static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -127,6 +128,13 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task(),
     ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::v::net::ftp::ftp_server_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -322,6 +330,12 @@ static TASKS: &[TaskSpec] = &[
         required: NET_AND_ROOT_READY,
         started: &HTTP_TRUEOSFS_STARTED,
         spawn: spawn_http_trueosfs,
+    },
+    TaskSpec {
+        name: "ftp-server",
+        required: NET_AND_ROOT_READY,
+        started: &FTP_SERVER_STARTED,
+        spawn: spawn_ftp_server,
     },
 
     // USB core + peripherals

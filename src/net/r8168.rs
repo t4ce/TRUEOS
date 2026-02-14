@@ -16,6 +16,9 @@ const TX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
 const TX_BUF_SIZE: usize = 2048;
 const RX_POLL_BUDGET: usize = 32;
+const POLL_STATE_LOG_EVERY: u64 = 10_000;
+const ENABLE_PERIODIC_STATE_LOG: bool = false;
+const ISR_BENIGN_POLL_MASK: u16 = 0x0085;
 
 // MMIO registers (RTL8168 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
@@ -46,6 +49,8 @@ const CPLUS_ENABLE: u16 = 1 << 0;
 const ENABLE_RX_CHKSUM_OFFLOAD: bool = false;
 const ACCEPT_RX_ERR_SUM_FRAMES: bool = true;
 const STRIP_RX_CRC: bool = false;
+const RX_ERR_SUM_LOG_ACCEPTED_EVERY: u64 = 16_384;
+const RX_ERR_SUM_LOG_DROPPED_EVERY: u64 = 256;
 
 // Descriptor bits
 const DESC_OWN: u32 = 1 << 31;
@@ -145,12 +150,75 @@ pub struct R8168Adapter {
     dbg_logged_first_rx: bool,
     dbg_logged_cfg: bool,
     dbg_idle_polls: u64,
+    dbg_poll_ticks: u64,
+    dbg_state_dumps: u64,
+    dbg_isr_nonzero: u64,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
 unsafe impl Send for R8168Adapter {}
 
 impl R8168Adapter {
+    fn log_hw_state(&mut self, reason: &str) {
+        self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
+        let (cmd, isr, imr, rcr, tcr, cplus, rms, phy, rds_lo, rds_hi, tnp_lo, tnp_hi) = unsafe {
+            (
+                self.mmio.read_u8(REG_CMD),
+                self.mmio.read_u16(REG_ISR),
+                self.mmio.read_u16(REG_IMR),
+                self.mmio.read_u32(REG_RCR),
+                self.mmio.read_u32(REG_TCR),
+                self.mmio.read_u16(REG_CPLUS_CMD),
+                self.mmio.read_u16(REG_RX_MAX_SIZE),
+                self.mmio.read_u8(REG_PHYSTAT),
+                self.mmio.read_u32(REG_RDSAR),
+                self.mmio.read_u32(REG_RDSAR_HI),
+                self.mmio.read_u32(REG_TNPDS),
+                self.mmio.read_u32(REG_TNPDS_HI),
+            )
+        };
+
+        let rx_idx = self.rx_idx;
+        let tx_head = self.tx_head;
+        let tx_tail = self.tx_tail;
+
+        let rx_desc = unsafe { read_volatile(self.rx_desc.add(rx_idx)) };
+        let tx_desc = unsafe { read_volatile(self.tx_desc.add(tx_head)) };
+        let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
+        let tx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_desc.opts1)) };
+
+        crate::log!(
+            "net/r8168: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:04x} imr=0x{:04x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} rx_idx={} rx_opts1=0x{:08x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} rx_ok={} rx_bad={} rx_errsum={} rx_len0={}\n",
+            reason,
+            self.dbg_state_dumps,
+            self.dbg_poll_ticks,
+            cmd,
+            isr,
+            imr,
+            phy,
+            rcr,
+            tcr,
+            cplus,
+            rms,
+            rds_hi,
+            rds_lo,
+            tnp_hi,
+            tnp_lo,
+            rx_idx,
+            rx_opts1,
+            tx_head,
+            tx_tail,
+            tx_opts1,
+            self.dbg_tx_submitted,
+            self.dbg_tx_reclaimed,
+            self.dbg_tx_ring_full,
+            self.dbg_rx_ok,
+            self.dbg_rx_bad_flags,
+            self.dbg_rx_errsum,
+            self.dbg_rx_len_zero
+        );
+    }
+
     pub fn init_all() -> alloc::vec::Vec<Self> {
         let mut out = alloc::vec::Vec::new();
         let devs = find_r8168_devices();
@@ -369,6 +437,9 @@ impl R8168Adapter {
             dbg_logged_first_rx: false,
             dbg_logged_cfg: false,
             dbg_idle_polls: 0,
+            dbg_poll_ticks: 0,
+            dbg_state_dumps: 0,
+            dbg_isr_nonzero: 0,
         })
     }
 
@@ -423,6 +494,7 @@ impl R8168Adapter {
                         tn_lo,
                         isr
                     );
+                    self.log_hw_state("tx-stall");
 
                     // Recovery attempt when TX ownership appears stuck.
                     self.kick_tx_engine();
@@ -440,6 +512,8 @@ impl R8168Adapter {
     }
 
     fn poll_rx_ring(&mut self) {
+        self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
+
         if !self.dbg_logged_cfg {
             self.dbg_logged_cfg = true;
             let cmd = unsafe { self.mmio.read_u8(REG_CMD) };
@@ -457,6 +531,10 @@ impl R8168Adapter {
             );
         }
 
+        if ENABLE_PERIODIC_STATE_LOG && (self.dbg_poll_ticks % POLL_STATE_LOG_EVERY) == 0 {
+            self.log_hw_state("periodic");
+        }
+
         // Track PHY/link changes without spamming: only log on change.
         let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
         if phy != self.dbg_last_phystat {
@@ -466,6 +544,25 @@ impl R8168Adapter {
                 phy,
                 ((phy & 0x01) != 0) as u8
             );
+            self.log_hw_state("phystat-change");
+        }
+
+        let isr = unsafe { self.mmio.read_u16(REG_ISR) };
+        if isr != 0 {
+            self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
+            let unexpected = isr & !ISR_BENIGN_POLL_MASK;
+            if unexpected != 0 && (self.dbg_isr_nonzero <= 8 || (self.dbg_isr_nonzero & 0x3FF) == 0) {
+                crate::log!(
+                    "net/r8168: isr nonzero count={} isr=0x{:04x} unexpected=0x{:04x}\n",
+                    self.dbg_isr_nonzero,
+                    isr,
+                    unexpected
+                );
+                self.log_hw_state("isr-nonzero");
+            }
+            unsafe {
+                self.mmio.write_u16(REG_ISR, isr);
+            }
         }
 
         let Some(ring_ptr) = self.ring else {
@@ -495,10 +592,11 @@ impl R8168Adapter {
             let had_errsum = (opts1 & RX_ERR_SUM) != 0;
 
             if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
-                // Log once but continue anyway.
-                if self.dbg_rx_bad_flags == 0 {
+                self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
+                if self.dbg_rx_bad_flags == 1 || (self.dbg_rx_bad_flags & 0x3ff) == 0 {
                     crate::log!(
-                        "net/r8168: rx flags missing fs/ls opts1=0x{:08x} (continuing)\n",
+                        "net/r8168: rx flags missing fs/ls count={} opts1=0x{:08x} (continuing)\n",
+                        self.dbg_rx_bad_flags,
                         opts1
                     );
                 }
@@ -508,9 +606,20 @@ impl R8168Adapter {
 
             if had_errsum {
                 self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
-                // On this family, ERR_SUM can represent checksum status metadata.
-                // Keep logging sparse and actionable.
-                if self.dbg_rx_errsum == 1 || (self.dbg_rx_errsum & 0x3ff) == 0 {
+                // On this family, ERR_SUM is often checksum-status metadata.
+                // For bring-up, keep accepted-path logs very sparse and reserve
+                // frequent logs for drop mode, which is operationally actionable.
+                let should_log = if ACCEPT_RX_ERR_SUM_FRAMES {
+                    self.dbg_rx_errsum == 1
+                        || (RX_ERR_SUM_LOG_ACCEPTED_EVERY != 0
+                            && (self.dbg_rx_errsum % RX_ERR_SUM_LOG_ACCEPTED_EVERY) == 0)
+                } else {
+                    self.dbg_rx_errsum == 1
+                        || (RX_ERR_SUM_LOG_DROPPED_EVERY != 0
+                            && (self.dbg_rx_errsum % RX_ERR_SUM_LOG_DROPPED_EVERY) == 0)
+                };
+
+                if should_log {
                     crate::log!(
                         "net/r8168: rx errsum seen count={} opts1=0x{:08x} opts2=0x{:08x} raw_len={} (accepted={})\n",
                         self.dbg_rx_errsum,
@@ -664,6 +773,7 @@ impl R8168Adapter {
                         isr,
                         phy
                     );
+                    self.log_hw_state("tx-ring-full");
                 }
                 return Err(());
             }
@@ -690,6 +800,7 @@ impl R8168Adapter {
                         self.tx_tail,
                         cur2_opts1
                     );
+                    self.log_hw_state("tx-desc-busy");
                 }
                 return Err(());
             }

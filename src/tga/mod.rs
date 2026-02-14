@@ -58,7 +58,7 @@ static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
-// We send 0..15 (wrap) so the FPGA can display the low bits.
+// We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
@@ -503,9 +503,9 @@ pub(crate) async fn tga_task() {
         }
 
         let t = TGA_HEARTBEAT_COUNTER.fetch_add(1, Ordering::Relaxed);
-        // Send 0..15 then wrap.
-        write_led_raw(t & 0xF);
+        // Send 0..31 then wrap.
+        write_led_raw(t & 0x1F);
 
-        Timer::after(EmbassyDuration::from_millis(500)).await;
+        Timer::after(EmbassyDuration::from_millis(100)).await;
     }
 }

@@ -466,6 +466,7 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         TableColumn { header: "Interface", width: 20 },
         TableColumn { header: "MAC Address", width: 17 },
         TableColumn { header: "IPv4", width: 15 },
+        TableColumn { header: "Mode", width: 8 },
         TableColumn { header: "IPv6", width: 4 },
     ];
     let t = Table::new(&cols);
@@ -489,9 +490,14 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         } else {
             alloc::string::String::from(" - ")
         };
+        let mode = if let Some(has_lease) = crate::net::adapter::dhcp_has_lease_at(index) {
+            if has_lease { "dhcp" } else { "fallback" }
+        } else {
+            "-"
+        };
 
         let idx_s = alloc::format!("{}", index);
-        t.print_row(ctx.io, &[idx_s, name.into(), mac, ip, "::".into()]);
+        t.print_row(ctx.io, &[idx_s, name.into(), mac, ip, mode.into(), "::".into()]);
     }
 
     CommandAction::None

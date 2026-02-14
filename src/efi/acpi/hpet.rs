@@ -48,6 +48,32 @@ impl Hpet {
         }
         self.write_reg64(CONFIG_OFFSET, config);
     }
+
+    #[inline]
+    fn counter_mask(&self) -> u64 {
+        if self.info.main_counter_is_64bits {
+            u64::MAX
+        } else {
+            u32::MAX as u64
+        }
+    }
+
+    #[inline]
+    pub fn frequency_hz(&self) -> u64 {
+        self.frequency_hz
+    }
+
+    #[inline]
+    pub fn main_counter(&self) -> u64 {
+        let raw = unsafe { self.read_reg64(MAIN_COUNTER_OFFSET) };
+        raw & self.counter_mask()
+    }
+
+    #[inline]
+    pub fn counter_delta(&self, start: u64, end: u64) -> u64 {
+        let mask = self.counter_mask();
+        end.wrapping_sub(start) & mask
+    }
 }
 
 pub fn ensure() -> Option<&'static Hpet> {

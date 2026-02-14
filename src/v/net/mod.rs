@@ -2,6 +2,7 @@ use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 pub mod dns;
+pub mod ftp;
 pub mod https;
 pub mod ping;
 pub mod ws;

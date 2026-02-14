@@ -67,6 +67,12 @@ struct Completion {
 }
 
 impl Completion {
+    fn is_success(self) -> bool {
+        // `status` includes phase in bit0 and NVMe status field in bits15:1.
+        // Success is strictly status field == 0.
+        (self.status >> 1) == 0
+    }
+
     fn status_code(self) -> u8 {
         ((self.status >> 1) & 0xFF) as u8
     }
@@ -200,6 +206,9 @@ unsafe impl Send for NvmeController {}
 unsafe impl Sync for NvmeController {}
 
 impl NvmeController {
+    const ADMIN_Q_DEPTH: u16 = 64;
+    const IO_Q_DEPTH_DEFAULT: u16 = 64;
+
     fn default_max_transfer_bytes() -> u64 {
         256 * 1024
     }
@@ -286,8 +295,14 @@ impl NvmeController {
         let cc = self.reg32(NVME_REG_CC);
         let csts = self.reg32(NVME_REG_CSTS);
         let aqa = self.reg32(NVME_REG_AQA);
+        let admin_cqe = self.admin.cq_peek();
+        let io_cqe = self.io.cq_peek();
+        let admin_status = (admin_cqe.dw3 >> 16) as u16;
+        let io_status = (io_cqe.dw3 >> 16) as u16;
+        let admin_phase = (admin_status & 0x1) != 0;
+        let io_phase = (io_status & 0x1) != 0;
         crate::log!(
-            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}]\n",
+            "nvme: {} {} regs cap=0x{:016X} vs=0x{:08X} cc=0x{:08X} csts=0x{:08X} aqa=0x{:08X} dstrd={} mps={} admin[sq={} cq={} phase={}] io[sq={} cq={} phase={}] admin_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}] io_cqe[dw0=0x{:08X} dw3=0x{:08X} st=0x{:04X} p={}]\n",
             self.pci,
             reason,
             cap,
@@ -303,6 +318,14 @@ impl NvmeController {
             self.io.sq_tail,
             self.io.cq_head,
             self.io.cq_phase,
+            admin_cqe.dw0,
+            admin_cqe.dw3,
+            admin_status,
+            admin_phase,
+            io_cqe.dw0,
+            io_cqe.dw3,
+            io_status,
+            io_phase,
         );
     }
 
@@ -556,7 +579,11 @@ impl NvmeController {
         self.spin_wait_ready(enable, 2000)
     }
 
-    fn init(mmio: NonNull<u8>, pci: block::PciAddress) -> core::result::Result<Self, block::Error> {
+    fn init_with_io_depth(
+        mmio: NonNull<u8>,
+        pci: block::PciAddress,
+        io_depth: u16,
+    ) -> core::result::Result<Self, block::Error> {
         unsafe {
             let regs = mmio.as_ptr();
             let cap = read_volatile(regs.add(NVME_REG_CAP) as *const u64);
@@ -581,8 +608,8 @@ impl NvmeController {
             doorbell_stride_bytes,
             page_size_bytes,
             max_transfer_bytes: Self::default_max_transfer_bytes(),
-            admin: NvmeQueue::new(64, page_size_bytes)?,
-            io: NvmeQueue::new(64, page_size_bytes)?,
+            admin: NvmeQueue::new(Self::ADMIN_Q_DEPTH, page_size_bytes)?,
+            io: NvmeQueue::new(io_depth.max(1), page_size_bytes)?,
             next_cid: 1,
             io_inflight: [0u64; CID_BITMAP_WORDS],
             io_pending: [None; IO_PENDING_SLOTS],
@@ -637,6 +664,10 @@ impl NvmeController {
         Ok(ctrl)
     }
 
+    fn init(mmio: NonNull<u8>, pci: block::PciAddress) -> core::result::Result<Self, block::Error> {
+        Self::init_with_io_depth(mmio, pci, Self::IO_Q_DEPTH_DEFAULT)
+    }
+
     fn admin_create_io_cq(&mut self, qid: u16, depth: u16, cq_phys: u64) -> core::result::Result<(), block::Error> {
         crate::log!("nvme: {} create_io_cq qid={} depth={} phys=0x{:X}\n", self.pci, qid, depth, cq_phys);
         let cid = self.alloc_cid();
@@ -649,7 +680,7 @@ impl NvmeController {
         // PC=1 (physically contiguous), IEN=0 (polling).
         sqe.d[11] = 1;
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
-        if cpl.status_code() != 0 {
+        if !cpl.is_success() {
             crate::log!(
                 "nvme: {} create_io_cq failed sct={} sc={} status=0x{:04X}\n",
                 self.pci,
@@ -680,7 +711,7 @@ impl NvmeController {
         // PC=1 (physically contiguous), QPRIO=0, CQID in bits31:16.
         sqe.d[11] = 1 | ((cqid as u32) << 16);
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
-        if cpl.status_code() != 0 {
+        if !cpl.is_success() {
             crate::log!(
                 "nvme: {} create_io_sq failed sct={} sc={} status=0x{:04X}\n",
                 self.pci,
@@ -706,7 +737,7 @@ impl NvmeController {
         sqe.d[11] = (nsqr << 16) | (ncqr & 0xFFFF);
 
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
-        if cpl.status_code() != 0 {
+        if !cpl.is_success() {
             crate::log!(
                 "nvme: {} set_features(num_queues) failed sct={} sc={} status=0x{:04X}\n",
                 self.pci,
@@ -788,7 +819,7 @@ impl NvmeController {
         sqe.d[10] = cns;
 
         let cpl = self.admin_submit_and_wait_sync(sqe, cid, 1000)?;
-        let status_ok = cpl.status_code() == 0;
+        let status_ok = cpl.is_success();
 
         if let Some((_, lv, lb)) = prp_list {
             dma::dealloc(lv, lb);
@@ -985,7 +1016,7 @@ impl NvmeController {
         }
 
         let cpl = cpl_res?;
-        if cpl.status_code() != 0 {
+        if !cpl.is_success() {
             crate::log!(
                 "nvme: {} io failed opcode=0x{:02X} nsid={} slba={} nlb={} status=0x{:04X} (sct={} sc={})\n",
                 self.pci,
@@ -1008,7 +1039,7 @@ impl NvmeController {
         sqe.d[0] = (NVME_NVM_FLUSH as u32) | ((cid as u32) << 16);
         sqe.d[1] = nsid;
         let cpl = self.io_submit_and_wait_async(sqe, cid, 2000).await?;
-        if cpl.status_code() != 0 {
+        if !cpl.is_success() {
             return Err(block::Error::Io);
         }
         Ok(())
@@ -1200,8 +1231,8 @@ impl block::BlockDevice for NvmeBlockDevice {
                             bytes_here,
                             NVME_ADMIN_PROBE_TIMEOUT_MS,
                         ).await {
-                            Ok(cpl) if cpl.status_code() == 0 => {}
-                            Ok(cpl) => {
+                            Ok(cpl) if cpl.is_success() => {}
+                            Ok(_cpl) => {
                                 dma::dealloc(dma_virt, max_io_bytes);
                                 // crate::log!(
                                 //     "nvme: {} probe-read fallback (admin) failed status=0x{:04X} (sct={} sc={})\n",
@@ -1291,7 +1322,7 @@ impl block::BlockDevice for NvmeBlockDevice {
                             bytes_here,
                             NVME_IO_SYNC_FALLBACK_TIMEOUT_MS,
                         ) {
-                            Ok(cpl) if cpl.status_code() == 0 => {}
+                            Ok(cpl) if cpl.is_success() => {}
                             Ok(cpl) => {
                                 dma::dealloc(dma_virt, max_io_bytes);
                                 crate::log!(
@@ -1343,6 +1374,63 @@ impl block::BlockDevice for NvmeBlockDevice {
 
 fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
     dev.class == 0x01 && dev.subclass == 0x08 && dev.prog_if == 0x02
+}
+
+fn io_selftest_read(
+    ctrl: &mut NvmeController,
+    pci_addr: block::PciAddress,
+    nsid: u32,
+    block_size: u32,
+) -> bool {
+    let bs = block_size as usize;
+    let bytes = bs.max(512);
+    let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) else {
+        crate::log!("nvme: {} io-selftest: DMA alloc failed\n", pci_addr);
+        return false;
+    };
+
+    unsafe { write_bytes(dma_virt, 0, bytes) };
+
+    let ok = match ctrl.io_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
+        Ok(cpl) => {
+            if !cpl.is_success() {
+                crate::log!(
+                    "nvme: {} io-selftest read failed status=0x{:04X} (sct={} sc={})\n",
+                    pci_addr,
+                    cpl.status,
+                    cpl.status_type(),
+                    cpl.status_code(),
+                );
+                false
+            } else {
+                true
+            }
+        }
+        Err(e) => {
+            crate::log!("nvme: {} io-selftest read failed: {:?}\n", pci_addr, e);
+
+            // Diagnostic fallback: try the same NVM READ on the admin queue.
+            // If this completes, it suggests IO queue bring-up is the issue.
+            match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
+                Ok(cpl) => {
+                    crate::log!(
+                        "nvme: {} admin-read selftest status=0x{:04X} (sct={} sc={})\n",
+                        pci_addr,
+                        cpl.status,
+                        cpl.status_type(),
+                        cpl.status_code(),
+                    );
+                }
+                Err(e2) => {
+                    crate::log!("nvme: {} admin-read selftest failed: {:?}\n", pci_addr, e2);
+                }
+            }
+            false
+        }
+    };
+
+    dma::dealloc(dma_virt, bytes);
+    ok
 }
 
 pub fn probe_once() {
@@ -1408,7 +1496,7 @@ pub fn probe_once() {
                 }
             };
 
-            let nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
+            let mut nsid = match ctrl.identify_first_active_namespace(ctrl_info.nn) {
                 Ok(id) => id,
                 Err(e) => {
                     crate::log!("nvme: {} no active namespace found: {:?}\n", pci_addr, e);
@@ -1417,7 +1505,7 @@ pub fn probe_once() {
             };
 
             // Register the first active namespace.
-            let (blocks, block_size) = match ctrl.identify_namespace(nsid) {
+            let (mut blocks, mut block_size) = match ctrl.identify_namespace(nsid) {
                 Ok(v) => v,
                 Err(e) => {
                     crate::log!("nvme: {} identify namespace {} failed: {:?}\n", pci_addr, nsid, e);
@@ -1429,50 +1517,78 @@ pub fn probe_once() {
                 continue;
             }
 
-            // Early sanity check: verify the IO queue actually completes a tiny READ.
-            // If this times out, upper layers will see `block::Error::Timeout` on reads.
-            {
-                let bs = block_size as usize;
-                let bytes = bs.max(512);
-                if let Some((dma_phys, dma_virt)) = dma::alloc(bytes, ctrl.page_size_bytes()) {
-                    unsafe { write_bytes(dma_virt, 0, bytes) };
-                    match ctrl.io_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
-                        Ok(cpl) => {
-                            if cpl.status_code() != 0 {
-                                crate::log!(
-                                    "nvme: {} io-selftest read failed status=0x{:04X} (sct={} sc={})\n",
-                                    pci_addr,
-                                    cpl.status,
-                                    cpl.status_type(),
-                                    cpl.status_code(),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            crate::log!("nvme: {} io-selftest read failed: {:?}\n", pci_addr, e);
+            // Strict gate: IO queue must complete at least one NVM READ before registration.
+            let mut io_ready = io_selftest_read(&mut ctrl, pci_addr, nsid, block_size);
+            if !io_ready {
+                crate::log!(
+                    "nvme: {} io-selftest failed; attempting one controller reinit\n",
+                    pci_addr
+                );
 
-                            // Diagnostic fallback: try the same NVM READ on the admin queue.
-                            // If this completes, it suggests IO queue bring-up is the issue.
-                            match ctrl.admin_rw_sync(NVME_NVM_READ, nsid, 0, 1, dma_phys, bs, 2000) {
-                                Ok(cpl) => {
-                                    crate::log!(
-                                        "nvme: {} admin-read selftest status=0x{:04X} (sct={} sc={})\n",
-                                        pci_addr,
-                                        cpl.status,
-                                        cpl.status_type(),
-                                        cpl.status_code(),
-                                    );
-                                }
-                                Err(e2) => {
-                                    crate::log!("nvme: {} admin-read selftest failed: {:?}\n", pci_addr, e2);
-                                }
-                            }
-                        }
+                let mut retry_ctrl = match NvmeController::init_with_io_depth(mmio_ptr, pci_addr, 2) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        crate::log!("nvme: {} reinit failed: {:?}\n", pci_addr, e);
+                        continue;
                     }
-                    dma::dealloc(dma_virt, bytes);
-                } else {
-                    crate::log!("nvme: {} io-selftest: DMA alloc failed\n", pci_addr);
+                };
+
+                let retry_ctrl_info = match retry_ctrl.identify_controller_info() {
+                    Ok(info) => info,
+                    Err(e) => {
+                        crate::log!("nvme: {} reinit identify controller failed: {:?}\n", pci_addr, e);
+                        continue;
+                    }
+                };
+
+                let retry_nsid = match retry_ctrl.identify_first_active_namespace(retry_ctrl_info.nn) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        crate::log!("nvme: {} reinit no active namespace found: {:?}\n", pci_addr, e);
+                        continue;
+                    }
+                };
+
+                let (retry_blocks, retry_block_size) = match retry_ctrl.identify_namespace(retry_nsid) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::log!(
+                            "nvme: {} reinit identify namespace {} failed: {:?}\n",
+                            pci_addr,
+                            retry_nsid,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                if retry_blocks == 0 || retry_block_size == 0 {
+                    crate::log!(
+                        "nvme: {} reinit namespace {} has invalid capacity\n",
+                        pci_addr,
+                        retry_nsid
+                    );
+                    continue;
                 }
+
+                io_ready = io_selftest_read(&mut retry_ctrl, pci_addr, retry_nsid, retry_block_size);
+                if !io_ready {
+                    crate::log!(
+                        "nvme: {} IO queue not operational after reinit; skipping controller\n",
+                        pci_addr
+                    );
+                    crate::log!(
+                        "nvme: {} probe outcome: skipped (io-selftest failed)\n",
+                        pci_addr
+                    );
+                    continue;
+                }
+
+                crate::log!("nvme: {} IO queue recovered after reinit\n", pci_addr);
+                ctrl = retry_ctrl;
+                nsid = retry_nsid;
+                blocks = retry_blocks;
+                block_size = retry_block_size;
             }
 
             let label = if let Some(s) = ctrl.serial.as_deref() {
@@ -1512,6 +1628,7 @@ pub fn probe_once() {
                 block_size,
                 max_transfer_bytes,
             );
+            crate::log!("nvme: {} probe outcome: registered\n", pci_addr);
             registered_any = true;
 
             // For now, only claim/register the first controller.
