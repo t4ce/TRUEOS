@@ -39,3 +39,15 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
 pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
     with_system(|sys| f(sys.context_mut()))
 }
+
+#[cfg(feature = "gfx_virgl")]
+pub fn switch_to_virgl() -> bool {
+    with_system(|sys| {
+        let Some(b) = backends::Backend::init_virgl() else {
+            return false;
+        };
+        sys.backend = b;
+        true
+    })
+    .unwrap_or(false)
+}

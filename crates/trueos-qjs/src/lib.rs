@@ -260,6 +260,20 @@ extern "C" {
 
     pub fn JS_NewArrayBufferCopy(ctx: *mut JSContext, buf: *const u8, len: usize) -> JSValue;
 
+    // --- ArrayBuffer / TypedArray access (needed for WebGL-style shims) ---
+    // quickjs.h: uint8_t *JS_GetArrayBuffer(JSContext *ctx, size_t *psize, JSValueConst obj);
+    pub fn JS_GetArrayBuffer(ctx: *mut JSContext, psize: *mut usize, obj: JSValueConst) -> *mut u8;
+    // quickjs.h:
+    // JSValue JS_GetTypedArrayBuffer(JSContext *ctx, JSValueConst obj,
+    //    size_t *pbyte_offset, size_t *pbyte_length, size_t *pbytes_per_element);
+    pub fn JS_GetTypedArrayBuffer(
+        ctx: *mut JSContext,
+        obj: JSValueConst,
+        pbyte_offset: *mut usize,
+        pbyte_length: *mut usize,
+        pbytes_per_element: *mut usize,
+    ) -> JSValue;
+
     pub fn JS_NewError(ctx: *mut JSContext) -> JSValue;
     pub fn JS_Throw(ctx: *mut JSContext, obj: JSValue) -> JSValue;
 

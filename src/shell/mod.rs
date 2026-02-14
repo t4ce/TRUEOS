@@ -295,6 +295,7 @@ pub(crate) enum CommandAction {
     DoFormat { disc_id: u32 },
     DoInstall { disc_id: u32 },
     DoUpdate { disc_id: u32 },
+    OpenAiChat { token: String<192>, first: String<384> },
 }
 
 

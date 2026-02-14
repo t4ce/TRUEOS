@@ -43,6 +43,20 @@ pub enum WssError {
 
 impl WssConnection {
     pub async fn connect(url: &str) -> Result<Self, WssError> {
+        Self::connect_inner(url, None).await
+    }
+
+    pub async fn connect_with_headers<'a>(
+        url: &str,
+        additional_headers: &'a [&'a str],
+    ) -> Result<Self, WssError> {
+        Self::connect_inner(url, Some(additional_headers)).await
+    }
+
+    async fn connect_inner<'a>(
+        url: &str,
+        additional_headers: Option<&'a [&'a str]>,
+    ) -> Result<Self, WssError> {
         let (host, port, path) = parse_wss_url(url).ok_or(WssError::InvalidUrl)?;
 
         let dev_idx = crate::net::primary_device_index();
@@ -77,12 +91,12 @@ impl WssConnection {
         let rng = ChaCha20Rng::from_seed(seed);
 
         let mut client = WebSocketClient::new_client(rng);
-         let options = WebSocketOptions {
+        let options = WebSocketOptions {
             path: path.as_str(),
             host: host.as_str(),
             origin: "",
             sub_protocols: None,
-            additional_headers: None,
+            additional_headers,
         };
 
         let mut frame_buf = [0u8; RX_BUF_SIZE];

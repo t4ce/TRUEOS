@@ -774,6 +774,149 @@ pub mod cabi {
 		}
 	}
 
+	// --- GFX C-ABI ---
+	// This is the stable bridge between the in-kernel JS "WebGL" shim and the renderer.
+	// It intentionally targets the gfx abstraction (`trueos_gfx_core`) rather than a GPU driver.
+
+	use trueos_gfx_core::{
+		BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandList, GfxContext, MemoryType,
+		PipelineDesc, PipelineId, SwapchainDesc, VertexLayout, Viewport,
+	};
+
+	struct GfxCabiState {
+		pipeline: PipelineId,
+		vbuf: BufferId,
+		capacity: usize,
+	}
+
+	impl GfxCabiState {
+		const fn new() -> Self {
+			Self {
+				pipeline: PipelineId::invalid(),
+				vbuf: BufferId::invalid(),
+				capacity: 0,
+			}
+		}
+	}
+
+	static GFX_CABI_STATE: spin::Mutex<GfxCabiState> = spin::Mutex::new(GfxCabiState::new());
+
+	fn ensure_gfx_resources(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId)> {
+		let swap = ctx.swapchain_desc();
+		if swap.extent.width == 0 || swap.extent.height == 0 {
+			return None;
+		}
+		let _ = ctx.configure_swapchain(SwapchainDesc {
+			format: swap.format,
+			extent: swap.extent,
+		});
+
+		let mut st = GFX_CABI_STATE.lock();
+
+		if !st.pipeline.is_valid() {
+			let layout = VertexLayout {
+				stride: 12, // f32 x, f32 y, u8 r,g,b, pad
+				pos_offset: 0,
+				color_offset: 8,
+				color_format: ColorFormat::RgbU8,
+			};
+			let p = ctx
+				.create_pipeline(PipelineDesc {
+					vertex_layout: layout,
+					vs: None,
+					fs: None,
+				})
+				.ok()?;
+			st.pipeline = p;
+		}
+
+		if !st.vbuf.is_valid() || st.capacity < need_bytes {
+			if st.vbuf.is_valid() {
+				ctx.destroy_buffer(st.vbuf);
+				st.vbuf = BufferId::invalid();
+				st.capacity = 0;
+			}
+			let cap = need_bytes.max(256);
+			let b = ctx
+				.create_buffer(BufferDesc {
+					size: cap as u64,
+					usage: BufferUsage::Vertex,
+					memory: MemoryType::HostVisible,
+				})
+				.ok()?;
+			st.vbuf = b;
+			st.capacity = cap;
+		}
+
+		Some((st.pipeline, st.vbuf))
+	}
+
+	/// Draw a list of RGB triangles and present.
+	///
+	/// Vertex ABI (bytes): repeating struct { f32 x, f32 y, u8 r, u8 g, u8 b, u8 pad }
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles(
+		clear_rgb: u32,
+		vtx_ptr: *const u8,
+		vtx_len: usize,
+	) -> i32 {
+		if vtx_ptr.is_null() {
+			return if vtx_len == 0 { 0 } else { -1 };
+		}
+		if vtx_len == 0 {
+			return 0;
+		}
+		const VTX_SIZE: usize = 12;
+		let usable = vtx_len - (vtx_len % VTX_SIZE);
+		if usable == 0 {
+			return -2;
+		}
+
+		let vtx = core::slice::from_raw_parts(vtx_ptr, usable);
+		let vcount = (usable / VTX_SIZE) as u32;
+		if vcount == 0 {
+			return 0;
+		}
+
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let (pipeline, vbuf) = match ensure_gfx_resources(ctx, usable) {
+				Some(v) => v,
+				None => return -3,
+			};
+
+			if ctx.write_buffer(vbuf, 0, vtx).is_err() {
+				return -4;
+			}
+
+			let swap = ctx.swapchain_desc();
+			let vp = Viewport {
+				x: 0,
+				y: 0,
+				width: swap.extent.width as i32,
+				height: swap.extent.height as i32,
+			};
+
+			let mut list = CommandList::new();
+			list.push(Command::SetViewport(vp));
+			list.push(Command::ClearColor { rgb: clear_rgb });
+			list.push(Command::BindPipeline(pipeline));
+			list.push(Command::BindVertexBuffer { buffer: vbuf, offset: 0 });
+			list.push(Command::Draw {
+				vertex_count: vcount,
+				first_vertex: 0,
+			});
+			list.push(Command::Present);
+
+			match ctx.submit(list.as_buffer()) {
+				Ok(_) => 0,
+				Err(_) => -5,
+			}
+		}) else {
+			return -6;
+		};
+		ret
+	}
+
 }
 
 /// Writer that routes bytes to the global console pipeline (stdout).

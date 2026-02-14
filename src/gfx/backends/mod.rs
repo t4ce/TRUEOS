@@ -1,8 +1,15 @@
 mod limine_fb;
 use trueos_gfx_core::GfxContext;
 
+#[cfg(feature = "gfx_virgl")]
+use crate::gfx::virtio_gpu_3d;
+
 pub enum Backend {
     LimineFb(limine_fb::LimineFbBackend),
+
+    #[cfg(feature = "gfx_virgl")]
+    Virgl(virtio_gpu_3d::VirglGfxBackend),
+
     None(limine_fb::NullBackend),
 }
 
@@ -10,7 +17,14 @@ impl Backend {
     pub fn init_auto(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Self {
+        // Default is intentionally conservative: use the known-good Limine framebuffer backend.
+        // GPU backends (virtio-gpu/virgl, Xe, ...) are opt-in and switched explicitly.
         Self::init_limine_fb(framebuffers)
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    pub fn init_virgl() -> Option<Self> {
+        virtio_gpu_3d::VirglGfxBackend::init().map(|b| Backend::Virgl(b))
     }
 
     pub fn init_limine_fb(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) -> Self {
@@ -28,6 +42,10 @@ impl Backend {
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
             Backend::LimineFb(b) => b,
+
+            #[cfg(feature = "gfx_virgl")]
+            Backend::Virgl(b) => b,
+
             Backend::None(b) => b,
         }
     }
