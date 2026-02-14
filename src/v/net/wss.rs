@@ -100,7 +100,7 @@ impl WssConnection {
         };
 
         let mut frame_buf = [0u8; RX_BUF_SIZE];
-        let (len, _handshake_bytes) = match client.client_connect(&options, &mut frame_buf) {
+        let (len, ws_key) = match client.client_connect(&options, &mut frame_buf) {
             Ok(res) => res,
             Err(_) => return Err(WssError::Protocol), 
         };
@@ -161,53 +161,51 @@ impl WssConnection {
         // Silence warning for unused variable  if loop breaks early
         let _ = established;
 
-        // Wait for handshake response (HTTP 101)
-         let mut handshake_response = Vec::new();
-         let mut rx_buf = Vec::new();
-         let mut connected = false;
+        // Wait for handshake response; must call `client_accept` to transition to Open.
+        let mut handshake_response = Vec::new();
+        let mut rx_buf = Vec::new();
 
         loop {
-             let mut got_event = false;
-             while let Some(ev) = events.pop() {
-                 got_event = true;
-                  match ev {
-                     TlsEvent::Data { handle: h, data } => {
-                         if Some(h) == handle {
-                             handshake_response.extend_from_slice(&data);
-                              if let Some(end) = find_http_header_end(&handshake_response) {
-                                 // Check status 101 -- loose check
-                                 if !handshake_response.windows(12).any(|w| w == b"101 Switching") {
-                                      // return Err(WssError::Protocol);
-                                 }
-                                 let extra = handshake_response.split_off(end);
-                                 rx_buf = extra;
-                                 connected = true;
-                                 break;
-                             }
-                         }
-                     }
-                      TlsEvent::Closed { .. } => return Err(WssError::Closed),
-                      _ => {}
-                  }
-             }
-             if connected { break; }
-             if crate::time::uptime_seconds() > deadline {
+            let mut got_event = false;
+            while let Some(ev) = events.pop() {
+                got_event = true;
+                match ev {
+                    TlsEvent::Data { handle: h, data } => {
+                        if Some(h) == handle {
+                            handshake_response.extend_from_slice(&data);
+
+                            match client.client_accept(&ws_key, handshake_response.as_slice()) {
+                                Ok((consumed, _subproto)) => {
+                                    let extra = handshake_response.split_off(consumed);
+                                    rx_buf = extra;
+                                    // Handshake complete.
+                                    return Ok(Self {
+                                        cmds,
+                                        events,
+                                        handle,
+                                        client,
+                                        connected: true,
+                                        closed: false,
+                                        rx_buf,
+                                    });
+                                }
+                                Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
+                                Err(_) => return Err(WssError::Protocol),
+                            }
+                        }
+                    }
+                    TlsEvent::Closed { .. } => return Err(WssError::Closed),
+                    _ => {}
+                }
+            }
+
+            if crate::time::uptime_seconds() > deadline {
                 return Err(WssError::ConnectFailed);
             }
-             if !got_event {
-                 Timer::after(Duration::from_micros(100)).await;
+            if !got_event {
+                Timer::after(Duration::from_micros(100)).await;
             }
         }
-
-        Ok(Self {
-            cmds,
-            events,
-            handle,
-            client,
-            connected,
-            closed: false,
-            rx_buf,
-        })
     }
 
     pub fn send(&mut self, text: &str) -> Result<(), WssError> {
@@ -293,10 +291,4 @@ fn parse_wss_url(url: &str) -> Option<(String, u16, String)> {
         (String::from(authority), 443)
     };
     Some((host, port, path))
-}
-
-fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
 }

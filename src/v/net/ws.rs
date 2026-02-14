@@ -65,7 +65,7 @@ impl WsConnection {
         };
 
         let mut frame_buf = [0u8; RX_BUF_SIZE];
-        let (len, _handshake_bytes) = match client.client_connect(&options, &mut frame_buf) {
+        let (len, ws_key) = match client.client_connect(&options, &mut frame_buf) {
             Ok(res) => res,
             Err(_) => return Err(WsError::Protocol),
         };
@@ -112,30 +112,29 @@ impl WsConnection {
             Timer::after(Duration::from_micros(100)).await;
         }
         
-
         let mut rx_buf = Vec::new();
         loop {
             if let Some(ev) = net.pop_event() {
-                 match ev {
-                     Event::TcpData { handle: h, data } => {
-                         if Some(h) == handle {
-                             rx_buf.extend_from_slice(data.as_slice());
-                             if let Some(end) = find_http_header_end(&rx_buf) {
-                                 // Simple check for 101 Switching Protocols
-                                 if !rx_buf.windows(12).any(|w| w == b"101 Switching") { // Loose check
-                                     // return Err(WsError::Protocol);
-                                 }
-                                 
-                                 // Consume logic
-                                 let extra = rx_buf.split_off(end);
-                                 rx_buf = extra;
-                                 break;
-                             }
-                         }
-                     }
-                     Event::Closed { .. } => return Err(WsError::Closed),
-                     _ => {}
-                 }
+                match ev {
+                    Event::TcpData { handle: h, data } => {
+                        if Some(h) == handle {
+                            rx_buf.extend_from_slice(data.as_slice());
+
+                            match client.client_accept(&ws_key, rx_buf.as_slice()) {
+                                Ok((consumed, _subproto)) => {
+                                    // Keep any bytes beyond the HTTP header for WS frame parsing.
+                                    let extra = rx_buf.split_off(consumed);
+                                    rx_buf = extra;
+                                    break;
+                                }
+                                Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
+                                Err(_) => return Err(WsError::Protocol),
+                            }
+                        }
+                    }
+                    Event::Closed { .. } => return Err(WsError::Closed),
+                    _ => {}
+                }
             }
             if crate::time::uptime_seconds() > deadline {
                 return Err(WsError::ConnectFailed);
@@ -236,10 +235,4 @@ fn parse_ws_url(url: &str) -> Option<(String, u16, String)> {
         (String::from(authority), 80)
     };
     Some((host, port, path))
-}
-
-fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
 }
