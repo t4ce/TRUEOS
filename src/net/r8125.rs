@@ -22,11 +22,13 @@ const TX_STALL_KICK_THRESHOLD: u64 = 10_000;
 const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 const POLL_STATE_LOG_EVERY: u64 = 10_000;
 const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
-const EXP_R8125_SKIP_DESC0: bool = true;
-const EXP_R8125_TXPOLL_ALT: bool = true;
+const EXP_R8125_SKIP_DESC0: bool = false;
+const EXP_R8125_TXPOLL_ALT: bool = false;
 const EXP_R8125_TXPOLL_ALT_VALUE: u8 = 0x80;
 const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
-const EXP_R8125_FORCE_CPLUS_OFF: bool = true;
+const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
+const EXP_R8125_CLFLUSH_TX: bool = false;
+const TX_WEDGE_QUARANTINE_RESETS: u64 = 3;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
@@ -164,12 +166,35 @@ pub struct R8125Adapter {
     dbg_last_tnpds_hi: u32,
     dbg_kick_readbacks: u64,
     dbg_doorbells: u64,
+    dbg_tx_quarantined: bool,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    #[inline]
+    fn clflush_range(ptr: *const u8, len: usize) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use core::arch::x86_64::{_mm_clflush, _mm_mfence};
+
+            if ptr.is_null() || len == 0 {
+                return;
+            }
+
+            let line = 64usize;
+            let start = (ptr as usize) & !(line - 1);
+            let end = (ptr as usize).saturating_add(len);
+            let mut p = start;
+            while p < end {
+                _mm_clflush(p as *const _);
+                p = p.saturating_add(line);
+            }
+            _mm_mfence();
+        }
+    }
+
     #[inline]
     fn tx_start_index() -> usize {
         if EXP_R8125_SKIP_DESC0 { 1 } else { 0 }
@@ -477,6 +502,11 @@ impl R8125Adapter {
 
         // Program descriptor bases + enable C+ mode.
         unsafe {
+            // Stop engines while programming baseline datapath registers.
+            mmio.write_u8(REG_CMD, 0);
+            mmio.write_u16(REG_IMR, 0);
+            mmio.write_u16(REG_ISR, 0xFFFF);
+
             // C+ mode on (descriptor mode). Keep it minimal.
             let cplus = mmio.read_u16(REG_CPLUS_CMD);
             let cplus_new = Self::cplus_programmed(cplus);
@@ -496,6 +526,7 @@ impl R8125Adapter {
 
             // Enable Rx/Tx
             mmio.write_u8(REG_CMD, CMD_RX_EN | CMD_TX_EN);
+            mmio.write_u16(REG_ISR, 0xFFFF);
         }
 
         crate::log!(
@@ -560,6 +591,7 @@ impl R8125Adapter {
             dbg_last_tnpds_hi: (tx_desc_phys >> 32) as u32,
             dbg_kick_readbacks: 0,
             dbg_doorbells: 0,
+            dbg_tx_quarantined: false,
         })
     }
 
@@ -569,10 +601,6 @@ impl R8125Adapter {
             self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
             self.mmio
                 .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
-
-            let cplus = self.mmio.read_u16(REG_CPLUS_CMD);
-            let cplus_new = Self::cplus_programmed(cplus);
-            self.mmio.write_u16(REG_CPLUS_CMD, cplus_new);
 
             let cmd = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
@@ -601,6 +629,10 @@ impl R8125Adapter {
     }
 
     fn reset_tx_ring_controlled(&mut self, reason: &str) {
+        if self.dbg_tx_quarantined {
+            return;
+        }
+
         self.dbg_tx_resets = self.dbg_tx_resets.saturating_add(1);
 
         let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
@@ -669,9 +701,25 @@ impl R8125Adapter {
             self.tx_tail,
             EXP_R8125_SKIP_DESC0 as u8
         );
+
+        if self.dbg_tx_reclaimed == 0 && self.dbg_tx_resets >= TX_WEDGE_QUARANTINE_RESETS {
+            self.dbg_tx_quarantined = true;
+            crate::log!(
+                "net/r8125: tx quarantined after resets={} (no reclaims); rx remains active\n",
+                self.dbg_tx_resets
+            );
+            unsafe {
+                let cmd_now = self.mmio.read_u8(REG_CMD);
+                self.mmio.write_u8(REG_CMD, cmd_now & !CMD_TX_EN);
+            }
+        }
     }
 
     fn reclaim_tx(&mut self) {
+        if self.dbg_tx_quarantined {
+            return;
+        }
+
         while self.tx_head != self.tx_tail {
             let idx = self.tx_head;
             let desc = unsafe { read_volatile(self.tx_desc.add(idx)) };
@@ -908,6 +956,10 @@ impl R8125Adapter {
             return Ok(());
         }
 
+        if self.dbg_tx_quarantined {
+            return Err(());
+        }
+
         // Don't rely on RX polling cadence to free TX descriptors.
         self.reclaim_tx();
 
@@ -981,6 +1033,10 @@ impl R8125Adapter {
             core::ptr::copy_nonoverlapping(frame.as_ptr(), self.tx_bufs[idx].virt(), len);
         }
 
+        if EXP_R8125_CLFLUSH_TX {
+            Self::clflush_range(self.tx_bufs[idx].virt() as *const u8, len);
+        }
+
         // Ensure the packet bytes are visible before we set DESC_OWN.
         compiler_fence(Ordering::Release);
 
@@ -998,6 +1054,19 @@ impl R8125Adapter {
 
             // Ensure descriptor writes are visible before we kick the device.
             fence(Ordering::Release);
+        }
+
+        if EXP_R8125_CLFLUSH_TX {
+            let desc_ptr = unsafe { self.tx_desc.add(idx) } as *const u8;
+            Self::clflush_range(desc_ptr, core::mem::size_of::<TxDesc>());
+            if self.dbg_tx_submitted < TX_SUBMIT_DEBUG_FIRST {
+                crate::log!(
+                    "net/r8125: tx clflush idx={} len={} enabled={}\n",
+                    idx,
+                    len,
+                    EXP_R8125_CLFLUSH_TX as u8
+                );
+            }
         }
 
         self.ring_tx_doorbell("tx-submit");

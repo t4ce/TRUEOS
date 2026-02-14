@@ -4,82 +4,83 @@ description: TRUEOS iteration loop: build ISO, connect QJS via nc, reboot, repea
 ---
 TRUEOS bare-metal AI bridge cycle (QJS REPL over TCP).
 
-Use this loop for fast kernel iteration:
+This skill is intentionally strict and copy-paste safe for agents.
 
-## 1) Make ISO
+## Golden loop (copy-paste)
+
+1) Build:
 
 ```sh
 cd /home/t4ce/Repos/TRUEOS
-make iso
+make iso-release
 ```
 
-## 2) Connect with nc (AI/QJS bridge)
+2) Reboot guest from QJS bridge:
 
 ```sh
-nc 192.168.178.78 4246
+timeout 12 sh -c '{
+	printf "\r\n"
+	sleep 1
+	printf "TRUEOS.acpi(\"reboot\")\r\n"
+	sleep 1
+	printf ".exit\r\n"
+	sleep 1
+} | nc -w 6 192.168.178.78 4246 | cat'
 ```
 
-This is the runtime QJS REPL.
-
-## 3) Reboot from QJS
-
-In the QJS session:
-
-```js
-TRUEOS.acpi("reboot")
-```
-
-Alternative:
-
-```js
-TRUEOS.reboot()
-```
-
-## 4) Wait before reconnect
-
-After sending reboot, wait at least 30 seconds before reconnecting:
+3) Wait for reboot:
 
 ```sh
 sleep 30
 ```
 
-Then reconnect to `4246` and continue.
-
-## Loop shape
-
-`program -> make iso -> nc/qjs -> acpi("reboot") -> sleep 30 -> reconnect -> repeat`
-
-## Working live demos (validated)
-
-Run these in the QJS REPL after connecting:
-
-```js
-import proc, { cwd } from "node:process"; print("proc-cwd", cwd())
-import * as path from "path"; print("join", path.join("bm", "qjs"))
-import("left-pad@1.3.0").then(m => print("leftpad", m.default("ok", 6, "."))).catch(e => print(e))
-```
-
-Expected style of output:
-
-- `qjs: proc-cwd /`
-- `qjs: join bm/qjs`
-- `qjs: leftpad ....ok`
-
-Notes from validation:
-
-- Static `import ... from "left-pad@1.3.0"; ...` can fail in single-line REPL usage; dynamic `import(...)` is reliable.
-- Seeing `qjs: => [object Promise]` after `import(...)` is expected.
-
-## Quick probe example (non-interactive)
+4) Validate bridge + TRUEOS API on new boot:
 
 ```sh
-timeout 8 sh -c "{ sleep 1; printf '\r\n'; sleep 1; printf 'TRUEOS.acpi(\"reboot\")\r\n'; sleep 1; } | nc 192.168.178.78 4246"
-sleep 30
-timeout 8 sh -c "{ sleep 1; printf '\r\n'; sleep 1; } | nc 192.168.178.78 4246"
+timeout 15 sh -c '{
+	printf "\r\n"
+	sleep 1
+	printf "print(\"ping\")\r\n"
+	sleep 1
+	printf "print(typeof TRUEOS)\r\n"
+	sleep 1
+	printf "print(TRUEOS[\"logs\"])\r\n"
+	sleep 1
+	printf ".exit\r\n"
+	sleep 1
+} | nc -w 6 192.168.178.78 4246 | cat'
 ```
 
-Use a short timeout for the reboot send itself; the required boot grace period is the explicit `sleep 30` after reboot.
+Expected proof markers in output:
 
-Notes:
-- Use `TRUEOS.acpi("s1")`..`TRUEOS.acpi("s5")` for sleep states when needed.
-- If output gets noisy or prompt state looks stale, disconnect and reconnect.
+- `qjs: ping`
+- `qjs: object`
+
+If running the newest kernel containing `TRUEOS.logs`, then:
+
+- `print(TRUEOS["logs"])` prints a native function body
+- `print(TRUEOS.logs(256))` returns text (possibly empty, but no TypeError)
+
+## Why the initial Enter is mandatory
+
+Always send one initial `\r\n` and a short `sleep 1` before first JS command.
+Without this, the session may show only `qjs>` prompt echoes and ignore payload.
+
+## Reliable non-interactive read of bringup log cache
+
+```sh
+timeout 15 sh -c '{
+	printf "\r\n"
+	sleep 1
+	printf "print(TRUEOS.logs(8192))\r\n"
+	sleep 1
+	printf ".exit\r\n"
+	sleep 1
+} | nc -w 6 192.168.178.78 4246 | cat'
+```
+
+## Troubleshooting checklist
+
+- If you get only `qjs>` prompt, increase delays to `sleep 2` between lines.
+- If `TRUEOS["logs"]` is `undefined`, running OS image is older than current build; reboot into latest image and retry.
+- Prefer bracket syntax in automation (`TRUEOS["logs"]`) to avoid shell escaping mistakes.
