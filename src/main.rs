@@ -118,6 +118,13 @@ pub extern "C" fn kmain() -> ! {
 
     let executor = percpu::init_executor();
     let spawner = executor.spawner();
+
+    // Register BSP spawner for affinity-first worker placement.
+    trueos_qjs::workers::register_core_spawner(
+        percpu::this_cpu().cpu_index(),
+        cpu::intel_core_kind_hint(),
+        spawner,
+    );
     if let Err(e) = spawner.spawn(crate::wait::job_runner_task()) {
         crate::log!("wait: job_runner_task spawn failed: {:?}\n", e);
     }
@@ -126,8 +133,7 @@ pub extern "C" fn kmain() -> ! {
         crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
     } 
 
-    // Worker threads (MVP) reuse the current executor's spawner (no cross-core scheduling policy).
-    let _ = trueos_qjs::workers::ensure_service_started(&spawner);
+    // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
     net::init();
 

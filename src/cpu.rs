@@ -1,6 +1,7 @@
 use crate::{percpu, runtime, globalog, exceptions};
 use ::limine::mp::Cpu as LimineCpu;
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use core::arch::x86_64::__cpuid;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
@@ -12,6 +13,10 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     percpu::init_ap(cpu.lapic_id as u32, slot as u32);
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
+
+    // Register this core's spawner for affinity-first worker placement.
+    trueos_qjs::workers::register_core_spawner(slot as u32, intel_core_kind_hint(), spawner);
+
     if percpu::this_cpu().cpu_index() == 1 {
         runtime::register_first_ap_spawner(spawner);
     }
@@ -21,6 +26,27 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     crate::smp::mark_online();
     exceptions::load_this_cpu();
     runtime::run_ap_forever()
+}
+
+/// Best-effort Intel hybrid core kind hint via CPUID leaf 0x1A.
+///
+/// Returns one of:
+/// - `trueos_qjs::workers::CORE_KIND_PERF`
+/// - `trueos_qjs::workers::CORE_KIND_EFF`
+/// - `trueos_qjs::workers::CORE_KIND_UNKNOWN`
+pub(crate) fn intel_core_kind_hint() -> u8 {
+    let r0 = unsafe { __cpuid(0) };
+    let max = r0.eax;
+    if max < 0x1A {
+        return trueos_qjs::workers::CORE_KIND_UNKNOWN;
+    }
+    let r = unsafe { __cpuid(0x1A) };
+    let core_type = (r.eax >> 24) as u8;
+    match core_type {
+        0x40 => trueos_qjs::workers::CORE_KIND_PERF,
+        0x20 => trueos_qjs::workers::CORE_KIND_EFF,
+        _ => trueos_qjs::workers::CORE_KIND_UNKNOWN,
+    }
 }
 
 #[embassy_executor::task(pool_size = AP_HEARTBEAT_TASK_POOL)]

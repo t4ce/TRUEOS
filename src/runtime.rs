@@ -55,10 +55,16 @@ pub fn run_ap_forever() -> ! {
         if counter % 10_000_000 == 0 {
             let slot = crate::percpu::this_cpu().cpu_index() as usize;
             let total = crate::smp::cpu_count().max(1);
+
+            let outline = match crate::cpu::intel_core_kind_hint() {
+                trueos_qjs::workers::CORE_KIND_PERF => 0x00_FF_37_FF, // 255,55,255
+                _ => 0x00_FF_FF_FF,
+            };
             crate::vga::draw_header_square(
                 total,
                 slot,
                 crate::vga::DEFAULT_SHADOW_COLOR,
+                outline,
                 (counter % 360) as u32,
             );
         }

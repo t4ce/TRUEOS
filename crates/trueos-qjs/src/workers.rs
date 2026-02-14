@@ -32,7 +32,14 @@ fn log_str(s: &str) {
 
 static WORKER_SEQ: AtomicU32 = AtomicU32::new(1);
 
-static WORKER_SPAWNER: Mutex<Option<embassy_executor::SendSpawner>> = Mutex::new(None);
+pub const CORE_KIND_UNKNOWN: u8 = 0;
+pub const CORE_KIND_PERF: u8 = 1;
+pub const CORE_KIND_EFF: u8 = 2;
+
+static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> = Mutex::new(BTreeMap::new());
+static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
+static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
+
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
 // Context -> worker_id mapping (only populated for worker contexts).
@@ -71,12 +78,51 @@ impl WorkerState {
 }
 
 pub fn ensure_service_started(spawner: &Spawner) -> bool {
-    let send = spawner.make_send();
-    let mut g = WORKER_SPAWNER.lock();
-    if g.is_none() {
-        *g = Some(send);
-    }
+    // Back-compat: treat this as "register BSP as unknown".
+    register_core_spawner(0, CORE_KIND_UNKNOWN, *spawner);
     true
+}
+
+/// Register a core's SendSpawner along with a best-effort core-kind hint.
+///
+/// `core_kind` is typically derived from Intel hybrid CPUID leaf 0x1A:
+/// - `CORE_KIND_PERF`: performance core
+/// - `CORE_KIND_EFF`: efficient core
+/// - `CORE_KIND_UNKNOWN`: fallback
+pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
+    CORE_SPAWNERS.lock().insert(cpu_slot, spawner.make_send());
+    CORE_KINDS.lock().insert(cpu_slot, core_kind);
+}
+
+fn pick_spawner_affinity_first() -> Option<embassy_executor::SendSpawner> {
+    // Prefer performance cores if any are registered; otherwise fall back to all cores.
+    let map = CORE_SPAWNERS.lock();
+    if map.is_empty() {
+        return None;
+    }
+
+    let kinds = CORE_KINDS.lock();
+
+    let mut perf: Vec<embassy_executor::SendSpawner> = Vec::new();
+    let mut any: Vec<embassy_executor::SendSpawner> = Vec::new();
+    for (slot, sp) in map.iter() {
+        // Policy: never schedule QJS workers on the BSP (slot 0).
+        if *slot == 0 {
+            continue;
+        }
+        any.push(sp.clone());
+        if kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF {
+            perf.push(sp.clone());
+        }
+    }
+
+    if any.is_empty() {
+        return None;
+    }
+
+    let pool = if !perf.is_empty() { perf } else { any };
+    let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize;
+    Some(pool[idx % pool.len()].clone())
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -115,7 +161,7 @@ pub fn spawn_eval(code_utf8: &[u8]) -> Result<u32, i32> {
         .lock()
         .insert(worker_id, WorkerState::new(code_utf8.to_vec()));
 
-    let spawner = WORKER_SPAWNER.lock().clone().ok_or(-2)?;
+    let spawner = pick_spawner_affinity_first().ok_or(-2)?;
     spawner.spawn(worker_task(worker_id)).map_err(|_| -2)?;
     Ok(worker_id)
 }
