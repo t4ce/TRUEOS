@@ -20,6 +20,9 @@ pub mod node;
 #[cfg(feature = "trueos")]
 pub mod trueos_shims;
 
+#[cfg(feature = "trueos")]
+pub mod vm;
+
 #[repr(C)]
 pub struct JSRuntime {
     _private: [u8; 0],

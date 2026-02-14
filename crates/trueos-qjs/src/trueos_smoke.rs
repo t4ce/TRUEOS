@@ -95,21 +95,11 @@ unsafe fn install_print(ctx: *mut qjs::JSContext) {
 /// - Installs a module loader that serves a native `complex` module.
 /// - Evaluates an ES module that imports `complex` and asserts add/square results.
 pub unsafe fn run() {
-    let rt = qjs::JS_NewRuntime();
-    if rt.is_null() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
-    }
-
-    // Enable ES module loading (imports) using the Node-enhanced loader.
-    qjs::node::install(rt);
-
-    let ctx = qjs::JS_NewContext(rt);
-    if ctx.is_null() {
-        log_str("quickjs: JS_NewContext failed\n");
-        qjs::JS_FreeRuntime(rt);
-        return;
-    }
+    };
+    let ctx = vm.ctx_ptr();
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
@@ -185,8 +175,7 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
     qjs::js_free_value(ctx, ret);
 
     log_str("quickjs: runtime/context ok\n");
-    qjs::JS_FreeContext(ctx);
-    qjs::JS_FreeRuntime(rt);
+    drop(vm);
 }
 
 /// TRUEOS kernel QuickJS module-loader smoke test:
@@ -198,20 +187,11 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
 /// - URL module caching to `/qjs/cdn/<hash>.mjs` via async net-fetch C-ABI
 /// - Recursive URL import handling (origin-relative specifiers like "/pkg@ver/..." from esm.sh)
 pub unsafe fn run_module_loader_smoke() {
-    let rt = qjs::JS_NewRuntime();
-    if rt.is_null() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
-    }
-
-    qjs::node::install(rt);
-
-    let ctx = qjs::JS_NewContext(rt);
-    if ctx.is_null() {
-        log_str("quickjs: JS_NewContext failed\n");
-        qjs::JS_FreeRuntime(rt);
-        return;
-    }
+    };
+    let ctx = vm.ctx_ptr();
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
@@ -245,28 +225,18 @@ globalThis.print('module-loader ok', out);\n\
         log_str("quickjs: module-loader eval ok\n");
     }
 
-    qjs::JS_FreeContext(ctx);
-    qjs::JS_FreeRuntime(rt);
+    drop(vm);
 }
 
 /// Temporary boot-time smoke for parse5 HTML parsing.
 ///
 /// Goal: validate esm.sh ESM imports and DOM-like output parsing via parse5.
 pub unsafe fn run_parse5_smoke() {
-    let rt = qjs::JS_NewRuntime();
-    if rt.is_null() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
-    }
-
-    qjs::node::install(rt);
-
-    let ctx = qjs::JS_NewContext(rt);
-    if ctx.is_null() {
-        log_str("quickjs: JS_NewContext failed\n");
-        qjs::JS_FreeRuntime(rt);
-        return;
-    }
+    };
+    let ctx = vm.ctx_ptr();
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
@@ -304,6 +274,5 @@ globalThis.print('parse5 ok', root.nodeName, count);\n\
         log_str("quickjs: parse5 eval ok\n");
     }
 
-    qjs::JS_FreeContext(ctx);
-    qjs::JS_FreeRuntime(rt);
+    drop(vm);
 }
