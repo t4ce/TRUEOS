@@ -4,6 +4,7 @@ use core::ffi::{c_char, c_int, CStr};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell::{ShellBackend, ShellIo};
+use crate::shell::table::{Table, TableColumn};
 
 #[repr(C)]
 struct QjsShellOpaque {
@@ -669,6 +670,10 @@ async fn read_line(
                 }
 
                 match b {
+                    0x00 => {
+                        // Some serial/USB bridges can inject NULs during paste.
+                        // Ignore them to avoid confusing JS syntax errors.
+                    }
                     b'\r' => {
                         *ignore_lf = true;
                         io.write_str("\r\n");
@@ -740,8 +745,21 @@ async fn repl(io: &'static dyn ShellBackend) {
             if src.is_empty() {
                 continue;
             }
-            if src == ".exit" || src == ".quit" {
+
+            // REPL meta commands (not JavaScript).
+            // Keep these forgiving because users will instinctively type `help`.
+            if src == "help" || src == "h" || src == ".help" || src == ".h" || src == "?" {
+                help(io);
+                continue;
+            }
+            if src == "exit" || src == "quit" || src == ".exit" || src == ".quit" {
                 break;
+            }
+
+            // Common footgun: pasting shell examples into the REPL.
+            if src == "qjs" || src.starts_with("qjs ") {
+                io.write_str("qjs: you're already in the REPL; run `qjs ...` at the shell prompt (or type .exit first)\r\n");
+                continue;
             }
 
             let flags = if looks_like_module_src(src) {
@@ -804,24 +822,46 @@ async fn repl(io: &'static dyn ShellBackend) {
 }
 
 pub(crate) fn help(io: &dyn ShellIo) {
-    io.write_str("qjs: usage\r\n");
-    io.write_str("qjs <javascript>\r\n");
-    io.write_str("qjs @<path>\r\n");
-    io.write_str("qjs <path.js|path.mjs>\r\n");
-    io.write_str("qjs -e <javascript>\r\n");
-    io.write_str("qjs -m -e <module javascript>\r\n");
-    io.write_str("qjs -p <expr>\r\n");
-    io.write_str("qjs --repl\r\n");
-    io.write_str("qjs: examples\r\n");
-    io.write_str("qjs print(1+2)\r\n");
-    io.write_str("qjs -m -e import leftPad from 'left-pad@1.3.0'; print(leftPad('a',3,'.'));\r\n");
-    io.write_str("qjs -m -e import * as path from 'path'; print(path.join('a','b'));\r\n");
+    // Single-column, paste-proof examples.
+    // If you copy a whole line from the table, it should still be valid input.
+    const EX_W: usize = 190;
+    let cols = [TableColumn {
+        header: "REPL paste (20 commands)",
+        width: EX_W,
+    }];
+
+    {
+        let t = Table::new_forward(&cols);
+        t.print_header(io);
+
+        // Exactly 20 REPL inputs.
+        t.print_row(io, &[".help  // show this table"]);
+        t.print_row(io, &[".exit  // leave REPL (also: .quit, Ctrl-D)"]);
+        t.print_row(io, &["print(1+2);  // arithmetic"]);
+        t.print_row(io, &["let x=3; print(x*7);  // variables"]);
+        t.print_row(io, &["function add(a,b){return a+b;} print(add(2,3));  // function"]);
+        t.print_row(io, &["for (let i=0;i<3;i++) print(i);  // loop"]);
+        t.print_row(io, &["const a=[1,2,3]; a.push(4); print(a.join());  // array"]);
+        t.print_row(io, &["const m=new Map([[1,\"a\"],[2,\"b\"]]); print(m.get(2));  // Map"]);
+        t.print_row(io, &["const s=new Set([1,2,2,3]); print(s.has(2));  // Set"]);
+        t.print_row(io, &["const o={a:1,b:2}; print(JSON.stringify(o));  // JSON"]);
+        t.print_row(io, &["print(/a+b*/.test(\"aaab\"));  // RegExp"]);
+        t.print_row(io, &["try { throw new Error(\"boom\"); } catch(e) { print(e.message); }  // try/catch"]);
+        t.print_row(io, &["Promise.resolve(1).then(v=>print(\"then\",v));  // Promise microtask"]);
+        t.print_row(io, &["print(TRUEOS.logs(256).slice(0,80));  // TRUEOS logs"]);
+        t.print_row(io, &["print(TRUEOS.acpi(\"s0\"));  // TRUEOS acpi"]);
+        t.print_row(io, &["import * as path from \"path\"; print(path.join(\"a\",\"b\"));  // import builtin"]);
+        t.print_row(io, &["import leftPad from \"left-pad@1.3.0\"; print(leftPad(\"a\",3,\".\"));  // import pkg"]);
+        t.print_row(io, &["import(\"node:worker_threads\").then(m=>{ globalThis.Worker=m.Worker; print(\"Worker ready\"); });  // load Worker"]);
+        t.print_row(io, &["const w=new Worker('import { parentPort } from \"node:worker_threads\"; parentPort.onMessage(m=>parentPort.postMessage(\"pong:\"+m));');  // spawn worker"]);
+        t.print_row(io, &["w.onMessage(m=>print(\"main:\",m)); w.postMessage(\"ping\");  // message worker"]);
+    }
 }
 
 pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
     let src = src.trim();
     if src.is_empty() {
-        help(io);
+        repl(io).await;
         return;
     }
 

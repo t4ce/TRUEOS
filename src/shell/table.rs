@@ -9,10 +9,19 @@ pub struct TableColumn {
     pub width: usize,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TableOrder {
+    /// Print buffered lines in reverse order (useful when the output backend inserts new lines at the top).
+    Reverse,
+    /// Print buffered lines in forward order (normal terminal output).
+    Forward,
+}
+
 pub struct Table<'a, 'io> {
     cols: &'a [TableColumn],
     io: RefCell<Option<&'io dyn ShellIo>>,
     lines: RefCell<Vec<String>>,
+    order: TableOrder,
 }
 
 impl<'a, 'io> Table<'a, 'io> {
@@ -21,6 +30,17 @@ impl<'a, 'io> Table<'a, 'io> {
             cols,
             io: RefCell::new(None),
             lines: RefCell::new(Vec::new()),
+            order: TableOrder::Reverse,
+        }
+    }
+
+    /// Create a table that prints in normal top-to-bottom order.
+    pub fn new_forward(cols: &'a [TableColumn]) -> Self {
+        Self {
+            cols,
+            io: RefCell::new(None),
+            lines: RefCell::new(Vec::new()),
+            order: TableOrder::Forward,
         }
     }
 
@@ -94,19 +114,27 @@ impl<'a, 'io> Drop for Table<'a, 'io> {
     fn drop(&mut self) {
         let slot = self.io.borrow();
         if let Some(io) = *slot {
-             // We print lines in REVERSE order because the shell pushes lines to the TOP.
-             // Standard logical order: Header, Sep, Row0, Row1...
-             // Stacked output: 
-             //   Row 1 (last written) -> Top
-             //   Row 0
-             //   Sep
-             //   Header (first written) -> Bottom
-             //
-             // Thus we iterate lines.rev()
-             
-             for line in self.lines.borrow().iter().rev() {
-                 io.write_str(line);
-             }
+            match self.order {
+                TableOrder::Reverse => {
+                    // We print lines in REVERSE order because the shell pushes lines to the TOP.
+                    // Standard logical order: Header, Sep, Row0, Row1...
+                    // Stacked output:
+                    //   Row 1 (last written) -> Top
+                    //   Row 0
+                    //   Sep
+                    //   Header (first written) -> Bottom
+                    //
+                    // Thus we iterate lines.rev().
+                    for line in self.lines.borrow().iter().rev() {
+                        io.write_str(line);
+                    }
+                }
+                TableOrder::Forward => {
+                    for line in self.lines.borrow().iter() {
+                        io.write_str(line);
+                    }
+                }
+            }
         }
     }
 }
