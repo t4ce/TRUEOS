@@ -199,7 +199,7 @@ pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     // Keep only a minimal help escape hatch so users can discover REPL commands.
     let rest = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
     if rest == "-h" || rest == "--help" {
-        crate::shell::shellqjs::help(ctx.io);
+        crate::shell::shellqjs::help_with_term_cols(ctx.io, *ctx.term_cols);
         return CommandAction::None;
     }
 
