@@ -75,6 +75,8 @@ pub const JS_EVAL_TYPE_MODULE: c_int = 1;
 pub const JS_EVAL_FLAG_COMPILE_ONLY: c_int = 1 << 5;
 
 pub const JS_CFUNC_GENERIC: c_int = 0;
+// quickjs.h: JS_CFUNC_constructor
+pub const JS_CFUNC_CONSTRUCTOR: c_int = 2;
 
 impl JSValue {
     #[inline]
