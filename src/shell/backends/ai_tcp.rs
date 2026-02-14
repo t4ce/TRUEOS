@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
+use alloc::{collections::VecDeque, vec::Vec};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -68,31 +68,19 @@ pub async fn ai_tcp_bridge_task() {
             return;
         }
 
-        // Route the debug bridge over a non-primary NIC when available, so we can still
-        // interact even if the primary adapter is wedged (e.g. r8125 TX).
-        let device_index = if crate::net::device_count() > 1 { 1 } else { 0 };
-        let owner: &'static str = {
-            let s = alloc::format!("ai-qjs@{}", device_index);
-            Box::leak(s.into_boxed_str())
-        };
-        let cmds_name: &'static str = {
-            let s = alloc::format!("{}-cmd", owner);
-            Box::leak(s.into_boxed_str())
-        };
-        let events_name: &'static str = {
-            let s = alloc::format!("{}-evt", owner);
-            Box::leak(s.into_boxed_str())
-        };
-        let cmds = NetQueue::new_leaked(cmds_name, 256);
-        let events = NetQueue::new_leaked(events_name, 256);
-        register_app_queues(owner, cmds, events);
+        // Always route the bridge over the primary NIC. If another adapter exists and is broken
+        // (e.g. RTL8125 TX wedge), routing bridge output over it can make the bridge look dead.
+        // Pin routing to dev0 so bridge I/O stays isolated from secondary NIC failures.
+        const OWNER: &'static str = "ai-qjs@0";
+        let cmds = NetQueue::new_leaked("ai-qjs-cmd", 256);
+        let events = NetQueue::new_leaked("ai-qjs-evt", 256);
+        register_app_queues(OWNER, cmds, events);
 
         let _ = cmds.push(NetCommand::OpenTcpListen { port: AI_TCP_PORT });
         crate::log!(
-            "ai-qjs: listening on tcp {} dev={} owner={} (hostfwd localhost:{} -> guest)\n",
+            "ai-qjs: listening on tcp {} owner={} (hostfwd localhost:{} -> guest)\n",
             AI_TCP_PORT,
-            device_index,
-            owner,
+            OWNER,
             AI_TCP_PORT
         );
 

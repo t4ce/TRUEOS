@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
+use alloc::{collections::VecDeque, vec::Vec};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,34 +56,21 @@ pub async fn net_shell_task() {
             return;
         }
 
-        // Prefer a non-primary NIC when available so this debug channel remains usable even
-        // if the primary adapter is misbehaving.
-        let device_index = if crate::net::device_count() > 1 { 1 } else { 0 };
-        let owner: &'static str = {
-            let s = alloc::format!("net-shell@{}", device_index);
-            Box::leak(s.into_boxed_str())
-        };
-        let cmds_name: &'static str = {
-            let s = alloc::format!("{}-cmd", owner);
-            Box::leak(s.into_boxed_str())
-        };
-        let events_name: &'static str = {
-            let s = alloc::format!("{}-evt", owner);
-            Box::leak(s.into_boxed_str())
-        };
-
-        let cmds = NetQueue::new_leaked(cmds_name, 256);
-        let events = NetQueue::new_leaked(events_name, 256);
-        register_app_queues(owner, cmds, events);
+        // Always route the shell over the primary NIC. If another adapter exists and is broken
+        // (e.g. RTL8125 TX wedge), routing shell output over it can make the shell appear dead.
+        // Pin routing to dev0 so the shell never depends on secondary NIC health.
+        const OWNER: &'static str = "net-shell@0";
+        let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
+        let events = NetQueue::new_leaked("net-shell-evt", 256);
+        register_app_queues(OWNER, cmds, events);
 
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
         crate::log!(
-            "net-shell: listening on tcp {} dev={} owner={} (hostfwd localhost:{} -> guest)\n",
+            "net-shell: listening on tcp {} owner={} (hostfwd localhost:{} -> guest)\n",
             NET_SHELL_TCP_PORT,
-            device_index,
-            owner,
+            OWNER,
             NET_SHELL_TCP_PORT
         );
 

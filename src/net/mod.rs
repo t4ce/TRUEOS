@@ -19,10 +19,14 @@ use crate::net::r8125::R8125Adapter;
 use crate::net::r8168::R8168Adapter;
 use crate::net::vio::VirtioNetAdapter;
 use crate::net::e1000::E1000Adapter;
+use crate::pci::PciDevice;
 
 const RX_DESC_COUNT: usize = 256;
 const RX_BUF_SIZE: usize = 2048;
 const POLL_BUDGET: usize = 512;
+// Keep RTL8125 enabled, but keep RTL8168 as the primary NIC (dev0) by init order.
+// Enable RTL8125 probing as a secondary NIC. Primary selection is kept stable (dev=0)
+// so the two adapters don't interfere.
 const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
@@ -89,14 +93,6 @@ impl NetDevice for ActiveDevice {
 }
 
 pub fn device_name_at(index: usize) -> Option<&'static str> {
-    with_device_at(index, |dev| {
-        // Since we can't easily downcast or modify trait yet, we can't get the inner name easily 
-        // without adding name() to NetDevice trait.
-        // However, we can peek at the ActiveDevice list if we change how with_device_at works 
-        // or just access DEVICES directly here.
-        "NetDevice" // Fallback 
-    });
-
     // Access DEVICES directly to match on enum variants
     let guard = DEVICES.lock();
     let dev = guard.get(index)?;
@@ -106,6 +102,131 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
         ActiveDevice::R8125(_) => "Realtek RTL8125",
         ActiveDevice::R8168(_) => "Realtek RTL8168",
     })
+}
+
+pub fn pci_device_at(index: usize) -> Option<PciDevice> {
+    let guard = DEVICES.lock();
+    let dev = guard.get(index)?;
+    match dev {
+        ActiveDevice::Virtio(n) => n.pci_device(),
+        ActiveDevice::E1000(n) => n.pci_device(),
+        ActiveDevice::R8125(n) => n.pci_device(),
+        ActiveDevice::R8168(n) => n.pci_device(),
+    }
+}
+
+pub fn pci_id_at(index: usize) -> Option<(u16, u16)> {
+    let d = pci_device_at(index)?;
+    Some((d.vendor, d.device))
+}
+
+pub fn bdf_at(index: usize) -> Option<(u8, u8, u8)> {
+    let d = pci_device_at(index)?;
+    Some((d.bus, d.slot, d.function))
+}
+
+pub fn find_device_by_vidpid(vendor: u16, device: u16) -> Option<usize> {
+    let count = device_count();
+    for idx in 0..count {
+        if pci_id_at(idx) == Some((vendor, device)) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+pub fn find_device_by_bdf(bus: u8, slot: u8, function: u8) -> Option<usize> {
+    let count = device_count();
+    for idx in 0..count {
+        if bdf_at(idx) == Some((bus, slot, function)) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+fn parse_hex_u16(s: &str) -> Option<u16> {
+    let s = s.trim();
+    if s.is_empty() || s.len() > 4 {
+        return None;
+    }
+    let mut out: u16 = 0;
+    for b in s.as_bytes() {
+        let v = match b {
+            b'0'..=b'9' => (b - b'0') as u16,
+            b'a'..=b'f' => (b - b'a' + 10) as u16,
+            b'A'..=b'F' => (b - b'A' + 10) as u16,
+            _ => return None,
+        };
+        out = (out << 4) | v;
+    }
+    Some(out)
+}
+
+fn parse_hex_u8(s: &str) -> Option<u8> {
+    let v = parse_hex_u16(s)?;
+    if v > u8::MAX as u16 {
+        return None;
+    }
+    Some(v as u8)
+}
+
+fn parse_u8_dec_or_hex(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let has_hex_alpha = s.as_bytes().iter().any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F'));
+    if has_hex_alpha {
+        parse_hex_u8(s)
+    } else {
+        s.parse::<u8>().ok()
+    }
+}
+
+/// Map an app/service owner string to a NIC index.
+///
+/// Supported suffix formats (after the last '@'):
+/// - `@<index>` (legacy)
+/// - `@vvvv:pppp` (PCI vendor:device, hex)
+/// - `@bb:dd.f` (PCI bus:slot.function; bus/slot hex, function dec/hex)
+pub fn device_index_from_owner(owner: &str) -> Option<usize> {
+    let (base, suffix) = owner.rsplit_once('@')?;
+    if base.is_empty() || suffix.is_empty() {
+        return None;
+    }
+    let suffix = suffix.trim();
+
+    // Legacy numeric index.
+    if suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return suffix.parse::<usize>().ok();
+    }
+
+    // BDF: bb:dd.f
+    if let Some((bus_s, rest)) = suffix.split_once(':') {
+        if let Some((slot_s, func_s)) = rest.split_once('.') {
+            if let (Some(bus), Some(slot), Some(function)) = (
+                parse_hex_u8(bus_s),
+                parse_hex_u8(slot_s),
+                parse_u8_dec_or_hex(func_s),
+            ) {
+                if let Some(idx) = find_device_by_bdf(bus, slot, function) {
+                    return Some(idx);
+                }
+            }
+        }
+    }
+
+    // VID:PID: vvvv:pppp
+    if let Some((vid_s, pid_s)) = suffix.split_once(':') {
+        if let (Some(vid), Some(pid)) = (parse_hex_u16(vid_s), parse_hex_u16(pid_s)) {
+            if let Some(idx) = find_device_by_vidpid(vid, pid) {
+                return Some(idx);
+            }
+        }
+    }
+
+    None
 }
 
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
@@ -188,6 +309,13 @@ pub fn init() {
         added += 1;
     }
 
+    for adapter in R8168Adapter::init_all() {
+        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
+        let mut guard = DEVICES.lock();
+        guard.push(ActiveDevice::R8168(NetCore::new(adapter, ring)));
+        added += 1;
+    }
+
     if ENABLE_R8125 {
         for adapter in R8125Adapter::init_all() {
             let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
@@ -195,15 +323,6 @@ pub fn init() {
             guard.push(ActiveDevice::R8125(NetCore::new(adapter, ring)));
             added += 1;
         }
-    } else {
-        crate::log!("net: r8125 disabled (temporary)\n");
-    }
-
-    for adapter in R8168Adapter::init_all() {
-        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
-        let mut guard = DEVICES.lock();
-        guard.push(ActiveDevice::R8168(NetCore::new(adapter, ring)));
-        added += 1;
     }
 
     if added == 0 {
@@ -265,15 +384,10 @@ pub fn primary_device_index() -> usize {
 }
 
 pub fn set_primary_device_index(index: usize) {
-    let count = device_count();
-    if count == 0 {
-        return;
-    }
-    let new_idx = index.min(count - 1);
-    let old_idx = PRIMARY_DEVICE_INDEX.swap(new_idx, Ordering::Relaxed);
-    if old_idx != new_idx {
-        crate::log!("net: primary device switched {} -> {}\n", old_idx, new_idx);
-    }
+    // Primary NIC selection is pinned to dev0 to keep multi-NIC setups deterministic.
+    // Use explicit device indices (`VNet::open(i)`, `net.icmp <host> [index]`) to test
+    // secondary NICs without impacting the primary network flow.
+    let _ = index;
 }
 
 fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {

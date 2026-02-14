@@ -60,14 +60,7 @@ fn leak_str(s: alloc::string::String) -> &'static str {
 }
 
 fn owner_device_index(owner: &str) -> Option<usize> {
-    let (base, suffix) = owner.rsplit_once('@')?;
-    if base.is_empty() || suffix.is_empty() {
-        return None;
-    }
-    if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    suffix.parse::<usize>().ok()
+    crate::net::device_index_from_owner(owner)
 }
 
 #[derive(Clone)]

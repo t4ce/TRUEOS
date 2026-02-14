@@ -27,11 +27,15 @@ QEMU_NET_FLAGS = -netdev tap,id=net1,ifname=tap0,script=no,downscript=no,vhost=o
 QEMU_RNG_FLAGS = -object rng-random,filename=/dev/urandom,id=rng0 \
 	-device virtio-rng-pci,rng=rng0,disable-modern=off
 
-QEMU_ISO_FLAGS = -display sdl,gl=on -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+CARGO_BUILD_FLAGS ?=
+
+QEMU_GPU_FLAGS ?= -vga none -device virtio-vga-gl
+
+QEMU_ISO_FLAGS = -display sdl,gl=on $(QEMU_GPU_FLAGS) -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	-device vfio-pci,host=0000:06:00.0,rombar=1 \
+	$(QEMU_VFIO_FLAGS) \
 	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=3,id=usbhost \
@@ -42,6 +46,10 @@ QEMU_USB_FLAGS = \
 	-device nvme,drive=nvme0,serial=t4ce \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=5,id=usbms 
+
+# Optional host PCI passthrough (VFIO). Example:
+#   make run QEMU_VFIO_FLAGS='-device vfio-pci,host=0000:06:00.0,rombar=1'
+QEMU_VFIO_FLAGS ?=
 	
 #-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 
@@ -106,7 +114,7 @@ iso: artifacts images
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 
 iso-release: BUILD_MODE := release
-iso-release: CARGO_BUILD_FLAGS := --release
+iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
 	7z a -t7z -mx=9 -m0=lzma2 $(ISO_DIR)/TrueOS.7z $(ISO_PATH)
 	gio mount smb://t4ce@pdjb/home-share || true

@@ -364,8 +364,16 @@ async fn fetch_on_device(
     );
 
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
-    // Suffix with "@<idx>" so tls-socket can pin the underlying TCP socket to the chosen NIC.
-    let owner = leak_str(format!("vhttps-{}@{}", seq, dev_idx));
+    // Suffix with a stable selector so tls-socket can pin the underlying TCP socket to the chosen NIC.
+    // Prefer PCI BDF (unique), otherwise fall back to VID:PID.
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        format!("{}", dev_idx)
+    };
+    let owner = leak_str(format!("vhttps-{}@{}", seq, selector));
     let cmds_name = leak_str(format!("{}-tls-cmd", owner));
     let evts_name = leak_str(format!("{}-tls-evt", owner));
 
@@ -597,7 +605,14 @@ async fn fetch_on_device_to_file(
     );
 
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let owner = leak_str(format!("vhttps-file-{}@{}", seq, dev_idx));
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        format!("{}", dev_idx)
+    };
+    let owner = leak_str(format!("vhttps-file-{}@{}", seq, selector));
     let cmds_name = leak_str(format!("{}-tls-cmd", owner));
     let evts_name = leak_str(format!("{}-tls-evt", owner));
 
