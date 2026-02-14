@@ -515,17 +515,12 @@ pub(crate) fn init_builtin_shell_commands() {
         use crate::shell::cmd;
 
         static ECMA48_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest)];
-        // static GET_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
-        // static HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
-        /*
-        static NET_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("op", ArgType::Str).mandatory(),
-            ArgSpec::new("target", ArgType::Str),
-        ];
-        */
         #[cfg(feature = "dma_nic_fpga")]
         static DMAFPGA_ARGS: [ArgSpec; 1] = [ArgSpec::new("arg", ArgType::Rest).mandatory()];
+
         static NO_ARGS: [ArgSpec; 0] = [];
+
+        // Network
         static NET_ARGS: [ArgSpec; 0] = [];
         static NET_ICMP_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("target", ArgType::Str).mandatory(),
@@ -535,10 +530,10 @@ pub(crate) fn init_builtin_shell_commands() {
         static NET_HOSTNAME_ARGS: [ArgSpec; 1] = [ArgSpec::new("name", ArgType::Str)];
         static NET_HTTP_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
         static NET_HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
-        
+
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
-        static OPENAI_ARGS: [ArgSpec; 2] = [
-            ArgSpec::new("code", ArgType::Str).mandatory(),
+        static AI_ARGS: [ArgSpec; 2] = [
+            ArgSpec::new("token", ArgType::Str).mandatory(),
             ArgSpec::new("first", ArgType::Rest),
         ];
 
@@ -556,25 +551,27 @@ pub(crate) fn init_builtin_shell_commands() {
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
-        #[cfg(feature = "gfx_virgl")]
-        static VIRGL_TRI_ARGS: [ArgSpec; 0] = [];
+
         #[cfg(feature = "gfx_virgl")]
         static VIRGL_GFX_ARGS: [ArgSpec; 0] = [];
+        #[cfg(feature = "gfx_virgl")]
+        static GFX_SPIN_ARGS: [ArgSpec; 0] = [];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
-        let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd); 
+        let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd);
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd::cmd_ecma48);
-        
+
         // Network
-        let _ = REGSHCMD("net", &NET_ARGS, cmd::cmd_net);           // Prints help
+        let _ = REGSHCMD("net", &NET_ARGS, cmd::cmd_net);
         let _ = REGSHCMD("net.icmp", &NET_ICMP_ARGS, cmd::cmd_net_icmp);
         let _ = REGSHCMD("net.nic", &NET_NIC_ARGS, cmd::cmd_net_nic);
         let _ = REGSHCMD("net.hostname", &NET_HOSTNAME_ARGS, cmd::cmd_net_hostname);
         let _ = REGSHCMD("net.http", &NET_HTTP_ARGS, cmd::cmd_net_http);
         let _ = REGSHCMD("net.https", &NET_HTTPS_ARGS, cmd::cmd_net_https);
-        
+
         #[cfg(feature = "dma_nic_fpga")]
         let _ = REGSHCMD("dmafpga", &DMAFPGA_ARGS, cmd::cmd_dmafpga);
+
         let _ = REGSHCMD("update", &NO_ARGS, cmd::cmd_update);
         let _ = REGSHCMD("install", &[], cmd::cmd_install);
         let _ = REGSHCMD("format", &NO_ARGS, cmd::cmd_format);
@@ -582,9 +579,11 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
-        let _ = REGSHCMD("ai", &OPENAI_ARGS, cmd::cmd_openai);
+
+        // AI (no alias)
+        let _ = REGSHCMD("ai", &AI_ARGS, cmd::cmd_ai);
+
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
-        // let _ = REGSHCMD("https", &HTTPS_ARGS, cmd::cmd_https);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
         let _ = REGSHCMD("go", &[], cmd::cmd_go);
         let _ = REGSHCMD("go.two", &[], cmd::cmd_go_two);
@@ -615,9 +614,10 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
-        #[cfg(feature = "gfx_virgl")]
-        let _ = REGSHCMD("virgl.tri", &VIRGL_TRI_ARGS, cmd::cmd_virgl_tri);
+
         #[cfg(feature = "gfx_virgl")]
         let _ = REGSHCMD("virgl.gfx", &VIRGL_GFX_ARGS, cmd::cmd_virgl_gfx);
+        #[cfg(feature = "gfx_virgl")]
+        let _ = REGSHCMD("gfx.spin", &GFX_SPIN_ARGS, cmd::cmd_gfx_spin);
     });
 }

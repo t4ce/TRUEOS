@@ -65,7 +65,7 @@ impl WssConnection {
             Err(_) => return Err(WssError::DnsFailed),
         };
 
-        let seq = WSS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let seq = WSS_SEQ.fetch_add(1, Ordering::Relaxed) as u64;
         let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
             format!("{:02x}:{:02x}.{}", bus, slot, func)
         } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
