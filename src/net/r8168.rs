@@ -119,6 +119,7 @@ impl Mmio {
 
 pub struct R8168Adapter {
     mmio: Mmio,
+    pci: pci::PciDevice,
     mac: [u8; 6],
     ring: Option<*mut NetRing>,
 
@@ -409,6 +410,7 @@ impl R8168Adapter {
 
         Ok(Self {
             mmio,
+            pci: dev,
             mac,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
@@ -862,6 +864,11 @@ impl VendorAdapter for R8168Adapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.transmit_hw(frame)
+    }
+
+    #[inline]
+    fn pci_device(&self) -> Option<pci::PciDevice> {
+        Some(self.pci)
     }
 
     fn bind_ring(&mut self, ring: *mut NetRing) {

@@ -41,8 +41,6 @@ const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 // Kept intentionally simple: we record what DHCP reports for the active primary NIC.
 static PRIMARY_DHCP_DNS: spin::Mutex<([[u8; 4]; DHCP_DNS_MAX], u8)> =
     spin::Mutex::new(([[0u8; 4]; DHCP_DNS_MAX], 0));
-static PRIMARY_DEVICE_LOCKED: AtomicBool = AtomicBool::new(false);
-static PRIMARY_REACHABLE_LOCKED: AtomicBool = AtomicBool::new(false);
 
 pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
     *PRIMARY_DHCP_DNS.lock()
@@ -1619,13 +1617,6 @@ impl NetService {
                     );
                 }
 
-                if PRIMARY_DEVICE_LOCKED
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    crate::net::set_primary_device_index(self.device_index);
-                }
-
                 if self.device_index == crate::net::primary_device_index() {
                     *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
                 }
@@ -1656,8 +1647,6 @@ impl NetService {
 
                     if self.device_index == crate::net::primary_device_index() {
                         *PRIMARY_DHCP_DNS.lock() = ([[0u8; 4]; DHCP_DNS_MAX], 0);
-                        PRIMARY_DEVICE_LOCKED.store(false, Ordering::SeqCst);
-                        PRIMARY_REACHABLE_LOCKED.store(false, Ordering::SeqCst);
                     }
                 }
             }
@@ -1673,12 +1662,6 @@ impl NetService {
     }
 
     fn maybe_send_icmp_ping(&mut self, timestamp: Instant) {
-        if PRIMARY_REACHABLE_LOCKED.load(Ordering::Relaxed)
-            && self.device_index != crate::net::primary_device_index()
-        {
-            return;
-        }
-
         if self.icmp_ping_pongs >= 1 {
             return;
         }
@@ -1803,22 +1786,6 @@ impl NetService {
                                     self.device_index
                                 );
                                 crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
-
-                                // Prefer the first NIC that has proven end-to-end
-                                // L2/L3 reachability to the gateway for default vnet users.
-                                if PRIMARY_REACHABLE_LOCKED
-                                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                                    .is_ok()
-                                {
-                                    crate::net::set_primary_device_index(self.device_index);
-                                    if self.device_index == crate::net::primary_device_index() {
-                                        *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
-                                    }
-                                    crate::log!(
-                                        "net: primary locked by reachability dev={}\n",
-                                        self.device_index
-                                    );
-                                }
                             }
                         }
                     }
@@ -1871,14 +1838,7 @@ static POLL_SCRATCH_BUF: spin::Mutex<[u8; 8192]> = spin::Mutex::new([0u8; 8192])
 static NET_SERVICES: spin::Mutex<Option<Vec<NetService>>> = spin::Mutex::new(None);
 
 fn owner_device_index(owner: &str) -> Option<usize> {
-    let (base, suffix) = owner.rsplit_once('@')?;
-    if base.is_empty() || suffix.is_empty() {
-        return None;
-    }
-    if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    suffix.parse::<usize>().ok()
+    crate::net::device_index_from_owner(owner)
 }
 
 fn ensure_services(count: usize) {

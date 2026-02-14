@@ -44,8 +44,16 @@ impl VNet {
     // otherwise leave our new queues undrained.
     let seq = VNET_SEQ.fetch_add(1, Ordering::Relaxed);
 
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(device_index) {
+      format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(device_index) {
+      format!("{:04x}:{:04x}", vid, pid)
+    } else {
+      format!("{}", device_index)
+    };
+
     let owner: &'static str = {
-      let s = format!("vnet-{}@{}", seq, device_index);
+      let s = format!("vnet-{}@{}", seq, selector);
       Box::leak(s.into_boxed_str())
     };
 
@@ -91,7 +99,7 @@ impl VNet {
   }
 
   pub fn mac_address(&self) -> Option<api::MacAddr> {
-    let idx = owner_device_index(self.owner)?;
+    let idx = crate::net::device_index_from_owner(self.owner)?;
     crate::net::mac_address_at(idx).map(api::MacAddr)
   }
 
@@ -153,17 +161,6 @@ impl VNet {
       other => from_kernel_event(other),
     }
   }
-}
-
-fn owner_device_index(owner: &str) -> Option<usize> {
-  let (base, suffix) = owner.rsplit_once('@')?;
-  if base.is_empty() || suffix.is_empty() {
-    return None;
-  }
-  if !suffix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-    return None;
-  }
-  suffix.parse::<usize>().ok()
 }
 
 fn to_kernel_endpoint(ep: api::EndpointV4) -> NetEndpoint {

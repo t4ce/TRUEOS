@@ -52,7 +52,14 @@ impl WssConnection {
         };
 
         let seq = WSS_SEQ.fetch_add(1, Ordering::Relaxed);
-        let owner = Box::leak(format!("wss-{}@{}", seq, dev_idx).into_boxed_str());
+        let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+            format!("{:02x}:{:02x}.{}", bus, slot, func)
+        } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+            format!("{:04x}:{:04x}", vid, pid)
+        } else {
+            format!("{}", dev_idx)
+        };
+        let owner = Box::leak(format!("wss-{}@{}", seq, selector).into_boxed_str());
         let cmds_name = Box::leak(format!("{}-wss-cmd", owner).into_boxed_str());
         let evts_name = Box::leak(format!("{}-wss-evt", owner).into_boxed_str());
 

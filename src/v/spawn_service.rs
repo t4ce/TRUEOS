@@ -450,7 +450,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "net-tcp-shell",
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: 0,
         started: &NET_TCP_SHELL_STARTED,
         spawn: spawn_net_tcp_shell,
     },
