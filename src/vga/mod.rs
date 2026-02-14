@@ -179,7 +179,13 @@ pub fn header_height() -> usize {
     TOP_MARGIN.load(Ordering::Relaxed)
 }
 
-pub fn draw_header_square(total_slots: usize, slot: usize, color: u32, degree: u32) -> bool {
+pub fn draw_header_square(
+    total_slots: usize,
+    slot: usize,
+    color: u32,
+    outline_color: u32,
+    degree: u32,
+) -> bool {
     let square_side_length: usize = 25;
     with_framebuffer(|fb| {
         let slot = slot % total_slots;
@@ -207,12 +213,10 @@ pub fn draw_header_square(total_slots: usize, slot: usize, color: u32, degree: u
                 let ry = dx * s + dy * c;
                 pts[i] = (roundf(cx + rx) as i32, roundf(cy + ry) as i32);
             }
-
-            let white = DEFAULT_FG_COLOR;
             for i in 0..4 {
                 let (x0, y0) = pts[i];
                 let (x1, y1) = pts[(i + 1) % 4];
-                fb.draw_line(x0, y0, x1, y1, white);
+                fb.draw_line(x0, y0, x1, y1, outline_color);
             }
         }
 
