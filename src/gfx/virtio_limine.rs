@@ -6,7 +6,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::gfx::virtio_gpu_3d::VirtioGpu3d;
+use crate::gfx::virtio_gpu_3d::with_global_gpu;
 
 // Virtio-gpu scanout expects B8G8R8X8 for our current pipeline.
 const FORMAT_B8G8R8X8_UNORM: u32 = 2;
@@ -26,7 +26,6 @@ fn alloc_res_id() -> u32 {
 }
 
 struct MirrorState {
-    gpu: Option<VirtioGpu3d>,
     scanout_id: u32,
     res_id: u32,
     present_w: u32,
@@ -36,7 +35,6 @@ struct MirrorState {
 impl MirrorState {
     const fn new() -> Self {
         Self {
-            gpu: None,
             scanout_id: 0,
             res_id: 0,
             present_w: 0,
@@ -45,7 +43,6 @@ impl MirrorState {
     }
 
     fn disable(&mut self) {
-        self.gpu = None;
         self.scanout_id = 0;
         self.res_id = 0;
         self.present_w = 0;
@@ -58,9 +55,27 @@ static STATE: Mutex<MirrorState> = Mutex::new(MirrorState::new());
 fn limine_fb_phys_addr(ptr: *mut u8) -> Option<u64> {
     let addr = ptr as u64;
     if let Some(phys) = crate::limine::try_as_phys_addr(addr) {
+        crate::log!(
+            "virtio-limine: phys via try_as_phys_addr virt=0x{:X} phys=0x{:X}\n",
+            ptr as usize,
+            phys
+        );
         return Some(phys);
     }
-    crate::phys::virt_to_phys_checked(ptr as *const u8)
+    let phys = crate::phys::virt_to_phys_checked(ptr as *const u8);
+    if let Some(p) = phys {
+        crate::log!(
+            "virtio-limine: phys via virt_to_phys_checked virt=0x{:X} phys=0x{:X}\n",
+            ptr as usize,
+            p
+        );
+    } else {
+        crate::log!(
+            "virtio-limine: phys translate failed virt=0x{:X}\n",
+            ptr as usize
+        );
+    }
+    phys
 }
 
 pub fn disable() {
@@ -99,6 +114,15 @@ pub fn enable(framebuffers: Option<&'static ::limine::response::FramebufferRespo
         return false;
     }
 
+    crate::log!(
+        "virtio-limine: fb virt=0x{:X} {}x{} pitch={} bytes={}\n",
+        addr as usize,
+        fb_w,
+        fb_h,
+        pitch,
+        pitch.saturating_mul(fb_h as usize)
+    );
+
     let Some(backing_phys) = limine_fb_phys_addr(addr) else {
         crate::log!("virtio-limine: virt->phys failed addr=0x{:X}\n", addr as usize);
         return false;
@@ -109,39 +133,68 @@ pub fn enable(framebuffers: Option<&'static ::limine::response::FramebufferRespo
         .saturating_mul(fb_h as usize)
         .min(u32::MAX as usize) as u32;
 
-    let Some(mut gpu) = VirtioGpu3d::init_first() else {
-        crate::log!("virtio-limine: virtio-gpu init_first failed\n");
-        return false;
-    };
-    let Some((scanout_id, disp_w, disp_h)) = gpu.get_display_info() else {
+    let Some((scanout_id, disp_w, disp_h)) = with_global_gpu(|gpu| gpu.get_display_info()).flatten() else {
         crate::log!("virtio-limine: get_display_info failed\n");
         return false;
     };
+
+    crate::log!(
+        "virtio-limine: display_info scanout={} {}x{}\n",
+        scanout_id,
+        disp_w,
+        disp_h
+    );
 
     let present_w = disp_w.min(fb_w).max(1);
     let present_h = disp_h.min(fb_h).max(1);
 
     let res_id = alloc_res_id();
-    if !gpu.resource_create_2d(res_id, FORMAT_B8G8R8X8_UNORM, stride_pixels, fb_h) {
+    let ok_create = with_global_gpu(|gpu| {
+        gpu.resource_create_2d(res_id, FORMAT_B8G8R8X8_UNORM, stride_pixels, fb_h)
+    })
+    .unwrap_or(false);
+    if !ok_create {
         crate::log!("virtio-limine: resource_create_2d failed\n");
         return false;
     }
-    if !gpu.resource_attach_backing(res_id, backing_phys, backing_len) {
+    let ok_attach = with_global_gpu(|gpu| gpu.resource_attach_backing(res_id, backing_phys, backing_len))
+        .unwrap_or(false);
+    if !ok_attach {
         crate::log!("virtio-limine: attach_backing failed\n");
         return false;
     }
-    if !gpu.set_scanout(scanout_id, res_id, present_w, present_h) {
+    let ok_scanout = with_global_gpu(|gpu| gpu.set_scanout(scanout_id, res_id, present_w, present_h))
+        .unwrap_or(false);
+    if !ok_scanout {
         crate::log!("virtio-limine: set_scanout failed\n");
         return false;
     }
 
+    crate::log!(
+        "virtio-limine: set_scanout ok res={} present={}x{} stride_px={} backing_phys=0x{:X} backing_len={}\n",
+        res_id,
+        present_w,
+        present_h,
+        stride_pixels,
+        backing_phys,
+        backing_len
+    );
+
     // Make sure the host resource is initialized from guest memory at least once.
-    let _ = gpu.transfer_to_host_2d(res_id, present_w, present_h);
-    let _ = gpu.resource_flush(res_id, present_w, present_h);
+    let (ok_tth, ok_flush) = with_global_gpu(|gpu| {
+        let ok_tth = gpu.transfer_to_host_2d(res_id, present_w, present_h);
+        let ok_flush = gpu.resource_flush(res_id, present_w, present_h);
+        (ok_tth, ok_flush)
+    })
+    .unwrap_or((false, false));
+    crate::log!(
+        "virtio-limine: initial transfer_to_host={} flush={}\n",
+        ok_tth as u8,
+        ok_flush as u8
+    );
 
     {
         let mut st = STATE.lock();
-        st.gpu = Some(gpu);
         st.scanout_id = scanout_id;
         st.res_id = res_id;
         st.present_w = present_w;
@@ -177,15 +230,52 @@ async fn virtio_limine_mirror_task() {
     // 30Hz is plenty for console + simple animations; keeps overhead low.
     let period = EmbassyDuration::from_millis(33);
 
+    let mut tick: u32 = 0;
+    let mut last_ok: i8 = -1;
+
     loop {
         if ENABLED.load(Ordering::Acquire) {
             let mut guard = STATE.lock();
             let w = guard.present_w;
             let h = guard.present_h;
             let res = guard.res_id;
-            if let Some(gpu) = guard.gpu.as_mut() {
-                let _ = gpu.transfer_to_host_2d(res, w, h);
-                let _ = gpu.resource_flush(res, w, h);
+            // Drop lock before issuing virtio commands.
+            core::mem::drop(guard);
+
+            let (ok_tth, ok_flush) = with_global_gpu(|gpu| {
+                let ok_tth = gpu.transfer_to_host_2d(res, w, h);
+                let ok_flush = gpu.resource_flush(res, w, h);
+                (ok_tth, ok_flush)
+            })
+            .unwrap_or((false, false));
+
+            let ok = (ok_tth && ok_flush) as i8;
+
+            // Only log on state change or occasional heartbeat.
+            tick = tick.wrapping_add(1);
+            if ok != last_ok {
+                last_ok = ok;
+                crate::log!(
+                    "virtio-limine: mirror state ok={} (tth={} flush={}) res={} {}x{}\n",
+                    ok,
+                    ok_tth as u8,
+                    ok_flush as u8,
+                    res,
+                    w,
+                    h
+                );
+            } else if ok == 0 {
+                // If failing continuously, log at ~1Hz.
+                if (tick % 30) == 0 {
+                    crate::log!(
+                        "virtio-limine: mirror failing (tth={} flush={}) res={} {}x{}\n",
+                        ok_tth as u8,
+                        ok_flush as u8,
+                        res,
+                        w,
+                        h
+                    );
+                }
             }
         }
         Timer::after(period).await;
