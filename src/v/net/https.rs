@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -23,6 +23,40 @@ use crate::wait::WaitQueue;
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
+
+// Net-fetch scheduler (used by QJS URL module cache):
+// - coalesces concurrent requests for the same cache key
+// - caps concurrency to avoid TLS-handshake storms starving the executor
+const NET_FETCH_MAX_CONCURRENCY: usize = 4;
+static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Default)]
+struct InflightFetch {
+    leader: u32,
+    followers: Vec<u32>,
+}
+
+static CABI_NET_FETCH_INFLIGHT: Mutex<BTreeMap<String, InflightFetch>> = Mutex::new(BTreeMap::new());
+
+async fn net_fetch_acquire_slot() {
+    loop {
+        let cur = NET_FETCH_ACTIVE.load(Ordering::Relaxed);
+        if cur < NET_FETCH_MAX_CONCURRENCY {
+            if NET_FETCH_ACTIVE
+                .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return;
+            }
+        }
+        // Cooperative backoff.
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+}
+
+fn net_fetch_release_slot() {
+    NET_FETCH_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+}
 
 /// Errors returned by [`fetch_https_body_async`].
 #[derive(Clone, Debug)]
@@ -640,11 +674,15 @@ async fn fetch_on_device_to_file(
     disk: crate::disc::block::DeviceHandle,
     tmp_path: &str,
 ) -> Result<(), FetchToFileError> {
+    let t0 = Instant::now();
+
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsTimeout))),
         Err(_) => return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsFailed))),
     };
+
+    let t_dns = Instant::now();
 
     crate::log!(
         "vhttps: host={} dev={} ip={}.{}.{}.{}\n",
@@ -681,6 +719,13 @@ async fn fetch_on_device_to_file(
     let mut sent_connect = false;
     let mut http_sent = false;
 
+    let mut t_open_sent: Option<Instant> = None;
+    let mut t_tcp_opened: Option<Instant> = None;
+    let mut t_tls_connected: Option<Instant> = None;
+    let mut t_header_done: Option<Instant> = None;
+    let mut t_write_begin: Option<Instant> = None;
+    let mut t_write_done: Option<Instant> = None;
+
     let mut header_buf: Vec<u8> = Vec::new();
     let mut header_done = false;
     let mut body_is_chunked = false;
@@ -690,15 +735,77 @@ async fn fetch_on_device_to_file(
     let mut body_written = 0usize;
     let mut stream_handle: Option<u32> = None;
 
+    let mut last_http_status: u16 = 0;
+
+    #[inline]
+    fn ms_since(a: Instant, b: Instant) -> u64 {
+        b.saturating_duration_since(a).as_millis() as u64
+    }
+
+    #[inline]
+    fn log_vhttps_file_timing(
+        host: &str,
+        dev_idx: usize,
+        status: u16,
+        t0: Instant,
+        t_dns: Instant,
+        t_open_sent: Option<Instant>,
+        t_tcp_opened: Option<Instant>,
+        t_tls_connected: Option<Instant>,
+        t_header_done: Option<Instant>,
+        t_write_begin: Option<Instant>,
+        t_write_done: Option<Instant>,
+        rc: i32,
+    ) {
+        let t_end = Instant::now();
+        let dns_ms = ms_since(t0, t_dns);
+        let tcp_ms = match (t_open_sent, t_tcp_opened) {
+            (Some(a), Some(b)) => ms_since(a, b),
+            _ => 0,
+        };
+        let tls_ms = match (t_tcp_opened, t_tls_connected) {
+            (Some(a), Some(b)) => ms_since(a, b),
+            _ => 0,
+        };
+        let hdr_ms = match (t_tls_connected, t_header_done) {
+            (Some(a), Some(b)) => ms_since(a, b),
+            _ => 0,
+        };
+        let write_ms = match (t_write_begin, t_write_done) {
+            (Some(a), Some(b)) => ms_since(a, b),
+            _ => 0,
+        };
+        let total_ms = ms_since(t0, t_end);
+        crate::log!(
+            "vhttps-file: timing host={} dev={} status={} rc={} dns={}ms tcp={}ms tls={}ms hdr={}ms write={}ms total={}ms\n",
+            host,
+            dev_idx,
+            status,
+            rc,
+            dns_ms,
+            tcp_ms,
+            tls_ms,
+            hdr_ms,
+            write_ms,
+            total_ms,
+        );
+    }
+
     loop {
         for ev in events.drain(1024) {
             match ev {
                 TlsEvent::Opened { handle } => {
                     tls_handle = Some(handle);
+                    if t_tcp_opened.is_none() {
+                        t_tcp_opened = Some(Instant::now());
+                    }
                 }
                 TlsEvent::Connected { handle } => {
                     if tls_handle != Some(handle) {
                         continue;
+                    }
+                    if t_tls_connected.is_none() {
+                        t_tls_connected = Some(Instant::now());
                     }
                     if !http_sent {
                         let req = format!(
@@ -733,6 +840,7 @@ async fn fetch_on_device_to_file(
                         if let Some(hdr_end) = find_http_header_end(&header_buf) {
                             let headers = &header_buf[..hdr_end];
                             let status = parse_http_status(headers).unwrap_or(0);
+                            last_http_status = status;
                             if status != 200 {
                                 if is_redirect_status(status) {
                                     if let Some(next) = redirect_url_from_location(parsed, headers) {
@@ -742,6 +850,20 @@ async fn fetch_on_device_to_file(
                                         if let Some(sh) = stream_handle.take() {
                                             let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                         }
+                                        log_vhttps_file_timing(
+                                            parsed.host.as_str(),
+                                            dev_idx,
+                                            last_http_status,
+                                            t0,
+                                            t_dns,
+                                            t_open_sent,
+                                            t_tcp_opened,
+                                            t_tls_connected,
+                                            t_header_done,
+                                            t_write_begin,
+                                            t_write_done,
+                                            fetch_error_to_code(FetchError::Http(status)),
+                                        );
                                         return Err(FetchToFileError::Redirect { status, url: next });
                                     }
                                 }
@@ -752,7 +874,22 @@ async fn fetch_on_device_to_file(
                                 if let Some(sh) = stream_handle.take() {
                                     let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(status))));
+                                let rc = fetch_error_to_code(FetchError::Http(status));
+                                log_vhttps_file_timing(
+                                    parsed.host.as_str(),
+                                    dev_idx,
+                                    last_http_status,
+                                    t0,
+                                    t_dns,
+                                    t_open_sent,
+                                    t_tcp_opened,
+                                    t_tls_connected,
+                                    t_header_done,
+                                    t_write_begin,
+                                    t_write_done,
+                                    rc,
+                                );
+                                return Err(FetchToFileError::Code(rc));
                             }
 
                             let Some(head) = parse_http_head(headers) else {
@@ -767,7 +904,22 @@ async fn fetch_on_device_to_file(
                                     parsed.host,
                                     header_buf.len()
                                 );
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                                let rc = fetch_error_to_code(FetchError::Http(0));
+                                log_vhttps_file_timing(
+                                    parsed.host.as_str(),
+                                    dev_idx,
+                                    last_http_status,
+                                    t0,
+                                    t_dns,
+                                    t_open_sent,
+                                    t_tcp_opened,
+                                    t_tls_connected,
+                                    t_header_done,
+                                    t_write_begin,
+                                    t_write_done,
+                                    rc,
+                                );
+                                return Err(FetchToFileError::Code(rc));
                             };
                             log_http_head("vhttps-file: head", parsed.host.as_str(), head);
 
@@ -785,10 +937,28 @@ async fn fetch_on_device_to_file(
                                 if let Some(sh) = stream_handle.take() {
                                     let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                                log_vhttps_file_timing(
+                                    parsed.host.as_str(),
+                                    dev_idx,
+                                    last_http_status,
+                                    t0,
+                                    t_dns,
+                                    t_open_sent,
+                                    t_tcp_opened,
+                                    t_tls_connected,
+                                    t_header_done,
+                                    t_write_begin,
+                                    t_write_done,
+                                    rc,
+                                );
+                                return Err(FetchToFileError::Code(rc));
                             }
 
                             if !body_is_chunked {
+                                if t_write_begin.is_none() {
+                                    t_write_begin = Some(Instant::now());
+                                }
                                 let sh = match crate::v::fs::trueosfs::file_write_begin_async(
                                     disk,
                                     tmp_path,
@@ -799,11 +969,30 @@ async fn fetch_on_device_to_file(
                                 .map_err(FetchToFileError::Code)?
                                 {
                                     Some(h) => h,
-                                    None => return Err(FetchToFileError::Code(FS_ERR_NO_SPACE)),
+                                    None => {
+                                        log_vhttps_file_timing(
+                                            parsed.host.as_str(),
+                                            dev_idx,
+                                            last_http_status,
+                                            t0,
+                                            t_dns,
+                                            t_open_sent,
+                                            t_tcp_opened,
+                                            t_tls_connected,
+                                            t_header_done,
+                                            t_write_begin,
+                                            t_write_done,
+                                            FS_ERR_NO_SPACE,
+                                        );
+                                        return Err(FetchToFileError::Code(FS_ERR_NO_SPACE));
+                                    }
                                 };
                                 stream_handle = Some(sh);
                             }
                             header_done = true;
+                            if t_header_done.is_none() {
+                                t_header_done = Some(Instant::now());
+                            }
 
                             let body_start = hdr_end;
                             if header_buf.len() > body_start {
@@ -814,7 +1003,22 @@ async fn fetch_on_device_to_file(
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
                                         }
-                                        return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                        let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                                        log_vhttps_file_timing(
+                                            parsed.host.as_str(),
+                                            dev_idx,
+                                            last_http_status,
+                                            t0,
+                                            t_dns,
+                                            t_open_sent,
+                                            t_tcp_opened,
+                                            t_tls_connected,
+                                            t_header_done,
+                                            t_write_begin,
+                                            t_write_done,
+                                            rc,
+                                        );
+                                        return Err(FetchToFileError::Code(rc));
                                     }
                                     let take = part.len().min(room);
                                     chunked_raw_body.extend_from_slice(&part[..take]);
@@ -822,7 +1026,22 @@ async fn fetch_on_device_to_file(
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
                                         }
-                                        return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                        let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                                        log_vhttps_file_timing(
+                                            parsed.host.as_str(),
+                                            dev_idx,
+                                            last_http_status,
+                                            t0,
+                                            t_dns,
+                                            t_open_sent,
+                                            t_tcp_opened,
+                                            t_tls_connected,
+                                            t_header_done,
+                                            t_write_begin,
+                                            t_write_done,
+                                            rc,
+                                        );
+                                        return Err(FetchToFileError::Code(rc));
                                     }
                                 } else if let Some(sh) = stream_handle {
                                     let rem = body_expected.saturating_sub(body_written);
@@ -844,10 +1063,27 @@ async fn fetch_on_device_to_file(
                                         .await
                                         .map_err(block_error_to_code)
                                         .map_err(FetchToFileError::Code)?;
+                                    if t_write_done.is_none() {
+                                        t_write_done = Some(Instant::now());
+                                    }
                                 }
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
+                                log_vhttps_file_timing(
+                                    parsed.host.as_str(),
+                                    dev_idx,
+                                    last_http_status,
+                                    t0,
+                                    t_dns,
+                                    t_open_sent,
+                                    t_tcp_opened,
+                                    t_tls_connected,
+                                    t_header_done,
+                                    t_write_begin,
+                                    t_write_done,
+                                    0,
+                                );
                                 return Ok(());
                             }
                         }
@@ -857,7 +1093,22 @@ async fn fetch_on_device_to_file(
                             if let Some(h) = tls_handle {
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                            let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                rc,
+                            );
+                            return Err(FetchToFileError::Code(rc));
                         }
                         let take = data.len().min(room);
                         chunked_raw_body.extend_from_slice(&data[..take]);
@@ -865,21 +1116,71 @@ async fn fetch_on_device_to_file(
                             if let Some(h) = tls_handle {
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                            let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                rc,
+                            );
+                            return Err(FetchToFileError::Code(rc));
                         }
                         if let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) {
                             if decoded.len() > max_bytes {
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                                log_vhttps_file_timing(
+                                    parsed.host.as_str(),
+                                    dev_idx,
+                                    last_http_status,
+                                    t0,
+                                    t_dns,
+                                    t_open_sent,
+                                    t_tcp_opened,
+                                    t_tls_connected,
+                                    t_header_done,
+                                    t_write_begin,
+                                    t_write_done,
+                                    rc,
+                                );
+                                return Err(FetchToFileError::Code(rc));
+                            }
+                            if t_write_begin.is_none() {
+                                t_write_begin = Some(Instant::now());
                             }
                             write_body_to_tmp_file(disk, tmp_path, decoded.as_slice())
                                 .await
                                 .map_err(FetchToFileError::Code)?;
+                            if t_write_done.is_none() {
+                                t_write_done = Some(Instant::now());
+                            }
                             if let Some(h) = tls_handle {
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                0,
+                            );
                             return Ok(());
                         }
                     } else if let Some(sh) = stream_handle {
@@ -897,9 +1198,26 @@ async fn fetch_on_device_to_file(
                                 .await
                                 .map_err(block_error_to_code)
                                 .map_err(FetchToFileError::Code)?;
+                            if t_write_done.is_none() {
+                                t_write_done = Some(Instant::now());
+                            }
                             if let Some(h) = tls_handle {
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                0,
+                            );
                             return Ok(());
                         }
                     }
@@ -913,26 +1231,91 @@ async fn fetch_on_device_to_file(
                             if let Some(sh) = stream_handle.take() {
                                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                             }
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                            let rc = fetch_error_to_code(FetchError::Http(0));
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                rc,
+                            );
+                            return Err(FetchToFileError::Code(rc));
                         };
                         if decoded.len() > max_bytes {
                             if let Some(sh) = stream_handle.take() {
                                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                             }
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                            let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
+                            log_vhttps_file_timing(
+                                parsed.host.as_str(),
+                                dev_idx,
+                                last_http_status,
+                                t0,
+                                t_dns,
+                                t_open_sent,
+                                t_tcp_opened,
+                                t_tls_connected,
+                                t_header_done,
+                                t_write_begin,
+                                t_write_done,
+                                rc,
+                            );
+                            return Err(FetchToFileError::Code(rc));
                         }
                         if let Some(sh) = stream_handle.take() {
                             let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                         }
+                        if t_write_begin.is_none() {
+                            t_write_begin = Some(Instant::now());
+                        }
                         write_body_to_tmp_file(disk, tmp_path, decoded.as_slice())
                             .await
                             .map_err(FetchToFileError::Code)?;
+                        if t_write_done.is_none() {
+                            t_write_done = Some(Instant::now());
+                        }
+                        log_vhttps_file_timing(
+                            parsed.host.as_str(),
+                            dev_idx,
+                            last_http_status,
+                            t0,
+                            t_dns,
+                            t_open_sent,
+                            t_tcp_opened,
+                            t_tls_connected,
+                            t_header_done,
+                            t_write_begin,
+                            t_write_done,
+                            0,
+                        );
                         return Ok(());
                     }
                     if let Some(sh) = stream_handle.take() {
                         let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                     }
-                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
+                    let rc = fetch_error_to_code(FetchError::BodyTimeout);
+                    log_vhttps_file_timing(
+                        parsed.host.as_str(),
+                        dev_idx,
+                        last_http_status,
+                        t0,
+                        t_dns,
+                        t_open_sent,
+                        t_tcp_opened,
+                        t_tls_connected,
+                        t_header_done,
+                        t_write_begin,
+                        t_write_done,
+                        rc,
+                    );
+                    return Err(FetchToFileError::Code(rc));
                 }
                 TlsEvent::Error { .. } => {}
                 TlsEvent::TlsError { .. } => {
@@ -942,7 +1325,22 @@ async fn fetch_on_device_to_file(
                     if let Some(sh) = stream_handle.take() {
                         let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                     }
-                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Tls)));
+                    let rc = fetch_error_to_code(FetchError::Tls);
+                    log_vhttps_file_timing(
+                        parsed.host.as_str(),
+                        dev_idx,
+                        last_http_status,
+                        t0,
+                        t_dns,
+                        t_open_sent,
+                        t_tcp_opened,
+                        t_tls_connected,
+                        t_header_done,
+                        t_write_begin,
+                        t_write_done,
+                        rc,
+                    );
+                    return Err(FetchToFileError::Code(rc));
                 }
             }
         }
@@ -957,6 +1355,9 @@ async fn fetch_on_device_to_file(
                 cfg: cfg.clone(),
                 roots: roots.clone(),
             });
+            if t_open_sent.is_none() {
+                t_open_sent = Some(Instant::now());
+            }
             sent_connect = true;
         }
 
@@ -967,13 +1368,28 @@ async fn fetch_on_device_to_file(
             if let Some(sh) = stream_handle.take() {
                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
             }
-            return Err(FetchToFileError::Code(if tls_handle.is_none() {
+            let rc = if tls_handle.is_none() {
                 fetch_error_to_code(FetchError::ConnectTimeout)
             } else if !http_sent {
                 fetch_error_to_code(FetchError::TlsTimeout)
             } else {
                 fetch_error_to_code(FetchError::BodyTimeout)
-            }));
+            };
+            log_vhttps_file_timing(
+                parsed.host.as_str(),
+                dev_idx,
+                last_http_status,
+                t0,
+                t_dns,
+                t_open_sent,
+                t_tcp_opened,
+                t_tls_connected,
+                t_header_done,
+                t_write_begin,
+                t_write_done,
+                rc,
+            );
+            return Err(FetchToFileError::Code(rc));
         }
 
         Timer::after(EmbassyDuration::from_millis(2)).await;
@@ -1040,6 +1456,7 @@ pub async fn fetch_https_to_file_async(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<(), i32> {
+    let t0 = Instant::now();
     let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() else {
         return Err(FS_ERR_USBMS_NOT_FOUND);
     };
@@ -1051,6 +1468,8 @@ pub async fn fetch_https_to_file_async(
         Ok(false) => {}
         Err(e) => return Err(block_error_to_code(e)),
     }
+
+    let t_exists = Instant::now();
 
     const MAX_REDIRECTS: usize = 3;
 
@@ -1117,7 +1536,25 @@ pub async fn fetch_https_to_file_async(
         return Err(last_err);
     }
 
-    match crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await {
+    let t_dl = Instant::now();
+
+    let rename_res = crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await;
+    let t_ren = Instant::now();
+
+    let total_ms = t_ren.saturating_duration_since(t0).as_millis() as u64;
+    let exists_ms = t_exists.saturating_duration_since(t0).as_millis() as u64;
+    let dl_ms = t_dl.saturating_duration_since(t_exists).as_millis() as u64;
+    let ren_ms = t_ren.saturating_duration_since(t_dl).as_millis() as u64;
+    crate::log!(
+        "vhttps-cache: done key={} ms_total={} exists={} dl={} rename={}\n",
+        key,
+        total_ms,
+        exists_ms,
+        dl_ms,
+        ren_ms
+    );
+
+    match rename_res {
         Ok(true) => Ok(()),
         Ok(false) => {
             let _ = crate::v::fs::trueosfs::file_delete_async(disk, tmp.as_str()).await;
@@ -1155,19 +1592,67 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     const TIMEOUT_MS: u32 = 2_500;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
+    // Normalize the cache key so coalescing matches how fetch_https_to_file_async resolves paths.
+    let key = match normalize_rel(path_s, false) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+
     let url = String::from(url_s);
     let path = String::from(path_s);
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
+
+    // Coalesce duplicates: if the same cache key is already being fetched, register as follower.
+    {
+        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        if let Some(entry) = inflight.get_mut(&key) {
+            entry.followers.push(op_id);
+            return op_id;
+        }
+        inflight.insert(
+            key.clone(),
+            InflightFetch {
+                leader: op_id,
+                followers: Vec::new(),
+            },
+        );
+    }
+
     crate::wait::spawn_local_detached(async move {
+        let t0 = Instant::now();
+        net_fetch_acquire_slot().await;
         let rc = match fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES).await {
             Ok(()) => 0,
             Err(code) => code,
         };
+        net_fetch_release_slot();
+        let elapsed_ms = t0.elapsed().as_millis() as u64;
+
+        // Complete leader + all followers.
+        let followers = {
+            let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+            inflight.remove(&key).map(|e| e.followers).unwrap_or_default()
+        };
+
         let mut map = CABI_NET_FETCH_RESULTS.lock();
         if let Some(slot) = map.get_mut(&op_id) {
             *slot = Some(rc);
         }
+        for fid in &followers {
+            if let Some(slot) = map.get_mut(fid) {
+                *slot = Some(rc);
+            }
+        }
+
+        crate::log!(
+            "net-fetch: done key={} rc={} ms={} followers={}\n",
+            key,
+            rc,
+            elapsed_ms,
+            followers.len()
+        );
+
         CABI_NET_FETCH_WAIT.notify_all();
     });
     op_id
@@ -1194,6 +1679,15 @@ pub extern "C" fn trueos_cabi_net_fetch_result(op_id: u32) -> i32 {
 pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
     let mut map = CABI_NET_FETCH_RESULTS.lock();
     map.remove(&op_id);
+
+    // Best-effort: remove from any follower lists so coalescing maps don't retain dead ids.
+    // (Leader tasks may still complete; they will simply skip removed result slots.)
+    {
+        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        for (_k, v) in inflight.iter_mut() {
+            v.followers.retain(|&id| id != op_id);
+        }
+    }
     0
 }
 
