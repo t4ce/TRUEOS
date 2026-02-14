@@ -700,20 +700,15 @@ async fn read_line(
 
 async fn repl(io: &'static dyn ShellBackend) {
     unsafe {
-        let rt = trueos_qjs::JS_NewRuntime();
-        if rt.is_null() {
-            io.write_str("qjs: JS_NewRuntime failed\r\n");
-            return;
-        }
-
-        trueos_qjs::node::install(rt);
-
-        let ctx = trueos_qjs::JS_NewContext(rt);
-        if ctx.is_null() {
-            trueos_qjs::JS_FreeRuntime(rt);
-            io.write_str("qjs: JS_NewContext failed\r\n");
-            return;
-        }
+        let vm = match trueos_qjs::vm::QjsVm::new_node() {
+            Some(vm) => vm,
+            None => {
+                io.write_str("qjs: JS_NewRuntime failed\r\n");
+                return;
+            }
+        };
+        let rt = vm.rt_ptr();
+        let ctx = vm.ctx_ptr();
 
         let opaque = Box::new(QjsShellOpaque { io });
         let opaque_ptr = Box::into_raw(opaque);
@@ -801,8 +796,7 @@ async fn repl(io: &'static dyn ShellBackend) {
             trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
             drop(Box::from_raw(opaque_ptr));
         }
-        trueos_qjs::JS_FreeContext(ctx);
-        trueos_qjs::JS_FreeRuntime(rt);
+        drop(vm);
     }
 }
 
@@ -975,20 +969,15 @@ pub(crate) async fn eval_bytes_opts_async(
     print_result: bool,
 ) {
     unsafe {
-        let rt = trueos_qjs::JS_NewRuntime();
-        if rt.is_null() {
-            io.write_str("qjs: JS_NewRuntime failed\r\n");
-            return;
-        }
-
-        trueos_qjs::node::install(rt);
-
-        let ctx = trueos_qjs::JS_NewContext(rt);
-        if ctx.is_null() {
-            trueos_qjs::JS_FreeRuntime(rt);
-            io.write_str("qjs: JS_NewContext failed\r\n");
-            return;
-        }
+        let vm = match trueos_qjs::vm::QjsVm::new_node() {
+            Some(vm) => vm,
+            None => {
+                io.write_str("qjs: JS_NewRuntime failed\r\n");
+                return;
+            }
+        };
+        let rt = vm.rt_ptr();
+        let ctx = vm.ctx_ptr();
 
         let opaque = Box::new(QjsShellOpaque { io });
         let opaque_ptr = Box::into_raw(opaque);
@@ -1041,7 +1030,6 @@ pub(crate) async fn eval_bytes_opts_async(
             trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
             drop(Box::from_raw(opaque_ptr));
         }
-        trueos_qjs::JS_FreeContext(ctx);
-        trueos_qjs::JS_FreeRuntime(rt);
+        drop(vm);
     }
 }

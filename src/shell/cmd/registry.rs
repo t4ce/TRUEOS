@@ -552,6 +552,8 @@ pub(crate) fn init_builtin_shell_commands() {
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
+        #[cfg(feature = "gfx_virgl")]
+        static VIRGL_TRI_ARGS: [ArgSpec; 0] = [];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd); 
@@ -606,5 +608,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
+        #[cfg(feature = "gfx_virgl")]
+        let _ = REGSHCMD("virgl.tri", &VIRGL_TRI_ARGS, cmd::cmd_virgl_tri);
     });
 }
