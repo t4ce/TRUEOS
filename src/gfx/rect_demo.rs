@@ -33,6 +33,8 @@ async fn moving_rect_task() {
     let h = 0.22f32;
     let y0 = -0.2f32;
 
+    let (r, g, b) = (255u8, 105u8, 180u8); // hot pink
+
     let mut t: f32 = 0.0;
 
     loop {
@@ -49,49 +51,49 @@ async fn moving_rect_task() {
             Vtx {
                 x: x0,
                 y: y0,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
             Vtx {
                 x: x1,
                 y: y0,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
             Vtx {
                 x: x1,
                 y: y1,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
             Vtx {
                 x: x0,
                 y: y0,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
             Vtx {
                 x: x1,
                 y: y1,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
             Vtx {
                 x: x0,
                 y: y1,
-                r: 255,
-                g: 85,
-                b: 255,
+                r,
+                g,
+                b,
                 _pad: 0,
             },
         ];
