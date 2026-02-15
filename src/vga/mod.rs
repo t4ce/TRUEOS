@@ -16,8 +16,8 @@ pub struct Image<'a> {
 
 const FONT_CELL_W: usize = 6;
 const FONT_CELL_H: usize = 6;
-const BANNER_CELL_W: usize = 24;
-const BANNER_CELL_H: usize = 12;
+pub const BANNER_CELL_W: usize = 24;
+pub const BANNER_CELL_H: usize = 12;
 const FONT_W: usize = FONT_CELL_W;
 const FONT_H: usize = FONT_CELL_H;
 const CHAR_SPACING: usize = 1;
@@ -652,6 +652,60 @@ impl FontCacheLarge {
     }
 }
 
+pub fn get_banner_glyph(ch: char) -> Option<(&'static [u8], usize)> {
+    font_cache_large().lookup(ch).map(|g| (&g.alpha[..], g.width as usize))
+}
+
+pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
+    let text = BANNER_TEXT;
+    let height = BANNER_CELL_H;
+    let mut total_width = 0;
+    
+    // First pass: Calculate total width
+    for ch in text.chars() {
+        if let Some((_, w)) = get_banner_glyph(ch) {
+            total_width += w + 1;
+        }
+    }
+    if total_width > 0 {
+        total_width -= 1;
+    }
+
+    let mut buffer = alloc::vec![0_u32; total_width * height];
+    let mut current_x = 0;
+    
+    for ch in text.chars() {
+        // Decide color based on char
+        let (r, g, b) = if ch == '§' {
+            (255, 55, 255)
+        } else {
+            (255, 255, 255)
+        };
+
+        if let Some((alpha, w)) = get_banner_glyph(ch) {
+             for y in 0..height {
+                for x in 0..BANNER_CELL_W {
+                    let val = alpha[y * BANNER_CELL_W + x];
+                    if val > 0 {
+                        let dest_x = current_x + x;
+                        let dest_y = y;
+                        if dest_x < total_width && dest_y < height {
+                             let color_u32 = ((val as u32) << 24) 
+                                | ((r as u32) << 16) 
+                                | ((g as u32) << 8) 
+                                | (b as u32);
+                             buffer[dest_y * total_width + dest_x] = color_u32;
+                        }
+                    }
+                }
+            }
+            current_x += w + 1;
+        }
+    }
+    
+    (buffer, total_width, height)
+}
+
 fn font_cache_large() -> &'static FontCacheLarge {
     FONT_CACHE_LARGE.call_once(build_font_cache_large)
 }
@@ -686,7 +740,9 @@ fn build_font_cache_large() -> FontCacheLarge {
 
         if glyph_w > 0 && glyph_h > 0 {
             let x0 = (-metrics.xmin).max(0);
-            let y0 = (cell_h - glyph_h) / 2 - metrics.ymin - 1;
+            // let y0 = (cell_h - glyph_h) / 2 - metrics.ymin - 1;
+            // Align purely by centering the bounding box:
+            let y0 = (cell_h - glyph_h) / 2;
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {

@@ -95,144 +95,255 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
     let seed = crate::time::unix_time_seconds().unwrap_or(12345);
     let mut rng = SimpleRng::new(seed);
 
+    let (logo, logo_w, logo_h) = crate::vga::get_logo_buffer();
+    let offset_x = cols.saturating_sub(logo_w) / 2;
+    let offset_y = rows.saturating_sub(logo_h) / 2;
+    
+    // Track which pixels are permanently revealed
+    let mut revealed = alloc::vec![false; logo.len()];
+
+    // Don't draw initial background - start pitch black as requested
+
     loop {
         if io.read_byte().is_some() {
             break;
         }
 
-        let spawn_count = rng.gen_range(2, 3);
-        for _ in 0..spawn_count {
-            let col = rng.gen_range(1, cols); 
-            
-            let mut seq = if rng.gen_bool() {
-                let n = rng.gen_range(1, 8) as u8;
-                braille_sliding_run(n)
-            } else {
-                let seed = rng.gen_u8();
-                braille_increasing_density_seeded(seed)
-            };
-            
-            // Mirror sequence: append the first part in reverse to make it loop smoothly
-            // Original: [A, B, C, D] -> [A, B, C, D, D, C, B, A]
-            // Or maybe [A, B, C, D, C, B] to avoid double peaks?
-            // "copy in the first 8 chars in reverse" implies doubling length.
-            let mut rev = seq.clone();
-            rev.reverse();
-            seq.extend(rev);
+        if drops.len() < 175 {
+            let spawn_count = rng.gen_range(1, 2);
+            for _ in 0..spawn_count {
+                let start_col_range = 6;
+                let end_col_range = cols.saturating_sub(5);
+                
+                if end_col_range > start_col_range {
+                    let col = rng.gen_range(start_col_range, end_col_range + 1);
+                    
+                    let mut seq = if rng.gen_bool() {
+                        let n = rng.gen_range(1, 8) as u8;
+                        braille_sliding_run(n)
+                    } else {
+                        let seed = rng.gen_u8();
+                        braille_increasing_density_seeded(seed)
+                    };
+                    
+                    let mut rev = seq.clone();
+                    rev.reverse();
+                    seq.extend(rev);
 
-            let trail_len = rng.gen_range(3, 5);
+                    let trail_len = rng.gen_range(3, 5);
 
-            // Spawn randomly in the top quarter
-            // But if we start below row 1, we should be careful not to draw glitches.
-            // Actually, if we start lower, 'row' is just the head position.
-            // The drawing loop handles visibility (r < 1 || r > rows).
-            let start_row = rng.gen_range(1, rows / 4 + 1);
+                    let start_row = rng.gen_range(1, 4);
 
-            drops.push(RainDrop {
-                col,
-                row: start_row,
-                sequence: seq,
-                seq_idx: 0,
-                forward: true,
-                trail_len,
-                ticks_since_update: 0,
-                pulse: 0,
-                pulse_up: true,
-            });
+                    drops.push(RainDrop {
+                        col,
+                        row: start_row,
+                        sequence: seq,
+                        seq_idx: 0,
+                        forward: true,
+                        trail_len,
+                        ticks_since_update: 0,
+                        pulse: 0,
+                        pulse_up: true,
+                    });
+                }
+            }
         }
         
         Timer::after(Duration::from_millis(33)).await;
 
         let mut i = 0;
         while i < drops.len() {
-            let drop = &mut drops[i];
-            
-            // Should update this drop?
-            drop.ticks_since_update += 1;
-            // 20% update rate OR force update if waiting too long
-            // Actually user requested "randomly", 1/3 is approx 33%.
-            // "if a seqence wasnt advanced for 4 steps it gets for sure advanced"
-            let should_update = drop.ticks_since_update >= 4 || rng.gen_range(0, 3) == 0;
+            let mut remove_drop = false;
+            let mut hit_detected = false;
+            let mut should_update = false;
+
+            // Block 1: Check update necessity
+            {
+                let drop = &mut drops[i];
+                drop.ticks_since_update += 1;
+                should_update = drop.ticks_since_update >= 4 || rng.gen_range(0, 3) == 0;
+            }
 
             if !should_update {
                 i += 1;
                 continue;
             }
-            drop.ticks_since_update = 0;
 
-            // Pulse logic: 0-48 steps of 2
-            if drop.pulse_up {
-                if drop.pulse >= 48 {
-                    drop.pulse_up = false;
-                    drop.pulse = 46;
-                } else {
-                    drop.pulse += 2;
-                }
-            } else {
-                if drop.pulse <= 0 {
-                    drop.pulse_up = true;
-                    drop.pulse = 2;
-                } else {
-                    drop.pulse = drop.pulse.saturating_sub(2);
-                }
-            }
+            // Block 2: Logic update (mutable borrow scope)
+            {
+                let drop = &mut drops[i];
+                drop.ticks_since_update = 0;
 
-            if drop.row > drop.trail_len {
-                 let clear_row = drop.row - drop.trail_len;
-                 if clear_row > 0 && clear_row <= rows {
-                     io.write_fmt(format_args!("{} ", crate::ecma48::pos(clear_row, drop.col)));
-                 }
-            }
-
-            drop.row += 1;
-            
-            // Update sequence index (looping)
-            drop.seq_idx = (drop.seq_idx + 1) % drop.sequence.len();
-
-            if drop.row > rows + drop.trail_len {
-                drops.swap_remove(i);
-                continue;
-            }
-
-            for k in 0..=drop.trail_len {
-                if drop.row <= k {
-                    continue; 
-                }
-                let r = drop.row - k;
-
-                if r < 1 || r > rows {
-                    continue;
-                }
-
-                // Calculate index for this trail position (cycling backwards)
-                let len = drop.sequence.len();
-                let curr_idx = (drop.seq_idx + len - (k % len)) % len;
-                
-                if let Some(ch) = drop.sequence.get(curr_idx) {
-                    if k == 0 {
-                         // Pulsing background for head
-                         io.write_fmt(format_args!(
-                            "{}\x1b[48;2;{};{};{}m{}{}", // pulse rgb
-                            crate::ecma48::pos(r, drop.col),
-                            drop.pulse, drop.pulse, drop.pulse,
-                            ch,
-                            "\x1b[48;2;0;0;0m" // reset bg
-                        ));
+                // Pulse logic
+                if drop.pulse_up {
+                    if drop.pulse >= 48 {
+                        drop.pulse_up = false;
+                        drop.pulse = 46;
                     } else {
-                        // Trail fade: fade from white (255) to black (0) over trail_len
-                        let intensity = 255 - ((k as u32 * 255) / (drop.trail_len as u32 + 1));
-                        
-                        io.write_fmt(format_args!(
-                            "{}\x1b[38;2;{};{};{}m{}", 
-                            crate::ecma48::pos(r, drop.col),
-                            intensity, intensity, intensity,
-                            ch
-                        ));
+                        drop.pulse += 2;
+                    }
+                } else {
+                    if drop.pulse <= 0 {
+                        drop.pulse_up = true;
+                        drop.pulse = 2;
+                    } else {
+                        drop.pulse = drop.pulse.saturating_sub(2);
                     }
                 }
-            }
+                
+                // Clear tail logic (background/revealed pixels)
+                if drop.row > drop.trail_len {
+                    let clear_row = drop.row - drop.trail_len;
+                    if clear_row > 0 && clear_row <= rows {
+                        let mut drawn_bg = false;
+                        if clear_row > offset_y && clear_row <= offset_y + logo_h {
+                            // Check overlap
+                            if drop.col > offset_x && drop.col <= offset_x + logo_w {
+                                let ly = clear_row - 1 - offset_y;
+                                let lx = drop.col - 1 - offset_x;
+                                let idx = ly * logo_w + lx;
+                                
+                                if revealed[idx] {
+                                    let val = logo[idx];
+                                    let intensity = ((val >> 24) & 0xFF) as u8;
+                                    if intensity > 0 {
+                                        let r = ((val >> 16) & 0xFF) as u8;
+                                        let g = ((val >> 8) & 0xFF) as u8;
+                                        let b = (val & 0xFF) as u8;
+                                        let r = ((r as u16 * intensity as u16) / 255) as u8;
+                                        let g = ((g as u16 * intensity as u16) / 255) as u8;
+                                        let b = ((b as u16 * intensity as u16) / 255) as u8;
+        
+                                        io.write_fmt(format_args!(
+                                            "{}\x1b[38;2;{};{};{}m█", 
+                                            crate::ecma48::pos(clear_row, drop.col),
+                                            r, g, b
+                                        ));
+                                        drawn_bg = true;
+                                    }
+                                }
+                            }
+                        }
+                        if !drawn_bg {
+                            io.write_fmt(format_args!("{} ", crate::ecma48::pos(clear_row, drop.col)));
+                        }
+                    }
+                }
 
-            i += 1;
+                // Advance head
+                drop.row += 1;
+
+                // Collision Detection
+                if drop.row > offset_y && drop.row <= offset_y + logo_h {
+                    if drop.col > offset_x && drop.col <= offset_x + logo_w {
+                        let ly = drop.row - 1 - offset_y;
+                        let lx = drop.col - 1 - offset_x;
+                        let idx = ly * logo_w + lx;
+                        
+                        let val = logo[idx];
+                        let intensity = ((val >> 24) & 0xFF) as u8;
+                        
+                        if intensity > 0 && !revealed[idx] {
+                            // HIT!
+                            revealed[idx] = true;
+                            hit_detected = true;
+                            
+                            // Draw revealed pixel
+                            let r = ((val >> 16) & 0xFF) as u8;
+                            let g = ((val >> 8) & 0xFF) as u8;
+                            let b = (val & 0xFF) as u8;
+                            let r = ((r as u16 * intensity as u16) / 255) as u8;
+                            let g = ((g as u16 * intensity as u16) / 255) as u8;
+                            let b = ((b as u16 * intensity as u16) / 255) as u8;
+
+                            io.write_fmt(format_args!(
+                                "{}\x1b[38;2;{};{};{}m█", 
+                                crate::ecma48::pos(drop.row, drop.col),
+                                r, g, b
+                            ));
+                            
+                            // Clear trail immediately
+                            for k in 1..=drop.trail_len {
+                                let trail_r = drop.row.saturating_sub(k);
+                                if trail_r > 0 && trail_r <= rows {
+                                    let mut is_revealed_pixel = false;
+                                    if trail_r > offset_y && trail_r <= offset_y + logo_h && drop.col > offset_x && drop.col <= offset_x + logo_w {
+                                        let t_ly = trail_r - 1 - offset_y;
+                                        let t_lx = drop.col - 1 - offset_x;
+                                        let t_idx = t_ly * logo_w + t_lx;
+                                        if revealed[t_idx] {
+                                            is_revealed_pixel = true;
+                                            let t_val = logo[t_idx];
+                                            let t_int = ((t_val >> 24) & 0xFF) as u8;
+                                            if t_int > 0 {
+                                                let tr = ((t_val >> 16) & 0xFF) as u8;
+                                                let tg = ((t_val >> 8) & 0xFF) as u8;
+                                                let tb = (t_val & 0xFF) as u8;
+                                                let tr = ((tr as u16 * t_int as u16) / 255) as u8;
+                                                let tg = ((tg as u16 * t_int as u16) / 255) as u8;
+                                                let tb = ((tb as u16 * t_int as u16) / 255) as u8;
+                                                io.write_fmt(format_args!(
+                                                    "{}\x1b[38;2;{};{};{}m█", 
+                                                    crate::ecma48::pos(trail_r, drop.col),
+                                                    tr, tg, tb
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    if !is_revealed_pixel {
+                                        io.write_fmt(format_args!("{} ", crate::ecma48::pos(trail_r, drop.col)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Determine if we remove or update sequence
+                if hit_detected || drop.row > rows + drop.trail_len {
+                    remove_drop = true;
+                } else {
+                     drop.seq_idx = (drop.seq_idx + 1) % drop.sequence.len();
+                }
+            } // End of mutable borrow scope
+
+            if remove_drop {
+                drops.swap_remove(i);
+                // Do not increment i, as swap_remove moves the last element to i.
+            } else {
+                // Block 3: Draw logic (new immutable borrow)
+                let drop = &drops[i]; 
+                for k in 0..=drop.trail_len {
+                    if drop.row <= k { continue; }
+                    let r = drop.row - k;
+                    if r < 1 || r > rows { continue; }
+                    
+                    let len = drop.sequence.len();
+                    let curr_idx = (drop.seq_idx + len - (k % len)) % len;
+
+                    if let Some(ch) = drop.sequence.get(curr_idx) {
+                        if k == 0 {
+                             io.write_fmt(format_args!(
+                                "{}\x1b[48;2;{};{};{}m{}{}", 
+                                crate::ecma48::pos(r, drop.col),
+                                drop.pulse, drop.pulse, drop.pulse,
+                                ch,
+                                "\x1b[48;2;0;0;0m" 
+                            ));
+                        } else {
+                            let intensity = 255 - ((k as u32 * 255) / (drop.trail_len as u32 + 1));
+                            io.write_fmt(format_args!(
+                                "{}\x1b[38;2;{};{};{}m{}", 
+                                crate::ecma48::pos(r, drop.col),
+                                intensity, intensity, intensity,
+                                ch
+                            ));
+                        }
+                    }
+                }
+                
+                i += 1;
+            }
         }
     }
     

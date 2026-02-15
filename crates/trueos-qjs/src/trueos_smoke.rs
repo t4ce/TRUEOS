@@ -619,10 +619,17 @@ void main(){
     const program = PIXI.Program.from(vs, fs);
     const shader = new PIXI.Shader(program, {});
     const mesh = new PIXI.Mesh(geometry, shader);
+    mesh.position.set(160, 100);
+    mesh.pivot.set(160, 100);
 
     const stage = new PIXI.Container();
     stage.addChild(mesh);
-    renderer.render(stage);
+
+    // Drive a short in-VM animation burst; our shim doesn't provide browser RAF/timers yet.
+    for (let i = 0; i < 120; i++) {
+        mesh.rotation += 0.04;
+        renderer.render(stage);
+    }
 
     log('pixi-tri: ok');
 } catch (e) {
@@ -676,5 +683,4 @@ void main(){
 
     drop(vm);
 }
-
 
