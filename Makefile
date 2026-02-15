@@ -125,7 +125,9 @@ run: iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
 dbg: iso-debug
-	@($(QEMU_ISO) -s -S & $(SERIAL_CONSOLE_CMD))
+	@$(SERIAL_CONSOLE_CMD) &
+	@echo "Waiting for debugger..."
+	@$(QEMU_ISO) -S -s
 
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
