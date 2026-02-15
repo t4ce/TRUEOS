@@ -25,8 +25,20 @@ pub(crate) async fn boot_pixi_smoke_task() {
 }
 
 #[task]
-pub(crate) async fn boot_webgl_rect_smoke_task() {
-    crate::log!("qjs-webgl-rect-smoke: starting\n");
-    unsafe { trueos_qjs::trueos_smoke::run_webgl_rect_smoke() };
-    crate::log!("qjs-webgl-rect-smoke: done\n");
+pub(crate) async fn boot_pixi_rect_smoke_task() {
+    use embassy_time::{Duration as EmbassyDuration, Timer};
+
+    crate::log!("qjs-pixi-rect-smoke: waiting for VirtioSw gfx\n");
+
+    // Wait until the user (or system) switches gfx into a virtio-backed scanout.
+    // This avoids drawing into the Limine/VGA console framebuffer.
+    loop {
+        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
+            crate::log!("qjs-pixi-rect-smoke: starting\n");
+            unsafe { trueos_qjs::trueos_smoke::run_pixi_rect_smoke() };
+            crate::log!("qjs-pixi-rect-smoke: done\n");
+            return;
+        }
+        Timer::after(EmbassyDuration::from_millis(100)).await;
+    }
 }

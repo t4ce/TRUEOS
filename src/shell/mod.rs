@@ -96,6 +96,31 @@ const MATRIX_RUNNING_GLYPH: char = '⣿';
 const DEFAULT_TERM_COLS: usize = 200;
 const DEFAULT_TERM_ROWS: usize = 60;
 
+pub(crate) async fn handle_command_action_for_tools(
+    action: CommandAction,
+    mode: &mut ShellMode,
+    cube_mode: &mut bool,
+    cube: &mut cube::CubeState,
+    io: &'static dyn ShellBackend,
+    term_cols: &mut usize,
+    term_rows: &mut usize,
+    spawner: &Spawner,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+) {
+    actions::handle_command_action(
+        action,
+        mode,
+        cube_mode,
+        cube,
+        io,
+        term_cols,
+        term_rows,
+        spawner,
+        history,
+    )
+    .await;
+}
+
 
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {

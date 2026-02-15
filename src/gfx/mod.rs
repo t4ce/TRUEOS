@@ -1,5 +1,4 @@
 pub mod backends;
-pub mod demo;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 #[cfg(feature = "gfx_virgl")]
