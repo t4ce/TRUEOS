@@ -1731,6 +1731,14 @@ unsafe fn ensure_global_document(
                             return js_null();
                         }
 
+                        // We currently only model a very small WebGL 1-ish subset.
+                        // Returning a non-null object for "webgl2" causes libraries like Pixi
+                        // to take WebGL2 code paths (VAOs, UBOs, etc.) that our shim does not
+                        // implement, often resulting in a blank scene.
+                        if kind.eq_ignore_ascii_case(b"webgl2") {
+                            return js_null();
+                        }
+
                         // Pixi (and friends) do feature probes with a one-arg
                         // getContext("webgl") call and then await media events.
                         // We don't model that event loop, so treat one-arg webgl/webgl2

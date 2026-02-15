@@ -437,7 +437,13 @@ pub mod cabi {
 
 	#[no_mangle]
 	pub extern "C" fn trueos_cabi_poll_once() {
-		crate::wait::park_step();
+		// This function is used by QuickJS smokes (and other C-ABI callers) as a
+		// cooperative yield point while polling for async completions.
+		//
+		// Do NOT call `park_step()` here: it may execute `hlt`, and on configurations
+		// without a reliable periodic interrupt source that can wake the CPU, that
+		// can present as a hard BSP freeze (e.g. right after `qjs-pixi-rect-smoke: starting`).
+		crate::wait::spin_step();
 	}
 
 	#[no_mangle]

@@ -36,7 +36,6 @@ const VHTTPS_KEEPALIVE_IDLE_CLOSE_MS: u64 = 10_000;
 static VHTTPS_KEEPALIVE_SEQ: AtomicU32 = AtomicU32::new(1);
 
 struct KeepAliveConn {
-    owner: &'static str,
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
     in_use: AtomicBool,
@@ -92,7 +91,6 @@ fn ensure_keepalive_conn(dev_idx: usize, host: &str, port: u16) -> &'static Keep
     register_tls_app_queues(owner, cmds, events);
 
     let conn = KeepAliveConn {
-        owner,
         cmds,
         events,
         in_use: AtomicBool::new(false),
@@ -128,7 +126,6 @@ static NET_FETCH_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Default)]
 struct InflightFetch {
-    leader: u32,
     followers: Vec<u32>,
 }
 
@@ -195,7 +192,10 @@ fn fetch_error_to_code(err: FetchError) -> i32 {
         FetchError::TlsTimeout => NET_ERR_TIMEOUT_TLS,
         FetchError::BodyTimeout => NET_ERR_TIMEOUT_BODY,
         FetchError::Tls => NET_ERR_TLS,
-        FetchError::Http(_) => NET_ERR_HTTP,
+        FetchError::Http(status) => {
+            let _status = status;
+            NET_ERR_HTTP
+        }
         FetchError::Redirect { .. } => NET_ERR_HTTP,
         FetchError::ResponseTooLarge => FS_ERR_TOO_LARGE,
     }
@@ -435,43 +435,26 @@ fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-fn finish_fetch_body(
-    parsed: &ParsedHttpsUrl,
-    headers: &[u8],
-    body: &[u8],
-    max_bytes: usize,
-) -> Result<Vec<u8>, FetchError> {
-    let status = parse_http_status(headers).iter().next().copied().unwrap_or(0); // Using iter().next() as parse_http_status returns Option
-    // Wait, parse_http_status(headers) -> Option<u16>.
-    // But headers is just bytes. parse_http_status uses buf.starts_with(b"HTTP/")...
-    // Ok, parse_http_status takes &[u8].
-    // Let's rely on parse_http_status(headers) being consistent if headers starts with HTTP line.
-    
-    // Actually, `headers` includes the status line.
-    let status = parse_http_status(headers).unwrap_or(0);
-    
-    if status != 200 {
-        if is_redirect_status(status) {
-            if let Some(next) = redirect_url_from_location(parsed, headers) {
-                return Err(FetchError::Redirect { status, url: next });
+fn log_utf8_chunks(prefix: &str, s: &str) {
+    // Avoid log-line truncation by splitting into multiple lines.
+    // UTF-8 safe: ensure chunk boundaries are on char boundaries.
+    const CHUNK: usize = 768;
+    let mut i = 0usize;
+    while i < s.len() {
+        let mut end = (i + CHUNK).min(s.len());
+        while end < s.len() && !s.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        if end == i {
+            // Avoid infinite loop on unexpected boundary issues.
+            end = (i + 1).min(s.len());
+            while end < s.len() && !s.is_char_boundary(end) {
+                end += 1;
             }
         }
-        return Err(FetchError::Http(status));
+        crate::log!("{}{}\n", prefix, &s[i..end]);
+        i = end;
     }
-
-    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
-    let decoded_body = if is_chunked {
-        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
-    } else if let Some(len) = header_parse_content_length(headers) {
-        body.get(..len).unwrap_or(body).to_vec()
-    } else {
-        body.to_vec()
-    };
-
-    if decoded_body.len() > max_bytes {
-        return Err(FetchError::ResponseTooLarge);
-    }
-    Ok(decoded_body)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -591,7 +574,13 @@ async fn fetch_on_device(
     let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
     let server_name = leak_str(parsed.host.clone());
 
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
+    let start = Instant::now();
+    let total_deadline = start + EmbassyDuration::from_millis(timeout_ms as u64);
+    let connect_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
+    let tls_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
+    let connect_deadline = start + EmbassyDuration::from_millis(connect_ms);
+    // TLS can only start after TCP open; this is a best-effort wall clock deadline.
+    let tls_deadline = start + EmbassyDuration::from_millis(connect_ms.saturating_add(tls_ms));
 
     let mut tls_handle: Option<vnet::NetHandle> = None;
     let mut sent_connect = false;
@@ -704,6 +693,23 @@ async fn fetch_on_device(
                                         return Err(FetchError::Redirect { status, url: next });
                                     }
                                 }
+
+                                // Log error bodies (often JSON) to aid debugging.
+                                let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                                let decoded_body = if is_chunked {
+                                    decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                                } else if let Some(len) = header_parse_content_length(headers) {
+                                    body.get(..len).unwrap_or(body).to_vec()
+                                } else {
+                                    body.to_vec()
+                                };
+                                crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
+                                if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
+                                    log_utf8_chunks("vhttps: http_error_body: ", s);
+                                } else {
+                                    crate::log!("vhttps: http_error_body: [non-utf8]\n");
+                                }
+
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
@@ -772,6 +778,23 @@ async fn fetch_on_device(
                                 return Err(FetchError::Redirect { status, url: next });
                             }
                         }
+
+                        // Log error bodies (often JSON) to aid debugging.
+                        let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                        let decoded_body = if is_chunked {
+                            decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+                        } else if let Some(len) = header_parse_content_length(headers) {
+                            body.get(..len).unwrap_or(body).to_vec()
+                        } else {
+                            body.to_vec()
+                        };
+                        crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
+                        if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
+                            log_utf8_chunks("vhttps: http_error_body: ", s);
+                        } else {
+                            crate::log!("vhttps: http_error_body: [non-utf8]\n");
+                        }
+
                         return Err(FetchError::Http(status));
                     }
 
@@ -817,15 +840,38 @@ async fn fetch_on_device(
                 server_name,
                 cfg: cfg.clone(),
                 roots: roots.clone(),
-                timeouts: crate::net::tls_socket::TlsTimeouts::default(),
-        if Instant::now() >= deadline {
+                timeouts: t,
+            });
+            sent_connect = true;
+        }
+
+        let now = Instant::now();
+        if tls_handle.is_none() && now >= connect_deadline {
             if let Some(h) = tls_handle {
                 let _ = cmds.push(TlsCommand::Close { handle: h });
             }
-            // Best-effort phase classification: we have a single overall deadline.
-            // - No handle => TCP connect never opened
-            // - Handle but no HTTP sent => TLS handshake didn't complete
-            // - HTTP sent => body stalled
+            return Err(FetchError::ConnectTimeout);
+        }
+        if tls_handle.is_some() && !http_sent && now >= tls_deadline {
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
+            }
+            return Err(FetchError::TlsTimeout);
+        }
+        if http_sent {
+            let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
+            if now >= idle_deadline {
+                if let Some(h) = tls_handle {
+                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                }
+                return Err(FetchError::BodyTimeout);
+            }
+        }
+        if now >= total_deadline {
+            if let Some(h) = tls_handle {
+                let _ = cmds.push(TlsCommand::Close { handle: h });
+            }
+            // Fallback classification: we hit the total wall clock deadline.
             return Err(if tls_handle.is_none() {
                 FetchError::ConnectTimeout
             } else if !http_sent {
@@ -927,6 +973,11 @@ async fn fetch_on_device_to_file_keepalive(
                 server_name,
                 cfg: cfg.clone(),
                 roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
             });
             connect_in_flight = true;
         }
@@ -1866,6 +1917,11 @@ async fn fetch_on_device_to_file(
                 server_name,
                 cfg: cfg.clone(),
                 roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
             });
             if t_open_sent.is_none() {
                 t_open_sent = Some(Instant::now());
@@ -2172,7 +2228,6 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
         inflight.insert(
             key.clone(),
             InflightFetch {
-                leader: op_id,
                 followers: Vec::new(),
             },
         );

@@ -112,6 +112,11 @@ impl WssConnection {
             server_name: Box::leak(host.clone().into_boxed_str()),
             cfg,
             roots,
+            timeouts: crate::net::tls_socket::TlsTimeouts {
+                connect_ms: 15_000,
+                tls_ms: 15_000,
+                idle_ms: 60_000,
+            },
         }).map_err(|_| WssError::ConnectFailed)?;
 
         let mut handle = None; 

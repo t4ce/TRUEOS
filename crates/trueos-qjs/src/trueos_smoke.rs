@@ -58,6 +58,7 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
     };
     let deadline = start.saturating_add(max_ticks);
 
+    let mut last_status_tick: u64 = start;
     loop {
         let mut progress = false;
         progress |= qjs::async_ops::pump(ctx);
@@ -72,6 +73,22 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
         let jobs_pending = qjs::JS_IsJobPending(rt) > 0;
         if !pending_async && !pending_workers && !jobs_pending {
             break;
+        }
+
+        // Coarse status: once per ~1s while we're still waiting.
+        if hz != 0 {
+            let now_tick = embassy_time_driver::now();
+            let one_sec = hz;
+            if now_tick.saturating_sub(last_status_tick) >= one_sec {
+                last_status_tick = now_tick;
+                log_str("quickjs: waiting async=");
+                log_str(if pending_async { "1" } else { "0" });
+                log_str(" workers=");
+                log_str(if pending_workers { "1" } else { "0" });
+                log_str(" jobs=");
+                log_str(if jobs_pending { "1" } else { "0" });
+                log_str("\n");
+            }
         }
 
         if max_ticks != 0 && embassy_time_driver::now() >= deadline {
@@ -512,6 +529,8 @@ pub unsafe fn run_pixi_rect_smoke() {
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
+    log_str("quickjs: pixi-tri: vm ok\n");
+
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
@@ -599,6 +618,7 @@ void main(){
     owned.extend_from_slice(mod_script);
     owned.push(0);
 
+    log_str("quickjs: pixi-tri: JS_Eval begin\n");
     let mod_ret = qjs::JS_Eval(
         ctx,
         owned.as_ptr() as *const c_char,
@@ -606,6 +626,8 @@ void main(){
         mod_filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_MODULE,
     );
+
+    log_str("quickjs: pixi-tri: JS_Eval end\n");
 
     if mod_ret.is_exception() {
         log_str("quickjs: pixi-rect JS_Eval exception\n");

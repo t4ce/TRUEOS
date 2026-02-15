@@ -712,6 +712,11 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                     server_name: target.host,
                     cfg: cfg.clone(),
                     roots: roots.clone(),
+                    timeouts: crate::net::tls_socket::TlsTimeouts {
+                        connect_ms: 20_000,
+                        tls_ms: 30_000,
+                        idle_ms: 120_000,
+                    },
                 });
                 sent_connect = true;
             }
