@@ -34,13 +34,21 @@ pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
     true
 }
 
-/// Single spin step that can be swapped for parking later.
+/// Single spin step for polling loops.
+///
+/// Important: this must not execute `hlt`.
+/// Many low-level drivers use polling (e.g. virtio queue progress by observing
+/// shared memory updated by the device). If we `hlt` here we may never observe
+/// the condition becoming true, which can present as a hard freeze (notably from
+/// synchronous shell commands like `gfx sw`).
 #[inline]
 pub fn spin_step() {
-    park_step();
+    crate::time::poll();
+    crate::runtime::poll_local_executor();
+    core::hint::spin_loop();
 }
 
-/// Single parking step that drives async work and idles the BSP.
+/// Single parking step that drives async work and may idle the BSP.
 #[inline]
 pub fn park_step() {
     crate::time::poll();

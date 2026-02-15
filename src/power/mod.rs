@@ -131,7 +131,13 @@ pub fn set_idle_policy(policy: IdlePolicy) -> IdlePolicy {
 pub fn idle_hint() {
     match idle_policy() {
         IdlePolicy::Spin => core::hint::spin_loop(),
-        IdlePolicy::Halt => x86_64::instructions::hlt(),
+        IdlePolicy::Halt => {
+            if x86_64::instructions::interrupts::are_enabled() {
+                x86_64::instructions::hlt()
+            } else {
+                core::hint::spin_loop()
+            }
+        }
     }
 }
 

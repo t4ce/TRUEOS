@@ -42,3 +42,47 @@ pub(crate) async fn boot_pixi_rect_smoke_task() {
         Timer::after(EmbassyDuration::from_millis(100)).await;
     }
 }
+
+#[cfg(feature = "gfx_virgl")]
+#[task]
+pub(crate) async fn boot_virtio_sw_triangle_smoke_task() {
+    use embassy_time::{Duration as EmbassyDuration, Timer};
+
+    crate::log!("gfx-virtio-sw-tri-smoke: waiting for VirtioSw gfx\n");
+
+    loop {
+        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(100)).await;
+    }
+
+    crate::log!("gfx-virtio-sw-tri-smoke: drawing\n");
+
+    #[inline]
+    fn put_vtx(dst: &mut [u8; 36], idx: usize, x: f32, y: f32, r: u8, g: u8, b: u8) {
+        let off = idx * 12;
+        dst[off..off + 4].copy_from_slice(&x.to_le_bytes());
+        dst[off + 4..off + 8].copy_from_slice(&y.to_le_bytes());
+        dst[off + 8] = r;
+        dst[off + 9] = g;
+        dst[off + 10] = b;
+        dst[off + 11] = 0;
+    }
+
+    let mut vtx = [0u8; 36];
+    put_vtx(&mut vtx, 0, 120.0, 120.0, 255, 0, 0);
+    put_vtx(&mut vtx, 1, 640.0, 160.0, 0, 255, 0);
+    put_vtx(&mut vtx, 2, 360.0, 520.0, 0, 0, 255);
+
+    // Draw a couple frames to make the transition obvious even if the first present races.
+    for _ in 0..3 {
+        let rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles(0x00_08_18_30, vtx.as_ptr(), vtx.len())
+        };
+        crate::log!("gfx-virtio-sw-tri-smoke: draw rc={}\n", rc);
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+
+    crate::log!("gfx-virtio-sw-tri-smoke: done\n");
+}
