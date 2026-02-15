@@ -56,7 +56,7 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-static BOOT_WEBGL_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_PIXI_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -255,13 +255,14 @@ fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_boot_webgl_rect_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_webgl_rect_smoke_task(),
+fn spawn_boot_pixi_rect_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_pixi_rect_smoke_task(),
     ) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
+
 
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
@@ -310,7 +311,7 @@ const PARSE5_BOOT_READY: u32 =
     | crate::v::readiness::QJS_ASYNC_FS_READY;
 
 const PIXI_BOOT_READY: u32 = PARSE5_BOOT_READY;
-const WEBGL_RECT_BOOT_READY: u32 = PARSE5_BOOT_READY;
+const PIXI_RECT_BOOT_READY: u32 = PARSE5_BOOT_READY;
 
 const WS_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
@@ -460,10 +461,10 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_boot_pixi_smoke,
     },
     TaskSpec {
-        name: "boot-webgl-rect-smoke",
-        required: WEBGL_RECT_BOOT_READY,
-        started: &BOOT_WEBGL_RECT_SMOKE_STARTED,
-        spawn: spawn_boot_webgl_rect_smoke,
+        name: "boot-pixi-rect-smoke",
+        required: PIXI_RECT_BOOT_READY,
+        started: &BOOT_PIXI_RECT_SMOKE_STARTED,
+        spawn: spawn_boot_pixi_rect_smoke,
     },
     TaskSpec {
         name: "boot-ws-smoke",

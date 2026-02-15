@@ -207,34 +207,12 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
 
     ctx.io
         .write_fmt(format_args!("gfx[{}]: end next={:?}\r\n", seq, kind));
-
-    if kind == crate::gfx::BackendKind::VirtioSw {
-        // Temporarily disable the spinning demo rectangle so other tests (like the WebGL shim)
-        // have a stable screen to draw into.
-        ctx.io
-            .write_fmt(format_args!("gfx[{}]: spin rect disabled (temporary)\r\n", seq));
-
-        // Run the WebGL shim smoke after switching to virtio-backed gfx so it's visible.
-        ctx.io
-            .write_fmt(format_args!("gfx[{}]: running qjs webgl-rect smoke\r\n", seq));
-        unsafe { trueos_qjs::trueos_smoke::run_webgl_rect_smoke() };
-    } else {
-        ctx.io
-            .write_fmt(format_args!("gfx[{}]: spin rect skipped (non-gfx mode)\r\n", seq));
-    }
     CommandAction::None
 }
 
 #[cfg(not(feature = "gfx_virgl"))]
 pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
     ctx.io.write_str("gfx: virgl not built (feature gfx_virgl disabled)\r\n");
-
-    // Temporarily disable the spinning demo rectangle so other tests (like the WebGL shim)
-    // have a stable screen to draw into.
-    ctx.io.write_str("gfx: spin rect disabled (temporary)\r\n");
-
-    ctx.io.write_str("gfx: running qjs webgl-rect smoke\r\n");
-    unsafe { trueos_qjs::trueos_smoke::run_webgl_rect_smoke() };
     CommandAction::None
 }
 

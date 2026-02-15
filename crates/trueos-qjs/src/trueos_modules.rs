@@ -41,6 +41,7 @@ struct WebGlVertexAttrib {
     normalized: bool,
     stride: i32,
     offset: usize,
+    buffer: u32,
 }
 
 #[derive(Default)]
@@ -1031,8 +1032,12 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
         let target = target_f as i32;
 
-        let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[1]) else {
-            return qjs::JSValue::undefined();
+        // WebGL allows bufferData(target, size, usage) as well as bufferData(target, data, usage).
+        let mut numeric_size: f64 = 0.0;
+        let data_opt = if qjs::JS_ToFloat64(ctx, &mut numeric_size as *mut f64, args[1]) == 0 {
+            None
+        } else {
+            js_get_arraybuffer_view(ctx, args[1])
         };
 
         let mut st = WEBGL_STATE.lock();
@@ -1044,8 +1049,13 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         if buf_id == 0 {
             return qjs::JSValue::undefined();
         }
-        let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-        st.buffers.insert(buf_id, bytes.to_vec());
+        if let Some((ptr, len)) = data_opt {
+            let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+            st.buffers.insert(buf_id, bytes.to_vec());
+        } else {
+            let sz = (numeric_size as i64).max(0) as usize;
+            st.buffers.insert(buf_id, vec![0u8; sz]);
+        }
         qjs::JSValue::undefined()
     }
 
@@ -1143,12 +1153,14 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         let offset = (offset_f as i64).max(0) as usize;
 
         let mut st = WEBGL_STATE.lock();
+        let array_buffer = st.array_buffer;
         let entry = st.attribs.entry(idx).or_default();
         entry.size = size;
         entry.ty = ty;
         entry.normalized = normalized;
         entry.stride = stride;
         entry.offset = offset;
+        entry.buffer = array_buffer;
         qjs::JSValue::undefined()
     }
 
@@ -1234,11 +1246,8 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         const VTX_SIZE: usize = 12;
 
         // Snapshot everything we need while holding the lock.
-        let (clear_rgb, viewport_w, viewport_h, array_bytes, elem_bytes, attribs) = {
+        let (clear_rgb, viewport_w, viewport_h, buffers, elem_bytes, attribs) = {
             let st = WEBGL_STATE.lock();
-            let Some(array_bytes) = st.buffers.get(&st.array_buffer) else {
-                return qjs::JSValue::undefined();
-            };
             let Some(elem_bytes) = st.buffers.get(&st.element_array_buffer) else {
                 return qjs::JSValue::undefined();
             };
@@ -1246,7 +1255,7 @@ unsafe fn ensure_global_trueos_webgl_singleton(
                 st.clear_rgb,
                 st.viewport_w,
                 st.viewport_h,
-                array_bytes.clone(),
+                st.buffers.clone(),
                 elem_bytes.clone(),
                 st.attribs.clone(),
             )
@@ -1301,6 +1310,11 @@ unsafe fn ensure_global_trueos_webgl_singleton(
             (None, 0)
         };
 
+        let Some(pos_bytes) = buffers.get(&pos.buffer) else {
+            return qjs::JSValue::undefined();
+        };
+        let col_bytes_opt = col.and_then(|c| buffers.get(&c.buffer));
+
         let mut out = Vec::with_capacity(count.saturating_mul(VTX_SIZE));
         for i in 0..count {
             let idx_off = index_off.saturating_add(i.saturating_mul(2));
@@ -1310,10 +1324,10 @@ unsafe fn ensure_global_trueos_webgl_singleton(
             let vtx_idx = vtx_idx as usize;
 
             let base = vtx_idx.saturating_mul(pos_stride).saturating_add(pos.offset);
-            let Some(x_px) = read_f32_le(&array_bytes, base) else {
+            let Some(x_px) = read_f32_le(pos_bytes, base) else {
                 continue;
             };
-            let Some(y_px) = read_f32_le(&array_bytes, base.saturating_add(4)) else {
+            let Some(y_px) = read_f32_le(pos_bytes, base.saturating_add(4)) else {
                 continue;
             };
 
@@ -1321,13 +1335,13 @@ unsafe fn ensure_global_trueos_webgl_singleton(
             let x = (2.0 * (x_px / viewport_w)) - 1.0;
             let y = 1.0 - (2.0 * (y_px / viewport_h));
 
-            let (r, g, b) = if let Some(col) = col {
+            let (r, g, b) = if let (Some(col), Some(col_bytes)) = (col, col_bytes_opt) {
                 let base = vtx_idx
                     .saturating_mul(col_stride)
                     .saturating_add(col.offset);
-                let r = *array_bytes.get(base).unwrap_or(&255);
-                let g = *array_bytes.get(base + 1).unwrap_or(&255);
-                let b = *array_bytes.get(base + 2).unwrap_or(&255);
+                let r = *col_bytes.get(base).unwrap_or(&255);
+                let g = *col_bytes.get(base + 1).unwrap_or(&255);
+                let b = *col_bytes.get(base + 2).unwrap_or(&255);
                 (r, g, b)
             } else {
                 (255, 255, 255)
@@ -1344,10 +1358,6 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         if out.is_empty() {
             return qjs::JSValue::undefined();
         }
-
-        log_str("qjs-webgl: drawElements -> gfx vtx_bytes=");
-        log_usize_dec(out.len());
-        log_nl();
 
         unsafe {
             let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, out.as_ptr(), out.len());
@@ -1729,7 +1739,24 @@ unsafe fn ensure_global_document(
                             || kind.eq_ignore_ascii_case(b"webgl2"))
                             && argc < 2
                         {
+                            // Escape hatch for explicit smokes/tests.
+                            let global = qjs::JS_GetGlobalObject(ctx);
+                            let force = qjs::JS_GetPropertyStr(
+                                ctx,
+                                global,
+                                b"__trueos_webgl_force\0".as_ptr() as *const c_char,
+                            );
+                            qjs::js_free_value(ctx, global);
+                            let mut f: f64 = 0.0;
+                            let forced = (!force.is_exception())
+                                && (qjs::JS_ToFloat64(ctx, &mut f as *mut f64, force) == 0)
+                                && (f != 0.0);
+                            qjs::js_free_value(ctx, force);
+                            if forced {
+                                // allow
+                            } else {
                             return js_null();
+                            }
                         }
                     }
                 }
