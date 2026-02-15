@@ -9,12 +9,19 @@ fn braille_from_mask(mask: u8) -> char {
 
 fn braille_sliding_run(n: u8) -> Vec<char> {
     assert!((1..=8).contains(&n));
-    let n = n as u32;
-    (0..=8 - n)
+    let n = n as i32;
+    ((1 - n)..=7)
         .map(|start| {
-            let mask = ((1u16 << n) - 1) << start;
-            braille_from_mask(mask as u8)
+            let mut mask = 0u8;
+            for i in 0..n {
+                let bit = start + i;
+                if bit >= 0 && bit < 8 {
+                    mask |= 1 << bit;
+                }
+            }
+            braille_from_mask(mask)
         })
+        .filter(|&c| c != '\u{2800}')
         .collect()
 }
 
@@ -40,7 +47,6 @@ struct RainDrop {
     seq_idx: usize,
     forward: bool,
     trail_len: usize,
-    color: (u8, u8, u8),
 }
 
 struct SimpleRng {
@@ -49,7 +55,7 @@ struct SimpleRng {
 
 impl SimpleRng {
     fn new(seed: u64) -> Self {
-        Self { state: seed | 1 } // Ensure non-zero
+        Self { state: seed | 1 }
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -78,27 +84,23 @@ impl SimpleRng {
 
 pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
     io.write_str(crate::ecma48::HIDE_CURSOR);
+    io.write_str("\x1b[48;2;0;0;0m");
+    io.write_str("\x1b[38;2;255;255;255m");
     io.write_str(crate::ecma48::CLEAR_SCREEN);
 
     let mut drops: Vec<RainDrop> = Vec::new();
     let seed = crate::time::unix_time_seconds().unwrap_or(12345);
     let mut rng = SimpleRng::new(seed);
 
-    // Default color requested: (255, 55, 255) - Magenta/Pinkish
-    let base_color = (255, 55, 255);
-
     loop {
-        // Check for input to exit
         if io.read_byte().is_some() {
             break;
         }
 
-        // Spawn 1 or 2 new drops
-        let spawn_count = rng.gen_range(1, 2);
+        let spawn_count = rng.gen_range(0, 1);
         for _ in 0..spawn_count {
             let col = rng.gen_range(1, cols); 
             
-            // Randomly choose sequence type
             let seq = if rng.gen_bool() {
                 let n = rng.gen_range(1, 8) as u8;
                 braille_sliding_run(n)
@@ -111,27 +113,26 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
 
             drops.push(RainDrop {
                 col,
-                row: 1, // Start at row 1
+                row: 1,
                 sequence: seq,
                 seq_idx: 0,
                 forward: true,
                 trail_len,
-                color: base_color,
             });
-            
-            // Note: We don't draw immediately on spawn, we let the main loop handle it consistently.
-            // Or we can draw just the head. The main loop clears and redraws anyway.
         }
         
-        // Wait a bit
-        Timer::after(Duration::from_millis(50)).await;
+        Timer::after(Duration::from_millis(67)).await;
 
-        // Advance drops
         let mut i = 0;
         while i < drops.len() {
+            // Only update ~1/3 of drops per tick
+            if rng.gen_range(0, 3) != 0 {
+                i += 1;
+                continue;
+            }
+
             let drop = &mut drops[i];
 
-            // Clear the tail of the trail before advancing
             if drop.row > drop.trail_len {
                  let clear_row = drop.row - drop.trail_len;
                  if clear_row > 0 && clear_row <= rows {
@@ -139,76 +140,43 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                  }
             }
 
-            // Update position
             drop.row += 1;
             
-            // Update sequence index
-            if drop.forward {
-                if drop.seq_idx + 1 < drop.sequence.len() {
-                    drop.seq_idx += 1;
-                } else {
-                    drop.forward = false;
-                    if drop.seq_idx > 0 {
-                        drop.seq_idx -= 1;
-                    } 
-                }
-            } else {
-                if drop.seq_idx > 0 {
-                    drop.seq_idx -= 1;
-                } else {
-                     drop.forward = true;
-                     drop.seq_idx += 1; 
-                }
-            }
+            // Update sequence index (looping)
+            drop.seq_idx = (drop.seq_idx + 1) % drop.sequence.len();
 
-            // Remove if head is far off screen (allowing trail to finish falling off?)
-            // "UNTIL the sequence reaches the last visible row" usually implies head reaches bottom.
-            // But visually it looks better if it falls off completely.
             if drop.row > rows + drop.trail_len {
                 drops.swap_remove(i);
                 continue;
             }
 
-            // Draw Head and Trail
-            if let Some(ch) = drop.sequence.get(drop.seq_idx) {
-                let mut current_color = drop.color;
+            for k in 0..=drop.trail_len {
+                if drop.row <= k {
+                    continue; 
+                }
+                let r = drop.row - k;
 
-                for k in 0..=drop.trail_len {
-                    // Check if segment is spatially valid (above head but on screen)
-                    if drop.row <= k {
-                        continue; 
-                    }
-                    let r = drop.row - k;
+                if r < 1 || r > rows {
+                    continue;
+                }
 
-                    // Skip if off screen
-                    if r < 1 || r > rows {
-                        continue;
-                    }
-
+                // Calculate index for this trail position (cycling backwards)
+                let len = drop.sequence.len();
+                let curr_idx = (drop.seq_idx + len - (k % len)) % len;
+                
+                if let Some(ch) = drop.sequence.get(curr_idx) {
                     if k == 0 {
-                        let mut buf = [0u8; 4];
-                        let s = ch.encode_utf8(&mut buf);
-                        // Head: White FG, with drop color as BG (cursor effect)
-                        io.write_fmt(format_args!(
-                            "{}{}", 
+                        // Leading character: 33% gray background (approx 85, 85, 85)
+                         io.write_fmt(format_args!(
+                            "{}\x1b[48;2;85;85;85m{}\x1b[48;2;0;0;0m", 
                             crate::ecma48::pos(r, drop.col),
-                            crate::ecma48::style(s)
-                                .fg((255, 255, 255))
-                                .bg(drop.color)
+                            ch
                         ));
                     } else {
-                        // Trail: Dimming
-                        current_color.0 /= 2;
-                        current_color.1 /= 2;
-                        current_color.2 /= 2;
-                        
-                        let mut buf = [0u8; 4];
-                        let s = ch.encode_utf8(&mut buf);
-                        
                         io.write_fmt(format_args!(
                             "{}{}", 
                             crate::ecma48::pos(r, drop.col),
-                            crate::ecma48::color(s, current_color)
+                            ch
                         ));
                     }
                 }
