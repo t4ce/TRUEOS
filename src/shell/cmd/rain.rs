@@ -21,7 +21,7 @@ fn braille_sliding_run(n: u8) -> Vec<char> {
 fn braille_increasing_density_seeded(seed: u8) -> Vec<char> {
     (1..=8)
         .map(|n| {
-            let x = seed.wrapping_mul(73).wrapping_add(n as u8 * 41);
+            let x = seed.wrapping_mul(73).wrapping_add((n as u8).wrapping_mul(41));
             let perm = x ^ x.rotate_left(3) ^ x.rotate_right(2);
             let mask = if n == 8 { 0xFF } else { (1u16 << n) as u8 - 1 };
             braille_from_mask(perm & mask)
@@ -39,6 +39,8 @@ struct RainDrop {
     sequence: Vec<char>,
     seq_idx: usize,
     forward: bool,
+    trail_len: usize,
+    color: (u8, u8, u8),
 }
 
 struct SimpleRng {
@@ -82,6 +84,9 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
     let seed = crate::time::unix_time_seconds().unwrap_or(12345);
     let mut rng = SimpleRng::new(seed);
 
+    // Default color requested: (255, 55, 255) - Magenta/Pinkish
+    let base_color = (255, 55, 255);
+
     loop {
         // Check for input to exit
         if io.read_byte().is_some() {
@@ -102,20 +107,20 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 braille_increasing_density_seeded(seed)
             };
 
+            let trail_len = rng.gen_range(3, 5);
+
             drops.push(RainDrop {
                 col,
                 row: 1, // Start at row 1
                 sequence: seq,
                 seq_idx: 0,
                 forward: true,
+                trail_len,
+                color: base_color,
             });
             
-            // Draw initial char
-            if let Some(drop) = drops.last() {
-                if let Some(ch) = drop.sequence.get(drop.seq_idx) {
-                    io.write_fmt(format_args!("{}{}", crate::ecma48::pos(drop.row, drop.col), ch));
-                }
-            }
+            // Note: We don't draw immediately on spawn, we let the main loop handle it consistently.
+            // Or we can draw just the head. The main loop clears and redraws anyway.
         }
         
         // Wait a bit
@@ -126,8 +131,13 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
         while i < drops.len() {
             let drop = &mut drops[i];
 
-            // Clear current position
-            io.write_fmt(format_args!("{} ", crate::ecma48::pos(drop.row, drop.col)));
+            // Clear the tail of the trail before advancing
+            if drop.row > drop.trail_len {
+                 let clear_row = drop.row - drop.trail_len;
+                 if clear_row > 0 && clear_row <= rows {
+                     io.write_fmt(format_args!("{} ", crate::ecma48::pos(clear_row, drop.col)));
+                 }
+            }
 
             // Update position
             drop.row += 1;
@@ -137,7 +147,6 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 if drop.seq_idx + 1 < drop.sequence.len() {
                     drop.seq_idx += 1;
                 } else {
-                    // Reached end, reverse
                     drop.forward = false;
                     if drop.seq_idx > 0 {
                         drop.seq_idx -= 1;
@@ -147,25 +156,62 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 if drop.seq_idx > 0 {
                     drop.seq_idx -= 1;
                 } else {
-                     // Reached 0 going backwards. 
-                     // Reset to forward for ping-pong effect or just keep oscillating?
-                     // "the sequence runs backwards" implies one way trip back?
-                     // Let's assume it bounces.
                      drop.forward = true;
                      drop.seq_idx += 1; 
                 }
             }
 
-            // Remove if off screen
-            if drop.row > rows {
+            // Remove if head is far off screen (allowing trail to finish falling off?)
+            // "UNTIL the sequence reaches the last visible row" usually implies head reaches bottom.
+            // But visually it looks better if it falls off completely.
+            if drop.row > rows + drop.trail_len {
                 drops.swap_remove(i);
                 continue;
             }
 
-            // Draw new char
+            // Draw Head and Trail
             if let Some(ch) = drop.sequence.get(drop.seq_idx) {
-                 // Use a color? Let's use Cyan.
-                 io.write_fmt(format_args!("{}{}", crate::ecma48::pos(drop.row, drop.col), crate::ecma48::color(*ch, (100, 200, 255))));
+                let mut current_color = drop.color;
+
+                for k in 0..=drop.trail_len {
+                    // Check if segment is spatially valid (above head but on screen)
+                    if drop.row <= k {
+                        continue; 
+                    }
+                    let r = drop.row - k;
+
+                    // Skip if off screen
+                    if r < 1 || r > rows {
+                        continue;
+                    }
+
+                    if k == 0 {
+                        let mut buf = [0u8; 4];
+                        let s = ch.encode_utf8(&mut buf);
+                        // Head: White FG, with drop color as BG (cursor effect)
+                        io.write_fmt(format_args!(
+                            "{}{}", 
+                            crate::ecma48::pos(r, drop.col),
+                            crate::ecma48::style(s)
+                                .fg((255, 255, 255))
+                                .bg(drop.color)
+                        ));
+                    } else {
+                        // Trail: Dimming
+                        current_color.0 /= 2;
+                        current_color.1 /= 2;
+                        current_color.2 /= 2;
+                        
+                        let mut buf = [0u8; 4];
+                        let s = ch.encode_utf8(&mut buf);
+                        
+                        io.write_fmt(format_args!(
+                            "{}{}", 
+                            crate::ecma48::pos(r, drop.col),
+                            crate::ecma48::color(s, current_color)
+                        ));
+                    }
+                }
             }
 
             i += 1;
