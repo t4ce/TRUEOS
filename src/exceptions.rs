@@ -202,14 +202,25 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+fn panic(info: &PanicInfo) -> ! {
+    interrupts::disable();
+
+    dprintln!("\n\x1b[31m=== KERNEL PANIC ===\x1b[0m");
+
+    if let Some(loc) = info.location() {
+        dprintln!("Location: {}:{}:{}", loc.file(), loc.line(), loc.column());
+        crate::log!("Location: {}:{}:{}\n", loc.file(), loc.line(), loc.column());
+    } else {
+        crate::log!("Location: unknown\n");
+    }
+
+    let args = info.message();
+    dprintln!("Reason: {}", args);
+    crate::log!("Reason: {}\n", args);
+
     print_backtrace(64);
-    let mut counter: u64 = 0;
+    
     loop {
-        counter = counter.wrapping_add(1);
-        if counter % 100_000_000 == 0 {
-            crate::globalog::debugcon_write_byte_raw(b'!');
-        }
+        hlt();
     }
 }
