@@ -6,7 +6,10 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-use crate::gfx::virtio_gpu_3d::with_global_gpu;
+use crate::gfx::virtio_gpu_3d::{
+    gpu_get_display_info, gpu_resource_attach_backing, gpu_resource_create_2d, gpu_resource_flush,
+    gpu_set_scanout, gpu_transfer_to_host_2d,
+};
 
 // Virtio-gpu scanout expects B8G8R8X8 for our current pipeline.
 const FORMAT_B8G8R8X8_UNORM: u32 = 2;
@@ -133,7 +136,7 @@ pub fn enable(framebuffers: Option<&'static ::limine::response::FramebufferRespo
         .saturating_mul(fb_h as usize)
         .min(u32::MAX as usize) as u32;
 
-    let Some((scanout_id, disp_w, disp_h)) = with_global_gpu(|gpu| gpu.get_display_info()).flatten() else {
+    let Some((scanout_id, disp_w, disp_h)) = gpu_get_display_info(2000) else {
         crate::log!("virtio-limine: get_display_info failed\n");
         return false;
     };
@@ -149,22 +152,17 @@ pub fn enable(framebuffers: Option<&'static ::limine::response::FramebufferRespo
     let present_h = disp_h.min(fb_h).max(1);
 
     let res_id = alloc_res_id();
-    let ok_create = with_global_gpu(|gpu| {
-        gpu.resource_create_2d(res_id, FORMAT_B8G8R8X8_UNORM, stride_pixels, fb_h)
-    })
-    .unwrap_or(false);
+    let ok_create = gpu_resource_create_2d(res_id, FORMAT_B8G8R8X8_UNORM, stride_pixels, fb_h, 2000);
     if !ok_create {
         crate::log!("virtio-limine: resource_create_2d failed\n");
         return false;
     }
-    let ok_attach = with_global_gpu(|gpu| gpu.resource_attach_backing(res_id, backing_phys, backing_len))
-        .unwrap_or(false);
+    let ok_attach = gpu_resource_attach_backing(res_id, backing_phys, backing_len, 2000);
     if !ok_attach {
         crate::log!("virtio-limine: attach_backing failed\n");
         return false;
     }
-    let ok_scanout = with_global_gpu(|gpu| gpu.set_scanout(scanout_id, res_id, present_w, present_h))
-        .unwrap_or(false);
+    let ok_scanout = gpu_set_scanout(scanout_id, res_id, present_w, present_h, 2000);
     if !ok_scanout {
         crate::log!("virtio-limine: set_scanout failed\n");
         return false;
@@ -181,12 +179,10 @@ pub fn enable(framebuffers: Option<&'static ::limine::response::FramebufferRespo
     );
 
     // Make sure the host resource is initialized from guest memory at least once.
-    let (ok_tth, ok_flush) = with_global_gpu(|gpu| {
-        let ok_tth = gpu.transfer_to_host_2d(res_id, present_w, present_h);
-        let ok_flush = gpu.resource_flush(res_id, present_w, present_h);
-        (ok_tth, ok_flush)
-    })
-    .unwrap_or((false, false));
+    // Do not hold the global virtio-gpu lock across multiple ctrlq submissions.
+    // This reduces contention with backend switching and avoids apparent deadlocks/timeouts.
+    let ok_tth = gpu_transfer_to_host_2d(res_id, present_w, present_h, 1000);
+    let ok_flush = gpu_resource_flush(res_id, present_w, present_h, 1000);
     crate::log!(
         "virtio-limine: initial transfer_to_host={} flush={}\n",
         ok_tth as u8,
@@ -242,12 +238,9 @@ async fn virtio_limine_mirror_task() {
             // Drop lock before issuing virtio commands.
             core::mem::drop(guard);
 
-            let (ok_tth, ok_flush) = with_global_gpu(|gpu| {
-                let ok_tth = gpu.transfer_to_host_2d(res, w, h);
-                let ok_flush = gpu.resource_flush(res, w, h);
-                (ok_tth, ok_flush)
-            })
-            .unwrap_or((false, false));
+            // Keep global lock hold times short (see note in enable()).
+            let ok_tth = gpu_transfer_to_host_2d(res, w, h, 1000);
+            let ok_flush = gpu_resource_flush(res, w, h, 1000);
 
             let ok = (ok_tth && ok_flush) as i8;
 

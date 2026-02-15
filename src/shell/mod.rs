@@ -312,6 +312,7 @@ pub(crate) enum CommandAction {
     EnterIco,
     EnterGo,
     EnterGoTwo,
+    EnterRain,
     EnterTetris,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
     Qjs { src: String<192> },

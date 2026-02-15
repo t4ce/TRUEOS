@@ -146,6 +146,11 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         prev
     ));
 
+    // Backend switching is a synchronous shell command and touches multiple spinlocks and
+    // low-level polling loops. Ensure we don't hit any `hlt`-based idling while switching.
+    let prev_idle = crate::power::idle_policy();
+    let _ = crate::power::set_idle_policy(crate::power::IdlePolicy::Spin);
+
     // If we're leaving LimineFB mode (or leaving mirror mode), stop mirroring it into virtio scanout.
     if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::LimineFb) {
         ctx.io
@@ -163,6 +168,8 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         || requested.eq_ignore_ascii_case("soft")
         || requested.eq_ignore_ascii_case("virtio_sw")
     {
+        ctx.io
+            .write_fmt(format_args!("gfx[{}]: switch_to_virtio_sw...\r\n", seq));
         if crate::gfx::switch_to_virtio_sw() {
             crate::gfx::BackendKind::VirtioSw
         } else {
@@ -207,6 +214,9 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
 
     ctx.io
         .write_fmt(format_args!("gfx[{}]: end next={:?}\r\n", seq, kind));
+
+    // Restore idle policy.
+    let _ = crate::power::set_idle_policy(prev_idle);
     CommandAction::None
 }
 

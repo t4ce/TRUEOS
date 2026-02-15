@@ -8,6 +8,7 @@ use spin::{Once, Mutex};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use trueos_gfx_core::GfxContext;
+use embassy_time_driver::{now, TICK_HZ};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -49,7 +50,37 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
     let sys = SYSTEM.get()?;
-    let mut guard = sys.lock();
+
+    // `spin::Mutex::lock()` is an unbounded spin. Backend switches can be invoked from the shell;
+    // if any code path accidentally re-enters gfx while holding this lock, it can look like a
+    // hard BSP freeze. Prefer a bounded wait with a loud log.
+    let mut guard = match sys.try_lock() {
+        Some(g) => g,
+        None => {
+            crate::log!("gfx: waiting for SYSTEM lock...\n");
+
+            let timeout_ms: u64 = 2000;
+            let hz = TICK_HZ as u64;
+            let ticks = if hz == 0 {
+                0
+            } else {
+                ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            };
+            let deadline = now().saturating_add(ticks);
+
+            loop {
+                if let Some(g) = sys.try_lock() {
+                    break g;
+                }
+                if ticks != 0 && now() >= deadline {
+                    crate::log!("gfx: SYSTEM lock timeout (possible re-entrancy/deadlock)\n");
+                    return None;
+                }
+                crate::wait::spin_step();
+            }
+        }
+    };
+
     Some(f(&mut *guard))
 }
 
@@ -75,12 +106,17 @@ pub fn switch_to_virgl() -> bool {
 
 #[cfg(feature = "gfx_virgl")]
 pub fn switch_to_virtio_sw() -> bool {
+    crate::log!("gfx: switch_to_virtio_sw: begin\n");
+
+    // IMPORTANT: do the heavy init without holding the global gfx SYSTEM lock.
+    // Holding SYSTEM while we also acquire the global virtio-gpu lock (and do DMA alloc)
+    // increases the chance of lock inversion / apparent shell freezes.
+    let Some(b) = backends::Backend::init_virtio_sw() else {
+        crate::log!("gfx: switch_to_virtio_sw: init_virtio_sw failed\n");
+        return false;
+    };
+
     with_system(|sys| {
-        crate::log!("gfx: switch_to_virtio_sw: begin\n");
-        let Some(b) = backends::Backend::init_virtio_sw() else {
-            crate::log!("gfx: switch_to_virtio_sw: init_virtio_sw failed\n");
-            return false;
-        };
         sys.backend = b;
         bump_backend_epoch();
         crate::log!("gfx: switch_to_virtio_sw: ok epoch={}\n", backend_epoch());
@@ -95,9 +131,14 @@ pub fn switch_to_virtio_sw() -> bool {
 }
 
 pub fn switch_to_limine_fb() -> bool {
+    crate::log!("gfx: switch_to_limine_fb: begin\n");
+
+    // Snapshot framebuffers without holding SYSTEM across backend init.
+    let fbs = with_framebuffers(|f| f).flatten();
+    let b = backends::Backend::init_limine_fb(fbs);
+
     with_system(|sys| {
-        crate::log!("gfx: switch_to_limine_fb: begin\n");
-        sys.backend = backends::Backend::init_limine_fb(sys.framebuffers);
+        sys.backend = b;
         bump_backend_epoch();
         crate::log!("gfx: switch_to_limine_fb: ok epoch={}\n", backend_epoch());
         true
