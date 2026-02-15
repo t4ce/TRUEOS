@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use embassy_time::{Duration, Timer};
 use alloc::borrow::ToOwned;
+use crate::wait::{select2, Either};
 
 use crate::shell::{CommandAction, ShellBackend};
 use crate::shell::interface::ShellIo;
@@ -106,38 +107,92 @@ async fn process_input(
         esc
     );
 
-    // out.write_str("ai: thinking...\n");
     statusbar::set_right_active("thinking");
     statusbar::refresh(io, term_cols, term_rows);
 
-    // 10s timeout, max 64KB response
-    let res = post_https_json_async(url, body, Some(key), 10_000, 64 * 1024).await;
-    
+    // Increase timeout to 120s since web search can be slow.
+    let net_future = post_https_json_async(url, body, Some(key), 120_000, 64 * 1024);
+    let cancel_future = wait_for_enter_with_animation(io);
+
+    // Run network vs cancellation
+    let result = select2(net_future, cancel_future).await;
+
+    // Clear animations/status
     statusbar::set_right_active("");
     statusbar::refresh(io, term_cols, term_rows);
+    io.write_str(crate::ecma48::SHOW_CURSOR); // ensure cursor shown if animation hid it
+    // Restore cursor to prompt line just in case animation left it elsewhere
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5))); // move past ai> 
 
-    match res {
-        Ok(bytes) => {
-            if let Ok(s) = core::str::from_utf8(&bytes) {
-                // OpenAI responses are JSON. We should try to extract the text.
-                if let Some(content) = extract_json_string_field(s, "\"text\":") {
-                    out.write_str("ai: ");
-                    out.write_str(&content);
-                    out.write_str("\n");
-                } else {
-                     // Fallback: print the whole thing
-                     out.write_str("ai: [raw] ");
-                     out.write_str(s);
-                     out.write_str("\n");
+    match result {
+        Either::First(res) => {
+            // Network completed
+            match res {
+                Ok(bytes) => {
+                    if let Ok(s) = core::str::from_utf8(&bytes) {
+                        // OpenAI responses are JSON. We should try to extract the text.
+                        if let Some(content) = extract_json_string_field(s, "\"text\":") {
+                            out.write_str("ai: ");
+                            out.write_str(&content);
+                            out.write_str("\n");
+                        } else {
+                             // Fallback: print the whole thing
+                             out.write_str("ai: [raw] ");
+                             out.write_str(s);
+                             out.write_str("\n");
+                        }
+                    } else {
+                        out.write_str("ai: error decoding utf8\n");
+                    }
                 }
-            } else {
-                out.write_str("ai: error decoding utf8\n");
+                Err(e) => {
+                    out.write_fmt(format_args!("ai: network error {:?}\n", e));
+                }
             }
         }
-        Err(e) => {
-            out.write_fmt(format_args!("ai: network error {:?}\n", e));
+        Either::Second(_) => {
+            // User cancelled
+            out.write_str("ai: aborted\n");
         }
     }
+}
+
+async fn wait_for_enter_with_animation(io: &dyn ShellBackend) {
+    const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+    let mut go_idx = 0;
+    
+    io.write_str(crate::ecma48::HIDE_CURSOR);
+    
+    loop {
+        // check input
+        // Since we are racing with network, any input should abort.
+        // But specifically looking for Enter? The user said "wait can be canceled".
+        // Usually implied by any key or Enter.
+        // The read_byte blocks? No, we need to poll or use Timer.
+        // wait... io.read_byte() is non-blocking (returns Option<u8> immediately?).
+        // If it is blocking, we have a problem because we need to animate.
+        // src/shell/cmd/shell_cmds.rs used `io.read_byte()` loop with Timer.
+        // So read_byte seems non-blocking or at least returns None quickly.
+        
+        if let Some(b) = io.read_byte() {
+            if b == b'\r' || b == b'\n' {
+                break;
+            }
+        }
+        
+        // draw spinner at Row 2, col 5 (after "ai> ")
+        io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5)));
+        io.write_char(GO_CHARS[go_idx]);
+        
+        go_idx = (go_idx + 1) % GO_CHARS.len();
+        
+        Timer::after(Duration::from_millis(160)).await;
+    }
+    
+    io.write_str(crate::ecma48::SHOW_CURSOR);
+    // Clear the spinner char
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5)));
+    io.write_str(" ");
 }
 
 fn json_escape_into(out: &mut String, s: &str) {

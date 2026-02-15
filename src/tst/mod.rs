@@ -23,3 +23,10 @@ pub(crate) async fn boot_pixi_smoke_task() {
     unsafe { trueos_qjs::trueos_smoke::run_pixi_import_smoke() };
     crate::log!("qjs-pixi-smoke: done\n");
 }
+
+#[task]
+pub(crate) async fn boot_webgl_rect_smoke_task() {
+    crate::log!("qjs-webgl-rect-smoke: starting\n");
+    unsafe { trueos_qjs::trueos_smoke::run_webgl_rect_smoke() };
+    crate::log!("qjs-webgl-rect-smoke: done\n");
+}

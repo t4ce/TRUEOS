@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use core::ffi::{c_char, c_int, CStr};
 
 use crate as qjs;
@@ -110,6 +112,18 @@ unsafe fn install_print(ctx: *mut qjs::JSContext) {
         0,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, func);
+
+    // Stable alias so libraries can’t clobber our primary log hook.
+    let alias = b"__trueos_print\0";
+    let func2 = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_print),
+        alias.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, global, alias.as_ptr() as *const c_char, func2);
     qjs::js_free_value(ctx, global);
 }
 
@@ -363,11 +377,10 @@ pub unsafe fn run_pixi_import_smoke() {
     qjs::node::install_globals(ctx);
 
     // Pin a specific version so smoke output is stable and caching is effective.
-    // Note: this will likely fail until the WebGL shim exists; that is still useful
-    // because the exception message tells us which globals/APIs Pixi expects.
+    // Use esm.sh's bundled build to reduce the number of separate fetches (more reliable
+    // under tight boot-time networking constraints).
     let mod_filename = b"<smoke-pixi-import>\0";
-    let mod_script = b"globalThis.print('pixi import: start');\n\
-import * as PIXI from 'pixi.js@7.4.0';\n\
+    let mod_script = b"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';\n\
 globalThis.print('pixi import: ok');\n\
 globalThis.print('pixi VERSION', (PIXI && PIXI.VERSION) ? PIXI.VERSION : 'unknown');\n\
 globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
@@ -388,6 +401,100 @@ globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: pixi-import eval ok\n");
+    }
+
+    drop(vm);
+}
+
+/// Boot-time smoke for the TRUEOS WebGL shim.
+///
+/// Goal: exercise `bufferData` + `drawElements` (indexed triangles) end-to-end:
+/// JS -> WebGL shim -> `trueos_cabi_gfx_draw_rgb_triangles`.
+pub unsafe fn run_webgl_rect_smoke() {
+    let Some(vm) = qjs::vm::QjsVm::new_node() else {
+        log_str("quickjs: JS_NewRuntime failed\n");
+        return;
+    };
+    let ctx = vm.ctx_ptr();
+
+    install_print(ctx);
+    qjs::node::install_globals(ctx);
+
+    let filename = b"<smoke-webgl-rect>\0";
+    // Note: canvas.getContext('webgl') (1-arg) is treated as a probe and returns null;
+    // pass an options object to request the real shim context.
+    let script = br#"globalThis.print('webgl-rect: start');
+const canvas = document.createElement('canvas');
+canvas.width = 320;
+canvas.height = 200;
+const gl = canvas.getContext('webgl', {});
+if (!gl) throw new Error('webgl-rect: getContext returned null');
+
+gl.viewport(0, 0, canvas.width, canvas.height);
+gl.clearColor(8/255, 24/255, 48/255, 1);
+
+// Vertex format expected by the shim drawElements path:
+//   [f32 x_px, f32 y_px, u8 r, u8 g, u8 b, u8 a] (stride = 12)
+const stride = 12;
+const vb = new ArrayBuffer(4 * stride);
+const dv = new DataView(vb);
+const u8 = new Uint8Array(vb);
+
+function setV(i, x, y, r, g, b, a) {
+  const base = i * stride;
+  dv.setFloat32(base + 0, x, true);
+  dv.setFloat32(base + 4, y, true);
+  u8[base + 8] = r;
+  u8[base + 9] = g;
+  u8[base + 10] = b;
+  u8[base + 11] = a;
+}
+
+// Rectangle in pixel coords.
+setV(0,  32,  24, 255, 105, 180, 255);
+setV(1, 192,  24, 255, 105, 180, 255);
+setV(2, 192, 124, 255, 105, 180, 255);
+setV(3,  32, 124, 255, 105, 180, 255);
+
+const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+
+const vbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+gl.bufferData(gl.ARRAY_BUFFER, u8, gl.STATIC_DRAW);
+
+const ibo = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, 0, stride, 0);
+gl.enableVertexAttribArray(1);
+gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, 1, stride, 8);
+
+gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+gl.flush();
+
+globalThis.print('webgl-rect: ok');
+"#;
+
+    let mut owned = alloc::vec::Vec::with_capacity(script.len() + 1);
+    owned.extend_from_slice(script);
+    owned.push(0);
+
+    let ret = qjs::JS_Eval(
+        ctx,
+        owned.as_ptr() as *const c_char,
+        owned.len() - 1,
+        filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
+
+    if ret.is_exception() {
+        log_str("quickjs: webgl-rect JS_Eval exception\n");
+        dump_exception(ctx);
+    } else {
+        qjs::js_free_value(ctx, ret);
+        log_str("quickjs: webgl-rect eval ok\n");
     }
 
     drop(vm);
