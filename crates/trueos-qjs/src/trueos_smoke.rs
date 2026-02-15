@@ -6,6 +6,90 @@ use crate as qjs;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    fn trueos_cabi_poll_once();
+}
+
+unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
+    if rt.is_null() {
+        return true;
+    }
+
+    loop {
+        let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
+        let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
+        if rc > 0 {
+            continue;
+        }
+        if rc < 0 {
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
+            if !ctx.is_null() {
+                log_str("quickjs: exception while executing pending job\n");
+                dump_exception(ctx);
+            } else {
+                log_str("quickjs: exception while executing pending job (no ctx)\n");
+            }
+            return false;
+        }
+        break;
+    }
+
+    true
+}
+
+/// Drive QuickJS microtasks + TRUEOS async ops (net/FS fetches used by the module loader).
+///
+/// Unlike the shell REPL, boot smokes are not async; they must explicitly yield to the kernel
+/// via `trueos_cabi_poll_once()` while waiting for completions.
+unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext, max_wait_ms: u64) -> bool {
+    if rt.is_null() || ctx.is_null() {
+        return true;
+    }
+
+    let start = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    let max_ticks = if max_wait_ms == 0 || hz == 0 {
+        0
+    } else {
+        (max_wait_ms.saturating_mul(hz) + 999) / 1000
+    };
+    let deadline = start.saturating_add(max_ticks);
+
+    loop {
+        let mut progress = false;
+        progress |= qjs::async_ops::pump(ctx);
+        progress |= qjs::workers::pump(ctx);
+
+        if !drain_pending_jobs(rt, ctx) {
+            return false;
+        }
+
+        let pending_async = qjs::async_ops::has_pending(ctx);
+        let pending_workers = qjs::workers::has_pending_for_ctx(ctx);
+        let jobs_pending = qjs::JS_IsJobPending(rt) > 0;
+        if !pending_async && !pending_workers && !jobs_pending {
+            break;
+        }
+
+        if max_ticks != 0 && embassy_time_driver::now() >= deadline {
+            log_str("quickjs: async wait timeout\n");
+            break;
+        }
+
+        // Yield to the kernel so async net/FS tasks can run.
+        // We do this even when we made progress to avoid starving the executor.
+        trueos_cabi_poll_once();
+
+        // If we are spinning but nothing is happening, keep yielding.
+        if !progress {
+            trueos_cabi_poll_once();
+        }
+    }
+
+    true
 }
 
 #[inline]
@@ -136,6 +220,7 @@ pub unsafe fn run() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
@@ -176,6 +261,7 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: module eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 30_000);
     }
 
     // Keep the original minimal global eval as a baseline sanity check.
@@ -228,6 +314,7 @@ pub unsafe fn run_module_loader_smoke() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
@@ -260,6 +347,7 @@ globalThis.print('module-loader ok', out);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: module-loader eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 30_000);
     }
 
     drop(vm);
@@ -273,6 +361,7 @@ pub unsafe fn run_parse5_smoke() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
@@ -309,6 +398,7 @@ globalThis.print('parse5 ok', root.nodeName, count);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: parse5 eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 30_000);
     }
 
     drop(vm);
@@ -324,6 +414,7 @@ pub unsafe fn run_common_modules_smoke() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
@@ -357,6 +448,7 @@ globalThis.print('common-modules: lodash ok', cc);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: common-modules eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 30_000);
     }
 
     drop(vm);
@@ -371,6 +463,7 @@ pub unsafe fn run_pixi_import_smoke() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
@@ -401,6 +494,7 @@ globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: pixi-import eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 60_000);
     }
 
     drop(vm);
@@ -415,15 +509,16 @@ pub unsafe fn run_pixi_rect_smoke() {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
     };
+    let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
-        // IMPORTANT: In an ES module, imports must come first.
-        // Use __trueos_print so logs remain stable even if libraries overwrite globalThis.print.
-        let mod_filename = b"<smoke-pixi-tri>\0";
-        let mod_script = br#"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';
+    // IMPORTANT: In an ES module, imports must come first.
+    // Use __trueos_print so logs remain stable even if libraries overwrite globalThis.print.
+    let mod_filename = b"<smoke-pixi-tri>\0";
+    let mod_script = br#"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';
 
 // Allow getContext('webgl') one-arg calls during this smoke.
 globalThis.__trueos_webgl_force = 1;
@@ -499,18 +594,18 @@ void main(){
 0
 "#;
 
-        // NUL-terminate: QuickJS parser tends to be more reliable with C-string style buffers.
-        let mut owned: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(mod_script.len() + 1);
-        owned.extend_from_slice(mod_script);
-        owned.push(0);
+    // NUL-terminate: QuickJS parser tends to be more reliable with C-string style buffers.
+    let mut owned: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(mod_script.len() + 1);
+    owned.extend_from_slice(mod_script);
+    owned.push(0);
 
-        let mod_ret = qjs::JS_Eval(
-                ctx,
-                owned.as_ptr() as *const c_char,
-                owned.len() - 1,
-                mod_filename.as_ptr() as *const c_char,
-                qjs::JS_EVAL_TYPE_MODULE,
-        );
+    let mod_ret = qjs::JS_Eval(
+        ctx,
+        owned.as_ptr() as *const c_char,
+        owned.len() - 1,
+        mod_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_MODULE,
+    );
 
     if mod_ret.is_exception() {
         log_str("quickjs: pixi-rect JS_Eval exception\n");
@@ -518,6 +613,7 @@ void main(){
     } else {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: pixi-rect eval ok\n");
+        let _ = drain_jobs_and_promises(rt, ctx, 60_000);
     }
 
     drop(vm);

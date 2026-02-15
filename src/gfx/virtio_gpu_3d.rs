@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use crate::{pci, wait};
+use embassy_time_driver::{now, TICK_HZ};
 // a Rectangle is just two triangles
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Virtio 1.0 GPU device id (0x1040 + virtio device id 16).
@@ -767,7 +768,39 @@ static GLOBAL_GPU: Once<Mutex<Option<VirtioGpu3d>>> = Once::new();
 pub fn with_global_gpu<R>(f: impl FnOnce(&mut VirtioGpu3d) -> R) -> Option<R> {
     let _ = GLOBAL_GPU.call_once(|| Mutex::new(VirtioGpu3d::init_first()));
     let slot = GLOBAL_GPU.get()?;
-    let mut guard = slot.lock();
+
+    // `spin::Mutex::lock()` is an unbounded spin. If some code path accidentally tries to
+    // re-enter `with_global_gpu` while holding the lock (or otherwise wedges), backend switches
+    // can appear to "hard hang" the machine. Prefer a bounded wait with a loud log.
+    let mut guard = match slot.try_lock() {
+        Some(g) => g,
+        None => {
+            crate::log!("virtio-gpu3d: waiting for global lock...\n");
+
+            // 2000ms is intentionally longer than ctrlq timeouts (1000ms) so we distinguish
+            // between "device not responding" vs "lock never released".
+            let timeout_ms: u64 = 2000;
+            let hz = TICK_HZ as u64;
+            let ticks = if hz == 0 {
+                0
+            } else {
+                ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            };
+            let deadline = now().saturating_add(ticks);
+
+            loop {
+                if let Some(g) = slot.try_lock() {
+                    break g;
+                }
+                if now() >= deadline {
+                    crate::log!("virtio-gpu3d: global lock timeout (possible re-entrancy/deadlock)\n");
+                    return None;
+                }
+                wait::spin_step();
+            }
+        }
+    };
+
     let gpu = guard.as_mut()?;
     Some(f(gpu))
 }
