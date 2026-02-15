@@ -1,6 +1,8 @@
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
+use alloc::boxed::Box;
+
 use super::cube::{CubeState, WireShape};
 use super::{CommandAction, PendingAction, ShellBackend, ShellMode};
 
@@ -70,13 +72,15 @@ pub(super) async fn handle_command_action(
             *mode = ShellMode::Idle;
         }
         CommandAction::OpenAiChat { first } => {
-            crate::shell::cmd::ai::run_ai_wizard(
-                io, 
-                *term_cols, 
-                *term_rows, 
-                history, 
-                first.as_str()
-            ).await;
+            Box::pin(crate::shell::cmd::ai::run_ai_wizard(
+                io,
+                *term_cols,
+                *term_rows,
+                spawner,
+                history,
+                first.as_str(),
+            ))
+            .await;
         }
         CommandAction::None => {}
     }

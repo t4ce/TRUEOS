@@ -406,11 +406,11 @@ globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
     drop(vm);
 }
 
-/// Boot-time smoke for the TRUEOS WebGL shim.
+/// Boot-time / on-demand smoke for rendering a single rectangle via PixiJS.
 ///
-/// Goal: exercise `bufferData` + `drawElements` (indexed triangles) end-to-end:
-/// JS -> WebGL shim -> `trueos_cabi_gfx_draw_rgb_triangles`.
-pub unsafe fn run_webgl_rect_smoke() {
+/// Goal: exercise the WebGL shim through a real library (Pixi) and get a visible draw
+/// when the kernel gfx backend is switched to a virtio-backed scanout.
+pub unsafe fn run_pixi_rect_smoke() {
     let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
@@ -420,82 +420,107 @@ pub unsafe fn run_webgl_rect_smoke() {
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
-    let filename = b"<smoke-webgl-rect>\0";
-    // Note: canvas.getContext('webgl') (1-arg) is treated as a probe and returns null;
-    // pass an options object to request the real shim context.
-    let script = br#"globalThis.print('webgl-rect: start');
-const canvas = document.createElement('canvas');
-canvas.width = 320;
-canvas.height = 200;
-const gl = canvas.getContext('webgl', {});
-if (!gl) throw new Error('webgl-rect: getContext returned null');
+        // IMPORTANT: In an ES module, imports must come first.
+        // Use __trueos_print so logs remain stable even if libraries overwrite globalThis.print.
+        let mod_filename = b"<smoke-pixi-tri>\0";
+        let mod_script = br#"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';
 
-gl.viewport(0, 0, canvas.width, canvas.height);
-gl.clearColor(8/255, 24/255, 48/255, 1);
+// Allow getContext('webgl') one-arg calls during this smoke.
+globalThis.__trueos_webgl_force = 1;
 
-// Vertex format expected by the shim drawElements path:
-//   [f32 x_px, f32 y_px, u8 r, u8 g, u8 b, u8 a] (stride = 12)
-const stride = 12;
-const vb = new ArrayBuffer(4 * stride);
-const dv = new DataView(vb);
-const u8 = new Uint8Array(vb);
+const log = globalThis.__trueos_print || globalThis.print;
+log('pixi-tri: start');
 
-function setV(i, x, y, r, g, b, a) {
-  const base = i * stride;
-  dv.setFloat32(base + 0, x, true);
-  dv.setFloat32(base + 4, y, true);
-  u8[base + 8] = r;
-  u8[base + 9] = g;
-  u8[base + 10] = b;
-  u8[base + 11] = a;
+try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 200;
+
+    const renderer = new PIXI.Renderer({
+        view: canvas,
+        width: canvas.width,
+        height: canvas.height,
+        antialias: false,
+        backgroundColor: 0x081830
+    });
+
+    // Triangle in pixel coords.
+    const positions = new Float32Array([
+        40, 40,
+        280, 60,
+        160, 170,
+    ]);
+
+    // Per-vertex RGBA (normalized u8): R, G, B corners.
+    const colors = new Uint8Array([
+        255, 0, 0, 255,
+        0, 255, 0, 255,
+        0, 0, 255, 255,
+    ]);
+
+    const indices = new Uint16Array([0, 1, 2]);
+
+    const geometry = new PIXI.Geometry()
+        .addAttribute('aVertexPosition', positions, 2, false, PIXI.TYPES.FLOAT)
+        .addAttribute('aColor', colors, 4, true, PIXI.TYPES.UNSIGNED_BYTE)
+        .addIndex(indices);
+
+    const vs = `precision mediump float;
+attribute vec2 aVertexPosition;
+attribute vec4 aColor;
+uniform mat3 translationMatrix;
+uniform mat3 projectionMatrix;
+varying vec4 vColor;
+void main(){
+    vColor = aColor;
+    vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
+    gl_Position = vec4(pos.xy, 0.0, 1.0);
+}`;
+
+    const fs = `precision mediump float;
+varying vec4 vColor;
+void main(){
+    gl_FragColor = vColor;
+}`;
+
+    const program = PIXI.Program.from(vs, fs);
+    const shader = new PIXI.Shader(program, {});
+    const mesh = new PIXI.Mesh(geometry, shader);
+
+    const stage = new PIXI.Container();
+    stage.addChild(mesh);
+    renderer.render(stage);
+
+    log('pixi-tri: ok');
+} catch (e) {
+    log('pixi-tri: error', (e && e.stack) ? e.stack : (e && e.message) ? e.message : String(e));
 }
 
-// Rectangle in pixel coords.
-setV(0,  32,  24, 255, 105, 180, 255);
-setV(1, 192,  24, 255, 105, 180, 255);
-setV(2, 192, 124, 255, 105, 180, 255);
-setV(3,  32, 124, 255, 105, 180, 255);
-
-const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
-
-const vbo = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-gl.bufferData(gl.ARRAY_BUFFER, u8, gl.STATIC_DRAW);
-
-const ibo = gl.createBuffer();
-gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
-gl.enableVertexAttribArray(0);
-gl.vertexAttribPointer(0, 2, gl.FLOAT, 0, stride, 0);
-gl.enableVertexAttribArray(1);
-gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, 1, stride, 8);
-
-gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-gl.flush();
-
-globalThis.print('webgl-rect: ok');
+0
 "#;
 
-    let mut owned = alloc::vec::Vec::with_capacity(script.len() + 1);
-    owned.extend_from_slice(script);
-    owned.push(0);
+        // NUL-terminate: QuickJS parser tends to be more reliable with C-string style buffers.
+        let mut owned: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(mod_script.len() + 1);
+        owned.extend_from_slice(mod_script);
+        owned.push(0);
 
-    let ret = qjs::JS_Eval(
-        ctx,
-        owned.as_ptr() as *const c_char,
-        owned.len() - 1,
-        filename.as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_MODULE,
-    );
+        let mod_ret = qjs::JS_Eval(
+                ctx,
+                owned.as_ptr() as *const c_char,
+                owned.len() - 1,
+                mod_filename.as_ptr() as *const c_char,
+                qjs::JS_EVAL_TYPE_MODULE,
+        );
 
-    if ret.is_exception() {
-        log_str("quickjs: webgl-rect JS_Eval exception\n");
+    if mod_ret.is_exception() {
+        log_str("quickjs: pixi-rect JS_Eval exception\n");
         dump_exception(ctx);
     } else {
-        qjs::js_free_value(ctx, ret);
-        log_str("quickjs: webgl-rect eval ok\n");
+        qjs::js_free_value(ctx, mod_ret);
+        log_str("quickjs: pixi-rect eval ok\n");
     }
 
     drop(vm);
 }
+
+
