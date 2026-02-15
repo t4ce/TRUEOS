@@ -91,9 +91,27 @@ impl fmt::Display for BgAnsi<'_> {
     }
 }
 
+
+struct FgRgbChar {
+    ch: char,
+    rgb: (u8, u8, u8),
+}
+
+impl fmt::Display for FgRgbChar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (r, g, b) = self.rgb;
+        write!(f, "\x1b[38;2;{};{};{}m{}{}", r, g, b, self.ch, RESET)
+    }
+}
+
 /// Truecolor foreground (24-bit RGB).
 pub fn color(text: &str, rgb: (u8, u8, u8)) -> impl fmt::Display + '_ {
     FgRgb { text, rgb }
+}
+
+/// Truecolor foreground for a single `char` (24-bit RGB).
+pub fn color_char(ch: char, rgb: (u8, u8, u8)) -> impl fmt::Display {
+    FgRgbChar { ch, rgb }
 }
 
 /// Truecolor background (24-bit RGB).

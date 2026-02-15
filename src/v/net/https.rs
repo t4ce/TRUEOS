@@ -167,6 +167,14 @@ pub enum FetchError {
     ResponseTooLarge,
 }
 
+/// Callback sink for Server-Sent Events (SSE) streaming.
+///
+/// The handler receives the raw `data:` payload (already concatenated across
+/// multiple `data:` lines for a single SSE event).
+pub trait SseHandler {
+    fn on_data(&mut self, data: &str);
+}
+
 #[inline]
 fn block_error_to_code(err: crate::disc::block::Error) -> i32 {
     use crate::disc::block::Error;
@@ -872,6 +880,309 @@ async fn fetch_on_device(
                 let _ = cmds.push(TlsCommand::Close { handle: h });
             }
             // Fallback classification: we hit the total wall clock deadline.
+            return Err(if tls_handle.is_none() {
+                FetchError::ConnectTimeout
+            } else if !http_sent {
+                FetchError::TlsTimeout
+            } else {
+                FetchError::BodyTimeout
+            });
+        }
+
+        Timer::after(EmbassyDuration::from_millis(2)).await;
+    }
+}
+
+async fn fetch_on_device_sse(
+    parsed: &ParsedHttpsUrl,
+    dev_idx: usize,
+    timeout_ms: u32,
+    max_bytes: usize,
+    body_json: &str,
+    auth_token: Option<&str>,
+    handler: &mut dyn SseHandler,
+) -> Result<(), FetchError> {
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+        Ok(ip) => ip,
+        Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
+        Err(_) => return Err(FetchError::DnsFailed),
+    };
+
+    let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+        format!("{:02x}:{:02x}.{}", bus, slot, func)
+    } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        format!("{:04x}:{:04x}", vid, pid)
+    } else {
+        format!("{}", dev_idx)
+    };
+    let owner = leak_str(format!("vhttpssse-{}@{}", seq, selector));
+    let cmds_name = leak_str(format!("{}-tls-cmd", owner));
+    let evts_name = leak_str(format!("{}-tls-evt", owner));
+    let cmds = Queue::new_leaked(cmds_name, 256);
+    let events = Queue::new_leaked(evts_name, 4096);
+    register_tls_app_queues(owner, cmds, events);
+
+    let roots = TlsRoots::mozilla();
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let server_name = leak_str(parsed.host.clone());
+
+    let start = Instant::now();
+    let total_deadline = start + EmbassyDuration::from_millis(timeout_ms as u64);
+    let connect_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
+    let tls_ms: u64 = (timeout_ms as u64 / 4).max(5_000);
+    let connect_deadline = start + EmbassyDuration::from_millis(connect_ms);
+    let tls_deadline = start + EmbassyDuration::from_millis(connect_ms.saturating_add(tls_ms));
+
+    let mut tls_handle: Option<vnet::NetHandle> = None;
+    let mut sent_connect = false;
+    let mut http_sent = false;
+    let mut last_activity = Instant::now();
+
+    // Capture enough plaintext for headers + some body. Keep bounded.
+    let capture_cap = max_bytes.saturating_add(64 * 1024);
+    let mut plaintext: Vec<u8> = Vec::new();
+    let mut hdr_end_cached: Option<usize> = None;
+
+    // Streaming decode state.
+    let mut raw_body_consumed: usize = 0;
+    let mut decoded_body_len: usize = 0;
+    let mut sse_buf: Vec<u8> = Vec::new();
+    let mut chunked_done = false;
+    let mut saw_done_event = false;
+
+    loop {
+        for ev in events.drain(1024) {
+            match ev {
+                TlsEvent::Opened { handle } => {
+                    last_activity = Instant::now();
+                    tls_handle = Some(handle);
+                }
+                TlsEvent::Connected { handle } => {
+                    last_activity = Instant::now();
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if !http_sent {
+                        let auth = if let Some(token) = auth_token {
+                            format!("Authorization: Bearer {}\r\n", token)
+                        } else {
+                            String::new()
+                        };
+                        let len = body_json.len();
+                        let req = format!(
+                            "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\nAccept: text/event-stream\r\nAccept-Encoding: identity\r\n{}Content-Length: {}\r\n\r\n{}",
+                            parsed.path,
+                            parsed.host,
+                            auth,
+                            len,
+                            body_json
+                        );
+                        let _ = cmds.push(TlsCommand::Send {
+                            handle,
+                            data: req.into_bytes(),
+                        });
+                        http_sent = true;
+                    }
+                }
+                TlsEvent::Data { handle, data } => {
+                    last_activity = Instant::now();
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    if data.is_empty() {
+                        continue;
+                    }
+
+                    let room = capture_cap.saturating_sub(plaintext.len());
+                    if room == 0 {
+                        if let Some(h) = tls_handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                        }
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+                    let take = data.len().min(room);
+                    plaintext.extend_from_slice(&data[..take]);
+                    if take < data.len() {
+                        if let Some(h) = tls_handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                        }
+                        return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    // Find headers once.
+                    let hdr_end = match hdr_end_cached {
+                        Some(v) => v,
+                        None => {
+                            let v = find_http_header_end(&plaintext);
+                            if let Some(v) = v {
+                                hdr_end_cached = Some(v);
+                            }
+                            v.unwrap_or(0)
+                        }
+                    };
+                    if hdr_end == 0 {
+                        continue;
+                    }
+
+                    let headers = &plaintext[..hdr_end];
+                    let status = parse_http_status(&plaintext).unwrap_or(0);
+                    if status != 200 {
+                        // Let existing error-body logging handle details.
+                        if let Some(h) = tls_handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                        }
+                        return Err(FetchError::Http(status));
+                    }
+
+                    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let body_raw = &plaintext[hdr_end..];
+
+                    if is_chunked {
+                        // Incremental chunked decode.
+                        while !chunked_done {
+                            // Need size line.
+                            let rem = &body_raw[raw_body_consumed..];
+                            let Some(line_end) = rem.windows(2).position(|w| w == b"\r\n") else {
+                                break;
+                            };
+                            let line = &rem[..line_end];
+                            // Strip extensions.
+                            let line = line.split(|b| *b == b';').next().unwrap_or(line);
+                            let Ok(line_str) = core::str::from_utf8(line) else {
+                                return Err(FetchError::Http(0));
+                            };
+                            let Ok(size) = usize::from_str_radix(line_str.trim(), 16) else {
+                                return Err(FetchError::Http(0));
+                            };
+                            let after_line = raw_body_consumed + line_end + 2;
+                            if size == 0 {
+                                // Need terminating CRLF after 0 size and possible trailers; best-effort done.
+                                chunked_done = true;
+                                break;
+                            }
+                            if after_line + size + 2 > body_raw.len() {
+                                break;
+                            }
+                            let chunk = &body_raw[after_line..after_line + size];
+                            decoded_body_len = decoded_body_len.saturating_add(chunk.len());
+                            if decoded_body_len > max_bytes {
+                                return Err(FetchError::ResponseTooLarge);
+                            }
+                            sse_buf.extend_from_slice(chunk);
+                            raw_body_consumed = after_line + size + 2;
+                        }
+                    } else {
+                        // Non-chunked: treat raw body bytes as decoded.
+                        let new = &body_raw[raw_body_consumed..];
+                        if !new.is_empty() {
+                            decoded_body_len = decoded_body_len.saturating_add(new.len());
+                            if decoded_body_len > max_bytes {
+                                return Err(FetchError::ResponseTooLarge);
+                            }
+                            sse_buf.extend_from_slice(new);
+                            raw_body_consumed = body_raw.len();
+                        }
+                    }
+
+                    // SSE parse: emit complete events as they arrive.
+                    loop {
+                        let delim = if let Some(p) = sse_buf.windows(2).position(|w| w == b"\n\n") {
+                            Some((p, 2))
+                        } else if let Some(p) = sse_buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            Some((p, 4))
+                        } else {
+                            None
+                        };
+                        let Some((pos, dlen)) = delim else { break };
+                        let block = sse_buf.drain(..pos + dlen).collect::<Vec<u8>>();
+                        // Strip delimiter
+                        let mut block = block;
+                        if block.len() >= dlen {
+                            block.truncate(block.len() - dlen);
+                        }
+                        if block.is_empty() {
+                            continue;
+                        }
+                        let Ok(text) = core::str::from_utf8(block.as_slice()) else {
+                            continue;
+                        };
+                        let mut data_out = String::new();
+                        for line in text.lines() {
+                            let line = line.trim_end_matches('\r');
+                            if let Some(rest) = line.strip_prefix("data:") {
+                                let mut rest = rest;
+                                if rest.starts_with(' ') {
+                                    rest = &rest[1..];
+                                }
+                                if !data_out.is_empty() {
+                                    data_out.push('\n');
+                                }
+                                data_out.push_str(rest);
+                            }
+                        }
+                        if data_out == "[DONE]" {
+                            saw_done_event = true;
+                            break;
+                        }
+                        if !data_out.is_empty() {
+                            handler.on_data(data_out.as_str());
+                        }
+                    }
+
+                    if saw_done_event {
+                        if let Some(h) = tls_handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
+                        }
+                        return Ok(());
+                    }
+                }
+                TlsEvent::Closed { handle } => {
+                    if tls_handle != Some(handle) {
+                        continue;
+                    }
+                    // Connection closed; treat as end of stream.
+                    return Ok(());
+                }
+                TlsEvent::TlsError { .. } => {
+                    if let Some(h) = tls_handle {
+                        let _ = cmds.push(TlsCommand::Close { handle: h });
+                    }
+                    return Err(FetchError::Tls);
+                }
+                _ => {}
+            }
+        }
+
+        if !sent_connect {
+            let _ = cmds.push(TlsCommand::OpenTcpConnect {
+                remote: vnet::EndpointV4 { addr: ip, port: parsed.port },
+                server_name,
+                cfg: cfg.clone(),
+                roots: roots.clone(),
+                timeouts: crate::net::tls_socket::TlsTimeouts {
+                    connect_ms: (timeout_ms / 4).max(5_000),
+                    tls_ms: (timeout_ms / 4).max(5_000),
+                    idle_ms: timeout_ms,
+                },
+            });
+            sent_connect = true;
+        }
+
+        let now = Instant::now();
+        if tls_handle.is_none() && now >= connect_deadline {
+            return Err(FetchError::ConnectTimeout);
+        }
+        if tls_handle.is_some() && !http_sent && now >= tls_deadline {
+            return Err(FetchError::TlsTimeout);
+        }
+        if http_sent {
+            let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
+            if now >= idle_deadline {
+                return Err(FetchError::BodyTimeout);
+            }
+        }
+        if now >= total_deadline {
             return Err(if tls_handle.is_none() {
                 FetchError::ConnectTimeout
             } else if !http_sent {
@@ -2037,6 +2348,67 @@ pub async fn post_https_json_async(
         for dev_idx in 0..dev_count {
             match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, Some(body_json.as_str()), auth_token).await {
                 Ok(v) => return Ok(v),
+                Err(FetchError::Redirect { status, url }) => {
+                    redirect = Some((status, url));
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        if let Some((status, next_url)) = redirect {
+            if hop >= MAX_REDIRECTS {
+                return Err(FetchError::Http(status));
+            }
+            current_url = next_url;
+            continue;
+        }
+
+        return Err(last_err.unwrap_or(FetchError::DnsFailed));
+    }
+
+    Err(FetchError::Http(0))
+}
+
+/// POST JSON and stream response as SSE (`text/event-stream`).
+///
+/// This is intended for model streaming (`stream: true`). The handler will be
+/// called for each parsed SSE `data:` payload.
+pub async fn post_https_sse_async(
+    url: &str,
+    body_json: String,
+    auth_token: Option<&str>,
+    timeout_ms: u32,
+    max_bytes: usize,
+    handler: &mut dyn SseHandler,
+) -> Result<(), FetchError> {
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return Err(FetchError::NoNic);
+    }
+
+    const MAX_REDIRECTS: usize = 3;
+    let mut current_url = String::from(url);
+
+    for hop in 0..=MAX_REDIRECTS {
+        let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
+
+        let mut last_err: Option<FetchError> = None;
+        let mut redirect: Option<(u16, String)> = None;
+
+        for dev_idx in 0..dev_count {
+            match fetch_on_device_sse(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                body_json.as_str(),
+                auth_token,
+                handler,
+            )
+            .await
+            {
+                Ok(()) => return Ok(()),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
                     break;

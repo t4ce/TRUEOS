@@ -534,6 +534,25 @@ pub unsafe fn run_pixi_rect_smoke() {
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
+    // Preflight: prove JS -> print() -> kernel log bridge works in this VM.
+    {
+        let filename = b"<pixi-tri-preflight>\0";
+        let script = b"print('pixi-tri: preflight print ok'); 0\0";
+        let v = qjs::JS_Eval(
+            ctx,
+            script.as_ptr() as *const c_char,
+            script.len() - 1,
+            filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+        );
+        if v.is_exception() {
+            log_str("quickjs: pixi-tri preflight JS_Eval exception\n");
+            dump_exception(ctx);
+        } else {
+            qjs::js_free_value(ctx, v);
+        }
+    }
+
     // IMPORTANT: In an ES module, imports must come first.
     // Use __trueos_print so logs remain stable even if libraries overwrite globalThis.print.
     let mod_filename = b"<smoke-pixi-tri>\0";
@@ -636,6 +655,23 @@ void main(){
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: pixi-rect eval ok\n");
         let _ = drain_jobs_and_promises(rt, ctx, 60_000);
+
+        // Postflight: if the module ran, logs should have appeared; still verify print works.
+        let filename = b"<pixi-tri-postflight>\0";
+        let script = b"print('pixi-tri: postflight print ok'); 0\0";
+        let v = qjs::JS_Eval(
+            ctx,
+            script.as_ptr() as *const c_char,
+            script.len() - 1,
+            filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+        );
+        if v.is_exception() {
+            log_str("quickjs: pixi-tri postflight JS_Eval exception\n");
+            dump_exception(ctx);
+        } else {
+            qjs::js_free_value(ctx, v);
+        }
     }
 
     drop(vm);
