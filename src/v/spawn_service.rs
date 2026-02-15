@@ -257,6 +257,16 @@ fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_boot_pixi_rect_smoke(spawner: Spawner) -> SpawnAttempt {
+    if let Some(ap1_spawner) = crate::runtime::first_ap_spawner() {
+        crate::log!("spawn-svc: boot-pixi-rect-smoke -> AP1\n");
+        let _ = spawner;
+        return match ap1_spawner.spawn(crate::tst::boot_pixi_rect_smoke_task()) {
+            Ok(()) => SpawnAttempt::Spawned,
+            Err(e) => SpawnAttempt::Failed(e),
+        };
+    }
+
+    crate::log!("spawn-svc: boot-pixi-rect-smoke -> BSP\n");
     match spawner.spawn(crate::tst::boot_pixi_rect_smoke_task(),
     ) {
         Ok(()) => SpawnAttempt::Spawned,

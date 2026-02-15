@@ -48,16 +48,7 @@ pub(crate) async fn boot_pixi_rect_smoke_task() {
 pub(crate) async fn boot_virtio_sw_triangle_smoke_task() {
     use embassy_time::{Duration as EmbassyDuration, Timer};
 
-    crate::log!("gfx-virtio-sw-tri-smoke: waiting for VirtioSw gfx\n");
-
-    loop {
-        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(100)).await;
-    }
-
-    crate::log!("gfx-virtio-sw-tri-smoke: drawing\n");
+    crate::log!("gfx-virtio-sw-tri-smoke: armed (draw on VirtioSw)\n");
 
     #[inline]
     fn put_vtx(dst: &mut [u8; 36], idx: usize, x: f32, y: f32, r: u8, g: u8, b: u8) {
@@ -71,18 +62,48 @@ pub(crate) async fn boot_virtio_sw_triangle_smoke_task() {
     }
 
     let mut vtx = [0u8; 36];
-    put_vtx(&mut vtx, 0, 120.0, 120.0, 255, 0, 0);
-    put_vtx(&mut vtx, 1, 640.0, 160.0, 0, 255, 0);
-    put_vtx(&mut vtx, 2, 360.0, 520.0, 0, 0, 255);
+    // Clip-space (NDC) triangle: should be visible regardless of viewport size.
+    put_vtx(&mut vtx, 0, -0.6, -0.6, 255, 0, 0);
+    put_vtx(&mut vtx, 1, 0.6, -0.6, 0, 255, 0);
+    put_vtx(&mut vtx, 2, 0.0, 0.6, 0, 0, 255);
 
-    // Draw a couple frames to make the transition obvious even if the first present races.
-    for _ in 0..3 {
-        let rc = unsafe {
-            crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles(0x00_08_18_30, vtx.as_ptr(), vtx.len())
-        };
-        crate::log!("gfx-virtio-sw-tri-smoke: draw rc={}\n", rc);
-        Timer::after(EmbassyDuration::from_millis(50)).await;
+    let mut last_epoch: u64 = 0;
+
+    loop {
+        // Wait until we're on VirtioSw and the backend epoch advanced (new swap).
+        loop {
+            if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
+                let epoch = crate::gfx::backend_epoch();
+                if epoch != last_epoch {
+                    last_epoch = epoch;
+                    break;
+                }
+            }
+            Timer::after(EmbassyDuration::from_millis(50)).await;
+        }
+
+        crate::log!("gfx-virtio-sw-tri-smoke: drawing epoch={}\n", last_epoch);
+
+        // Draw a couple frames to make the transition obvious even if the first present races.
+        for _ in 0..3 {
+            let rc = unsafe {
+                crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles(
+                    0x00_08_18_30,
+                    vtx.as_ptr(),
+                    vtx.len(),
+                )
+            };
+            crate::log!("gfx-virtio-sw-tri-smoke: draw rc={}\n", rc);
+            Timer::after(EmbassyDuration::from_millis(50)).await;
+        }
+
+        // Wait until we leave VirtioSw before allowing another draw. (Avoid spamming draws
+        // while staying on VirtioSw.)
+        loop {
+            if crate::gfx::backend_kind() != Some(crate::gfx::BackendKind::VirtioSw) {
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(100)).await;
+        }
     }
-
-    crate::log!("gfx-virtio-sw-tri-smoke: done\n");
 }

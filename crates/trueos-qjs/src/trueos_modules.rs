@@ -32,6 +32,7 @@ static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 // --- Minimal WebGL-ish shim state ---
 
 static WEBGL_NEXT_ID: AtomicU32 = AtomicU32::new(1);
+static WEBGL_DID_LOG_DRAW: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, Default)]
 struct WebGlVertexAttrib {
@@ -1359,6 +1360,14 @@ unsafe fn ensure_global_trueos_webgl_singleton(
             return qjs::JSValue::undefined();
         }
 
+        if WEBGL_DID_LOG_DRAW
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log_str("qjs-webgl: drawElements -> gfx vtx_bytes=");
+            log_usize_dec(out.len());
+            log_str("\n");
+        }
         unsafe {
             let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, out.as_ptr(), out.len());
         }
@@ -1492,6 +1501,14 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         };
 
         unsafe {
+            if WEBGL_DID_LOG_DRAW
+                .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                log_str("qjs-webgl: drawArrays -> gfx vtx_bytes=");
+                log_usize_dec(owned.len());
+                log_str("\n");
+            }
             let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, owned.as_ptr(), owned.len());
         }
         qjs::JSValue::undefined()

@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use alloc::collections::{BTreeMap, VecDeque};
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use crate::{pci, wait};
@@ -758,52 +759,196 @@ pub struct VirtioGpu3d {
 
 use spin::{Once, Mutex};
 
-static GLOBAL_GPU: Once<Mutex<Option<VirtioGpu3d>>> = Once::new();
+// -------------------------------------------------------------------------------------------------
+// Serialized virtio-gpu access ("GPU actor")
+// -------------------------------------------------------------------------------------------------
+//
+// The virtio-gpu device has a single control queue and this driver is written assuming a single
+// outstanding ctrlq descriptor chain. If multiple subsystems call into VirtioGpu3d concurrently
+// (virtio_sw scanout, virtio-limine mirror, shell gfx switching), and especially if any of those
+// paths poll the async executor while holding locks, we can hit lock inversion and apparent BSP
+// freezes.
+//
+// To avoid this, we serialize all virtio-gpu operations through a small in-kernel "actor":
+// - A single global VirtioGpu3d instance (no external mutex exposure)
+// - A command queue + response map
+// - A `gpu_service_step()` function that executes at most one command
+//
+// This is intentionally synchronous: callers can drive progress by calling `gpu_service_step()`
+// while waiting for their response, without polling the async executor.
 
-/// Execute a closure with the single global virtio-gpu device instance.
-///
-/// Important: we must not re-run virtio-gpu init/negotiate/queue setup from multiple
-/// subsystems (virgl backend, virtio_sw scanout, virtio_limine mirror). Doing so can
-/// corrupt queue/device state and make scanout swaps appear nondeterministic.
-pub fn with_global_gpu<R>(f: impl FnOnce(&mut VirtioGpu3d) -> R) -> Option<R> {
-    let _ = GLOBAL_GPU.call_once(|| Mutex::new(VirtioGpu3d::init_first()));
-    let slot = GLOBAL_GPU.get()?;
+static GPU_ACTOR_GPU: Mutex<Option<VirtioGpu3d>> = Mutex::new(None);
+static GPU_ACTOR_QUEUE: Mutex<VecDeque<(u32, GpuCmd)>> = Mutex::new(VecDeque::new());
+static GPU_ACTOR_RESP: Mutex<BTreeMap<u32, GpuResp>> = Mutex::new(BTreeMap::new());
+static GPU_ACTOR_NEXT_ID: AtomicU32 = AtomicU32::new(1);
+static GPU_ACTOR_PROCESSING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-    // `spin::Mutex::lock()` is an unbounded spin. If some code path accidentally tries to
-    // re-enter `with_global_gpu` while holding the lock (or otherwise wedges), backend switches
-    // can appear to "hard hang" the machine. Prefer a bounded wait with a loud log.
-    let mut guard = match slot.try_lock() {
-        Some(g) => g,
-        None => {
-            crate::log!("virtio-gpu3d: waiting for global lock...\n");
-
-            // 2000ms is intentionally longer than ctrlq timeouts (1000ms) so we distinguish
-            // between "device not responding" vs "lock never released".
-            let timeout_ms: u64 = 2000;
-            let hz = TICK_HZ as u64;
-            let ticks = if hz == 0 {
-                0
-            } else {
-                ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
-            };
-            let deadline = now().saturating_add(ticks);
-
-            loop {
-                if let Some(g) = slot.try_lock() {
-                    break g;
-                }
-                if now() >= deadline {
-                    crate::log!("virtio-gpu3d: global lock timeout (possible re-entrancy/deadlock)\n");
-                    return None;
-                }
-                wait::spin_step();
-            }
-        }
-    };
-
-    let gpu = guard.as_mut()?;
-    Some(f(gpu))
+#[derive(Clone, Copy, Debug)]
+enum GpuCmd {
+    GetDisplayInfo,
+    ResourceCreate2D {
+        resource_id: u32,
+        format: u32,
+        width: u32,
+        height: u32,
+    },
+    ResourceAttachBacking {
+        resource_id: u32,
+        backing_phys: u64,
+        backing_len: u32,
+    },
+    SetScanout {
+        scanout_id: u32,
+        resource_id: u32,
+        width: u32,
+        height: u32,
+    },
+    TransferToHost2D {
+        resource_id: u32,
+        width: u32,
+        height: u32,
+    },
+    ResourceFlush {
+        resource_id: u32,
+        width: u32,
+        height: u32,
+    },
 }
+
+#[derive(Clone, Copy, Debug)]
+enum GpuResp {
+    DisplayInfo(Option<(u32, u32, u32)>),
+    Bool(bool),
+}
+
+fn gpu_submit(cmd: GpuCmd) -> u32 {
+    let id = GPU_ACTOR_NEXT_ID.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    GPU_ACTOR_QUEUE.lock().push_back((id, cmd));
+    id
+}
+
+fn gpu_take_resp(id: u32) -> Option<GpuResp> {
+    GPU_ACTOR_RESP.lock().remove(&id)
+}
+
+fn gpu_ensure_inited_locked(gpu_slot: &mut Option<VirtioGpu3d>) -> bool {
+    if gpu_slot.is_some() {
+        return true;
+    }
+    *gpu_slot = VirtioGpu3d::init_first();
+    gpu_slot.is_some()
+}
+
+/// Execute at most one queued GPU command.
+fn gpu_service_step() {
+    if GPU_ACTOR_PROCESSING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let maybe_cmd = GPU_ACTOR_QUEUE.lock().pop_front();
+    if let Some((id, cmd)) = maybe_cmd {
+        let mut gpu_guard = GPU_ACTOR_GPU.lock();
+        if !gpu_ensure_inited_locked(&mut *gpu_guard) {
+            GPU_ACTOR_RESP.lock().insert(id, match cmd {
+                GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(None),
+                _ => GpuResp::Bool(false),
+            });
+        } else {
+            let gpu = gpu_guard.as_mut().expect("gpu init");
+            let resp = match cmd {
+                GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(gpu.get_display_info()),
+                GpuCmd::ResourceCreate2D { resource_id, format, width, height } => {
+                    GpuResp::Bool(gpu.resource_create_2d(resource_id, format, width, height))
+                }
+                GpuCmd::ResourceAttachBacking { resource_id, backing_phys, backing_len } => {
+                    GpuResp::Bool(gpu.resource_attach_backing(resource_id, backing_phys, backing_len))
+                }
+                GpuCmd::SetScanout { scanout_id, resource_id, width, height } => {
+                    GpuResp::Bool(gpu.set_scanout(scanout_id, resource_id, width, height))
+                }
+                GpuCmd::TransferToHost2D { resource_id, width, height } => {
+                    GpuResp::Bool(gpu.transfer_to_host_2d(resource_id, width, height))
+                }
+                GpuCmd::ResourceFlush { resource_id, width, height } => {
+                    GpuResp::Bool(gpu.resource_flush(resource_id, width, height))
+                }
+            };
+            GPU_ACTOR_RESP.lock().insert(id, resp);
+        }
+    }
+
+    GPU_ACTOR_PROCESSING.store(false, Ordering::Release);
+}
+
+fn gpu_wait_resp(id: u32, timeout_ms: u64) -> Option<GpuResp> {
+    let hz = TICK_HZ as u64;
+    let ticks = if hz == 0 {
+        0
+    } else {
+        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+    };
+    let deadline = now().saturating_add(ticks);
+
+    loop {
+        if let Some(r) = gpu_take_resp(id) {
+            return Some(r);
+        }
+
+        // Drive one GPU step locally.
+        gpu_service_step();
+
+        if let Some(r) = gpu_take_resp(id) {
+            return Some(r);
+        }
+        if timeout_ms != 0 && now() >= deadline {
+            return None;
+        }
+
+        // Low-level wait: do not poll the async executor here.
+        wait::spin_step_no_exec();
+    }
+}
+
+// Public wrappers used by scanout/mirror/backends.
+
+pub fn gpu_get_display_info(timeout_ms: u64) -> Option<(u32, u32, u32)> {
+    let id = gpu_submit(GpuCmd::GetDisplayInfo);
+    match gpu_wait_resp(id, timeout_ms)? {
+        GpuResp::DisplayInfo(v) => v,
+        _ => None,
+    }
+}
+
+pub fn gpu_resource_create_2d(resource_id: u32, format: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
+    let id = gpu_submit(GpuCmd::ResourceCreate2D { resource_id, format, width, height });
+    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+}
+
+pub fn gpu_resource_attach_backing(resource_id: u32, backing_phys: u64, backing_len: u32, timeout_ms: u64) -> bool {
+    let id = gpu_submit(GpuCmd::ResourceAttachBacking { resource_id, backing_phys, backing_len });
+    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+}
+
+pub fn gpu_set_scanout(scanout_id: u32, resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
+    let id = gpu_submit(GpuCmd::SetScanout { scanout_id, resource_id, width, height });
+    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+}
+
+pub fn gpu_transfer_to_host_2d(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
+    let id = gpu_submit(GpuCmd::TransferToHost2D { resource_id, width, height });
+    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+}
+
+pub fn gpu_resource_flush(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
+    let id = gpu_submit(GpuCmd::ResourceFlush { resource_id, width, height });
+    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+}
+
+// NOTE: `with_global_gpu` is intentionally removed from cross-subsystem usage.
+// All scanout/mirror callers must use the serialized `gpu_*` wrappers above.
 
 unsafe impl Send for VirtioGpu3d {}
 
@@ -1173,7 +1318,13 @@ impl VirtioGpu3d {
         fence(Ordering::Release);
         notify_queue_modern(self.notify, self.notify_mult, self.ctrlq.queue_index, self.ctrlq.notify_off);
 
-        let ok = wait::spin_until_timeout(1000, || self.ctrlq.used_idx() != self.ctrlq.last_used_idx);
+        // IMPORTANT: do not poll the executor while waiting for ctrlq progress.
+        // This function is often called under the global virtio-gpu mutex, and can also be
+        // reached while higher-level gfx locks are held. Polling the executor here can re-enter
+        // the shell/gfx stack and wedge on those locks (observed as `gfx: SYSTEM lock timeout`).
+        let ok = wait::spin_until_timeout_no_exec(1000, || {
+            self.ctrlq.used_idx() != self.ctrlq.last_used_idx
+        });
         if !ok {
             crate::log!("virtio-gpu3d: ctrlq timeout\n");
             return false;

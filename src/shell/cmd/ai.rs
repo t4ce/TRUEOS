@@ -1,9 +1,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::borrow::ToOwned;
-use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
+use spin::Mutex;
 
 use crate::wait::{select2, Either};
 
@@ -11,9 +11,61 @@ use crate::shell::{CommandAction, ShellBackend, ShellMode};
 use crate::shell::interface::ShellIo;
 use crate::shell::output::ReverseOutput;
 use crate::shell::statusbar;
-use crate::v::net::https::post_https_json_async;
+use crate::v::net::https::{post_https_json_async, post_https_sse_async, SseHandler};
 
-static AI_DUMP_REQUEST_JSON_ONCE: AtomicBool = AtomicBool::new(true);
+fn log_utf8_chunks(prefix: &str, s: &str) {
+    // Avoid log-line truncation by splitting into multiple lines.
+    // Keep boundaries on UTF-8 char boundaries.
+    const CHUNK: usize = 512;
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let mut end = (i + CHUNK).min(bytes.len());
+        while end > i && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == i {
+            // Should not happen for valid UTF-8, but avoid infinite loop.
+            end = (i + 1).min(bytes.len());
+        }
+        crate::log!("{}{}\n", prefix, &s[i..end]);
+        i = end;
+    }
+}
+
+fn sse_event_type(data: &str) -> Option<String> {
+    // SSE payloads from Responses API are JSON with a top-level: {"type":"..."}
+    // Prefer the first match (the event type) rather than nested "type" fields.
+    extract_json_string_field(data, "\"type\":")
+}
+
+fn should_log_sse_data(event_type: Option<&str>) -> bool {
+    // Full SSE payload logging is very noisy and can interfere with the shell UI.
+    // Keep a useful subset by default.
+    const VERBOSE: bool = false;
+    if VERBOSE {
+        return true;
+    }
+    matches!(
+        event_type,
+        Some("response.output_text.delta")
+            | Some("response.output_text.done")
+            | Some("response.completed")
+            | Some("response.error")
+    )
+}
+
+// Preserve multi-turn conversation state across `ai` invocations.
+// Best-effort, resets on reboot.
+static AI_PREVIOUS_RESPONSE_ID: Mutex<Option<String>> = Mutex::new(None);
+
+fn ai_prev_get() -> Option<String> {
+    AI_PREVIOUS_RESPONSE_ID.lock().clone()
+}
+
+fn ai_prev_set(v: Option<String>) {
+    *AI_PREVIOUS_RESPONSE_ID.lock() = v;
+}
 
 pub fn cmd_ai(_ctx: &mut crate::shell::cmd::registry::ShellCommandCtx, args: Option<&crate::shell::cmd::registry::ParsedArgs>) -> CommandAction {
     let first = args.and_then(|a| a.get_str(0)).unwrap_or("");
@@ -38,18 +90,27 @@ pub async fn run_ai_wizard(
     // Ensure correct scroll region (Row 3..Bottom)
     crate::shell::output::apply_shell_scroll_region(io, term_rows);
 
+    let slot = match crate::matrix::alloc_slot("ai") {
+        Some(s) => s,
+        None => {
+            // Best-effort: still run without statusbar.
+            255
+        }
+    };
+    if slot != 255 {
+        let _ = statusbar::set_active_slot(slot);
+        let _ = statusbar::set_left(slot, "ai");
+        let _ = statusbar::set_right(slot, "idle");
+        statusbar::refresh(io, term_cols, term_rows);
+    }
+
     let out = ReverseOutput::new(io, term_cols, term_rows, history);
 
-    let mut previous_response_id: Option<String> = None;
+    let mut previous_response_id: Option<String> = ai_prev_get();
     let mut pending_shell_outputs: Vec<ShellCallOutput> = Vec::new();
 
     if !initial_prompt.trim().is_empty() {
-        {
-             let mut echoed = String::new();
-             echoed.push_str("ai> ");
-             echoed.push_str(initial_prompt);
-             out.echo_command(echoed.as_str());
-        }
+        // Do not echo here: the outer shell already echoed `ai <initial_prompt>`.
         process_input(
             &out,
             io,
@@ -71,15 +132,15 @@ pub async fn run_ai_wizard(
         // Position cursor at the prompt line (Row 2), clear it, and show prompt
         io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
         io.write_str(crate::ecma48::CLEAR_LINE);
-        io.write_str("ai> ");
+        io.write_str("§ ");
         io.write_str(&line);
 
         // Wait for input
         let b = loop {
-             if let Some(Byte) = io.read_byte() {
-                 break Byte;
-             }
-             Timer::after(Duration::from_millis(10)).await;
+            if let Some(byte) = io.read_byte() {
+                break byte;
+            }
+            Timer::after(Duration::from_millis(10)).await;
         };
 
         match b {
@@ -101,12 +162,14 @@ pub async fn run_ai_wizard(
                     break;
                 }
                 if !input.is_empty() {
-                    {
-                        let mut echoed = String::new();
-                        echoed.push_str("ai> ");
-                        echoed.push_str(&input);
-                        out.echo_command(echoed.as_str());
-                    }
+                    // Clear prompt row so we don't show the typed input + echoed line.
+                    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+                    io.write_str(crate::ecma48::CLEAR_LINE);
+
+                    let mut echoed = String::new();
+                    echoed.push_str(&input);
+                    out.echo_command(echoed.as_str());
+
                     process_input(
                         &out,
                         io,
@@ -132,6 +195,12 @@ pub async fn run_ai_wizard(
             }
         }
     }
+
+    if slot != 255 {
+        let _ = statusbar::set_active_slot(u8::MAX);
+        let _ = crate::matrix::free_slot(slot);
+        statusbar::refresh(io, term_cols, term_rows);
+    }
 }
 
 async fn process_input(
@@ -146,29 +215,143 @@ async fn process_input(
     previous_response_id: &mut Option<String>,
     pending_shell_outputs: &mut Vec<ShellCallOutput>,
 ) {
-    let body = build_openai_request_body(input, previous_response_id.as_deref(), pending_shell_outputs);
+    let force_tools = input.trim_start().starts_with('!');
+    // Streaming is for normal chat text only; tool turns need the full JSON response.
+    let stream = !force_tools
+        && pending_shell_outputs.is_empty()
+        && !looks_like_execute_request(input);
 
-    if AI_DUMP_REQUEST_JSON_ONCE.swap(false, Ordering::AcqRel) {
-        let clipped = clip_visible(body.as_str(), 4096);
-        crate::log!("ai: request_json(len={}): {}\n", body.len(), clipped);
-    }
+    let body = build_openai_request_body(
+        input,
+        previous_response_id.as_deref(),
+        pending_shell_outputs,
+        stream,
+    );
 
-    statusbar::set_right_active("thinking");
+    crate::log!("ai: request_json_begin len={}\n", body.len());
+    log_utf8_chunks("ai: request_json: ", body.as_str());
+    crate::log!("ai: request_json_end\n");
+
+    statusbar::set_right_active(if stream { "streaming" } else { "thinking" });
     statusbar::refresh(io, term_cols, term_rows);
 
     // Increase timeout to 120s since web search can be slow.
+    if stream {
+        struct AiStream<'a, 'b> {
+            out: &'a ReverseOutput<'b>,
+            started: bool,
+            last_full: String,
+            saw_delta: bool,
+        }
+
+        impl<'a, 'b> SseHandler for AiStream<'a, 'b> {
+            fn on_data(&mut self, data: &str) {
+                let et = sse_event_type(data);
+                if should_log_sse_data(et.as_deref()) {
+                    crate::log!("ai: sse_data_begin len={}\n", data.len());
+                    log_utf8_chunks("ai: sse_data: ", data);
+                    crate::log!("ai: sse_data_end\n");
+                }
+
+                // Update conversation id as early as possible.
+                if let Some(id) = extract_response_id(data) {
+                    ai_prev_set(Some(id));
+                }
+
+                // Prefer true deltas.
+                let delta = extract_json_string_field(data, "\"delta\":");
+                // Fallback: some frames carry cumulative output.
+                let full = extract_json_string_field(data, "\"output_text\":")
+                    .or_else(|| extract_json_string_field(data, "\"text\":"));
+
+                if let Some(d) = delta {
+                    if !self.started {
+                        self.out.write_str("ai: ");
+                        self.started = true;
+                    }
+                    self.saw_delta = true;
+                    let clean = sanitize_term_text(d.as_str());
+                    self.out.write_str(clean.as_str());
+                    return;
+                }
+
+                // If we already printed deltas, ignore done/full frames to avoid duplicating output.
+                // The API commonly sends both `...delta` and `...done` with the full text.
+                if self.saw_delta {
+                    return;
+                }
+
+                if let Some(f) = full {
+                    // Print only the new suffix versus last_full to avoid repeats.
+                    if f.len() >= self.last_full.len() && f.starts_with(self.last_full.as_str()) {
+                        let suffix = &f[self.last_full.len()..];
+                        if !suffix.is_empty() {
+                            if !self.started {
+                                self.out.write_str("ai: ");
+                                self.started = true;
+                            }
+                            let clean = sanitize_term_text(suffix);
+                            self.out.write_str(clean.as_str());
+                        }
+                    } else {
+                        // If it doesn't look like an append, reset and print full.
+                        if !self.started {
+                            self.out.write_str("ai: ");
+                            self.started = true;
+                        }
+                        let clean = sanitize_term_text(f.as_str());
+                        self.out.write_str(clean.as_str());
+                    }
+                    self.last_full = f;
+                }
+            }
+        }
+
+        let mut sink = AiStream {
+            out,
+            started: false,
+            last_full: String::new(),
+            saw_delta: false,
+        };
+
+        let result = post_https_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
+
+        // Clear status
+        statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
+        statusbar::refresh(io, term_cols, term_rows);
+
+        match result {
+            Ok(()) => {
+                // Sync local state from the persisted id.
+                *previous_response_id = ai_prev_get();
+                if sink.started {
+                    out.write_str("\n");
+                }
+            }
+            Err(e) => {
+                out.write_fmt(format_args!("ai: network error {:?}\n", e));
+            }
+        }
+        return;
+    }
+
     let result = post_https_json_async(url, body, Some(key), 120_000, 256 * 1024).await;
 
     // Clear status
-    statusbar::set_right_active("");
+    statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
     statusbar::refresh(io, term_cols, term_rows);
  
     match result {
         Ok(bytes) => {
                     if let Ok(s) = core::str::from_utf8(&bytes) {
+                        crate::log!("ai: response_json_begin len={}\n", s.len());
+                        log_utf8_chunks("ai: response_json: ", s);
+                        crate::log!("ai: response_json_end\n");
+
                         // Track response id for multi-turn and for tool follow-ups.
                         if let Some(id) = extract_response_id(s) {
                             *previous_response_id = Some(id);
+                            ai_prev_set(previous_response_id.clone());
                         }
 
                         // If the model requested shell execution, run it locally and submit outputs.
@@ -205,7 +388,15 @@ async fn process_input(
                                 "",
                                 previous_response_id.as_deref(),
                                 pending_shell_outputs,
+                                false,
                             );
+
+                            crate::log!(
+                                "ai: followup_request_json_begin len={}\n",
+                                followup_body.len()
+                            );
+                            log_utf8_chunks("ai: followup_request_json: ", followup_body.as_str());
+                            crate::log!("ai: followup_request_json_end\n");
 
                             let follow = post_https_json_async(
                                 url,
@@ -219,8 +410,13 @@ async fn process_input(
                             match follow {
                                 Ok(bytes) => {
                                     if let Ok(s2) = core::str::from_utf8(&bytes) {
+                                        crate::log!("ai: followup_response_json_begin len={}\n", s2.len());
+                                        log_utf8_chunks("ai: followup_response_json: ", s2);
+                                        crate::log!("ai: followup_response_json_end\n");
+
                                         if let Some(id2) = extract_response_id(s2) {
                                             *previous_response_id = Some(id2);
+                                            ai_prev_set(previous_response_id.clone());
                                         }
                                         pending_shell_outputs.clear();
                                         write_openai_text(out, s2);
@@ -263,7 +459,8 @@ fn write_openai_text(out: &ReverseOutput<'_>, json: &str) {
     // Prefer Responses API convenience field.
     if let Some(content) = extract_json_string_field(json, "\"output_text\":") {
         out.write_str("ai: ");
-        out.write_str(&content);
+        let clean = sanitize_term_text(content.as_str());
+        out.write_str(clean.as_str());
         out.write_str("\n");
         return;
     }
@@ -271,7 +468,8 @@ fn write_openai_text(out: &ReverseOutput<'_>, json: &str) {
     // Fallback: some responses embed a "text" field in output items.
     if let Some(content) = extract_json_string_field(json, "\"text\":") {
         out.write_str("ai: ");
-        out.write_str(&content);
+        let clean = sanitize_term_text(content.as_str());
+        out.write_str(clean.as_str());
         out.write_str("\n");
         return;
     }
@@ -279,6 +477,25 @@ fn write_openai_text(out: &ReverseOutput<'_>, json: &str) {
     out.write_str("ai: [raw] ");
     out.write_str(json);
     out.write_str("\n");
+}
+
+fn sanitize_term_text(s: &str) -> String {
+    // Some backends are not UTF-8 clean and will display mojibake like "â" for
+    // punctuation (e.g. em dashes). Keep output readable by mapping common
+    // punctuation to ASCII.
+    let mut out = String::new();
+    for ch in s.chars() {
+        match ch {
+            '—' | '–' => out.push('-'),
+            '…' => out.push_str("..."),
+            '’' => out.push('\''),
+            '“' | '”' => out.push('"'),
+            '\u{00a0}' => out.push(' '),
+            c if c.is_ascii() => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug)]
@@ -308,6 +525,7 @@ fn build_openai_request_body(
     user_text: &str,
     previous_response_id: Option<&str>,
     pending_shell_outputs: &[ShellCallOutput],
+    stream: bool,
 ) -> String {
     // Tools: enable local shell execution and keep web_search available.
     // If `!` is used (force_tools), expose ONLY shell so tool_choice=required can't pick web_search.
@@ -341,12 +559,16 @@ fn build_openai_request_body(
     let input_json = alloc::format!("[{}]", join_json_array(&input_items));
 
     // Keep instructions short; they're repeated each turn.
-    let instructions = "You are running inside TRUEOS. Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive. Prefer read-only inspection commands. Avoid destructive commands.";
+    let instructions = "You are running inside TRUEOS (not Linux). Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive. Prefer read-only inspection commands. Avoid destructive commands as you are close to ring0. Avoid GNU/Linux-specific commands and flags (e.g. man, head, which, redirections like 2>/dev/null, and complex pipelines) unless you have verified they exist in TRUEOS.";
     let mut esc_instructions = String::new();
     json_escape_into(&mut esc_instructions, instructions);
 
     let mut body = String::new();
-    body.push_str("{\"model\":\"gpt-5.2\",");
+    body.push_str("{\"model\":\"gpt-5.2-pro-2025-12-11\",");
+    if stream {
+        body.push_str("\"stream\":true,");
+    }
+    body.push_str("\"truncation\":\"auto\",");
     if force_tools {
         body.push_str("\"tool_choice\":\"required\",");
     } else {
@@ -475,35 +697,47 @@ fn shell_call_output_item_json(item: &ShellCallOutput) -> String {
     let mut esc_call_id = String::new();
     json_escape_into(&mut esc_call_id, item.call_id.as_str());
 
-    let mut outputs: Vec<String> = Vec::new();
-    for entry in item.output.iter() {
-        let mut esc_out = String::new();
-        let mut esc_err = String::new();
-        json_escape_into(&mut esc_out, entry.stdout.as_str());
-        json_escape_into(&mut esc_err, entry.stderr.as_str());
-
-        let outcome = match (entry.outcome_type, entry.exit_code) {
-            ("exit", Some(code)) => alloc::format!(
-                "{{\"type\":\"exit\",\"exit_code\":{}}}",
-                code
-            ),
-            ("timeout", _) => "{\"type\":\"timeout\"}".to_owned(),
-            _ => "{\"type\":\"exit\",\"exit_code\":1}".to_owned(),
-        };
-
-        outputs.push(alloc::format!(
-            "{{\"stdout\":\"{}\",\"stderr\":\"{}\",\"outcome\":{}}}",
-            esc_out,
-            esc_err,
-            outcome
-        ));
+    // Responses API expects `output` to be an array of objects (content parts).
+    // Keep it compact but informative.
+    let mut combined = String::new();
+    for (idx, entry) in item.output.iter().enumerate() {
+        if idx != 0 {
+            combined.push_str("\n");
+        }
+        if !entry.stdout.is_empty() {
+            combined.push_str("[stdout]\n");
+            combined.push_str(entry.stdout.as_str());
+            if !entry.stdout.ends_with('\n') {
+                combined.push('\n');
+            }
+        }
+        if !entry.stderr.is_empty() {
+            combined.push_str("[stderr]\n");
+            combined.push_str(entry.stderr.as_str());
+            if !entry.stderr.ends_with('\n') {
+                combined.push('\n');
+            }
+        }
+        match (entry.outcome_type, entry.exit_code) {
+            ("exit", Some(code)) => {
+                combined.push_str("[exit_code] ");
+                combined.push_str(&alloc::format!("{}\n", code));
+            }
+            ("timeout", _) => combined.push_str("[timeout]\n"),
+            _ => {}
+        }
+    }
+    if combined.len() > item.max_output_length {
+        combined.truncate(item.max_output_length);
     }
 
+    let mut esc_output = String::new();
+    json_escape_into(&mut esc_output, combined.as_str());
+
     alloc::format!(
-        "{{\"type\":\"shell_call_output\",\"call_id\":\"{}\",\"max_output_length\":{},\"output\":[{}]}}",
+        "{{\"type\":\"shell_call_output\",\"call_id\":\"{}\",\"output\":[{{\"type\":\"output_text\",\"text\":\"{}\"}}]}}",
         esc_call_id,
-        item.max_output_length,
-        join_json_array(&outputs)
+        esc_output
     )
 }
 

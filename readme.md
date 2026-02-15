@@ -28,11 +28,10 @@ cargo outdated -R
 cargo upgrade
 cargo update
 
-# and so nomachione with pxe work:
+# and so nomachione with pxe work add to
 sudoedit /usr/NX/etc/server.cfg
-# Add:
 UDPPort 50000-50999
-# Restart NoMachine:
+
 sudo systemctl restart nxserver
 
 konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.78 4245; stty sane'
@@ -71,7 +70,14 @@ nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
 sudo nmcli con mod "$WIRED_CON" connection.autoconnect no 2>/dev/null || true
 sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
 sudo nmcli con up "$SLAVE_CON"
+sudo nmcli con up br0
+
+# Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
+# (otherwise br0 may present a different MAC than $UPLINK)
+sudo nmcli con mod "$BR" 802-3-ethernet.cloned-mac-address "$(cat /sys/class/net/$UPLINK/address)"
+sudo nmcli con down "$BR" 2>/dev/null || true
 sudo nmcli con up "$BR"
+
 sudo nmcli con delete "$TAP" 2>/dev/null || true
 if ! ip link show "$TAP" >/dev/null 2>&1; then
   sudo ip tuntap add dev "$TAP" mode tap user "$USER" group "$USER"
@@ -108,3 +114,11 @@ lspci -nnk -s 06:00.0
 # dummy (no persist across reboot)
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
+
+
+
+# at reboot
+sudo nmcli con up br0-enp5s0
+sudo nmcli con up br0
+sudo ip link set tap0 master br0
+sudo ip link set tap0 up

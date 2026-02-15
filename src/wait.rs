@@ -48,6 +48,17 @@ pub fn spin_step() {
     core::hint::spin_loop();
 }
 
+/// Spin step that does **not** poll the async executor.
+///
+/// Use this inside low-level driver critical sections / global locks where
+/// polling the executor could re-enter unrelated subsystems and deadlock
+/// (e.g. shell invoking `gfx` while the gfx SYSTEM mutex is held).
+#[inline]
+pub fn spin_step_no_exec() {
+    crate::time::poll();
+    core::hint::spin_loop();
+}
+
 /// Single parking step that drives async work and may idle the BSP.
 #[inline]
 pub fn park_step() {
@@ -75,6 +86,28 @@ pub fn spin_until_timeout<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F)
             return false;
         }
         spin_step();
+    }
+}
+
+/// Spin until `condition` is true or the timeout expires, without polling the executor.
+#[inline]
+pub fn spin_until_timeout_no_exec<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F) -> bool {
+    let hz = TICK_HZ as u64;
+    let ticks = if hz == 0 {
+        0
+    } else {
+        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+    };
+    let deadline = now().saturating_add(ticks);
+
+    loop {
+        if condition() {
+            return true;
+        }
+        if now() >= deadline {
+            return false;
+        }
+        spin_step_no_exec();
     }
 }
 
@@ -198,7 +231,10 @@ impl WaitQueue {
                 return true;
             }
 
-            park_step();
+            // Blocking waits must not `hlt`.
+            // Many subsystems (net fetch, module loader, sync wrappers) depend on polling-driven
+            // progress where there may be no periodic interrupt to wake a halted CPU.
+            spin_step();
         }
     }
 

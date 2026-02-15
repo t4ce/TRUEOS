@@ -39,6 +39,7 @@ pub(super) async fn handle_command_action(
         CommandAction::EnterIco => handle_enter_ico(cube_mode, cube, io, term_cols, term_rows),
         CommandAction::EnterGo => handle_enter_go(io).await,
         CommandAction::EnterGoTwo => handle_enter_go_two(io).await,
+        CommandAction::EnterRain => handle_enter_rain(cube_mode, io, term_cols, term_rows).await,
         CommandAction::EnterTxtEdt { filename, slot_id } => {
             handle_enter_txt(cube_mode, io, term_cols, term_rows, filename, slot_id).await;
         }
@@ -174,6 +175,19 @@ async fn run_go_animation(io: &'static dyn ShellBackend, chars: &[char]) {
     }
     io.write_str(crate::ecma48::SHOW_CURSOR);
     io.write_str("\r\n");
+}
+
+async fn handle_enter_rain(
+    cube_mode: &mut bool,
+    io: &'static dyn ShellBackend,
+    term_cols: &mut usize,
+    term_rows: &mut usize,
+) {
+    *cube_mode = false;
+    let cols = *term_cols;
+    let rows = *term_rows;
+    super::cmd::rain::run(io, cols, rows).await;
+    reset_shell_display(io, *term_cols, *term_rows);
 }
 
 async fn handle_enter_txt(
