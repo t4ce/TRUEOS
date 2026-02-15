@@ -157,24 +157,14 @@ async fn process_input(
     statusbar::refresh(io, term_cols, term_rows);
 
     // Increase timeout to 120s since web search can be slow.
-    let net_future = post_https_json_async(url, body, Some(key), 120_000, 256 * 1024);
-    let cancel_future = wait_for_enter_with_animation(io);
+    let result = post_https_json_async(url, body, Some(key), 120_000, 256 * 1024).await;
 
-    // Run network vs cancellation
-    let result = select2(net_future, cancel_future).await;
-
-    // Clear animations/status
+    // Clear status
     statusbar::set_right_active("");
     statusbar::refresh(io, term_cols, term_rows);
-    io.write_str(crate::ecma48::SHOW_CURSOR); // ensure cursor shown if animation hid it
-    // Restore cursor to prompt line just in case animation left it elsewhere
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5))); // move past ai> 
-
+ 
     match result {
-        Either::First(res) => {
-            // Network completed
-            match res {
-                Ok(bytes) => {
+        Ok(bytes) => {
                     if let Ok(s) = core::str::from_utf8(&bytes) {
                         // Track response id for multi-turn and for tool follow-ups.
                         if let Some(id) = extract_response_id(s) {
@@ -217,18 +207,17 @@ async fn process_input(
                                 pending_shell_outputs,
                             );
 
-                            let net_future = post_https_json_async(
+                            let follow = post_https_json_async(
                                 url,
                                 followup_body,
                                 Some(key),
                                 120_000,
                                 256 * 1024,
-                            );
-                            let cancel_future = wait_for_enter_with_animation(io);
-                            let follow = select2(net_future, cancel_future).await;
+                            )
+                            .await;
 
                             match follow {
-                                Either::First(Ok(bytes)) => {
+                                Ok(bytes) => {
                                     if let Ok(s2) = core::str::from_utf8(&bytes) {
                                         if let Some(id2) = extract_response_id(s2) {
                                             *previous_response_id = Some(id2);
@@ -238,14 +227,11 @@ async fn process_input(
                                         return;
                                     }
                                 }
-                                Either::First(Err(e)) => {
+                                Err(e) => {
                                     out.write_fmt(format_args!(
                                         "ai: tool follow-up network error {:?} (will retry on next prompt)\n",
                                         e
                                     ));
-                                }
-                                Either::Second(_) => {
-                                    out.write_str("ai: tool follow-up aborted (will retry on next prompt)\n");
                                 }
                             }
 
@@ -267,14 +253,8 @@ async fn process_input(
                         out.write_str("ai: error decoding utf8\n");
                     }
                 }
-                Err(e) => {
-                    out.write_fmt(format_args!("ai: network error {:?}\n", e));
-                }
-            }
-        }
-        Either::Second(_) => {
-            // User cancelled
-            out.write_str("ai: aborted\n");
+        Err(e) => {
+            out.write_fmt(format_args!("ai: network error {:?}\n", e));
         }
     }
 }
@@ -398,15 +378,55 @@ fn build_openai_request_body(
 }
 
 fn extract_response_id(json: &str) -> Option<String> {
-    // Manual scan for "id":"resp_..." (Responses ids start with resp_).
-    let marker = "\"id\":\"resp_";
-    let start = json.find(marker)? + marker.len();
-    let rest = &json[start..];
-    let end = rest.find('"')?;
-    let mut out = String::new();
-    out.push_str("resp_");
-    out.push_str(&rest[..end]);
-    Some(out)
+    // Responses API returns top-level: "id": "resp_..." (note the spaces).
+    // We also see nested "id" fields (e.g. msg_), so only accept resp_ ids.
+    let bytes = json.as_bytes();
+    let mut i = 0usize;
+    while i + 4 <= bytes.len() {
+        // Match "id"
+        if bytes[i] == b'"'
+            && bytes.get(i + 1) == Some(&b'i')
+            && bytes.get(i + 2) == Some(&b'd')
+            && bytes.get(i + 3) == Some(&b'"')
+        {
+            let mut j = i + 4;
+            // Skip whitespace
+            while j < bytes.len()
+                && (bytes[j] == b' ' || bytes[j] == b'\n' || bytes[j] == b'\r' || bytes[j] == b'\t')
+            {
+                j += 1;
+            }
+            if j >= bytes.len() || bytes[j] != b':' {
+                i += 1;
+                continue;
+            }
+            j += 1;
+            while j < bytes.len()
+                && (bytes[j] == b' ' || bytes[j] == b'\n' || bytes[j] == b'\r' || bytes[j] == b'\t')
+            {
+                j += 1;
+            }
+            if j >= bytes.len() || bytes[j] != b'"' {
+                i += 1;
+                continue;
+            }
+            j += 1;
+            let start = j;
+            while j < bytes.len() && bytes[j] != b'"' {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                return None;
+            }
+            let id_bytes = &bytes[start..j];
+            if id_bytes.starts_with(b"resp_") {
+                let id_str = core::str::from_utf8(id_bytes).ok()?;
+                return Some(String::from(id_str));
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn looks_like_execute_request(s: &str) -> bool {
@@ -847,44 +867,6 @@ fn strip_ansi(s: &str) -> String {
         i += 1;
     }
     out
-}
-
-async fn wait_for_enter_with_animation(io: &dyn ShellBackend) {
-    const GO_CHARS: [char; 9] = ['⣿', '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
-    let mut go_idx = 0;
-    
-    io.write_str(crate::ecma48::HIDE_CURSOR);
-    
-    loop {
-        // check input
-        // Since we are racing with network, any input should abort.
-        // But specifically looking for Enter? The user said "wait can be canceled".
-        // Usually implied by any key or Enter.
-        // The read_byte blocks? No, we need to poll or use Timer.
-        // wait... io.read_byte() is non-blocking (returns Option<u8> immediately?).
-        // If it is blocking, we have a problem because we need to animate.
-        // src/shell/cmd/shell_cmds.rs used `io.read_byte()` loop with Timer.
-        // So read_byte seems non-blocking or at least returns None quickly.
-        
-        if let Some(b) = io.read_byte() {
-            if b == b'\r' || b == b'\n' {
-                break;
-            }
-        }
-        
-        // draw spinner at Row 2, col 5 (after "ai> ")
-        io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5)));
-        io.write_char(GO_CHARS[go_idx]);
-        
-        go_idx = (go_idx + 1) % GO_CHARS.len();
-        
-        Timer::after(Duration::from_millis(160)).await;
-    }
-    
-    io.write_str(crate::ecma48::SHOW_CURSOR);
-    // Clear the spinner char
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 5)));
-    io.write_str(" ");
 }
 
 fn json_escape_into(out: &mut String, s: &str) {

@@ -57,6 +57,7 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_VIRTIO_SW_TRI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -257,6 +258,15 @@ fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_boot_pixi_rect_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::boot_pixi_rect_smoke_task(),
+    ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+#[cfg(feature = "gfx_virgl")]
+fn spawn_boot_virtio_sw_tri_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_virtio_sw_triangle_smoke_task(),
     ) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -465,6 +475,13 @@ static TASKS: &[TaskSpec] = &[
         required: PIXI_RECT_BOOT_READY,
         started: &BOOT_PIXI_RECT_SMOKE_STARTED,
         spawn: spawn_boot_pixi_rect_smoke,
+    },
+    #[cfg(feature = "gfx_virgl")]
+    TaskSpec {
+        name: "boot-virtio-sw-tri-smoke",
+        required: 0,
+        started: &BOOT_VIRTIO_SW_TRI_SMOKE_STARTED,
+        spawn: spawn_boot_virtio_sw_tri_smoke,
     },
     TaskSpec {
         name: "boot-ws-smoke",
