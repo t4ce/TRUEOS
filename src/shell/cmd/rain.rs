@@ -47,6 +47,9 @@ struct RainDrop {
     seq_idx: usize,
     forward: bool,
     trail_len: usize,
+    ticks_since_update: usize,
+    pulse: u8,
+    pulse_up: bool,
 }
 
 struct SimpleRng {
@@ -97,41 +100,82 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
             break;
         }
 
-        let spawn_count = rng.gen_range(0, 1);
+        let spawn_count = rng.gen_range(2, 3);
         for _ in 0..spawn_count {
             let col = rng.gen_range(1, cols); 
             
-            let seq = if rng.gen_bool() {
+            let mut seq = if rng.gen_bool() {
                 let n = rng.gen_range(1, 8) as u8;
                 braille_sliding_run(n)
             } else {
                 let seed = rng.gen_u8();
                 braille_increasing_density_seeded(seed)
             };
+            
+            // Mirror sequence: append the first part in reverse to make it loop smoothly
+            // Original: [A, B, C, D] -> [A, B, C, D, D, C, B, A]
+            // Or maybe [A, B, C, D, C, B] to avoid double peaks?
+            // "copy in the first 8 chars in reverse" implies doubling length.
+            let mut rev = seq.clone();
+            rev.reverse();
+            seq.extend(rev);
 
             let trail_len = rng.gen_range(3, 5);
 
+            // Spawn randomly in the top quarter
+            // But if we start below row 1, we should be careful not to draw glitches.
+            // Actually, if we start lower, 'row' is just the head position.
+            // The drawing loop handles visibility (r < 1 || r > rows).
+            let start_row = rng.gen_range(1, rows / 4 + 1);
+
             drops.push(RainDrop {
                 col,
-                row: 1,
+                row: start_row,
                 sequence: seq,
                 seq_idx: 0,
                 forward: true,
                 trail_len,
+                ticks_since_update: 0,
+                pulse: 0,
+                pulse_up: true,
             });
         }
         
-        Timer::after(Duration::from_millis(67)).await;
+        Timer::after(Duration::from_millis(33)).await;
 
         let mut i = 0;
         while i < drops.len() {
-            // Only update ~1/3 of drops per tick
-            if rng.gen_range(0, 3) != 0 {
+            let drop = &mut drops[i];
+            
+            // Should update this drop?
+            drop.ticks_since_update += 1;
+            // 20% update rate OR force update if waiting too long
+            // Actually user requested "randomly", 1/3 is approx 33%.
+            // "if a seqence wasnt advanced for 4 steps it gets for sure advanced"
+            let should_update = drop.ticks_since_update >= 4 || rng.gen_range(0, 3) == 0;
+
+            if !should_update {
                 i += 1;
                 continue;
             }
+            drop.ticks_since_update = 0;
 
-            let drop = &mut drops[i];
+            // Pulse logic: 0-48 steps of 2
+            if drop.pulse_up {
+                if drop.pulse >= 48 {
+                    drop.pulse_up = false;
+                    drop.pulse = 46;
+                } else {
+                    drop.pulse += 2;
+                }
+            } else {
+                if drop.pulse <= 0 {
+                    drop.pulse_up = true;
+                    drop.pulse = 2;
+                } else {
+                    drop.pulse = drop.pulse.saturating_sub(2);
+                }
+            }
 
             if drop.row > drop.trail_len {
                  let clear_row = drop.row - drop.trail_len;
@@ -166,16 +210,22 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 
                 if let Some(ch) = drop.sequence.get(curr_idx) {
                     if k == 0 {
-                        // Leading character: 33% gray background (approx 85, 85, 85)
+                         // Pulsing background for head
                          io.write_fmt(format_args!(
-                            "{}\x1b[48;2;85;85;85m{}\x1b[48;2;0;0;0m", 
+                            "{}\x1b[48;2;{};{};{}m{}{}", // pulse rgb
                             crate::ecma48::pos(r, drop.col),
-                            ch
+                            drop.pulse, drop.pulse, drop.pulse,
+                            ch,
+                            "\x1b[48;2;0;0;0m" // reset bg
                         ));
                     } else {
+                        // Trail fade: fade from white (255) to black (0) over trail_len
+                        let intensity = 255 - ((k as u32 * 255) / (drop.trail_len as u32 + 1));
+                        
                         io.write_fmt(format_args!(
-                            "{}{}", 
+                            "{}\x1b[38;2;{};{};{}m{}", 
                             crate::ecma48::pos(r, drop.col),
+                            intensity, intensity, intensity,
                             ch
                         ));
                     }

@@ -3,6 +3,7 @@
 extern crate alloc;
 pub mod config;
 pub mod lang;
+pub mod helper;
 
 use alloc::string::String;
 use alloc::vec::Vec;
