@@ -26,7 +26,11 @@ static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 
 // --- keep-alive pool (per host) ---
 
-const VHTTPS_KEEPALIVE_ENABLE: bool = true;
+// NOTE: Keep-alive pooling is currently disabled.
+// We observed persistent `NET_ERR_TIMEOUT_BODY` failures on some CDN (esm.sh) chunked
+// responses when reusing connections; forcing fresh connections avoids the stall.
+// TODO: Re-enable after the keep-alive fetch path is proven robust.
+const VHTTPS_KEEPALIVE_ENABLE: bool = false;
 const VHTTPS_KEEPALIVE_IDLE_CLOSE_MS: u64 = 10_000;
 
 static VHTTPS_KEEPALIVE_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -431,6 +435,45 @@ fn decode_http_chunked(body: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+fn finish_fetch_body(
+    parsed: &ParsedHttpsUrl,
+    headers: &[u8],
+    body: &[u8],
+    max_bytes: usize,
+) -> Result<Vec<u8>, FetchError> {
+    let status = parse_http_status(headers).iter().next().copied().unwrap_or(0); // Using iter().next() as parse_http_status returns Option
+    // Wait, parse_http_status(headers) -> Option<u16>.
+    // But headers is just bytes. parse_http_status uses buf.starts_with(b"HTTP/")...
+    // Ok, parse_http_status takes &[u8].
+    // Let's rely on parse_http_status(headers) being consistent if headers starts with HTTP line.
+    
+    // Actually, `headers` includes the status line.
+    let status = parse_http_status(headers).unwrap_or(0);
+    
+    if status != 200 {
+        if is_redirect_status(status) {
+            if let Some(next) = redirect_url_from_location(parsed, headers) {
+                return Err(FetchError::Redirect { status, url: next });
+            }
+        }
+        return Err(FetchError::Http(status));
+    }
+
+    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+    let decoded_body = if is_chunked {
+        decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
+    } else if let Some(len) = header_parse_content_length(headers) {
+        body.get(..len).unwrap_or(body).to_vec()
+    } else {
+        body.to_vec()
+    };
+
+    if decoded_body.len() > max_bytes {
+        return Err(FetchError::ResponseTooLarge);
+    }
+    Ok(decoded_body)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HttpBodyKind {
     ContentLength(usize),
@@ -563,13 +606,17 @@ async fn fetch_on_device(
     // when the response body is complete (Content-Length or chunked terminator).
     let mut hdr_end_cached: Option<usize> = None;
 
+    let mut last_activity = Instant::now();
+
     loop {
         for ev in events.drain(1024) {
             match ev {
                 TlsEvent::Opened { handle } => {
+                    last_activity = Instant::now();
                     tls_handle = Some(handle);
                 }
                 TlsEvent::Connected { handle } => {
+                    last_activity = Instant::now();
                     if tls_handle != Some(handle) {
                         continue;
                     }
@@ -605,6 +652,7 @@ async fn fetch_on_device(
                     }
                 }
                 TlsEvent::Data { handle, data } => {
+                    last_activity = Instant::now();
                     if tls_handle != Some(handle) {
                         continue;
                     }
@@ -638,7 +686,13 @@ async fn fetch_on_device(
                         };
                         if hdr_end != 0 {
                             let headers = &plaintext[..hdr_end];
+                            // Debug logging for headers
+                            if let Ok(h_str) = core::str::from_utf8(headers) {
+                                crate::log!("vhttps: headers:\n{}\n", h_str);
+                            }
                             let body = &plaintext[hdr_end..];
+                            // Debug logging for body length
+                            crate::log!("vhttps: body_len={}\n", body.len());
 
                             let status = parse_http_status(&plaintext).unwrap_or(0);
                             if status != 200 {
@@ -655,9 +709,15 @@ async fn fetch_on_device(
                                 }
                                 return Err(FetchError::Http(status));
                             }
+                            // 204 No Content
+                            if status == 204 {
+                                if let Some(h) = tls_handle {
+                                    let _ = cmds.push(TlsCommand::Close { handle: h });
+                                }
+                                return Ok(Vec::new());
+                            }
 
-                            let is_chunked =
-                                header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
                             if is_chunked {
                                 if let Some(decoded) = decode_http_chunked(body) {
                                     if decoded.len() > max_bytes {
@@ -670,10 +730,12 @@ async fn fetch_on_device(
                                         let _ = cmds.push(TlsCommand::Close { handle: h });
                                     }
                                     return Ok(decoded);
+                                } else {
+                                     crate::log!("vhttps: incomplete chunked body. len={}\n", body.len());
                                 }
                             } else if let Some(len) = header_parse_content_length(headers) {
                                 if body.len() >= len {
-                                    let  out = body[..len].to_vec();
+                                    let out = body[..len].to_vec();
                                     if out.len() > max_bytes {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -685,6 +747,9 @@ async fn fetch_on_device(
                                     }
                                     return Ok(out);
                                 }
+                            } else {
+                                // No chunked, no content-length. If Connection: close, we wait for close.
+                                // If status implies no body (HEAD request, 1xx, 204, 304), handled above or implicitly.
                             }
                         }
                     }
@@ -2077,7 +2142,11 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     };
 
     // Fixed fetch limits for loader cache path.
-    const TIMEOUT_MS: u32 = 2_500;
+    //
+    // This powers the QJS URL-module cache (esm.sh / CDN imports). Some responses are
+    // large and/or slow enough that a ~2.5s global deadline causes spurious
+    // `NET_ERR_TIMEOUT_BODY` failures even when connectivity is fine.
+    const TIMEOUT_MS: u32 = 20_000;
     const MAX_BYTES: usize = 4 * 1024 * 1024;
 
     // Normalize the cache key so coalescing matches how fetch_https_to_file_async resolves paths.

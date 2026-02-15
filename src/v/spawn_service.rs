@@ -55,6 +55,8 @@ static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_WEBGL_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -245,6 +247,22 @@ fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_pixi_smoke_task(),
+    ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_boot_webgl_rect_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_webgl_rect_smoke_task(),
+    ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task(),
@@ -290,6 +308,9 @@ const PARSE5_BOOT_READY: u32 =
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::v::readiness::QJS_ASYNC_FS_READY;
+
+const PIXI_BOOT_READY: u32 = PARSE5_BOOT_READY;
+const WEBGL_RECT_BOOT_READY: u32 = PARSE5_BOOT_READY;
 
 const WS_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
@@ -431,6 +452,18 @@ static TASKS: &[TaskSpec] = &[
         required: PARSE5_BOOT_READY,
         started: &BOOT_PARSE5_SMOKE_STARTED,
         spawn: spawn_boot_parse5_smoke,
+    },
+    TaskSpec {
+        name: "boot-pixi-smoke",
+        required: PIXI_BOOT_READY,
+        started: &BOOT_PIXI_SMOKE_STARTED,
+        spawn: spawn_boot_pixi_smoke,
+    },
+    TaskSpec {
+        name: "boot-webgl-rect-smoke",
+        required: WEBGL_RECT_BOOT_READY,
+        started: &BOOT_WEBGL_RECT_SMOKE_STARTED,
+        spawn: spawn_boot_webgl_rect_smoke,
     },
     TaskSpec {
         name: "boot-ws-smoke",

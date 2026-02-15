@@ -33,18 +33,36 @@ static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 static WEBGL_NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
+#[derive(Clone, Copy, Default)]
+struct WebGlVertexAttrib {
+    enabled: bool,
+    size: i32,
+    ty: u32,
+    normalized: bool,
+    stride: i32,
+    offset: usize,
+}
+
 #[derive(Default)]
 struct WebGlState {
     array_buffer: u32,
+    element_array_buffer: u32,
     buffers: BTreeMap<u32, Vec<u8>>,
+    attribs: BTreeMap<u32, WebGlVertexAttrib>,
     clear_rgb: u32,
+    viewport_w: i32,
+    viewport_h: i32,
 }
 
 static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
     array_buffer: 0,
+    element_array_buffer: 0,
     buffers: BTreeMap::new(),
+    attribs: BTreeMap::new(),
     // TRUEOS default console blue.
     clear_rgb: 0x00_08_18_30,
+    viewport_w: 0,
+    viewport_h: 0,
 });
 
 pub fn set_process_argv(args: &[&str]) {
@@ -944,14 +962,21 @@ unsafe fn ensure_global_trueos_webgl_singleton(
             return qjs::JSValue::undefined();
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
-        // target ignored for now (ARRAY_BUFFER only)
+        let mut target_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
+        let target = target_f as i32;
         let mut buf_id_f: f64 = 0.0;
         if qjs::JS_ToFloat64(ctx, &mut buf_id_f as *mut f64, args[1]) != 0 {
             return qjs::JSValue::undefined();
         }
         let buf_id = buf_id_f as i32;
         let mut st = WEBGL_STATE.lock();
-        st.array_buffer = if buf_id > 0 { buf_id as u32 } else { 0 };
+        let buf_id = if buf_id > 0 { buf_id as u32 } else { 0 };
+        match target as u32 {
+            0x8892 => st.array_buffer = buf_id,         // ARRAY_BUFFER
+            0x8893 => st.element_array_buffer = buf_id, // ELEMENT_ARRAY_BUFFER
+            _ => {}
+        }
         qjs::JSValue::undefined()
     }
 
@@ -998,22 +1023,381 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         argc: c_int,
         argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        if argv.is_null() || argc < 2 {
+        if argv.is_null() || argc < 3 {
             return qjs::JSValue::undefined();
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut target_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
+        let target = target_f as i32;
+
         let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[1]) else {
             return qjs::JSValue::undefined();
         };
 
         let mut st = WEBGL_STATE.lock();
-        let buf_id = st.array_buffer;
+        let buf_id = match target as u32 {
+            0x8892 => st.array_buffer,         // ARRAY_BUFFER
+            0x8893 => st.element_array_buffer, // ELEMENT_ARRAY_BUFFER
+            _ => 0,
+        };
         if buf_id == 0 {
             return qjs::JSValue::undefined();
         }
         let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
         st.buffers.insert(buf_id, bytes.to_vec());
         qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_buffer_sub_data(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 3 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+
+        let mut target_f: f64 = 0.0;
+        let mut offset_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut offset_f as *mut f64, args[1]);
+        let target = target_f as i32;
+        let offset = (offset_f as i64).max(0) as usize;
+
+        let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[2]) else {
+            return qjs::JSValue::undefined();
+        };
+        let src = unsafe { core::slice::from_raw_parts(ptr, len) };
+
+        let mut st = WEBGL_STATE.lock();
+        let buf_id = match target as u32 {
+            0x8892 => st.array_buffer,         // ARRAY_BUFFER
+            0x8893 => st.element_array_buffer, // ELEMENT_ARRAY_BUFFER
+            _ => 0,
+        };
+        if buf_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let dst = st.buffers.entry(buf_id).or_insert_with(Vec::new);
+        let needed = offset.saturating_add(src.len());
+        if needed > dst.len() {
+            dst.resize(needed, 0);
+        }
+        dst[offset..offset + src.len()].copy_from_slice(src);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_enable_vertex_attrib_array(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut idx_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut idx_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let idx = (idx_f as i32).max(0) as u32;
+        let mut st = WEBGL_STATE.lock();
+        let entry = st.attribs.entry(idx).or_default();
+        entry.enabled = true;
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_vertex_attrib_pointer(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 6 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+
+        let mut idx_f: f64 = 0.0;
+        let mut size_f: f64 = 0.0;
+        let mut ty_f: f64 = 0.0;
+        let mut stride_f: f64 = 0.0;
+        let mut offset_f: f64 = 0.0;
+        let mut normalized_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut idx_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut size_f as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut ty_f as *mut f64, args[2]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut normalized_f as *mut f64, args[3]);
+        let normalized = normalized_f != 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut stride_f as *mut f64, args[4]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut offset_f as *mut f64, args[5]);
+
+        let idx = (idx_f as i32).max(0) as u32;
+        let size = (size_f as i32).max(0);
+        let ty = (ty_f as i32).max(0) as u32;
+        let stride = (stride_f as i32).max(0);
+        let offset = (offset_f as i64).max(0) as usize;
+
+        let mut st = WEBGL_STATE.lock();
+        let entry = st.attribs.entry(idx).or_default();
+        entry.size = size;
+        entry.ty = ty;
+        entry.normalized = normalized;
+        entry.stride = stride;
+        entry.offset = offset;
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_viewport(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 4 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut w_f: f64 = 0.0;
+        let mut h_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[2]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[3]);
+        let w = (w_f as i32).max(0);
+        let h = (h_f as i32).max(0);
+        let mut st = WEBGL_STATE.lock();
+        st.viewport_w = w;
+        st.viewport_h = h;
+        qjs::JSValue::undefined()
+    }
+
+    fn ty_size_bytes(ty: u32) -> Option<usize> {
+        match ty {
+            0x1406 => Some(4), // FLOAT
+            0x1401 => Some(1), // UNSIGNED_BYTE
+            0x1403 => Some(2), // UNSIGNED_SHORT
+            _ => None,
+        }
+    }
+
+    fn read_u16_le(bytes: &[u8], off: usize) -> Option<u16> {
+        let b0 = *bytes.get(off)?;
+        let b1 = *bytes.get(off + 1)?;
+        Some(u16::from_le_bytes([b0, b1]))
+    }
+
+    fn read_f32_le(bytes: &[u8], off: usize) -> Option<f32> {
+        let b0 = *bytes.get(off)?;
+        let b1 = *bytes.get(off + 1)?;
+        let b2 = *bytes.get(off + 2)?;
+        let b3 = *bytes.get(off + 3)?;
+        Some(f32::from_le_bytes([b0, b1, b2, b3]))
+    }
+
+    unsafe extern "C" fn gl_draw_elements(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 4 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut mode_f: f64 = 0.0;
+        let mut count_f: f64 = 0.0;
+        let mut ty_f: f64 = 0.0;
+        let mut offset_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut count_f as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut ty_f as *mut f64, args[2]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut offset_f as *mut f64, args[3]);
+        let mode = mode_f as i32;
+        if mode != 0x0004 {
+            return qjs::JSValue::undefined();
+        }
+        let mut count = (count_f as i32).max(0) as usize;
+        count -= count % 3;
+        if count == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let ty = (ty_f as i32).max(0) as u32;
+        if ty != 0x1403 {
+            // UNSIGNED_SHORT only for now
+            return qjs::JSValue::undefined();
+        }
+        let index_off = (offset_f as i64).max(0) as usize;
+
+        const VTX_SIZE: usize = 12;
+
+        // Snapshot everything we need while holding the lock.
+        let (clear_rgb, viewport_w, viewport_h, array_bytes, elem_bytes, attribs) = {
+            let st = WEBGL_STATE.lock();
+            let Some(array_bytes) = st.buffers.get(&st.array_buffer) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(elem_bytes) = st.buffers.get(&st.element_array_buffer) else {
+                return qjs::JSValue::undefined();
+            };
+            (
+                st.clear_rgb,
+                st.viewport_w,
+                st.viewport_h,
+                array_bytes.clone(),
+                elem_bytes.clone(),
+                st.attribs.clone(),
+            )
+        };
+
+        let viewport_w = (viewport_w.max(1)) as f32;
+        let viewport_h = (viewport_h.max(1)) as f32;
+
+        // Heuristic: pick first enabled vec2 float attrib as position.
+        let mut pos_attr: Option<(u32, WebGlVertexAttrib)> = None;
+        let mut col_attr: Option<(u32, WebGlVertexAttrib)> = None;
+        for (idx, a) in attribs.iter() {
+            if !a.enabled {
+                continue;
+            }
+            if pos_attr.is_none() && a.size == 2 && a.ty == 0x1406 {
+                pos_attr = Some((*idx, *a));
+            }
+            if col_attr.is_none() && a.size == 4 && a.ty == 0x1401 {
+                col_attr = Some((*idx, *a));
+            }
+        }
+        let Some((_pos_idx, pos)) = pos_attr else {
+            return qjs::JSValue::undefined();
+        };
+
+        let pos_ty_sz = match ty_size_bytes(pos.ty) {
+            Some(v) => v,
+            None => return qjs::JSValue::undefined(),
+        };
+        let pos_stride = if pos.stride == 0 {
+            (pos.size as usize).saturating_mul(pos_ty_sz)
+        } else {
+            pos.stride as usize
+        };
+        if pos_stride == 0 {
+            return qjs::JSValue::undefined();
+        }
+
+        let (col, col_stride) = if let Some((_col_idx, col)) = col_attr {
+            let col_ty_sz = match ty_size_bytes(col.ty) {
+                Some(v) => v,
+                None => 0,
+            };
+            let stride = if col.stride == 0 {
+                (col.size as usize).saturating_mul(col_ty_sz)
+            } else {
+                col.stride as usize
+            };
+            (Some(col), stride)
+        } else {
+            (None, 0)
+        };
+
+        let mut out = Vec::with_capacity(count.saturating_mul(VTX_SIZE));
+        for i in 0..count {
+            let idx_off = index_off.saturating_add(i.saturating_mul(2));
+            let Some(vtx_idx) = read_u16_le(&elem_bytes, idx_off) else {
+                break;
+            };
+            let vtx_idx = vtx_idx as usize;
+
+            let base = vtx_idx.saturating_mul(pos_stride).saturating_add(pos.offset);
+            let Some(x_px) = read_f32_le(&array_bytes, base) else {
+                continue;
+            };
+            let Some(y_px) = read_f32_le(&array_bytes, base.saturating_add(4)) else {
+                continue;
+            };
+
+            // Map pixel-ish coords to the gfx NDC-ish expectation.
+            let x = (2.0 * (x_px / viewport_w)) - 1.0;
+            let y = 1.0 - (2.0 * (y_px / viewport_h));
+
+            let (r, g, b) = if let Some(col) = col {
+                let base = vtx_idx
+                    .saturating_mul(col_stride)
+                    .saturating_add(col.offset);
+                let r = *array_bytes.get(base).unwrap_or(&255);
+                let g = *array_bytes.get(base + 1).unwrap_or(&255);
+                let b = *array_bytes.get(base + 2).unwrap_or(&255);
+                (r, g, b)
+            } else {
+                (255, 255, 255)
+            };
+
+            out.extend_from_slice(&x.to_le_bytes());
+            out.extend_from_slice(&y.to_le_bytes());
+            out.push(r);
+            out.push(g);
+            out.push(b);
+            out.push(0);
+        }
+
+        if out.is_empty() {
+            return qjs::JSValue::undefined();
+        }
+
+        log_str("qjs-webgl: drawElements -> gfx vtx_bytes=");
+        log_usize_dec(out.len());
+        log_nl();
+
+        unsafe {
+            let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, out.as_ptr(), out.len());
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_get_supported_extensions(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        // Return an empty list rather than `null`.
+        qjs::JS_NewArray(ctx)
+    }
+
+    unsafe extern "C" fn gl_get_shader_precision_format(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        // Best-effort, plausible defaults.
+        let obj = qjs::JS_NewObject(ctx);
+        if obj.is_exception() {
+            return obj;
+        }
+        let k_range_min = b"rangeMin\0";
+        let k_range_max = b"rangeMax\0";
+        let k_prec = b"precision\0";
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            k_range_min.as_ptr() as *const c_char,
+            js_int32(127),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            k_range_max.as_ptr() as *const c_char,
+            js_int32(127),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            k_prec.as_ptr() as *const c_char,
+            js_int32(23),
+        );
+        obj
     }
 
     unsafe extern "C" fn gl_clear_color(
@@ -1186,11 +1570,19 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_const!("RGB", 0x1907);
     gl_const!("UNSIGNED_BYTE", 0x1401);
     gl_const!("UNSIGNED_SHORT", 0x1403);
+    gl_const!("FLOAT", 0x1406);
+
+    gl_const!("VERTEX_SHADER", 0x8B31);
+    gl_const!("FRAGMENT_SHADER", 0x8B30);
+    gl_const!("COMPILE_STATUS", 0x8B81);
+    gl_const!("LINK_STATUS", 0x8B82);
 
     gl_const!("TRIANGLES", 0x0004);
     gl_const!("BLEND", 0x0BE2);
     gl_const!("SCISSOR_TEST", 0x0C11);
     gl_const!("CULL_FACE", 0x0B44);
+
+    gl_const!("COLOR_BUFFER_BIT", 0x4000);
 
     gl_const!("ONE", 1);
     gl_const!("ONE_MINUS_SRC_ALPHA", 0x0303);
@@ -1222,6 +1614,8 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("getError", gl_get_error, 0);
     gl_fn!("getParameter", gl_get_parameter, 1);
     gl_fn!("getExtension", gl_return_null, 1);
+    gl_fn!("getSupportedExtensions", gl_get_supported_extensions, 0);
+    gl_fn!("getShaderPrecisionFormat", gl_get_shader_precision_format, 2);
     gl_fn!("isContextLost", gl_return_false, 0);
 
     // Object creation helpers
@@ -1234,7 +1628,7 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     // Generic no-ops (extend as Pixi tells us what it needs)
     gl_fn!("bindBuffer", gl_bind_buffer, 2);
     gl_fn!("bufferData", gl_buffer_data, 3);
-    gl_fn!("bufferSubData", gl_noop, 3);
+    gl_fn!("bufferSubData", gl_buffer_sub_data, 3);
     gl_fn!("bindTexture", gl_noop, 2);
     gl_fn!("activeTexture", gl_noop, 1);
     gl_fn!("texParameteri", gl_noop, 3);
@@ -1246,15 +1640,15 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("attachShader", gl_noop, 2);
     gl_fn!("linkProgram", gl_noop, 1);
     gl_fn!("useProgram", gl_noop, 1);
-    gl_fn!("enableVertexAttribArray", gl_noop, 1);
-    gl_fn!("vertexAttribPointer", gl_noop, 6);
+    gl_fn!("enableVertexAttribArray", gl_enable_vertex_attrib_array, 1);
+    gl_fn!("vertexAttribPointer", gl_vertex_attrib_pointer, 6);
     gl_fn!("uniform1i", gl_noop, 2);
     gl_fn!("uniform1f", gl_noop, 2);
     gl_fn!("uniform2f", gl_noop, 3);
     gl_fn!("uniform4f", gl_noop, 5);
     gl_fn!("uniformMatrix3fv", gl_noop, 3);
     gl_fn!("uniformMatrix4fv", gl_noop, 3);
-    gl_fn!("viewport", gl_noop, 4);
+    gl_fn!("viewport", gl_viewport, 4);
     gl_fn!("scissor", gl_noop, 4);
     gl_fn!("enable", gl_noop, 1);
     gl_fn!("disable", gl_noop, 1);
@@ -1262,7 +1656,7 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("blendFuncSeparate", gl_noop, 4);
     gl_fn!("clearColor", gl_clear_color, 4);
     gl_fn!("clear", gl_noop, 1);
-    gl_fn!("drawElements", gl_noop, 4);
+    gl_fn!("drawElements", gl_draw_elements, 4);
     gl_fn!("drawArrays", gl_draw_arrays, 3);
     gl_fn!("flush", gl_noop, 0);
 
@@ -1316,13 +1710,6 @@ unsafe fn ensure_global_document(
                 argc: c_int,
                 argv: *const qjs::JSValueConst,
             ) -> qjs::JSValue {
-                // Ignore context type and return the shared singleton.
-                let global = qjs::JS_GetGlobalObject(ctx);
-                let gl = qjs::JS_GetPropertyStr(ctx, global, b"__trueos_gl\0".as_ptr() as *const c_char);
-                qjs::js_free_value(ctx, global);
-                if gl.is_exception() {
-                    return js_null();
-                }
                 // If the caller asked for "2d", return null for now (explicitly not supported).
                 if !argv.is_null() && argc >= 1 {
                     let args = core::slice::from_raw_parts(argv, argc as usize);
@@ -1331,10 +1718,33 @@ unsafe fn ensure_global_document(
                         let kind = CStr::from_ptr(cstr).to_bytes();
                         qjs::JS_FreeCString(ctx, cstr);
                         if kind.eq_ignore_ascii_case(b"2d") {
-                            qjs::js_free_value(ctx, gl);
+                            return js_null();
+                        }
+
+                        // Pixi (and friends) do feature probes with a one-arg
+                        // getContext("webgl") call and then await media events.
+                        // We don't model that event loop, so treat one-arg webgl/webgl2
+                        // as "unsupported" to avoid stalling module initialization.
+                        if (kind.eq_ignore_ascii_case(b"webgl")
+                            || kind.eq_ignore_ascii_case(b"webgl2"))
+                            && argc < 2
+                        {
                             return js_null();
                         }
                     }
+                }
+
+                // For actual renderer creation paths (usually passing options),
+                // return the shared singleton.
+                let global = qjs::JS_GetGlobalObject(ctx);
+                let gl = qjs::JS_GetPropertyStr(
+                    ctx,
+                    global,
+                    b"__trueos_gl\0".as_ptr() as *const c_char,
+                );
+                qjs::js_free_value(ctx, global);
+                if gl.is_exception() {
+                    return js_null();
                 }
 
                 // Store last_context on the canvas for debugging.
@@ -1851,8 +2261,8 @@ const CDN_DIR: &[u8] = b"/qjs/cdn/";
 // An outer loader timeout can fire early while the async-fs service is still
 // executing a non-cancellable in-flight fetch, which then starves following ops.
 const BOOTSTRAP_NET_TIMEOUT_MS: u64 = 0;
-const BOOTSTRAP_NET_FETCH_RETRIES: usize = 1;
-const BOOTSTRAP_NET_RETRY_BACKOFF_MS: u64 = 75;
+const BOOTSTRAP_NET_FETCH_RETRIES: usize = 3;
+const BOOTSTRAP_NET_RETRY_BACKOFF_MS: u64 = 250;
 
 fn push_i32_dec(out: &mut Vec<u8>, v: i32) {
     if v == 0 {
@@ -1951,7 +2361,10 @@ unsafe fn fetch_to_cache_rc_async(url: &[u8], cache_path: &[u8], timeout_ms: u64
             if len < 0 {
                 let rc = len as i32;
                 let _ = qjs::async_fs::discard(op_id);
-                let retriable = rc == NET_ERR_TIMEOUT_DNS || rc == NET_ERR_TIMEOUT_TLS || rc == NET_ERR_TIMEOUT_CONNECT;
+                let retriable = rc == NET_ERR_TIMEOUT_DNS
+                    || rc == NET_ERR_TIMEOUT_TLS
+                    || rc == NET_ERR_TIMEOUT_CONNECT
+                    || rc == NET_ERR_TIMEOUT_BODY;
                 if retriable && attempts < BOOTSTRAP_NET_FETCH_RETRIES {
                     let backoff_ticks = if hz == 0 {
                         0
