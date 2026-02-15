@@ -804,6 +804,11 @@ async fn fetch_on_device(
         }
 
         if !sent_connect {
+            let t = crate::net::tls_socket::TlsTimeouts {
+                connect_ms: (timeout_ms / 4).max(5_000),
+                tls_ms: (timeout_ms / 4).max(5_000),
+                idle_ms: timeout_ms,
+            };
             let _ = cmds.push(TlsCommand::OpenTcpConnect {
                 remote: vnet::EndpointV4 {
                     addr: ip,
@@ -812,10 +817,7 @@ async fn fetch_on_device(
                 server_name,
                 cfg: cfg.clone(),
                 roots: roots.clone(),
-            });
-            sent_connect = true;
-        }
-
+                timeouts: crate::net::tls_socket::TlsTimeouts::default(),
         if Instant::now() >= deadline {
             if let Some(h) = tls_handle {
                 let _ = cmds.push(TlsCommand::Close { handle: h });

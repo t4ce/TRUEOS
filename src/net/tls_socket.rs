@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use trueos_v::vnet as vnet;
@@ -15,6 +15,43 @@ use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoo
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Clone, Copy, Debug)]
+pub struct TlsTimeouts {
+    pub connect_ms: u32,
+    pub tls_ms: u32,
+    pub idle_ms: u32,
+}
+
+impl Default for TlsTimeouts {
+    fn default() -> Self {
+        Self {
+            connect_ms: 30_000,
+            tls_ms: 30_000,
+            idle_ms: 120_000,
+        }
+    }
+}
+
+static TLS_OWNER_TIMEOUTS: Mutex<Vec<(&'static str, TlsTimeouts)>> = Mutex::new(Vec::new());
+
+pub fn set_tls_owner_timeouts(owner: &'static str, timeouts: TlsTimeouts) {
+    let mut guard = TLS_OWNER_TIMEOUTS.lock();
+    if let Some(e) = guard.iter_mut().find(|(o, _)| *o == owner) {
+        e.1 = timeouts;
+        return;
+    }
+    guard.push((owner, timeouts));
+}
+
+fn owner_timeouts(owner: &'static str) -> TlsTimeouts {
+    let guard = TLS_OWNER_TIMEOUTS.lock();
+    guard
+        .iter()
+        .find(|(o, _)| *o == owner)
+        .map(|(_, t)| *t)
+        .unwrap_or_default()
+}
 
 struct TlsAppQueues {
     name: &'static str,
@@ -71,6 +108,7 @@ pub enum TlsCommand {
         server_name: &'static str,
         cfg: TlsClientConfig,
         roots: TlsRoots,
+        timeouts: TlsTimeouts,
     },
     /// Send plaintext application bytes.
     Send {
@@ -124,6 +162,10 @@ struct TlsConn {
     tls: TlsClient,
     connected_notified: bool,
     closed: bool,
+
+    created_at: Instant,
+    last_activity: Instant,
+    timeouts: TlsTimeouts,
 }
 
 impl TlsConn {
@@ -211,6 +253,7 @@ fn tls_socket_tick_once() {
                     server_name,
                     cfg,
                     roots,
+                    timeouts,
                 } => {
                     let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
                     let dev_idx =
@@ -255,6 +298,9 @@ fn tls_socket_tick_once() {
                         tls,
                         connected_notified: false,
                         closed: false,
+                        created_at: Instant::now(),
+                        last_activity: Instant::now(),
+                        timeouts,
                     };
 
                     let _ = conn.net.submit(vnet::Command::OpenTcpConnect { remote });
@@ -262,6 +308,7 @@ fn tls_socket_tick_once() {
                 }
                 TlsCommand::Send { handle, data } => {
                     if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
+                        conn.last_activity = Instant::now();
                         if conn.closed {
                             let _ = push_tls_event(conn.user_owner, TlsEvent::Closed { handle });
                             continue;
@@ -287,6 +334,84 @@ fn tls_socket_tick_once() {
         }
     }
 
+    // Enforce per-owner / per-connection timeouts.
+    // This prevents leaks where an app gives up but the tls-socket service keeps a stalled conn alive.
+    let now = Instant::now();
+    let mut idx = 0;
+    while idx < conns.len() {
+        let t = if conns[idx].timeouts.connect_ms == 0
+            && conns[idx].timeouts.tls_ms == 0
+            && conns[idx].timeouts.idle_ms == 0
+        {
+            owner_timeouts(conns[idx].user_owner)
+        } else {
+            conns[idx].timeouts
+        };
+
+        let mut remove = false;
+
+        // Connect timeout: never got a TCP handle.
+        if conns[idx].handle.is_none() && t.connect_ms != 0 {
+            let elapsed = now
+                .saturating_duration_since(conns[idx].created_at)
+                .as_millis() as u64;
+            if elapsed >= t.connect_ms as u64 {
+                let msg = leak_str(alloc::format!(
+                    "tls-socket: connect timeout owner={}",
+                    conns[idx].user_owner
+                ));
+                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                remove = true;
+            }
+        }
+
+        // TLS timeout: have a handle but handshake didn't complete.
+        if !remove
+            && conns[idx].handle.is_some()
+            && !conns[idx].tls.is_connected()
+            && t.tls_ms != 0
+        {
+            let elapsed = now
+                .saturating_duration_since(conns[idx].last_activity)
+                .as_millis() as u64;
+            if elapsed >= t.tls_ms as u64 {
+                if let Some(handle) = conns[idx].handle {
+                    let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                }
+                let msg = leak_str(alloc::format!(
+                    "tls-socket: tls timeout owner={}",
+                    conns[idx].user_owner
+                ));
+                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                remove = true;
+            }
+        }
+
+        // Idle timeout after connect.
+        if !remove && conns[idx].tls.is_connected() && t.idle_ms != 0 {
+            let elapsed = now
+                .saturating_duration_since(conns[idx].last_activity)
+                .as_millis() as u64;
+            if elapsed >= t.idle_ms as u64 {
+                if let Some(handle) = conns[idx].handle {
+                    let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                }
+                let msg = leak_str(alloc::format!(
+                    "tls-socket: idle timeout owner={}",
+                    conns[idx].user_owner
+                ));
+                let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                remove = true;
+            }
+        }
+
+        if remove {
+            conns.swap_remove(idx);
+        } else {
+            idx += 1;
+        }
+    }
+
     // Pump underlying TCP events into TLS and emit plaintext TLS events.
     let mut idx = 0;
     while idx < conns.len() {
@@ -301,12 +426,14 @@ fn tls_socket_tick_once() {
                 vnet::Event::Opened { handle, kind } => {
                     if kind == vnet::SocketKind::Tcp {
                         conns[idx].handle = Some(handle);
+                        conns[idx].last_activity = Instant::now();
                         let _ =
                             push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                     }
                 }
                 vnet::Event::TcpEstablished { handle } => {
                     if conns[idx].handle == Some(handle) {
+                        conns[idx].last_activity = Instant::now();
                         crate::log!(
                             "tls-socket: tcp established owner={} handle={}\n",
                             conns[idx].user_owner,
@@ -320,6 +447,8 @@ fn tls_socket_tick_once() {
                     if conns[idx].handle != Some(handle) {
                         continue;
                     }
+
+                    conns[idx].last_activity = Instant::now();
 
                     let produced = match conns[idx].tls.ingest_encrypted(data.as_slice()) {
                         Ok(p) => p,
