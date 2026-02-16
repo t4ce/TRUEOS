@@ -26,11 +26,50 @@ const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
 const GL_COMPILE_STATUS: u32 = 0x8B81;
 const GL_LINK_STATUS: u32 = 0x8B82;
+const GL_ACTIVE_ATTRIBUTES: u32 = 0x8B89;
+const GL_ACTIVE_UNIFORMS: u32 = 0x8B86;
 
 const GL_VERSION: u32 = 0x1F02;
 const GL_RENDERER: u32 = 0x1F01;
 const GL_VENDOR: u32 = 0x1F00;
 const GL_MAX_VERTEX_ATTRIBS: u32 = 0x8869;
+const GL_MAX_TEXTURE_IMAGE_UNITS: u32 = 0x8872;
+const GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: u32 = 0x8B4D;
+const GL_STENCIL_BITS: u32 = 0x0D57;
+const GL_FRAGMENT_SHADER: u32 = 0x8B30;
+const GL_VERTEX_SHADER: u32 = 0x8B31;
+const GL_HIGH_FLOAT: u32 = 0x8DF2;
+const GL_MEDIUM_FLOAT: u32 = 0x8DF1;
+const GL_LOW_FLOAT: u32 = 0x8DF0;
+const GL_HIGH_INT: u32 = 0x8DF5;
+const GL_MEDIUM_INT: u32 = 0x8DF4;
+const GL_LOW_INT: u32 = 0x8DF3;
+const GL_FLOAT_VEC2: u32 = 0x8B50;
+const GL_FLOAT_VEC3: u32 = 0x8B51;
+const GL_FLOAT_VEC4: u32 = 0x8B52;
+const GL_INT: u32 = 0x1404;
+const GL_INT_VEC2: u32 = 0x8B53;
+const GL_INT_VEC3: u32 = 0x8B54;
+const GL_INT_VEC4: u32 = 0x8B55;
+const GL_BOOL: u32 = 0x8B56;
+const GL_BOOL_VEC2: u32 = 0x8B57;
+const GL_BOOL_VEC3: u32 = 0x8B58;
+const GL_BOOL_VEC4: u32 = 0x8B59;
+const GL_FLOAT_MAT2: u32 = 0x8B5A;
+const GL_FLOAT_MAT3: u32 = 0x8B5B;
+const GL_FLOAT_MAT4: u32 = 0x8B5C;
+const GL_SAMPLER_2D: u32 = 0x8B5E;
+const GL_SAMPLER_CUBE: u32 = 0x8B60;
+const GL_SAMPLER_2D_ARRAY: u32 = 0x8DC1;
+const GL_UNSIGNED_INT_VEC2: u32 = 0x8DC6;
+const GL_UNSIGNED_INT_VEC3: u32 = 0x8DC7;
+const GL_UNSIGNED_INT_VEC4: u32 = 0x8DC8;
+const GL_INT_SAMPLER_2D: u32 = 0x8DCA;
+const GL_INT_SAMPLER_CUBE: u32 = 0x8DCC;
+const GL_INT_SAMPLER_2D_ARRAY: u32 = 0x8DCF;
+const GL_UNSIGNED_INT_SAMPLER_2D: u32 = 0x8DD2;
+const GL_UNSIGNED_INT_SAMPLER_CUBE: u32 = 0x8DD4;
+const GL_UNSIGNED_INT_SAMPLER_2D_ARRAY: u32 = 0x8DD7;
 
 #[derive(Clone, Copy)]
 struct AttribState {
@@ -73,6 +112,11 @@ struct ProgramState {
     attrib_names: Vec<Vec<u8>>,
     uniform_names: Vec<Vec<u8>>,
     uniform_mat3: Vec<Option<[f32; 9]>>,
+    active_attribs: Vec<(Vec<u8>, u32, i32)>,
+    active_uniforms: Vec<(Vec<u8>, u32, i32)>,
+    attached_vertex_shader: u32,
+    attached_fragment_shader: u32,
+    linked: bool,
 }
 
 impl ProgramState {
@@ -81,13 +125,25 @@ impl ProgramState {
             attrib_names: Vec::new(),
             uniform_names: Vec::new(),
             uniform_mat3: Vec::new(),
+            active_attribs: Vec::new(),
+            active_uniforms: Vec::new(),
+            attached_vertex_shader: 0,
+            attached_fragment_shader: 0,
+            linked: false,
         }
     }
+}
+
+struct ShaderState {
+    shader_type: u32,
+    source: Vec<u8>,
+    compiled: bool,
 }
 
 struct GlState {
     next_handle: u32,
     buffers: Vec<Option<Vec<u8>>>,
+    shaders: Vec<Option<ShaderState>>,
     programs: Vec<Option<ProgramState>>,
     current_array_buffer: u32,
     current_element_array_buffer: u32,
@@ -97,6 +153,7 @@ struct GlState {
     viewport_w: i32,
     viewport_h: i32,
     blend_enabled: bool,
+    frame_open: bool,
 }
 
 impl GlState {
@@ -104,6 +161,7 @@ impl GlState {
         Self {
             next_handle: 1,
             buffers: Vec::new(),
+            shaders: Vec::new(),
             programs: Vec::new(),
             current_array_buffer: 0,
             current_element_array_buffer: 0,
@@ -113,6 +171,7 @@ impl GlState {
             viewport_w: 1280,
             viewport_h: 800,
             blend_enabled: false,
+            frame_open: false,
         }
     }
 
@@ -251,6 +310,209 @@ fn program_slot_mut(st: &mut GlState, id: u32) -> Option<&mut ProgramState> {
     st.programs[idx].as_mut()
 }
 
+fn shader_slot_mut(st: &mut GlState, id: u32) -> Option<&mut ShaderState> {
+    if id == 0 {
+        return None;
+    }
+    let idx = (id - 1) as usize;
+    if idx >= st.shaders.len() {
+        return None;
+    }
+    st.shaders[idx].as_mut()
+}
+
+fn shader_slot(st: &GlState, id: u32) -> Option<&ShaderState> {
+    if id == 0 {
+        return None;
+    }
+    let idx = (id - 1) as usize;
+    if idx >= st.shaders.len() {
+        return None;
+    }
+    st.shaders[idx].as_ref()
+}
+
+fn glsl_type_to_enum(tok: &[u8]) -> u32 {
+    if tok == b"float" {
+        GL_FLOAT
+    } else if tok == b"vec2" {
+        GL_FLOAT_VEC2
+    } else if tok == b"vec3" {
+        GL_FLOAT_VEC3
+    } else if tok == b"vec4" {
+        GL_FLOAT_VEC4
+    } else if tok == b"int" {
+        GL_INT
+    } else if tok == b"ivec2" {
+        GL_INT_VEC2
+    } else if tok == b"ivec3" {
+        GL_INT_VEC3
+    } else if tok == b"ivec4" {
+        GL_INT_VEC4
+    } else if tok == b"uint" {
+        GL_UNSIGNED_INT
+    } else if tok == b"uvec2" {
+        GL_UNSIGNED_INT_VEC2
+    } else if tok == b"uvec3" {
+        GL_UNSIGNED_INT_VEC3
+    } else if tok == b"uvec4" {
+        GL_UNSIGNED_INT_VEC4
+    } else if tok == b"bool" {
+        GL_BOOL
+    } else if tok == b"bvec2" {
+        GL_BOOL_VEC2
+    } else if tok == b"bvec3" {
+        GL_BOOL_VEC3
+    } else if tok == b"bvec4" {
+        GL_BOOL_VEC4
+    } else if tok == b"mat2" {
+        GL_FLOAT_MAT2
+    } else if tok == b"mat3" {
+        GL_FLOAT_MAT3
+    } else if tok == b"mat4" {
+        GL_FLOAT_MAT4
+    } else if tok == b"sampler2D" {
+        GL_SAMPLER_2D
+    } else if tok == b"samplerCube" {
+        GL_SAMPLER_CUBE
+    } else if tok == b"sampler2DArray" {
+        GL_SAMPLER_2D_ARRAY
+    } else {
+        GL_FLOAT
+    }
+}
+
+fn is_glsl_qualifier(tok: &str) -> bool {
+    matches!(
+        tok,
+        "lowp"
+            | "mediump"
+            | "highp"
+            | "flat"
+            | "smooth"
+            | "noperspective"
+            | "centroid"
+            | "invariant"
+            | "precise"
+    )
+}
+
+fn sanitize_glsl_name(name: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for b in name {
+        if *b == b';' || *b == b',' {
+            break;
+        }
+        if *b == b'[' {
+            break;
+        }
+        out.push(*b);
+    }
+    out
+}
+
+fn scan_glsl_decl(src: &[u8], key: &[u8], out: &mut Vec<(Vec<u8>, u32, i32)>) {
+    let Ok(s) = core::str::from_utf8(src) else {
+        return;
+    };
+    let Ok(key_s) = core::str::from_utf8(key) else {
+        return;
+    };
+    for raw in s.lines() {
+        let line = raw.trim();
+        if !line.as_bytes().starts_with(key) {
+            continue;
+        }
+        let Some(mut tail) = line.strip_prefix(key_s) else {
+            continue;
+        };
+        tail = tail.trim_start();
+        let mut parts = tail.split_whitespace();
+        let mut type_tok = parts.next().unwrap_or("");
+        while is_glsl_qualifier(type_tok) {
+            type_tok = parts.next().unwrap_or("");
+            if type_tok.is_empty() {
+                break;
+            }
+        }
+        let name_tok = parts.next().unwrap_or("");
+        if type_tok.is_empty() || name_tok.is_empty() {
+            continue;
+        }
+        if name_tok.is_empty() {
+            continue;
+        }
+        let n = sanitize_glsl_name(name_tok.as_bytes());
+        if n.is_empty() {
+            continue;
+        }
+        if out.iter().any(|(x, _, _)| *x == n) {
+            continue;
+        }
+        out.push((n, glsl_type_to_enum(type_tok.as_bytes()), 1));
+    }
+}
+
+unsafe fn uniform_loc_index(ctx: *mut qjs::JSContext, loc_obj: qjs::JSValueConst) -> Option<usize> {
+    if loc_obj.tag != qjs::JS_TAG_OBJECT {
+        return None;
+    }
+    let v = qjs::JS_GetPropertyStr(ctx, loc_obj, b"__u\0".as_ptr() as *const c_char);
+    let loc = js_get_f64(ctx, v).map(|x| x.max(0.0) as usize);
+    qjs::js_free_value(ctx, v);
+    loc
+}
+
+unsafe fn uniform_loc_program(ctx: *mut qjs::JSContext, loc_obj: qjs::JSValueConst) -> u32 {
+    if loc_obj.tag != qjs::JS_TAG_OBJECT {
+        return 0;
+    }
+    let v = qjs::JS_GetPropertyStr(ctx, loc_obj, b"__p\0".as_ptr() as *const c_char);
+    let prog = js_get_f64(ctx, v).map(|x| x.max(0.0) as u32).unwrap_or(0);
+    qjs::js_free_value(ctx, v);
+    prog
+}
+
+unsafe fn with_uniform_loc<F>(
+    ctx: *mut qjs::JSContext,
+    loc_obj: qjs::JSValueConst,
+    mut f: F,
+) -> qjs::JSValue
+where
+    F: FnMut(&mut ProgramState, usize),
+{
+    let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    let prog_id = {
+        let p = uniform_loc_program(ctx, loc_obj);
+        if p != 0 { p } else { st.current_program }
+    };
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JSValue::undefined();
+    };
+    if loc >= p.uniform_names.len() {
+        return qjs::JSValue::undefined();
+    }
+    f(p, loc);
+    qjs::JSValue::undefined()
+}
+
+unsafe fn gl_uniform_store_noop(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let loc_obj = args[0];
+    with_uniform_loc(ctx, loc_obj, |_p, _loc| {})
+}
+
 fn read_index(src: &[u8], type_enum: u32, offset: usize, i: usize) -> Option<u32> {
     match type_enum {
         GL_UNSIGNED_BYTE => src.get(offset + i).copied().map(|x| x as u32),
@@ -368,6 +630,13 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
     if out.is_empty() {
         return;
     }
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: out });
+}
+
+fn begin_frame_if_needed(st: &mut GlState) {
+    if st.frame_open {
+        return;
+    }
     cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport {
         w: st.viewport_w.max(1),
         h: st.viewport_h.max(1),
@@ -379,8 +648,7 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         enabled: st.blend_enabled,
     });
     cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: out });
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
+    st.frame_open = true;
 }
 
 unsafe extern "C" fn gl_create_buffer(
@@ -509,6 +777,237 @@ unsafe extern "C" fn gl_create_program(
     }
     st.programs[idx] = Some(ProgramState::new());
     js_new_handle_obj(ctx, id)
+}
+
+unsafe extern "C" fn gl_create_shader(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut shader_type = GL_FRAGMENT_SHADER;
+    if !argv.is_null() && argc >= 1 {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        shader_type = js_get_f64(ctx, args[0]).unwrap_or(GL_FRAGMENT_SHADER as f64).max(0.0) as u32;
+    }
+    let mut st = GL_STATE.lock();
+    let id = st.alloc_handle();
+    let idx = (id - 1) as usize;
+    if idx >= st.shaders.len() {
+        st.shaders.resize_with(idx + 1, || None);
+    }
+    st.shaders[idx] = Some(ShaderState {
+        shader_type,
+        source: Vec::new(),
+        compiled: false,
+    });
+    js_new_handle_obj(ctx, id)
+}
+
+unsafe extern "C" fn gl_shader_source(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let shader_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[1], 0);
+    if cstr.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let src = core::slice::from_raw_parts(cstr as *const u8, len).to_vec();
+    qjs::JS_FreeCString(ctx, cstr);
+    let mut st = GL_STATE.lock();
+    if let Some(sh) = shader_slot_mut(&mut st, shader_id) {
+        sh.source = src;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_compile_shader(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let shader_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let mut st = GL_STATE.lock();
+    if let Some(sh) = shader_slot_mut(&mut st, shader_id) {
+        sh.compiled = true;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_attach_shader(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let shader_id = js_get_handle_id(ctx, args[1]).unwrap_or(0);
+    let mut st = GL_STATE.lock();
+    let shader_type = shader_slot(&st, shader_id).map(|s| s.shader_type).unwrap_or(0);
+    if let Some(p) = program_slot_mut(&mut st, prog_id) {
+        if shader_type == GL_VERTEX_SHADER {
+            p.attached_vertex_shader = shader_id;
+        } else if shader_type == GL_FRAGMENT_SHADER {
+            p.attached_fragment_shader = shader_id;
+        }
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_bind_attrib_location(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let loc = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as usize;
+    let name_c = qjs::js_to_cstring(ctx, args[2]);
+    if name_c.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let name = CStr::from_ptr(name_c).to_bytes().to_vec();
+    qjs::JS_FreeCString(ctx, name_c);
+    let mut st = GL_STATE.lock();
+    if let Some(p) = program_slot_mut(&mut st, prog_id) {
+        if p.attrib_names.len() <= loc {
+            p.attrib_names.resize(loc + 1, Vec::new());
+        }
+        p.attrib_names[loc] = name;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_link_program(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let mut st = GL_STATE.lock();
+    let (vs_id, fs_id) = st
+        .programs
+        .get(prog_id.saturating_sub(1) as usize)
+        .and_then(|p| p.as_ref())
+        .map(|p| (p.attached_vertex_shader, p.attached_fragment_shader))
+        .unwrap_or((0, 0));
+    let vs_src = shader_slot(&st, vs_id).map(|s| s.source.clone()).unwrap_or_default();
+    let fs_src = shader_slot(&st, fs_id).map(|s| s.source.clone()).unwrap_or_default();
+    if let Some(p) = program_slot_mut(&mut st, prog_id) {
+        p.active_attribs.clear();
+        p.active_uniforms.clear();
+        scan_glsl_decl(vs_src.as_slice(), b"attribute ", &mut p.active_attribs);
+        scan_glsl_decl(vs_src.as_slice(), b"in ", &mut p.active_attribs);
+        scan_glsl_decl(vs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
+        scan_glsl_decl(fs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
+        if p.attrib_names.is_empty() {
+            for (n, _, _) in p.active_attribs.iter() {
+                p.attrib_names.push(n.clone());
+            }
+        }
+        if p.uniform_names.is_empty() {
+            for (n, _, _) in p.active_uniforms.iter() {
+                p.uniform_names.push(n.clone());
+                p.uniform_mat3.push(None);
+            }
+        }
+        p.linked = true;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_get_active_attrib(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let idx = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as usize;
+    let st = GL_STATE.lock();
+    let Some(Some(p)) = st.programs.get(prog_id.saturating_sub(1) as usize) else {
+        return js_null();
+    };
+    let Some((name, type_enum, size)) = p.active_attribs.get(idx) else {
+        return js_null();
+    };
+    let o = qjs::JS_NewObject(ctx);
+    if o.is_exception() {
+        return o;
+    }
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"name\0".as_ptr() as *const c_char,
+        qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len()),
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"type\0".as_ptr() as *const c_char, js_int32(*type_enum as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"size\0".as_ptr() as *const c_char, js_int32(*size));
+    o
+}
+
+unsafe extern "C" fn gl_get_active_uniform(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let idx = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as usize;
+    let st = GL_STATE.lock();
+    let Some(Some(p)) = st.programs.get(prog_id.saturating_sub(1) as usize) else {
+        return js_null();
+    };
+    let Some((name, type_enum, size)) = p.active_uniforms.get(idx) else {
+        return js_null();
+    };
+    let o = qjs::JS_NewObject(ctx);
+    if o.is_exception() {
+        return o;
+    }
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"name\0".as_ptr() as *const c_char,
+        qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len()),
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"type\0".as_ptr() as *const c_char, js_int32(*type_enum as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"size\0".as_ptr() as *const c_char, js_int32(*size));
+    o
 }
 
 unsafe extern "C" fn gl_use_program(
@@ -654,8 +1153,9 @@ unsafe extern "C" fn gl_get_uniform_location(
     if name_c.is_null() {
         return js_null();
     }
-    let name = CStr::from_ptr(name_c).to_bytes().to_vec();
+    let raw_name = CStr::from_ptr(name_c).to_bytes().to_vec();
     qjs::JS_FreeCString(ctx, name_c);
+    let name = sanitize_glsl_name(raw_name.as_slice());
     let mut st = GL_STATE.lock();
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return js_null();
@@ -677,6 +1177,12 @@ unsafe extern "C" fn gl_get_uniform_location(
         b"__u\0".as_ptr() as *const c_char,
         qjs::JS_NewFloat64(ctx, idx as f64),
     );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"__p\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, prog_id as f64),
+    );
     o
 }
 
@@ -691,12 +1197,9 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let loc_obj = args[0];
-    if loc_obj.tag != qjs::JS_TAG_OBJECT {
+    let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
         return qjs::JSValue::undefined();
-    }
-    let v = qjs::JS_GetPropertyStr(ctx, loc_obj, b"__u\0".as_ptr() as *const c_char);
-    let loc = js_get_f64(ctx, v).map(|x| x.max(0.0) as usize).unwrap_or(usize::MAX);
-    qjs::js_free_value(ctx, v);
+    };
     let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[2]) else {
         return qjs::JSValue::undefined();
     };
@@ -710,8 +1213,11 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
         m[i] = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
     }
     let mut st = GL_STATE.lock();
-    let curr_prog = st.current_program;
-    let Some(p) = program_slot_mut(&mut st, curr_prog) else {
+    let prog_id = {
+        let p = uniform_loc_program(ctx, loc_obj);
+        if p != 0 { p } else { st.current_program }
+    };
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return qjs::JSValue::undefined();
     };
     if loc < p.uniform_mat3.len() {
@@ -751,14 +1257,16 @@ unsafe extern "C" fn gl_clear(
         return qjs::JSValue::undefined();
     };
     if (mask & GL_COLOR_BUFFER_BIT) != 0 {
-        let st = GL_STATE.lock();
-        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport {
-            w: st.viewport_w.max(1),
-            h: st.viewport_h.max(1),
-        });
-        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetClearColor { clear_rgb: st.clear_rgb });
-        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
-        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
+        let mut st = GL_STATE.lock();
+        // Treat COLOR clear as a frame boundary:
+        // Pixi with clearBeforeRender=true issues clear once per render().
+        // Closing an open frame here guarantees presents even if GL flush/finish
+        // is not called reliably by the JS side.
+        if st.frame_open {
+            cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
+            st.frame_open = false;
+        }
+        begin_frame_if_needed(&mut st);
     }
     qjs::JSValue::undefined()
 }
@@ -781,6 +1289,20 @@ unsafe extern "C" fn gl_viewport(
     qjs::JSValue::undefined()
 }
 
+unsafe extern "C" fn gl_flush_frame(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut st = GL_STATE.lock();
+    if st.frame_open {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
+        st.frame_open = false;
+    }
+    qjs::JSValue::undefined()
+}
+
 unsafe extern "C" fn gl_enable_disable(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -799,6 +1321,240 @@ unsafe extern "C" fn gl_enable_disable(
         GL_STATE.lock().blend_enabled = enabled;
     }
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_uniform_1f(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2f(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3f(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4f(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_1i(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2i(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3i(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4i(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_1fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_1iv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2iv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3iv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4iv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_1ui(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2ui(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3ui(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4ui(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_1uiv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_2uiv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_3uiv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_4uiv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_matrix2fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_uniform_matrix4fv(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    gl_uniform_store_noop(ctx, this_val, argc, argv)
 }
 
 unsafe extern "C" fn gl_enable(
@@ -889,6 +1645,8 @@ unsafe extern "C" fn gl_draw_elements(
         _ => {}
     }
     if tri.len() >= 3 {
+        let mut st = GL_STATE.lock();
+        begin_frame_if_needed(&mut st);
         emit_triangles(&st, tri.as_slice());
     }
     qjs::JSValue::undefined()
@@ -914,7 +1672,8 @@ unsafe extern "C" fn gl_draw_arrays(
     for i in 0..count {
         idx.push(first + i);
     }
-    let st = GL_STATE.lock();
+    let mut st = GL_STATE.lock();
+    begin_frame_if_needed(&mut st);
     emit_triangles(&st, idx.as_slice());
     qjs::JSValue::undefined()
 }
@@ -929,9 +1688,39 @@ unsafe extern "C" fn gl_get_shader_program_parameter(
         return js_bool(true);
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
+    let id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
     let pname = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as u32;
-    if pname == GL_COMPILE_STATUS || pname == GL_LINK_STATUS {
-        return js_bool(true);
+    let st = GL_STATE.lock();
+    if pname == GL_COMPILE_STATUS {
+        let ok = shader_slot(&st, id).map(|s| s.compiled).unwrap_or(true);
+        return js_bool(ok);
+    }
+    if pname == GL_LINK_STATUS {
+        let ok = st
+            .programs
+            .get(id.saturating_sub(1) as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.linked)
+            .unwrap_or(true);
+        return js_bool(ok);
+    }
+    if pname == GL_ACTIVE_ATTRIBUTES {
+        let n = st
+            .programs
+            .get(id.saturating_sub(1) as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.active_attribs.len() as i32)
+            .unwrap_or(0);
+        return js_int32(n);
+    }
+    if pname == GL_ACTIVE_UNIFORMS {
+        let n = st
+            .programs
+            .get(id.saturating_sub(1) as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.active_uniforms.len() as i32)
+            .unwrap_or(0);
+        return js_int32(n);
     }
     js_int32(1)
 }
@@ -952,6 +1741,9 @@ unsafe extern "C" fn gl_get_parameter(
         GL_RENDERER => qjs::JS_NewStringLen(ctx, b"TRUEOS CmdStream\0".as_ptr() as *const c_char, 16),
         GL_VENDOR => qjs::JS_NewStringLen(ctx, b"TRUEOS\0".as_ptr() as *const c_char, 6),
         GL_MAX_VERTEX_ATTRIBS => js_int32(MAX_ATTRS as i32),
+        GL_MAX_TEXTURE_IMAGE_UNITS => js_int32(8),
+        GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS => js_int32(8),
+        GL_STENCIL_BITS => js_int32(8),
         _ => js_int32(0),
     }
 }
@@ -973,9 +1765,33 @@ unsafe extern "C" fn gl_get_extension(
     let name = CStr::from_ptr(name_c).to_bytes();
     qjs::JS_FreeCString(ctx, name_c);
     if name.eq_ignore_ascii_case(b"OES_vertex_array_object")
+        || name.eq_ignore_ascii_case(b"OES_element_index_uint")
         || name.eq_ignore_ascii_case(b"ANGLE_instanced_arrays")
+        || name.eq_ignore_ascii_case(b"WEBGL_draw_buffers")
     {
         return qjs::JS_NewObject(ctx);
+    }
+    if name.eq_ignore_ascii_case(b"EXT_texture_filter_anisotropic")
+        || name.eq_ignore_ascii_case(b"MOZ_EXT_texture_filter_anisotropic")
+        || name.eq_ignore_ascii_case(b"WEBKIT_EXT_texture_filter_anisotropic")
+    {
+        let ext = qjs::JS_NewObject(ctx);
+        if ext.is_exception() {
+            return ext;
+        }
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"TEXTURE_MAX_ANISOTROPY_EXT\0".as_ptr() as *const c_char,
+            js_int32(0x84FE),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"MAX_TEXTURE_MAX_ANISOTROPY_EXT\0".as_ptr() as *const c_char,
+            js_int32(0x84FF),
+        );
+        return ext;
     }
     js_null()
 }
@@ -987,6 +1803,169 @@ unsafe extern "C" fn gl_noop(
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn canvas2d_noop(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn canvas2d_measure_text(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let m = qjs::JS_NewObject(ctx);
+    if m.is_exception() {
+        return m;
+    }
+    let _ = qjs::JS_SetPropertyStr(ctx, m, b"width\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, 0.0));
+    m
+}
+
+unsafe fn make_canvas_2d_context(ctx: *mut qjs::JSContext, canvas: qjs::JSValueConst) -> qjs::JSValue {
+    let c2d = qjs::JS_NewObject(ctx);
+    if c2d.is_exception() {
+        return c2d;
+    }
+    macro_rules! c2d_fn {
+        ($name:literal, $func:expr, $argc:expr) => {{
+            let k = concat!($name, "\0");
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some($func),
+                k.as_ptr() as *const c_char,
+                $argc,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(ctx, c2d, k.as_ptr() as *const c_char, f);
+        }};
+    }
+    c2d_fn!("fillRect", canvas2d_noop, 4);
+    c2d_fn!("clearRect", canvas2d_noop, 4);
+    c2d_fn!("drawImage", canvas2d_noop, 9);
+    c2d_fn!("save", canvas2d_noop, 0);
+    c2d_fn!("restore", canvas2d_noop, 0);
+    c2d_fn!("translate", canvas2d_noop, 2);
+    c2d_fn!("rotate", canvas2d_noop, 1);
+    c2d_fn!("scale", canvas2d_noop, 2);
+    c2d_fn!("setTransform", canvas2d_noop, 6);
+    c2d_fn!("resetTransform", canvas2d_noop, 0);
+    c2d_fn!("beginPath", canvas2d_noop, 0);
+    c2d_fn!("closePath", canvas2d_noop, 0);
+    c2d_fn!("moveTo", canvas2d_noop, 2);
+    c2d_fn!("lineTo", canvas2d_noop, 2);
+    c2d_fn!("rect", canvas2d_noop, 4);
+    c2d_fn!("arc", canvas2d_noop, 6);
+    c2d_fn!("fill", canvas2d_noop, 0);
+    c2d_fn!("stroke", canvas2d_noop, 0);
+    c2d_fn!("clip", canvas2d_noop, 0);
+    c2d_fn!("measureText", canvas2d_measure_text, 1);
+
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        c2d,
+        b"fillStyle\0".as_ptr() as *const c_char,
+        qjs::JS_NewStringLen(ctx, b"#ffffff\0".as_ptr() as *const c_char, 7),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        c2d,
+        b"strokeStyle\0".as_ptr() as *const c_char,
+        qjs::JS_NewStringLen(ctx, b"#000000\0".as_ptr() as *const c_char, 7),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        c2d,
+        b"globalAlpha\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 1.0),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        c2d,
+        b"canvas\0".as_ptr() as *const c_char,
+        qjs::js_dup_value(ctx, canvas),
+    );
+    c2d
+}
+
+unsafe extern "C" fn gl_get_error(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    js_int32(0)
+}
+
+unsafe extern "C" fn gl_is_context_lost(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    js_bool(false)
+}
+
+unsafe extern "C" fn gl_get_supported_extensions(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let arr = qjs::JS_NewArray(ctx);
+    if arr.is_exception() {
+        return arr;
+    }
+    let v0 = qjs::JS_NewStringLen(ctx, b"OES_vertex_array_object\0".as_ptr() as *const c_char, 23);
+    let v1 = qjs::JS_NewStringLen(ctx, b"OES_element_index_uint\0".as_ptr() as *const c_char, 22);
+    let v2 = qjs::JS_NewStringLen(ctx, b"ANGLE_instanced_arrays\0".as_ptr() as *const c_char, 22);
+    let v3 = qjs::JS_NewStringLen(ctx, b"EXT_texture_filter_anisotropic\0".as_ptr() as *const c_char, 30);
+    let _ = qjs::JS_SetPropertyUint32(ctx, arr, 0, v0);
+    let _ = qjs::JS_SetPropertyUint32(ctx, arr, 1, v1);
+    let _ = qjs::JS_SetPropertyUint32(ctx, arr, 2, v2);
+    let _ = qjs::JS_SetPropertyUint32(ctx, arr, 3, v3);
+    arr
+}
+
+unsafe extern "C" fn gl_get_info_log(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0)
+}
+
+unsafe extern "C" fn gl_get_shader_precision_format(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let o = qjs::JS_NewObject(ctx);
+    if o.is_exception() {
+        return o;
+    }
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"rangeMin\0".as_ptr() as *const c_char, js_int32(127));
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"rangeMax\0".as_ptr() as *const c_char, js_int32(127));
+    let _ = qjs::JS_SetPropertyStr(ctx, o, b"precision\0".as_ptr() as *const c_char, js_int32(23));
+    o
+}
+
+unsafe extern "C" fn gl_check_framebuffer_status(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    js_int32(0x8CD5)
 }
 
 unsafe extern "C" fn gl_get_context_attributes(
@@ -1021,6 +2000,22 @@ pub unsafe extern "C" fn canvas_get_context(
         return js_null();
     }
     let kind = CStr::from_ptr(kind_c).to_bytes();
+    if kind.eq_ignore_ascii_case(b"2d") {
+        qjs::JS_FreeCString(ctx, kind_c);
+        let existing2d = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_2d_ctx\0".as_ptr() as *const c_char);
+        if !existing2d.is_exception() && existing2d.tag != qjs::JS_TAG_UNDEFINED && existing2d.tag != qjs::JS_TAG_NULL {
+            return existing2d;
+        }
+        qjs::js_free_value(ctx, existing2d);
+        let c2d = make_canvas_2d_context(ctx, this_val);
+        if c2d.is_exception() {
+            return c2d;
+        }
+        let keep = qjs::js_dup_value(ctx, c2d);
+        let _ = qjs::JS_SetPropertyStr(ctx, this_val, b"__trueos_2d_ctx\0".as_ptr() as *const c_char, keep);
+        return c2d;
+    }
+
     let ok = kind.eq_ignore_ascii_case(b"webgl")
         || kind.eq_ignore_ascii_case(b"webgl2")
         || kind.eq_ignore_ascii_case(b"experimental-webgl");
@@ -1061,27 +2056,53 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("bufferSubData", gl_buffer_sub_data, 3);
     gl_fn!("createProgram", gl_create_program, 0);
     gl_fn!("useProgram", gl_use_program, 1);
-    gl_fn!("createShader", gl_create_buffer, 1);
-    gl_fn!("shaderSource", gl_noop, 2);
-    gl_fn!("compileShader", gl_noop, 1);
-    gl_fn!("attachShader", gl_noop, 2);
-    gl_fn!("linkProgram", gl_noop, 1);
+    gl_fn!("createShader", gl_create_shader, 1);
+    gl_fn!("deleteShader", gl_noop, 1);
+    gl_fn!("shaderSource", gl_shader_source, 2);
+    gl_fn!("compileShader", gl_compile_shader, 1);
+    gl_fn!("attachShader", gl_attach_shader, 2);
+    gl_fn!("bindAttribLocation", gl_bind_attrib_location, 3);
+    gl_fn!("linkProgram", gl_link_program, 1);
+    gl_fn!("deleteProgram", gl_noop, 1);
     gl_fn!("getShaderParameter", gl_get_shader_program_parameter, 2);
     gl_fn!("getProgramParameter", gl_get_shader_program_parameter, 2);
-    gl_fn!("getShaderInfoLog", gl_noop, 1);
-    gl_fn!("getProgramInfoLog", gl_noop, 1);
+    gl_fn!("getShaderInfoLog", gl_get_info_log, 1);
+    gl_fn!("getProgramInfoLog", gl_get_info_log, 1);
+    gl_fn!("getActiveAttrib", gl_get_active_attrib, 2);
+    gl_fn!("getActiveUniform", gl_get_active_uniform, 2);
+    gl_fn!("getShaderPrecisionFormat", gl_get_shader_precision_format, 2);
     gl_fn!("getAttribLocation", gl_get_attrib_location, 2);
     gl_fn!("enableVertexAttribArray", gl_enable_vertex_attrib_array, 1);
     gl_fn!("disableVertexAttribArray", gl_disable_vertex_attrib_array, 1);
     gl_fn!("vertexAttribPointer", gl_vertex_attrib_pointer, 6);
     gl_fn!("getUniformLocation", gl_get_uniform_location, 2);
     gl_fn!("uniformMatrix3fv", gl_uniform_matrix3fv, 3);
-    gl_fn!("uniformMatrix4fv", gl_noop, 3);
-    gl_fn!("uniform1f", gl_noop, 2);
-    gl_fn!("uniform1i", gl_noop, 2);
-    gl_fn!("uniform2f", gl_noop, 3);
-    gl_fn!("uniform4f", gl_noop, 5);
-    gl_fn!("uniform4fv", gl_noop, 2);
+    gl_fn!("uniformMatrix2fv", gl_uniform_matrix2fv, 3);
+    gl_fn!("uniformMatrix4fv", gl_uniform_matrix4fv, 3);
+    gl_fn!("uniform1f", gl_uniform_1f, 2);
+    gl_fn!("uniform2f", gl_uniform_2f, 3);
+    gl_fn!("uniform3f", gl_uniform_3f, 4);
+    gl_fn!("uniform4f", gl_uniform_4f, 5);
+    gl_fn!("uniform1i", gl_uniform_1i, 2);
+    gl_fn!("uniform2i", gl_uniform_2i, 3);
+    gl_fn!("uniform3i", gl_uniform_3i, 4);
+    gl_fn!("uniform4i", gl_uniform_4i, 5);
+    gl_fn!("uniform1fv", gl_uniform_1fv, 2);
+    gl_fn!("uniform2fv", gl_uniform_2fv, 2);
+    gl_fn!("uniform3fv", gl_uniform_3fv, 2);
+    gl_fn!("uniform4fv", gl_uniform_4fv, 2);
+    gl_fn!("uniform1iv", gl_uniform_1iv, 2);
+    gl_fn!("uniform2iv", gl_uniform_2iv, 2);
+    gl_fn!("uniform3iv", gl_uniform_3iv, 2);
+    gl_fn!("uniform4iv", gl_uniform_4iv, 2);
+    gl_fn!("uniform1ui", gl_uniform_1ui, 2);
+    gl_fn!("uniform2ui", gl_uniform_2ui, 3);
+    gl_fn!("uniform3ui", gl_uniform_3ui, 4);
+    gl_fn!("uniform4ui", gl_uniform_4ui, 5);
+    gl_fn!("uniform1uiv", gl_uniform_1uiv, 2);
+    gl_fn!("uniform2uiv", gl_uniform_2uiv, 2);
+    gl_fn!("uniform3uiv", gl_uniform_3uiv, 2);
+    gl_fn!("uniform4uiv", gl_uniform_4uiv, 2);
     gl_fn!("clearColor", gl_clear_color, 4);
     gl_fn!("clear", gl_clear, 1);
     gl_fn!("viewport", gl_viewport, 4);
@@ -1095,15 +2116,45 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("cullFace", gl_noop, 1);
     gl_fn!("drawElements", gl_draw_elements, 4);
     gl_fn!("drawArrays", gl_draw_arrays, 3);
-    gl_fn!("flush", gl_noop, 0);
-    gl_fn!("finish", gl_noop, 0);
+    gl_fn!("flush", gl_flush_frame, 0);
+    gl_fn!("finish", gl_flush_frame, 0);
+    gl_fn!("getError", gl_get_error, 0);
+    gl_fn!("isContextLost", gl_is_context_lost, 0);
+    gl_fn!("getSupportedExtensions", gl_get_supported_extensions, 0);
     gl_fn!("createTexture", gl_create_buffer, 0);
+    gl_fn!("deleteTexture", gl_noop, 1);
     gl_fn!("bindTexture", gl_noop, 2);
     gl_fn!("activeTexture", gl_noop, 1);
+    gl_fn!("generateMipmap", gl_noop, 1);
     gl_fn!("pixelStorei", gl_noop, 2);
     gl_fn!("texParameteri", gl_noop, 3);
+    gl_fn!("texParameterf", gl_noop, 3);
     gl_fn!("texImage2D", gl_noop, 9);
     gl_fn!("texSubImage2D", gl_noop, 9);
+    gl_fn!("createFramebuffer", gl_create_buffer, 0);
+    gl_fn!("bindFramebuffer", gl_noop, 2);
+    gl_fn!("deleteFramebuffer", gl_noop, 1);
+    gl_fn!("framebufferTexture2D", gl_noop, 5);
+    gl_fn!("checkFramebufferStatus", gl_check_framebuffer_status, 1);
+    gl_fn!("createRenderbuffer", gl_create_buffer, 0);
+    gl_fn!("bindRenderbuffer", gl_noop, 2);
+    gl_fn!("deleteRenderbuffer", gl_noop, 1);
+    gl_fn!("renderbufferStorage", gl_noop, 4);
+    gl_fn!("framebufferRenderbuffer", gl_noop, 4);
+    gl_fn!("deleteBuffer", gl_noop, 1);
+    gl_fn!("scissor", gl_noop, 4);
+    gl_fn!("colorMask", gl_noop, 4);
+    gl_fn!("depthMask", gl_noop, 1);
+    gl_fn!("depthFunc", gl_noop, 1);
+    gl_fn!("clearDepth", gl_noop, 1);
+    gl_fn!("polygonOffset", gl_noop, 2);
+    gl_fn!("lineWidth", gl_noop, 1);
+    gl_fn!("stencilMask", gl_noop, 1);
+    gl_fn!("stencilMaskSeparate", gl_noop, 2);
+    gl_fn!("stencilFunc", gl_noop, 3);
+    gl_fn!("stencilFuncSeparate", gl_noop, 4);
+    gl_fn!("stencilOp", gl_noop, 3);
+    gl_fn!("stencilOpSeparate", gl_noop, 4);
     gl_fn!("getParameter", gl_get_parameter, 1);
     gl_fn!("getExtension", gl_get_extension, 1);
     gl_fn!("getContextAttributes", gl_get_context_attributes, 0);
@@ -1129,14 +2180,60 @@ pub unsafe extern "C" fn canvas_get_context(
     set_i32_const(ctx, gl, b"CULL_FACE\0", 0x0B44);
     set_i32_const(ctx, gl, b"FRONT\0", 0x0404);
     set_i32_const(ctx, gl, b"BACK\0", 0x0405);
+    set_i32_const(ctx, gl, b"FRAMEBUFFER\0", 0x8D40);
+    set_i32_const(ctx, gl, b"RENDERBUFFER\0", 0x8D41);
+    set_i32_const(ctx, gl, b"FRAMEBUFFER_COMPLETE\0", 0x8CD5);
+    set_i32_const(ctx, gl, b"COLOR_ATTACHMENT0\0", 0x8CE0);
+    set_i32_const(ctx, gl, b"TEXTURE_2D\0", 0x0DE1);
+    set_i32_const(ctx, gl, b"TEXTURE0\0", 0x84C0);
     set_i32_const(ctx, gl, b"CW\0", 0x0900);
     set_i32_const(ctx, gl, b"CCW\0", 0x0901);
     set_i32_const(ctx, gl, b"COMPILE_STATUS\0", GL_COMPILE_STATUS as i32);
     set_i32_const(ctx, gl, b"LINK_STATUS\0", GL_LINK_STATUS as i32);
+    set_i32_const(ctx, gl, b"ACTIVE_ATTRIBUTES\0", GL_ACTIVE_ATTRIBUTES as i32);
+    set_i32_const(ctx, gl, b"ACTIVE_UNIFORMS\0", GL_ACTIVE_UNIFORMS as i32);
     set_i32_const(ctx, gl, b"VERSION\0", GL_VERSION as i32);
     set_i32_const(ctx, gl, b"RENDERER\0", GL_RENDERER as i32);
     set_i32_const(ctx, gl, b"VENDOR\0", GL_VENDOR as i32);
+    set_i32_const(ctx, gl, b"FRAGMENT_SHADER\0", GL_FRAGMENT_SHADER as i32);
+    set_i32_const(ctx, gl, b"VERTEX_SHADER\0", GL_VERTEX_SHADER as i32);
     set_i32_const(ctx, gl, b"MAX_VERTEX_ATTRIBS\0", GL_MAX_VERTEX_ATTRIBS as i32);
+    set_i32_const(ctx, gl, b"MAX_TEXTURE_IMAGE_UNITS\0", GL_MAX_TEXTURE_IMAGE_UNITS as i32);
+    set_i32_const(ctx, gl, b"MAX_COMBINED_TEXTURE_IMAGE_UNITS\0", GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS as i32);
+    set_i32_const(ctx, gl, b"STENCIL_BITS\0", GL_STENCIL_BITS as i32);
+    set_i32_const(ctx, gl, b"HIGH_FLOAT\0", GL_HIGH_FLOAT as i32);
+    set_i32_const(ctx, gl, b"MEDIUM_FLOAT\0", GL_MEDIUM_FLOAT as i32);
+    set_i32_const(ctx, gl, b"LOW_FLOAT\0", GL_LOW_FLOAT as i32);
+    set_i32_const(ctx, gl, b"HIGH_INT\0", GL_HIGH_INT as i32);
+    set_i32_const(ctx, gl, b"MEDIUM_INT\0", GL_MEDIUM_INT as i32);
+    set_i32_const(ctx, gl, b"LOW_INT\0", GL_LOW_INT as i32);
+    set_i32_const(ctx, gl, b"FLOAT_VEC2\0", GL_FLOAT_VEC2 as i32);
+    set_i32_const(ctx, gl, b"FLOAT_VEC3\0", GL_FLOAT_VEC3 as i32);
+    set_i32_const(ctx, gl, b"FLOAT_VEC4\0", GL_FLOAT_VEC4 as i32);
+    set_i32_const(ctx, gl, b"INT\0", GL_INT as i32);
+    set_i32_const(ctx, gl, b"INT_VEC2\0", GL_INT_VEC2 as i32);
+    set_i32_const(ctx, gl, b"INT_VEC3\0", GL_INT_VEC3 as i32);
+    set_i32_const(ctx, gl, b"INT_VEC4\0", GL_INT_VEC4 as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT\0", GL_UNSIGNED_INT as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_VEC2\0", GL_UNSIGNED_INT_VEC2 as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_VEC3\0", GL_UNSIGNED_INT_VEC3 as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_VEC4\0", GL_UNSIGNED_INT_VEC4 as i32);
+    set_i32_const(ctx, gl, b"BOOL\0", GL_BOOL as i32);
+    set_i32_const(ctx, gl, b"BOOL_VEC2\0", GL_BOOL_VEC2 as i32);
+    set_i32_const(ctx, gl, b"BOOL_VEC3\0", GL_BOOL_VEC3 as i32);
+    set_i32_const(ctx, gl, b"BOOL_VEC4\0", GL_BOOL_VEC4 as i32);
+    set_i32_const(ctx, gl, b"FLOAT_MAT2\0", GL_FLOAT_MAT2 as i32);
+    set_i32_const(ctx, gl, b"FLOAT_MAT3\0", GL_FLOAT_MAT3 as i32);
+    set_i32_const(ctx, gl, b"FLOAT_MAT4\0", GL_FLOAT_MAT4 as i32);
+    set_i32_const(ctx, gl, b"SAMPLER_2D\0", GL_SAMPLER_2D as i32);
+    set_i32_const(ctx, gl, b"INT_SAMPLER_2D\0", GL_INT_SAMPLER_2D as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_2D\0", GL_UNSIGNED_INT_SAMPLER_2D as i32);
+    set_i32_const(ctx, gl, b"SAMPLER_CUBE\0", GL_SAMPLER_CUBE as i32);
+    set_i32_const(ctx, gl, b"INT_SAMPLER_CUBE\0", GL_INT_SAMPLER_CUBE as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_CUBE\0", GL_UNSIGNED_INT_SAMPLER_CUBE as i32);
+    set_i32_const(ctx, gl, b"SAMPLER_2D_ARRAY\0", GL_SAMPLER_2D_ARRAY as i32);
+    set_i32_const(ctx, gl, b"INT_SAMPLER_2D_ARRAY\0", GL_INT_SAMPLER_2D_ARRAY as i32);
+    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_2D_ARRAY\0", GL_UNSIGNED_INT_SAMPLER_2D_ARRAY as i32);
 
     let mut w = 1280.0f64;
     let mut h = 800.0f64;

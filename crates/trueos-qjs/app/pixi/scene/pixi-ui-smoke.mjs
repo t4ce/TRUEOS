@@ -31,8 +31,9 @@ try {
   });
   log('pixi-ui: gl ctx', gl ? 'ok' : 'null');
 
-  const app = new PIXI.Application({
+  const renderer = new PIXI.Renderer({
     view: canvas,
+    context: gl,
     width: VIEW_W,
     height: VIEW_H,
     antialias: false,
@@ -41,14 +42,14 @@ try {
     backgroundColor: 0x12161d,
     clearBeforeRender: true,
     powerPreference: 'high-performance',
-    preference: 'webgl',
   });
 
-  log('pixi-ui: renderer', String(app.renderer.type));
+  const stage = new PIXI.Container();
+  log('pixi-ui: renderer', String(renderer.type));
 
   const root = new PIXI.Container();
   root.position.set(VIEW_W * 0.5, VIEW_H * 0.5);
-  app.stage.addChild(root);
+  stage.addChild(root);
 
   const shell = new PIXI.Graphics();
   shell.beginFill(0x2b3242, 1.0);
@@ -76,7 +77,7 @@ try {
     root.rotation = Math.sin(t) * 0.15;
     root.scale.set(1.0 + Math.sin(t * 0.7) * 0.03);
 
-    app.renderer.render(app.stage);
+    renderer.render(stage);
     frames++;
 
     const now = nowSeconds();

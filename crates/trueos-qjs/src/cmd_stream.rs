@@ -11,6 +11,7 @@ extern "C" {
 
 static LAST_SUBMIT_RC: AtomicI32 = AtomicI32::new(i32::MIN);
 static SUBMIT_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
+static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -148,6 +149,8 @@ fn flush_active_frame(st: &mut FrameState) {
     if !st.active {
         return;
     }
+    let draw_batches = st.batches.len() as u32;
+    let draw_bytes: usize = st.batches.iter().map(|b| b.vtx.len()).sum();
     if st.batches.is_empty() {
         submit_rgb_triangles(st.frame_clear_rgb, None);
     } else if st.batches.len() == 1 {
@@ -159,6 +162,16 @@ fn flush_active_frame(st: &mut FrameState) {
             merged.extend_from_slice(batch.vtx.as_slice());
         }
         submit_rgb_triangles(st.frame_clear_rgb, Some(merged.as_slice()));
+    }
+    let seq = FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    if (seq % 120) == 1 {
+        log_bytes(b"qjs-cmd-stream: frame seq=");
+        log_i32_dec(seq as i32);
+        log_bytes(b" batches=");
+        log_i32_dec(draw_batches as i32);
+        log_bytes(b" bytes=");
+        log_i32_dec(draw_bytes as i32);
+        log_bytes(b"\n");
     }
     st.batches.clear();
     st.active = false;
