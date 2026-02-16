@@ -438,15 +438,15 @@ pub unsafe fn run_pixi_rect_smoke() {
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
-    log_str("quickjs: pixi-tri: vm ok\n");
+    log_str("quickjs: pixi-ui: vm ok\n");
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
     // Preflight: prove JS -> print() -> kernel log bridge works in this VM.
     {
-        let filename = b"<pixi-tri-preflight>\0";
-        let script = b"print('pixi-tri: preflight print ok'); 0\0";
+        let filename = b"<pixi-ui-preflight>\0";
+        let script = b"print('pixi-ui: preflight print ok'); 0\0";
         let v = qjs::JS_Eval(
             ctx,
             script.as_ptr() as *const c_char,
@@ -455,21 +455,21 @@ pub unsafe fn run_pixi_rect_smoke() {
             qjs::JS_EVAL_TYPE_GLOBAL,
         );
         if v.is_exception() {
-            log_str("quickjs: pixi-tri preflight JS_Eval exception\n");
+            log_str("quickjs: pixi-ui preflight JS_Eval exception\n");
             dump_exception(ctx);
         } else {
             qjs::js_free_value(ctx, v);
         }
     }
 
-    let mod_filename = b"<smoke-pixi-calc>\0";
-    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/scene/pixicalc.mjs")
+    let mod_filename = b"<smoke-pixi-ui>\0";
+    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/scene/pixi-ui-smoke.mjs")
         .as_bytes()
         .to_vec();
     // NUL-terminate for parser stability.
     owned.push(0);
 
-    log_str("quickjs: pixi-tri: JS_Eval begin\n");
+    log_str("quickjs: pixi-ui: JS_Eval begin\n");
     let mod_ret = qjs::JS_Eval(
         ctx,
         owned.as_ptr() as *const c_char,
@@ -478,7 +478,7 @@ pub unsafe fn run_pixi_rect_smoke() {
         qjs::JS_EVAL_TYPE_MODULE,
     );
 
-    log_str("quickjs: pixi-tri: JS_Eval end\n");
+    log_str("quickjs: pixi-ui: JS_Eval end\n");
 
     if mod_ret.is_exception() {
         log_str("quickjs: pixi-rect JS_Eval exception\n");
@@ -489,8 +489,8 @@ pub unsafe fn run_pixi_rect_smoke() {
         let _ = drain_jobs_and_promises(rt, ctx, 60_000);
 
         // Postflight: if the module ran, logs should have appeared; still verify print works.
-        let filename = b"<pixi-tri-postflight>\0";
-        let script = b"print('pixi-tri: postflight print ok'); 0\0";
+        let filename = b"<pixi-ui-postflight>\0";
+        let script = b"print('pixi-ui: postflight print ok'); 0\0";
         let v = qjs::JS_Eval(
             ctx,
             script.as_ptr() as *const c_char,
@@ -499,7 +499,7 @@ pub unsafe fn run_pixi_rect_smoke() {
             qjs::JS_EVAL_TYPE_GLOBAL,
         );
         if v.is_exception() {
-            log_str("quickjs: pixi-tri postflight JS_Eval exception\n");
+            log_str("quickjs: pixi-ui postflight JS_Eval exception\n");
             dump_exception(ctx);
         } else {
             qjs::js_free_value(ctx, v);
