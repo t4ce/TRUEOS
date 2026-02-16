@@ -8,6 +8,7 @@ use spin::Mutex;
 
 use crate as qjs;
 use crate::cmd_stream;
+use crate::webgl;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -748,7 +749,7 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, proc);
 
     // Minimal browser-ish globals for early library bring-up.
-    // This intentionally excludes WebGL shims; rendering should go through cmd_stream.
+    // Includes a lean WebGL shim for Pixi Graphics-only scenarios.
     let _ = ensure_global_window_document(ctx);
 
     // Expose a browser-style global Worker constructor backed by the existing worker_threads shim.
@@ -920,18 +921,6 @@ unsafe fn ensure_global_document_stub(
     ctx: *mut qjs::JSContext,
     global: qjs::JSValue,
 ) -> qjs::JSValue {
-    unsafe extern "C" fn canvas_get_context_null(
-        _ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: c_int,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        qjs::JSValue {
-            u: qjs::JSValueUnion { int32: 0 },
-            tag: qjs::JS_TAG_NULL,
-        }
-    }
-
     unsafe extern "C" fn document_create_element(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -966,7 +955,7 @@ unsafe fn ensure_global_document_stub(
             );
             let get_ctx_fn = qjs::JS_NewCFunction2(
                 ctx,
-                Some(canvas_get_context_null),
+                Some(webgl::canvas_get_context),
                 b"getContext\0".as_ptr() as *const c_char,
                 2,
                 qjs::JS_CFUNC_GENERIC,

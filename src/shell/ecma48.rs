@@ -530,6 +530,127 @@ pub fn align_right(text: &str, width: usize) -> String {
     out
 }
 
+/// Applies lightweight ECMA-48 syntax highlighting to JSON text.
+///
+/// Input/output are still plain JSON characters; this only adds ANSI color
+/// sequences for display in shell output.
+pub fn json_upgrade(input: &str) -> String {
+    const C_KEY: &str = "\x1b[38;2;255;55;255m";
+    const C_STRING: &str = "\x1b[38;2;120;210;255m";
+    const C_NUMBER: &str = "\x1b[38;2;255;190;110m";
+    const C_BOOL: &str = "\x1b[38;2;255;230;140m";
+    const C_NULL: &str = "\x1b[38;2;140;140;140m";
+    const C_PUNCT: &str = "\x1b[38;2;170;170;170m";
+
+    let mut out = String::new();
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        // JSON strings.
+        if b == b'"' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' => {
+                        i = (i + 2).min(bytes.len());
+                    }
+                    b'"' => {
+                        i += 1;
+                        break;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            let token = &input[start..i.min(bytes.len())];
+            let mut j = i;
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
+                j += 1;
+            }
+            let key = j < bytes.len() && bytes[j] == b':';
+
+            out.push_str(if key { C_KEY } else { C_STRING });
+            out.push_str(token);
+            out.push_str(RESET);
+            continue;
+        }
+
+        // Whitespace.
+        if matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+
+        // Punctuation.
+        if matches!(b, b'{' | b'}' | b'[' | b']' | b':' | b',') {
+            out.push_str(C_PUNCT);
+            out.push(b as char);
+            out.push_str(RESET);
+            i += 1;
+            continue;
+        }
+
+        // Keywords.
+        if bytes[i..].starts_with(b"true") {
+            out.push_str(C_BOOL);
+            out.push_str("true");
+            out.push_str(RESET);
+            i += 4;
+            continue;
+        }
+        if bytes[i..].starts_with(b"false") {
+            out.push_str(C_BOOL);
+            out.push_str("false");
+            out.push_str(RESET);
+            i += 5;
+            continue;
+        }
+        if bytes[i..].starts_with(b"null") {
+            out.push_str(C_NULL);
+            out.push_str("null");
+            out.push_str(RESET);
+            i += 4;
+            continue;
+        }
+
+        // Numbers.
+        if b == b'-' || (b as char).is_ascii_digit() {
+            let start = i;
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if (c as char).is_ascii_digit() || matches!(c, b'.' | b'e' | b'E' | b'+' | b'-') {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push_str(C_NUMBER);
+            out.push_str(&input[start..i]);
+            out.push_str(RESET);
+            continue;
+        }
+
+        // Fallback for any unexpected token.
+        if b < 0x80 {
+            out.push(b as char);
+            i += 1;
+        } else if let Some(ch) = input[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    out
+}
+
 pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend, rest: &str, cols: usize) {
     let arg = rest.trim();
     if arg.eq_ignore_ascii_case("help") {

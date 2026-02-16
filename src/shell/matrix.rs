@@ -571,19 +571,18 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
                         let mut s: String<4> = String::new();
                         let _ = s.push('§');
                         let _ = s.push(super::MATRIX_RUNNING_GLYPH);
-                        io.write_str(s.as_str());
+                        io.write_fmt(format_args!(
+                            "{}",
+                            crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
+                        ));
                     }
                     _ => {
                         let mut s: String<8> = String::new();
                         let _ = write!(s, "§{}", id);
-                        if *state == SlotState::Done {
-                            io.write_fmt(format_args!(
-                                "{}",
-                                crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
-                            ));
-                        } else {
-                            io.write_str(s.as_str());
-                        }
+                        io.write_fmt(format_args!(
+                            "{}",
+                            crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
+                        ));
                     }
                 }
             }
