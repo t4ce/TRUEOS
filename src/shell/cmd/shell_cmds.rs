@@ -58,7 +58,7 @@ pub(crate) fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         return CommandAction::None;
     };
 
-    // With id: set active status slot.
+    // With id: set active status slot and dump slot contents (without clearing).
     let id = args.get_u8(0).unwrap_or(0);
     if id == 0 {
         ctx.io.write_str("§: ids are 1..\r\n");
@@ -66,13 +66,40 @@ pub(crate) fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     }
     let slot_id = id - 1;
 
-    if crate::shell::statusbar::set_active_slot(slot_id) {
-        ctx.io.write_fmt(format_args!("status: active §{}\r\n", id));
+    if !crate::shell::statusbar::set_active_slot(slot_id) {
+        ctx.io.write_str("§: not found\r\n");
+        return CommandAction::None;
+    }
+
+    ctx.io.write_fmt(format_args!("status: active §{}\r\n", id));
+
+    if let Some(blob) = crate::matrix::clone_blob(slot_id) {
+        if !blob.is_empty() {
+            if let Ok(s) = core::str::from_utf8(blob.as_slice()) {
+                write_crlf_lines(ctx.io, s);
+            } else {
+                let lossy = alloc::string::String::from_utf8_lossy(blob.as_slice());
+                write_crlf_lines(ctx.io, lossy.as_ref());
+            }
+            return CommandAction::None;
+        }
+    }
+
+    let mut buf: heapless::String<1024> = heapless::String::new();
+    if crate::matrix::dump_slot(&mut buf, slot_id) {
+        ctx.io.write_str(buf.as_str());
     } else {
         ctx.io.write_str("§: not found\r\n");
     }
 
     CommandAction::None
+}
+
+fn write_crlf_lines(io: &dyn crate::shell::ShellIo, s: &str) {
+    for line in s.split('\n') {
+        io.write_str(line.trim_end_matches('\r'));
+        io.write_str("\r\n");
+    }
 }
 
 pub(crate) fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
@@ -206,4 +233,3 @@ pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     // (Other execution paths still exist for internal callers like the AI bridge.)
     CommandAction::Qjs { src: heapless::String::new() }
 }
-

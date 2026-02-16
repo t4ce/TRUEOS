@@ -4,11 +4,10 @@ use alloc::vec::Vec;
 use alloc::vec;
 
 use core::ffi::{c_char, c_int, CStr};
-// WebGL atomics moved to webgl.rs
 use spin::Mutex;
 
 use crate as qjs;
-use crate::webgl;
+use crate::cmd_stream;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -749,8 +748,8 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, proc);
 
     // Minimal browser-ish globals for early library bring-up.
-    // This is intentionally tiny: enough for feature-detection and import-time code paths.
-    let _ = ensure_global_window_document_webgl(ctx);
+    // This intentionally excludes WebGL shims; rendering should go through cmd_stream.
+    let _ = ensure_global_window_document(ctx);
 
     // Expose a browser-style global Worker constructor backed by the existing worker_threads shim.
     let global = qjs::JS_GetGlobalObject(ctx);
@@ -833,7 +832,7 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     }
 }
 
-unsafe fn ensure_global_window_document_webgl(ctx: *mut qjs::JSContext) -> Result<(), ()> {
+unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), ()> {
     if ctx.is_null() {
         return Err(());
     }
@@ -907,18 +906,128 @@ unsafe fn ensure_global_window_document_webgl(ctx: *mut qjs::JSContext) -> Resul
         }
     }
 
-    // Install a singleton `__trueos_gl` object and a `document.createElement('canvas')` that
-    // returns a canvas object whose getContext() returns the singleton.
     ensure_global_intl(ctx, global);
     ensure_global_console(ctx, global);
     qjs::browser::ensure_global_event_target_stubs(ctx, global);
-    let gl_obj = webgl::ensure_global_trueos_webgl_singleton(ctx, global);
     ensure_global_browser_rendering_ctors(ctx, global);
-    let doc_obj = webgl::ensure_global_document(ctx, global, gl_obj);
+    let doc_obj = ensure_global_document_stub(ctx, global);
     qjs::js_free_value(ctx, doc_obj);
-    qjs::js_free_value(ctx, gl_obj);
     qjs::js_free_value(ctx, global);
     Ok(())
+}
+
+unsafe fn ensure_global_document_stub(
+    ctx: *mut qjs::JSContext,
+    global: qjs::JSValue,
+) -> qjs::JSValue {
+    unsafe extern "C" fn canvas_get_context_null(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 0 },
+            tag: qjs::JS_TAG_NULL,
+        }
+    }
+
+    unsafe extern "C" fn document_create_element(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let node = qjs::browser::make_dom_like_element(ctx);
+        if node.is_exception() {
+            return node;
+        }
+        if argv.is_null() || argc < 1 {
+            return node;
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let tag_cstr = qjs::js_to_cstring(ctx, args[0]);
+        if tag_cstr.is_null() {
+            return node;
+        }
+        let tag = CStr::from_ptr(tag_cstr).to_bytes();
+        if tag.eq_ignore_ascii_case(b"canvas") {
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                node,
+                b"width\0".as_ptr() as *const c_char,
+                qjs::JS_NewFloat64(ctx, 800.0),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                node,
+                b"height\0".as_ptr() as *const c_char,
+                qjs::JS_NewFloat64(ctx, 600.0),
+            );
+            let get_ctx_fn = qjs::JS_NewCFunction2(
+                ctx,
+                Some(canvas_get_context_null),
+                b"getContext\0".as_ptr() as *const c_char,
+                2,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                node,
+                b"getContext\0".as_ptr() as *const c_char,
+                get_ctx_fn,
+            );
+        }
+        qjs::JS_FreeCString(ctx, tag_cstr);
+        node
+    }
+
+    let existing = qjs::JS_GetPropertyStr(ctx, global, b"document\0".as_ptr() as *const c_char);
+    if !existing.is_exception() && existing.tag != qjs::JS_TAG_UNDEFINED && existing.tag != qjs::JS_TAG_NULL {
+        return existing;
+    }
+    qjs::js_free_value(ctx, existing);
+
+    let doc = qjs::JS_NewObject(ctx);
+    if doc.is_exception() {
+        return doc;
+    }
+
+    let body = qjs::browser::make_dom_like_element(ctx);
+    if !body.is_exception() {
+        let _ = qjs::JS_SetPropertyStr(ctx, doc, b"body\0".as_ptr() as *const c_char, body);
+    } else {
+        qjs::js_free_value(ctx, body);
+    }
+    let head = qjs::browser::make_dom_like_element(ctx);
+    if !head.is_exception() {
+        let _ = qjs::JS_SetPropertyStr(ctx, doc, b"head\0".as_ptr() as *const c_char, head);
+    } else {
+        qjs::js_free_value(ctx, head);
+    }
+
+    let create_el = qjs::JS_NewCFunction2(
+        ctx,
+        Some(document_create_element),
+        b"createElement\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        doc,
+        b"createElement\0".as_ptr() as *const c_char,
+        create_el,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"document\0".as_ptr() as *const c_char,
+        qjs::js_dup_value(ctx, doc),
+    );
+    doc
 }
 
 unsafe fn ensure_global_console(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
@@ -1616,6 +1725,308 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
     0
 }
 
+unsafe fn js_get_arraybuffer_view(
+    ctx: *mut qjs::JSContext,
+    val: qjs::JSValueConst,
+) -> Option<(*const u8, usize)> {
+    let mut byte_off: usize = 0;
+    let mut byte_len: usize = 0;
+    let mut bpe: usize = 0;
+    let ab = qjs::JS_GetTypedArrayBuffer(
+        ctx,
+        val,
+        &mut byte_off as *mut usize,
+        &mut byte_len as *mut usize,
+        &mut bpe as *mut usize,
+    );
+    if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED {
+        let mut total: usize = 0;
+        let ptr = qjs::JS_GetArrayBuffer(ctx, &mut total as *mut usize, ab);
+        qjs::js_free_value(ctx, ab);
+        if !ptr.is_null() {
+            let end = byte_off.saturating_add(byte_len);
+            if end <= total {
+                return Some((ptr.add(byte_off) as *const u8, byte_len));
+            }
+        }
+    } else {
+        qjs::js_free_value(ctx, ab);
+    }
+    let mut total: usize = 0;
+    let ptr = qjs::JS_GetArrayBuffer(ctx, &mut total as *mut usize, val);
+    if !ptr.is_null() {
+        Some((ptr as *const u8, total))
+    } else {
+        None
+    }
+}
+
+unsafe extern "C" fn qjs_cmd_stream_begin_frame(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_end_frame(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut v_f: f64 = 0.0;
+    if qjs::JS_ToFloat64(ctx, &mut v_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetClearColor { clear_rgb: rgb });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_viewport(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut w_f: f64 = 0.0;
+    let mut h_f: f64 = 0.0;
+    if qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[1]) != 0
+    {
+        return qjs::JSValue::undefined();
+    }
+    let w = (w_f as i32).max(0);
+    let h = (h_f as i32).max(0);
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport { w, h });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut enabled_f: f64 = 0.0;
+    if qjs::JS_ToFloat64(ctx, &mut enabled_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let enabled = enabled_f != 0.0;
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEnabled { enabled });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_blend_func(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 4 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut sr: f64 = 0.0;
+    let mut dr: f64 = 0.0;
+    let mut sa: f64 = 0.0;
+    let mut da: f64 = 0.0;
+    if qjs::JS_ToFloat64(ctx, &mut sr as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut dr as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut sa as *mut f64, args[2]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut da as *mut f64, args[3]) != 0
+    {
+        return qjs::JSValue::undefined();
+    }
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendFunc {
+        src_rgb: (sr as i32).max(0) as u32,
+        dst_rgb: (dr as i32).max(0) as u32,
+        src_alpha: (sa as i32).max(0) as u32,
+        dst_alpha: (da as i32).max(0) as u32,
+    });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_set_blend_equation(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut rgb: f64 = 0.0;
+    let mut alpha: f64 = 0.0;
+    if qjs::JS_ToFloat64(ctx, &mut rgb as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut alpha as *mut f64, args[1]) != 0
+    {
+        return qjs::JSValue::undefined();
+    }
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEquation {
+        rgb: (rgb as i32).max(0) as u32,
+        alpha: (alpha as i32).max(0) as u32,
+    });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[0]) else {
+        return qjs::JSValue::undefined();
+    };
+    let bytes = core::slice::from_raw_parts(ptr, len).to_vec();
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: bytes });
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+    let begin_frame_name = b"beginFrame\0";
+    let end_frame_name = b"endFrame\0";
+    let set_clear_rgb_name = b"setClearRgb\0";
+    let set_viewport_name = b"setViewport\0";
+    let set_blend_enabled_name = b"setBlendEnabled\0";
+    let set_blend_func_name = b"setBlendFunc\0";
+    let set_blend_equation_name = b"setBlendEquation\0";
+    let draw_triangles_u8_name = b"drawTrianglesU8\0";
+
+    let begin_frame_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_begin_frame),
+        begin_frame_name.as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, begin_frame_name.as_ptr() as *const c_char, begin_frame_fn) < 0 {
+        return -1;
+    }
+    let end_frame_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_end_frame),
+        end_frame_name.as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, end_frame_name.as_ptr() as *const c_char, end_frame_fn) < 0 {
+        return -1;
+    }
+    let set_clear_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_set_clear_rgb),
+        set_clear_rgb_name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, set_clear_rgb_name.as_ptr() as *const c_char, set_clear_fn) < 0 {
+        return -1;
+    }
+    let set_viewport_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_set_viewport),
+        set_viewport_name.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, set_viewport_name.as_ptr() as *const c_char, set_viewport_fn) < 0 {
+        return -1;
+    }
+    let set_blend_enabled_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_set_blend_enabled),
+        set_blend_enabled_name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, set_blend_enabled_name.as_ptr() as *const c_char, set_blend_enabled_fn) < 0 {
+        return -1;
+    }
+    let set_blend_func_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_set_blend_func),
+        set_blend_func_name.as_ptr() as *const c_char,
+        4,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, set_blend_func_name.as_ptr() as *const c_char, set_blend_func_fn) < 0 {
+        return -1;
+    }
+    let set_blend_equation_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_set_blend_equation),
+        set_blend_equation_name.as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        set_blend_equation_name.as_ptr() as *const c_char,
+        set_blend_equation_fn,
+    ) < 0
+    {
+        return -1;
+    }
+    let draw_triangles_u8_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_cmd_stream_draw_triangles_u8),
+        draw_triangles_u8_name.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        draw_triangles_u8_name.as_ptr() as *const c_char,
+        draw_triangles_u8_fn,
+    ) < 0
+    {
+        return -1;
+    }
+    0
+}
+
 /// Attempt to load a TRUEOS-provided native module.
 ///
 /// Returns null if the module is not recognized.
@@ -1673,6 +2084,20 @@ pub unsafe fn load_native_module(
         (
             qjs_path_module_init,
             &[b"join\0", b"dirname\0", b"basename\0", b"extname\0", b"resolve\0"],
+        )
+    } else if name == b"cmd_stream" || name == b"trueos:cmd_stream" {
+        (
+            qjs_cmd_stream_module_init,
+            &[
+                b"beginFrame\0",
+                b"endFrame\0",
+                b"setClearRgb\0",
+                b"setViewport\0",
+                b"setBlendEnabled\0",
+                b"setBlendFunc\0",
+                b"setBlendEquation\0",
+                b"drawTrianglesU8\0",
+            ],
         )
     } else {
         return core::ptr::null_mut();
