@@ -76,10 +76,12 @@ pub(crate) fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     if let Some(blob) = crate::matrix::clone_blob(slot_id) {
         if !blob.is_empty() {
             if let Ok(s) = core::str::from_utf8(blob.as_slice()) {
-                write_crlf_lines(ctx.io, s);
+                let upgraded = crate::shell::ecma48::json_upgrade(s);
+                write_crlf_lines(ctx.io, upgraded.as_str());
             } else {
                 let lossy = alloc::string::String::from_utf8_lossy(blob.as_slice());
-                write_crlf_lines(ctx.io, lossy.as_ref());
+                let upgraded = crate::shell::ecma48::json_upgrade(lossy.as_ref());
+                write_crlf_lines(ctx.io, upgraded.as_str());
             }
             return CommandAction::None;
         }

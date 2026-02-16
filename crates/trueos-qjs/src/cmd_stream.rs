@@ -1,10 +1,44 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use spin::Mutex;
 
 extern "C" {
     fn trueos_cabi_gfx_draw_rgb_triangles(clear_rgb: u32, vtx_ptr: *const u8, vtx_len: usize) -> i32;
+    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+}
+
+static LAST_SUBMIT_RC: AtomicI32 = AtomicI32::new(i32::MIN);
+static SUBMIT_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn log_bytes(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+}
+
+#[inline]
+fn log_i32_dec(v: i32) {
+    if v == 0 {
+        log_bytes(b"0");
+        return;
+    }
+    let mut n = v as i64;
+    if n < 0 {
+        log_bytes(b"-");
+        n = -n;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    log_bytes(&buf[i..]);
 }
 
 pub(crate) enum CmdStreamCommand {
@@ -91,13 +125,22 @@ static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
 });
 
 fn submit_rgb_triangles(clear_rgb: u32, vertices: Option<&[u8]>) {
-    match vertices {
+    let rc = match vertices {
         Some(vtx) => unsafe {
-            let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, vtx.as_ptr(), vtx.len());
+            trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, vtx.as_ptr(), vtx.len())
         },
         None => unsafe {
-            let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, core::ptr::null(), 0);
+            trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, core::ptr::null(), 0)
         },
+    };
+    if rc != 0 {
+        let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
+        let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if prev != rc || (n % 120) == 1 {
+            log_bytes(b"qjs-cmd-stream: submit rc=");
+            log_i32_dec(rc);
+            log_bytes(b"\n");
+        }
     }
 }
 
