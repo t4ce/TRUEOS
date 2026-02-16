@@ -51,7 +51,7 @@ void main(){
 
   const stage = new PIXI.Container();
   stage.addChild(mesh);
-  return { stage, mesh };
+  return { stage, mesh, geometry };
 }
 
 const log = globalThis.print;
@@ -91,12 +91,29 @@ try {
     renderer && renderer.type !== undefined ? String(renderer.type) : 'unknown',
   );
 
-  const { stage, mesh } = createTriangleScene();
+  const { stage, geometry } = createTriangleScene();
+  const posBuffer = geometry.getBuffer('aVertexPosition');
+  const posData = posBuffer.data;
+  const base = new Float32Array(posData);
+  const cx = 160;
+  const cy = 100;
+  let angle = 0;
 
-  // Drive a short in-VM animation burst; our shim doesn't provide browser RAF/timers yet.
-  for (let i = 0; i < 120; i++) {
-    mesh.rotation += 0.04;
+  // Endless in-VM animation loop.
+  const spinDelayIters = 180000;
+  while (true) {
+    angle += 0.02;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    for (let i = 0; i < 3; i++) {
+      const x0 = base[i * 2] - cx;
+      const y0 = base[i * 2 + 1] - cy;
+      posData[i * 2] = cx + (x0 * c - y0 * s);
+      posData[i * 2 + 1] = cy + (x0 * s + y0 * c);
+    }
+    posBuffer.update();
     renderer.render(stage);
+    for (let k = 0; k < spinDelayIters; k++) {}
   }
 
   log('pixi-tri: ok');

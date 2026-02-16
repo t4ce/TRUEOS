@@ -55,6 +55,7 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static BOOT_GFX_VIRTIO_SW_PREPARE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -245,6 +246,14 @@ fn spawn_boot_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_boot_gfx_virtio_sw_prepare(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::tst::boot_gfx_virtio_sw_prepare_task(),
+    ) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn spawn_boot_pixi_rect_smoke(spawner: Spawner) -> SpawnAttempt {
     if let Some(ap1_spawner) = crate::runtime::first_ap_spawner() {
         crate::log!("spawn-svc: boot-pixi-rect-smoke -> AP1\n");
@@ -301,7 +310,9 @@ const PARSE5_BOOT_READY: u32 =
     | crate::v::readiness::QJS_ASYNC_FS_READY;
 
 const PIXI_BOOT_READY: u32 = PARSE5_BOOT_READY;
-const PIXI_RECT_BOOT_READY: u32 = PARSE5_BOOT_READY;
+const PIXI_GFX_PREPARE_READY: u32 = PARSE5_BOOT_READY;
+const PIXI_RECT_BOOT_READY: u32 =
+    PARSE5_BOOT_READY | crate::v::readiness::GFX_VIRTIO_SW_READY;
 
 const WS_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
@@ -443,6 +454,12 @@ static TASKS: &[TaskSpec] = &[
         required: PIXI_BOOT_READY,
         started: &BOOT_PIXI_SMOKE_STARTED,
         spawn: spawn_boot_pixi_smoke,
+    },
+    TaskSpec {
+        name: "boot-gfx-virtio-sw-prepare",
+        required: PIXI_GFX_PREPARE_READY,
+        started: &BOOT_GFX_VIRTIO_SW_PREPARE_STARTED,
+        spawn: spawn_boot_gfx_virtio_sw_prepare,
     },
     TaskSpec {
         name: "boot-pixi-rect-smoke",
