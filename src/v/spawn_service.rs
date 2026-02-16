@@ -57,7 +57,6 @@ static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_PIXI_RECT_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-static NALGEBRA_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -272,14 +271,6 @@ fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_nalgebra_demo(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::nalgebra_demo::boot_nalgebra_demo_task(),
-    ) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND),
     ) {
@@ -464,12 +455,6 @@ static TASKS: &[TaskSpec] = &[
         required: WS_BOOT_READY,
         started: &BOOT_WS_SMOKE_STARTED,
         spawn: spawn_boot_ws_smoke,
-    },
-    TaskSpec {
-        name: "boot-nalgebra-demo",
-        required: 0,
-        started: &NALGEBRA_DEMO_STARTED,
-        spawn: spawn_nalgebra_demo,
     },
     TaskSpec {
         name: "uart-shell",

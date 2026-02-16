@@ -65,6 +65,18 @@ try {
   const gl = canvas.getContext('webgl');
   log('pixi-tri: gl ctx', gl ? 'ok' : 'null');
   if (!gl) throw new Error('no webgl context');
+  log(
+    'pixi-tri: gl attrs',
+    (gl.getContextAttributes && gl.getContextAttributes)
+      ? JSON.stringify(gl.getContextAttributes())
+      : 'missing',
+  );
+  log(
+    'pixi-tri: gl ext oes_uint32',
+    (gl.getExtension && gl.getExtension)
+      ? String(!!gl.getExtension('OES_element_index_uint'))
+      : 'missing',
+  );
 
   const renderer = new PIXI.Renderer({
     view: canvas,

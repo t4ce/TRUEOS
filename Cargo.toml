@@ -48,7 +48,6 @@ rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, feature
 webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
-nalgebra = { version = "0.34.1", default-features = false, features = ["alloc", "libm"] }
 embedded-websocket = { version = "0.9.3", default-features = false }
 
 [profile.dev]

@@ -939,12 +939,177 @@ unsafe fn ensure_global_window_document_webgl(ctx: *mut qjs::JSContext) -> Resul
     // Install a singleton `__trueos_gl` object and a `document.createElement('canvas')` that
     // returns a canvas object whose getContext() returns the singleton.
     ensure_global_intl(ctx, global);
+    ensure_global_console(ctx, global);
+    qjs::browser::ensure_global_event_target_stubs(ctx, global);
     let gl_obj = ensure_global_trueos_webgl_singleton(ctx, global);
+    ensure_global_browser_rendering_ctors(ctx, global);
     let doc_obj = ensure_global_document(ctx, global, gl_obj);
     qjs::js_free_value(ctx, doc_obj);
     qjs::js_free_value(ctx, gl_obj);
     qjs::js_free_value(ctx, global);
     Ok(())
+}
+
+unsafe fn ensure_global_console(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
+    unsafe fn console_emit(
+        ctx: *mut qjs::JSContext,
+        level: &[u8],
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) {
+        log_str("qjs: ");
+        log_bytes(level);
+        log_str(": ");
+        if argv.is_null() || argc <= 0 {
+            log_str("\n");
+            return;
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        for (i, arg) in args.iter().enumerate() {
+            if i != 0 {
+                log_str(" ");
+            }
+            let mut len: usize = 0;
+            let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, *arg, 0);
+            if cstr.is_null() {
+                log_str("<toString-error>");
+                continue;
+            }
+            let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+            log_bytes(bytes);
+            qjs::JS_FreeCString(ctx, cstr);
+        }
+        log_str("\n");
+    }
+
+    unsafe extern "C" fn console_log(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        console_emit(ctx, b"log", argc, argv);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn console_info(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        console_emit(ctx, b"info", argc, argv);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn console_debug(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        console_emit(ctx, b"debug", argc, argv);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn console_warn(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        console_emit(ctx, b"warn", argc, argv);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn console_error(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        console_emit(ctx, b"error", argc, argv);
+        qjs::JSValue::undefined()
+    }
+
+    let existing = qjs::JS_GetPropertyStr(ctx, global, b"console\0".as_ptr() as *const c_char);
+    let console = if existing.is_exception() || existing.tag == qjs::JS_TAG_UNDEFINED || existing.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, existing);
+        qjs::JS_NewObject(ctx)
+    } else {
+        existing
+    };
+    if console.is_exception() {
+        qjs::js_free_value(ctx, console);
+        return;
+    }
+
+    macro_rules! set_console_fn {
+        ($name:literal, $func:expr, $argc:expr) => {{
+            let k = concat!($name, "\0");
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some($func),
+                k.as_ptr() as *const c_char,
+                $argc,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(ctx, console, k.as_ptr() as *const c_char, f);
+        }};
+    }
+
+    set_console_fn!("log", console_log, 1);
+    set_console_fn!("info", console_info, 1);
+    set_console_fn!("debug", console_debug, 1);
+    set_console_fn!("warn", console_warn, 1);
+    set_console_fn!("error", console_error, 1);
+
+    let _ = qjs::JS_SetPropertyStr(ctx, global, b"console\0".as_ptr() as *const c_char, console);
+    let global_log_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(console_log),
+        b"globalLog\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, global, b"globalLog\0".as_ptr() as *const c_char, global_log_fn);
+}
+
+unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
+    unsafe extern "C" fn ctor_noop(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        qjs::JS_NewObject(ctx)
+    }
+
+    let names: [&[u8]; 2] = [
+        b"WebGLRenderingContext\0",
+        b"CanvasRenderingContext2D\0",
+    ];
+    for name in names {
+        let existing = qjs::JS_GetPropertyStr(ctx, global, name.as_ptr() as *const c_char);
+        let needs_install = existing.is_exception()
+            || existing.tag == qjs::JS_TAG_UNDEFINED
+            || existing.tag == qjs::JS_TAG_NULL;
+        qjs::js_free_value(ctx, existing);
+        if !needs_install {
+            continue;
+        }
+        let ctor = qjs::JS_NewCFunction2(
+            ctx,
+            Some(ctor_noop),
+            name.as_ptr() as *const c_char,
+            0,
+            qjs::JS_CFUNC_CONSTRUCTOR,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, ctor);
+    }
 }
 
 unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
@@ -2153,6 +2318,72 @@ unsafe fn ensure_global_trueos_webgl_singleton(
         js_int32(0)
     }
 
+    unsafe extern "C" fn gl_get_extension(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return js_null();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let cstr = qjs::js_to_cstring(ctx, args[0]);
+        if cstr.is_null() {
+            return js_null();
+        }
+        let name = CStr::from_ptr(cstr).to_bytes();
+        let is_uint_ext = name.eq_ignore_ascii_case(b"OES_element_index_uint");
+        qjs::JS_FreeCString(ctx, cstr);
+        if is_uint_ext {
+            return qjs::JS_NewObject(ctx);
+        }
+        js_null()
+    }
+
+    unsafe extern "C" fn gl_get_context_attributes(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let obj = qjs::JS_NewObject(ctx);
+        if obj.is_exception() {
+            return obj;
+        }
+        let js_true = qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 1 },
+            tag: qjs::JS_TAG_BOOL,
+        };
+        let js_false = qjs::JSValue {
+            u: qjs::JSValueUnion { int32: 0 },
+            tag: qjs::JS_TAG_BOOL,
+        };
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"alpha\0".as_ptr() as *const c_char, js_true);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"antialias\0".as_ptr() as *const c_char, js_false);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"depth\0".as_ptr() as *const c_char, js_false);
+        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"stencil\0".as_ptr() as *const c_char, js_true);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            b"premultipliedAlpha\0".as_ptr() as *const c_char,
+            js_true,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            b"preserveDrawingBuffer\0".as_ptr() as *const c_char,
+            js_false,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            b"powerPreference\0".as_ptr() as *const c_char,
+            qjs::JS_NewStringLen(ctx, b"default\0".as_ptr() as *const c_char, 7),
+        );
+        obj
+    }
+
     // Build the gl object.
     let gl = qjs::JS_NewObject(ctx);
     if gl.is_exception() {
@@ -2195,6 +2426,9 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_const!("BLEND", 0x0BE2);
     gl_const!("SCISSOR_TEST", 0x0C11);
     gl_const!("CULL_FACE", 0x0B44);
+    gl_const!("DEPTH_TEST", 0x0B71);
+    gl_const!("LEQUAL", 0x0203);
+    gl_const!("LESS", 0x0201);
 
     gl_const!("COLOR_BUFFER_BIT", 0x4000);
 
@@ -2226,8 +2460,9 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     }
 
     gl_fn!("getError", gl_get_error, 0);
+    gl_fn!("getContextAttributes", gl_get_context_attributes, 0);
     gl_fn!("getParameter", gl_get_parameter, 1);
-    gl_fn!("getExtension", gl_return_null, 1);
+    gl_fn!("getExtension", gl_get_extension, 1);
     gl_fn!("getSupportedExtensions", gl_get_supported_extensions, 0);
     gl_fn!("getShaderPrecisionFormat", gl_get_shader_precision_format, 2);
     gl_fn!("isContextLost", gl_return_false, 0);
@@ -2266,6 +2501,10 @@ unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("scissor", gl_noop, 4);
     gl_fn!("enable", gl_noop, 1);
     gl_fn!("disable", gl_noop, 1);
+    gl_fn!("depthMask", gl_noop, 1);
+    gl_fn!("depthFunc", gl_noop, 1);
+    gl_fn!("depthRange", gl_noop, 2);
+    gl_fn!("clearDepth", gl_noop, 1);
     gl_fn!("blendFunc", gl_noop, 2);
     gl_fn!("blendFuncSeparate", gl_noop, 4);
     gl_fn!("clearColor", gl_clear_color, 4);
@@ -2404,7 +2643,7 @@ unsafe fn ensure_global_document(
                 gl
             }
 
-            let canvas = qjs::JS_NewObject(ctx);
+            let canvas = qjs::browser::make_dom_like_element(ctx);
             if canvas.is_exception() {
                 return canvas;
             }
@@ -2427,7 +2666,7 @@ unsafe fn ensure_global_document(
             return canvas;
         }
 
-        qjs::JS_NewObject(ctx)
+        qjs::browser::make_dom_like_element(ctx)
     }
 
     // Create document object
@@ -2437,12 +2676,16 @@ unsafe fn ensure_global_document(
     }
 
     // document.body placeholder
-    let body = qjs::JS_NewObject(ctx);
+    let body = qjs::browser::make_dom_like_element(ctx);
     if !body.is_exception() {
+        let _ = qjs::JS_SetPropertyStr(ctx, body, b"width\0".as_ptr() as *const c_char, js_int32(1280));
+        let _ = qjs::JS_SetPropertyStr(ctx, body, b"height\0".as_ptr() as *const c_char, js_int32(800));
         let _ = qjs::JS_SetPropertyStr(ctx, doc, b"body\0".as_ptr() as *const c_char, body);
     } else {
         qjs::js_free_value(ctx, body);
     }
+
+    qjs::browser::ensure_global_event_target_stubs(ctx, doc);
 
     // document.createElement
     let name = b"createElement\0";
