@@ -517,22 +517,18 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
         if i != 0 {
             visible_len += 1;
         }
-        match state {
-            SlotState::Running => {
-                // "§⣿"
-                visible_len += 2;
-            }
-            _ => {
-                // "§<id>"
-                visible_len += 1; // '§'
-                let mut n = *id as usize;
-                let mut digits = 1;
-                while n >= 10 {
-                    digits += 1;
-                    n /= 10;
-                }
-                visible_len += digits;
-            }
+        // Base width: "§<id>"
+        visible_len += 1; // '§'
+        let mut n = *id as usize;
+        let mut digits = 1;
+        while n >= 10 {
+            digits += 1;
+            n /= 10;
+        }
+        visible_len += digits;
+        if *state == SlotState::Running {
+            // Running suffix glyph: "§<id>⣿"
+            visible_len += 1;
         }
     }
 
@@ -568,9 +564,9 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
                 }
                 match *state {
                     SlotState::Running => {
-                        let mut s: String<4> = String::new();
-                        let _ = s.push('§');
-                        let _ = s.push(super::MATRIX_RUNNING_GLYPH);
+                        let mut s: String<8> = String::new();
+                        let glyph = running_spinner_glyph();
+                        let _ = write!(s, "§{}{}", id, glyph);
                         io.write_fmt(format_args!(
                             "{}",
                             crate::ecma48::color(s.as_str(), super::PROMPT_RGB)
@@ -590,6 +586,16 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
     }
 
     io.write_str(crate::ecma48::RESTORE_CURSOR);
+}
+
+#[inline]
+fn running_spinner_glyph() -> char {
+    let glyphs = &super::MATRIX_RUNNING_GLYPHS;
+    let ticks = embassy_time_driver::now() as usize;
+    let hz = embassy_time_driver::TICK_HZ as usize;
+    let step = (hz / 6).max(1); // ~6 fps spinner
+    let idx = (ticks / step) % glyphs.len();
+    glyphs[idx]
 }
 
 #[inline]

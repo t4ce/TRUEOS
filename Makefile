@@ -121,10 +121,13 @@ iso-debug: iso
 
 SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 30; nc 127.0.0.1 5555; stty sane'
 
-run: iso-debug
+snipe:
+	@killall -9 qemu-system-x86_64 || true
+
+run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-dbg: iso-debug
+dbg: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
 	@echo "Waiting for debugger..."
 	@$(QEMU_ISO) -S -s
@@ -133,5 +136,5 @@ dbg: iso-debug
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
 QEMU_DISK_DRIVE_FLAGS = -drive file=disk.img,if=virtio,format=raw
 
-run-installed: iso-debug
+run-installed: snipe iso-debug
 	@($(QEMU_BIN) -bios $(QEMU_UEFI_FIRMWARE) $(QEMU_DISK_COMMON_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS) $(QEMU_DISK_DRIVE_FLAGS) & $(SERIAL_CONSOLE_CMD))
