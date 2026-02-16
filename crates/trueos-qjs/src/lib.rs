@@ -18,6 +18,15 @@ pub mod trueos_modules;
 pub mod webgl;
 
 #[cfg(feature = "trueos")]
+pub mod webgl_core;
+
+#[cfg(feature = "trueos")]
+pub mod webgl_hotpath;
+
+#[cfg(feature = "trueos")]
+pub mod cmd_stream;
+
+#[cfg(feature = "trueos")]
 pub mod webgl_texture;
 
 #[cfg(feature = "trueos")]
@@ -246,6 +255,7 @@ extern "C" {
     pub fn JS_NewObject(ctx: *mut JSContext) -> JSValue;
     pub fn JS_NewArray(ctx: *mut JSContext) -> JSValue;
     pub fn JS_GetPropertyStr(ctx: *mut JSContext, this_obj: JSValueConst, prop: *const c_char) -> JSValue;
+    pub fn JS_GetPropertyUint32(ctx: *mut JSContext, this_obj: JSValueConst, idx: u32) -> JSValue;
 
     pub fn JS_ToFloat64(ctx: *mut JSContext, pres: *mut f64, val: JSValueConst) -> c_int;
     pub fn JS_SetPropertyStr(
