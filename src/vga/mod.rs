@@ -61,14 +61,15 @@ struct VgaLogWriter {
     fg: u32,
     bg: u32,
     shadow: u32,
-    ended_with_newline: bool,
 }
 
 impl fmt::Write for VgaLogWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.ended_with_newline = s.ends_with('\n');
-        let _ = log(s, self.fg, self.bg, self.shadow);
-        Ok(())
+        if log(s, self.fg, self.bg, self.shadow) {
+            Ok(())
+        } else {
+            Err(fmt::Error)
+        }
     }
 }
 
@@ -165,10 +166,8 @@ pub fn log_fmt(args: fmt::Arguments<'_>) -> bool {
         fg,
         bg,
         shadow,
-        ended_with_newline: false,
     };
-    let _ = fmt::write(&mut w, args);
-    true
+    fmt::write(&mut w, args).is_ok()
 }
 
 pub fn framebuffer_dimensions() -> Option<(u32, u32)> {
@@ -187,6 +186,9 @@ pub fn draw_header_square(
     degree: u32,
 ) -> bool {
     let square_side_length: usize = 25;
+    if total_slots == 0 {
+        return false;
+    }
     with_framebuffer(|fb| {
         let slot = slot % total_slots;
         let total_width = square_side_length.saturating_mul(total_slots);
@@ -298,13 +300,16 @@ impl FramebufferSurface {
         let cache = font_cache_large();
         let mut cursor_x = origin_x;
         for ch in text.chars() {
-            self.blit_glyph_large(ch, cursor_x, origin_y, fg, bg, shadow);
-            let width = cache
+            let glyph = cache
                 .lookup(ch)
                 .or_else(|| cache.lookup('?'))
-                .or_else(|| cache.lookup(' '))
-                .map(|g| g.width as usize)
-                .unwrap_or(1);
+                .or_else(|| cache.lookup(' '));
+            let Some(glyph) = glyph else {
+                continue;
+            };
+
+            self.blit_glyph_large_cell(glyph, cursor_x, origin_y, fg, bg, shadow);
+            let width = glyph.width as usize;
             cursor_x = cursor_x.saturating_add(width.saturating_add(CHAR_SPACING));
             if cursor_x >= self.width.saturating_sub(BANNER_CELL_W + CHAR_SPACING) {
                 break;
@@ -358,27 +363,15 @@ impl FramebufferSurface {
         }
     }
 
-    fn blit_glyph_large(
+    fn blit_glyph_large_cell(
         &self,
-        ch: char,
+        glyph: &GlyphCellLarge,
         origin_x: usize,
         origin_y: usize,
         fg: u32,
         bg: u32,
         shadow: u32,
     ) {
-        if !FONT_READY_LARGE.load(Ordering::Acquire) {
-            return;
-        }
-        let cache = font_cache_large();
-        let glyph = cache
-            .lookup(ch)
-            .or_else(|| cache.lookup('?'))
-            .or_else(|| cache.lookup(' '));
-        let Some(glyph) = glyph else {
-            return;
-        };
-
         for row in 0..BANNER_CELL_H {
             let pixel_y = origin_y + row;
             if pixel_y >= self.height {
@@ -659,11 +652,13 @@ pub fn get_banner_glyph(ch: char) -> Option<(&'static [u8], usize)> {
 pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
     let text = BANNER_TEXT;
     let height = BANNER_CELL_H;
+    let mut glyph_runs: Vec<(&'static [u8], usize, u32)> = Vec::with_capacity(text.len());
     let mut total_width = 0;
-    
-    // First pass: Calculate total width
+
     for ch in text.chars() {
-        if let Some((_, w)) = get_banner_glyph(ch) {
+        if let Some((alpha, w)) = get_banner_glyph(ch) {
+            let rgb = if ch == '§' { 0x00_FF_37_FF } else { 0x00_FF_FF_FF };
+            glyph_runs.push((alpha, w, rgb));
             total_width += w + 1;
         }
     }
@@ -673,36 +668,23 @@ pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
 
     let mut buffer = alloc::vec![0_u32; total_width * height];
     let mut current_x = 0;
-    
-    for ch in text.chars() {
-        // Decide color based on char
-        let (r, g, b) = if ch == '§' {
-            (255, 55, 255)
-        } else {
-            (255, 255, 255)
-        };
 
-        if let Some((alpha, w)) = get_banner_glyph(ch) {
-             for y in 0..height {
-                for x in 0..BANNER_CELL_W {
-                    let val = alpha[y * BANNER_CELL_W + x];
-                    if val > 0 {
-                        let dest_x = current_x + x;
-                        let dest_y = y;
-                        if dest_x < total_width && dest_y < height {
-                             let color_u32 = ((val as u32) << 24) 
-                                | ((r as u32) << 16) 
-                                | ((g as u32) << 8) 
-                                | (b as u32);
-                             buffer[dest_y * total_width + dest_x] = color_u32;
-                        }
+    for (alpha, w, rgb) in glyph_runs {
+        for y in 0..height {
+            for x in 0..w {
+                let val = alpha[y * BANNER_CELL_W + x];
+                if val > 0 {
+                    let dest_x = current_x + x;
+                    if dest_x < total_width {
+                        let color_u32 = ((val as u32) << 24) | rgb;
+                        buffer[y * total_width + dest_x] = color_u32;
                     }
                 }
             }
-            current_x += w + 1;
         }
+        current_x += w + 1;
     }
-    
+
     (buffer, total_width, height)
 }
 

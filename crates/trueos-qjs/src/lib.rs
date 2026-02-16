@@ -18,6 +18,9 @@ pub mod trueos_modules;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
+pub mod browser;
+
+#[cfg(feature = "trueos")]
 pub mod node;
 
 #[cfg(feature = "trueos")]
