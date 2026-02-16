@@ -50,6 +50,7 @@ struct RainDrop {
     ticks_since_update: usize,
     pulse: u8,
     pulse_up: bool,
+    revealed_count: u8,
 }
 
 struct SimpleRng {
@@ -112,39 +113,43 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
         if drops.len() < 175 {
             let spawn_count = rng.gen_range(1, 2);
             for _ in 0..spawn_count {
-                let start_col_range = 6;
-                let end_col_range = cols.saturating_sub(5);
-                
-                if end_col_range > start_col_range {
-                    let col = rng.gen_range(start_col_range, end_col_range + 1);
+                // Simple bell curve (triangular distribution)
+                // Summing two random numbers creates a distribution peaked at the center
+                let half_width = cols / 2;
+                if half_width > 0 {
+                    let r1 = rng.gen_range(0, half_width);
+                    let r2 = rng.gen_range(0, half_width + (cols % 2)); // Handle odd widths
+                    let col = 1 + r1 + r2; // 1-based index
                     
-                    let mut seq = if rng.gen_bool() {
-                        let n = rng.gen_range(1, 8) as u8;
-                        braille_sliding_run(n)
-                    } else {
-                        let seed = rng.gen_u8();
-                        braille_increasing_density_seeded(seed)
-                    };
-                    
-                    let mut rev = seq.clone();
-                    rev.reverse();
-                    seq.extend(rev);
+                    if col > 0 && col <= cols {
+                        let mut seq = if rng.gen_bool() {
+                            let n = rng.gen_range(1, 8) as u8;
+                            braille_sliding_run(n)
+                        } else {
+                            let seed = rng.gen_u8();
+                            braille_increasing_density_seeded(seed)
+                        };
+                        
+                        let mut rev = seq.clone();
+                        rev.reverse();
+                        seq.extend(rev);
 
-                    let trail_len = rng.gen_range(3, 5);
+                        let trail_len = rng.gen_range(3, 5);
+                        let start_row = rng.gen_range(11, 14); // Restricted top spawn as requested
 
-                    let start_row = rng.gen_range(1, 4);
-
-                    drops.push(RainDrop {
-                        col,
-                        row: start_row,
-                        sequence: seq,
-                        seq_idx: 0,
-                        forward: true,
-                        trail_len,
-                        ticks_since_update: 0,
-                        pulse: 0,
-                        pulse_up: true,
-                    });
+                        drops.push(RainDrop {
+                            col,
+                            row: start_row,
+                            sequence: seq,
+                            seq_idx: 0,
+                            forward: true,
+                            trail_len,
+                            ticks_since_update: 0,
+                            pulse: 0,
+                            pulse_up: true,
+                            revealed_count: 0,
+                        });
+                    }
                 }
             }
         }
@@ -224,7 +229,8 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                                 }
                             }
                         }
-                        if !drawn_bg {
+                        let min_row = 11;
+                        if !drawn_bg && clear_row >= min_row {
                             io.write_fmt(format_args!("{} ", crate::ecma48::pos(clear_row, drop.col)));
                         }
                     }
@@ -246,7 +252,7 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                         if intensity > 0 && !revealed[idx] {
                             // HIT!
                             revealed[idx] = true;
-                            hit_detected = true;
+                            drop.revealed_count += 1;
                             
                             // Draw revealed pixel
                             let r = ((val >> 16) & 0xFF) as u8;
@@ -262,36 +268,39 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                                 r, g, b
                             ));
                             
-                            // Clear trail immediately
-                            for k in 1..=drop.trail_len {
-                                let trail_r = drop.row.saturating_sub(k);
-                                if trail_r > 0 && trail_r <= rows {
-                                    let mut is_revealed_pixel = false;
-                                    if trail_r > offset_y && trail_r <= offset_y + logo_h && drop.col > offset_x && drop.col <= offset_x + logo_w {
-                                        let t_ly = trail_r - 1 - offset_y;
-                                        let t_lx = drop.col - 1 - offset_x;
-                                        let t_idx = t_ly * logo_w + t_lx;
-                                        if revealed[t_idx] {
-                                            is_revealed_pixel = true;
-                                            let t_val = logo[t_idx];
-                                            let t_int = ((t_val >> 24) & 0xFF) as u8;
-                                            if t_int > 0 {
-                                                let tr = ((t_val >> 16) & 0xFF) as u8;
-                                                let tg = ((t_val >> 8) & 0xFF) as u8;
-                                                let tb = (t_val & 0xFF) as u8;
-                                                let tr = ((tr as u16 * t_int as u16) / 255) as u8;
-                                                let tg = ((tg as u16 * t_int as u16) / 255) as u8;
-                                                let tb = ((tb as u16 * t_int as u16) / 255) as u8;
-                                                io.write_fmt(format_args!(
-                                                    "{}\x1b[38;2;{};{};{}m█", 
-                                                    crate::ecma48::pos(trail_r, drop.col),
-                                                    tr, tg, tb
-                                                ));
+                            if drop.revealed_count >= 2 {
+                                hit_detected = true;
+                                // Clear trail immediately
+                                for k in 1..=drop.trail_len {
+                                    let trail_r = drop.row.saturating_sub(k);
+                                    if trail_r > 0 && trail_r <= rows {
+                                        let mut is_revealed_pixel = false;
+                                        if trail_r > offset_y && trail_r <= offset_y + logo_h && drop.col > offset_x && drop.col <= offset_x + logo_w {
+                                            let t_ly = trail_r - 1 - offset_y;
+                                            let t_lx = drop.col - 1 - offset_x;
+                                            let t_idx = t_ly * logo_w + t_lx;
+                                            if revealed[t_idx] {
+                                                is_revealed_pixel = true;
+                                                let t_val = logo[t_idx];
+                                                let t_int = ((t_val >> 24) & 0xFF) as u8;
+                                                if t_int > 0 {
+                                                    let tr = ((t_val >> 16) & 0xFF) as u8;
+                                                    let tg = ((t_val >> 8) & 0xFF) as u8;
+                                                    let tb = (t_val & 0xFF) as u8;
+                                                    let tr = ((tr as u16 * t_int as u16) / 255) as u8;
+                                                    let tg = ((tg as u16 * t_int as u16) / 255) as u8;
+                                                    let tb = ((tb as u16 * t_int as u16) / 255) as u8;
+                                                    io.write_fmt(format_args!(
+                                                        "{}\x1b[38;2;{};{};{}m█", 
+                                                        crate::ecma48::pos(trail_r, drop.col),
+                                                        tr, tg, tb
+                                                    ));
+                                                }
                                             }
                                         }
-                                    }
-                                    if !is_revealed_pixel {
-                                        io.write_fmt(format_args!("{} ", crate::ecma48::pos(trail_r, drop.col)));
+                                        if !is_revealed_pixel {
+                                            io.write_fmt(format_args!("{} ", crate::ecma48::pos(trail_r, drop.col)));
+                                        }
                                     }
                                 }
                             }
@@ -300,7 +309,8 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 }
                 
                 // Determine if we remove or update sequence
-                if hit_detected || drop.row > rows + drop.trail_len {
+                let max_row = rows.saturating_sub(10);
+                if hit_detected || drop.row > max_row + drop.trail_len {
                     remove_drop = true;
                 } else {
                      drop.seq_idx = (drop.seq_idx + 1) % drop.sequence.len();
