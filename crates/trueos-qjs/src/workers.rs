@@ -379,6 +379,7 @@ async fn worker_task(worker_id: u32) {
         };
         if v.is_exception() {
             log_str("qjs-worker: startup eval exception\n");
+            unsafe { qjs::qjs_diag::dump_last_exception(ctx, "worker-startup-eval") };
         }
         unsafe { qjs::js_free_value(ctx, v) };
     }
@@ -400,6 +401,11 @@ async fn worker_task(worker_id: u32) {
             if rc > 0 {
                 progress = true;
                 continue;
+            }
+            if rc < 0 {
+                let ectx = if !job_ctx.is_null() { job_ctx } else { ctx };
+                log_str("qjs-worker: pending-job exception\n");
+                unsafe { qjs::qjs_diag::dump_last_exception(ectx, "worker-pending-job") };
             }
             break;
         }
@@ -472,10 +478,18 @@ unsafe fn worker_id_from_this(ctx: *mut qjs::JSContext, this_val: qjs::JSValueCo
     }
 }
 
+#[inline]
+unsafe fn event_name_is_message(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> bool {
+    let Some(name) = (unsafe { arg_to_bytes(ctx, v) }) else {
+        return false;
+    };
+    name.as_slice() == b"message"
+}
+
 /// Worker constructor: `new Worker(<code_string>)` (MVP: eval string only).
 pub unsafe extern "C" fn js_worker_ctor(
     ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
+    this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
@@ -496,7 +510,13 @@ pub unsafe extern "C" fn js_worker_ctor(
         Err(_) => return qjs::JSValue::exception(),
     };
 
-    let obj = qjs::JS_NewObject(ctx);
+    // Constructor mode (`new Worker(...)`) passes a pre-created `this` with Worker.prototype.
+    // Keep that object so class inheritance/prototype checks work for browser-style code.
+    let obj = if this_val.tag == qjs::JS_TAG_OBJECT {
+        qjs::js_dup_value(ctx, this_val)
+    } else {
+        qjs::JS_NewObject(ctx)
+    };
     if obj.is_exception() {
         return obj;
     }
@@ -544,8 +564,41 @@ pub unsafe extern "C" fn js_worker_ctor(
         0,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"onMessage\0".as_ptr() as *const c_char, onm);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"onmessage\0".as_ptr() as *const c_char, qjs::JSValue::undefined());
 
     obj
+}
+
+pub unsafe extern "C" fn js_worker_add_event_listener(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if ctx.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let Some(worker_id) = (unsafe { worker_id_from_this(ctx, this_val) }) else {
+        return qjs::JSValue::undefined();
+    };
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = unsafe { core::slice::from_raw_parts(argv, argc as usize) };
+    if unsafe { event_name_is_message(ctx, args[0]) } {
+        unsafe { set_on_message(ctx, worker_id, args[1]) };
+    }
+    qjs::JSValue::undefined()
+}
+
+pub unsafe extern "C" fn js_worker_remove_event_listener(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // No-op MVP. We keep this for browser API shape compatibility.
+    qjs::JSValue::undefined()
 }
 
 pub unsafe extern "C" fn js_worker_post_message(

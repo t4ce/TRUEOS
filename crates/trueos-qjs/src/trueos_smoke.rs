@@ -128,46 +128,7 @@ fn log_nl() {
 }
 
 unsafe fn dump_exception(ctx: *mut qjs::JSContext) {
-    let exc = qjs::JS_GetException(ctx);
-    let cstr = qjs::js_to_cstring(ctx, exc);
-    log_str("quickjs: exception: ");
-    if !cstr.is_null() {
-        let bytes = CStr::from_ptr(cstr).to_bytes();
-        // Best-effort: assume utf8 for logs; fallback to raw bytes.
-        if let Ok(s) = core::str::from_utf8(bytes) {
-            log_str(s);
-        } else {
-            log_bytes(bytes);
-        }
-        qjs::JS_FreeCString(ctx, cstr);
-    } else {
-        log_str("<toString failed>");
-    }
-    log_nl();
-
-    // Best-effort: print `exc.stack` if present.
-    // Many JS libraries throw rich Error objects; the stack often contains the missing global.
-    {
-        let stack_key = b"stack\0";
-        let stack_val = qjs::JS_GetPropertyStr(ctx, exc, stack_key.as_ptr() as *const c_char);
-        if !stack_val.is_exception() {
-            let stack_cstr = qjs::js_to_cstring(ctx, stack_val);
-            if !stack_cstr.is_null() {
-                let bytes = CStr::from_ptr(stack_cstr).to_bytes();
-                log_str("quickjs: exception.stack: ");
-                if let Ok(s) = core::str::from_utf8(bytes) {
-                    log_str(s);
-                } else {
-                    log_bytes(bytes);
-                }
-                log_nl();
-                qjs::JS_FreeCString(ctx, stack_cstr);
-            }
-        }
-        qjs::js_free_value(ctx, stack_val);
-    }
-
-    qjs::js_free_value(ctx, exc);
+    qjs::qjs_diag::dump_last_exception(ctx, "exception");
 }
 
 unsafe fn install_print(ctx: *mut qjs::JSContext) {
@@ -315,58 +276,6 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
     qjs::js_free_value(ctx, ret);
 
     log_str("quickjs: runtime/context ok\n");
-    drop(vm);
-}
-
-/// TRUEOS kernel QuickJS module-loader smoke test:
-/// - Installs the TRUEOS module loader.
-/// - Evaluates an ES module that imports a bare specifier from esm.sh.
-///
-/// This exercises:
-/// - `trueos_module_normalize` (bare specifier -> https://esm.sh/...)
-/// - URL module caching to `/qjs/cdn/<hash>.mjs` via async net-fetch C-ABI
-/// - Recursive URL import handling (origin-relative specifiers like "/pkg@ver/..." from esm.sh)
-pub unsafe fn run_module_loader_smoke() {
-    let Some(vm) = qjs::vm::QjsVm::new_node() else {
-        log_str("quickjs: JS_NewRuntime failed\n");
-        return;
-    };
-    let rt = vm.rt_ptr();
-    let ctx = vm.ctx_ptr();
-
-    install_print(ctx);
-    qjs::node::install_globals(ctx);
-
-    let mod_filename = b"<smoke-module-loader>\0";
-    let mod_script = b"import proc from 'node:process';\n\
-if (typeof proc !== 'object' || proc === null) throw new Error('node:process missing');\n\
-import * as path from 'path';\n\
-if (typeof path.join !== 'function') throw new Error('path.join missing');\n\
-const joined = path.join('a', 'b');\n\
-if (joined !== 'a/b' && joined !== 'a\\b') throw new Error('path.join unexpected: ' + joined);\n\
-import leftPad from 'left-pad@1.3.0';\n\
-const out = leftPad('a', 3, '.');\n\
-if (out !== '..a') throw new Error('left-pad unexpected: ' + out);\n\
-globalThis.print('module-loader ok', out);\n\
-0\n\0";
-
-    let mod_ret = qjs::JS_Eval(
-        ctx,
-        mod_script.as_ptr() as *const c_char,
-        mod_script.len() - 1,
-        mod_filename.as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_MODULE,
-    );
-
-    if mod_ret.is_exception() {
-        log_str("quickjs: module-loader JS_Eval exception\n");
-        dump_exception(ctx);
-    } else {
-        qjs::js_free_value(ctx, mod_ret);
-        log_str("quickjs: module-loader eval ok\n");
-        let _ = drain_jobs_and_promises(rt, ctx, 30_000);
-    }
-
     drop(vm);
 }
 

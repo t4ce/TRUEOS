@@ -15,6 +15,9 @@ pub mod async_fs;
 pub mod trueos_modules;
 
 #[cfg(feature = "trueos")]
+pub mod trueos_module_loader;
+
+#[cfg(feature = "trueos")]
 pub mod node;
 
 #[cfg(feature = "trueos")]
@@ -25,6 +28,9 @@ pub mod vm;
 
 #[cfg(feature = "trueos")]
 pub mod workers;
+
+#[cfg(feature = "trueos")]
+pub mod qjs_diag;
 
 #[repr(C)]
 pub struct JSRuntime {
@@ -174,6 +180,14 @@ pub type JSModuleLoaderFunc = unsafe extern "C" fn(
     opaque: *mut c_void,
 ) -> *mut JSModuleDef;
 
+pub type JSHostPromiseRejectionTracker = unsafe extern "C" fn(
+    ctx: *mut JSContext,
+    promise: JSValueConst,
+    reason: JSValueConst,
+    is_handled: c_int,
+    opaque: *mut c_void,
+);
+
 extern "C" {
     pub fn JS_NewRuntime() -> *mut JSRuntime;
     pub fn JS_FreeRuntime(rt: *mut JSRuntime);
@@ -197,6 +211,11 @@ extern "C" {
         rt: *mut JSRuntime,
         module_normalize: Option<JSModuleNormalizeFunc>,
         module_loader: Option<JSModuleLoaderFunc>,
+        opaque: *mut c_void,
+    );
+    pub fn JS_SetHostPromiseRejectionTracker(
+        rt: *mut JSRuntime,
+        cb: Option<JSHostPromiseRejectionTracker>,
         opaque: *mut c_void,
     );
 

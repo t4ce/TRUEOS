@@ -11,11 +11,11 @@ unsafe extern "C" fn trueos_node_module_normalize(
     _opaque: *mut c_void,
 ) -> *mut c_char {
     // Delegate to the shared TRUEOS normalizer in Node mode.
-    qjs::trueos_modules::normalize_with_mode(
+    qjs::trueos_module_loader::normalize_with_mode(
         ctx,
         module_base_name,
         module_name,
-        qjs::trueos_modules::NormalizeMode::Node,
+        qjs::trueos_module_loader::NormalizeMode::Node,
     )
 }
 
@@ -35,7 +35,7 @@ pub unsafe fn install(rt: *mut qjs::JSRuntime) {
     qjs::JS_SetModuleLoaderFunc(
         rt,
         Some(trueos_node_module_normalize),
-        Some(qjs::trueos_modules::trueos_module_loader),
+        Some(qjs::trueos_module_loader::trueos_module_loader),
         core::ptr::null_mut(),
     );
 }
