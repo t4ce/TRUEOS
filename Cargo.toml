@@ -11,11 +11,12 @@ gfx_intel = []
 
 
 [dependencies]
+x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
+core2 = { version = "0.4", default-features = false, features = ["alloc"] }
+spin = "0.10"
 embassy-executor = { version = "0.9.1", default-features = false, features = ["executor-thread", "arch-spin"] }
 embassy-time = { version = "0.5.0", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.1", default-features = false }
-x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
-spin = "0.10"
 heapless = { version = "0.9", default-features = false }
 limine = { version = "0.5", default-features = false }
 acpi = { version = "6.1.0", default-features = false, features = ["alloc", "aml"] }
@@ -28,18 +29,11 @@ rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false }
 libm = { version = "0.2", default-features = false }
-trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
-trueos-fs = { path = "crates/trueos-fs" }
-trueos-v = { path = "crates/trueos-v" }
-trueos-tetris = { path = "crates/trueos-tetris" }
-trueos-weather = { path = "crates/trueos-weather" }
 hashbrown = { version = "0.16.1", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
 twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
-smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-core2 = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 trueos-gfx-core = { path = "crates/trueos-gfx-core", features = ["alloc"] }
@@ -49,6 +43,12 @@ webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
 embedded-websocket = { version = "0.9.3", default-features = false }
+smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
+trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
+trueos-fs = { path = "crates/trueos-fs" }
+trueos-v = { path = "crates/trueos-v" }
+trueos-tetris = { path = "crates/trueos-tetris" }
+trueos-weather = { path = "crates/trueos-weather" }
 
 [profile.dev]
 panic = "abort"

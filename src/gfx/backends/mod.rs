@@ -40,8 +40,14 @@ impl Backend {
     pub fn init_auto(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Self {
-        // Default is intentionally conservative: use the known-good Limine framebuffer backend.
-        // GPU backends (virtio-gpu/virgl, Xe, ...) are opt-in and switched explicitly.
+        #[cfg(feature = "gfx_virgl")]
+        {
+            if let Some(v) = Self::init_virgl(framebuffers) {
+                crate::log!("gfx: using virgl backend (auto)\n");
+                return v;
+            }
+            crate::log!("gfx: virgl auto init failed; fallback to limine framebuffer\n");
+        }
         Self::init_limine_fb(framebuffers)
     }
 

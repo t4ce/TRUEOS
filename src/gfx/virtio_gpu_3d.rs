@@ -1383,10 +1383,39 @@ struct HostBuffer {
     desc: BufferDesc,
     bytes: Vec<u8>,
     mapped: bool,
+    revision: u32,
 }
 
 struct HostPipeline {
     desc: PipelineDesc,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConvertedVertexCacheKey {
+    pipeline_id: u32,
+    buffer_id: u32,
+    buffer_rev: u32,
+    binding_offset: u64,
+    first_vertex: u32,
+    vertex_count: u32,
+    layout_stride: u16,
+    layout_pos_offset: u16,
+    layout_color_offset: u16,
+    layout_color_format: ColorFormat,
+}
+
+struct ConvertedVertexCache {
+    key: Option<ConvertedVertexCacheKey>,
+    bytes: Vec<u8>,
+    vertex_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SubmittedFrameKey {
+    viewport_w: u32,
+    viewport_h: u32,
+    clear_rgb: u32,
+    draw: Option<(ConvertedVertexCacheKey, u32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1458,6 +1487,11 @@ pub struct VirglGfxBackend {
     pipelines: Vec<Option<HostPipeline>>,
 
     state: VirglDrawState,
+    converted_cache: ConvertedVertexCache,
+    uploaded_cache_key: Option<ConvertedVertexCacheKey>,
+    uploaded_cache_vbo_generation: u32,
+    vbo_generation: u32,
+    last_submitted_frame: Option<SubmittedFrameKey>,
 
     next_fence: u64,
     completed_fence: u64,
@@ -1668,6 +1702,15 @@ impl VirglGfxBackend {
                 },
                 ..VirglDrawState::default()
             },
+            converted_cache: ConvertedVertexCache {
+                key: None,
+                bytes: Vec::new(),
+                vertex_count: 0,
+            },
+            uploaded_cache_key: None,
+            uploaded_cache_vbo_generation: 0,
+            vbo_generation: 1,
+            last_submitted_frame: None,
             next_fence: 1,
             completed_fence: 0,
         })
@@ -1775,6 +1818,13 @@ impl VirglGfxBackend {
 
         self.vbo_res = new_vbo_res;
         self.vbo_cap_bytes = new_cap;
+        self.vbo_generation = self.vbo_generation.wrapping_add(1);
+        if self.vbo_generation == 0 {
+            self.vbo_generation = 1;
+        }
+        self.uploaded_cache_key = None;
+        self.uploaded_cache_vbo_generation = 0;
+        self.last_submitted_frame = None;
         true
     }
 
@@ -1883,8 +1933,12 @@ impl GfxDevice for VirglGfxBackend {
                 desc,
                 bytes,
                 mapped: false,
+                revision: 1,
             },
         );
+        self.uploaded_cache_key = None;
+        self.uploaded_cache_vbo_generation = 0;
+        self.last_submitted_frame = None;
         Ok(BufferId::from_raw(slot as u32 + 1))
     }
 
@@ -1896,6 +1950,25 @@ impl GfxDevice for VirglGfxBackend {
         let idx = (raw - 1) as usize;
         if idx < self.buffers.len() {
             self.buffers[idx] = None;
+            if self
+                .converted_cache
+                .key
+                .map(|k| k.buffer_id == raw)
+                .unwrap_or(false)
+            {
+                self.converted_cache.key = None;
+                self.converted_cache.bytes.clear();
+                self.converted_cache.vertex_count = 0;
+            }
+            if self
+                .uploaded_cache_key
+                .map(|k| k.buffer_id == raw)
+                .unwrap_or(false)
+            {
+                self.uploaded_cache_key = None;
+                self.uploaded_cache_vbo_generation = 0;
+                self.last_submitted_frame = None;
+            }
         }
     }
 
@@ -1935,6 +2008,25 @@ impl GfxDevice for VirglGfxBackend {
         let idx = (raw - 1) as usize;
         if idx < self.pipelines.len() {
             self.pipelines[idx] = None;
+            if self
+                .converted_cache
+                .key
+                .map(|k| k.pipeline_id == raw)
+                .unwrap_or(false)
+            {
+                self.converted_cache.key = None;
+                self.converted_cache.bytes.clear();
+                self.converted_cache.vertex_count = 0;
+            }
+            if self
+                .uploaded_cache_key
+                .map(|k| k.pipeline_id == raw)
+                .unwrap_or(false)
+            {
+                self.uploaded_cache_key = None;
+                self.uploaded_cache_vbo_generation = 0;
+                self.last_submitted_frame = None;
+            }
         }
     }
 
@@ -1955,7 +2047,14 @@ impl GfxDevice for VirglGfxBackend {
         if end > buf.bytes.len() {
             return Err(Error::Invalid);
         }
-        buf.bytes[off..end].copy_from_slice(data);
+        let dst = &mut buf.bytes[off..end];
+        if dst != data {
+            dst.copy_from_slice(data);
+            buf.revision = buf.revision.wrapping_add(1);
+            if buf.revision == 0 {
+                buf.revision = 1;
+            }
+        }
         Ok(())
     }
 
@@ -1988,6 +2087,10 @@ impl GfxDevice for VirglGfxBackend {
             return Err(Error::NotFound);
         };
         buf.mapped = false;
+        buf.revision = buf.revision.wrapping_add(1);
+        if buf.revision == 0 {
+            buf.revision = 1;
+        }
         Ok(())
     }
 
@@ -2030,6 +2133,8 @@ impl GfxDevice for VirglGfxBackend {
         }
 
         let mut cmd = VirglCmdBuf::new();
+        let mut submitted_draw: Option<(ConvertedVertexCacheKey, u32)> = None;
+        let mut draw_upload_needed = false;
 
         // Ensure viewport matches our swapchain.
         let vp_w = self.state.viewport.width.max(0) as u32;
@@ -2056,22 +2161,66 @@ impl GfxDevice for VirglGfxBackend {
                 return Err(Error::NotFound);
             };
 
-            let verts = self
-                .build_virgl_vertices(&vb.bytes, pipe, self.state.vertex, (vertex_count, first_vertex))
-                .ok_or(Error::Invalid)?;
-
-            let vbytes: &[u8] = unsafe {
-                core::slice::from_raw_parts(
-                    verts.as_ptr() as *const u8,
-                    core::mem::size_of_val(verts.as_slice()),
-                )
+            let cache_key = ConvertedVertexCacheKey {
+                pipeline_id: pipeline_raw,
+                buffer_id: vraw,
+                buffer_rev: vb.revision,
+                binding_offset: self.state.vertex.offset,
+                first_vertex,
+                vertex_count,
+                layout_stride: pipe.desc.vertex_layout.stride,
+                layout_pos_offset: pipe.desc.vertex_layout.pos_offset,
+                layout_color_offset: pipe.desc.vertex_layout.color_offset,
+                layout_color_format: pipe.desc.vertex_layout.color_format,
             };
-            if !self.ensure_vbo_capacity(vbytes.len()) {
+
+            if self.converted_cache.key != Some(cache_key) {
+                let verts = self
+                    .build_virgl_vertices(&vb.bytes, pipe, self.state.vertex, (vertex_count, first_vertex))
+                    .ok_or(Error::Invalid)?;
+                let vbytes: &[u8] = unsafe {
+                    core::slice::from_raw_parts(
+                        verts.as_ptr() as *const u8,
+                        core::mem::size_of_val(verts.as_slice()),
+                    )
+                };
+                self.converted_cache.key = Some(cache_key);
+                self.converted_cache.bytes.clear();
+                self.converted_cache.bytes.extend_from_slice(vbytes);
+                self.converted_cache.vertex_count = verts.len() as u32;
+            }
+
+            if self.converted_cache.bytes.is_empty() || self.converted_cache.vertex_count == 0 {
+                return Err(Error::Invalid);
+            }
+
+            if !self.ensure_vbo_capacity(self.converted_cache.bytes.len()) {
                 return Err(Error::OutOfMemory);
             }
 
-            encode_inline_write_buffer(&mut cmd, self.vbo_res, vbytes);
-            encode_draw_vbo_count(&mut cmd, verts.len() as u32);
+            let need_upload = self.uploaded_cache_key != Some(cache_key)
+                || self.uploaded_cache_vbo_generation != self.vbo_generation;
+            if need_upload {
+                encode_inline_write_buffer(&mut cmd, self.vbo_res, self.converted_cache.bytes.as_slice());
+                self.uploaded_cache_key = Some(cache_key);
+                self.uploaded_cache_vbo_generation = self.vbo_generation;
+                draw_upload_needed = true;
+            }
+            submitted_draw = Some((cache_key, self.vbo_generation));
+            encode_draw_vbo_count(&mut cmd, self.converted_cache.vertex_count);
+        }
+
+        let frame_key = SubmittedFrameKey {
+            viewport_w: vp_w,
+            viewport_h: vp_h,
+            clear_rgb: self.state.clear_rgb,
+            draw: submitted_draw,
+        };
+        if !draw_upload_needed && self.last_submitted_frame == Some(frame_key) {
+            let fence = self.next_fence;
+            self.next_fence = self.next_fence.wrapping_add(1);
+            self.completed_fence = fence;
+            return Ok(FenceId::from_raw(fence));
         }
 
         // Present: copy to 2D scanout and flush.
@@ -2089,6 +2238,7 @@ impl GfxDevice for VirglGfxBackend {
 
         let _ = self.gpu.resource_flush(self.scanout_res, self.width, self.height);
 
+        self.last_submitted_frame = Some(frame_key);
         self.completed_fence = fence;
         Ok(FenceId::from_raw(fence))
     }
