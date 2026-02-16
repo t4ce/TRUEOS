@@ -462,8 +462,8 @@ pub unsafe fn run_pixi_rect_smoke() {
         }
     }
 
-    let mod_filename = b"<smoke-pixi-tri-bundle>\0";
-    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/bundle.mjs")
+    let mod_filename = b"<smoke-pixi-calc>\0";
+    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/scene/pixicalc.mjs")
         .as_bytes()
         .to_vec();
     // NUL-terminate for parser stability.
