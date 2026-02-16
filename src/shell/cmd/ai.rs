@@ -205,7 +205,7 @@ pub async fn run_ai_wizard(
 
 async fn process_input(
     out: &ReverseOutput<'_>,
-    io: &dyn ShellBackend,
+    io: &'static dyn ShellBackend,
     term_cols: usize,
     term_rows: usize,
     spawner: &Spawner,
@@ -365,7 +365,7 @@ async fn process_input(
                                     out.write_str(cmd);
                                     out.write_str("\n");
                                 }
-                                let out_item = run_shell_call(spawner, call).await;
+                                let out_item = run_shell_call(spawner, io, term_cols, term_rows, call).await;
 
                                 // Echo a clipped summary so the user can see that something happened.
                                 for entry in out_item.output.iter() {
@@ -559,7 +559,7 @@ fn build_openai_request_body(
     let input_json = alloc::format!("[{}]", join_json_array(&input_items));
 
     // Keep instructions short; they're repeated each turn.
-    let instructions = "You are running inside TRUEOS (not Linux). Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive. Prefer read-only inspection commands. Avoid destructive commands as you are close to ring0. Avoid GNU/Linux-specific commands and flags (e.g. man, head, which, redirections like 2>/dev/null, and complex pipelines) unless you have verified they exist in TRUEOS.";
+    let instructions = "You are running inside TRUEOS (not Linux). Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive, except `tetris` when the user explicitly asks to launch it. Prefer read-only inspection commands. Avoid destructive commands as you are close to ring0. Avoid GNU/Linux-specific commands and flags (e.g. man, head, which, redirections like 2>/dev/null, and complex pipelines) unless you have verified they exist in TRUEOS.";
     let mut esc_instructions = String::new();
     json_escape_into(&mut esc_instructions, instructions);
 
@@ -567,6 +567,8 @@ fn build_openai_request_body(
     body.push_str("{\"model\":\"gpt-5.2-pro-2025-12-11\",");
     if stream {
         body.push_str("\"stream\":true,");
+        // Reduce SSE payload overhead on trusted links.
+        body.push_str("\"stream_options\":{\"include_obfuscation\":false},");
     }
     body.push_str("\"truncation\":\"auto\",");
     if force_tools {
@@ -938,13 +940,31 @@ impl ShellBackend for CaptureBackend {
 
 static CAPTURE_BACKEND: CaptureBackend = CaptureBackend::new();
 
-async fn run_shell_call(spawner: &Spawner, call: ShellCall) -> ShellCallOutput {
+async fn run_shell_call(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend,
+    term_cols: usize,
+    term_rows: usize,
+    call: ShellCall,
+) -> ShellCallOutput {
     let mut outputs: Vec<ShellCallOutputEntry> = Vec::new();
 
     let timeout_ms = call.timeout_ms.max(1).min(300_000);
     let max_len = call.max_output_length.max(256).min(64 * 1024);
 
     for cmd in call.commands.iter() {
+        if is_live_tetris_command(cmd.as_str()) {
+            let (stdout, stderr, exit_code) =
+                run_live_tetris_command(spawner, io, term_cols, term_rows).await;
+            outputs.push(ShellCallOutputEntry {
+                stdout,
+                stderr,
+                outcome_type: "exit",
+                exit_code,
+            });
+            continue;
+        }
+
         let (stdout, stderr, exit_code, timed_out) =
             run_shell_command_line(spawner, cmd.as_str(), timeout_ms, max_len).await;
 
@@ -961,6 +981,44 @@ async fn run_shell_call(spawner: &Spawner, call: ShellCall) -> ShellCallOutput {
         max_output_length: max_len,
         output: outputs,
     }
+}
+
+fn is_live_tetris_command(line: &str) -> bool {
+    let verb = line.trim().split_whitespace().next().unwrap_or("");
+    matches_ignore_ascii(verb, "tetris")
+}
+
+async fn run_live_tetris_command(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend,
+    term_cols: usize,
+    term_rows: usize,
+) -> (String, String, Option<i32>) {
+    let mut mode: ShellMode = ShellMode::Idle;
+    let mut cube_mode: bool = false;
+    let mut cube = crate::shell::cube::CubeState::new();
+    let mut cols = term_cols.max(1);
+    let mut rows = term_rows.max(1);
+    let mut history: Vec<String> = Vec::new();
+
+    crate::shell::handle_command_action_for_tools(
+        CommandAction::EnterTetris,
+        &mut mode,
+        &mut cube_mode,
+        &mut cube,
+        io,
+        &mut cols,
+        &mut rows,
+        spawner,
+        &mut history,
+    )
+    .await;
+
+    (
+        String::from("launched interactive tetris; user exited"),
+        String::new(),
+        Some(0),
+    )
 }
 
 async fn run_shell_command_line(
@@ -1168,4 +1226,3 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
     }
     None
 }
-

@@ -105,6 +105,7 @@ struct FrameState {
     viewport_h: i32,
     blend: BlendState,
     batches: Vec<DrawBatch>,
+    merge_scratch: Vec<u8>,
 }
 
 static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
@@ -123,6 +124,7 @@ static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
         eq_alpha: 0x8006,
     },
     batches: Vec::new(),
+    merge_scratch: Vec::new(),
 });
 
 fn submit_rgb_triangles(clear_rgb: u32, vertices: Option<&[u8]>) {
@@ -149,22 +151,26 @@ fn flush_active_frame(st: &mut FrameState) {
     if !st.active {
         return;
     }
-    let draw_batches = st.batches.len() as u32;
-    let draw_bytes: usize = st.batches.iter().map(|b| b.vtx.len()).sum();
     if st.batches.is_empty() {
         submit_rgb_triangles(st.frame_clear_rgb, None);
     } else if st.batches.len() == 1 {
         submit_rgb_triangles(st.frame_clear_rgb, Some(st.batches[0].vtx.as_slice()));
     } else {
         let merged_len: usize = st.batches.iter().map(|b| b.vtx.len()).sum();
-        let mut merged = Vec::with_capacity(merged_len);
+        let merged = &mut st.merge_scratch;
+        if merged.capacity() < merged_len {
+            merged.reserve(merged_len - merged.capacity());
+        }
+        merged.clear();
         for batch in st.batches.iter() {
             merged.extend_from_slice(batch.vtx.as_slice());
         }
         submit_rgb_triangles(st.frame_clear_rgb, Some(merged.as_slice()));
     }
     let seq = FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-    if seq <= 20 || (seq % 120) == 1 {
+    if seq == 1 {
+        let draw_batches = st.batches.len() as u32;
+        let draw_bytes: usize = st.batches.iter().map(|b| b.vtx.len()).sum();
         log_bytes(b"qjs-cmd-stream: frame seq=");
         log_i32_dec(seq as i32);
         log_bytes(b" batches=");

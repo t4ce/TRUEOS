@@ -785,8 +785,8 @@ pub mod cabi {
 	// It intentionally targets the gfx abstraction (`trueos_gfx_core`) rather than a GPU driver.
 
 	use trueos_gfx_core::{
-		BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandList, GfxContext, MemoryType,
-		PipelineDesc, PipelineId, SwapchainDesc, VertexLayout, Viewport,
+		BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, Extent2D, GfxContext,
+		ImageFormat, MemoryType, PipelineDesc, PipelineId, SwapchainDesc, VertexLayout, Viewport,
 	};
 
 	struct GfxCabiState {
@@ -794,6 +794,9 @@ pub mod cabi {
 		vbuf: BufferId,
 		capacity: usize,
 		epoch: u64,
+		swapchain_configured: bool,
+		swapchain_desc: SwapchainDesc,
+		viewport_configured: bool,
 	}
 
 	impl GfxCabiState {
@@ -803,22 +806,31 @@ pub mod cabi {
 				vbuf: BufferId::invalid(),
 				capacity: 0,
 				epoch: 0,
+				swapchain_configured: false,
+					swapchain_desc: SwapchainDesc {
+						format: ImageFormat::Rgbx8888,
+						extent: Extent2D {
+							width: 0,
+							height: 0,
+						},
+					},
+					viewport_configured: false,
+				}
 			}
 		}
-	}
 
 	static GFX_CABI_STATE: spin::Mutex<GfxCabiState> = spin::Mutex::new(GfxCabiState::new());
 
-	fn ensure_gfx_resources(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId)> {
+	fn ensure_gfx_resources(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId, bool)> {
 		let epoch = crate::gfx::backend_epoch();
 		let swap = ctx.swapchain_desc();
 		if swap.extent.width == 0 || swap.extent.height == 0 {
 			return None;
 		}
-		let _ = ctx.configure_swapchain(SwapchainDesc {
+		let desired_swap = SwapchainDesc {
 			format: swap.format,
 			extent: swap.extent,
-		});
+		};
 
 		let mut st = GFX_CABI_STATE.lock();
 		if st.epoch != epoch {
@@ -826,7 +838,15 @@ pub mod cabi {
 			st.pipeline = PipelineId::invalid();
 			st.vbuf = BufferId::invalid();
 			st.capacity = 0;
+			st.swapchain_configured = false;
+			st.viewport_configured = false;
 			st.epoch = epoch;
+		}
+		if !st.swapchain_configured || st.swapchain_desc != desired_swap {
+			ctx.configure_swapchain(desired_swap).ok()?;
+			st.swapchain_desc = desired_swap;
+			st.swapchain_configured = true;
+			st.viewport_configured = false;
 		}
 
 		if !st.pipeline.is_valid() {
@@ -864,7 +884,9 @@ pub mod cabi {
 			st.capacity = cap;
 		}
 
-		Some((st.pipeline, st.vbuf))
+		let need_set_viewport = !st.viewport_configured;
+		st.viewport_configured = true;
+		Some((st.pipeline, st.vbuf, need_set_viewport))
 	}
 
 	/// Draw a list of RGB triangles and present.
@@ -902,10 +924,10 @@ pub mod cabi {
 		}
 
 		let Some(ret) = crate::gfx::with_context(|ctx| {
-			let (pipeline, vbuf) = match ensure_gfx_resources(ctx, usable) {
-				Some(v) => v,
-				None => return -3,
-			};
+				let (pipeline, vbuf, need_set_viewport) = match ensure_gfx_resources(ctx, usable) {
+					Some(v) => v,
+					None => return -3,
+				};
 
 			if ctx.write_buffer(vbuf, 0, vtx).is_err() {
 				return -4;
@@ -919,24 +941,48 @@ pub mod cabi {
 				height: swap.extent.height as i32,
 			};
 
-			let mut list = CommandList::new();
-			list.push(Command::SetViewport(vp));
-			list.push(Command::ClearColor { rgb: clear_rgb });
-			list.push(Command::BindPipeline(pipeline));
-			list.push(Command::BindVertexBuffer { buffer: vbuf, offset: 0 });
-			list.push(Command::Draw {
-				vertex_count: vcount,
-				first_vertex: 0,
-			});
-			list.push(Command::Present);
+				if need_set_viewport {
+					let cmds = [
+						Command::SetViewport(vp),
+						Command::ClearColor { rgb: clear_rgb },
+						Command::BindPipeline(pipeline),
+						Command::BindVertexBuffer {
+							buffer: vbuf,
+							offset: 0,
+						},
+						Command::Draw {
+							vertex_count: vcount,
+							first_vertex: 0,
+						},
+						Command::Present,
+					];
+					return match ctx.submit(CommandBuffer { commands: &cmds }) {
+						Ok(_) => 0,
+						Err(_) => -5,
+					};
+				}
 
-			match ctx.submit(list.as_buffer()) {
-				Ok(_) => 0,
-				Err(_) => -5,
-			}
-		}) else {
-			return -6;
-		};
+				let cmds = [
+					Command::ClearColor { rgb: clear_rgb },
+					Command::BindPipeline(pipeline),
+					Command::BindVertexBuffer {
+						buffer: vbuf,
+						offset: 0,
+					},
+					Command::Draw {
+						vertex_count: vcount,
+						first_vertex: 0,
+					},
+					Command::Present,
+				];
+
+				match ctx.submit(CommandBuffer { commands: &cmds }) {
+					Ok(_) => 0,
+					Err(_) => -5,
+				}
+			}) else {
+				return -6;
+			};
 		ret
 	}
 

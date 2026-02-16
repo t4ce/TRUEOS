@@ -57,6 +57,8 @@ unsafe impl Send for JsCallback {}
 
 static MAIN_ON_MESSAGE: Mutex<BTreeMap<(usize, u32), JsCallback>> = Mutex::new(BTreeMap::new());
 static WORKER_ON_MESSAGE: Mutex<BTreeMap<(usize, u32), JsCallback>> = Mutex::new(BTreeMap::new());
+// Main-context ownership of workers created from that context.
+static MAIN_CTX_WORKERS: Mutex<BTreeMap<usize, Vec<u32>>> = Mutex::new(BTreeMap::new());
 
 struct WorkerState {
     startup: Option<Vec<u8>>,
@@ -181,6 +183,17 @@ pub fn terminate(worker_id: u32) {
     let _ = worker_state_mut(worker_id, |st| {
         st.terminated.store(true, Ordering::Release);
     });
+}
+
+pub fn terminate_all_for_context(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let key = ctx as usize;
+    let ids = MAIN_CTX_WORKERS.lock().remove(&key).unwrap_or_default();
+    for worker_id in ids {
+        terminate(worker_id);
+    }
 }
 
 pub fn post_to_worker(worker_id: u32, msg: &[u8]) -> Result<(), i32> {
@@ -509,6 +522,11 @@ pub unsafe extern "C" fn js_worker_ctor(
         Ok(id) => id,
         Err(_) => return qjs::JSValue::exception(),
     };
+    MAIN_CTX_WORKERS
+        .lock()
+        .entry(ctx as usize)
+        .or_default()
+        .push(worker_id);
 
     // Constructor mode (`new Worker(...)`) passes a pre-created `this` with Worker.prototype.
     // Keep that object so class inheritance/prototype checks work for browser-style code.

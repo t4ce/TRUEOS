@@ -162,8 +162,12 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         crate::gfx::toggle_backend()
     } else if requested.eq_ignore_ascii_case("virgl") {
         ctx.io
-            .write_fmt(format_args!("gfx[{}]: virgl disabled (A/B swap mode)\r\n", seq));
-        crate::gfx::BackendKind::None
+            .write_fmt(format_args!("gfx[{}]: switch_to_virgl...\r\n", seq));
+        if crate::gfx::switch_to_virgl() {
+            crate::gfx::BackendKind::Virgl
+        } else {
+            crate::gfx::BackendKind::None
+        }
     } else if requested.eq_ignore_ascii_case("sw")
         || requested.eq_ignore_ascii_case("soft")
         || requested.eq_ignore_ascii_case("virtio_sw")
@@ -182,8 +186,7 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
         let _ = crate::gfx::switch_to_limine_fb();
         crate::gfx::BackendKind::LimineFb
     } else {
-        ctx.io.write_str("gfx: usage gfx [toggle|sw|liminefb]\r\n");
-        ctx.io.write_str("gfx: note: virgl is currently disabled (A/B swap mode)\r\n");
+        ctx.io.write_str("gfx: usage gfx [toggle|virgl|sw|liminefb]\r\n");
         return CommandAction::None;
     };
 
@@ -928,4 +931,3 @@ fn parse_https_host_port(url: &str) -> Option<(heapless::String<96>, u16)> {
     }
     Some((h, port))
 }
-

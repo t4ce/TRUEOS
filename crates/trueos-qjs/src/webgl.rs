@@ -2,14 +2,12 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
-use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate as qjs;
 use crate::cmd_stream;
 
 extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 
 const MAX_ATTRS: usize = 16;
@@ -145,6 +143,59 @@ struct ShaderState {
     compiled: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct VertexDecodeCacheKey {
+    buffer_id: u32,
+    buffer_rev: u32,
+    stride: usize,
+    offset: usize,
+    size: i32,
+    type_enum: u32,
+}
+
+struct VertexDecodeCache {
+    key: Option<VertexDecodeCacheKey>,
+    indices: Vec<u32>,
+    xy: Vec<f32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IndexExpandCacheKey {
+    elem_buffer_id: u32,
+    elem_buffer_rev: u32,
+    mode: u32,
+    count: usize,
+    index_type: u32,
+    index_offset: usize,
+}
+
+struct IndexExpandCache {
+    key: Option<IndexExpandCacheKey>,
+    tri: Vec<u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PackedVertexCacheKey {
+    buffer_id: u32,
+    buffer_rev: u32,
+    stride: usize,
+    offset: usize,
+    size: i32,
+    type_enum: u32,
+    current_program: u32,
+    viewport_w: i32,
+    viewport_h: i32,
+    transform_epoch: u32,
+    indices_len: usize,
+    indices_hash: u32,
+    color_buffer_id: u32,
+    color_buffer_rev: u32,
+    color_stride: usize,
+    color_offset: usize,
+    color_size: i32,
+    color_type_enum: u32,
+}
+
 struct GlState {
     next_handle: u32,
     buffers: Vec<Option<Vec<u8>>>,
@@ -154,10 +205,19 @@ struct GlState {
     current_element_array_buffer: u32,
     current_program: u32,
     attribs: [AttribState; MAX_ATTRS],
+    buffer_revs: Vec<u32>,
+    vertex_decode_cache: VertexDecodeCache,
+    index_expand_cache: IndexExpandCache,
+    packed_vertex_cache_key: Option<PackedVertexCacheKey>,
+    packed_vertex_cache: Vec<u8>,
     clear_rgb: u32,
     viewport_w: i32,
     viewport_h: i32,
     blend_enabled: bool,
+    transform_epoch: u32,
+    viewport_dirty: bool,
+    clear_dirty: bool,
+    blend_dirty: bool,
     frame_open: bool,
 }
 
@@ -172,10 +232,26 @@ impl GlState {
             current_element_array_buffer: 0,
             current_program: 0,
             attribs: [attrib_default(); MAX_ATTRS],
+            buffer_revs: Vec::new(),
+            vertex_decode_cache: VertexDecodeCache {
+                key: None,
+                indices: Vec::new(),
+                xy: Vec::new(),
+            },
+            index_expand_cache: IndexExpandCache {
+                key: None,
+                tri: Vec::new(),
+            },
+            packed_vertex_cache_key: None,
+            packed_vertex_cache: Vec::new(),
             clear_rgb: 0x12161d,
             viewport_w: 1280,
             viewport_h: 800,
             blend_enabled: false,
+            transform_epoch: 1,
+            viewport_dirty: true,
+            clear_dirty: true,
+            blend_dirty: true,
             frame_open: false,
         }
     }
@@ -188,31 +264,6 @@ impl GlState {
 }
 
 static GL_STATE: Mutex<GlState> = Mutex::new(GlState::new());
-static EMIT_SKIP_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-
-#[inline]
-fn log_bytes(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
-}
-
-#[inline]
-fn log_u32(mut v: u32) {
-    if v == 0 {
-        log_bytes(b"0");
-        return;
-    }
-    let mut buf = [0u8; 10];
-    let mut i = buf.len();
-    while v > 0 {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-    }
-    log_bytes(&buf[i..]);
-}
 
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
@@ -560,6 +611,15 @@ fn read_index(src: &[u8], type_enum: u32, offset: usize, i: usize) -> Option<u32
     }
 }
 
+fn hash_u32_slice(values: &[u32]) -> u32 {
+    let mut h: u32 = 0x811C9DC5;
+    for v in values {
+        h ^= *v;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
 fn mat3_apply(m: &[f32; 9], x: f32, y: f32) -> (f32, f32) {
     let ox = m[0] * x + m[3] * y + m[6];
     let oy = m[1] * x + m[4] * y + m[7];
@@ -615,16 +675,8 @@ fn pack_vertex(dst: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8) {
     dst.push(0);
 }
 
-fn emit_triangles(st: &GlState, indices: &[u32]) {
-    let log_skip = |reason: &[u8]| {
-        let n = EMIT_SKIP_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-        if n <= 20 || (n % 120) == 1 {
-            log_bytes(b"qjs-webgl: emit skip=");
-            log_bytes(reason);
-            log_bytes(b"\n");
-        }
-    };
-    let mut pos_attr = None;
+fn emit_triangles(st: &mut GlState, indices: &[u32]) {
+    let mut pos_attr: Option<(usize, AttribState)> = None;
     let mut preferred_loc: Option<usize> = None;
     if st.current_program != 0 {
         let pidx = st.current_program.saturating_sub(1) as usize;
@@ -650,21 +702,21 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         if loc < MAX_ATTRS {
             let a = st.attribs[loc];
             if a.enabled && a.buffer_id != 0 && a.size >= 2 {
-                pos_attr = Some(a);
+                pos_attr = Some((loc, a));
             }
         }
     }
     if pos_attr.is_none() {
         let a0 = st.attribs[0];
         if a0.enabled && a0.buffer_id != 0 && a0.size >= 2 {
-            pos_attr = Some(a0);
+            pos_attr = Some((0, a0));
         }
     }
     if pos_attr.is_none() {
         for i in 0..MAX_ATTRS {
             let a = st.attribs[i];
             if a.enabled && a.buffer_id != 0 && a.size >= 2 && a.type_enum == GL_FLOAT {
-                pos_attr = Some(a);
+                pos_attr = Some((i, a));
                 break;
             }
         }
@@ -673,21 +725,61 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         for i in 0..MAX_ATTRS {
             let a = st.attribs[i];
             if a.enabled && a.buffer_id != 0 && a.size >= 2 {
-                pos_attr = Some(a);
+                pos_attr = Some((i, a));
                 break;
             }
         }
     }
-    let Some(pa) = pos_attr else {
-        log_skip(b"no-pos-attrib");
+    let Some((pos_loc, pa)) = pos_attr else {
         return;
     };
-    let Some(Some(vb)) = st.buffers.get((pa.buffer_id - 1) as usize) else {
-        log_skip(b"no-vb");
+    let mut color_attr: Option<AttribState> = None;
+    if st.current_program != 0 {
+        let pidx = st.current_program.saturating_sub(1) as usize;
+        if let Some(Some(p)) = st.programs.get(pidx) {
+            if let Some((i, _)) = p
+                .attrib_names
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.as_slice() == b"aColor" || n.as_slice() == b"color")
+            {
+                if i < MAX_ATTRS {
+                    let a = st.attribs[i];
+                    if a.enabled
+                        && a.buffer_id != 0
+                        && a.size >= 3
+                        && (a.type_enum == GL_UNSIGNED_BYTE || a.type_enum == GL_FLOAT)
+                    {
+                        color_attr = Some(a);
+                    }
+                }
+            }
+        }
+    }
+    if color_attr.is_none() {
+        for i in 0..MAX_ATTRS {
+            if i == pos_loc {
+                continue;
+            }
+            let a = st.attribs[i];
+            if a.enabled
+                && a.buffer_id != 0
+                && a.size >= 3
+                && (a.type_enum == GL_UNSIGNED_BYTE || a.type_enum == GL_FLOAT)
+            {
+                color_attr = Some(a);
+                break;
+            }
+        }
+    }
+    let Some(vb) = st
+        .buffers
+        .get((pa.buffer_id - 1) as usize)
+        .and_then(|v| v.as_ref())
+    else {
         return;
     };
     if pa.type_enum != GL_FLOAT {
-        log_skip(b"bad-type");
         return;
     }
     let elem = 4usize;
@@ -697,45 +789,188 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         pa.stride as usize
     };
     if stride == 0 {
-        log_skip(b"zero-stride");
         return;
     }
 
-    let mut out = Vec::with_capacity(indices.len().saturating_mul(12));
-    for idx in indices {
-        let off = pa.offset.saturating_add((*idx as usize).saturating_mul(stride));
-        let Some(px) = vb.get(off..off + 4) else {
-            continue;
+    let buffer_rev = st
+        .buffer_revs
+        .get((pa.buffer_id - 1) as usize)
+        .copied()
+        .unwrap_or(0);
+    let (color_buffer_id, color_buffer_rev, color_stride, color_offset, color_size, color_type_enum) =
+        if let Some(ca) = color_attr {
+            let cstride = if ca.stride <= 0 {
+                match ca.type_enum {
+                    GL_UNSIGNED_BYTE => ca.size as usize,
+                    GL_FLOAT => (ca.size as usize).saturating_mul(4),
+                    _ => 0,
+                }
+            } else {
+                ca.stride as usize
+            };
+            let crev = st
+                .buffer_revs
+                .get((ca.buffer_id - 1) as usize)
+                .copied()
+                .unwrap_or(0);
+            (ca.buffer_id, crev, cstride, ca.offset, ca.size, ca.type_enum)
+        } else {
+            (0, 0, 0, 0, 0, 0)
         };
-        let Some(py) = vb.get(off + 4..off + 8) else {
-            continue;
-        };
-        let x = f32::from_le_bytes([px[0], px[1], px[2], px[3]]);
-        let y = f32::from_le_bytes([py[0], py[1], py[2], py[3]]);
-        let (nx, ny) = transform_xy(st, x, y);
-        pack_vertex(&mut out, nx, ny, 232, 140, 40);
-    }
-    if out.is_empty() {
-        log_skip(b"empty-out");
+    let indices_hash = hash_u32_slice(indices);
+    let cache_key = VertexDecodeCacheKey {
+        buffer_id: pa.buffer_id,
+        buffer_rev,
+        stride,
+        offset: pa.offset,
+        size: pa.size,
+        type_enum: pa.type_enum,
+    };
+    let packed_key = PackedVertexCacheKey {
+        buffer_id: pa.buffer_id,
+        buffer_rev,
+        stride,
+        offset: pa.offset,
+        size: pa.size,
+        type_enum: pa.type_enum,
+        current_program: st.current_program,
+        viewport_w: st.viewport_w,
+        viewport_h: st.viewport_h,
+        transform_epoch: st.transform_epoch,
+        indices_len: indices.len(),
+        indices_hash,
+        color_buffer_id,
+        color_buffer_rev,
+        color_stride,
+        color_offset,
+        color_size,
+        color_type_enum,
+    };
+    if st.packed_vertex_cache_key == Some(packed_key) && !st.packed_vertex_cache.is_empty() {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles {
+            vertices: st.packed_vertex_cache.clone(),
+        });
         return;
     }
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: out });
+
+    let mut decoded_local: Vec<f32> = Vec::new();
+    let src_xy: &[f32] = if st.vertex_decode_cache.key == Some(cache_key)
+        && st.vertex_decode_cache.indices.as_slice() == indices
+    {
+        st.vertex_decode_cache.xy.as_slice()
+    } else {
+        decoded_local.reserve(indices.len().saturating_mul(2));
+        for idx in indices {
+            let off = pa.offset.saturating_add((*idx as usize).saturating_mul(stride));
+            let Some(px) = vb.get(off..off + 4) else {
+                continue;
+            };
+            let Some(py) = vb.get(off + 4..off + 8) else {
+                continue;
+            };
+            let x = f32::from_le_bytes([px[0], px[1], px[2], px[3]]);
+            let y = f32::from_le_bytes([py[0], py[1], py[2], py[3]]);
+            decoded_local.push(x);
+            decoded_local.push(y);
+        }
+        decoded_local.as_slice()
+    };
+
+    let mut out = Vec::with_capacity((src_xy.len() / 2).saturating_mul(12));
+    let color_buf = color_attr.and_then(|ca| {
+        st.buffers
+            .get((ca.buffer_id - 1) as usize)
+            .and_then(|v| v.as_ref())
+    });
+    let mut i = 0usize;
+    while i + 1 < src_xy.len() {
+        let x = src_xy[i];
+        let y = src_xy[i + 1];
+        let (nx, ny) = transform_xy(st, x, y);
+        let mut r: u8 = 255;
+        let mut g: u8 = 255;
+        let mut b: u8 = 255;
+        if let (Some(ca), Some(cb)) = (color_attr, color_buf) {
+            let idx_i = i / 2;
+            let cstride = if ca.stride <= 0 {
+                match ca.type_enum {
+                    GL_UNSIGNED_BYTE => ca.size as usize,
+                    GL_FLOAT => (ca.size as usize).saturating_mul(4),
+                    _ => 0,
+                }
+            } else {
+                ca.stride as usize
+            };
+            let coff = ca
+                .offset
+                .saturating_add((indices[idx_i] as usize).saturating_mul(cstride));
+            match ca.type_enum {
+                GL_UNSIGNED_BYTE => {
+                    if let Some(bytes) = cb.get(coff..coff.saturating_add(3)) {
+                        r = bytes[0];
+                        g = bytes[1];
+                        b = bytes[2];
+                    }
+                }
+                GL_FLOAT => {
+                    if let Some(px) = cb.get(coff..coff + 4) {
+                        let v = f32::from_le_bytes([px[0], px[1], px[2], px[3]]).clamp(0.0, 1.0);
+                        r = (v * 255.0) as u8;
+                    }
+                    if let Some(py) = cb.get(coff + 4..coff + 8) {
+                        let v = f32::from_le_bytes([py[0], py[1], py[2], py[3]]).clamp(0.0, 1.0);
+                        g = (v * 255.0) as u8;
+                    }
+                    if let Some(pz) = cb.get(coff + 8..coff + 12) {
+                        let v = f32::from_le_bytes([pz[0], pz[1], pz[2], pz[3]]).clamp(0.0, 1.0);
+                        b = (v * 255.0) as u8;
+                    }
+                }
+                _ => {}
+            }
+        }
+        pack_vertex(&mut out, nx, ny, r, g, b);
+        i += 2;
+    }
+
+    if st.vertex_decode_cache.key != Some(cache_key) || st.vertex_decode_cache.indices.as_slice() != indices {
+        st.vertex_decode_cache.key = Some(cache_key);
+        st.vertex_decode_cache.indices.clear();
+        st.vertex_decode_cache.indices.extend_from_slice(indices);
+        st.vertex_decode_cache.xy = decoded_local;
+    }
+
+    if !out.is_empty() {
+        st.packed_vertex_cache_key = Some(packed_key);
+        st.packed_vertex_cache.clear();
+        st.packed_vertex_cache.extend_from_slice(out.as_slice());
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: out });
+    }
 }
 
 fn begin_frame_if_needed(st: &mut GlState) {
     if st.frame_open {
         return;
     }
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport {
-        w: st.viewport_w.max(1),
-        h: st.viewport_h.max(1),
-    });
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetClearColor {
-        clear_rgb: st.clear_rgb,
-    });
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEnabled {
-        enabled: st.blend_enabled,
-    });
+    if st.viewport_dirty {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport {
+            w: st.viewport_w.max(1),
+            h: st.viewport_h.max(1),
+        });
+        st.viewport_dirty = false;
+    }
+    if st.clear_dirty {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetClearColor {
+            clear_rgb: st.clear_rgb,
+        });
+        st.clear_dirty = false;
+    }
+    if st.blend_dirty {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEnabled {
+            enabled: st.blend_enabled,
+        });
+        st.blend_dirty = false;
+    }
     cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
     st.frame_open = true;
 }
@@ -752,7 +987,11 @@ unsafe extern "C" fn gl_create_buffer(
     if idx >= st.buffers.len() {
         st.buffers.resize_with(idx + 1, || None);
     }
+    if idx >= st.buffer_revs.len() {
+        st.buffer_revs.resize(idx + 1, 0);
+    }
     st.buffers[idx] = Some(Vec::new());
+    st.buffer_revs[idx] = 1;
     js_new_handle_obj(ctx, id)
 }
 
@@ -810,6 +1049,12 @@ unsafe extern "C" fn gl_buffer_data(
         dst.clear();
         dst.resize(sz, 0);
     }
+    if buf_id != 0 {
+        let idx = (buf_id - 1) as usize;
+        if let Some(rev) = st.buffer_revs.get_mut(idx) {
+            *rev = rev.wrapping_add(1);
+        }
+    }
     qjs::JSValue::undefined()
 }
 
@@ -849,6 +1094,12 @@ unsafe extern "C" fn gl_buffer_sub_data(
         dst.resize(need, 0);
     }
     dst[offset..offset + src.len()].copy_from_slice(src);
+    if buf_id != 0 {
+        let idx = (buf_id - 1) as usize;
+        if let Some(rev) = st.buffer_revs.get_mut(idx) {
+            *rev = rev.wrapping_add(1);
+        }
+    }
     qjs::JSValue::undefined()
 }
 
@@ -1310,7 +1561,11 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
         return qjs::JSValue::undefined();
     };
     if loc < p.uniform_mat3.len() {
+        let changed = p.uniform_mat3[loc].map(|old| old != m).unwrap_or(true);
         p.uniform_mat3[loc] = Some(m);
+        if changed {
+            st.transform_epoch = st.transform_epoch.wrapping_add(1);
+        }
     }
     qjs::JSValue::undefined()
 }
@@ -1328,7 +1583,12 @@ unsafe extern "C" fn gl_clear_color(
     let r = (js_get_f64(ctx, args[0]).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0) as u32;
     let g = (js_get_f64(ctx, args[1]).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0) as u32;
     let b = (js_get_f64(ctx, args[2]).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0) as u32;
-    GL_STATE.lock().clear_rgb = (r << 16) | (g << 8) | b;
+    let mut st = GL_STATE.lock();
+    let rgb = (r << 16) | (g << 8) | b;
+    if st.clear_rgb != rgb {
+        st.clear_rgb = rgb;
+        st.clear_dirty = true;
+    }
     qjs::JSValue::undefined()
 }
 
@@ -1373,8 +1633,14 @@ unsafe extern "C" fn gl_viewport(
     let w = js_get_f64(ctx, args[2]).unwrap_or(0.0).max(0.0) as i32;
     let h = js_get_f64(ctx, args[3]).unwrap_or(0.0).max(0.0) as i32;
     let mut st = GL_STATE.lock();
-    st.viewport_w = w.max(1);
-    st.viewport_h = h.max(1);
+    let nw = w.max(1);
+    let nh = h.max(1);
+    if st.viewport_w != nw || st.viewport_h != nh {
+        st.viewport_w = nw;
+        st.viewport_h = nh;
+        st.transform_epoch = st.transform_epoch.wrapping_add(1);
+        st.viewport_dirty = true;
+    }
     qjs::JSValue::undefined()
 }
 
@@ -1407,7 +1673,11 @@ unsafe extern "C" fn gl_enable_disable(
         return qjs::JSValue::undefined();
     };
     if cap == GL_BLEND {
-        GL_STATE.lock().blend_enabled = enabled;
+        let mut st = GL_STATE.lock();
+        if st.blend_enabled != enabled {
+            st.blend_enabled = enabled;
+            st.blend_dirty = true;
+        }
     }
     qjs::JSValue::undefined()
 }
@@ -1681,22 +1951,48 @@ unsafe extern "C" fn gl_draw_elements(
     if count < 3 {
         return qjs::JSValue::undefined();
     }
-    let st = GL_STATE.lock();
+    let mut st = GL_STATE.lock();
     let elem_id = st.current_element_array_buffer;
-    let Some(Some(ib)) = st.buffers.get(elem_id.saturating_sub(1) as usize) else {
-        return qjs::JSValue::undefined();
-    };
-    let mut idx_src = Vec::with_capacity(count);
-    for i in 0..count {
-        let Some(v) = read_index(ib, index_type, index_offset, i) else {
-            break;
+    let idx_src = {
+        let Some(Some(ib)) = st.buffers.get(elem_id.saturating_sub(1) as usize) else {
+            return qjs::JSValue::undefined();
         };
-        idx_src.push(v);
-    }
-    drop(st);
+        let mut idx_src = Vec::with_capacity(count);
+        for i in 0..count {
+            let Some(v) = read_index(ib, index_type, index_offset, i) else {
+                break;
+            };
+            idx_src.push(v);
+        }
+        idx_src
+    };
     if idx_src.len() < 3 {
         return qjs::JSValue::undefined();
     }
+    let elem_rev = st
+        .buffer_revs
+        .get(elem_id.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or(0);
+    let cache_key = IndexExpandCacheKey {
+        elem_buffer_id: elem_id,
+        elem_buffer_rev: elem_rev,
+        mode,
+        count: idx_src.len(),
+        index_type,
+        index_offset,
+    };
+
+    if st.index_expand_cache.key == Some(cache_key) {
+        let tri = core::mem::take(&mut st.index_expand_cache.tri);
+        if tri.len() >= 3 {
+            begin_frame_if_needed(&mut st);
+            emit_triangles(&mut st, tri.as_slice());
+        }
+        st.index_expand_cache.tri = tri;
+        return qjs::JSValue::undefined();
+    }
+
     let mut tri = Vec::new();
     match mode {
         GL_TRIANGLES => {
@@ -1735,9 +2031,10 @@ unsafe extern "C" fn gl_draw_elements(
         _ => {}
     }
     if tri.len() >= 3 {
-        let mut st = GL_STATE.lock();
         begin_frame_if_needed(&mut st);
-        emit_triangles(&st, tri.as_slice());
+        emit_triangles(&mut st, tri.as_slice());
+        st.index_expand_cache.key = Some(cache_key);
+        st.index_expand_cache.tri = tri;
     }
     qjs::JSValue::undefined()
 }
@@ -1758,16 +2055,13 @@ unsafe extern "C" fn gl_draw_arrays(
     if count < 3 || mode != GL_TRIANGLES {
         return qjs::JSValue::undefined();
     }
-    log_bytes(b"qjs-webgl: drawArrays count=");
-    log_u32(count);
-    log_bytes(b"\n");
     let mut idx = Vec::with_capacity(count as usize);
     for i in 0..count {
         idx.push(first + i);
     }
     let mut st = GL_STATE.lock();
     begin_frame_if_needed(&mut st);
-    emit_triangles(&st, idx.as_slice());
+    emit_triangles(&mut st, idx.as_slice());
     qjs::JSValue::undefined()
 }
 
