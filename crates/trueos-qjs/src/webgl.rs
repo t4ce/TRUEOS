@@ -2,10 +2,15 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate as qjs;
 use crate::cmd_stream;
+
+extern "C" {
+    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+}
 
 const MAX_ATTRS: usize = 16;
 
@@ -183,6 +188,31 @@ impl GlState {
 }
 
 static GL_STATE: Mutex<GlState> = Mutex::new(GlState::new());
+static EMIT_SKIP_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn log_bytes(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+}
+
+#[inline]
+fn log_u32(mut v: u32) {
+    if v == 0 {
+        log_bytes(b"0");
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = buf.len();
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    log_bytes(&buf[i..]);
+}
 
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
@@ -586,21 +616,78 @@ fn pack_vertex(dst: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8) {
 }
 
 fn emit_triangles(st: &GlState, indices: &[u32]) {
+    let log_skip = |reason: &[u8]| {
+        let n = EMIT_SKIP_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 20 || (n % 120) == 1 {
+            log_bytes(b"qjs-webgl: emit skip=");
+            log_bytes(reason);
+            log_bytes(b"\n");
+        }
+    };
     let mut pos_attr = None;
-    for i in 0..MAX_ATTRS {
-        let a = st.attribs[i];
-        if a.enabled && a.buffer_id != 0 && a.size >= 2 {
-            pos_attr = Some(a);
-            break;
+    let mut preferred_loc: Option<usize> = None;
+    if st.current_program != 0 {
+        let pidx = st.current_program.saturating_sub(1) as usize;
+        if let Some(Some(p)) = st.programs.get(pidx) {
+            if let Some((i, _)) = p
+                .attrib_names
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.as_slice() == b"aVertexPosition")
+            {
+                preferred_loc = Some(i);
+            } else if let Some((i, _)) = p
+                .attrib_names
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.as_slice() == b"position")
+            {
+                preferred_loc = Some(i);
+            }
+        }
+    }
+    if let Some(loc) = preferred_loc {
+        if loc < MAX_ATTRS {
+            let a = st.attribs[loc];
+            if a.enabled && a.buffer_id != 0 && a.size >= 2 {
+                pos_attr = Some(a);
+            }
+        }
+    }
+    if pos_attr.is_none() {
+        let a0 = st.attribs[0];
+        if a0.enabled && a0.buffer_id != 0 && a0.size >= 2 {
+            pos_attr = Some(a0);
+        }
+    }
+    if pos_attr.is_none() {
+        for i in 0..MAX_ATTRS {
+            let a = st.attribs[i];
+            if a.enabled && a.buffer_id != 0 && a.size >= 2 && a.type_enum == GL_FLOAT {
+                pos_attr = Some(a);
+                break;
+            }
+        }
+    }
+    if pos_attr.is_none() {
+        for i in 0..MAX_ATTRS {
+            let a = st.attribs[i];
+            if a.enabled && a.buffer_id != 0 && a.size >= 2 {
+                pos_attr = Some(a);
+                break;
+            }
         }
     }
     let Some(pa) = pos_attr else {
+        log_skip(b"no-pos-attrib");
         return;
     };
     let Some(Some(vb)) = st.buffers.get((pa.buffer_id - 1) as usize) else {
+        log_skip(b"no-vb");
         return;
     };
     if pa.type_enum != GL_FLOAT {
+        log_skip(b"bad-type");
         return;
     }
     let elem = 4usize;
@@ -610,6 +697,7 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         pa.stride as usize
     };
     if stride == 0 {
+        log_skip(b"zero-stride");
         return;
     }
 
@@ -628,6 +716,7 @@ fn emit_triangles(st: &GlState, indices: &[u32]) {
         pack_vertex(&mut out, nx, ny, 232, 140, 40);
     }
     if out.is_empty() {
+        log_skip(b"empty-out");
         return;
     }
     cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: out });
@@ -1604,6 +1693,7 @@ unsafe extern "C" fn gl_draw_elements(
         };
         idx_src.push(v);
     }
+    drop(st);
     if idx_src.len() < 3 {
         return qjs::JSValue::undefined();
     }
@@ -1668,6 +1758,9 @@ unsafe extern "C" fn gl_draw_arrays(
     if count < 3 || mode != GL_TRIANGLES {
         return qjs::JSValue::undefined();
     }
+    log_bytes(b"qjs-webgl: drawArrays count=");
+    log_u32(count);
+    log_bytes(b"\n");
     let mut idx = Vec::with_capacity(count as usize);
     for i in 0..count {
         idx.push(first + i);

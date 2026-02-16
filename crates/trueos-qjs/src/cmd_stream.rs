@@ -164,7 +164,7 @@ fn flush_active_frame(st: &mut FrameState) {
         submit_rgb_triangles(st.frame_clear_rgb, Some(merged.as_slice()));
     }
     let seq = FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-    if (seq % 120) == 1 {
+    if seq <= 20 || (seq % 120) == 1 {
         log_bytes(b"qjs-cmd-stream: frame seq=");
         log_i32_dec(seq as i32);
         log_bytes(b" batches=");
