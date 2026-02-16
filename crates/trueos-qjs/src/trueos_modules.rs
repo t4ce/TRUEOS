@@ -939,8 +939,44 @@ unsafe fn ensure_global_document_stub(
         if tag_cstr.is_null() {
             return node;
         }
+        // ownerDocument linkage is required by Pixi's EventSystem setup.
+        let g = qjs::JS_GetGlobalObject(ctx);
+        if !g.is_exception() {
+            let doc = qjs::JS_GetPropertyStr(ctx, g, b"document\0".as_ptr() as *const c_char);
+            if !doc.is_exception() && doc.tag != qjs::JS_TAG_UNDEFINED && doc.tag != qjs::JS_TAG_NULL {
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    node,
+                    b"ownerDocument\0".as_ptr() as *const c_char,
+                    qjs::js_dup_value(ctx, doc),
+                );
+            }
+            qjs::js_free_value(ctx, doc);
+        }
+        qjs::js_free_value(ctx, g);
+
         let tag = CStr::from_ptr(tag_cstr).to_bytes();
         if tag.eq_ignore_ascii_case(b"canvas") {
+            // Make this object pass `instanceof HTMLCanvasElement` checks used by Pixi resource detection.
+            let g2 = qjs::JS_GetGlobalObject(ctx);
+            if !g2.is_exception() {
+                let ctor = qjs::JS_GetPropertyStr(ctx, g2, b"HTMLCanvasElement\0".as_ptr() as *const c_char);
+                if !ctor.is_exception() && ctor.tag != qjs::JS_TAG_UNDEFINED && ctor.tag != qjs::JS_TAG_NULL {
+                    let proto = qjs::JS_GetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char);
+                    if !proto.is_exception() && proto.tag != qjs::JS_TAG_UNDEFINED && proto.tag != qjs::JS_TAG_NULL {
+                        let _ = qjs::JS_SetPropertyStr(
+                            ctx,
+                            node,
+                            b"__proto__\0".as_ptr() as *const c_char,
+                            qjs::js_dup_value(ctx, proto),
+                        );
+                    }
+                    qjs::js_free_value(ctx, proto);
+                }
+                qjs::js_free_value(ctx, ctor);
+            }
+            qjs::js_free_value(ctx, g2);
+
             let _ = qjs::JS_SetPropertyStr(
                 ctx,
                 node,
@@ -952,6 +988,18 @@ unsafe fn ensure_global_document_stub(
                 node,
                 b"height\0".as_ptr() as *const c_char,
                 qjs::JS_NewFloat64(ctx, 600.0),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                node,
+                b"nodeName\0".as_ptr() as *const c_char,
+                qjs::JS_NewStringLen(ctx, b"CANVAS\0".as_ptr() as *const c_char, 6),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                node,
+                b"tagName\0".as_ptr() as *const c_char,
+                qjs::JS_NewStringLen(ctx, b"CANVAS\0".as_ptr() as *const c_char, 6),
             );
             let get_ctx_fn = qjs::JS_NewCFunction2(
                 ctx,
@@ -981,6 +1029,13 @@ unsafe fn ensure_global_document_stub(
     let doc = qjs::JS_NewObject(ctx);
     if doc.is_exception() {
         return doc;
+    }
+    qjs::browser::ensure_global_event_target_stubs(ctx, doc);
+
+    let doc_el = qjs::browser::make_dom_like_element(ctx);
+    if !doc_el.is_exception() {
+        let _ = qjs::JS_SetPropertyStr(ctx, doc, b"documentElement\0".as_ptr() as *const c_char, qjs::js_dup_value(ctx, doc_el));
+        qjs::js_free_value(ctx, doc_el);
     }
 
     let body = qjs::browser::make_dom_like_element(ctx);
@@ -1015,6 +1070,12 @@ unsafe fn ensure_global_document_stub(
         global,
         b"document\0".as_ptr() as *const c_char,
         qjs::js_dup_value(ctx, doc),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        doc,
+        b"defaultView\0".as_ptr() as *const c_char,
+        qjs::js_dup_value(ctx, global),
     );
     doc
 }
@@ -1156,7 +1217,8 @@ unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global
         qjs::JS_NewObject(ctx)
     }
 
-    let names: [&[u8]; 2] = [
+    let names: [&[u8]; 3] = [
+        b"HTMLCanvasElement\0",
         b"WebGLRenderingContext\0",
         b"CanvasRenderingContext2D\0",
     ];
@@ -1177,6 +1239,13 @@ unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global
             qjs::JS_CFUNC_CONSTRUCTOR,
             0,
         );
+        // Give constructor a stable prototype object so instanceof checks can work.
+        let proto = qjs::JS_NewObject(ctx);
+        if !proto.is_exception() {
+            let _ = qjs::JS_SetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char, proto);
+        } else {
+            qjs::js_free_value(ctx, proto);
+        }
         let _ = qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, ctor);
     }
 }

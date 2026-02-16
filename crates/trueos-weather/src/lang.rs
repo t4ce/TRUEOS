@@ -55,3 +55,20 @@ pub const LANGUAGES: &[Language] = &[
     Language { code: "vi", name: "Vietnamese" },
     Language { code: "zu", name: "Zulu" },
 ];
+
+pub const DEFAULT_LANGUAGE_CODE: &str = "en";
+pub const DEFAULT_GERMAN_LANGUAGE_CODE: &str = "de";
+
+#[inline]
+pub fn is_supported_language(code: &str) -> bool {
+    LANGUAGES.iter().any(|l| l.code.eq_ignore_ascii_case(code))
+}
+
+#[inline]
+pub fn normalized_language_code(code: &str) -> &str {
+    if is_supported_language(code) {
+        code
+    } else {
+        DEFAULT_LANGUAGE_CODE
+    }
+}
