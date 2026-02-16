@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub mod dns;
 pub mod ftp;
 pub mod https;
+pub mod json;
 pub mod ping;
 pub mod ws;
 pub mod wss;

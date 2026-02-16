@@ -290,6 +290,21 @@ pub fn take_blob(slot_id: u8) -> Option<AVec<u8>> {
     Some(core::mem::take(&mut data.blob))
 }
 
+/// Clones the current slot blob without clearing it.
+pub fn clone_blob(slot_id: u8) -> Option<AVec<u8>> {
+    let Some(slot) = slot_ref(slot_id) else {
+        return None;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return None;
+    }
+    let data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(data.blob.clone())
+}
+
 pub fn set_state(slot_id: u8, state: SlotState) {
     let Some(slot) = slot_ref(slot_id) else {
         return;

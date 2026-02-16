@@ -1,29 +1,8 @@
-globalThis.__trueos_webgl_force = 1;
-
-if (!globalThis.HTMLCanvasElement || !globalThis.HTMLCanvasElement.__trueosPatched) {
-  const Ctor = function HTMLCanvasElement() {};
-  Object.defineProperty(Ctor, '__trueosPatched', { value: 1 });
-  Object.defineProperty(Ctor, Symbol.hasInstance, {
-    value(obj) {
-      return !!obj && typeof obj.getContext === 'function' && 'width' in obj && 'height' in obj;
-    },
-  });
-  globalThis.HTMLCanvasElement = Ctor;
-}
-if (!globalThis.CanvasRenderingContext2D || !globalThis.CanvasRenderingContext2D.__trueosPatched) {
-  const Ctor = function CanvasRenderingContext2D() {};
-  Object.defineProperty(Ctor, '__trueosPatched', { value: 1 });
-  Object.defineProperty(Ctor, Symbol.hasInstance, {
-    value(obj) {
-      return !!obj && typeof obj.fillRect === 'function';
-    },
-  });
-  globalThis.CanvasRenderingContext2D = Ctor;
-}
-
-const PIXI = await import('pixi.js@7.4.0?bundle&target=es2022');
+const cmd = await import('cmd_stream');
 const processMod = await import('node:process');
 const process = processMod.default || processMod;
+const VIEW_W = 1280;
+const VIEW_H = 800;
 
 const log = globalThis.print;
 log('pixi-ui: start');
@@ -33,203 +12,132 @@ function nowSeconds() {
   return t[0] + (t[1] / 1e9);
 }
 
-function clampByte(v) {
-  if (v < 0) return 0;
-  if (v > 255) return 255;
-  return v | 0;
+function pushVtx(out, x, y, r, g, b) {
+  // cmd_stream draw payload currently uses clip-space XY.
+  const nx = (2.0 * (x / VIEW_W)) - 1.0;
+  const ny = 1.0 - (2.0 * (y / VIEW_H));
+  const dv = new DataView(new ArrayBuffer(12));
+  dv.setFloat32(0, nx, true);
+  dv.setFloat32(4, ny, true);
+  dv.setUint8(8, r & 255);
+  dv.setUint8(9, g & 255);
+  dv.setUint8(10, b & 255);
+  dv.setUint8(11, 0);
+  out.push(
+    dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3),
+    dv.getUint8(4), dv.getUint8(5), dv.getUint8(6), dv.getUint8(7),
+    dv.getUint8(8), dv.getUint8(9), dv.getUint8(10), dv.getUint8(11),
+  );
 }
 
-function mixRgb(a, b, t) {
-  return [
-    clampByte(a[0] + (b[0] - a[0]) * t),
-    clampByte(a[1] + (b[1] - a[1]) * t),
-    clampByte(a[2] + (b[2] - a[2]) * t),
-  ];
+function emitRect(out, x, y, w, h, r, g, b) {
+  const x0 = x, y0 = y;
+  const x1 = x + w, y1 = y;
+  const x2 = x + w, y2 = y + h;
+  const x3 = x, y3 = y + h;
+  pushVtx(out, x0, y0, r, g, b);
+  pushVtx(out, x1, y1, r, g, b);
+  pushVtx(out, x2, y2, r, g, b);
+  pushVtx(out, x0, y0, r, g, b);
+  pushVtx(out, x2, y2, r, g, b);
+  pushVtx(out, x3, y3, r, g, b);
 }
 
-function rgbToHex(rgb) {
-  return ((rgb[0] & 255) << 16) | ((rgb[1] & 255) << 8) | (rgb[2] & 255);
+function emitTri(out, x0, y0, x1, y1, x2, y2, r, g, b) {
+  pushVtx(out, x0, y0, r, g, b);
+  pushVtx(out, x1, y1, r, g, b);
+  pushVtx(out, x2, y2, r, g, b);
 }
 
-function drawButtonSkin(g, w, h, state) {
-  const base = [58, 70, 86];
-  const edge = [95, 120, 145];
-  const hi = [120, 160, 210];
-  const lo = [38, 48, 60];
+function buildTriangleField(width, height, triCount) {
+  const bytes = [];
+  const cols = Math.max(1, Math.floor(Math.sqrt(triCount * (width / height))));
+  const rows = Math.max(1, Math.ceil(triCount / cols));
+  const cellW = width / cols;
+  const cellH = height / rows;
+  let emitted = 0;
 
-  let fill = base;
-  let border = edge;
-  let alpha = 1.0;
-  let inset = 0;
-
-  if (state === 'hovered') {
-    fill = mixRgb(base, hi, 0.45);
-    border = mixRgb(edge, hi, 0.65);
-  } else if (state === 'pressed') {
-    fill = mixRgb(base, lo, 0.55);
-    border = mixRgb(edge, lo, 0.2);
-    inset = 1;
-  } else if (state === 'disabled') {
-    fill = mixRgb(base, lo, 0.7);
-    border = mixRgb(edge, lo, 0.75);
-    alpha = 0.55;
+  for (let y = 0; y < rows && emitted < triCount; y++) {
+    for (let x = 0; x < cols && emitted < triCount; x++) {
+      const xBase = x * cellW;
+      const yBase = y * cellH;
+      const padX = cellW * 0.08;
+      const padY = cellH * 0.08;
+      const x0 = xBase + padX;
+      const y0 = yBase + cellH - padY;
+      const x1 = xBase + cellW - padX;
+      const y1 = yBase + cellH - padY;
+      const x2 = xBase + cellW * 0.5;
+      const y2 = yBase + padY;
+      const r = 60 + ((x * 17 + y * 13) % 160);
+      const g = 70 + ((x * 11 + y * 19) % 150);
+      const b = 80 + ((x * 23 + y * 7) % 140);
+      emitTri(bytes, x0, y0, x1, y1, x2, y2, r, g, b);
+      emitted++;
+    }
   }
 
-  const x = inset;
-  const y = inset;
-  const bw = w - inset * 2;
-  const bh = h - inset * 2;
-
-  g.clear();
-  g.alpha = alpha;
-  g.lineStyle(2, rgbToHex(border), 1.0);
-  g.beginFill(rgbToHex(fill), 1.0);
-  g.drawRoundedRect(x, y, bw, bh, 12);
-  g.endFill();
-
-  const shine = mixRgb(fill, [220, 235, 255], 0.15);
-  g.lineStyle(1, rgbToHex(shine), 0.85);
-  g.moveTo(x + 10, y + 10);
-  g.lineTo(x + bw - 10, y + 10);
-}
-
-function drawGlyph(g, w, h, state) {
-  const on = state === 'disabled' ? [95, 108, 124] : [210, 226, 244];
-  const accent = state === 'pressed' ? [240, 170, 120] : [120, 200, 255];
-
-  g.clear();
-  g.lineStyle(3, rgbToHex(on), 1.0);
-  g.moveTo(10, h * 0.5);
-  g.lineTo(w - 12, h * 0.5);
-  g.lineStyle(2, rgbToHex(accent), 0.95);
-  g.moveTo(w * 0.35, h * 0.33);
-  g.lineTo(w * 0.5, h * 0.68);
-  g.lineTo(w * 0.65, h * 0.33);
-}
-
-function makeButton(x, y, w, h, state) {
-  const c = new PIXI.Container();
-  c.position.set(x, y);
-
-  const skin = new PIXI.Graphics();
-  const glyph = new PIXI.Graphics();
-  c.addChild(skin);
-  c.addChild(glyph);
-
-  drawButtonSkin(skin, w, h, state);
-  drawGlyph(glyph, w, h, state);
-
-  return { container: c, state };
+  return new Uint8Array(bytes);
 }
 
 try {
-  const width = 640;
-  const height = 420;
+  const width = VIEW_W;
+  const height = VIEW_H;
+  cmd.setViewport(width, height);
+  cmd.setBlendEnabled(false);
+  cmd.setClearRgb(0x12161d);
+  log('pixi-ui: cmd-stream ok');
+  const stages = [1000, 10000, 50000, 100000];
+  const reportSec = 5.0;
+  const stageSec = 15.0;
+  let stageIdx = 0;
+  let stageTriCount = stages[stageIdx];
+  let stageBytes = buildTriangleField(width, height, stageTriCount);
+  log('pixi-ui: bench stage tris', String(stageTriCount), 'bytes', String(stageBytes.length));
 
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-
-  const gl = canvas.getContext('webgl');
-  log('pixi-ui: gl ctx', gl ? 'ok' : 'null');
-  if (!gl) throw new Error('no webgl context');
-
-  const renderer = new PIXI.Renderer({
-    view: canvas,
-    context: gl,
-    width,
-    height,
-    antialias: false,
-    backgroundColor: 0x12161D,
-  });
-  log('pixi-ui: renderer', renderer && renderer.type !== undefined ? String(renderer.type) : 'unknown');
-
-  const stage = new PIXI.Container();
-
-  const root = new PIXI.Container();
-  root.position.set(88, 46);
-  stage.addChild(root);
-
-  const frame = new PIXI.Graphics();
-  frame.lineStyle(2, 0x3A485A, 1.0);
-  frame.beginFill(0x1A222D, 0.92);
-  frame.drawRoundedRect(0, 0, 464, 300, 20);
-  frame.endFill();
-  root.addChild(frame);
-
-  const toolbar = new PIXI.Container();
-  toolbar.position.set(18, 16);
-  root.addChild(toolbar);
-
-  const toolbarBg = new PIXI.Graphics();
-  toolbarBg.beginFill(0x10151D, 0.9);
-  toolbarBg.lineStyle(1, 0x304255, 1.0);
-  toolbarBg.drawRoundedRect(0, 0, 428, 48, 12);
-  toolbarBg.endFill();
-  toolbar.addChild(toolbarBg);
-
-  const toolbarLine = new PIXI.Graphics();
-  toolbarLine.lineStyle(2, 0x5EA6E8, 0.9);
-  toolbarLine.moveTo(18, 24);
-  toolbarLine.lineTo(170, 24);
-  toolbarLine.lineStyle(2, 0xF0A878, 0.9);
-  toolbarLine.moveTo(258, 24);
-  toolbarLine.lineTo(410, 24);
-  toolbar.addChild(toolbarLine);
-
-  const btnGroup = new PIXI.Container();
-  btnGroup.position.set(28, 88);
-  root.addChild(btnGroup);
-
-  const buttons = [
-    makeButton(0, 0, 130, 74, 'normal'),
-    makeButton(146, 0, 130, 74, 'hovered'),
-    makeButton(292, 0, 130, 74, 'disabled'),
-    makeButton(73, 96, 130, 74, 'pressed'),
-    makeButton(219, 96, 130, 74, 'normal'),
-  ];
-
-  for (let i = 0; i < buttons.length; i++) {
-    btnGroup.addChild(buttons[i].container);
-  }
-
-  let phase = 0.0;
+  let stageStartSec = nowSeconds();
+  let reportStartSec = stageStartSec;
   let frames = 0;
-  let lastFpsSec = nowSeconds();
+  let frameSecAccum = 0.0;
   while (true) {
-    phase += 0.04;
+    const frameStartSec = nowSeconds();
 
-    root.rotation = 0.015 * Math.sin(phase * 0.25);
-    root.scale.set(1.0 + 0.01 * Math.sin(phase * 0.5));
+    cmd.beginFrame();
+    cmd.drawTrianglesU8(stageBytes);
+    cmd.endFrame();
 
-    for (let i = 0; i < buttons.length; i++) {
-      const b = buttons[i];
-
-      if (b.state === 'hovered') {
-        b.container.y = (i >= 3 ? 96 : 0) + 1.8 * Math.sin(phase * 1.1 + i);
-        b.container.scale.set(1.0 + 0.03 * Math.sin(phase * 1.25 + i));
-        b.container.alpha = 0.92 + 0.08 * (0.5 + 0.5 * Math.sin(phase * 1.15 + i));
-      } else if (b.state === 'pressed') {
-        b.container.y = (i >= 3 ? 96 : 0) + 2.0 + 1.2 * Math.sin(phase * 1.8);
-        b.container.scale.set(0.985 + 0.01 * Math.sin(phase * 1.4));
-        b.container.alpha = 1.0;
-      } else {
-        b.container.y = (i >= 3 ? 96 : 0);
-        b.container.scale.set(1.0, 1.0);
-        b.container.alpha = b.state === 'disabled' ? 0.58 : 1.0;
-      }
-    }
-
-    renderer.render(stage);
+    const frameEndSec = nowSeconds();
+    frameSecAccum += (frameEndSec - frameStartSec);
     frames++;
 
-    const now = nowSeconds();
-    const dt = now - lastFpsSec;
-    if (dt >= 15.0) {
-      const fps = Math.floor(frames / dt);
-      log('pixi-ui: fps-est', String(fps), 'dt', String(dt));
+    const nowSec = frameEndSec;
+    const reportDt = nowSec - reportStartSec;
+    if (reportDt >= reportSec && frames > 0) {
+      const fps = frames / reportDt;
+      const msPerFrame = (frameSecAccum / frames) * 1000.0;
+      const mtrisPerSec = (stageTriCount * fps) / 1000000.0;
+      log(
+        'pixi-ui: bench',
+        'tris/frame', String(stageTriCount),
+        'fps', String(Math.floor(fps)),
+        'ms/frame', String(msPerFrame),
+        'Mtris/s', String(mtrisPerSec),
+      );
+      reportStartSec = nowSec;
       frames = 0;
-      lastFpsSec = now;
+      frameSecAccum = 0.0;
+    }
+
+    const stageDt = nowSec - stageStartSec;
+    if (stageDt >= stageSec) {
+      stageIdx = (stageIdx + 1) % stages.length;
+      stageTriCount = stages[stageIdx];
+      stageBytes = buildTriangleField(width, height, stageTriCount);
+      log('pixi-ui: bench stage tris', String(stageTriCount), 'bytes', String(stageBytes.length));
+      stageStartSec = nowSec;
+      reportStartSec = nowSec;
+      frames = 0;
+      frameSecAccum = 0.0;
     }
   }
 } catch (e) {

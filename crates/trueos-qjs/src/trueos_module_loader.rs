@@ -473,6 +473,8 @@ pub(crate) unsafe fn normalize_with_mode(
         // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"
+            || spec == b"cmd_stream"
+            || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"
             || spec == b"process"
             || spec == b"node:process"
