@@ -31,6 +31,8 @@ impl QjsVm {
             return None;
         }
 
+        unsafe { qjs::qjs_diag::install_runtime(rt) };
+
         unsafe { qjs::node::install(rt) };
 
         let ctx = unsafe { qjs::JS_NewContext(rt) };
@@ -38,6 +40,8 @@ impl QjsVm {
             unsafe { qjs::JS_FreeRuntime(rt) };
             return None;
         }
+
+        unsafe { qjs::qjs_diag::install_context(ctx) };
 
         Some(Self {
             rt,

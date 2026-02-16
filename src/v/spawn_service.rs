@@ -31,7 +31,6 @@ enum SpawnAttempt {
 // --- one-shot guards (kept here so boot/task wiring is centralized) ---
 
 static VGA_FONT_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
-static BSP_SMOKE_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOSFS_MOUNT_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static NET_POLL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -67,14 +66,6 @@ static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::vga::init_font_cache_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-fn spawn_bsp_smoke_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::smoke_fs::bsp_smoke_service_task(),
-    ) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -333,12 +324,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &VGA_FONT_CACHE_STARTED,
         spawn: spawn_vga_font_cache,
-    },
-    TaskSpec {
-        name: "bsp-smoke-service",
-        required: 0,
-        started: &BSP_SMOKE_SERVICE_STARTED,
-        spawn: spawn_bsp_smoke_service,
     },
     TaskSpec {
         name: "trueosfs-mount-service",
