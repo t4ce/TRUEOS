@@ -7,12 +7,6 @@ use crate as qjs;
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_poll_once();
-    fn trueos_cabi_fs_read_file(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
 }
 
 unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
@@ -232,21 +226,6 @@ unsafe fn install_print(ctx: *mut qjs::JSContext) {
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, alias.as_ptr() as *const c_char, func2);
     qjs::js_free_value(ctx, global);
-}
-
-unsafe fn read_file_owned(path: &[u8]) -> Option<alloc::vec::Vec<u8>> {
-    let len = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
-    if len < 0 {
-        return None;
-    }
-    let len = len as usize;
-    let mut out = alloc::vec![0u8; len];
-    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), out.as_mut_ptr(), out.len());
-    if got < 0 {
-        return None;
-    }
-    out.truncate(got as usize);
-    Some(out)
 }
 
 /// TRUEOS kernel QuickJS smoke test:
@@ -574,12 +553,10 @@ pub unsafe fn run_pixi_rect_smoke() {
         }
     }
 
-    let mod_filename = b"/qjs/app/pixi/main.mjs\0";
-    let Some(mut owned) = read_file_owned(b"/qjs/app/pixi/main.mjs") else {
-        log_str("quickjs: pixi-tri read /qjs/app/pixi/main.mjs failed\n");
-        drop(vm);
-        return;
-    };
+    let mod_filename = b"<smoke-pixi-tri-bundle>\0";
+    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/bundle.mjs")
+        .as_bytes()
+        .to_vec();
     // NUL-terminate for parser stability.
     owned.push(0);
 

@@ -198,9 +198,13 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 
                 // Clear tail logic (background/revealed pixels)
                 if drop.row > drop.trail_len {
-                    let clear_row = drop.row - drop.trail_len;
-                    if clear_row > 0 && clear_row <= rows {
-                        let mut drawn_bg = false;
+                    // trail covers row - k where k in 0..=trail_len
+                    // means it covers [row, row-1, ..., row-trail_len]
+                    // so we need to clear (row - trail_len - 1)
+                    if drop.row > drop.trail_len + 1 {
+                        let clear_row = drop.row - drop.trail_len - 1;
+                        if clear_row > 0 && clear_row <= rows {
+                            let mut drawn_bg = false;
                         if clear_row > offset_y && clear_row <= offset_y + logo_h {
                             // Check overlap
                             if drop.col > offset_x && drop.col <= offset_x + logo_w {
@@ -235,6 +239,7 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                         }
                     }
                 }
+            }
 
                 // Advance head
                 drop.row += 1;
@@ -270,39 +275,7 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                             
                             if drop.revealed_count >= 2 {
                                 hit_detected = true;
-                                // Clear trail immediately
-                                for k in 1..=drop.trail_len {
-                                    let trail_r = drop.row.saturating_sub(k);
-                                    if trail_r > 0 && trail_r <= rows {
-                                        let mut is_revealed_pixel = false;
-                                        if trail_r > offset_y && trail_r <= offset_y + logo_h && drop.col > offset_x && drop.col <= offset_x + logo_w {
-                                            let t_ly = trail_r - 1 - offset_y;
-                                            let t_lx = drop.col - 1 - offset_x;
-                                            let t_idx = t_ly * logo_w + t_lx;
-                                            if revealed[t_idx] {
-                                                is_revealed_pixel = true;
-                                                let t_val = logo[t_idx];
-                                                let t_int = ((t_val >> 24) & 0xFF) as u8;
-                                                if t_int > 0 {
-                                                    let tr = ((t_val >> 16) & 0xFF) as u8;
-                                                    let tg = ((t_val >> 8) & 0xFF) as u8;
-                                                    let tb = (t_val & 0xFF) as u8;
-                                                    let tr = ((tr as u16 * t_int as u16) / 255) as u8;
-                                                    let tg = ((tg as u16 * t_int as u16) / 255) as u8;
-                                                    let tb = ((tb as u16 * t_int as u16) / 255) as u8;
-                                                    io.write_fmt(format_args!(
-                                                        "{}\x1b[38;2;{};{};{}m█", 
-                                                        crate::ecma48::pos(trail_r, drop.col),
-                                                        tr, tg, tb
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                        if !is_revealed_pixel {
-                                            io.write_fmt(format_args!("{} ", crate::ecma48::pos(trail_r, drop.col)));
-                                        }
-                                    }
-                                }
+                                // Trail clearing is handled in the removal block below
                             }
                         }
                     }
@@ -312,6 +285,46 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 let max_row = rows.saturating_sub(10);
                 if hit_detected || drop.row > max_row + drop.trail_len {
                     remove_drop = true;
+                    // Clear the remaining trail before removing
+                    // We need to clear from k=0 because the head (k=0) might have been drawn in a previous step
+                    // or if it's a hit, the head was just handled.
+                    // But for "falling off bottom", we might need to clear everything including where the head *would* be if it were visible,
+                    // or rather, we just need to clear the full extent of the drop's visual footprint.
+                    for k in 0..=drop.trail_len {
+                        let trail_r = drop.row.saturating_sub(k);
+                        if trail_r > 0 && trail_r <= rows {
+                            // Check if this position is a revealed pixel
+                            let mut is_revealed_pixel = false;
+                            if trail_r > offset_y && trail_r <= offset_y + logo_h && drop.col > offset_x && drop.col <= offset_x + logo_w {
+                                let t_ly = trail_r - 1 - offset_y;
+                                let t_lx = drop.col - 1 - offset_x;
+                                let t_idx = t_ly * logo_w + t_lx;
+                                if revealed[t_idx] {
+                                    is_revealed_pixel = true;
+                                    // It's a revealed pixel, redraw it correctly instead of clearing
+                                    let t_val = logo[t_idx];
+                                    let t_int = ((t_val >> 24) & 0xFF) as u8;
+                                    if t_int > 0 {
+                                        let tr = ((t_val >> 16) & 0xFF) as u8;
+                                        let tg = ((t_val >> 8) & 0xFF) as u8;
+                                        let tb = (t_val & 0xFF) as u8;
+                                        let tr = ((tr as u16 * t_int as u16) / 255) as u8;
+                                        let tg = ((tg as u16 * t_int as u16) / 255) as u8;
+                                        let tb = ((tb as u16 * t_int as u16) / 255) as u8;
+                                        io.write_fmt(format_args!(
+                                            "{}\x1b[38;2;{};{};{}m█", 
+                                            crate::ecma48::pos(trail_r, drop.col),
+                                            tr, tg, tb
+                                        ));
+                                    }
+                                }
+                            }
+
+                            if !is_revealed_pixel {
+                                io.write_fmt(format_args!("{} ", crate::ecma48::pos(trail_r, drop.col)));
+                            }
+                        }
+                    }
                 } else {
                      drop.seq_idx = (drop.seq_idx + 1) % drop.sequence.len();
                 }
@@ -326,7 +339,7 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 for k in 0..=drop.trail_len {
                     if drop.row <= k { continue; }
                     let r = drop.row - k;
-                    if r < 1 || r > rows { continue; }
+                    if r < 11 || r > rows { continue; } // Restricted top 10 rows
                     
                     let len = drop.sequence.len();
                     let curr_idx = (drop.seq_idx + len - (k % len)) % len;

@@ -30,15 +30,37 @@ pub(crate) async fn boot_pixi_rect_smoke_task() {
 
     crate::log!("qjs-pixi-rect-smoke: waiting for VirtioSw gfx\n");
 
-    // Wait until the user (or system) switches gfx into a virtio-backed scanout.
-    // This avoids drawing into the Limine/VGA console framebuffer.
-    loop {
+    // First, wait briefly for an already-in-flight switch.
+    for _ in 0..30 {
         if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
-            crate::log!("qjs-pixi-rect-smoke: starting\n");
+            crate::log!("qjs-pixi-rect-smoke: starting (virtio_sw already active)\n");
             unsafe { trueos_qjs::trueos_smoke::run_pixi_rect_smoke() };
             crate::log!("qjs-pixi-rect-smoke: done\n");
             return;
         }
         Timer::after(EmbassyDuration::from_millis(100)).await;
     }
+
+    crate::log!("qjs-pixi-rect-smoke: forcing gfx switch_to_virtio_sw\n");
+    if !crate::gfx::switch_to_virtio_sw() {
+        crate::log!("qjs-pixi-rect-smoke: skip (switch_to_virtio_sw failed)\n");
+        return;
+    }
+
+    // Give scanout setup a short settling window.
+    for _ in 0..10 {
+        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(50)).await;
+    }
+
+    if crate::gfx::backend_kind() != Some(crate::gfx::BackendKind::VirtioSw) {
+        crate::log!("qjs-pixi-rect-smoke: skip (virtio_sw not active after switch)\n");
+        return;
+    }
+
+    crate::log!("qjs-pixi-rect-smoke: starting\n");
+    unsafe { trueos_qjs::trueos_smoke::run_pixi_rect_smoke() };
+    crate::log!("qjs-pixi-rect-smoke: done\n");
 }
