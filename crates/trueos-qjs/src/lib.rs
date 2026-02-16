@@ -18,6 +18,9 @@ pub mod trueos_modules;
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
+pub mod webgl;
+
+#[cfg(feature = "trueos")]
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
