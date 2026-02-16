@@ -16,6 +16,36 @@ extern "C" {
 
 static PROCESS_ARGV: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+#[derive(Copy, Clone)]
+struct PackedJsValue {
+    tag: i64,
+    payload: i64,
+}
+
+#[inline]
+fn pack_js_value(v: qjs::JSValue) -> PackedJsValue {
+    PackedJsValue {
+        tag: v.tag,
+        payload: unsafe { v.u.short_big_int },
+    }
+}
+
+#[inline]
+fn unpack_js_value(v: PackedJsValue) -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion {
+            short_big_int: v.payload,
+        },
+        tag: v.tag,
+    }
+}
+
+struct ProcessNextTickCall {
+    ctx: usize,
+    func: PackedJsValue,
+    args: Vec<PackedJsValue>,
+}
+static PROCESS_NEXT_TICK_QUEUE: Mutex<Vec<ProcessNextTickCall>> = Mutex::new(Vec::new());
 
 
 pub fn set_process_argv(args: &[&str]) {
@@ -127,17 +157,68 @@ unsafe extern "C" fn qjs_process_next_tick(
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let func = args[0];
-
-    let call_argc = (argc - 1).max(0);
-    let call_argv = if argc > 1 {
-        unsafe { argv.add(1) }
-    } else {
-        core::ptr::null()
-    };
-
-    // Best-effort: call immediately. Later this can be wired to a real microtask/"nextTick" queue.
-    unsafe { qjs::JS_Call(ctx, func, qjs::JSValue::undefined(), call_argc, call_argv) };
+    let mut copied_args: Vec<PackedJsValue> = Vec::new();
+    if argc > 1 {
+        copied_args.reserve((argc - 1) as usize);
+        for i in 1..(argc as usize) {
+            copied_args.push(pack_js_value(qjs::js_dup_value(ctx, args[i])));
+        }
+    }
+    PROCESS_NEXT_TICK_QUEUE.lock().push(ProcessNextTickCall {
+        ctx: ctx as usize,
+        func: pack_js_value(qjs::js_dup_value(ctx, func)),
+        args: copied_args,
+    });
     qjs::JSValue::undefined()
+}
+
+pub(crate) fn has_process_next_tick_pending(ctx: *mut qjs::JSContext) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    let key = ctx as usize;
+    PROCESS_NEXT_TICK_QUEUE
+        .lock()
+        .iter()
+        .any(|c| c.ctx == key)
+}
+
+pub(crate) unsafe fn pump_process_next_tick(ctx: *mut qjs::JSContext) -> bool {
+    if ctx.is_null() {
+        return false;
+    }
+    let key = ctx as usize;
+    let mut progress = false;
+    // Bound per-pump work to keep fairness with async/net polling.
+    for _ in 0..64 {
+        let call = {
+            let mut q = PROCESS_NEXT_TICK_QUEUE.lock();
+            let Some(idx) = q.iter().position(|c| c.ctx == key) else {
+                break;
+            };
+            q.remove(idx)
+        };
+        progress = true;
+        let func = unpack_js_value(call.func);
+        let args_len = call.args.len();
+        let mut call_args: Vec<qjs::JSValue> = Vec::with_capacity(args_len);
+        for arg in call.args {
+            call_args.push(unpack_js_value(arg));
+        }
+        let argc = args_len as c_int;
+        let argv = if call_args.is_empty() {
+            core::ptr::null()
+        } else {
+            call_args.as_ptr() as *const qjs::JSValueConst
+        };
+        let ret = qjs::JS_Call(ctx, func, qjs::JSValue::undefined(), argc, argv);
+        qjs::js_free_value(ctx, ret);
+        qjs::js_free_value(ctx, func);
+        for v in call_args {
+            qjs::js_free_value(ctx, v);
+        }
+    }
+    progress
 }
 
 unsafe extern "C" fn qjs_process_cwd(

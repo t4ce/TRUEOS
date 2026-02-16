@@ -74,6 +74,35 @@ fn halt_loop() -> ! {
     }
 }
 
+#[inline]
+fn is_canonical_addr(v: usize) -> bool {
+    let sign = (v >> 47) & 1;
+    let high = v >> 48;
+    if sign == 0 {
+        high == 0
+    } else {
+        high == 0xFFFF
+    }
+}
+
+fn dump_stack_words(sp: usize, words: usize) {
+    if sp == 0 || !is_canonical_addr(sp) {
+        dprintln!("stack dump: invalid sp=0x{:016x}", sp as u64);
+        return;
+    }
+    let ptr = sp as *const usize;
+    dprintln!("stack dump @0x{:016x}:", sp as u64);
+    for i in 0..words {
+        let p = unsafe { ptr.add(i) };
+        let addr = p as usize;
+        if !is_canonical_addr(addr) {
+            break;
+        }
+        let v = unsafe { core::ptr::read_volatile(p) };
+        dprintln!("  [rsp+0x{:02x}] = 0x{:016x}", i * core::mem::size_of::<usize>(), v as u64);
+    }
+}
+
 /// Simple frame-pointer-based stack frame capture.
 #[derive(Copy, Clone, Debug)]
 pub struct Frame {
@@ -181,6 +210,15 @@ extern "x86-interrupt" fn page_fault_handler(
     dprintln!("RIP={:#x} CS={:#x}", stack_frame.instruction_pointer.as_u64(), stack_frame.code_segment.0);
     dprintln!("RSP={:#x} SS={:#x}", stack_frame.stack_pointer.as_u64(), stack_frame.stack_segment.0);
     dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    dprintln!(
+        "CPU: lapic={} cpu={}",
+        crate::percpu::this_cpu().lapic_id(),
+        crate::percpu::this_cpu().cpu_index()
+    );
+    if stack_frame.instruction_pointer.as_u64() == 0 {
+        dprintln!("hint: RIP=0 null instruction fetch (null fn ptr / clobbered return address)");
+    }
+    dump_stack_words(stack_frame.stack_pointer.as_u64() as usize, 16);
 
     halt_loop();
 }

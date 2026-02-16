@@ -95,8 +95,22 @@ pub fn with_framebuffers<R>(f: impl FnOnce(Option<&'static ::limine::response::F
 #[cfg(feature = "gfx_virgl")]
 #[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {
-    crate::log!("gfx: switch_to_virgl: disabled (A/B swap mode)\n");
-    false
+    crate::log!("gfx: switch_to_virgl: begin\n");
+
+    // Perform backend init outside SYSTEM lock.
+    let fbs = with_framebuffers(|f| f).flatten();
+    let Some(b) = backends::Backend::init_virgl(fbs) else {
+        crate::log!("gfx: switch_to_virgl: init_virgl failed\n");
+        return false;
+    };
+
+    with_system(|sys| {
+        sys.backend = b;
+        bump_backend_epoch();
+        crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
+        true
+    })
+    .unwrap_or(false)
 }
 
 #[cfg(not(feature = "gfx_virgl"))]
@@ -223,12 +237,18 @@ pub fn toggle_backend() -> BackendKind {
             BackendKind::LimineFb
         }
         BackendKind::LimineFb => {
+            if switch_to_virgl() {
+                return BackendKind::Virgl;
+            }
             if switch_to_virtio_sw() {
                 return BackendKind::VirtioSw;
             }
             BackendKind::LimineFb
         }
         BackendKind::None => {
+            if switch_to_virgl() {
+                return BackendKind::Virgl;
+            }
             if switch_to_virtio_sw() {
                 return BackendKind::VirtioSw;
             }

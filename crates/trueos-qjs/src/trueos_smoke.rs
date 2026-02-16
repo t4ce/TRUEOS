@@ -61,6 +61,7 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
     let mut last_status_tick: u64 = start;
     loop {
         let mut progress = false;
+        progress |= qjs::trueos_modules::pump_process_next_tick(ctx);
         progress |= qjs::async_ops::pump(ctx);
         progress |= qjs::workers::pump(ctx);
 
@@ -71,7 +72,8 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
         let pending_async = qjs::async_ops::has_pending(ctx);
         let pending_workers = qjs::workers::has_pending_for_ctx(ctx);
         let jobs_pending = qjs::JS_IsJobPending(rt) > 0;
-        if !pending_async && !pending_workers && !jobs_pending {
+        let pending_next_tick = qjs::trueos_modules::has_process_next_tick_pending(ctx);
+        if !pending_async && !pending_workers && !jobs_pending && !pending_next_tick {
             break;
         }
 
@@ -87,6 +89,8 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
                 log_str(if pending_workers { "1" } else { "0" });
                 log_str(" jobs=");
                 log_str(if jobs_pending { "1" } else { "0" });
+                log_str(" nextTick=");
+                log_str(if pending_next_tick { "1" } else { "0" });
                 log_str("\n");
             }
         }
@@ -487,6 +491,10 @@ pub unsafe fn run_pixi_rect_smoke() {
         qjs::js_free_value(ctx, mod_ret);
         log_str("quickjs: pixi-rect eval ok\n");
         let _ = drain_jobs_and_promises(rt, ctx, 60_000);
+        // Scene can be infinite and may own workers; terminate them before VM teardown.
+        qjs::workers::terminate_all_for_context(ctx);
+        let _ = drain_jobs_and_promises(rt, ctx, 2_000);
+        qjs::workers::drain_all_for_context(ctx);
 
         // Postflight: if the module ran, logs should have appeared; still verify print works.
         let filename = b"<pixi-ui-postflight>\0";
