@@ -108,6 +108,19 @@ enum WebGlUniformKind {
     ProjectionMatrix,
 }
 
+#[derive(Clone)]
+struct WebGlActiveAttrib {
+    name: Vec<u8>,
+    gl_type: u32,
+    size: i32,
+}
+
+#[derive(Clone, Default)]
+struct WebGlVaoState {
+    element_array_buffer: u32,
+    attribs: BTreeMap<u32, WebGlVertexAttrib>,
+}
+
 struct WebGlState {
     array_buffer: u32,
     element_array_buffer: u32,
@@ -119,6 +132,10 @@ struct WebGlState {
     uniform_locs: BTreeMap<u32, WebGlUniformKind>,
     uniform_name_to_loc: BTreeMap<Vec<u8>, u32>,
     next_uniform_loc: u32,
+    shader_types: BTreeMap<u32, u32>,
+    shader_sources: BTreeMap<u32, Vec<u8>>,
+    program_shaders: BTreeMap<u32, Vec<u32>>,
+    program_active_attribs: BTreeMap<u32, Vec<WebGlActiveAttrib>>,
     translation_matrix: [f32; 9],
     projection_matrix: [f32; 9],
     has_translation_matrix: bool,
@@ -132,6 +149,9 @@ struct WebGlState {
     enabled_scissor_test: bool,
     front_face_mode: u32,
     cull_face_mode: u32,
+    current_vao: u32,
+    vao0: WebGlVaoState,
+    vaos: BTreeMap<u32, WebGlVaoState>,
 }
 
 static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
@@ -145,6 +165,10 @@ static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
     uniform_locs: BTreeMap::new(),
     uniform_name_to_loc: BTreeMap::new(),
     next_uniform_loc: 1,
+    shader_types: BTreeMap::new(),
+    shader_sources: BTreeMap::new(),
+    program_shaders: BTreeMap::new(),
+    program_active_attribs: BTreeMap::new(),
     translation_matrix: [
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -168,6 +192,12 @@ static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
     // WebGL defaults: CCW front faces, cull back faces.
     front_face_mode: 0x0901, // CCW
     cull_face_mode: 0x0405,  // BACK
+    current_vao: 0,
+    vao0: WebGlVaoState {
+        element_array_buffer: 0,
+        attribs: BTreeMap::new(),
+    },
+    vaos: BTreeMap::new(),
 });
 
 fn ascii_lower(bytes: &[u8]) -> Vec<u8> {
@@ -222,6 +252,124 @@ fn alloc_attrib_location(st: &mut WebGlState, name: &[u8]) -> u32 {
     st.attrib_loc_to_name.insert(loc, key);
     st.next_attrib_loc = loc.saturating_add(1);
     loc
+}
+
+fn parse_glsl_type_token(ty: &str) -> Option<u32> {
+    match ty {
+        "float" => Some(0x1406),
+        "vec2" => Some(0x8B50),
+        "vec3" => Some(0x8B51),
+        "vec4" => Some(0x8B52),
+        "int" => Some(0x1404),
+        "ivec2" => Some(0x8B53),
+        "ivec3" => Some(0x8B54),
+        "ivec4" => Some(0x8B55),
+        "bool" => Some(0x8B56),
+        "bvec2" => Some(0x8B57),
+        "bvec3" => Some(0x8B58),
+        "bvec4" => Some(0x8B59),
+        "mat2" => Some(0x8B5A),
+        "mat3" => Some(0x8B5B),
+        "mat4" => Some(0x8B5C),
+        _ => None,
+    }
+}
+
+fn parse_glsl_active_attribs(src: &[u8]) -> Vec<WebGlActiveAttrib> {
+    let mut out = Vec::new();
+    let Ok(text) = core::str::from_utf8(src) else {
+        return out;
+    };
+
+    for raw_line in text.lines() {
+        let line = raw_line.split("//").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut words = line.split_whitespace();
+        let Some(qual) = words.next() else {
+            continue;
+        };
+        if qual != "attribute" && qual != "in" {
+            continue;
+        }
+        let Some(ty_tok) = words.next() else {
+            continue;
+        };
+        let Some(name_tok) = words.next() else {
+            continue;
+        };
+
+        let Some(gl_type) = parse_glsl_type_token(ty_tok) else {
+            continue;
+        };
+
+        let mut name = name_tok.trim_end_matches(';');
+        if let Some(i) = name.find('[') {
+            name = &name[..i];
+        }
+        if name.is_empty() {
+            continue;
+        }
+
+        let name_bytes = name.as_bytes().to_vec();
+        if out.iter().any(|a| a.name == name_bytes) {
+            continue;
+        }
+        out.push(WebGlActiveAttrib {
+            name: name_bytes,
+            gl_type,
+            size: 1,
+        });
+    }
+    out
+}
+
+fn refresh_program_active_attribs(st: &mut WebGlState, program_id: u32) {
+    let mut out = Vec::new();
+    if let Some(shaders) = st.program_shaders.get(&program_id).cloned() {
+        for shader_id in shaders {
+            let ty = st.shader_types.get(&shader_id).copied().unwrap_or(0);
+            // VERTEX_SHADER only.
+            if ty != 0x8B31 {
+                continue;
+            }
+            let src = st.shader_sources.get(&shader_id).cloned().unwrap_or_default();
+            for a in parse_glsl_active_attribs(src.as_slice()) {
+                if !out.iter().any(|x: &WebGlActiveAttrib| x.name == a.name) {
+                    out.push(a);
+                }
+            }
+        }
+    }
+    for a in out.iter() {
+        let _ = alloc_attrib_location(st, a.name.as_slice());
+    }
+    st.program_active_attribs.insert(program_id, out);
+}
+
+fn webgl_save_current_vao_state(st: &mut WebGlState) {
+    let saved = WebGlVaoState {
+        element_array_buffer: st.element_array_buffer,
+        attribs: st.attribs.clone(),
+    };
+    if st.current_vao == 0 {
+        st.vao0 = saved;
+    } else {
+        st.vaos.insert(st.current_vao, saved);
+    }
+}
+
+fn webgl_load_vao_state(st: &mut WebGlState, vao_id: u32) {
+    let state = if vao_id == 0 {
+        st.vao0.clone()
+    } else {
+        st.vaos.get(&vao_id).cloned().unwrap_or_default()
+    };
+    st.current_vao = vao_id;
+    st.element_array_buffer = state.element_array_buffer;
+    st.attribs = state.attribs;
 }
 
 pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
@@ -299,20 +447,160 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         js_int32(id as i32)
     }
 
-    fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
-        let raw = if let Some(base) = name.strip_suffix(b"[0]") {
-            base
-        } else {
-            name
-        };
-        if raw.eq_ignore_ascii_case(b"translationMatrix") {
-            WebGlUniformKind::TranslationMatrix
-        } else if raw.eq_ignore_ascii_case(b"projectionMatrix") {
-            WebGlUniformKind::ProjectionMatrix
-        } else {
-            WebGlUniformKind::Other
+    unsafe extern "C" fn gl_create_shader(
+        ctx: *mut qjs::JSContext,
+        this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let out = gl_create_handle(ctx, this_val, 0, core::ptr::null());
+        if out.tag != qjs::JS_TAG_INT {
+            return out;
         }
+        if argv.is_null() || argc < 1 {
+            return out;
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut ty_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut ty_f as *mut f64, args[0]) != 0 {
+            return out;
+        }
+        let shader_ty = (ty_f as i32).max(0) as u32;
+        let shader_id = unsafe { out.u.int32 }.max(0) as u32;
+        if shader_id != 0 {
+            let mut st = WEBGL_STATE.lock();
+            st.shader_types.insert(shader_id, shader_ty);
+        }
+        out
     }
+
+    unsafe extern "C" fn gl_shader_source(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut shader_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut shader_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let shader_id = (shader_f as i32).max(0) as u32;
+        if shader_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let cstr = qjs::js_to_cstring(ctx, args[1]);
+        if cstr.is_null() {
+            return qjs::JSValue::undefined();
+        }
+        let src = CStr::from_ptr(cstr).to_bytes().to_vec();
+        qjs::JS_FreeCString(ctx, cstr);
+        let mut st = WEBGL_STATE.lock();
+        st.shader_sources.insert(shader_id, src);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_attach_shader(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
+        let mut shader_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut shader_f as *mut f64, args[1]);
+        let program_id = (program_f as i32).max(0) as u32;
+        let shader_id = (shader_f as i32).max(0) as u32;
+        if program_id == 0 || shader_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mut st = WEBGL_STATE.lock();
+        let v = st.program_shaders.entry(program_id).or_insert_with(Vec::new);
+        if !v.iter().any(|x| *x == shader_id) {
+            v.push(shader_id);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_detach_shader(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
+        let mut shader_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut shader_f as *mut f64, args[1]);
+        let program_id = (program_f as i32).max(0) as u32;
+        let shader_id = (shader_f as i32).max(0) as u32;
+        if program_id == 0 || shader_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mut st = WEBGL_STATE.lock();
+        if let Some(v) = st.program_shaders.get_mut(&program_id) {
+            v.retain(|x| *x != shader_id);
+        }
+        refresh_program_active_attribs(&mut st, program_id);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_link_program(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let program_id = (program_f as i32).max(0) as u32;
+        if program_id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mut st = WEBGL_STATE.lock();
+        refresh_program_active_attribs(&mut st, program_id);
+        qjs::JSValue::undefined()
+    }
+
+fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
+    let raw = if let Some(base) = name.strip_suffix(b"[0]") {
+        base
+    } else {
+        name
+    };
+    let lower = ascii_lower(raw);
+    if lower
+        .windows(b"translationmatrix".len())
+        .any(|w| w == b"translationmatrix")
+    {
+        WebGlUniformKind::TranslationMatrix
+    } else if lower
+        .windows(b"projectionmatrix".len())
+        .any(|w| w == b"projectionmatrix")
+    {
+        WebGlUniformKind::ProjectionMatrix
+    } else {
+        WebGlUniformKind::Other
+    }
+}
 
     fn mat3_mul_vec3(m: &[f32; 9], x: f32, y: f32, z: f32) -> (f32, f32, f32) {
         // Column-major mat3, matching GLSL/WebGL uniform layout.
@@ -327,6 +615,15 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             m[0], m[3], m[6],
             m[1], m[4], m[7],
             m[2], m[5], m[8],
+        ]
+    }
+
+    fn mat4_to_mat3_affine_2d(m: [f32; 16]) -> [f32; 9] {
+        // Column-major 4x4 for vec4(x, y, 0, 1) -> vec2.
+        [
+            m[0], m[1], 0.0,
+            m[4], m[5], 0.0,
+            m[12], m[13], 1.0,
         ]
     }
 
@@ -416,6 +713,9 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             return js_int32(-1);
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]);
+        let program_id = (program_f as i32).max(0) as u32;
         let cstr = qjs::js_to_cstring(ctx, args[1]);
         if cstr.is_null() {
             return js_int32(-1);
@@ -426,6 +726,19 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             return js_int32(-1);
         }
         let mut st = WEBGL_STATE.lock();
+        if program_id != 0 && !st.program_active_attribs.contains_key(&program_id) {
+            refresh_program_active_attribs(&mut st, program_id);
+        }
+        if program_id != 0 {
+            let known = st
+                .program_active_attribs
+                .get(&program_id)
+                .map(|v| v.iter().any(|a| a.name == name))
+                .unwrap_or(false);
+            if !known {
+                return js_int32(-1);
+            }
+        }
         let loc = alloc_attrib_location(&mut st, name.as_slice());
         js_int32(loc as i32)
     }
@@ -482,6 +795,67 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         }
         if WEBGL_LOG_UNIFORM_UPLOADS.fetch_add(1, Ordering::Relaxed) < 16 {
             log_str("qjs-webgl: uniformMatrix3fv loc=");
+            log_usize_dec(loc as usize);
+            log_str(" transpose=");
+            log_usize_dec((transpose_f != 0.0) as usize);
+            log_str("\n");
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_uniform_matrix4fv(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 3 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut loc_f: f64 = 0.0;
+        let mut transpose_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut loc_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut transpose_f as *mut f64, args[1]);
+        let loc = (loc_f as i32).max(0) as u32;
+        if loc == 0 {
+            return qjs::JSValue::undefined();
+        }
+
+        let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[2]) else {
+            return qjs::JSValue::undefined();
+        };
+        let bytes = core::slice::from_raw_parts(ptr, len);
+        if bytes.len() < 16 * 4 {
+            return qjs::JSValue::undefined();
+        }
+
+        let mut mat4 = [0.0f32; 16];
+        for (i, slot) in mat4.iter_mut().enumerate() {
+            let Some(v) = read_f32_le(bytes, i * 4) else {
+                return qjs::JSValue::undefined();
+            };
+            *slot = v;
+        }
+        let mut mat3 = mat4_to_mat3_affine_2d(mat4);
+        if transpose_f != 0.0 {
+            mat3 = mat3_transpose(mat3);
+        }
+
+        let mut st = WEBGL_STATE.lock();
+        match st.uniform_locs.get(&loc).copied().unwrap_or(WebGlUniformKind::Other) {
+            WebGlUniformKind::TranslationMatrix => {
+                st.translation_matrix = mat3;
+                st.has_translation_matrix = true;
+            }
+            WebGlUniformKind::ProjectionMatrix => {
+                st.projection_matrix = mat3;
+                st.has_projection_matrix = true;
+            }
+            WebGlUniformKind::Other => {}
+        }
+        if WEBGL_LOG_UNIFORM_UPLOADS.fetch_add(1, Ordering::Relaxed) < 16 {
+            log_str("qjs-webgl: uniformMatrix4fv loc=");
             log_usize_dec(loc as usize);
             log_str(" transpose=");
             log_usize_dec((transpose_f != 0.0) as usize);
@@ -570,12 +944,13 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         let target = target_f as i32;
 
         // WebGL allows bufferData(target, size, usage) as well as bufferData(target, data, usage).
+        // Prefer buffer-like inputs first; numeric coercion of objects can produce NaN/0 and
+        // accidentally drop real vertex/index payloads.
+        let data_opt = js_get_arraybuffer_view(ctx, args[1]);
         let mut numeric_size: f64 = 0.0;
-        let data_opt = if qjs::JS_ToFloat64(ctx, &mut numeric_size as *mut f64, args[1]) == 0 {
-            None
-        } else {
-            js_get_arraybuffer_view(ctx, args[1])
-        };
+        if data_opt.is_none() {
+            let _ = qjs::JS_ToFloat64(ctx, &mut numeric_size as *mut f64, args[1]);
+        }
 
         let mut st = WEBGL_STATE.lock();
         let buf_id = match target as u32 {
@@ -656,6 +1031,116 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         let entry = st.attribs.entry(idx).or_default();
         entry.enabled = true;
         qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_disable_vertex_attrib_array(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut idx_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut idx_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let idx = (idx_f as i32).max(0) as u32;
+        let mut st = WEBGL_STATE.lock();
+        let entry = st.attribs.entry(idx).or_default();
+        entry.enabled = false;
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_create_vertex_array_oes(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: c_int,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let id = WEBGL_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let mut st = WEBGL_STATE.lock();
+        st.vaos.entry(id).or_insert_with(WebGlVaoState::default);
+        js_int32(id as i32)
+    }
+
+    unsafe extern "C" fn gl_bind_vertex_array_oes(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let arg0 = args[0];
+        let mut id_f: f64 = 0.0;
+        let id = if arg0.tag == qjs::JS_TAG_NULL || arg0.tag == qjs::JS_TAG_UNDEFINED {
+            0
+        } else if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, arg0) == 0 {
+            (id_f as i32).max(0) as u32
+        } else {
+            0
+        };
+
+        let mut st = WEBGL_STATE.lock();
+        if id != 0 {
+            st.vaos.entry(id).or_insert_with(WebGlVaoState::default);
+        }
+        webgl_save_current_vao_state(&mut st);
+        webgl_load_vao_state(&mut st, id);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_delete_vertex_array_oes(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut id_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let id = (id_f as i32).max(0) as u32;
+        if id == 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mut st = WEBGL_STATE.lock();
+        if st.current_vao == id {
+            webgl_load_vao_state(&mut st, 0);
+        }
+        st.vaos.remove(&id);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_is_vertex_array_oes(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return js_bool(false);
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut id_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut id_f as *mut f64, args[0]) != 0 {
+            return js_bool(false);
+        }
+        let id = (id_f as i32).max(0) as u32;
+        if id == 0 {
+            return js_bool(false);
+        }
+        let st = WEBGL_STATE.lock();
+        js_bool(st.vaos.contains_key(&id))
     }
 
     unsafe extern "C" fn gl_vertex_attrib_pointer(
@@ -1084,10 +1569,10 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         let mut out = Vec::with_capacity(count.saturating_mul(VTX_SIZE));
         for i in 0..count {
             let idx_off = index_off.saturating_add(i.saturating_mul(2));
-            let Some(vtx_idx) = read_u16_le(&elem_bytes, idx_off) else {
-                break;
-            };
-            let vtx_idx = vtx_idx as usize;
+            // If index data is missing/truncated, degrade to sequential indexing.
+            let vtx_idx = read_u16_le(&elem_bytes, idx_off)
+                .map(|v| v as usize)
+                .unwrap_or(i);
 
             let base = vtx_idx.saturating_mul(pos_stride).saturating_add(pos.offset);
             let Some(x_px) = read_attrib_component(pos_bytes, base, pos.ty, pos.normalized) else {
@@ -1133,6 +1618,55 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             out.push(g);
             out.push(b);
             out.push(0);
+        }
+
+        if out.is_empty() {
+            // Fallback: try common interleaved float2 position layouts from any ARRAY_BUFFER.
+            // This keeps Pixi advancing when attribute/index state is partially modeled.
+            let mut recovered = Vec::new();
+            let try_strides = [8usize, 12, 16, 20, 24, 28, 32];
+            for (buf_id, bytes) in buffers.iter() {
+                if *buf_id == element_array_buffer || bytes.len() < 8 {
+                    continue;
+                }
+                for stride in try_strides.iter() {
+                    let mut tmp = Vec::with_capacity(count.saturating_mul(VTX_SIZE));
+                    for i in 0..count {
+                        let base = i.saturating_mul(*stride);
+                        let Some(x_px) = read_f32_le(bytes, base) else {
+                            break;
+                        };
+                        let Some(y_px) = read_f32_le(bytes, base.saturating_add(4)) else {
+                            break;
+                        };
+                        let (x, y) = if has_translation_matrix && has_projection_matrix {
+                            let (tx, ty, tz) = mat3_mul_vec3(&translation_matrix, x_px, y_px, 1.0);
+                            let (cx, cy, _cz) = mat3_mul_vec3(&projection_matrix, tx, ty, tz);
+                            (cx, cy)
+                        } else {
+                            let x = (2.0 * (x_px / viewport_w)) - 1.0;
+                            let y = 1.0 - (2.0 * (y_px / viewport_h));
+                            (x, y)
+                        };
+                        tmp.extend_from_slice(&x.to_le_bytes());
+                        tmp.extend_from_slice(&y.to_le_bytes());
+                        tmp.push(255);
+                        tmp.push(255);
+                        tmp.push(255);
+                        tmp.push(0);
+                    }
+                    if !tmp.is_empty() {
+                        recovered = tmp;
+                        break;
+                    }
+                }
+                if !recovered.is_empty() {
+                    break;
+                }
+            }
+            if !recovered.is_empty() {
+                out = recovered;
+            }
         }
 
         if out.is_empty() {
@@ -1546,15 +2080,27 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             return js_bool(true);
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
         let mut pname_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]);
         if qjs::JS_ToFloat64(ctx, &mut pname_f as *mut f64, args[1]) != 0 {
             return js_bool(true);
+        }
+        let program_id = (program_f as i32).max(0) as u32;
+        let mut st = WEBGL_STATE.lock();
+        if program_id != 0 && !st.program_active_attribs.contains_key(&program_id) {
+            refresh_program_active_attribs(&mut st, program_id);
         }
         match (pname_f as i32).max(0) as u32 {
             // LINK_STATUS
             0x8B82 => js_bool(true),
             // ACTIVE_ATTRIBUTES / ACTIVE_UNIFORMS
-            0x8B89 => js_int32(4),
+            0x8B89 => js_int32(
+                st.program_active_attribs
+                    .get(&program_id)
+                    .map(|v| v.len() as i32)
+                    .unwrap_or(0),
+            ),
             0x8B86 => js_int32(0),
             _ => js_bool(true),
         }
@@ -1570,17 +2116,25 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             return js_null();
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut program_f: f64 = 0.0;
         let mut idx_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut program_f as *mut f64, args[0]);
         if qjs::JS_ToFloat64(ctx, &mut idx_f as *mut f64, args[1]) != 0 {
             return js_null();
         }
-        let idx = (idx_f as i32).max(0) as u32;
-        let (name, ty) = match idx {
-            0 => (b"aVertexPosition\0".as_slice(), 0x8B50), // FLOAT_VEC2
-            1 => (b"aTextureCoord\0".as_slice(), 0x8B50),   // FLOAT_VEC2
-            2 => (b"aColor\0".as_slice(), 0x8B52),          // FLOAT_VEC4
-            3 => (b"aTextureId\0".as_slice(), 0x1406),      // FLOAT
-            _ => return js_null(),
+        let program_id = (program_f as i32).max(0) as u32;
+        let idx = (idx_f as i32).max(0) as usize;
+        let mut st = WEBGL_STATE.lock();
+        if program_id != 0 && !st.program_active_attribs.contains_key(&program_id) {
+            refresh_program_active_attribs(&mut st, program_id);
+        }
+        let Some(attr) = st
+            .program_active_attribs
+            .get(&program_id)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return js_null();
         };
         let obj = qjs::JS_NewObject(ctx);
         if obj.is_exception() {
@@ -1590,19 +2144,19 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
             ctx,
             obj,
             b"name\0".as_ptr() as *const c_char,
-            qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len() - 1),
+            qjs::JS_NewStringLen(ctx, attr.name.as_ptr() as *const c_char, attr.name.len()),
         );
         let _ = qjs::JS_SetPropertyStr(
             ctx,
             obj,
             b"size\0".as_ptr() as *const c_char,
-            js_int32(1),
+            js_int32(attr.size),
         );
         let _ = qjs::JS_SetPropertyStr(
             ctx,
             obj,
             b"type\0".as_ptr() as *const c_char,
-            js_int32(ty),
+            js_int32(attr.gl_type as i32),
         );
         obj
     }
@@ -1623,7 +2177,33 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
         }
         let name = CStr::from_ptr(cstr).to_bytes();
         let is_uint_ext = name.eq_ignore_ascii_case(b"OES_element_index_uint");
+        let is_vao_ext = name.eq_ignore_ascii_case(b"OES_vertex_array_object");
         qjs::JS_FreeCString(ctx, cstr);
+        if is_vao_ext {
+            let ext = qjs::JS_NewObject(ctx);
+            if ext.is_exception() {
+                return ext;
+            }
+            macro_rules! ext_fn {
+                ($name:literal, $func:expr, $argc:expr) => {{
+                    let k = concat!($name, "\0");
+                    let f = qjs::JS_NewCFunction2(
+                        ctx,
+                        Some($func),
+                        k.as_ptr() as *const c_char,
+                        $argc,
+                        qjs::JS_CFUNC_GENERIC,
+                        0,
+                    );
+                    let _ = qjs::JS_SetPropertyStr(ctx, ext, k.as_ptr() as *const c_char, f);
+                }};
+            }
+            ext_fn!("createVertexArrayOES", gl_create_vertex_array_oes, 0);
+            ext_fn!("bindVertexArrayOES", gl_bind_vertex_array_oes, 1);
+            ext_fn!("deleteVertexArrayOES", gl_delete_vertex_array_oes, 1);
+            ext_fn!("isVertexArrayOES", gl_is_vertex_array_oes, 1);
+            return ext;
+        }
         if is_uint_ext {
             return qjs::JS_NewObject(ctx);
         }
@@ -1781,12 +2361,14 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
     // Object creation helpers
     gl_fn!("createBuffer", gl_create_handle, 0);
     gl_fn!("createTexture", gl_create_handle, 0);
-    gl_fn!("createShader", gl_create_handle, 1);
+    gl_fn!("createShader", gl_create_shader, 1);
     gl_fn!("createProgram", gl_create_handle, 0);
+    gl_fn!("createVertexArray", gl_create_vertex_array_oes, 0);
     gl_fn!("getUniformLocation", gl_get_uniform_location, 2);
 
     // Generic no-ops (extend as Pixi tells us what it needs)
     gl_fn!("bindBuffer", gl_bind_buffer, 2);
+    gl_fn!("bindVertexArray", gl_bind_vertex_array_oes, 1);
     gl_fn!("bufferData", gl_buffer_data, 3);
     gl_fn!("bufferSubData", gl_buffer_sub_data, 3);
     gl_fn!("bindTexture", gl_noop, 2);
@@ -1796,23 +2378,26 @@ pub(crate) unsafe fn ensure_global_trueos_webgl_singleton(
     gl_fn!("texImage2D", gl_noop, 9);
     gl_fn!("texSubImage2D", gl_noop, 9);
     gl_fn!("pixelStorei", gl_noop, 2);
-    gl_fn!("shaderSource", gl_noop, 2);
+    gl_fn!("shaderSource", gl_shader_source, 2);
     gl_fn!("compileShader", gl_noop, 1);
-    gl_fn!("attachShader", gl_noop, 2);
-    gl_fn!("detachShader", gl_noop, 2);
-    gl_fn!("linkProgram", gl_noop, 1);
+    gl_fn!("attachShader", gl_attach_shader, 2);
+    gl_fn!("detachShader", gl_detach_shader, 2);
+    gl_fn!("linkProgram", gl_link_program, 1);
     gl_fn!("bindAttribLocation", gl_bind_attrib_location, 3);
     gl_fn!("useProgram", gl_noop, 1);
     gl_fn!("deleteShader", gl_noop, 1);
     gl_fn!("deleteProgram", gl_noop, 1);
+    gl_fn!("deleteVertexArray", gl_delete_vertex_array_oes, 1);
+    gl_fn!("isVertexArray", gl_is_vertex_array_oes, 1);
     gl_fn!("enableVertexAttribArray", gl_enable_vertex_attrib_array, 1);
+    gl_fn!("disableVertexAttribArray", gl_disable_vertex_attrib_array, 1);
     gl_fn!("vertexAttribPointer", gl_vertex_attrib_pointer, 6);
     gl_fn!("uniform1i", gl_noop, 2);
     gl_fn!("uniform1f", gl_noop, 2);
     gl_fn!("uniform2f", gl_noop, 3);
     gl_fn!("uniform4f", gl_noop, 5);
     gl_fn!("uniformMatrix3fv", gl_uniform_matrix3fv, 3);
-    gl_fn!("uniformMatrix4fv", gl_noop, 3);
+    gl_fn!("uniformMatrix4fv", gl_uniform_matrix4fv, 3);
     gl_fn!("viewport", gl_viewport, 4);
     gl_fn!("scissor", gl_noop, 4);
     gl_fn!("enable", gl_enable, 1);

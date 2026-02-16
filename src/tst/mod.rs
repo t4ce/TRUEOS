@@ -23,38 +23,69 @@ pub(crate) async fn boot_pixi_smoke_task() {
 }
 
 #[task]
-pub(crate) async fn boot_pixi_rect_smoke_task() {
-    use embassy_time::{Duration as EmbassyDuration, Timer};
+pub(crate) async fn boot_gfx_virtio_sw_prepare_task() {
+    use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-    crate::log!("qjs-pixi-rect-smoke: waiting for VirtioSw gfx\n");
-
-    // First, wait briefly for an already-in-flight switch.
-    for _ in 0..30 {
-        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
-            crate::log!("qjs-pixi-rect-smoke: starting (virtio_sw already active)\n");
-            unsafe { trueos_qjs::trueos_smoke::run_pixi_rect_smoke() };
-            crate::log!("qjs-pixi-rect-smoke: done\n");
-            return;
+    async fn wait_for_virtio_sw_stable(min_epoch: u64, timeout_ms: u64, settle_ms: u64) -> bool {
+        let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
+        let mut stable_ms: u64 = 0;
+        loop {
+            let kind_ok = crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw);
+            let epoch_ok = crate::gfx::backend_epoch() >= min_epoch;
+            if kind_ok && epoch_ok {
+                stable_ms = stable_ms.saturating_add(25);
+                if stable_ms >= settle_ms {
+                    return true;
+                }
+            } else {
+                stable_ms = 0;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            Timer::after(EmbassyDuration::from_millis(25)).await;
         }
-        Timer::after(EmbassyDuration::from_millis(100)).await;
     }
 
-    crate::log!("qjs-pixi-rect-smoke: forcing gfx switch_to_virtio_sw\n");
-    if !crate::gfx::switch_to_virtio_sw() {
-        crate::log!("qjs-pixi-rect-smoke: skip (switch_to_virtio_sw failed)\n");
+    crate::log!("qjs-gfx-prepare: waiting for stable VirtioSw gfx\n");
+    let epoch0 = crate::gfx::backend_epoch();
+
+    // First chance: if another path already switched to VirtioSw, wait for brief stability.
+    if wait_for_virtio_sw_stable(epoch0, 1500, 250).await {
+        crate::v::readiness::set(crate::v::readiness::GFX_VIRTIO_SW_READY);
+        crate::log!("qjs-gfx-prepare: ready (virtio_sw already active)\n");
         return;
     }
 
-    // Give scanout setup a short settling window.
-    for _ in 0..10 {
-        if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::VirtioSw) {
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(50)).await;
+    crate::log!("qjs-gfx-prepare: forcing gfx switch_to_virtio_sw\n");
+    if !crate::gfx::switch_to_virtio_sw() {
+        crate::log!("qjs-gfx-prepare: failed (switch_to_virtio_sw failed)\n");
+        return;
     }
 
-    if crate::gfx::backend_kind() != Some(crate::gfx::BackendKind::VirtioSw) {
-        crate::log!("qjs-pixi-rect-smoke: skip (virtio_sw not active after switch)\n");
+    let target_epoch = epoch0.saturating_add(1);
+    if !wait_for_virtio_sw_stable(target_epoch, 2500, 300).await {
+        crate::log!("qjs-gfx-prepare: failed (virtio_sw not stable)\n");
+        return;
+    }
+    crate::v::readiness::set(crate::v::readiness::GFX_VIRTIO_SW_READY);
+    crate::log!(
+        "qjs-gfx-prepare: ready epoch={}\n",
+        crate::gfx::backend_epoch()
+    );
+}
+
+#[task]
+pub(crate) async fn boot_pixi_rect_smoke_task() {
+    use embassy_time::Duration as EmbassyDuration;
+
+    if !crate::v::readiness::wait_for_timeout(
+        crate::v::readiness::GFX_VIRTIO_SW_READY,
+        EmbassyDuration::from_secs(8),
+    )
+    .await
+    {
+        crate::log!("qjs-pixi-rect-smoke: skip (gfx prepare timeout)\n");
         return;
     }
 
