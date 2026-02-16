@@ -7,6 +7,12 @@ use crate as qjs;
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_poll_once();
+    fn trueos_cabi_fs_read_file(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
 }
 
 unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
@@ -226,6 +232,21 @@ unsafe fn install_print(ctx: *mut qjs::JSContext) {
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, alias.as_ptr() as *const c_char, func2);
     qjs::js_free_value(ctx, global);
+}
+
+unsafe fn read_file_owned(path: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    let len = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0);
+    if len < 0 {
+        return None;
+    }
+    let len = len as usize;
+    let mut out = alloc::vec![0u8; len];
+    let got = trueos_cabi_fs_read_file(path.as_ptr(), path.len(), out.as_mut_ptr(), out.len());
+    if got < 0 {
+        return None;
+    }
+    out.truncate(got as usize);
+    Some(out)
 }
 
 /// TRUEOS kernel QuickJS smoke test:
@@ -553,95 +574,13 @@ pub unsafe fn run_pixi_rect_smoke() {
         }
     }
 
-    // IMPORTANT: In an ES module, imports must come first.
-    // Use __trueos_print so logs remain stable even if libraries overwrite globalThis.print.
-    let mod_filename = b"<smoke-pixi-tri>\0";
-    let mod_script = br#"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';
-
-// Allow getContext('webgl') one-arg calls during this smoke.
-globalThis.__trueos_webgl_force = 1;
-
-const log = globalThis.__trueos_print || globalThis.print;
-log('pixi-tri: start');
-
-try {
-    const canvas = document.createElement('canvas');
-    canvas.width = 320;
-    canvas.height = 200;
-
-    const renderer = new PIXI.Renderer({
-        view: canvas,
-        width: canvas.width,
-        height: canvas.height,
-        antialias: false,
-        backgroundColor: 0x081830
-    });
-
-    // Triangle in pixel coords.
-    const positions = new Float32Array([
-        40, 40,
-        280, 60,
-        160, 170,
-    ]);
-
-    // Per-vertex RGBA (normalized u8): R, G, B corners.
-    const colors = new Uint8Array([
-        255, 0, 0, 255,
-        0, 255, 0, 255,
-        0, 0, 255, 255,
-    ]);
-
-    const indices = new Uint16Array([0, 1, 2]);
-
-    const geometry = new PIXI.Geometry()
-        .addAttribute('aVertexPosition', positions, 2, false, PIXI.TYPES.FLOAT)
-        .addAttribute('aColor', colors, 4, true, PIXI.TYPES.UNSIGNED_BYTE)
-        .addIndex(indices);
-
-    const vs = `precision mediump float;
-attribute vec2 aVertexPosition;
-attribute vec4 aColor;
-uniform mat3 translationMatrix;
-uniform mat3 projectionMatrix;
-varying vec4 vColor;
-void main(){
-    vColor = aColor;
-    vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
-    gl_Position = vec4(pos.xy, 0.0, 1.0);
-}`;
-
-    const fs = `precision mediump float;
-varying vec4 vColor;
-void main(){
-    gl_FragColor = vColor;
-}`;
-
-    const program = PIXI.Program.from(vs, fs);
-    const shader = new PIXI.Shader(program, {});
-    const mesh = new PIXI.Mesh(geometry, shader);
-    mesh.position.set(160, 100);
-    mesh.pivot.set(160, 100);
-
-    const stage = new PIXI.Container();
-    stage.addChild(mesh);
-
-    // Drive a short in-VM animation burst; our shim doesn't provide browser RAF/timers yet.
-    for (let i = 0; i < 120; i++) {
-        mesh.rotation += 0.04;
-        renderer.render(stage);
-    }
-
-    log('pixi-tri: ok');
-} catch (e) {
-    log('pixi-tri: error', (e && e.stack) ? e.stack : (e && e.message) ? e.message : String(e));
-}
-
-0
-"#;
-
-    // NUL-terminate: QuickJS parser tends to be more reliable with C-string style buffers.
-    let mut owned: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(mod_script.len() + 1);
-    owned.extend_from_slice(mod_script);
+    let mod_filename = b"/qjs/app/pixi/main.mjs\0";
+    let Some(mut owned) = read_file_owned(b"/qjs/app/pixi/main.mjs") else {
+        log_str("quickjs: pixi-tri read /qjs/app/pixi/main.mjs failed\n");
+        drop(vm);
+        return;
+    };
+    // NUL-terminate for parser stability.
     owned.push(0);
 
     log_str("quickjs: pixi-tri: JS_Eval begin\n");
@@ -683,4 +622,3 @@ void main(){
 
     drop(vm);
 }
-
