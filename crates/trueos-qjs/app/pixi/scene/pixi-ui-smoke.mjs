@@ -15,6 +15,10 @@ function nowSeconds() {
 log('pixi-ui: start');
 
 try {
+  let workerPongs = 0;
+  let worker = null;
+  const MAX_FRAMES = 1200;
+
   const canvas = document.createElement('canvas');
   canvas.width = VIEW_W;
   canvas.height = VIEW_H;
@@ -72,23 +76,48 @@ try {
   let t = 0.0;
   let reportStart = nowSeconds();
   let frames = 0;
-  while (true) {
+  let totalFrames = 0;
+
+  function renderStep() {
     t += 0.022;
     root.rotation = Math.sin(t) * 0.15;
     root.scale.set(1.0 + Math.sin(t * 0.7) * 0.03);
 
     renderer.render(stage);
     frames++;
+    totalFrames++;
 
     const now = nowSeconds();
     const dt = now - reportStart;
     if (dt >= 15.0) {
       const fps = frames / dt;
-      log('pixi-ui: fps-est', String(Math.floor(fps)), 'dt', String(dt));
+      log('pixi-ui: fps-est', String(Math.floor(fps)), 'dt', String(dt), 'wp', String(workerPongs));
       reportStart = now;
       frames = 0;
     }
   }
+
+  try {
+    // Keep one side worker alive to exercise SMP worker plumbing without driving the frame clock.
+    worker = new Worker(`export {};`);
+    log('pixi-ui: worker', 'ok');
+  } catch (e) {
+    log('pixi-ui: worker', 'off', (e && e.message) ? e.message : String(e));
+  }
+
+  function scheduleTick() {
+    process.nextTick(() => {
+      renderStep();
+      if (totalFrames < MAX_FRAMES) {
+        scheduleTick();
+      } else if (worker && typeof worker.terminate === 'function') {
+        worker.terminate();
+        log('pixi-ui: done', 'frames', String(totalFrames), 'wp', String(workerPongs));
+      }
+    });
+  }
+
+  scheduleTick();
 } catch (e) {
   log('pixi-ui: error', (e && e.stack) ? e.stack : (e && e.message) ? e.message : String(e));
 }
