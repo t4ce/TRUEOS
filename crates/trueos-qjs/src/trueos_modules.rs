@@ -203,28 +203,69 @@ unsafe extern "C" fn qjs_process_chdir(
 }
 
 unsafe extern "C" fn qjs_process_uptime(
-    _ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    _argc: c_int,
-    _argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    // TODO: wire to kernel monotonic time.
-    unsafe { qjs::JS_NewFloat64(core::ptr::null_mut(), 0.0) }
-}
-
-unsafe extern "C" fn qjs_process_hrtime(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    // Node-style: [seconds, nanoseconds]. Best-effort zeros for now.
+    let ticks = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    if hz == 0 {
+        return unsafe { qjs::JS_NewFloat64(ctx, 0.0) };
+    }
+    let secs = (ticks / hz) as f64;
+    let rem = (ticks % hz) as f64;
+    unsafe { qjs::JS_NewFloat64(ctx, secs + (rem / hz as f64)) }
+}
+
+unsafe extern "C" fn qjs_process_hrtime(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // Node-style: [seconds, nanoseconds], optionally diffed against prior [sec, nsec].
+    let ticks = embassy_time_driver::now();
+    let hz = embassy_time_driver::TICK_HZ as u64;
+    let total_ns: u128 = if hz == 0 {
+        0
+    } else {
+        (ticks as u128).saturating_mul(1_000_000_000u128) / (hz as u128)
+    };
+    let mut out_ns = total_ns;
+
+    if !argv.is_null() && argc >= 1 {
+        let args = unsafe { core::slice::from_raw_parts(argv, argc as usize) };
+        let prev = args[0];
+        let s_v = unsafe { qjs::JS_GetPropertyUint32(ctx, prev, 0) };
+        let ns_v = unsafe { qjs::JS_GetPropertyUint32(ctx, prev, 1) };
+        if !s_v.is_exception() && !ns_v.is_exception() {
+            let mut s_f: f64 = 0.0;
+            let mut ns_f: f64 = 0.0;
+            let s_ok = unsafe { qjs::JS_ToFloat64(ctx, &mut s_f as *mut f64, s_v) } == 0;
+            let ns_ok = unsafe { qjs::JS_ToFloat64(ctx, &mut ns_f as *mut f64, ns_v) } == 0;
+            if s_ok && ns_ok {
+                let prev_ns = (s_f.max(0.0) as u128)
+                    .saturating_mul(1_000_000_000u128)
+                    .saturating_add(ns_f.max(0.0) as u128);
+                out_ns = out_ns.saturating_sub(prev_ns);
+            }
+        }
+        unsafe {
+            qjs::js_free_value(ctx, s_v);
+            qjs::js_free_value(ctx, ns_v);
+        }
+    }
+
+    let out_s = (out_ns / 1_000_000_000u128).min(i32::MAX as u128) as i32;
+    let out_n = (out_ns % 1_000_000_000u128) as i32;
+
     let arr = unsafe { qjs::JS_NewArray(ctx) };
     if arr.is_exception() {
         return arr;
     }
-    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 0, js_int32(0)) };
-    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 1, js_int32(0)) };
+    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 0, js_int32(out_s)) };
+    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, 1, js_int32(out_n)) };
     arr
 }
 
