@@ -15,6 +15,9 @@ pub mod async_fs;
 pub mod trueos_modules;
 
 #[cfg(feature = "trueos")]
+pub mod webgl;
+
+#[cfg(feature = "trueos")]
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
