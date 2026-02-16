@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate as qjs;
+use crate::webgl_texture::WebGlTextureState;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -149,9 +150,16 @@ struct WebGlState {
     enabled_scissor_test: bool,
     front_face_mode: u32,
     cull_face_mode: u32,
+    blend_src_rgb: u32,
+    blend_dst_rgb: u32,
+    blend_src_alpha: u32,
+    blend_dst_alpha: u32,
+    blend_eq_rgb: u32,
+    blend_eq_alpha: u32,
     current_vao: u32,
     vao0: WebGlVaoState,
     vaos: BTreeMap<u32, WebGlVaoState>,
+    textures: WebGlTextureState,
 }
 
 static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
@@ -192,12 +200,25 @@ static WEBGL_STATE: Mutex<WebGlState> = Mutex::new(WebGlState {
     // WebGL defaults: CCW front faces, cull back faces.
     front_face_mode: 0x0901, // CCW
     cull_face_mode: 0x0405,  // BACK
+    blend_src_rgb: 1, // ONE
+    blend_dst_rgb: 0, // ZERO
+    blend_src_alpha: 1, // ONE
+    blend_dst_alpha: 0, // ZERO
+    blend_eq_rgb: 0x8006, // FUNC_ADD
+    blend_eq_alpha: 0x8006, // FUNC_ADD
     current_vao: 0,
     vao0: WebGlVaoState {
         element_array_buffer: 0,
         attribs: BTreeMap::new(),
     },
     vaos: BTreeMap::new(),
+    textures: WebGlTextureState {
+        active_unit: 0,
+        unpack_alignment: 4,
+        bound_tex2d_by_unit: BTreeMap::new(),
+        params: BTreeMap::new(),
+        images: BTreeMap::new(),
+    },
 });
 
 fn ascii_lower(bytes: &[u8]) -> Vec<u8> {
@@ -929,6 +950,201 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
         Some((ptr as *const u8, total))
     }
 
+    unsafe extern "C" fn gl_active_texture(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut tex_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut tex_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let tex_enum = (tex_f as i32).max(0) as u32;
+        let mut st = WEBGL_STATE.lock();
+        st.textures.active_texture(tex_enum);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_bind_texture(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut target_f: f64 = 0.0;
+        let mut tex_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut tex_f as *mut f64, args[1]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let target = (target_f as i32).max(0) as u32;
+        if target == 0x0DE1 {
+            let tex_id = (tex_f as i32).max(0) as u32;
+            let mut st = WEBGL_STATE.lock();
+            st.textures.bind_texture_2d(tex_id);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_pixel_store_i(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut pname_f: f64 = 0.0;
+        let mut param_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut pname_f as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut param_f as *mut f64, args[1]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let pname = (pname_f as i32).max(0) as u32;
+        let param = param_f as i32;
+        let mut st = WEBGL_STATE.lock();
+        st.textures.pixel_store_i(pname, param);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_tex_parameter_i(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 3 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut target_f: f64 = 0.0;
+        let mut pname_f: f64 = 0.0;
+        let mut param_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut pname_f as *mut f64, args[1]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut param_f as *mut f64, args[2]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let target = (target_f as i32).max(0) as u32;
+        if target == 0x0DE1 {
+            let pname = (pname_f as i32).max(0) as u32;
+            let param = param_f as i32;
+            let mut st = WEBGL_STATE.lock();
+            st.textures.tex_parameter_i(pname, param);
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_tex_image_2d(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 9 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut target_f: f64 = 0.0;
+        let mut level_f: f64 = 0.0;
+        let mut internal_f: f64 = 0.0;
+        let mut width_f: f64 = 0.0;
+        let mut height_f: f64 = 0.0;
+        let mut border_f: f64 = 0.0;
+        let mut format_f: f64 = 0.0;
+        let mut ty_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut level_f as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut internal_f as *mut f64, args[2]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut width_f as *mut f64, args[3]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut height_f as *mut f64, args[4]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut border_f as *mut f64, args[5]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut format_f as *mut f64, args[6]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut ty_f as *mut f64, args[7]);
+
+        let target = (target_f as i32).max(0) as u32;
+        if target != 0x0DE1 {
+            return qjs::JSValue::undefined();
+        }
+        let level = level_f as i32;
+        let width = width_f as i32;
+        let height = height_f as i32;
+        let border = border_f as i32;
+        let format = (format_f as i32).max(0) as u32;
+        let ty = (ty_f as i32).max(0) as u32;
+
+        let data_opt = js_get_arraybuffer_view(ctx, args[8]).map(|(p, n)| core::slice::from_raw_parts(p, n));
+        let mut st = WEBGL_STATE.lock();
+        let _ = st
+            .textures
+            .tex_image_2d(level, width, height, border, format, ty, data_opt);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_tex_sub_image_2d(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 9 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut target_f: f64 = 0.0;
+        let mut level_f: f64 = 0.0;
+        let mut x_f: f64 = 0.0;
+        let mut y_f: f64 = 0.0;
+        let mut width_f: f64 = 0.0;
+        let mut height_f: f64 = 0.0;
+        let mut format_f: f64 = 0.0;
+        let mut ty_f: f64 = 0.0;
+        let _ = qjs::JS_ToFloat64(ctx, &mut target_f as *mut f64, args[0]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut level_f as *mut f64, args[1]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[2]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[3]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut width_f as *mut f64, args[4]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut height_f as *mut f64, args[5]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut format_f as *mut f64, args[6]);
+        let _ = qjs::JS_ToFloat64(ctx, &mut ty_f as *mut f64, args[7]);
+        let target = (target_f as i32).max(0) as u32;
+        if target != 0x0DE1 {
+            return qjs::JSValue::undefined();
+        }
+
+        let Some((p, n)) = js_get_arraybuffer_view(ctx, args[8]) else {
+            return qjs::JSValue::undefined();
+        };
+        let src = core::slice::from_raw_parts(p, n);
+
+        let level = level_f as i32;
+        let xoffset = x_f as i32;
+        let yoffset = y_f as i32;
+        let width = width_f as i32;
+        let height = height_f as i32;
+        let format = (format_f as i32).max(0) as u32;
+        let ty = (ty_f as i32).max(0) as u32;
+        let mut st = WEBGL_STATE.lock();
+        let _ = st
+            .textures
+            .tex_sub_image_2d(level, xoffset, yoffset, width, height, format, ty, src);
+        qjs::JSValue::undefined()
+    }
+
     unsafe extern "C" fn gl_buffer_data(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -1391,6 +1607,211 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
         }
     }
 
+    fn clamp01(v: f32) -> f32 {
+        if v < 0.0 {
+            0.0
+        } else if v > 1.0 {
+            1.0
+        } else {
+            v
+        }
+    }
+
+    fn blend_factor_rgb(
+        factor: u32,
+        src: [f32; 3],
+        src_a: f32,
+        dst: [f32; 3],
+        dst_a: f32,
+    ) -> [f32; 3] {
+        match factor {
+            0 => [0.0, 0.0, 0.0], // ZERO
+            1 => [1.0, 1.0, 1.0], // ONE
+            0x0302 => [src_a, src_a, src_a], // SRC_ALPHA
+            0x0303 => [1.0 - src_a, 1.0 - src_a, 1.0 - src_a], // ONE_MINUS_SRC_ALPHA
+            0x0304 => [dst_a, dst_a, dst_a], // DST_ALPHA
+            0x0305 => [1.0 - dst_a, 1.0 - dst_a, 1.0 - dst_a], // ONE_MINUS_DST_ALPHA
+            0x0300 => src, // SRC_COLOR
+            0x0301 => [1.0 - src[0], 1.0 - src[1], 1.0 - src[2]], // ONE_MINUS_SRC_COLOR
+            0x0306 => dst, // DST_COLOR
+            0x0307 => [1.0 - dst[0], 1.0 - dst[1], 1.0 - dst[2]], // ONE_MINUS_DST_COLOR
+            _ => [1.0, 1.0, 1.0],
+        }
+    }
+
+    fn apply_blend_equation(eq: u32, s: f32, d: f32) -> f32 {
+        match eq {
+            0x800A => s - d, // FUNC_SUBTRACT
+            0x800B => d - s, // FUNC_REVERSE_SUBTRACT
+            _ => s + d,      // FUNC_ADD
+        }
+    }
+
+    fn apply_simple_blend_rgb(
+        enabled: bool,
+        src_rgb_u8: [u8; 3],
+        src_a_u8: u8,
+        clear_rgb: u32,
+        src_factor: u32,
+        dst_factor: u32,
+        eq: u32,
+    ) -> [u8; 3] {
+        if !enabled {
+            return src_rgb_u8;
+        }
+        let src = [
+            (src_rgb_u8[0] as f32) / 255.0,
+            (src_rgb_u8[1] as f32) / 255.0,
+            (src_rgb_u8[2] as f32) / 255.0,
+        ];
+        let src_a = (src_a_u8 as f32) / 255.0;
+        let dst = [
+            ((clear_rgb >> 16) as u8 as f32) / 255.0,
+            (((clear_rgb >> 8) & 0xFF) as u8 as f32) / 255.0,
+            ((clear_rgb & 0xFF) as u8 as f32) / 255.0,
+        ];
+        let dst_a = 1.0;
+        let sf = blend_factor_rgb(src_factor, src, src_a, dst, dst_a);
+        let df = blend_factor_rgb(dst_factor, src, src_a, dst, dst_a);
+        let mut out = [0u8; 3];
+        for i in 0..3 {
+            let s = src[i] * sf[i];
+            let d = dst[i] * df[i];
+            let v = clamp01(apply_blend_equation(eq, s, d));
+            out[i] = (v * 255.0 + 0.5) as u8;
+        }
+        out
+    }
+
+    fn is_valid_blend_factor(v: u32) -> bool {
+        matches!(
+            v,
+            0 | 1 | 0x0302 | 0x0303 | 0x0304 | 0x0305 | 0x0300 | 0x0301 | 0x0306 | 0x0307
+        )
+    }
+
+    fn is_valid_blend_equation(v: u32) -> bool {
+        matches!(v, 0x8006 | 0x800A | 0x800B)
+    }
+
+    unsafe extern "C" fn gl_blend_func(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut src_f: f64 = 0.0;
+        let mut dst_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut src_f as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut dst_f as *mut f64, args[1]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let src = (src_f as i32).max(0) as u32;
+        let dst = (dst_f as i32).max(0) as u32;
+        if is_valid_blend_factor(src) && is_valid_blend_factor(dst) {
+            let mut st = WEBGL_STATE.lock();
+            st.blend_src_rgb = src;
+            st.blend_dst_rgb = dst;
+            st.blend_src_alpha = src;
+            st.blend_dst_alpha = dst;
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_blend_func_separate(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 4 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut sr: f64 = 0.0;
+        let mut dr: f64 = 0.0;
+        let mut sa: f64 = 0.0;
+        let mut da: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut sr as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut dr as *mut f64, args[1]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut sa as *mut f64, args[2]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut da as *mut f64, args[3]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let sr = (sr as i32).max(0) as u32;
+        let dr = (dr as i32).max(0) as u32;
+        let sa = (sa as i32).max(0) as u32;
+        let da = (da as i32).max(0) as u32;
+        if is_valid_blend_factor(sr)
+            && is_valid_blend_factor(dr)
+            && is_valid_blend_factor(sa)
+            && is_valid_blend_factor(da)
+        {
+            let mut st = WEBGL_STATE.lock();
+            st.blend_src_rgb = sr;
+            st.blend_dst_rgb = dr;
+            st.blend_src_alpha = sa;
+            st.blend_dst_alpha = da;
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_blend_equation(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut mode_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mode = (mode_f as i32).max(0) as u32;
+        if is_valid_blend_equation(mode) {
+            let mut st = WEBGL_STATE.lock();
+            st.blend_eq_rgb = mode;
+            st.blend_eq_alpha = mode;
+        }
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn gl_blend_equation_separate(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 2 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut rgb_f: f64 = 0.0;
+        let mut alpha_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut rgb_f as *mut f64, args[0]) != 0
+            || qjs::JS_ToFloat64(ctx, &mut alpha_f as *mut f64, args[1]) != 0
+        {
+            return qjs::JSValue::undefined();
+        }
+        let rgb = (rgb_f as i32).max(0) as u32;
+        let alpha = (alpha_f as i32).max(0) as u32;
+        if is_valid_blend_equation(rgb) && is_valid_blend_equation(alpha) {
+            let mut st = WEBGL_STATE.lock();
+            st.blend_eq_rgb = rgb;
+            st.blend_eq_alpha = alpha;
+        }
+        qjs::JSValue::undefined()
+    }
+
     unsafe extern "C" fn gl_draw_elements(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -1440,6 +1861,10 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
             element_array_buffer,
             elem_bytes,
             attribs,
+            enabled_blend,
+            blend_src_rgb,
+            blend_dst_rgb,
+            blend_eq_rgb,
             has_translation_matrix,
             has_projection_matrix,
             translation_matrix,
@@ -1458,6 +1883,10 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
                 st.element_array_buffer,
                 elem_bytes.clone(),
                 st.attribs.clone(),
+                st.enabled_blend,
+                st.blend_src_rgb,
+                st.blend_dst_rgb,
+                st.blend_eq_rgb,
                 st.has_translation_matrix,
                 st.has_projection_matrix,
                 st.translation_matrix,
@@ -1607,7 +2036,17 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
                 let r = *col_bytes.get(base).unwrap_or(&255);
                 let g = *col_bytes.get(base + 1).unwrap_or(&255);
                 let b = *col_bytes.get(base + 2).unwrap_or(&255);
-                (r, g, b)
+                let a = *col_bytes.get(base + 3).unwrap_or(&255);
+                let rgb = apply_simple_blend_rgb(
+                    enabled_blend,
+                    [r, g, b],
+                    a,
+                    clear_rgb,
+                    blend_src_rgb,
+                    blend_dst_rgb,
+                    blend_eq_rgb,
+                );
+                (rgb[0], rgb[1], rgb[2])
             } else {
                 (255, 255, 255)
             };
@@ -1770,6 +2209,30 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
         qjs::JSValue::undefined()
     }
 
+    unsafe extern "C" fn gl_clear(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return qjs::JSValue::undefined();
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut mask_f: f64 = 0.0;
+        if qjs::JS_ToFloat64(ctx, &mut mask_f as *mut f64, args[0]) != 0 {
+            return qjs::JSValue::undefined();
+        }
+        let mask = (mask_f as i32).max(0) as u32;
+        if (mask & 0x4000) != 0 {
+            let clear_rgb = WEBGL_STATE.lock().clear_rgb;
+            unsafe {
+                let _ = trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, core::ptr::null(), 0);
+            }
+        }
+        qjs::JSValue::undefined()
+    }
+
     unsafe extern "C" fn gl_draw_arrays(
         ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -1810,6 +2273,10 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
             viewport_h,
             buffers,
             attribs,
+            enabled_blend,
+            blend_src_rgb,
+            blend_dst_rgb,
+            blend_eq_rgb,
             has_translation_matrix,
             has_projection_matrix,
             translation_matrix,
@@ -1822,6 +2289,10 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
                 st.viewport_h,
                 st.buffers.clone(),
                 st.attribs.clone(),
+                st.enabled_blend,
+                st.blend_src_rgb,
+                st.blend_dst_rgb,
+                st.blend_eq_rgb,
                 st.has_translation_matrix,
                 st.has_projection_matrix,
                 st.translation_matrix,
@@ -1967,7 +2438,17 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
                 let r = *col_bytes.get(base).unwrap_or(&255);
                 let g = *col_bytes.get(base + 1).unwrap_or(&255);
                 let b = *col_bytes.get(base + 2).unwrap_or(&255);
-                (r, g, b)
+                let a = *col_bytes.get(base + 3).unwrap_or(&255);
+                let rgb = apply_simple_blend_rgb(
+                    enabled_blend,
+                    [r, g, b],
+                    a,
+                    clear_rgb,
+                    blend_src_rgb,
+                    blend_dst_rgb,
+                    blend_eq_rgb,
+                );
+                (rgb[0], rgb[1], rgb[2])
             } else {
                 (255, 255, 255)
             };
@@ -2039,6 +2520,18 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
             0x0B45 => js_int32(st.cull_face_mode as i32),
             // FRONT_FACE
             0x0B46 => js_int32(st.front_face_mode as i32),
+            // BLEND_SRC_RGB
+            0x80C9 => js_int32(st.blend_src_rgb as i32),
+            // BLEND_DST_RGB
+            0x80C8 => js_int32(st.blend_dst_rgb as i32),
+            // BLEND_SRC_ALPHA
+            0x80CB => js_int32(st.blend_src_alpha as i32),
+            // BLEND_DST_ALPHA
+            0x80CA => js_int32(st.blend_dst_alpha as i32),
+            // BLEND_EQUATION / BLEND_EQUATION_RGB
+            0x8009 => js_int32(st.blend_eq_rgb as i32),
+            // BLEND_EQUATION_ALPHA
+            0x883D => js_int32(st.blend_eq_alpha as i32),
             // BLEND / CULL_FACE / DEPTH_TEST / SCISSOR_TEST
             0x0BE2 | 0x0B44 | 0x0B71 | 0x0C11 => js_bool(gl_cap_get(&st, pname as u32).unwrap_or(false)),
             // VERSION
@@ -2290,6 +2783,7 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
     gl_const!("UNSIGNED_BYTE", 0x1401);
     gl_const!("UNSIGNED_SHORT", 0x1403);
     gl_const!("FLOAT", 0x1406);
+    gl_const!("UNPACK_ALIGNMENT", 0x0CF5);
 
     gl_const!("VERTEX_SHADER", 0x8B31);
     gl_const!("FRAGMENT_SHADER", 0x8B30);
@@ -2317,12 +2811,21 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
 
     gl_const!("ONE", 1);
     gl_const!("ZERO", 0);
+    gl_const!("SRC_COLOR", 0x0300);
     gl_const!("DST_COLOR", 0x0306);
+    gl_const!("ONE_MINUS_DST_COLOR", 0x0307);
     gl_const!("ONE_MINUS_SRC_COLOR", 0x0301);
     gl_const!("DST_ALPHA", 0x0304);
     gl_const!("ONE_MINUS_DST_ALPHA", 0x0305);
     gl_const!("ONE_MINUS_SRC_ALPHA", 0x0303);
     gl_const!("SRC_ALPHA", 0x0302);
+    gl_const!("BLEND_EQUATION", 0x8009);
+    gl_const!("BLEND_EQUATION_RGB", 0x8009);
+    gl_const!("BLEND_EQUATION_ALPHA", 0x883D);
+    gl_const!("BLEND_SRC_RGB", 0x80C9);
+    gl_const!("BLEND_DST_RGB", 0x80C8);
+    gl_const!("BLEND_SRC_ALPHA", 0x80CB);
+    gl_const!("BLEND_DST_ALPHA", 0x80CA);
     gl_const!("FUNC_ADD", 0x8006);
     gl_const!("FUNC_SUBTRACT", 0x800A);
     gl_const!("FUNC_REVERSE_SUBTRACT", 0x800B);
@@ -2371,13 +2874,13 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
     gl_fn!("bindVertexArray", gl_bind_vertex_array_oes, 1);
     gl_fn!("bufferData", gl_buffer_data, 3);
     gl_fn!("bufferSubData", gl_buffer_sub_data, 3);
-    gl_fn!("bindTexture", gl_noop, 2);
+    gl_fn!("bindTexture", gl_bind_texture, 2);
     gl_fn!("bindFramebuffer", gl_noop, 2);
-    gl_fn!("activeTexture", gl_noop, 1);
-    gl_fn!("texParameteri", gl_noop, 3);
-    gl_fn!("texImage2D", gl_noop, 9);
-    gl_fn!("texSubImage2D", gl_noop, 9);
-    gl_fn!("pixelStorei", gl_noop, 2);
+    gl_fn!("activeTexture", gl_active_texture, 1);
+    gl_fn!("texParameteri", gl_tex_parameter_i, 3);
+    gl_fn!("texImage2D", gl_tex_image_2d, 9);
+    gl_fn!("texSubImage2D", gl_tex_sub_image_2d, 9);
+    gl_fn!("pixelStorei", gl_pixel_store_i, 2);
     gl_fn!("shaderSource", gl_shader_source, 2);
     gl_fn!("compileShader", gl_noop, 1);
     gl_fn!("attachShader", gl_attach_shader, 2);
@@ -2409,12 +2912,12 @@ fn classify_uniform_name(name: &[u8]) -> WebGlUniformKind {
     gl_fn!("depthFunc", gl_noop, 1);
     gl_fn!("depthRange", gl_noop, 2);
     gl_fn!("clearDepth", gl_noop, 1);
-    gl_fn!("blendFunc", gl_noop, 2);
-    gl_fn!("blendFuncSeparate", gl_noop, 4);
-    gl_fn!("blendEquation", gl_noop, 1);
-    gl_fn!("blendEquationSeparate", gl_noop, 2);
+    gl_fn!("blendFunc", gl_blend_func, 2);
+    gl_fn!("blendFuncSeparate", gl_blend_func_separate, 4);
+    gl_fn!("blendEquation", gl_blend_equation, 1);
+    gl_fn!("blendEquationSeparate", gl_blend_equation_separate, 2);
     gl_fn!("clearColor", gl_clear_color, 4);
-    gl_fn!("clear", gl_noop, 1);
+    gl_fn!("clear", gl_clear, 1);
     gl_fn!("drawElements", gl_draw_elements, 4);
     gl_fn!("drawArrays", gl_draw_arrays, 3);
     gl_fn!("flush", gl_noop, 0);
