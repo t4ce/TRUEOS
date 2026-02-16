@@ -16,7 +16,10 @@ log('pixi-ui: start');
 
 try {
   let workerPongs = 0;
+  let workerPosts = 0;
   let worker = null;
+  let workerScaleBias = 0.0;
+  let workerReqInFlight = false;
   const MAX_FRAMES = 1200;
 
   const canvas = document.createElement('canvas');
@@ -81,25 +84,70 @@ try {
   function renderStep() {
     t += 0.022;
     root.rotation = Math.sin(t) * 0.15;
-    root.scale.set(1.0 + Math.sin(t * 0.7) * 0.03);
+    root.scale.set(1.0 + Math.sin(t * 0.7) * (0.03 + workerScaleBias));
 
     renderer.render(stage);
     frames++;
     totalFrames++;
 
+    // Sample off-main-thread compute periodically.
+    if (worker && !workerReqInFlight && (totalFrames % 30) === 0) {
+      workerReqInFlight = true;
+      workerPosts++;
+      worker.postMessage(JSON.stringify({ cmd: 'sample', t }));
+    }
+
     const now = nowSeconds();
     const dt = now - reportStart;
     if (dt >= 15.0) {
       const fps = frames / dt;
-      log('pixi-ui: fps-est', String(Math.floor(fps)), 'dt', String(dt), 'wp', String(workerPongs));
+      log(
+        'pixi-ui: fps-est',
+        String(Math.floor(fps)),
+        'dt',
+        String(dt),
+        'wp',
+        String(workerPosts),
+        'wr',
+        String(workerPongs),
+      );
       reportStart = now;
       frames = 0;
     }
   }
 
   try {
-    // Keep one side worker alive to exercise SMP worker plumbing without driving the frame clock.
-    worker = new Worker(`export {};`);
+    // Small proof slice: worker computes animation bias and sends it back.
+    worker = new Worker(`
+      import { parentPort } from 'node:worker_threads';
+      parentPort.onMessage((raw) => {
+        let out = { ok: 0, bias: 0.0 };
+        try {
+          const msg = JSON.parse(String(raw || '{}'));
+          if (msg && msg.cmd === 'sample') {
+            const tt = Number(msg.t || 0);
+            out.ok = 1;
+            out.bias = Math.sin(tt * 0.31) * 0.01;
+          }
+        } catch (_) {}
+        parentPort.postMessage(JSON.stringify(out));
+      });
+    `);
+    const onWorkerMessage = (raw) => {
+      workerReqInFlight = false;
+      workerPongs++;
+      try {
+        const m = JSON.parse(String(raw || '{}'));
+        if (m && m.ok === 1 && Number.isFinite(m.bias)) {
+          workerScaleBias = m.bias;
+        }
+      } catch (_) {}
+    };
+    if (typeof worker.onMessage === 'function') {
+      worker.onMessage(onWorkerMessage);
+    } else if (typeof worker.addEventListener === 'function') {
+      worker.addEventListener('message', onWorkerMessage);
+    }
     log('pixi-ui: worker', 'ok');
   } catch (e) {
     log('pixi-ui: worker', 'off', (e && e.message) ? e.message : String(e));
@@ -112,7 +160,7 @@ try {
         scheduleTick();
       } else if (worker && typeof worker.terminate === 'function') {
         worker.terminate();
-        log('pixi-ui: done', 'frames', String(totalFrames), 'wp', String(workerPongs));
+        log('pixi-ui: done', 'frames', String(totalFrames), 'wp', String(workerPosts), 'wr', String(workerPongs));
       }
     });
   }
