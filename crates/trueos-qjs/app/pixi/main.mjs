@@ -31,10 +31,12 @@ try {
 
   const { stage, mesh } = createTriangleScene(PIXI);
 
-  // Drive a short in-VM animation burst; our shim doesn't provide browser RAF/timers yet.
-  for (let i = 0; i < 120; i++) {
-    mesh.rotation += 0.04;
+  // Drive a short in-VM animation burst; keep per-frame delay so spin is visible.
+  const spinDelayIters = 180000;
+  for (let i = 0; i < 160; i++) {
+    mesh.rotation += 0.0035;
     renderer.render(stage);
+    for (let k = 0; k < spinDelayIters; k++) {}
   }
 
   log('pixi-tri: ok');

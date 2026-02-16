@@ -17,6 +17,7 @@ pub const TLS_SOCKET_SERVICE_READY: u32 = 1 << 9;
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const QJS_PARSE5_SMOKE_DONE: u32 = 1 << 18;
+pub const GFX_VIRTIO_SW_READY: u32 = 1 << 19;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 
