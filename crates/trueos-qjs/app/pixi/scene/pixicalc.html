@@ -3,109 +3,415 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Pixi Calculator (Static First Pass)</title>
+    <title>Three + Pixi Pass Contract Demo</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
-      canvas { display: block; margin: 0 auto; }
+      :root {
+        --bg: #0a1020;
+        --panel: rgba(10, 16, 28, 0.82);
+        --line: rgba(114, 163, 244, 0.55);
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background:
+          radial-gradient(1200px 700px at 10% 0%, #12254b 0%, rgba(18, 37, 75, 0.2) 44%, transparent 70%),
+          radial-gradient(1200px 700px at 90% 100%, #19341a 0%, rgba(25, 52, 26, 0.24) 44%, transparent 75%),
+          var(--bg);
+      }
+      #shell {
+        position: fixed;
+        inset: 0;
+      }
+      canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #world {
+        z-index: 0;
+      }
+      #ui {
+        z-index: 1;
+      }
+      #legend {
+        position: fixed;
+        left: 16px;
+        bottom: 14px;
+        padding: 8px 12px;
+        font: 12px/1.4 "JetBrains Mono", monospace;
+        color: #c9d9ff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        backdrop-filter: blur(6px);
+      }
     </style>
   </head>
   <body>
+    <div id="shell">
+      <canvas id="world"></canvas>
+      <canvas id="ui"></canvas>
+    </div>
+    <div id="legend">Three = world pass, Pixi = UI pass, one scheduler.</div>
     <script type="module">
-      import * as PIXI from "https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.mjs";
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
+      import * as PIXI from "https://cdn.jsdelivr.net/npm/pixi.js@7.4.0/dist/pixi.mjs";
 
-      // Static, fixed-size scene for first integration pass.
-      const WIDTH = 640;
-      const HEIGHT = 420;
+      const worldCanvas = document.getElementById("world");
+      const uiCanvas = document.getElementById("ui");
+      const shell = document.getElementById("shell");
 
-      const app = new PIXI.Application();
-      await app.init({
-        width: WIDTH,
-        height: HEIGHT,
-        background: "#111111",
-        antialias: true
-      });
-      document.body.appendChild(app.canvas);
+      const bridge = {
+        queue: [],
+        emit(type, payload = {}) {
+          this.queue.push({ type, payload });
+        },
+        drain() {
+          const out = this.queue;
+          this.queue = [];
+          return out;
+        }
+      };
 
-      function makeLabel(text, x, y, size = 18, fill = 0xffffff) {
-        const t = new PIXI.Text({
-          text,
-          style: { fill, fontSize: size, fontFamily: "monospace" }
-        });
-        t.x = x;
-        t.y = y;
-        return t;
+      const state = {
+        spin: true,
+        hue: 0.08,
+        fps: 0,
+        frame: 0,
+        lastCmd: "none",
+        pointer: { x: 0, y: 0, dx: 0, dy: 0, down: false, capturedByUI: false },
+        zoomDelta: 0
+      };
+
+      class WorldRenderer {
+        constructor(canvas, shared) {
+          this.state = shared;
+          this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+          this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+          this.scene = new THREE.Scene();
+          this.scene.background = new THREE.Color(0x0b1020);
+
+          this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+          this.orbitYaw = 0.6;
+          this.orbitPitch = 0.45;
+          this.orbitRadius = 4.2;
+
+          const hemi = new THREE.HemisphereLight(0x9dc6ff, 0x1b3a22, 1.2);
+          const dir = new THREE.DirectionalLight(0xfff2d7, 0.8);
+          dir.position.set(2, 5, 3);
+          this.scene.add(hemi, dir);
+
+          const geo = new THREE.IcosahedronGeometry(1, 1);
+          this.material = new THREE.MeshStandardMaterial({
+            roughness: 0.35,
+            metalness: 0.08,
+            color: new THREE.Color().setHSL(shared.hue, 0.74, 0.52)
+          });
+          this.mesh = new THREE.Mesh(geo, this.material);
+          this.scene.add(this.mesh);
+
+          const grid = new THREE.GridHelper(10, 24, 0x34577f, 0x1b2b46);
+          grid.position.y = -1.25;
+          this.scene.add(grid);
+          this.#syncCamera();
+        }
+
+        #syncCamera() {
+          const cp = Math.cos(this.orbitPitch);
+          this.camera.position.set(
+            Math.cos(this.orbitYaw) * this.orbitRadius * cp,
+            Math.sin(this.orbitPitch) * this.orbitRadius,
+            Math.sin(this.orbitYaw) * this.orbitRadius * cp
+          );
+          this.camera.lookAt(0, 0, 0);
+        }
+
+        resize(w, h) {
+          this.camera.aspect = w / h;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(w, h, false);
+        }
+
+        update(frameCtx) {
+          const p = this.state.pointer;
+          if (p.down && !p.capturedByUI) {
+            this.orbitYaw += p.dx * 0.004;
+            this.orbitPitch = Math.max(-1.15, Math.min(1.15, this.orbitPitch + p.dy * 0.004));
+          }
+          this.orbitRadius = Math.max(2.1, Math.min(8.4, this.orbitRadius + this.state.zoomDelta * 0.003));
+          p.dx = 0;
+          p.dy = 0;
+          this.state.zoomDelta = 0;
+
+          if (this.state.spin) {
+            this.mesh.rotation.y += frameCtx.dt * 1.05;
+            this.mesh.rotation.x += frameCtx.dt * 0.34;
+          }
+          this.material.color.setHSL(this.state.hue, 0.74, 0.52);
+          this.#syncCamera();
+        }
+
+        render() {
+          this.renderer.render(this.scene, this.camera);
+        }
       }
 
-      function makePanel(x, y, w, h, fill = 0x222222, stroke = 0x666666) {
-        const g = new PIXI.Graphics();
-        g.roundRect(x, y, w, h, 10).fill(fill).stroke({ color: stroke, width: 2 });
-        return g;
+      class UIRenderer {
+        constructor(canvas, shared, bridgeApi) {
+          this.state = shared;
+          this.bridge = bridgeApi;
+          this.renderer = new PIXI.Renderer({
+            view: canvas,
+            width: 1,
+            height: 1,
+            antialias: true,
+            backgroundAlpha: 0,
+            clearBeforeRender: true
+          });
+          this.stage = new PIXI.Container();
+          this.panel = new PIXI.Graphics();
+          this.stage.addChild(this.panel);
+
+          this.title = this.#mkText("Three.js + PixiJS Contract", 19, 16, 20, 0xdce8ff);
+          this.status = this.#mkText("", 19, 47, 14, 0x9fbcf5);
+          this.fps = this.#mkText("", 19, 68, 14, 0xb6d8ff);
+          this.mode = this.#mkText("", 19, 89, 14, 0xb6d8ff);
+          this.stage.addChild(this.title, this.status, this.fps, this.mode);
+
+          this.buttons = [];
+          this.#addButton("toggle-spin", "Toggle Spin", 0, () => this.bridge.emit("toggle-spin"));
+          this.#addButton("hue-plus", "Shift Hue", 1, () => this.bridge.emit("shift-hue", { delta: 0.09 }));
+          this.#addButton("hue-minus", "Hue Back", 2, () => this.bridge.emit("shift-hue", { delta: -0.09 }));
+        }
+
+        #mkText(text, x, y, size, color) {
+          const t = new PIXI.Text(text, {
+            fontFamily: "JetBrains Mono, monospace",
+            fontSize: size,
+            fill: color
+          });
+          t.x = x;
+          t.y = y;
+          return t;
+        }
+
+        #addButton(id, label, slot, onClick) {
+          const g = new PIXI.Graphics();
+          const t = this.#mkText(label, 0, 0, 14, 0xf3f7ff);
+          t.anchor.set(0.5);
+          this.stage.addChild(g, t);
+          this.buttons.push({ id, g, t, slot, onClick, hover: false, pressed: false, bounds: { x: 0, y: 0, w: 0, h: 0 } });
+        }
+
+        resize(w, h) {
+          this.renderer.resize(w, h);
+          const panelW = Math.min(370, Math.max(300, w * 0.37));
+          const panelH = 220;
+          this.bounds = { x: 16, y: 16, w: panelW, h: panelH };
+          this.panel.clear();
+          this.panel.lineStyle(1.5, 0x5f8de0, 0.72);
+          this.panel.beginFill(0x0b1220, 0.84);
+          this.panel.drawRoundedRect(this.bounds.x, this.bounds.y, panelW, panelH, 14);
+          this.panel.endFill();
+          this.#layoutButtons();
+        }
+
+        #layoutButtons() {
+          const startX = this.bounds.x + 18;
+          const y = this.bounds.y + 148;
+          const bw = this.bounds.w - 36;
+          const bh = 26;
+          const gap = 10;
+          for (const b of this.buttons) {
+            b.bounds.x = startX;
+            b.bounds.y = y + (bh + gap) * b.slot;
+            b.bounds.w = bw;
+            b.bounds.h = bh;
+            b.t.x = b.bounds.x + bw / 2;
+            b.t.y = b.bounds.y + bh / 2 + 1;
+          }
+          this.#redrawButtons();
+        }
+
+        #redrawButtons() {
+          for (const b of this.buttons) {
+            const fill = b.pressed ? 0x4171c9 : b.hover ? 0x2f507f : 0x1a2d4f;
+            b.g.clear();
+            b.g.lineStyle(1, 0x79a5f8, 0.9);
+            b.g.beginFill(fill, 1.0);
+            b.g.drawRoundedRect(b.bounds.x, b.bounds.y, b.bounds.w, b.bounds.h, 8);
+            b.g.endFill();
+          }
+        }
+
+        update(frameCtx) {
+          this.status.text = `last command: ${this.state.lastCmd}`;
+          this.fps.text = `fps: ${this.state.fps.toFixed(1)} | frame: ${this.state.frame}`;
+          this.mode.text = `world spin: ${this.state.spin ? "on" : "off"} | hue: ${this.state.hue.toFixed(2)}`;
+          if (frameCtx.frame % 8 === 0) this.#redrawButtons();
+        }
+
+        render() {
+          this.renderer.render(this.stage);
+        }
+
+        contains(x, y) {
+          const b = this.bounds;
+          return !!b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+        }
+
+        consumePointerDown(x, y) {
+          let hit = false;
+          for (const b of this.buttons) {
+            const inBtn = x >= b.bounds.x && x <= b.bounds.x + b.bounds.w && y >= b.bounds.y && y <= b.bounds.y + b.bounds.h;
+            b.pressed = inBtn;
+            hit = hit || inBtn;
+          }
+          this.#redrawButtons();
+          return hit;
+        }
+
+        consumePointerMove(x, y) {
+          let changed = false;
+          for (const b of this.buttons) {
+            const hover = x >= b.bounds.x && x <= b.bounds.x + b.bounds.w && y >= b.bounds.y && y <= b.bounds.y + b.bounds.h;
+            if (hover !== b.hover) changed = true;
+            b.hover = hover;
+          }
+          if (changed) this.#redrawButtons();
+        }
+
+        consumePointerUp(x, y) {
+          for (const b of this.buttons) {
+            const inBtn = x >= b.bounds.x && x <= b.bounds.x + b.bounds.w && y >= b.bounds.y && y <= b.bounds.y + b.bounds.h;
+            const click = b.pressed && inBtn;
+            b.pressed = false;
+            if (click) b.onClick();
+          }
+          this.#redrawButtons();
+        }
       }
 
-      function makeButton(label, x, y, w, h) {
-        const c = new PIXI.Container();
-        const bg = new PIXI.Graphics();
-        bg.roundRect(0, 0, w, h, 10).fill(0x2a2a2a).stroke({ color: 0x777777, width: 2 });
-        const t = new PIXI.Text({
-          text: label,
-          style: { fill: 0xffffff, fontSize: 20, fontFamily: "monospace" }
-        });
-        t.anchor.set(0.5);
-        t.x = w / 2;
-        t.y = h / 2;
-        c.x = x;
-        c.y = y;
-        c.addChild(bg, t);
-        return c;
+      class InputRouter {
+        constructor(rootEl, uiPass, shared) {
+          this.root = rootEl;
+          this.ui = uiPass;
+          this.state = shared;
+          rootEl.addEventListener("pointerdown", (e) => this.#onDown(e));
+          rootEl.addEventListener("pointermove", (e) => this.#onMove(e));
+          rootEl.addEventListener("pointerup", (e) => this.#onUp(e));
+          rootEl.addEventListener("pointercancel", (e) => this.#onUp(e));
+          rootEl.addEventListener("wheel", (e) => this.#onWheel(e), { passive: false });
+        }
+
+        #localPos(e) {
+          const r = this.root.getBoundingClientRect();
+          return { x: e.clientX - r.left, y: e.clientY - r.top };
+        }
+
+        #onDown(e) {
+          const p = this.state.pointer;
+          const pos = this.#localPos(e);
+          p.x = pos.x;
+          p.y = pos.y;
+          p.down = true;
+          p.dx = 0;
+          p.dy = 0;
+          this.ui.consumePointerMove(pos.x, pos.y);
+          p.capturedByUI = this.ui.consumePointerDown(pos.x, pos.y);
+        }
+
+        #onMove(e) {
+          const p = this.state.pointer;
+          const pos = this.#localPos(e);
+          if (p.down) {
+            p.dx += pos.x - p.x;
+            p.dy += pos.y - p.y;
+          }
+          p.x = pos.x;
+          p.y = pos.y;
+          this.ui.consumePointerMove(pos.x, pos.y);
+        }
+
+        #onUp(e) {
+          const p = this.state.pointer;
+          const pos = this.#localPos(e);
+          if (p.capturedByUI) this.ui.consumePointerUp(pos.x, pos.y);
+          p.down = false;
+          p.capturedByUI = false;
+        }
+
+        #onWheel(e) {
+          const pos = this.#localPos(e);
+          if (this.ui.contains(pos.x, pos.y)) return;
+          e.preventDefault();
+          this.state.zoomDelta += e.deltaY;
+        }
       }
 
-      function makeInputBox(x, y, w, h, placeholder) {
-        const c = new PIXI.Container();
-        const bg = new PIXI.Graphics();
-        bg.roundRect(0, 0, w, h, 10).fill(0x1b1b1b).stroke({ color: 0x666666, width: 2 });
-        const t = new PIXI.Text({
-          text: placeholder,
-          style: { fill: 0x888888, fontSize: 20, fontFamily: "monospace" }
-        });
-        t.x = 12;
-        t.y = (h - 20) / 2;
-        c.x = x;
-        c.y = y;
-        c.addChild(bg, t);
-        return c;
+      class FrameScheduler {
+        constructor(stateRef) {
+          this.state = stateRef;
+          this.passes = [];
+          this.last = performance.now();
+        }
+
+        addPass(name, fn) {
+          this.passes.push({ name, fn });
+          return this;
+        }
+
+        start() {
+          const loop = (now) => {
+            const dt = Math.min((now - this.last) / 1000, 0.05);
+            this.last = now;
+            this.state.frame += 1;
+            this.state.fps = this.state.fps * 0.9 + (1 / Math.max(dt, 0.0001)) * 0.1;
+            const frameCtx = { now, dt, frame: this.state.frame };
+            for (const pass of this.passes) pass.fn(frameCtx);
+            requestAnimationFrame(loop);
+          };
+          requestAnimationFrame(loop);
+        }
       }
 
-      const root = new PIXI.Container();
-      app.stage.addChild(root);
+      const world = new WorldRenderer(worldCanvas, state);
+      const ui = new UIRenderer(uiCanvas, state, bridge);
+      new InputRouter(shell, ui, state);
 
-      const uiW = 560;
-      const uiH = 360;
-      root.x = (WIDTH - uiW) / 2;
-      root.y = (HEIGHT - uiH) / 2;
+      function applyCommands() {
+        for (const cmd of bridge.drain()) {
+          if (cmd.type === "toggle-spin") state.spin = !state.spin;
+          if (cmd.type === "shift-hue") {
+            state.hue = (state.hue + (cmd.payload.delta || 0) + 1) % 1;
+          }
+          state.lastCmd = cmd.type;
+        }
+      }
 
-      root.addChild(makePanel(0, 0, uiW, uiH));
-      root.addChild(makeLabel("Pixi Calculator (static scene)", 20, 18, 18));
+      function resize() {
+        const w = Math.max(1, window.innerWidth);
+        const h = Math.max(1, window.innerHeight);
+        world.resize(w, h);
+        ui.resize(w, h);
+      }
 
-      root.addChild(makeLabel("A:", 20, 60, 18));
-      root.addChild(makeLabel("B:", 20, 110, 18));
+      window.addEventListener("resize", resize);
+      resize();
 
-      root.addChild(makeInputBox(70, 50, 470, 42, "input A (disabled in first pass)"));
-      root.addChild(makeInputBox(70, 100, 470, 42, "input B (disabled in first pass)"));
+      const scheduler = new FrameScheduler(state)
+        .addPass("bridge-commands", () => applyCommands())
+        .addPass("world-update", (ctx) => world.update(ctx))
+        .addPass("world-render", () => world.render())
+        .addPass("ui-update", (ctx) => ui.update(ctx))
+        .addPass("ui-render", () => ui.render());
 
-      root.addChild(makeLabel("Output:", 20, 168, 18));
-      root.addChild(makeLabel("Result rendering only (logic disabled)", 20, 198, 18, 0xcccccc));
-
-      const btnY = 282;
-      const btnW = 70;
-      const btnH = 44;
-      const gap = 12;
-      const startX = 20;
-      root.addChild(makeButton("+", startX + 0 * (btnW + gap), btnY, btnW, btnH));
-      root.addChild(makeButton("-", startX + 1 * (btnW + gap), btnY, btnW, btnH));
-      root.addChild(makeButton("*", startX + 2 * (btnW + gap), btnY, btnW, btnH));
-      root.addChild(makeButton("/", startX + 3 * (btnW + gap), btnY, btnW, btnH));
-      root.addChild(makeButton("Clear A", startX + 4 * (btnW + gap), btnY, 120, btnH));
-      root.addChild(makeButton("Clear B", startX + 4 * (btnW + gap), btnY + btnH + 10, 120, btnH));
+      scheduler.start();
     </script>
   </body>
 </html>
