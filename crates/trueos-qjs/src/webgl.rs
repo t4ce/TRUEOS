@@ -3003,6 +3003,7 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("blendFuncSeparate", gl_noop, 4);
     gl_fn!("blendEquation", gl_noop, 1);
     gl_fn!("blendEquationSeparate", gl_noop, 2);
+    gl_fn!("blendColor", gl_noop, 4);
     gl_fn!("frontFace", gl_noop, 1);
     gl_fn!("cullFace", gl_noop, 1);
     gl_fn!("drawElements", gl_draw_elements, 4);
