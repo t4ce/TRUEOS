@@ -99,11 +99,10 @@ pub extern "C" fn kmain() -> ! {
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     percpu::init_bsp();
     pci::dma::init_from_limine();
-    vga::init(limine::framebuffer_response());
-    // Render the proof tile immediately (one-shot) so display output is validated early.
-    vga::cube::tick();
-    // Enumerate PCI once before any PCI-dependent subsystem init.
     pci::enumerate_impl();
+    vga::init(limine::framebuffer_response());
+    vga::cube::tick();
+    
     usb::xhci::init_once();
     usb::truekey::init();
     pci::vrng::init_once();

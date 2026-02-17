@@ -23,6 +23,7 @@ macro_rules! usbv {
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static LOG_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
+static LOG_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
 const USB_EVENT_POLL_DELAY_MS: u64 = 1;
 const CMD_TIMEOUT_SHORT_ITERS: usize = 400;
 const CMD_TIMEOUT_DEFAULT_ITERS: usize = 800;
@@ -458,6 +459,11 @@ pub(crate) async fn enumerate_port(
                 target_port,
                 port_status
             );
+            crate::log!(
+                "usb: enum port {} reset timeout status=0x{:08X}\n",
+                target_port,
+                port_status
+            );
             return;
         }
         Timer::after(EmbassyDuration::from_millis(2)).await;
@@ -475,6 +481,7 @@ pub(crate) async fn enumerate_port(
     }
 
     let Some(slot_id) = enable_slot(state, target_port).await else {
+        crate::log!("usb: enum port {} enable-slot failed\n", target_port);
         return;
     };
 
@@ -869,8 +876,9 @@ pub(crate) async fn enumerate_with_params(
         let dq = ep0_ring.dequeue_ptr();
         write_volatile(ep0_ctx.add(2), lo(dq));
         write_volatile(ep0_ctx.add(3), hi(dq));
-        let avg_trb_len = core::cmp::max(8u32, max_packet as u32);
-        write_volatile(ep0_ctx.add(4), ep_avg_trb_len_bits(avg_trb_len));
+        // For EP0/control, keep average TRB length conservative at 8 (setup packet size).
+        // Some controllers reject larger values here during Address Device with CC=5.
+        write_volatile(ep0_ctx.add(4), ep_avg_trb_len_bits(8));
 
         let ep0_dw0 = read_volatile(ep0_ctx.add(0));
         let ep0_dw1 = read_volatile(ep0_ctx.add(1));
@@ -908,6 +916,13 @@ pub(crate) async fn enumerate_with_params(
                 target_port,
                 slot_id
             );
+            if tree_parent.is_none() {
+                crate::log!(
+                    "usb: enum port {} address-device timeout slot={}\n",
+                    target_port,
+                    slot_id
+                );
+            }
             if let Some((hub_slot, hub_port)) = tree_parent {
                 hub_child_mark_result(controller_id, hub_slot, hub_port, false, now_ms());
                 crate::log!(
@@ -1101,6 +1116,34 @@ pub(crate) async fn enumerate_with_params(
             control::trb_cc(&addr_evt),
             slot_id
         );
+        if tree_parent.is_none() {
+            crate::log!(
+                "usb: enum port {} address-device failed cc={} slot={}\n",
+                target_port,
+                control::trb_cc(&addr_evt),
+                slot_id
+            );
+            if !LOG_ROOT_ADDRDEV_FAIL_ONCE.swap(true, Ordering::AcqRel) {
+                crate::log!(
+                    "usb: root addrdev fail evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] slot_dw0=0x{:08X} slot_dw1=0x{:08X} slot_dw2=0x{:08X} ep0_dw0=0x{:08X} ep0_dw1=0x{:08X}\n",
+                    addr_evt.d0,
+                    addr_evt.d1,
+                    addr_evt.d2,
+                    addr_evt.d3,
+                    slot_dw0,
+                    slot_dw1,
+                    slot_dw2,
+                    ep0_dw0,
+                    ep0_dw1
+                );
+                log_addrdev_input_context(
+                    state.info.controller_id,
+                    input_ctx_phys,
+                    input_ctx_virt,
+                    ctx_stride_bytes,
+                );
+            }
+        }
         if let Some((hub_slot, hub_port)) = tree_parent {
             hub_child_mark_result(controller_id, hub_slot, hub_port, false, now_ms());
             crate::log!(
@@ -1161,6 +1204,11 @@ pub(crate) async fn enumerate_with_params(
     let (desc_phys, desc_virt) = match dma::alloc(64, 64) {
         Some(pair) => pair,
         None => {
+            crate::log!(
+                "usb: enum port {} alloc devdesc buffer failed slot={}\n",
+                target_port,
+                slot_id
+            );
             disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
             return;
         }
@@ -1214,6 +1262,11 @@ pub(crate) async fn enumerate_with_params(
         .is_err()
     {
         usbv!(
+            "usb: enum port {} get-devdesc failed slot={}\n",
+            target_port,
+            slot_id
+        );
+        crate::log!(
             "usb: enum port {} get-devdesc failed slot={}\n",
             target_port,
             slot_id
@@ -1545,16 +1598,33 @@ pub(crate) async fn disable_slot(state: &mut UsbControllerState, slot_id: u32) -
         d2: 0,
         d3: trb_type(10) | (slot_id << 24),
     };
-    xhci::submit_cmd_and_wait_any_cc(
+    let evt = xhci::submit_cmd_and_wait_any_cc(
         &state.ctx,
         &mut state.cmd_ring,
         disable,
-        Some(slot_id),
+        // Some controllers report disable-slot completion with slot_id=0.
+        // Do not over-filter; match by command pointer only.
+        None,
         "disable-slot",
         CMD_TIMEOUT_SHORT_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
     .await?;
+
+    let cc = control::trb_cc(&evt);
+    if cc != 1 {
+        crate::log!(
+            "usb: disable-slot failed cc={} req_slot={} evt_slot={} evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}]\n",
+            cc,
+            slot_id,
+            (evt.d3 >> 24) & 0xFF,
+            evt.d0,
+            evt.d1,
+            evt.d2,
+            evt.d3
+        );
+        return Err(());
+    }
 
     unsafe {
         let dcbaa = state.dcbaa_virt as *mut u64;
