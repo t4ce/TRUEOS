@@ -45,8 +45,10 @@ impl Default for DnsConfig {
         Self {
             servers,
             server_count,
-            timeout_ms: 1500,
-            resend_ms: 350,
+            // Loader/CDN imports are sensitive to resolver jitter; use a less aggressive
+            // default than 1.5s to avoid spurious NET_ERR_TIMEOUT_DNS.
+            timeout_ms: 4000,
+            resend_ms: 500,
             cname_depth: 6,
         }
     }
