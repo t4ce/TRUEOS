@@ -216,6 +216,23 @@ pub(crate) fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option
         .map(|d| d.kind)
 }
 
+pub(crate) fn friendly_name_for_vidpid(vid: u16, pid: u16) -> Option<&'static str> {
+    match (vid, pid) {
+        // Devices commonly used in local QEMU setups.
+        (0x303A, 0x1001) => Some("ESP USB Device"),
+        (0x0951, 0x16A4) => Some("HyperX Device"),
+        (0x07CF, 0x6803) => Some("USB MIDI Device"),
+        (0x058F, 0x6387) => Some("USB Flash Drive"),
+
+        // Common emulated HID IDs (best effort).
+        (0x0627, 0x0001) => Some("QEMU USB Tablet"),
+        (0x0627, 0x0002) => Some("QEMU USB Mouse"),
+        (0x0627, 0x0005) => Some("QEMU USB Keyboard"),
+
+        _ => None,
+    }
+}
+
 fn any_hid_registered(controller_id: usize) -> bool {
     DEVICES[controller_id]
         .lock()

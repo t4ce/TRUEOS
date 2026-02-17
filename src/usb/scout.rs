@@ -648,6 +648,11 @@ pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
                   if let Some(ident) = super::hub::identity_for_slot(controller_id, dev.slot_id) {
                       vid = Some(ident.vid);
                       pid = Some(ident.pid);
+                      if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid) {
+                          if matches!(dev.kind, DeviceKind::Unknown) {
+                              kind_str = Some(name);
+                          }
+                      }
                   }
              }
         }
@@ -657,9 +662,13 @@ pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
              if let Some((v, p)) = xhci::get_port_vidpid(controller_id, (port + 1) as u8) {
                  vid = Some(v);
                  pid = Some(p);
-                 if v != 0 || p != 0 {
-                      kind_str = Some("detecting");
+                 if let Some(name) = super::friendly_name_for_vidpid(v, p) {
+                     kind_str = Some(name);
+                 } else if v != 0 || p != 0 {
+                     kind_str = Some("detecting");
                  }
+             } else {
+                 kind_str = Some("present");
              }
         }
 
@@ -676,4 +685,3 @@ pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
     }
     results
 }
-

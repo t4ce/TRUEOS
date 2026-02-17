@@ -56,7 +56,6 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-static PIXI_RUNTIME_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -245,17 +244,6 @@ fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_pixi_runtime(spawner: Spawner) -> SpawnAttempt {
-    match crate::gfx::backend_kind() {
-        Some(crate::gfx::BackendKind::None) | None => return SpawnAttempt::Skipped,
-        _ => {}
-    }
-    match spawner.spawn(crate::tst::pixi_runtime_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND),
     ) {
@@ -289,12 +277,6 @@ const WS_BOOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::QJS_PARSE5_SMOKE_DONE;
-
-const PIXI_RUNTIME_READY: u32 =
-    crate::v::readiness::NET_GATEWAY_REACHABLE
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::v::readiness::QJS_ASYNC_FS_READY;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)
@@ -452,13 +434,6 @@ static TASKS: &[TaskSpec] = &[
         required: WS_BOOT_READY,
         started: &BOOT_WS_SMOKE_STARTED,
         spawn: spawn_boot_ws_smoke,
-    },
-    TaskSpec {
-        name: "pixi-runtime",
-        disabled: false,
-        required: PIXI_RUNTIME_READY,
-        started: &PIXI_RUNTIME_STARTED,
-        spawn: spawn_pixi_runtime,
     },
     TaskSpec {
         name: "uart-shell",
