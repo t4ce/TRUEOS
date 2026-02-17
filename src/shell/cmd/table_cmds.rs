@@ -25,6 +25,7 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         t.print_row(ctx.io, &["tlb.acpi", "List ACPI tables"]);
         t.print_row(ctx.io, &["tlb.uefi", "List UEFI tables"]);
         t.print_row(ctx.io, &["tlb.x2apic", "List x2APIC topology"]);
+        t.print_row(ctx.io, &["tlb.usb", "List USB controllers and ports"]);
         t.print_row(ctx.io, &["tlb.dump", "Write all tables to trueos/pci/tlb.txt"]);
     }
     
@@ -418,10 +419,10 @@ pub(crate) fn cmd_tlb_x2apic(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArg
     CommandAction::None
 }
 
-pub(crate) fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tlb_usb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let ctrls = crate::usb::xhci::xhc_list();
     if ctrls.is_empty() {
-        ctx.io.write_str("usb: no xhci controllers found\r\n");
+        ctx.io.write_str("tlb.usb: no xhci controllers found\r\n");
         return CommandAction::None;
     }
 
@@ -443,7 +444,7 @@ pub(crate) fn cmd_usb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
     t.print_header(ctx.io);
     
     for info in ctrls.iter() {
-        let ports = crate::usb::inspect_ports(info.controller_id);
+        let ports = crate::usb::port_snapshot(info.controller_id);
         
         for p in ports.iter() {
              let ctrl = alloc::format!("{}", info.controller_id);
@@ -707,7 +708,7 @@ pub(crate) fn cmd_tlb_dump(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<
             "", "", "", "", "", "", "").unwrap();
         
         for info in ctrls.iter() {
-            let ports = crate::usb::inspect_ports(info.controller_id);
+            let ports = crate::usb::port_snapshot(info.controller_id);
             for p in ports.iter() {
                  let state_str = if p.connected {
                      if p.enabled { "Active" } else { "Connected" }

@@ -1501,8 +1501,8 @@ pub(crate) async fn enumerate_with_params(
             );
         }
 
-        // Targeted debug aid: dump descriptors for the suspected USB LED controller.
-        if count == 1 && dev_vid == 0x0416 && dev_pid == 0xA125 {
+        // Targeted debug aid: dump descriptors for suspected USB LED controllers.
+        if count == 1 && super::leds::is_supported_led_controller(dev_vid, dev_pid) {
             dump_cfg_descriptors(target_port, dev_vid, dev_pid, cfg_slice);
         }
     }

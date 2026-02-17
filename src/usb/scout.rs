@@ -17,6 +17,8 @@ use spin::Mutex;
 
 static USB_CTRL: [Mutex<Option<UsbControllerState>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(None) }; MAX_XHCI_CONTROLLERS];
+static PORT_SNAPSHOTS: [Mutex<Vec<ScoutedPort, 64>>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; MAX_XHCI_CONTROLLERS];
 static SCOUT_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static SCOUT_SERVICE_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
@@ -36,6 +38,16 @@ impl Drop for EnumReadyGuard {
 
 fn has_device_on_port(controller_id: usize, port: u8) -> bool {
     DEVICES[controller_id].lock().iter().any(|d| d.port == port)
+}
+
+fn store_port_snapshot(controller_id: usize, snapshot: Vec<ScoutedPort, 64>) {
+    let mut snap = PORT_SNAPSHOTS[controller_id].lock();
+    // Defensive: if a transient scout pass yields an empty sample, do not clobber
+    // an already-populated snapshot that table commands rely on.
+    if snapshot.is_empty() && !snap.is_empty() {
+        return;
+    }
+    *snap = snapshot;
 }
 
 async fn cleanup_disconnected<const N: usize>(
@@ -431,6 +443,9 @@ async fn scout_pass(info: xhci::XhcInfo) {
         enumerate_hub_ports(&mut state, &work, &mut hub_queue).await;
     }
 
+    // Publish a stable snapshot for shell/table commands.
+    store_port_snapshot(controller_id, collect_ports(controller_id, &state));
+
     *USB_CTRL[controller_id].lock() = Some(state);
 }
 
@@ -540,13 +555,8 @@ pub struct ScoutedPort {
     pub pid: Option<u16>,
 }
 
-pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
+fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<ScoutedPort, 64> {
     let mut results: Vec<ScoutedPort, 64> = Vec::new();
-    let guard = USB_CTRL[controller_id].lock();
-    let state = match guard.as_ref() {
-        Some(s) => s,
-        None => return results,
-    };
 
     for port in 0..state.ctx.port_count {
         let status = unsafe { state.ctx.portsc(port as usize) };
@@ -613,4 +623,8 @@ pub fn inspect_ports(controller_id: usize) -> Vec<ScoutedPort, 64> {
         });
     }
     results
+}
+
+pub fn port_snapshot(controller_id: usize) -> Vec<ScoutedPort, 64> {
+    PORT_SNAPSHOTS[controller_id].lock().clone()
 }

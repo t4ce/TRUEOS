@@ -19,7 +19,7 @@ mod enumeration;
 mod control;
 mod attach;
 
-pub use scout::{usb_scout_service, inspect_ports, ScoutedPort};
+pub use scout::{usb_scout_service, port_snapshot, ScoutedPort};
 pub(crate) use self::control::{control_in, control_out};
 pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
 
@@ -92,6 +92,23 @@ enum DeviceKind {
     Midi,
     Leds,
     Unknown,
+}
+
+impl DeviceKind {
+    fn claimed_log_label(self) -> &'static str {
+        match self {
+            DeviceKind::Hid => "Hid",
+            DeviceKind::Hub => "Hub",
+            DeviceKind::Mass => "Mass",
+            DeviceKind::Printer => "Printer",
+            DeviceKind::Pen => "Pen",
+            DeviceKind::Cdc => "Cdc",
+            DeviceKind::Uac => "Uac",
+            DeviceKind::Midi => "Midi",
+            DeviceKind::Leds => "Leds",
+            DeviceKind::Unknown => "Unknown",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -179,18 +196,12 @@ fn register_device_inner(
     }
     // Signal that at least one device is enumerated so poll_task can start.
     ENUM_READY[controller_id].store(true, Ordering::Release);
-    if kind == DeviceKind::Unknown {
+    if kind != DeviceKind::Unknown {
         crate::log!(
-            "usb: device present (unclaimed) slot={} port={}\n",
+            "usb: device claimed slot={} port={} kind={}\n",
             slot_id,
             port,
-        );
-    } else {
-        crate::log!(
-            "usb: device claimed slot={} port={} kind={:?}\n",
-            slot_id,
-            port,
-            kind
+            kind.claimed_log_label()
         );
     }
 }
@@ -221,6 +232,7 @@ pub(crate) fn friendly_name_for_vidpid(vid: u16, pid: u16) -> Option<&'static st
         // Devices commonly used in local QEMU setups.
         (0x303A, 0x1001) => Some("ESP USB Device"),
         (0x0951, 0x16A4) => Some("HyperX Device"),
+        (0x1462, 0x7E03) => Some("MSI Mystic Light"),
         (0x07CF, 0x6803) => Some("USB MIDI Device"),
         (0x058F, 0x6387) => Some("USB Flash Drive"),
 

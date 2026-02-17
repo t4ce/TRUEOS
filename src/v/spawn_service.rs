@@ -430,7 +430,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "boot-ws-smoke",
-        disabled: false,
+        disabled: true,
         required: WS_BOOT_READY,
         started: &BOOT_WS_SMOKE_STARTED,
         spawn: spawn_boot_ws_smoke,

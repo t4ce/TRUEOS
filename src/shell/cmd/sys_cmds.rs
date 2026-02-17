@@ -130,8 +130,12 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
     CommandAction::None
 }
 
-pub(crate) fn cmd_gfx(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
     crate::gfx::init(crate::limine::framebuffer_response());
+    match ctx.spawner.spawn(crate::tst::pixi_hex::boot_pixi_hexagon_task()) {
+        Ok(()) => ctx.io.write_str("gfx: started pixi-hex task (20Hz)\r\n"),
+        Err(e) => ctx.io.write_fmt(format_args!("gfx: pixi-hex task spawn failed: {:?}\r\n", e)),
+    }
     CommandAction::None
 }
 
@@ -304,7 +308,7 @@ pub(crate) fn cmd_pci_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
 
     if sub == "dump" {
         ctx.io.write_str(
-            "pci.usb: targeted descriptor dump is printed automatically when an unclaimed device matches vid=0x0416 pid=0xA125 (JGINYUE 'LED SheBei').\r\n",
+            "pci.usb: targeted descriptor dump is printed automatically when an unclaimed device matches known LED IDs (0416:A125 or 1462:7E03).\r\n",
         );
         ctx.io.write_str(
             "pci.usb: replug the device (or reboot) to re-trigger enumeration.\r\n",
