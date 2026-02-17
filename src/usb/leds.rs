@@ -13,8 +13,15 @@ use embassy_time::Timer;
 use heapless::Vec;
 use spin::Mutex;
 
-const LED_VID: u16 = 0x0416;
-const LED_PID: u16 = 0xA125;
+const LED_VID_JGINYUE: u16 = 0x0416;
+const LED_PID_JGINYUE: u16 = 0xA125;
+const LED_VID_MSI: u16 = 0x1462;
+const LED_PID_MSI_MYSTIC_LIGHT: u16 = 0x7E03;
+
+pub fn is_supported_led_controller(vid: u16, pid: u16) -> bool {
+    (vid == LED_VID_JGINYUE && pid == LED_PID_JGINYUE)
+        || (vid == LED_VID_MSI && pid == LED_PID_MSI_MYSTIC_LIGHT)
+}
 
 #[derive(Copy, Clone, Debug)]
 struct LedIfaceInfo {
@@ -570,7 +577,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         dev_pid,
     } = params;
 
-    if dev_vid != LED_VID || dev_pid != LED_PID {
+    if !is_supported_led_controller(dev_vid, dev_pid) {
         return Err(());
     }
 

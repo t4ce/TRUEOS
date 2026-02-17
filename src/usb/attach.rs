@@ -36,8 +36,8 @@ pub(crate) async fn try_attach_device(
     // so use `root_port` when it is known.
     let registry_port = if root_port != 0 { root_port } else { target_port };
 
-    // Custom USB LED controller (JGINYUE 0x0416:0xA125)
-    if dev_vid == 0x0416 && dev_pid == 0xA125 {
+    // Known USB LED controllers.
+    if leds::is_supported_led_controller(dev_vid, dev_pid) {
         crate::log!(
             "usb: attach: trying leds driver port={} slot={}\n",
             target_port,

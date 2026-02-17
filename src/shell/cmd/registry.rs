@@ -550,7 +550,6 @@ pub(crate) fn init_builtin_shell_commands() {
         static FILE_ARGS: [ArgSpec; 1] = [ArgSpec::new("id", ArgType::Rest)];
         static ACPI_ARGS: [ArgSpec; 1] = [ArgSpec::new("state", ArgType::Str).mandatory()];
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
-        static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
 
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd);
@@ -597,6 +596,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tlb.acpi.ssdt", &NO_ARGS, cmd::cmd_tlb_acpi_ssdt);
         let _ = REGSHCMD("tlb.x2apic", &NO_ARGS, cmd::cmd_tlb_x2apic);
         let _ = REGSHCMD("tlb.uefi", &NO_ARGS, cmd::cmd_tlb_uefi);
+        let _ = REGSHCMD("tlb.usb", &NO_ARGS, cmd::cmd_tlb_usb);
         let _ = REGSHCMD("tlb.dump", &NO_ARGS, cmd::cmd_tlb_dump);
 
         let _ = REGSHCMD("mandel", &[], cmd::cmd_mandel);
@@ -609,8 +609,6 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tetris", &NO_ARGS, cmd::cmd_tetris);
         let _ = REGSHCMD("rain", &NO_ARGS, cmd::cmd_rain);
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
-        let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
-        let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
         let _ = REGSHCMD("gfx", &NO_ARGS, cmd::cmd_gfx);
 
     });

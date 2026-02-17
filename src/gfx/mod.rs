@@ -64,18 +64,6 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         let backend = backends::Backend::init_auto(framebuffers);
         Mutex::new(System::new(backend, framebuffers))
     });
-
-    // If gfx was previously initialized without virgl, retry virgl on explicit init calls.
-    // Virgl backend init programs scanout via VIRTIO_GPU_CMD_SET_SCANOUT.
-    #[cfg(feature = "gfx_virgl")]
-    {
-        match backend_kind() {
-            Some(BackendKind::None) => {
-                let _ = switch_to_virgl();
-            }
-            _ => {}
-        }
-    }
 }
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
