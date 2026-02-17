@@ -55,15 +55,6 @@ fn now_ms() -> u64 {
     embassy_time_driver::now().saturating_mul(1000) / hz
 }
 
-fn hub_child_should_backoff(controller_id: usize, hub_slot: u32, hub_port: u8, now_ms: u64) -> bool {
-    let hs = hub_slot as usize;
-    let hp = hub_port as usize;
-    if controller_id >= xhci::MAX_XHCI_CONTROLLERS || hs == 0 || hs > HUB_SLOT_TRACKED_MAX || hp > LOG_PORTS_MAX {
-        return false;
-    }
-    now_ms < HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp].load(Ordering::Acquire)
-}
-
 fn hub_child_mark_result(controller_id: usize, hub_slot: u32, hub_port: u8, success: bool, now_ms: u64) {
     let hs = hub_slot as usize;
     let hp = hub_port as usize;
@@ -750,11 +741,6 @@ pub(crate) async fn enumerate_with_params(
 ) {
     let controller_id = state.info.controller_id;
     if let Some((hub_slot, hub_port)) = tree_parent {
-        let t_ms = now_ms();
-        if hub_child_should_backoff(controller_id, hub_slot, hub_port, t_ms) {
-            let _ = disable_slot(state, slot_id).await;
-            return;
-        }
         crate::log!(
             "usb: hub child enum begin hub_slot={} port={} slot={} route=0x{:X} depth={} speed={}({})\n",
             hub_slot,

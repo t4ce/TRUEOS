@@ -252,6 +252,59 @@ pub fn init_once() {
 
                 register_xhc(info);
 
+                const USBCMD: usize = 0x00 / 4;
+                const USBSTS: usize = 0x04 / 4;
+
+                const USBCMD_RS: u32 = 1 << 0;
+                const USBCMD_HCRST: u32 = 1 << 1;
+
+                const USBSTS_HCH: u32 = 1 << 0;
+                const USBSTS_CNR: u32 = 1 << 11;
+
+                let mut cmd = read_volatile(op.add(USBCMD));
+                let mut sts = read_volatile(op.add(USBSTS));
+
+                if (cmd & USBCMD_RS) != 0 {
+                    cmd &= !USBCMD_RS;
+                    write_volatile(op.add(USBCMD), cmd);
+                }
+
+                let mut spin: u64 = 5_000_000;
+                while (sts & USBSTS_HCH) == 0 && spin != 0 {
+                    sts = read_volatile(op.add(USBSTS));
+                    spin -= 1;
+                }
+                if (sts & USBSTS_HCH) == 0 {
+                    crate::log!("xhci: halt timeout sts=0x{:X}\n", sts);
+                    continue;
+                }
+
+                cmd = read_volatile(op.add(USBCMD));
+                write_volatile(op.add(USBCMD), cmd | USBCMD_HCRST);
+
+                spin = 10_000_000;
+                while (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 && spin != 0 {
+                    spin -= 1;
+                }
+                if (read_volatile(op.add(USBCMD)) & USBCMD_HCRST) != 0 {
+                    crate::log!("xhci: reset bit stuck\n");
+                    continue;
+                }
+
+                spin = 10_000_000;
+                sts = read_volatile(op.add(USBSTS));
+                while (sts & USBSTS_CNR) != 0 && spin != 0 {
+                    sts = read_volatile(op.add(USBSTS));
+                    spin -= 1;
+                }
+
+                if (sts & USBSTS_CNR) != 0 {
+                    crate::log!("xhci: CNR stuck sts=0x{:X}\n", sts);
+                    continue;
+                }
+
+                crate::log!("xhci: reset ok sts=0x{:X}\n", sts);
+
                 if LOG_PORTS_ON_INIT.load(Ordering::Acquire) {
                     let ctx = XhciContext::new(info);
                     log_ports_table(&ctx);
