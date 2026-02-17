@@ -404,10 +404,9 @@ async fn worker_task(worker_id: u32) {
     if !startup.is_empty() {
         let filename = b"<worker>\0";
         let v = unsafe {
-            qjs::JS_Eval(
+            qjs::js_eval_bytes(
                 ctx,
-                startup.as_ptr() as *const c_char,
-                startup.len(),
+                &startup,
                 filename.as_ptr() as *const c_char,
                 qjs::JS_EVAL_TYPE_MODULE,
             )

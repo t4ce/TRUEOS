@@ -1,6 +1,5 @@
 pub mod html;
 pub mod http_trueosfs;
-pub mod pixi_hex;
 pub mod tls_demo;
 pub mod ws_smoke;
 
