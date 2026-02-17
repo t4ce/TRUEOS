@@ -19,66 +19,6 @@ pub(crate) async fn boot_parse5_smoke_task() {
 pub(crate) async fn boot_pixi_smoke_task() {
     crate::log!("qjs-pixi-smoke: starting\n");
     unsafe { trueos_qjs::trueos_smoke::run_pixi_import_smoke() };
+    unsafe { trueos_qjs::trueos_smoke::run_pixi_rgbtri_smoke() };
     crate::log!("qjs-pixi-smoke: done\n");
-}
-
-#[task]
-pub(crate) async fn boot_gfx_virtio_sw_prepare_task() {
-    use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
-
-    async fn wait_for_gfx_ready_stable(min_epoch: u64, timeout_ms: u64, settle_ms: u64) -> bool {
-        let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms);
-        let mut stable_ms: u64 = 0;
-        loop {
-            let kind_ok = crate::gfx::backend_kind().is_some();
-            let epoch_ok = crate::gfx::backend_epoch() >= min_epoch;
-            if kind_ok && epoch_ok {
-                stable_ms = stable_ms.saturating_add(25);
-                if stable_ms >= settle_ms {
-                    return true;
-                }
-            } else {
-                stable_ms = 0;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            Timer::after(EmbassyDuration::from_millis(25)).await;
-        }
-    }
-
-    crate::log!("qjs-gfx-prepare: waiting for stable gfx backend\n");
-    let epoch0 = crate::gfx::backend_epoch();
-
-    // Preserve currently selected backend; do not force a backend change in prepare.
-    if wait_for_gfx_ready_stable(epoch0, 2500, 250).await {
-        crate::v::readiness::set(crate::v::readiness::GFX_VIRTIO_SW_READY);
-        crate::log!(
-            "qjs-gfx-prepare: ready kind={:?} epoch={}\n",
-            crate::gfx::backend_kind(),
-            crate::gfx::backend_epoch(),
-        );
-        return;
-    }
-
-    crate::log!("qjs-gfx-prepare: failed (no stable backend)\n");
-}
-
-#[task]
-pub(crate) async fn boot_pixi_rect_smoke_task() {
-    use embassy_time::Duration as EmbassyDuration;
-
-    if !crate::v::readiness::wait_for_timeout(
-        crate::v::readiness::GFX_VIRTIO_SW_READY,
-        EmbassyDuration::from_secs(8),
-    )
-    .await
-    {
-        crate::log!("qjs-pixi-rect-smoke: skip (gfx prepare timeout)\n");
-        return;
-    }
-
-    crate::log!("qjs-pixi-rect-smoke: starting\n");
-    unsafe { trueos_qjs::trueos_smoke::run_pixi_rect_smoke() };
-    crate::log!("qjs-pixi-rect-smoke: done\n");
 }

@@ -765,7 +765,7 @@ use spin::{Once, Mutex};
 //
 // The virtio-gpu device has a single control queue and this driver is written assuming a single
 // outstanding ctrlq descriptor chain. If multiple subsystems call into VirtioGpu3d concurrently
-// (virtio_sw scanout, virtio-limine mirror, shell gfx switching), and especially if any of those
+// (scanout/mirror paths, shell gfx switching), and especially if any of those
 // paths poll the async executor while holding locks, we can hit lock inversion and apparent BSP
 // freezes.
 //

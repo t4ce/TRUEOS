@@ -30,9 +30,69 @@ fn log_nl() {
 }
 
 #[inline]
+fn log_i64_dec(v: i64) {
+    if v == 0 {
+        log_str("0");
+        return;
+    }
+    let neg = v < 0;
+    let mut n = if neg { v.unsigned_abs() } else { v as u64 };
+    let mut buf = [0u8; 24];
+    let mut i = buf.len();
+    while n != 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    if neg {
+        log_str("-");
+    }
+    log_bytes(&buf[i..]);
+}
+
+#[inline]
+unsafe fn try_log_via_global_string(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> bool {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return false;
+    }
+    let string_fn = qjs::JS_GetPropertyStr(ctx, global, c"String".as_ptr());
+    qjs::js_free_value(ctx, global);
+    if string_fn.is_exception() || string_fn.tag == qjs::JS_TAG_UNDEFINED {
+        qjs::js_free_value(ctx, string_fn);
+        return false;
+    }
+
+    let mut arg = v;
+    // Keep argument alive while calling into JS.
+    arg = qjs::js_dup_value(ctx, arg);
+    let out = qjs::JS_Call(ctx, string_fn, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValueConst);
+    qjs::js_free_value(ctx, arg);
+    qjs::js_free_value(ctx, string_fn);
+    if out.is_exception() {
+        let exc = qjs::JS_GetException(ctx);
+        qjs::js_free_value(ctx, exc);
+        return false;
+    }
+    let cstr = qjs::js_to_cstring(ctx, out);
+    if cstr.is_null() {
+        qjs::js_free_value(ctx, out);
+        return false;
+    }
+    let bytes = CStr::from_ptr(cstr).to_bytes();
+    log_bytes(bytes);
+    qjs::JS_FreeCString(ctx, cstr);
+    qjs::js_free_value(ctx, out);
+    true
+}
+
+#[inline]
 fn log_value(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) {
     let cstr = unsafe { qjs::js_to_cstring(ctx, v) };
     if cstr.is_null() {
+        if unsafe { try_log_via_global_string(ctx, v) } {
+            return;
+        }
         log_str("<toString failed>");
         return;
     }
@@ -60,6 +120,9 @@ pub unsafe fn log_exception_value(ctx: *mut qjs::JSContext, label: &str, value: 
     log_str(label);
     log_str(": ");
     log_value(ctx, value);
+    log_nl();
+    log_str("quickjs: tag: ");
+    log_i64_dec(value.tag);
     log_nl();
 
     log_named_prop(ctx, value, b"name\0", "quickjs: name: ");

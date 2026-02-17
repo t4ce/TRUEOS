@@ -384,10 +384,11 @@ globalThis.print('common-modules: lodash ok', cc);\n\
     drop(vm);
 }
 
-/// Temporary boot-time smoke for importing PixiJS via esm.sh.
+/// Temporary smoke for importing PixiJS only (no rendering).
 ///
-/// Goal: validate that our ESM URL loader can fetch a large real-world UI library.
-/// Rendering is intentionally out of scope here; this is import-only.
+/// Goal:
+/// - Exercise package import + module graph resolution for `pixi.js`.
+/// - Keep this separate from renderer-dependent smoke so loader regressions are isolated.
 pub unsafe fn run_pixi_import_smoke() {
     let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
@@ -399,12 +400,10 @@ pub unsafe fn run_pixi_import_smoke() {
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
-    // Pin a specific version so smoke output is stable and caching is effective.
-    // Use esm.sh's bundled build to reduce the number of separate fetches (more reliable
-    // under tight boot-time networking constraints).
     let mod_filename = b"<smoke-pixi-import>\0";
-    let mod_script = b"import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';\n\
-globalThis.print('pixi import: ok');\n\
+    let mod_script = b"globalThis.print('pixi-import: start');\n\
+import * as PIXI from 'pixi.js@7.4.0';\n\
+globalThis.print('pixi-import: ok');\n\
 globalThis.print('pixi VERSION', (PIXI && PIXI.VERSION) ? PIXI.VERSION : 'unknown');\n\
 globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
 0\n\
@@ -430,11 +429,11 @@ globalThis.print('pixi exports', Object.keys(PIXI || {}).length);\n\
     drop(vm);
 }
 
-/// Boot-time / on-demand smoke for rendering a single rectangle via PixiJS.
+/// Boot-time / on-demand smoke for rendering the Pixi RGB-triangle demo.
 ///
-/// Goal: exercise the WebGL shim through a real library (Pixi) and get a visible draw
-/// when the kernel gfx backend is switched to a virtio-backed scanout.
-pub unsafe fn run_pixi_rect_smoke() {
+/// This evaluates `app/pixi/main.mjs`, which imports `scene/triangle.mjs` and renders
+/// an animated tri-color triangle.
+pub unsafe fn run_pixi_rgbtri_smoke() {
     let Some(vm) = qjs::vm::QjsVm::new_node() else {
         log_str("quickjs: JS_NewRuntime failed\n");
         return;
@@ -442,38 +441,19 @@ pub unsafe fn run_pixi_rect_smoke() {
     let rt = vm.rt_ptr();
     let ctx = vm.ctx_ptr();
 
-    log_str("quickjs: pixi-ui: vm ok\n");
+    log_str("quickjs: pixi-rgbtri: vm ok\n");
 
     install_print(ctx);
     qjs::node::install_globals(ctx);
 
-    // Preflight: prove JS -> print() -> kernel log bridge works in this VM.
-    {
-        let filename = b"<pixi-ui-preflight>\0";
-        let script = b"print('pixi-ui: preflight print ok'); 0\0";
-        let v = qjs::JS_Eval(
-            ctx,
-            script.as_ptr() as *const c_char,
-            script.len() - 1,
-            filename.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-        );
-        if v.is_exception() {
-            log_str("quickjs: pixi-ui preflight JS_Eval exception\n");
-            dump_exception(ctx);
-        } else {
-            qjs::js_free_value(ctx, v);
-        }
-    }
-
-    let mod_filename = b"<smoke-pixi-ui>\0";
-    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/scene/pixi-ui-smoke.mjs")
+    let mod_filename = b"<smoke-pixi-rgbtri>\0";
+    let mut owned: alloc::vec::Vec<u8> = include_str!("../app/pixi/main.mjs")
         .as_bytes()
         .to_vec();
     // NUL-terminate for parser stability.
     owned.push(0);
 
-    log_str("quickjs: pixi-ui: JS_Eval begin\n");
+    log_str("quickjs: pixi-rgbtri: JS_Eval begin\n");
     let mod_ret = qjs::JS_Eval(
         ctx,
         owned.as_ptr() as *const c_char,
@@ -482,36 +462,15 @@ pub unsafe fn run_pixi_rect_smoke() {
         qjs::JS_EVAL_TYPE_MODULE,
     );
 
-    log_str("quickjs: pixi-ui: JS_Eval end\n");
+    log_str("quickjs: pixi-rgbtri: JS_Eval end\n");
 
     if mod_ret.is_exception() {
-        log_str("quickjs: pixi-rect JS_Eval exception\n");
+        log_str("quickjs: pixi-rgbtri JS_Eval exception\n");
         dump_exception(ctx);
     } else {
         qjs::js_free_value(ctx, mod_ret);
-        log_str("quickjs: pixi-rect eval ok\n");
+        log_str("quickjs: pixi-rgbtri eval ok\n");
         let _ = drain_jobs_and_promises(rt, ctx, 60_000);
-        // Scene can be infinite and may own workers; terminate them before VM teardown.
-        qjs::workers::terminate_all_for_context(ctx);
-        let _ = drain_jobs_and_promises(rt, ctx, 2_000);
-        qjs::workers::drain_all_for_context(ctx);
-
-        // Postflight: if the module ran, logs should have appeared; still verify print works.
-        let filename = b"<pixi-ui-postflight>\0";
-        let script = b"print('pixi-ui: postflight print ok'); 0\0";
-        let v = qjs::JS_Eval(
-            ctx,
-            script.as_ptr() as *const c_char,
-            script.len() - 1,
-            filename.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-        );
-        if v.is_exception() {
-            log_str("quickjs: pixi-ui postflight JS_Eval exception\n");
-            dump_exception(ctx);
-        } else {
-            qjs::js_free_value(ctx, v);
-        }
     }
 
     drop(vm);
