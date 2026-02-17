@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, c_void};
 
 #[cfg(feature = "trueos")]
@@ -40,6 +43,15 @@ pub mod workers;
 
 #[cfg(feature = "trueos")]
 pub mod qjs_diag;
+
+#[cfg(feature = "trueos")]
+pub mod pixi;
+
+#[cfg(feature = "trueos")]
+pub mod threejs;
+
+#[cfg(feature = "trueos")]
+pub use pixi::hex as pixi_hex;
 
 #[repr(C)]
 pub struct JSRuntime {
@@ -324,4 +336,37 @@ extern "C" {
     pub fn js_free(ctx: *mut JSContext, ptr: *mut c_void);
 
     pub fn __JS_FreeValue(ctx: *mut JSContext, v: JSValue);
+}
+
+/// Evaluate source while satisfying QuickJS' requirement:
+/// `input[input_len] == '\0'`.
+///
+/// Safety: caller must provide a live `ctx` and a valid C-string `filename`.
+#[inline]
+pub unsafe fn js_eval_bytes(
+    ctx: *mut JSContext,
+    input: &[u8],
+    filename: *const c_char,
+    eval_flags: c_int,
+) -> JSValue {
+    if input.last().copied() == Some(0) {
+        return JS_Eval(
+            ctx,
+            input.as_ptr() as *const c_char,
+            input.len().saturating_sub(1),
+            filename,
+            eval_flags,
+        );
+    }
+
+    let mut nul_terminated = Vec::with_capacity(input.len().saturating_add(1));
+    nul_terminated.extend_from_slice(input);
+    nul_terminated.push(0);
+    JS_Eval(
+        ctx,
+        nul_terminated.as_ptr() as *const c_char,
+        input.len(),
+        filename,
+        eval_flags,
+    )
 }
