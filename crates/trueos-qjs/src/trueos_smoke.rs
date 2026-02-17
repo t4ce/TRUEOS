@@ -229,10 +229,9 @@ if (q.re !== -7 || q.im !== 24) throw new Error('complex square failed');\n\
 globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
 0\n\0";
 
-    let mod_ret = qjs::JS_Eval(
+    let mod_ret = qjs::js_eval_bytes(
         ctx,
-        mod_script.as_ptr() as *const c_char,
-        mod_script.len() - 1,
+        mod_script,
         mod_filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_MODULE,
     );
@@ -249,10 +248,9 @@ globalThis.print('complex ok', s.re, s.im, q.re, q.im);\n\
     // Keep the original minimal global eval as a baseline sanity check.
     let filename = b"<smoke>\0";
     let script = b"print('hello from quickjs'); 1 + 1\0";
-    let ret = qjs::JS_Eval(
+    let ret = qjs::js_eval_bytes(
         ctx,
-        script.as_ptr() as *const c_char,
-        script.len() - 1,
+        script,
         filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_GLOBAL,
     );
@@ -314,10 +312,9 @@ globalThis.print('parse5 ok', root.nodeName, count);\n\
 0\n\
 \0";
 
-    let mod_ret = qjs::JS_Eval(
+    let mod_ret = qjs::js_eval_bytes(
         ctx,
-        mod_script.as_ptr() as *const c_char,
-        mod_script.len() - 1,
+        mod_script,
         mod_filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_MODULE,
     );
@@ -364,10 +361,9 @@ globalThis.print('common-modules: lodash ok', cc);\n\
 0\n\
 \0";
 
-    let mod_ret = qjs::JS_Eval(
+    let mod_ret = qjs::js_eval_bytes(
         ctx,
-        mod_script.as_ptr() as *const c_char,
-        mod_script.len() - 1,
+        mod_script,
         mod_filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_MODULE,
     );

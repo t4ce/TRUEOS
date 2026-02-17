@@ -264,7 +264,12 @@ unsafe fn compile_module_value_from_buf(
     len: usize,
 ) -> qjs::JSValue {
     let flags = qjs::JS_EVAL_TYPE_MODULE | qjs::JS_EVAL_FLAG_COMPILE_ONLY;
-    let val = qjs::JS_Eval(ctx, buf as *const c_char, len, module_name, flags);
+    let src = if len == 0 || buf.is_null() {
+        &[][..]
+    } else {
+        core::slice::from_raw_parts(buf, len)
+    };
+    let val = qjs::js_eval_bytes(ctx, src, module_name, flags);
 
     if val.is_exception() {
         return val;

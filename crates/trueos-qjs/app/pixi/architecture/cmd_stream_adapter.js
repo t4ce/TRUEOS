@@ -1,63 +1,37 @@
-export interface NativeCmdStream {
-  beginFrame(): void;
-  endFrame(): void;
-  setClearRgb(rgb: number): void;
-  setViewport(w: number, h: number): void;
-  setBlendEnabled(enabled: boolean): void;
-  setBlendFunc(srcRgb: number, dstRgb: number, srcAlpha: number, dstAlpha: number): void;
-  setBlendEquation(rgb: number, alpha: number): void;
-  drawTrianglesU8(bytes: Uint8Array): void;
-}
-
-export interface HexagonFrameOptions {
-  width: number;
-  height: number;
-  cx?: number;
-  cy?: number;
-  radius: number;
-  angleRad?: number;
-  clearRgb?: number;
-  fillRgb?: number;
-}
-
-export async function loadNativeCmdStream(): Promise<NativeCmdStream | null> {
+export async function loadNativeCmdStream() {
   try {
     const mod = await import("cmd_stream");
-    return mod as NativeCmdStream;
+    return mod;
   } catch {
     return null;
   }
 }
 
 export class DirectCmdUiRenderer {
-  constructor(private readonly native: NativeCmdStream) {}
+  constructor(native) {
+    this.native = native;
+  }
 
-  beginFrame(clearRgb: number): void {
+  beginFrame(clearRgb) {
     this.native.setClearRgb(clearRgb >>> 0);
     this.native.beginFrame();
   }
 
-  setViewport(width: number, height: number): void {
+  setViewport(width, height) {
     this.native.setViewport(width | 0, height | 0);
   }
 
-  drawTrianglesPacked(vertices: Uint8Array): void {
+  drawTrianglesPacked(vertices) {
     if (!vertices || vertices.length === 0) return;
     this.native.drawTrianglesU8(vertices);
   }
 
-  endFrame(): void {
+  endFrame() {
     this.native.endFrame();
   }
 }
 
-function writeVertex(
-  out: Uint8Array,
-  offset: number,
-  x: number,
-  y: number,
-  rgb: number,
-): number {
+function writeVertex(out, offset, x, y, rgb) {
   const dv = new DataView(out.buffer, out.byteOffset, out.byteLength);
   dv.setFloat32(offset, x, true);
   dv.setFloat32(offset + 4, y, true);
@@ -68,13 +42,13 @@ function writeVertex(
   return offset + 12;
 }
 
-export function buildHexagonTriangleBytes(options: HexagonFrameOptions): Uint8Array {
+export function buildHexagonTriangleBytes(options) {
   const cx = options.cx ?? options.width * 0.5;
   const cy = options.cy ?? options.height * 0.5;
   const angle0 = options.angleRad ?? 0;
   const color = (options.fillRgb ?? 0x3ddc97) >>> 0;
 
-  const pts = new Array<{ x: number; y: number }>(6);
+  const pts = new Array(6);
   for (let i = 0; i < 6; i += 1) {
     const a = angle0 + (i * Math.PI) / 3;
     pts[i] = {
@@ -95,7 +69,7 @@ export function buildHexagonTriangleBytes(options: HexagonFrameOptions): Uint8Ar
   return out;
 }
 
-export function renderHexagonFrame(renderer: DirectCmdUiRenderer, options: HexagonFrameOptions): void {
+export function renderHexagonFrame(renderer, options) {
   renderer.setViewport(options.width, options.height);
   renderer.beginFrame((options.clearRgb ?? 0x081830) >>> 0);
   renderer.drawTrianglesPacked(buildHexagonTriangleBytes(options));
