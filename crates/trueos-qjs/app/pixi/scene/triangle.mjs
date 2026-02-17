@@ -1,9 +1,9 @@
 export function createTriangleScene(PIXI) {
   // Triangle in pixel coords.
   const positions = new Float32Array([
-    40, 40,
-    280, 60,
-    160, 170,
+    148, 94,
+    172, 96,
+    160, 107,
   ]);
 
   // Per-vertex RGBA (normalized u8): R, G, B corners.
