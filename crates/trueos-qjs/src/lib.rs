@@ -51,7 +51,10 @@ pub mod pixi;
 pub mod threejs;
 
 #[cfg(feature = "trueos")]
-pub use pixi::hex as pixi_hex;
+pub use pixi::hex as stream_gfx_smoke;
+
+#[cfg(feature = "trueos")]
+pub use pixi::pixi_ui as pixi_ui;
 
 #[repr(C)]
 pub struct JSRuntime {

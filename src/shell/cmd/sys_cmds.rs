@@ -132,9 +132,25 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
 
 pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
     crate::gfx::init(crate::limine::framebuffer_response());
-    match ctx.spawner.spawn(trueos_qjs::pixi_hex::boot_pixi_hexagon_task()) {
-        Ok(()) => ctx.io.write_str("gfx: started pixi-hex task (20Hz)\r\n"),
-        Err(e) => ctx.io.write_fmt(format_args!("gfx: pixi-hex task spawn failed: {:?}\r\n", e)),
+    // match ctx
+    //     .spawner
+    //     .spawn(trueos_qjs::stream_gfx_smoke::boot_stream_gfx_smoke_task())
+    // {
+    //     Ok(()) => ctx.io.write_str("gfx: started stream_gfx_smoke task (20Hz)\r\n"),
+    //     Err(e) => ctx.io.write_fmt(format_args!(
+    //         "gfx: stream_gfx_smoke task spawn failed: {:?}\r\n",
+    //         e
+    //     )),
+    // }
+    match ctx
+        .spawner
+        .spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task())
+    {
+        Ok(()) => ctx.io.write_str("gfx: started pixi_ui task (20Hz)\r\n"),
+        Err(e) => ctx.io.write_fmt(format_args!(
+            "gfx: pixi_ui task spawn failed: {:?}\r\n",
+            e
+        )),
     }
     CommandAction::None
 }

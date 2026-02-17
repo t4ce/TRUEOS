@@ -11,7 +11,7 @@ extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 
-static PIXI_HEX_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+static STREAM_GFX_SMOKE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -39,7 +39,7 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
         if rc < 0 {
             let ctx = if !job_ctx.is_null() { job_ctx } else { fallback_ctx };
             if !ctx.is_null() {
-                qjs::qjs_diag::dump_last_exception(ctx, "pixi-hex pending-job");
+                qjs::qjs_diag::dump_last_exception(ctx, "stream-gfx-smoke pending-job");
             }
             return false;
         }
@@ -76,10 +76,10 @@ unsafe fn eval_or_log(
 ) -> bool {
     let val = qjs::js_eval_bytes(ctx, src, filename, flags);
     if val.is_exception() {
-        log_str("qjs-pixi-hex: ");
+        log_str("qjs-stream-gfx-smoke: ");
         log_str(label);
         log_str(" JS_Eval exception\n");
-        qjs::qjs_diag::dump_last_exception(ctx, "pixi-hex eval");
+        qjs::qjs_diag::dump_last_exception(ctx, "stream-gfx-smoke eval");
         return false;
     }
     qjs::js_free_value(ctx, val);
@@ -87,19 +87,19 @@ unsafe fn eval_or_log(
 }
 
 #[embassy_executor::task]
-pub async fn boot_pixi_hexagon_task() {
-    if PIXI_HEX_TASK_STARTED.swap(true, Ordering::SeqCst) {
-        log_str("qjs-pixi-hex: already running\n");
+pub async fn boot_stream_gfx_smoke_task() {
+    if STREAM_GFX_SMOKE_TASK_STARTED.swap(true, Ordering::SeqCst) {
+        log_str("qjs-stream-gfx-smoke: already running\n");
         return;
     }
 
-    log_str("qjs-pixi-hex: starting (20Hz)\n");
+    log_str("qjs-stream-gfx-smoke: starting (20Hz)\n");
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
-                log_str("qjs-pixi-hex: JS_NewRuntime failed\n");
-                PIXI_HEX_TASK_STARTED.store(false, Ordering::SeqCst);
+                log_str("qjs-stream-gfx-smoke: JS_NewRuntime failed\n");
+                STREAM_GFX_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -107,8 +107,8 @@ pub async fn boot_pixi_hexagon_task() {
         let ctx = vm.ctx_ptr();
         qjs::node::install_globals(ctx);
 
-        let init_filename = b"<pixi-hex-init-v9>\0";
-        log_str("qjs-pixi-hex: init script v9\n");
+        let init_filename = b"<stream-gfx-smoke-init-v10>\0";
+        log_str("qjs-stream-gfx-smoke: init script v10\n");
         let init_script = br#"import * as cmd from 'cmd_stream';
 var G = (typeof globalThis !== 'undefined') ? globalThis : this;
 var W = Number((G.window && G.window.innerWidth) || 1280);
@@ -116,9 +116,8 @@ var H = Number((G.window && G.window.innerHeight) || 800);
 var CX = W * 0.5;
 var CY = H * 0.5;
 var R = Math.max(60, Math.floor(Math.min(W, H) * 0.28));
-var CLEAR_A = 0x203050;
-var CLEAR_B = 0x305020;
-var FILL = 0xffd400;
+var CLEAR = 0x1f3f7a;
+var FILL = 0xffe45e;
 function packHex(a) {
   var pts = [];
   for (var i = 0; i < 6; i++) {
@@ -148,10 +147,10 @@ function packHex(a) {
   }
   return out;
 }
-G.__trueos_pixi_hex_tick = function(angleRad) {
+G.__trueos_stream_gfx_smoke_tick = function(angleRad) {
   cmd.setViewport(W | 0, H | 0);
   cmd.setBlendEnabled(false);
-  cmd.setClearRgb((((angleRad * 10) | 0) & 1) ? CLEAR_A : CLEAR_B);
+  cmd.setClearRgb(CLEAR >>> 0);
   cmd.beginFrame();
   cmd.drawTrianglesU8(packHex(angleRad));
   cmd.endFrame();
@@ -165,7 +164,7 @@ G.__trueos_pixi_hex_tick = function(angleRad) {
             "init",
         ) {
             drop(vm);
-            PIXI_HEX_TASK_STARTED.store(false, Ordering::SeqCst);
+            STREAM_GFX_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
             return;
         }
 
@@ -176,8 +175,8 @@ G.__trueos_pixi_hex_tick = function(angleRad) {
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
 
-        let tick_filename = b"<pixi-hex-tick>\0";
-        let tick_script = b"var G=(typeof globalThis!=='undefined')?globalThis:this; G.__trueos_hex_a=(G.__trueos_hex_a||0)+0.05; if (G.__trueos_pixi_hex_tick) G.__trueos_pixi_hex_tick(G.__trueos_hex_a);";
+        let tick_filename = b"<stream-gfx-smoke-tick>\0";
+        let tick_script = b"var G=(typeof globalThis!=='undefined')?globalThis:this; G.__trueos_stream_gfx_smoke_a=(G.__trueos_stream_gfx_smoke_a||0)+0.05; if (G.__trueos_stream_gfx_smoke_tick) G.__trueos_stream_gfx_smoke_tick(G.__trueos_stream_gfx_smoke_a);";
 
         loop {
             if !eval_or_log(
@@ -203,6 +202,6 @@ G.__trueos_pixi_hex_tick = function(angleRad) {
         drop(vm);
     }
 
-    log_str("qjs-pixi-hex: stopped\n");
-    PIXI_HEX_TASK_STARTED.store(false, Ordering::SeqCst);
+    log_str("qjs-stream-gfx-smoke: stopped\n");
+    STREAM_GFX_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
 }
