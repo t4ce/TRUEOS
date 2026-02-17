@@ -19,12 +19,5 @@ pub(crate) async fn boot_parse5_smoke_task() {
 pub(crate) async fn boot_pixi_smoke_task() {
     crate::log!("qjs-pixi-smoke: starting\n");
     unsafe { trueos_qjs::trueos_smoke::run_pixi_import_smoke() };
-    // unsafe { trueos_qjs::trueos_smoke::run_pixi_rgbtri_smoke() };
     crate::log!("qjs-pixi-smoke: done\n");
-}
-
-#[task]
-pub(crate) async fn pixi_runtime_task() {
-    crate::log!("qjs-pixi-runtime: starting\n");
-    unsafe { trueos_qjs::trueos_smoke::run_pixi_rgbtri_runtime_forever() };
 }

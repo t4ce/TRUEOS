@@ -132,8 +132,6 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
 
 pub(crate) fn cmd_gfx(_ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
     crate::gfx::init(crate::limine::framebuffer_response());
-   // unsafe { trueos_qjs::trueos_smoke::run_pixi_import_smoke() };
-    unsafe { trueos_qjs::trueos_smoke::run_pixi_rgbtri_smoke() };
     CommandAction::None
 }
 
