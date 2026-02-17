@@ -6,9 +6,9 @@ globalThis.__trueos_webgl_force = 1;
 function createTriangleScene() {
   // Triangle in pixel coords.
   const positions = new Float32Array([
-    40, 40,
-    280, 60,
-    160, 170,
+    148, 94,
+    172, 96,
+    160, 107,
   ]);
 
   // Per-vertex RGBA (normalized u8): R, G, B corners.
@@ -99,9 +99,7 @@ try {
   const cy = 100;
   let angle = 0;
 
-  // Endless in-VM animation loop.
-  const spinDelayIters = 180000;
-  while (true) {
+  function tick() {
     angle += 0.02;
     const c = Math.cos(angle);
     const s = Math.sin(angle);
@@ -113,8 +111,22 @@ try {
     }
     posBuffer.update();
     renderer.render(stage);
-    for (let k = 0; k < spinDelayIters; k++) {}
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+      globalThis.requestAnimationFrame(tick);
+      return;
+    }
+    if (typeof globalThis.setTimeout === 'function') {
+      globalThis.setTimeout(tick, 0);
+      return;
+    }
+    if (typeof process !== 'undefined' && process && typeof process.nextTick === 'function') {
+      process.nextTick(tick);
+      return;
+    }
+    // Last resort if no scheduler primitive exists.
+    tick();
   }
+  tick();
 
   log('pixi-tri: ok');
 } catch (e) {

@@ -1,22 +1,87 @@
-mod limine_fb;
-use trueos_gfx_core::GfxContext;
-
-#[cfg(feature = "gfx_intel")]
-mod intel_gpu;
+use trueos_gfx_core::{
+    BufferDesc, BufferId, CommandBuffer, DeviceCaps, Error, Extent2D, FenceId, GfxContext,
+    GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, PipelineDesc, PipelineId, Result,
+    ShaderDesc, ShaderId, SwapchainDesc,
+};
 
 #[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
-    LimineFb(limine_fb::LimineFbBackend),
-
-    #[cfg(feature = "gfx_intel")]
-    Intel(intel_gpu::IntelGpuBackend),
 
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
 
-    None(limine_fb::NullBackend),
+    None(NullBackend),
+}
+
+pub struct NullBackend;
+
+impl GfxDevice for NullBackend {
+    fn caps(&self) -> DeviceCaps {
+        DeviceCaps {
+            supports_rgbx8888: false,
+            supports_host_visible_buffers: false,
+        }
+    }
+
+    fn create_buffer(&mut self, _desc: BufferDesc) -> Result<BufferId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_buffer(&mut self, _id: BufferId) {}
+
+    fn create_shader(&mut self, _desc: ShaderDesc<'_>) -> Result<ShaderId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_shader(&mut self, _id: ShaderId) {}
+
+    fn create_pipeline(&mut self, _desc: PipelineDesc) -> Result<PipelineId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_pipeline(&mut self, _id: PipelineId) {}
+
+    fn create_image(&mut self, _desc: ImageDesc) -> Result<ImageId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_image(&mut self, _id: ImageId) {}
+
+    fn write_image(&mut self, _id: ImageId, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported)
+    }
+
+    fn write_buffer(&mut self, _id: BufferId, _offset: u64, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported)
+    }
+
+    fn submit(&mut self, _cmds: CommandBuffer<'_>) -> Result<FenceId> {
+        Err(Error::Unsupported)
+    }
+
+    fn poll(&mut self, _fence: FenceId) -> bool {
+        false
+    }
+
+    fn device_idle(&mut self) {}
+}
+
+impl GfxPresent for NullBackend {
+    fn configure_swapchain(&mut self, _desc: SwapchainDesc) -> Result<()> {
+        Err(Error::Unsupported)
+    }
+
+    fn swapchain_desc(&self) -> SwapchainDesc {
+        SwapchainDesc {
+            format: ImageFormat::Rgbx8888,
+            extent: Extent2D {
+                width: 0,
+                height: 0,
+            },
+        }
+    }
 }
 
 fn ensure_pci_enumerated_if_empty() {
@@ -40,9 +105,12 @@ impl Backend {
                 crate::log!("gfx: using virgl backend (auto)\n");
                 return v;
             }
-            crate::log!("gfx: virgl auto init failed; fallback to limine framebuffer\n");
+            crate::log!("gfx: virgl auto init failed\n");
         }
-        Self::init_limine_fb(framebuffers)
+
+
+        crate::log!("gfx: no accelerated backend available; gfx backend inactive\n");
+        Backend::None(NullBackend)
     }
 
     #[cfg(feature = "gfx_virgl")]
@@ -53,33 +121,8 @@ impl Backend {
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(|b| Backend::Virgl(b))
     }
 
-    #[cfg(feature = "gfx_intel")]
-    pub fn init_intel(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
-    ) -> Option<Self> {
-        ensure_pci_enumerated_if_empty();
-        intel_gpu::IntelGpuBackend::init(framebuffers).map(Backend::Intel)
-    }
-
-    pub fn init_limine_fb(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) -> Self {
-        limine_fb::LimineFbBackend::from_limine(framebuffers)
-            .map(|b| {
-                crate::log!("gfx: using limine framebuffer backend\n");
-                Backend::LimineFb(b)
-            })
-            .unwrap_or_else(|| {
-                crate::log!("gfx: limine framebuffer unavailable; no gfx backend active\n");
-                Backend::None(limine_fb::NullBackend)
-            })
-    }
-
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
         match self {
-            Backend::LimineFb(b) => b,
-
-            #[cfg(feature = "gfx_intel")]
-            Backend::Intel(b) => b,
-
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
 

@@ -70,7 +70,7 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
     #[cfg(feature = "gfx_virgl")]
     {
         match backend_kind() {
-            Some(BackendKind::LimineFb) | Some(BackendKind::None) => {
+            Some(BackendKind::None) => {
                 let _ = switch_to_virgl();
             }
             _ => {}
@@ -143,59 +143,16 @@ pub fn switch_to_virgl() -> bool {
     .unwrap_or(false)
 }
 
-#[cfg(not(feature = "gfx_virgl"))]
-pub fn switch_to_virgl() -> bool {
-    false
-}
-
-fn set_limine_fb_backend() -> bool {
-    crate::log!("gfx: set_limine_fb_backend: begin\n");
-    // Snapshot framebuffers without holding SYSTEM across backend init.
-    let fbs = with_framebuffers(|f| f).flatten();
-    let b = backends::Backend::init_limine_fb(fbs);
-
-    with_system(|sys| {
-        sys.backend = b;
-        bump_backend_epoch();
-        crate::log!("gfx: set_limine_fb_backend: ok epoch={}\n", backend_epoch());
-        true
-    })
-    .unwrap_or(false)
-}
-
-#[cfg(feature = "gfx_intel")]
-#[allow(dead_code)]
-pub fn switch_to_intel() -> bool {
-    with_system(|sys| {
-        let Some(b) = backends::Backend::init_intel(sys.framebuffers) else {
-            return false;
-        };
-        sys.backend = b;
-        bump_backend_epoch();
-        true
-    })
-    .unwrap_or(false)
-}
-
-#[cfg(not(feature = "gfx_intel"))]
-pub fn switch_to_intel() -> bool {
-    false
-}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
-    LimineFb,
     #[cfg(feature = "gfx_intel")]
-    Intel,
     Virgl,
     None,
 }
 
 pub fn backend_kind() -> Option<BackendKind> {
     with_system(|sys| match &sys.backend {
-        backends::Backend::LimineFb(_) => BackendKind::LimineFb,
-        #[cfg(feature = "gfx_intel")]
-        backends::Backend::Intel(_) => BackendKind::Intel,
         #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
         backends::Backend::None(_) => BackendKind::None,
@@ -204,41 +161,23 @@ pub fn backend_kind() -> Option<BackendKind> {
 
 /// Toggle the gfx backend.
 ///
-/// A/B swap cycle:
-/// - Virgl (gfx) <-> LimineFb (direct)
-///
-/// Notes:
-/// - `LimineFb` here uses direct framebuffer backend selection.
+/// A/B cycle between accelerated backends when available.
 pub fn toggle_backend() -> BackendKind {
     let Some(kind) = backend_kind() else {
         return BackendKind::None;
     };
 
     match kind {
-        #[cfg(feature = "gfx_intel")]
-        BackendKind::Intel => {
-            // Keep toggle behavior simple: Intel is not part of the LimineFB<->virgl toggle.
-            // If we're on Intel, toggle returns to the known-good LimineFB.
-            let _ = set_limine_fb_backend();
-            BackendKind::LimineFb
-        }
         BackendKind::Virgl => {
-            let _ = set_limine_fb_backend();
-            BackendKind::LimineFb
-        }
-        BackendKind::LimineFb => {
-            if switch_to_virgl() {
-                return BackendKind::Virgl;
-            }
-            BackendKind::LimineFb
+          
+            BackendKind::Virgl
         }
         BackendKind::None => {
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }
 
-            let _ = set_limine_fb_backend();
-            BackendKind::LimineFb
+            BackendKind::None
         }
     }
 }

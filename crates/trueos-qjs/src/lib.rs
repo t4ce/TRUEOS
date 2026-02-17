@@ -88,6 +88,8 @@ pub const JS_EVAL_TYPE_GLOBAL: c_int = 0;
 pub const JS_EVAL_TYPE_MODULE: c_int = 1;
 
 pub const JS_EVAL_FLAG_COMPILE_ONLY: c_int = 1 << 5;
+pub const JS_READ_OBJ_BYTECODE: c_int = 1 << 0;
+pub const JS_WRITE_OBJ_BYTECODE: c_int = 1 << 0;
 
 pub const JS_CFUNC_GENERIC: c_int = 0;
 // quickjs.h: JS_CFUNC_constructor
@@ -288,6 +290,14 @@ extern "C" {
     pub fn JS_NewStringLen(ctx: *mut JSContext, buf: *const c_char, buf_len: usize) -> JSValue;
 
     pub fn JS_NewArrayBufferCopy(ctx: *mut JSContext, buf: *const u8, len: usize) -> JSValue;
+
+    pub fn JS_ReadObject(ctx: *mut JSContext, buf: *const u8, buf_len: usize, flags: c_int) -> JSValue;
+    pub fn JS_WriteObject(
+        ctx: *mut JSContext,
+        psize: *mut usize,
+        obj: JSValueConst,
+        flags: c_int,
+    ) -> *mut u8;
 
     // --- ArrayBuffer / TypedArray access (needed for WebGL-style shims) ---
     // quickjs.h: uint8_t *JS_GetArrayBuffer(JSContext *ctx, size_t *psize, JSValueConst obj);

@@ -2,9 +2,9 @@ import * as PIXI from 'pixi.js@7.4.0?bundle&target=es2022';
 
 function createTriangleScene(PIXI) {
   const positions = new Float32Array([
-    40, 40,
-    280, 60,
-    160, 170,
+    148, 94,
+    172, 96,
+    160, 107,
   ]);
 
   const colors = new Uint8Array([
@@ -79,13 +79,25 @@ try {
 
   const { stage, mesh } = createTriangleScene(PIXI);
 
-  // Drive continuous in-VM animation; keep per-frame delay so spin is visible.
-  const spinDelayIters = 180000;
-  for (;;) {
+  function tick() {
     mesh.rotation += 0.0035;
     renderer.render(stage);
-    for (let k = 0; k < spinDelayIters; k++) {}
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+      globalThis.requestAnimationFrame(tick);
+      return;
+    }
+    if (typeof globalThis.setTimeout === 'function') {
+      globalThis.setTimeout(tick, 0);
+      return;
+    }
+    if (typeof process !== 'undefined' && process && typeof process.nextTick === 'function') {
+      process.nextTick(tick);
+      return;
+    }
+    // Last resort if no scheduler primitive exists.
+    tick();
   }
+  tick();
 } catch (e) {
   log('pixi-tri: error', (e && e.stack) ? e.stack : (e && e.message) ? e.message : String(e));
 }

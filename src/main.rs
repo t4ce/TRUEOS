@@ -102,12 +102,13 @@ pub extern "C" fn kmain() -> ! {
     vga::init(limine::framebuffer_response());
     // Render the proof tile immediately (one-shot) so display output is validated early.
     vga::cube::tick();
+    // Enumerate PCI once before any PCI-dependent subsystem init.
+    pci::enumerate_impl();
     usb::xhci::init_once();
     usb::truekey::init();
     pci::vrng::init_once();
     pci::vrng::smoke_test_once();
     crate::rng::init();
-    pci::enumerate_impl();
     disc::probe_once();
     efi::acpi::ensure_tables();
     efi::acpi::hpet::ensure();

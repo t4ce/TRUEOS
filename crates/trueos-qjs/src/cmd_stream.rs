@@ -178,7 +178,7 @@ fn flush_active_frame(st: &mut FrameState) {
         return;
     }
     let rc = unsafe { trueos_cabi_gfx_begin_frame(st.frame_clear_rgb) };
-    if rc != 0 {
+    if rc != 0 && rc != -3 {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
         let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if prev != rc || (n % 120) == 1 {
@@ -204,7 +204,7 @@ fn flush_active_frame(st: &mut FrameState) {
                 )
             },
         };
-        if rc != 0 {
+        if rc != 0 && rc != -6 {
             let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
             let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if prev != rc || (n % 120) == 1 {
@@ -219,7 +219,7 @@ fn flush_active_frame(st: &mut FrameState) {
     }
 
     let rc = unsafe { trueos_cabi_gfx_end_frame() };
-    if rc != 0 {
+    if rc != 0 && rc != -2 {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
         let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if prev != rc || (n % 120) == 1 {

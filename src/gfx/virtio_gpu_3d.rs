@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use alloc::collections::{BTreeMap, VecDeque};
 use core::sync::atomic::{fence, AtomicU32, Ordering};
+use libm::roundf;
 
 use crate::{pci, wait};
 use embassy_time_driver::{now, TICK_HZ};
@@ -1371,8 +1372,8 @@ DCL OUT[0], COLOR\n\
 use trueos_gfx_core::{
     BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
     FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
-    MemoryType, PipelineDesc, PipelineId, ShaderDesc, ShaderId, SwapchainDesc, VertexLayout,
-    Viewport,
+    MemoryType, PipelineDesc, PipelineId, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat,
+    VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1391,6 +1392,13 @@ struct HostPipeline {
     desc: PipelineDesc,
 }
 
+#[derive(Clone)]
+struct HostImage {
+    desc: ImageDesc,
+    bytes: Vec<u8>,
+    revision: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ConvertedVertexCacheKey {
     pipeline_id: u32,
@@ -1403,6 +1411,10 @@ struct ConvertedVertexCacheKey {
     layout_pos_offset: u16,
     layout_color_offset: u16,
     layout_color_format: ColorFormat,
+    layout_texcoord_offset: u16,
+    layout_texcoord_format: TexCoordFormat,
+    image_id: u32,
+    image_rev: u32,
 }
 
 struct ConvertedVertexCache {
@@ -1423,6 +1435,7 @@ struct SubmittedFrameKey {
 struct VirglDrawState {
     pipeline: PipelineId,
     vertex: VirglBufferBinding,
+    image: ImageId,
     viewport: Viewport,
     clear_rgb: u32,
 }
@@ -1441,6 +1454,7 @@ impl Default for VirglDrawState {
                 id: BufferId::invalid(),
                 offset: 0,
             },
+            image: ImageId::invalid(),
             viewport: Viewport {
                 x: 0,
                 y: 0,
@@ -1486,6 +1500,7 @@ pub struct VirglGfxBackend {
     buffers: Vec<Option<HostBuffer>>,
     shaders: Vec<Option<Vec<u8>>>,
     pipelines: Vec<Option<HostPipeline>>,
+    images: Vec<Option<HostImage>>,
 
     state: VirglDrawState,
     converted_cache: ConvertedVertexCache,
@@ -1694,6 +1709,7 @@ impl VirglGfxBackend {
             buffers: Vec::new(),
             shaders: Vec::new(),
             pipelines: Vec::new(),
+            images: Vec::new(),
             state: VirglDrawState {
                 viewport: Viewport {
                     x: 0,
@@ -1836,14 +1852,22 @@ impl VirglGfxBackend {
         (r, g, b)
     }
 
-    fn build_virgl_vertices(&self, buf: &[u8], pipe: &HostPipeline, binding: VirglBufferBinding, draw: (u32, u32)) -> Option<Vec<Vertex>> {
+    fn build_virgl_vertices(
+        &self,
+        buf: &[u8],
+        pipe: &HostPipeline,
+        binding: VirglBufferBinding,
+        draw: (u32, u32),
+        image: Option<&HostImage>,
+    ) -> Option<Vec<Vertex>> {
         let PipelineDesc { vertex_layout, .. } = pipe.desc;
         let VertexLayout {
             stride,
             pos_offset,
             color_offset,
             color_format,
-            ..
+            texcoord_offset,
+            texcoord_format,
         } = vertex_layout;
 
         let stride = stride as usize;
@@ -1882,6 +1906,7 @@ impl VirglGfxBackend {
             let mut r_u8 = 255u8;
             let mut g_u8 = 255u8;
             let mut b_u8 = 255u8;
+            let mut a_u8 = 255u8;
             let col_off = off + (color_offset as usize);
             match color_format {
                 ColorFormat::RgbU8 => {
@@ -1896,17 +1921,55 @@ impl VirglGfxBackend {
                         r_u8 = buf[col_off];
                         g_u8 = buf[col_off + 1];
                         b_u8 = buf[col_off + 2];
+                        a_u8 = buf[col_off + 3];
                     }
+                }
+            }
+
+            if texcoord_format == TexCoordFormat::UvF32 {
+                let img = image?;
+                let tex_off = off + (texcoord_offset as usize);
+                if tex_off + 8 > buf.len() {
+                    break;
+                }
+                let u = f32::from_le_bytes(buf[tex_off..tex_off + 4].try_into().ok()?);
+                let v = f32::from_le_bytes(buf[tex_off + 4..tex_off + 8].try_into().ok()?);
+                let tw = img.desc.width.max(1) as usize;
+                let th = img.desc.height.max(1) as usize;
+                let tx = (roundf(u.clamp(0.0, 1.0) * (tw.saturating_sub(1) as f32)) as usize)
+                    .min(tw.saturating_sub(1));
+                let ty = (roundf(v.clamp(0.0, 1.0) * (th.saturating_sub(1) as f32)) as usize)
+                    .min(th.saturating_sub(1));
+                let t_idx = ty
+                    .saturating_mul(tw)
+                    .saturating_add(tx)
+                    .saturating_mul(4);
+                if t_idx + 3 <= img.bytes.len() {
+                    let tr = img.bytes[t_idx] as u16;
+                    let tg = img.bytes[t_idx + 1] as u16;
+                    let tb = img.bytes[t_idx + 2] as u16;
+                    let ta = img.bytes[t_idx + 3] as u16;
+                    r_u8 = ((r_u8 as u16).saturating_mul(tr) / 255) as u8;
+                    g_u8 = ((g_u8 as u16).saturating_mul(tg) / 255) as u8;
+                    b_u8 = ((b_u8 as u16).saturating_mul(tb) / 255) as u8;
+                    a_u8 = ((a_u8 as u16).saturating_mul(ta) / 255) as u8;
+                } else {
+                    // Missing texel data behaves like transparent black.
+                    r_u8 = 0;
+                    g_u8 = 0;
+                    b_u8 = 0;
+                    a_u8 = 0;
                 }
             }
 
             let rf = (r_u8 as f32) / 255.0;
             let gf = (g_u8 as f32) / 255.0;
             let bf = (b_u8 as f32) / 255.0;
+            let af = (a_u8 as f32) / 255.0;
 
             out.push(Vertex {
                 pos: [x, y, 0.0, 1.0],
-                color: [rf, gf, bf, 1.0],
+                color: [rf, gf, bf, af],
             });
         }
         Some(out)
@@ -2032,14 +2095,75 @@ impl GfxDevice for VirglGfxBackend {
         }
     }
 
-    fn create_image(&mut self, _desc: ImageDesc) -> GfxResult<ImageId> {
-        Err(Error::Unsupported)
+    fn create_image(&mut self, desc: ImageDesc) -> GfxResult<ImageId> {
+        if desc.width == 0 || desc.height == 0 {
+            return Err(Error::Invalid);
+        }
+        if desc.format != ImageFormat::Rgba8888 {
+            return Err(Error::Unsupported);
+        }
+        let bytes_len = (desc.width as usize)
+            .saturating_mul(desc.height as usize)
+            .saturating_mul(4);
+        if bytes_len == 0 {
+            return Err(Error::Invalid);
+        }
+        let mut bytes = Vec::new();
+        bytes.resize(bytes_len, 0);
+        let slot = Self::alloc_slot(
+            &mut self.images,
+            HostImage {
+                desc,
+                bytes,
+                revision: 1,
+            },
+        );
+        Ok(ImageId::from_raw(slot as u32 + 1))
     }
 
-    fn destroy_image(&mut self, _id: ImageId) {}
+    fn destroy_image(&mut self, id: ImageId) {
+        let raw = id.raw();
+        if raw == 0 {
+            return;
+        }
+        let idx = (raw - 1) as usize;
+        if idx < self.images.len() {
+            self.images[idx] = None;
+            self.converted_cache.key = None;
+            self.uploaded_cache_key = None;
+            self.uploaded_cache_vbo_generation = 0;
+            self.last_submitted_frame = None;
+        }
+        if self.state.image.raw() == raw {
+            self.state.image = ImageId::invalid();
+        }
+    }
 
-    fn write_image(&mut self, _id: ImageId, _data: &[u8]) -> GfxResult<()> {
-        Err(Error::Unsupported)
+    fn write_image(&mut self, id: ImageId, data: &[u8]) -> GfxResult<()> {
+        let raw = id.raw();
+        if raw == 0 {
+            return Err(Error::Invalid);
+        }
+        let idx = (raw - 1) as usize;
+        let Some(img) = self.images.get_mut(idx).and_then(|i| i.as_mut()) else {
+            return Err(Error::NotFound);
+        };
+        let expected = (img.desc.width as usize)
+            .saturating_mul(img.desc.height as usize)
+            .saturating_mul(4);
+        if data.len() < expected || img.bytes.len() < expected {
+            return Err(Error::Invalid);
+        }
+        img.bytes[..expected].copy_from_slice(&data[..expected]);
+        img.revision = img.revision.wrapping_add(1);
+        if img.revision == 0 {
+            img.revision = 1;
+        }
+        self.converted_cache.key = None;
+        self.uploaded_cache_key = None;
+        self.uploaded_cache_vbo_generation = 0;
+        self.last_submitted_frame = None;
+        Ok(())
     }
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> GfxResult<()> {
@@ -2127,8 +2251,8 @@ impl GfxDevice for VirglGfxBackend {
                 Command::BindVertexBuffer { buffer, offset } => {
                     self.state.vertex = VirglBufferBinding { id: buffer, offset };
                 }
-                Command::BindImage(_image) => {
-                    // Textured pipelines are not supported in virgl backend yet.
+                Command::BindImage(image) => {
+                    self.state.image = image;
                 }
                 Command::Draw {
                     vertex_count,
@@ -2187,11 +2311,39 @@ impl GfxDevice for VirglGfxBackend {
                 layout_pos_offset: pipe.desc.vertex_layout.pos_offset,
                 layout_color_offset: pipe.desc.vertex_layout.color_offset,
                 layout_color_format: pipe.desc.vertex_layout.color_format,
+                layout_texcoord_offset: pipe.desc.vertex_layout.texcoord_offset,
+                layout_texcoord_format: pipe.desc.vertex_layout.texcoord_format,
+                image_id: self.state.image.raw(),
+                image_rev: if self.state.image.is_valid() {
+                    self.images
+                        .get(self.state.image.raw().saturating_sub(1) as usize)
+                        .and_then(|i| i.as_ref())
+                        .map(|i| i.revision)
+                        .unwrap_or(0)
+                } else {
+                    0
+                },
             };
 
             if self.converted_cache.key != Some(cache_key) {
+                let bound_image = if pipe.desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                    if !self.state.image.is_valid() {
+                        return Err(Error::Invalid);
+                    }
+                    self.images
+                        .get(self.state.image.raw().saturating_sub(1) as usize)
+                        .and_then(|i| i.as_ref())
+                } else {
+                    None
+                };
                 let verts = self
-                    .build_virgl_vertices(&vb.bytes, pipe, self.state.vertex, (vertex_count, first_vertex))
+                    .build_virgl_vertices(
+                        &vb.bytes,
+                        pipe,
+                        self.state.vertex,
+                        (vertex_count, first_vertex),
+                        bound_image,
+                    )
                     .ok_or(Error::Invalid)?;
                 let vbytes: &[u8] = unsafe {
                     core::slice::from_raw_parts(
