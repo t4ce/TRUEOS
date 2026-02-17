@@ -97,6 +97,15 @@ export interface UIRendererAdapter {
   destroy?(): void;
 }
 
+export interface HexagonSceneState {
+  width: number;
+  height: number;
+  radius: number;
+  angleRad: number;
+  clearRgb: number;
+  fillRgb: number;
+}
+
 export interface SchedulerDeps {
   input: InputRouter;
   bridge: WorldUIBridge;
@@ -234,4 +243,16 @@ export function wireUIPasses(ui: UIRendererAdapter): RenderPass[] {
       run: (ctx) => ui.render(ctx),
     },
   ];
+}
+
+export function makeCenteredHexagonState(width: number, height: number): HexagonSceneState {
+  const minSide = Math.max(1, Math.min(width, height));
+  return {
+    width,
+    height,
+    radius: Math.max(24, Math.floor(minSide * 0.18)),
+    angleRad: 0,
+    clearRgb: 0x081830,
+    fillRgb: 0x3ddc97,
+  };
 }

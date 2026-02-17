@@ -122,3 +122,7 @@ sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
 sudo ip link set tap0 master br0
 sudo ip link set tap0 up
+
+sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=usb
