@@ -64,6 +64,18 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         let backend = backends::Backend::init_auto(framebuffers);
         Mutex::new(System::new(backend, framebuffers))
     });
+
+    // If gfx was previously initialized without virgl, retry virgl on explicit init calls.
+    // Virgl backend init programs scanout via VIRTIO_GPU_CMD_SET_SCANOUT.
+    #[cfg(feature = "gfx_virgl")]
+    {
+        match backend_kind() {
+            Some(BackendKind::LimineFb) | Some(BackendKind::None) => {
+                let _ = switch_to_virgl();
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
@@ -136,35 +148,8 @@ pub fn switch_to_virgl() -> bool {
     false
 }
 
-#[cfg(feature = "gfx_virgl")]
-pub fn switch_to_virtio_sw() -> bool {
-    crate::log!("gfx: switch_to_virtio_sw: begin\n");
-
-    // IMPORTANT: do the heavy init without holding the global gfx SYSTEM lock.
-    // Holding SYSTEM while we also acquire the global virtio-gpu lock (and do DMA alloc)
-    // increases the chance of lock inversion / apparent shell freezes.
-    let Some(b) = backends::Backend::init_virtio_sw() else {
-        crate::log!("gfx: switch_to_virtio_sw: init_virtio_sw failed\n");
-        return false;
-    };
-
-    with_system(|sys| {
-        sys.backend = b;
-        bump_backend_epoch();
-        crate::log!("gfx: switch_to_virtio_sw: ok epoch={}\n", backend_epoch());
-        true
-    })
-    .unwrap_or(false)
-}
-
-#[cfg(not(feature = "gfx_virgl"))]
-pub fn switch_to_virtio_sw() -> bool {
-    false
-}
-
-pub fn switch_to_limine_fb() -> bool {
-    crate::log!("gfx: switch_to_limine_fb: begin\n");
-
+fn set_limine_fb_backend() -> bool {
+    crate::log!("gfx: set_limine_fb_backend: begin\n");
     // Snapshot framebuffers without holding SYSTEM across backend init.
     let fbs = with_framebuffers(|f| f).flatten();
     let b = backends::Backend::init_limine_fb(fbs);
@@ -172,7 +157,7 @@ pub fn switch_to_limine_fb() -> bool {
     with_system(|sys| {
         sys.backend = b;
         bump_backend_epoch();
-        crate::log!("gfx: switch_to_limine_fb: ok epoch={}\n", backend_epoch());
+        crate::log!("gfx: set_limine_fb_backend: ok epoch={}\n", backend_epoch());
         true
     })
     .unwrap_or(false)
@@ -203,7 +188,6 @@ pub enum BackendKind {
     #[cfg(feature = "gfx_intel")]
     Intel,
     Virgl,
-    VirtioSw,
     None,
 }
 
@@ -214,8 +198,6 @@ pub fn backend_kind() -> Option<BackendKind> {
         backends::Backend::Intel(_) => BackendKind::Intel,
         #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
-        #[cfg(feature = "gfx_virgl")]
-        backends::Backend::VirtioSw(_) => BackendKind::VirtioSw,
         backends::Backend::None(_) => BackendKind::None,
     })
 }
@@ -223,7 +205,7 @@ pub fn backend_kind() -> Option<BackendKind> {
 /// Toggle the gfx backend.
 ///
 /// A/B swap cycle:
-/// - VirtioSw (gfx) <-> LimineFb (direct)
+/// - Virgl (gfx) <-> LimineFb (direct)
 ///
 /// Notes:
 /// - `LimineFb` here uses direct framebuffer backend selection.
@@ -237,28 +219,16 @@ pub fn toggle_backend() -> BackendKind {
         BackendKind::Intel => {
             // Keep toggle behavior simple: Intel is not part of the LimineFB<->virgl toggle.
             // If we're on Intel, toggle returns to the known-good LimineFB.
-            let _ = switch_to_limine_fb();
+            let _ = set_limine_fb_backend();
             BackendKind::LimineFb
         }
         BackendKind::Virgl => {
-            // Virgl is disabled in A/B swap mode, but handle the state anyway.
-            // Prefer moving into the virtio-owned software scanout.
-            if switch_to_virtio_sw() {
-                return BackendKind::VirtioSw;
-            }
-            let _ = switch_to_limine_fb();
-            BackendKind::LimineFb
-        }
-        BackendKind::VirtioSw => {
-            let _ = switch_to_limine_fb();
+            let _ = set_limine_fb_backend();
             BackendKind::LimineFb
         }
         BackendKind::LimineFb => {
             if switch_to_virgl() {
                 return BackendKind::Virgl;
-            }
-            if switch_to_virtio_sw() {
-                return BackendKind::VirtioSw;
             }
             BackendKind::LimineFb
         }
@@ -266,11 +236,8 @@ pub fn toggle_backend() -> BackendKind {
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }
-            if switch_to_virtio_sw() {
-                return BackendKind::VirtioSw;
-            }
 
-            let _ = switch_to_limine_fb();
+            let _ = set_limine_fb_backend();
             BackendKind::LimineFb
         }
     }

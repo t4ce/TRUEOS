@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 // V-layer readiness flags.
 //
@@ -17,7 +17,6 @@ pub const TLS_SOCKET_SERVICE_READY: u32 = 1 << 9;
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
 pub const QJS_PARSE5_SMOKE_DONE: u32 = 1 << 18;
-pub const GFX_VIRTIO_SW_READY: u32 = 1 << 19;
 
 static READY: AtomicU32 = AtomicU32::new(0);
 
@@ -44,22 +43,6 @@ pub async fn wait_for(required: u32) {
     loop {
         if is_set(required) {
             return;
-        }
-        Timer::after(EmbassyDuration::from_millis(25)).await;
-    }
-}
-
-/// Wait until all required flags are set or a timeout elapses.
-///
-/// Returns `true` if ready, `false` on timeout.
-pub async fn wait_for_timeout(required: u32, timeout: EmbassyDuration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if is_set(required) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
         }
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }

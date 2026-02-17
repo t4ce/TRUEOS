@@ -7,9 +7,6 @@ mod intel_gpu;
 #[cfg(feature = "gfx_virgl")]
 use crate::gfx::virtio_gpu_3d;
 
-#[cfg(feature = "gfx_virgl")]
-mod virtio_sw;
-
 pub enum Backend {
     LimineFb(limine_fb::LimineFbBackend),
 
@@ -18,9 +15,6 @@ pub enum Backend {
 
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
-
-    #[cfg(feature = "gfx_virgl")]
-    VirtioSw(virtio_sw::VirtioSwBackend),
 
     None(limine_fb::NullBackend),
 }
@@ -59,12 +53,6 @@ impl Backend {
         virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(|b| Backend::Virgl(b))
     }
 
-    #[cfg(feature = "gfx_virgl")]
-    pub fn init_virtio_sw() -> Option<Self> {
-        ensure_pci_enumerated_if_empty();
-        virtio_sw::VirtioSwBackend::init().map(Backend::VirtioSw)
-    }
-
     #[cfg(feature = "gfx_intel")]
     pub fn init_intel(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
@@ -94,9 +82,6 @@ impl Backend {
 
             #[cfg(feature = "gfx_virgl")]
             Backend::Virgl(b) => b,
-
-            #[cfg(feature = "gfx_virgl")]
-            Backend::VirtioSw(b) => b,
 
             Backend::None(b) => b,
         }

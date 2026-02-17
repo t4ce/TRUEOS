@@ -552,8 +552,6 @@ pub(crate) fn init_builtin_shell_commands() {
         static HV_ARGS: [ArgSpec; 1] = [ArgSpec::new("op", ArgType::Str)];
         static PCI_USB_ARGS: [ArgSpec; 1] = [ArgSpec::new("cmd", ArgType::Str)];
 
-        static GFX_ARGS: [ArgSpec; 1] = [ArgSpec::new("backend", ArgType::Str)];
-
         let _ = REGSHCMD("§", &SECTION_ARGS, cmd::cmd_section);
         let _ = REGSHCMD("cmd", &NO_ARGS, cmd::cmd_cmd);
         let _ = REGSHCMD("ecma48", &ECMA48_ARGS, cmd::cmd_ecma48);
@@ -613,7 +611,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("pci.usb", &PCI_USB_ARGS, cmd::cmd_pci_usb);
         let _ = REGSHCMD("usb", &NO_ARGS, cmd::cmd_usb);
+        let _ = REGSHCMD("gfx", &NO_ARGS, cmd::cmd_gfx);
 
-        let _ = REGSHCMD("gfx", &GFX_ARGS, cmd::cmd_gfx);
     });
 }
