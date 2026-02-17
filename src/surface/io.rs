@@ -999,13 +999,6 @@ pub mod cabi {
 		vtx_ptr: *const u8,
 		vtx_len: usize,
 	) -> i32 {
-		// A = console buffer: when LimineFb is active, the Limine framebuffer is owned by the
-		// console/text renderer. Refuse gfx draws here to avoid two independent writers
-		// hammering the same memory (overlay/tearing) during backend swaps.
-		if crate::gfx::backend_kind() == Some(crate::gfx::BackendKind::LimineFb) {
-			return -10;
-		}
-
 		if vtx_ptr.is_null() {
 			return if vtx_len == 0 { 0 } else { -1 };
 		}
