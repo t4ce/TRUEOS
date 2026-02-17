@@ -132,6 +132,16 @@ fn write_prompt(io: &dyn ShellIo) {
 }
 
 #[inline]
+pub(crate) fn write_submitted_prompt(io: &dyn ShellIo, text: &str) {
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
+    io.write_str("\x1b[38;2;150;150;150m§ ");
+    io.write_str(text);
+    io.write_str("\x1b[0m");
+}
+
+#[inline]
 fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
     if prefix.len() > s.len() {
         return false;
@@ -457,6 +467,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     }
 
                     if !line.is_empty() {
+                        write_submitted_prompt(io, line.as_str());
                         // Enter uses the same prefix matching behavior as Tab:
                         // unique -> expand and execute, ambiguous -> show matches and stay in-place.
                         let mut input_buf: String<128> = String::new();

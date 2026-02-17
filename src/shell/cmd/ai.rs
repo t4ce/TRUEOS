@@ -48,9 +48,7 @@ fn should_log_sse_data(event_type: Option<&str>) -> bool {
     }
     matches!(
         event_type,
-        Some("response.output_text.delta")
-            | Some("response.output_text.done")
-            | Some("response.completed")
+        Some("response.completed")
             | Some("response.error")
     )
 }
@@ -65,6 +63,47 @@ fn ai_prev_get() -> Option<String> {
 
 fn ai_prev_set(v: Option<String>) {
     *AI_PREVIOUS_RESPONSE_ID.lock() = v;
+}
+
+#[inline]
+fn draw_ai_prompt_row(io: &dyn ShellIo, line: &str) {
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
+    io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)));
+    // Ensure typed text is never tinted by prior row styling.
+    io.write_str("\x1b[0m");
+    io.write_str(line);
+}
+
+#[inline]
+fn ai_status_wave(io: &dyn ShellIo, term_cols: usize, term_rows: usize, slot_id: u8, center: &str, step: usize, active: u8, idle: u8) {
+    let _ = statusbar::set_center(slot_id, center);
+    let _ = statusbar::set_right(slot_id, center);
+    for i in 0..statusbar::INDICATOR_COUNT {
+        let code = if i == (step % statusbar::INDICATOR_COUNT) { active } else { idle };
+        let _ = statusbar::set_indicator(slot_id, i, code);
+    }
+    statusbar::refresh(io, term_cols, term_rows);
+}
+
+#[inline]
+fn ai_status_solid(io: &dyn ShellIo, term_cols: usize, term_rows: usize, slot_id: u8, center: &str, color: u8) {
+    let _ = statusbar::set_center(slot_id, center);
+    let _ = statusbar::set_right(slot_id, center);
+    for i in 0..statusbar::INDICATOR_COUNT {
+        let _ = statusbar::set_indicator(slot_id, i, color);
+    }
+    statusbar::refresh(io, term_cols, term_rows);
+}
+
+async fn read_next_byte(io: &dyn ShellBackend) -> u8 {
+    loop {
+        if let Some(byte) = io.read_byte() {
+            return byte;
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
 }
 
 pub fn cmd_ai(_ctx: &mut crate::shell::cmd::registry::ShellCommandCtx, args: Option<&crate::shell::cmd::registry::ParsedArgs>) -> CommandAction {
@@ -89,6 +128,11 @@ pub async fn run_ai_wizard(
     
     // Ensure correct scroll region (Row 3..Bottom)
     crate::shell::output::apply_shell_scroll_region(io, term_rows);
+    // When entering AI mode, keep prompt row clean (`§ ` only).
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
+    io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)));
 
     let slot = match crate::matrix::alloc_slot("ai") {
         Some(s) => s,
@@ -101,6 +145,10 @@ pub async fn run_ai_wizard(
         let _ = statusbar::set_active_slot(slot);
         let _ = statusbar::set_left(slot, "ai");
         let _ = statusbar::set_right(slot, "idle");
+        let _ = statusbar::set_center(slot, "ready");
+        for i in 0..statusbar::INDICATOR_COUNT {
+            let _ = statusbar::set_indicator(slot, i, 0);
+        }
         statusbar::refresh(io, term_cols, term_rows);
     }
 
@@ -108,39 +156,41 @@ pub async fn run_ai_wizard(
 
     let mut previous_response_id: Option<String> = ai_prev_get();
     let mut pending_shell_outputs: Vec<ShellCallOutput> = Vec::new();
+    let mut active_request: Option<core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + '_>>> = None;
 
     if !initial_prompt.trim().is_empty() {
         // Do not echo here: the outer shell already echoed `ai <initial_prompt>`.
-        process_input(
+        active_request = Some(alloc::boxed::Box::pin(process_input(
             &out,
             io,
             term_cols,
             term_rows,
+            slot,
             spawner,
-            initial_prompt,
+            String::from(initial_prompt),
             URL,
             API_KEY,
             &mut previous_response_id,
             &mut pending_shell_outputs,
-        )
-        .await;
+        )));
     }
 
     let mut line = String::new();
 
     loop {
         // Position cursor at the prompt line (Row 2), clear it, and show prompt
-        io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
-        io.write_str(crate::ecma48::CLEAR_LINE);
-        io.write_str("§ ");
-        io.write_str(&line);
+        draw_ai_prompt_row(io, line.as_str());
 
-        // Wait for input
-        let b = loop {
-            if let Some(byte) = io.read_byte() {
-                break byte;
+        let b = if let Some(req) = active_request.as_mut() {
+            match select2(req.as_mut(), read_next_byte(io)).await {
+                Either::First(()) => {
+                    active_request = None;
+                    continue;
+                }
+                Either::Second(byte) => byte,
             }
-            Timer::after(Duration::from_millis(10)).await;
+        } else {
+            read_next_byte(io).await
         };
 
         match b {
@@ -159,30 +209,32 @@ pub async fn run_ai_wizard(
                 line.clear();
                 
                 if input.eq_ignore_ascii_case("exit") {
+                    ai_status_solid(io, term_cols, term_rows, slot, "exit", 0);
+                    active_request = None;
                     break;
                 }
                 if !input.is_empty() {
-                    // Clear prompt row so we don't show the typed input + echoed line.
-                    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
-                    io.write_str(crate::ecma48::CLEAR_LINE);
-
-                    let mut echoed = String::new();
-                    echoed.push_str(&input);
-                    out.echo_command(echoed.as_str());
-
-                    process_input(
+                    out.echo_user_text(input.as_str());
+                    // Keep row 2 clean while the request is in-flight.
+                    draw_ai_prompt_row(io, "");
+                    // Replace in-flight request with the new one.
+                    if active_request.is_some() {
+                        ai_status_solid(io, term_cols, term_rows, slot, "replaced", 3);
+                    }
+                    active_request = None;
+                    active_request = Some(alloc::boxed::Box::pin(process_input(
                         &out,
                         io,
                         term_cols,
                         term_rows,
+                        slot,
                         spawner,
-                        &input,
+                        input,
                         URL,
                         API_KEY,
                         &mut previous_response_id,
                         &mut pending_shell_outputs,
-                    )
-                    .await;
+                    )));
                 }
             }
             0x7F | 0x08 => { // Backspace
@@ -208,8 +260,9 @@ async fn process_input(
     io: &'static dyn ShellBackend,
     term_cols: usize,
     term_rows: usize,
+    slot_id: u8,
     spawner: &Spawner,
-    input: &str,
+    input: String,
     url: &str,
     key: &str,
     previous_response_id: &mut Option<String>,
@@ -219,10 +272,10 @@ async fn process_input(
     // Streaming is for normal chat text only; tool turns need the full JSON response.
     let stream = !force_tools
         && pending_shell_outputs.is_empty()
-        && !looks_like_execute_request(input);
+        && !looks_like_execute_request(input.as_str());
 
     let body = build_openai_request_body(
-        input,
+        input.as_str(),
         previous_response_id.as_deref(),
         pending_shell_outputs,
         stream,
@@ -233,15 +286,21 @@ async fn process_input(
     crate::log!("ai: request_json_end\n");
 
     statusbar::set_right_active(if stream { "streaming" } else { "thinking" });
+    ai_status_wave(io, term_cols, term_rows, slot_id, if stream { "sse.open" } else { "json.req" }, 0, 3, 0);
     statusbar::refresh(io, term_cols, term_rows);
 
     // Increase timeout to 120s since web search can be slow.
     if stream {
         struct AiStream<'a, 'b> {
             out: &'a ReverseOutput<'b>,
+            io: &'static dyn ShellBackend,
+            term_cols: usize,
+            term_rows: usize,
+            slot_id: u8,
             started: bool,
             last_full: String,
             saw_delta: bool,
+            pulse: usize,
         }
 
         impl<'a, 'b> SseHandler for AiStream<'a, 'b> {
@@ -258,6 +317,26 @@ async fn process_input(
                     ai_prev_set(Some(id));
                 }
 
+                if let Some(t) = et.as_deref() {
+                    match t {
+                        "response.created" => {
+                            self.pulse = self.pulse.wrapping_add(1);
+                            ai_status_wave(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.create", self.pulse, 4, 0);
+                        }
+                        "response.output_text.delta" => {
+                            self.pulse = self.pulse.wrapping_add(1);
+                            ai_status_wave(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.delta", self.pulse, 5, 0);
+                        }
+                        "response.completed" => {
+                            ai_status_solid(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.done", 2);
+                        }
+                        "response.error" => {
+                            ai_status_solid(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.error", 1);
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Prefer true deltas.
                 let delta = extract_json_string_field(data, "\"delta\":");
                 // Fallback: some frames carry cumulative output.
@@ -266,12 +345,12 @@ async fn process_input(
 
                 if let Some(d) = delta {
                     if !self.started {
-                        self.out.write_str("ai: ");
+                        self.out.write_live_fragment_wrapped("ai: ");
                         self.started = true;
                     }
                     self.saw_delta = true;
                     let clean = sanitize_term_text(d.as_str());
-                    self.out.write_str(clean.as_str());
+                    self.out.write_live_fragment_wrapped(clean.as_str());
                     return;
                 }
 
@@ -282,25 +361,31 @@ async fn process_input(
                 }
 
                 if let Some(f) = full {
+                    // Some providers emit repeated cumulative "full" frames.
+                    // Drop exact repeats to avoid visual duplicates.
+                    if f == self.last_full {
+                        return;
+                    }
+
                     // Print only the new suffix versus last_full to avoid repeats.
                     if f.len() >= self.last_full.len() && f.starts_with(self.last_full.as_str()) {
                         let suffix = &f[self.last_full.len()..];
                         if !suffix.is_empty() {
                             if !self.started {
-                                self.out.write_str("ai: ");
+                                self.out.write_live_fragment_wrapped("ai: ");
                                 self.started = true;
                             }
                             let clean = sanitize_term_text(suffix);
-                            self.out.write_str(clean.as_str());
+                            self.out.write_live_fragment_wrapped(clean.as_str());
                         }
                     } else {
                         // If it doesn't look like an append, reset and print full.
                         if !self.started {
-                            self.out.write_str("ai: ");
+                            self.out.write_live_fragment_wrapped("ai: ");
                             self.started = true;
                         }
                         let clean = sanitize_term_text(f.as_str());
-                        self.out.write_str(clean.as_str());
+                        self.out.write_live_fragment_wrapped(clean.as_str());
                     }
                     self.last_full = f;
                 }
@@ -309,9 +394,14 @@ async fn process_input(
 
         let mut sink = AiStream {
             out,
+            io,
+            term_cols,
+            term_rows,
+            slot_id,
             started: false,
             last_full: String::new(),
             saw_delta: false,
+            pulse: 0,
         };
 
         let result = post_https_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
@@ -327,8 +417,10 @@ async fn process_input(
                 if sink.started {
                     out.write_str("\n");
                 }
+                ai_status_solid(io, term_cols, term_rows, slot_id, "ready", 2);
             }
             Err(e) => {
+                ai_status_solid(io, term_cols, term_rows, slot_id, "net.err", 1);
                 out.write_fmt(format_args!("ai: network error {:?}\n", e));
             }
         }
@@ -437,7 +529,7 @@ async fn process_input(
                         }
 
                         // Debug aid: if the user likely wanted command execution but we got no tool call.
-                        if looks_like_execute_request(input) {
+                        if looks_like_execute_request(input.as_str()) {
                             out.write_str("ai: note: model did not issue shell_call for this prompt\n");
                             out.write_str("ai: tip: prefix with '!' to force tool usage (example: !tlb.pci)\n");
                         }
@@ -445,11 +537,14 @@ async fn process_input(
                         // Normal text response.
                         pending_shell_outputs.clear();
                         write_openai_text(out, s);
+                        ai_status_solid(io, term_cols, term_rows, slot_id, "ready", 2);
                     } else {
+                        ai_status_solid(io, term_cols, term_rows, slot_id, "utf8.err", 1);
                         out.write_str("ai: error decoding utf8\n");
                     }
                 }
         Err(e) => {
+            ai_status_solid(io, term_cols, term_rows, slot_id, "net.err", 1);
             out.write_fmt(format_args!("ai: network error {:?}\n", e));
         }
     }
@@ -484,8 +579,48 @@ fn sanitize_term_text(s: &str) -> String {
     // punctuation (e.g. em dashes). Keep output readable by mapping common
     // punctuation to ASCII.
     let mut out = String::new();
-    for ch in s.chars() {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if i + 2 < chars.len() && chars[i] == 'â' {
+            // Common UTF-8 mojibake triplets can show up as:
+            // - â€X (where second char is U+20AC)
+            // - â\u{0080}X (where second char is C1 control U+0080)
+            let c2 = chars[i + 1];
+            if c2 == '€' || c2 == '\u{0080}' {
+                match chars[i + 2] {
+                    // em/en dash
+                    '”' | '“' | '\u{0094}' | '\u{0093}' => {
+                        out.push('-');
+                        i += 3;
+                        continue;
+                    }
+                    // right single quote / apostrophe
+                    '™' | '\u{0099}' => {
+                        out.push('\'');
+                        i += 3;
+                        continue;
+                    }
+                    // left/right double quote
+                    'œ' | '' | '\u{009C}' | '\u{009D}' | '�' => {
+                        out.push('"');
+                        i += 3;
+                        continue;
+                    }
+                    // ellipsis
+                    '¦' | '\u{00A6}' => {
+                        out.push_str("...");
+                        i += 3;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let ch = chars[i];
         match ch {
+            '−' => out.push('-'),
             '—' | '–' => out.push('-'),
             '…' => out.push_str("..."),
             '’' => out.push('\''),
@@ -494,6 +629,7 @@ fn sanitize_term_text(s: &str) -> String {
             c if c.is_ascii() => out.push(c),
             _ => out.push('?'),
         }
+        i += 1;
     }
     out
 }
@@ -558,8 +694,8 @@ fn build_openai_request_body(
 
     let input_json = alloc::format!("[{}]", join_json_array(&input_items));
 
-    // Keep instructions short; they're repeated each turn.
-    let instructions = "You are running inside TRUEOS (not Linux). Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive, except `tetris` when the user explicitly asks to launch it. Prefer read-only inspection commands. Avoid destructive commands as you are close to ring0. Avoid GNU/Linux-specific commands and flags (e.g. man, head, which, redirections like 2>/dev/null, and complex pipelines) unless you have verified they exist in TRUEOS.";
+    let instructions = "You are running inside TRUEOS (not Linux). Use the shell tool to execute TRUEOS shell commands when asked to run commands or to verify facts. Commands must be non-interactive, except `tetris` when the user explicitly asks to launch it. Prefer read-only inspection commands. Avoid destructive commands as you are close to ring0. Avoid GNU/Linux-specific commands and flags (e.g. man, head, which, redirections like 2>/dev/null, and complex pipelines) unless you have verified they exist in TRUEOS. For streamed text replies, emit small incremental chunks frequently instead of buffering long paragraphs.";
+
     let mut esc_instructions = String::new();
     json_escape_into(&mut esc_instructions, instructions);
 

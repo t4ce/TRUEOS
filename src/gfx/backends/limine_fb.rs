@@ -3,13 +3,13 @@ use alloc::vec::Vec;
 #[cfg(not(target_arch = "x86_64"))]
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use libm::{ceilf, floorf};
+use libm::{ceilf, floorf, roundf};
 
 use trueos_gfx_core::{
     BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
-    Extent2D, FenceId, GfxDevice, GfxPresent, ImageFormat, MapMode, MappedRange, MemoryType,
-    PipelineDesc, PipelineId, Result, ShaderDesc, ShaderFormat, ShaderId, SwapchainDesc, VertexLayout,
-    Viewport,
+    Extent2D, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
+    MemoryType, PipelineDesc, PipelineId, Result, ShaderDesc, ShaderFormat, ShaderId, SwapchainDesc,
+    TexCoordFormat, VertexLayout, Viewport,
 };
 
 pub struct NullBackend;
@@ -39,6 +39,16 @@ impl GfxDevice for NullBackend {
     }
 
     fn destroy_pipeline(&mut self, _id: PipelineId) {}
+
+    fn create_image(&mut self, _desc: ImageDesc) -> Result<ImageId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_image(&mut self, _id: ImageId) {}
+
+    fn write_image(&mut self, _id: ImageId, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported)
+    }
 
     fn write_buffer(&mut self, _id: BufferId, _offset: u64, _data: &[u8]) -> Result<()> {
         Err(Error::Unsupported)
@@ -157,6 +167,11 @@ struct Pipeline {
     desc: PipelineDesc,
 }
 
+struct Image {
+    desc: ImageDesc,
+    bytes: Vec<u8>,
+}
+
 pub struct LimineFbBackend {
     fb: FramebufferSurface,
     swapchain: SwapchainDesc,
@@ -165,6 +180,7 @@ pub struct LimineFbBackend {
     buffers: Vec<Option<Buffer>>,
     shaders: Vec<Option<Shader>>,
     pipelines: Vec<Option<Pipeline>>,
+    images: Vec<Option<Image>>,
 
     state: DrawState,
 
@@ -176,6 +192,7 @@ pub struct LimineFbBackend {
 struct DrawState {
     pipeline: PipelineId,
     vertex: BufferBinding,
+    image: ImageId,
     viewport: Viewport,
 }
 
@@ -219,12 +236,14 @@ impl LimineFbBackend {
             buffers: Vec::new(),
             shaders: Vec::new(),
             pipelines: Vec::new(),
+            images: Vec::new(),
             state: DrawState {
                 pipeline: PipelineId::invalid(),
                 vertex: BufferBinding {
                     id: BufferId::invalid(),
                     offset: 0,
                 },
+                image: ImageId::invalid(),
                 viewport,
             },
             next_fence: 1,
@@ -264,6 +283,22 @@ impl LimineFbBackend {
         self.pipelines
             .get(idx)
             .and_then(|p| p.as_ref())
+            .ok_or(Error::NotFound)
+    }
+
+    fn get_image(&self, id: ImageId) -> Result<&Image> {
+        let idx = id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
+        self.images
+            .get(idx)
+            .and_then(|i| i.as_ref())
+            .ok_or(Error::NotFound)
+    }
+
+    fn get_image_mut(&mut self, id: ImageId) -> Result<&mut Image> {
+        let idx = id.raw().checked_sub(1).ok_or(Error::Invalid)? as usize;
+        self.images
+            .get_mut(idx)
+            .and_then(|i| i.as_mut())
             .ok_or(Error::NotFound)
     }
 
@@ -435,6 +470,212 @@ impl LimineFbBackend {
         }
     }
 
+    fn draw_triangles_pos_color_uv_rgba(
+        backbuffer: &mut [u32],
+        extent: Extent2D,
+        viewport: Viewport,
+        vbuf: &[u8],
+        layout: VertexLayout,
+        first_vertex: u32,
+        vertex_count: u32,
+        image_desc: ImageDesc,
+        image_bytes: &[u8],
+    ) {
+        if extent.width == 0 || extent.height == 0 {
+            return;
+        }
+        if layout.texcoord_format != TexCoordFormat::UvF32 {
+            return;
+        }
+
+        let stride = layout.stride as usize;
+        if stride == 0 {
+            return;
+        }
+
+        let tri_count = (vertex_count / 3) as usize;
+        if tri_count == 0 {
+            return;
+        }
+
+        let w = extent.width as i32;
+        let h = extent.height as i32;
+        let vp = viewport;
+        if vp.width <= 0 || vp.height <= 0 {
+            return;
+        }
+
+        let tex_w = image_desc.width.max(1) as f32;
+        let tex_h = image_desc.height.max(1) as f32;
+        let tex_bytes = image_bytes;
+        let tex_len = tex_bytes.len();
+
+        for tri_i in 0..tri_count {
+            let base = first_vertex as usize + tri_i * 3;
+
+            let mut px = [0.0f32; 3];
+            let mut py = [0.0f32; 3];
+            let mut tu = [0.0f32; 3];
+            let mut tv = [0.0f32; 3];
+            let mut cr = [255.0f32; 3];
+            let mut cg = [255.0f32; 3];
+            let mut cb = [255.0f32; 3];
+            let mut ca = [255.0f32; 3];
+
+            for i in 0..3 {
+                let vi = base + i;
+                let off = vi.saturating_mul(stride);
+                if off.saturating_add(stride) > vbuf.len() {
+                    return;
+                }
+
+                let pos_off = off.saturating_add(layout.pos_offset as usize);
+                let col_off = off.saturating_add(layout.color_offset as usize);
+                let tex_off = off.saturating_add(layout.texcoord_offset as usize);
+
+                if pos_off.saturating_add(8) > vbuf.len()
+                    || tex_off.saturating_add(8) > vbuf.len()
+                {
+                    return;
+                }
+
+                let x = f32::from_le_bytes([
+                    vbuf[pos_off + 0],
+                    vbuf[pos_off + 1],
+                    vbuf[pos_off + 2],
+                    vbuf[pos_off + 3],
+                ]);
+                let y = f32::from_le_bytes([
+                    vbuf[pos_off + 4],
+                    vbuf[pos_off + 5],
+                    vbuf[pos_off + 6],
+                    vbuf[pos_off + 7],
+                ]);
+
+                let vw = vp.width.max(1) as f32;
+                let vh = vp.height.max(1) as f32;
+                let sx = (x * 0.5 + 0.5) * vw + (vp.x as f32);
+                let sy = (-y * 0.5 + 0.5) * vh + (vp.y as f32);
+                px[i] = sx;
+                py[i] = sy;
+
+                let u = f32::from_le_bytes([
+                    vbuf[tex_off + 0],
+                    vbuf[tex_off + 1],
+                    vbuf[tex_off + 2],
+                    vbuf[tex_off + 3],
+                ]);
+                let v = f32::from_le_bytes([
+                    vbuf[tex_off + 4],
+                    vbuf[tex_off + 5],
+                    vbuf[tex_off + 6],
+                    vbuf[tex_off + 7],
+                ]);
+                tu[i] = u;
+                tv[i] = v;
+
+                match layout.color_format {
+                    ColorFormat::RgbU8 => {
+                        if col_off.saturating_add(3) <= vbuf.len() {
+                            cr[i] = vbuf[col_off + 0] as f32;
+                            cg[i] = vbuf[col_off + 1] as f32;
+                            cb[i] = vbuf[col_off + 2] as f32;
+                            ca[i] = 255.0;
+                        }
+                    }
+                    ColorFormat::RgbaU8 => {
+                        if col_off.saturating_add(4) <= vbuf.len() {
+                            cr[i] = vbuf[col_off + 0] as f32;
+                            cg[i] = vbuf[col_off + 1] as f32;
+                            cb[i] = vbuf[col_off + 2] as f32;
+                            ca[i] = vbuf[col_off + 3] as f32;
+                        }
+                    }
+                }
+            }
+
+            let min_x = floorf(px.iter().copied().fold(f32::INFINITY, f32::min)) as i32;
+            let max_x = ceilf(px.iter().copied().fold(f32::NEG_INFINITY, f32::max)) as i32;
+            let min_y = floorf(py.iter().copied().fold(f32::INFINITY, f32::min)) as i32;
+            let max_y = ceilf(py.iter().copied().fold(f32::NEG_INFINITY, f32::max)) as i32;
+
+            let x0 = min_x.max(vp.x).max(0);
+            let x1 = max_x.min(vp.x.saturating_add(vp.width)).min(w - 1);
+            let y0 = min_y.max(vp.y).max(0);
+            let y1 = max_y.min(vp.y.saturating_add(vp.height)).min(h - 1);
+            if x1 < x0 || y1 < y0 {
+                continue;
+            }
+
+            let ax = px[0];
+            let ay = py[0];
+            let bx = px[1];
+            let by = py[1];
+            let cx = px[2];
+            let cy = py[2];
+
+            let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+            if area.abs() <= f32::EPSILON {
+                continue;
+            }
+            let inv_area = 1.0 / area;
+
+            let sw = extent.width as usize;
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let fx = x as f32 + 0.5;
+                    let fy = y as f32 + 0.5;
+
+                    let w0 = ((bx - fx) * (cy - fy) - (by - fy) * (cx - fx)) * inv_area;
+                    let w1 = ((cx - fx) * (ay - fy) - (cy - fy) * (ax - fx)) * inv_area;
+                    let w2 = 1.0 - w0 - w1;
+
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+
+                    let u = (tu[0] * w0 + tu[1] * w1 + tu[2] * w2).clamp(0.0, 1.0);
+                    let v = (tv[0] * w0 + tv[1] * w1 + tv[2] * w2).clamp(0.0, 1.0);
+
+                    let tx = roundf(u * (tex_w - 1.0)).clamp(0.0, tex_w - 1.0) as u32;
+                    let ty = roundf(v * (tex_h - 1.0)).clamp(0.0, tex_h - 1.0) as u32;
+                    let t_idx = (ty * image_desc.width + tx) as usize * 4;
+                    if t_idx.saturating_add(3) >= tex_len {
+                        continue;
+                    }
+
+                    let tr = tex_bytes[t_idx + 0] as f32;
+                    let tg = tex_bytes[t_idx + 1] as f32;
+                    let tb = tex_bytes[t_idx + 2] as f32;
+                    let ta = tex_bytes[t_idx + 3] as f32;
+
+                    let vr = (cr[0] * w0 + cr[1] * w1 + cr[2] * w2).clamp(0.0, 255.0);
+                    let vg = (cg[0] * w0 + cg[1] * w1 + cg[2] * w2).clamp(0.0, 255.0);
+                    let vb = (cb[0] * w0 + cb[1] * w1 + cb[2] * w2).clamp(0.0, 255.0);
+                    let va = (ca[0] * w0 + ca[1] * w1 + ca[2] * w2).clamp(0.0, 255.0);
+
+                    let src_r = (tr * (vr / 255.0)).clamp(0.0, 255.0);
+                    let src_g = (tg * (vg / 255.0)).clamp(0.0, 255.0);
+                    let src_b = (tb * (vb / 255.0)).clamp(0.0, 255.0);
+                    let src_a = (ta * (va / 255.0)).clamp(0.0, 255.0);
+
+                    let idx = (y as usize).saturating_mul(sw).saturating_add(x as usize);
+                    if idx < backbuffer.len() {
+                        let dst = backbuffer[idx];
+                        let dst_r = ((dst >> 16) & 0xFF) as f32;
+                        let dst_g = ((dst >> 8) & 0xFF) as f32;
+                        let dst_b = (dst & 0xFF) as f32;
+                        let a = src_a / 255.0;
+                        let out_r = (src_r * a + dst_r * (1.0 - a)).clamp(0.0, 255.0) as u32;
+                        let out_g = (src_g * a + dst_g * (1.0 - a)).clamp(0.0, 255.0) as u32;
+                        let out_b = (src_b * a + dst_b * (1.0 - a)).clamp(0.0, 255.0) as u32;
+                        backbuffer[idx] = (out_r << 16) | (out_g << 8) | out_b;
+                    }
+                }
+            }
+        }
+    }
+
     fn process(&mut self, cmd: Command) -> Result<()> {
         match cmd {
             Command::ClearColor { rgb } => {
@@ -473,6 +714,14 @@ impl LimineFbBackend {
                 }
                 let _ = self.get_buffer(buffer)?;
                 self.state.vertex = BufferBinding { id: buffer, offset };
+                Ok(())
+            }
+            Command::BindImage(image) => {
+                if !image.is_valid() {
+                    return Err(Error::Invalid);
+                }
+                let _ = self.get_image(image)?;
+                self.state.image = image;
                 Ok(())
             }
             Command::SetViewport(vp) => {
@@ -516,15 +765,34 @@ impl LimineFbBackend {
                 }
                 let vbuf = &buffer.bytes[start..];
 
-                Self::draw_triangles_pos_color_rgbu8(
-                    &mut self.backbuffer,
-                    self.swapchain.extent,
-                    self.state.viewport,
-                    vbuf,
-                    layout,
-                    first_vertex,
-                    vertex_count,
-                );
+                if layout.texcoord_format == TexCoordFormat::UvF32 {
+                    let (desc, ptr, len) = {
+                        let image = self.get_image(self.state.image)?;
+                        (image.desc, image.bytes.as_ptr(), image.bytes.len())
+                    };
+                    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+                    Self::draw_triangles_pos_color_uv_rgba(
+                        &mut self.backbuffer,
+                        self.swapchain.extent,
+                        self.state.viewport,
+                        vbuf,
+                        layout,
+                        first_vertex,
+                        vertex_count,
+                        desc,
+                        bytes,
+                    );
+                } else {
+                    Self::draw_triangles_pos_color_rgbu8(
+                        &mut self.backbuffer,
+                        self.swapchain.extent,
+                        self.state.viewport,
+                        vbuf,
+                        layout,
+                        first_vertex,
+                        vertex_count,
+                    );
+                }
                 Ok(())
             }
             Command::Present => {
@@ -619,6 +887,43 @@ impl GfxDevice for LimineFbBackend {
         if let Some(slot) = self.pipelines.get_mut(idx) {
             *slot = None;
         }
+    }
+
+    fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId> {
+        if desc.width == 0 || desc.height == 0 {
+            return Err(Error::Invalid);
+        }
+        if desc.format != ImageFormat::Rgba8888 {
+            return Err(Error::Unsupported);
+        }
+        let len = (desc.width as usize)
+            .saturating_mul(desc.height as usize)
+            .saturating_mul(4);
+        let mut bytes = Vec::new();
+        bytes.resize(len, 0);
+        let slot = Self::alloc_slot(&mut self.images, Image { desc, bytes });
+        Ok(ImageId::from_raw(slot))
+    }
+
+    fn destroy_image(&mut self, id: ImageId) {
+        if !id.is_valid() {
+            return;
+        }
+        let Some(idx) = id.raw().checked_sub(1).map(|v| v as usize) else {
+            return;
+        };
+        if let Some(slot) = self.images.get_mut(idx) {
+            *slot = None;
+        }
+    }
+
+    fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()> {
+        let img = self.get_image_mut(id)?;
+        if data.len() != img.bytes.len() {
+            return Err(Error::Invalid);
+        }
+        img.bytes.copy_from_slice(data);
+        Ok(())
     }
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {

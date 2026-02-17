@@ -14,6 +14,7 @@ pub(crate) struct ReverseOutput<'a> {
     term_cols: usize,
     term_rows: usize,
     line_buf: RefCell<String>,
+    live_line_inserted: RefCell<bool>,
     history: RefCell<&'a mut Vec<String>>,
 }
 
@@ -29,6 +30,7 @@ impl<'a> ReverseOutput<'a> {
             term_cols,
             term_rows,
             line_buf: RefCell::new(String::new()),
+            live_line_inserted: RefCell::new(false),
             history: RefCell::new(history),
         }
     }
@@ -59,6 +61,145 @@ impl<'a> ReverseOutput<'a> {
             }
         }
     }
+
+    fn render_preview_line(&self, s: &str) {
+        let s = s.trim_end_matches('\r');
+        let bottom = output_bottom_row(self.term_rows);
+        let max_width = self.term_cols.saturating_sub(2);
+
+        self.inner.write_str(crate::ecma48::SAVE_CURSOR);
+        self.inner.write_str(crate::ecma48::HIDE_CURSOR);
+        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
+        self.inner.write_str("\x1b[K");
+
+        let content_len = crate::shell::ecma48::visible_width(s);
+        let padding = max_width.saturating_sub(content_len);
+        for _ in 0..padding {
+            self.inner.write_str(" ");
+        }
+
+        let final_s = if content_len > max_width {
+            let mut clipped = String::new();
+            let mut w = 0usize;
+            for ch in s.chars() {
+                w += 1;
+                if w > max_width {
+                    break;
+                }
+                clipped.push(ch);
+            }
+            clipped
+        } else {
+            String::from(s)
+        };
+
+        self.inner.write_str("\x1b[38;2;120;210;255m");
+        self.inner.write_str(final_s.as_str());
+        self.inner.write_str("\x1b[0m");
+
+        let _ = draw_scrollbar(
+            self.inner,
+            self.history.borrow().len(),
+            bottom.saturating_sub(3),
+            0,
+            3,
+            bottom,
+        );
+        self.inner.write_str(crate::ecma48::RESTORE_CURSOR);
+        self.inner.write_str(crate::ecma48::SHOW_CURSOR);
+    }
+
+    /// Live stream path: render partial text immediately without committing a history line.
+    /// Commit still happens when a trailing newline is written through `write_str`.
+    pub(crate) fn write_live_fragment(&self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if !*self.live_line_inserted.borrow() {
+            let bottom = output_bottom_row(self.term_rows);
+            self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+            self.inner.write_str("\x1b[L");
+            let _ = draw_scrollbar(
+                self.inner,
+                self.history.borrow().len(),
+                bottom.saturating_sub(3),
+                0,
+                3,
+                bottom,
+            );
+            *self.live_line_inserted.borrow_mut() = true;
+        }
+        let preview = {
+            let mut buf = self.line_buf.borrow_mut();
+            buf.push_str(s);
+            String::from(buf.as_str())
+        };
+        self.render_preview_line(preview.as_str());
+    }
+
+    /// Live stream path with soft-wrap to keep long, no-newline output visible.
+    pub(crate) fn write_live_fragment_wrapped(&self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        let max_width = self.term_cols.saturating_sub(2).max(1);
+        let mut col = {
+            let buf = self.line_buf.borrow();
+            crate::shell::ecma48::visible_width(buf.as_str())
+        };
+
+        let mut seg = String::new();
+        let mut seg_w = 0usize;
+
+        for ch in s.chars() {
+            if ch == '\n' {
+                if !seg.is_empty() {
+                    self.write_live_fragment(seg.as_str());
+                    col = col.saturating_add(seg_w);
+                    seg.clear();
+                    seg_w = 0;
+                }
+                self.write_str("\n");
+                col = 0;
+                continue;
+            }
+
+            let mut enc = [0u8; 4];
+            let ch_s = ch.encode_utf8(&mut enc);
+            let ch_w = crate::shell::ecma48::visible_width(ch_s).max(1);
+
+            if col.saturating_add(seg_w).saturating_add(ch_w) > max_width {
+                if !seg.is_empty() {
+                    self.write_live_fragment(seg.as_str());
+                    col = col.saturating_add(seg_w);
+                    seg.clear();
+                    seg_w = 0;
+                }
+                if col >= max_width {
+                    self.write_str("\n");
+                    col = 0;
+                }
+            }
+
+            seg.push(ch);
+            seg_w = seg_w.saturating_add(ch_w);
+
+            if col.saturating_add(seg_w) >= max_width {
+                self.write_live_fragment(seg.as_str());
+                col = col.saturating_add(seg_w);
+                seg.clear();
+                seg_w = 0;
+                if col >= max_width {
+                    self.write_str("\n");
+                    col = 0;
+                }
+            }
+        }
+
+        if !seg.is_empty() {
+            self.write_live_fragment(seg.as_str());
+        }
+    }
     
     fn flush_line(&self, s: &str) {
         // Normalize CRLF writers: `do_write` splits on `\n`, so lines may carry a trailing `\r`.
@@ -67,7 +208,15 @@ impl<'a> ReverseOutput<'a> {
 
         // Add to history
         self.history.borrow_mut().push(String::from(s));
-        
+
+        // If a live stream row is already inserted at row 3, only commit and repaint it.
+        // Inserting again would duplicate the same line visually.
+        if *self.live_line_inserted.borrow() {
+            self.render_preview_line(s);
+            *self.live_line_inserted.borrow_mut() = false;
+            return;
+        }
+
         let bottom = output_bottom_row(self.term_rows);
         
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
@@ -115,31 +264,49 @@ impl<'a> ReverseOutput<'a> {
         self.inner.write_str(crate::ecma48::SHOW_CURSOR);
     }
 
-    pub(crate) fn echo_command(&self, cmd: &str) {
-        if cmd.is_empty() { return; }
-        
-        self.history.borrow_mut().push(String::from(cmd));
-        let bottom = output_bottom_row(self.term_rows);
-        
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
-        self.inner.write_str("\x1b[L");
-        
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
-        self.inner.write_str(" ");
-
-        let verb = cmd.split_whitespace().next().unwrap_or("");
-        if verb.eq_ignore_ascii_case("install") || verb.eq_ignore_ascii_case("update") {
-             // (255, 55, 255)
-             self.inner.write_str("\x1b[38;2;255;55;255m");
-        } else {
-             self.inner.write_str("\x1b[37m"); // White
+    fn echo_with_ansi(&self, text: &str, ansi: &str) {
+        if text.is_empty() {
+            return;
         }
 
-        self.inner.write_str(cmd);
+        self.history.borrow_mut().push(String::from(text));
+        let bottom = output_bottom_row(self.term_rows);
+
+        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+        self.inner.write_str("\x1b[L");
+
+        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
+        self.inner.write_str(" ");
+        self.inner.write_str(ansi);
+        self.inner.write_str(text);
         self.inner.write_str("\x1b[0m");
 
-        // Redraw scrollbar (offset 0)
-        draw_scrollbar(self.inner, self.history.borrow().len(), bottom.saturating_sub(3), 0, 3, bottom);
+        draw_scrollbar(
+            self.inner,
+            self.history.borrow().len(),
+            bottom.saturating_sub(3),
+            0,
+            3,
+            bottom,
+        );
+    }
+
+    pub(crate) fn echo_command(&self, cmd: &str) {
+        if cmd.is_empty() { return; }
+
+        let verb = cmd.split_whitespace().next().unwrap_or("");
+        let ansi = if verb.eq_ignore_ascii_case("install") || verb.eq_ignore_ascii_case("update") {
+             "\x1b[38;2;255;55;255m"
+        } else if verb.eq_ignore_ascii_case("ai") {
+             "\x1b[38;2;150;150;150m"
+        } else {
+             "\x1b[37m"
+        };
+        self.echo_with_ansi(cmd, ansi);
+    }
+
+    pub(crate) fn echo_user_text(&self, text: &str) {
+        self.echo_with_ansi(text, "\x1b[38;2;150;150;150m");
     }
 
     pub(crate) fn write_overlay_hint(&self, text: &str) {

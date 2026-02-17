@@ -469,12 +469,14 @@ pub(crate) unsafe fn normalize_with_mode(
     }
 
     // Bare specifiers.
-    if !path_is_relative(spec) {
-        // Always keep known TRUEOS native modules.
+        if !path_is_relative(spec) {
+            // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
+            || spec == b"text"
+            || spec == b"trueos:text"
             || spec == b"worker_threads"
             || spec == b"process"
             || spec == b"node:process"

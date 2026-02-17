@@ -1,5 +1,6 @@
 import * as PIXI from 'pixi.js@7.4.0';
 import processMod from 'node:process';
+import { getFontAtlasSmall, getFontAtlasLarge } from 'trueos:text';
 
 const process = processMod.default || processMod;
 const log = globalThis.print;
@@ -18,12 +19,6 @@ log('pixi-ui: start');
 log('pixi-ui: scene', 'reintro-ui-v1');
 
 try {
-  let workerPongs = 0;
-  let workerPosts = 0;
-  let worker = null;
-  let workerReady = false;
-  let workerReqInFlight = false;
-  let hoverIndex = -1;
   let hoverStrength = 0.0;
 
   const canvas = document.createElement('canvas');
@@ -65,6 +60,8 @@ try {
   const cursor = new PIXI.Container();
   stage.addChild(cursor);
   const hitRects = [];
+  const textLayer = new PIXI.Container();
+  stage.addChild(textLayer);
 
   // Retained hover visuals: created once, moved/scaled/tinted on demand.
   const hoverGlow = new PIXI.Graphics();
@@ -166,6 +163,73 @@ try {
   cursorStroke.endFill();
   cursor.addChild(cursorStroke);
 
+  function buildFontAtlas(atlas) {
+    const pixels = new Uint8Array(atlas.pixels);
+    const base = PIXI.BaseTexture.fromBuffer(pixels, atlas.width, atlas.height);
+    const index = new Uint16Array(atlas.index);
+    const widths = atlas.widths ? new Uint8Array(atlas.widths) : null;
+    const textures = [];
+    const total = atlas.gridW * atlas.gridH;
+    for (let i = 0; i < total; i++) {
+      const col = i % atlas.gridW;
+      const row = (i / atlas.gridW) | 0;
+      const rect = new PIXI.Rectangle(
+        col * atlas.cellW,
+        row * atlas.cellH,
+        atlas.cellW,
+        atlas.cellH,
+      );
+      textures.push(new PIXI.Texture(base, rect));
+    }
+    return {
+      textures,
+      index,
+      widths,
+      cellW: atlas.cellW,
+      cellH: atlas.cellH,
+      gridW: atlas.gridW,
+      gridH: atlas.gridH,
+    };
+  }
+
+  function drawTextLine(text, x, y, color, font) {
+    const cont = new PIXI.Container();
+    let penX = x;
+    const idxQ = font.index['?'.charCodeAt(0)] || 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      let slot = font.index[code];
+      if (slot === 0xFFFF || slot === undefined) slot = idxQ;
+      const tex = font.textures[slot];
+      const spr = new PIXI.Sprite(tex);
+      spr.tint = color;
+      spr.position.set(penX, y);
+      cont.addChild(spr);
+      let adv = font.cellW;
+      if (font.widths && slot < font.widths.length) {
+        const w = font.widths[slot] | 0;
+        if (w > 0 && w <= font.cellW) adv = w;
+      }
+      penX += adv + 1;
+    }
+    return cont;
+  }
+
+  try {
+    const small = buildFontAtlas(getFontAtlasSmall());
+    const large = buildFontAtlas(getFontAtlasLarge());
+
+    textLayer.addChild(drawTextLine('TRUEOS UI', 230, 120, 0xE8F2FF, large));
+    textLayer.addChild(drawTextLine('STATUS', 230, 205, 0xCBE3FF, small));
+    textLayer.addChild(drawTextLine('PANEL', 460, 205, 0xCBE3FF, small));
+
+    textLayer.addChild(drawTextLine('OK', 478, 638, 0x112021, small));
+    textLayer.addChild(drawTextLine('CANCEL', 602, 638, 0xECF6FF, small));
+    textLayer.addChild(drawTextLine('APPLY', 726, 638, 0x112021, small));
+  } catch (e) {
+    log('pixi-ui: text', 'off', (e && e.message) ? e.message : String(e));
+  }
+
   let t = 0.0;
   let reportStart = nowSeconds();
   let frames = 0;
@@ -206,81 +270,7 @@ try {
     cursorHalo.alpha = 0.08 + (hoverStrength * 0.20);
   }
 
-  try {
-    worker = new Worker(`
-      import { parentPort } from 'node:worker_threads';
-
-      let rects = [];
-      function edgeDistance(x, y, r) {
-        const dx = Math.max(r.x - x, 0, x - (r.x + r.w));
-        const dy = Math.max(r.y - y, 0, y - (r.y + r.h));
-        return Math.sqrt(dx * dx + dy * dy);
-      }
-
-      parentPort.onMessage((raw) => {
-        let msg = null;
-        try { msg = JSON.parse(String(raw || '{}')); } catch (_) {}
-        if (!msg || !msg.cmd) {
-          parentPort.postMessage('{"ok":0}');
-          return;
-        }
-        if (msg.cmd === 'init') {
-          rects = Array.isArray(msg.rects) ? msg.rects : [];
-          parentPort.postMessage('{"ok":1,"ready":1}');
-          return;
-        }
-        if (msg.cmd === 'sample') {
-          const x = Number(msg.x || 0);
-          const y = Number(msg.y || 0);
-          const t = Number(msg.t || 0);
-          let bestI = -1;
-          let bestV = 0.0;
-          // Synthetic heavier compute slice (distance + oscillation field).
-          for (let i = 0; i < rects.length; i++) {
-            const r = rects[i];
-            const d = edgeDistance(x, y, r);
-            const base = Math.exp(-d / 90.0);
-            const wobble = 0.5 + 0.5 * Math.sin((i * 0.43) + (t * 2.7));
-            const v = base * (0.7 + 0.3 * wobble);
-            if (v > bestV) {
-              bestV = v;
-              bestI = i;
-            }
-          }
-          parentPort.postMessage(JSON.stringify({ ok: 1, hoverIndex: bestI, strength: bestV }));
-          return;
-        }
-        parentPort.postMessage('{"ok":0}');
-      });
-    `);
-
-    const onWorkerMessage = (raw) => {
-      workerReqInFlight = false;
-      workerPongs++;
-      let msg = null;
-      try { msg = JSON.parse(String(raw || '{}')); } catch (_) {}
-      if (!msg || msg.ok !== 1) return;
-      if (msg.ready === 1) {
-        workerReady = true;
-        return;
-      }
-      if (Number.isFinite(msg.hoverIndex)) hoverIndex = msg.hoverIndex | 0;
-      if (Number.isFinite(msg.strength)) hoverStrength = Math.max(0, Math.min(1, Number(msg.strength)));
-    };
-
-    if (typeof worker.onMessage === 'function') {
-      worker.onMessage(onWorkerMessage);
-    } else if (typeof worker.addEventListener === 'function') {
-      worker.addEventListener('message', onWorkerMessage);
-    }
-
-    const rectsForWorker = hitRects.map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h }));
-    worker.postMessage(JSON.stringify({ cmd: 'init', rects: rectsForWorker }));
-    workerPosts++;
-    log('pixi-ui: worker', 'ok');
-  } catch (e) {
-    log('pixi-ui: worker', 'off', (e && e.message) ? e.message : String(e));
-  }
+  log('pixi-ui: worker', 'off', 'removed');
 
   function renderStep() {
     t += 0.016;
@@ -289,15 +279,12 @@ try {
     // Pseudo mouse movement: smooth looping path across the panel.
     const cx = 640 + Math.sin(t * 0.95) * 360 + Math.sin(t * 2.1) * 30;
     const cy = 400 + Math.cos(t * 0.73) * 230 + Math.sin(t * 1.7) * 20;
-    if (worker && workerReady && !workerReqInFlight && ((frames & 1) === 0)) {
-      workerReqInFlight = true;
-      workerPosts++;
-      worker.postMessage(JSON.stringify({ cmd: 'sample', x: cx, y: cy, t }));
+    const hovered = findHovered(cx, cy);
+    if (hovered) {
+      hoverStrength = 0.35 + (Math.sin(t * 3.2) * 0.25);
+    } else {
+      hoverStrength = 0.0;
     }
-    const hovered = (hoverIndex >= 0 && hoverIndex < hitRects.length)
-      ? hitRects[hoverIndex]
-      : findHovered(cx, cy);
-    if (!hovered) hoverStrength = 0.0;
     drawHoverFx(hovered, cx, cy);
     cursor.position.set(cx | 0, cy | 0);
 
@@ -313,10 +300,6 @@ try {
         String(Math.floor(fps)),
         'dt',
         String(dt),
-        'wp',
-        String(workerPosts),
-        'wr',
-        String(workerPongs),
       );
       reportStart = now;
       frames = 0;
@@ -324,12 +307,32 @@ try {
   }
 
   function scheduleTick() {
-    process.nextTick(() => {
+    const step = () => {
       for (let i = 0; i < FRAMES_PER_TICK; i++) {
         renderStep();
       }
-      scheduleTick();
-    });
+    };
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+      const rafLoop = () => {
+        step();
+        globalThis.requestAnimationFrame(rafLoop);
+      };
+      globalThis.requestAnimationFrame(rafLoop);
+      return;
+    }
+    if (typeof globalThis.setTimeout === 'function') {
+      const toLoop = () => {
+        step();
+        globalThis.setTimeout(toLoop, 0);
+      };
+      globalThis.setTimeout(toLoop, 0);
+      return;
+    }
+    const ntLoop = () => {
+      step();
+      process.nextTick(ntLoop);
+    };
+    process.nextTick(ntLoop);
   }
 
   scheduleTick();

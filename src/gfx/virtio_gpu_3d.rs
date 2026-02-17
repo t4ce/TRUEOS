@@ -1370,8 +1370,9 @@ DCL OUT[0], COLOR\n\
 
 use trueos_gfx_core::{
     BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
-    FenceId, GfxDevice, GfxPresent, ImageFormat, MapMode, MappedRange, MemoryType, PipelineDesc,
-    PipelineId, ShaderDesc, ShaderId, SwapchainDesc, VertexLayout, Viewport,
+    FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
+    MemoryType, PipelineDesc, PipelineId, ShaderDesc, ShaderId, SwapchainDesc, VertexLayout,
+    Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1842,6 +1843,7 @@ impl VirglGfxBackend {
             pos_offset,
             color_offset,
             color_format,
+            ..
         } = vertex_layout;
 
         let stride = stride as usize;
@@ -2030,6 +2032,16 @@ impl GfxDevice for VirglGfxBackend {
         }
     }
 
+    fn create_image(&mut self, _desc: ImageDesc) -> GfxResult<ImageId> {
+        Err(Error::Unsupported)
+    }
+
+    fn destroy_image(&mut self, _id: ImageId) {}
+
+    fn write_image(&mut self, _id: ImageId, _data: &[u8]) -> GfxResult<()> {
+        Err(Error::Unsupported)
+    }
+
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> GfxResult<()> {
         let raw = id.raw();
         if raw == 0 {
@@ -2114,6 +2126,9 @@ impl GfxDevice for VirglGfxBackend {
                 }
                 Command::BindVertexBuffer { buffer, offset } => {
                     self.state.vertex = VirglBufferBinding { id: buffer, offset };
+                }
+                Command::BindImage(_image) => {
+                    // Textured pipelines are not supported in virgl backend yet.
                 }
                 Command::Draw {
                     vertex_count,

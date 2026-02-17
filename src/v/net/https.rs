@@ -902,6 +902,25 @@ async fn fetch_on_device_sse(
     auth_token: Option<&str>,
     handler: &mut dyn SseHandler,
 ) -> Result<(), FetchError> {
+    fn sse_json_type_hint(s: &str) -> Option<&str> {
+        let needle = "\"type\":\"";
+        let i = s.find(needle)?;
+        let start = i + needle.len();
+        let end_rel = s[start..].find('"')?;
+        Some(&s[start..start + end_rel])
+    }
+
+    fn set_preview(dst: &mut String, src: &str, max_chars: usize) {
+        dst.clear();
+        for ch in src.chars().take(max_chars) {
+            if ch.is_control() {
+                dst.push(' ');
+            } else {
+                dst.push(ch);
+            }
+        }
+    }
+
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
@@ -950,6 +969,15 @@ async fn fetch_on_device_sse(
     let mut sse_buf: Vec<u8> = Vec::new();
     let mut chunked_done = false;
     let mut saw_done_event = false;
+    let mut last_http_status: u16 = 0;
+    let mut body_is_chunked = false;
+    let mut sse_event_count: usize = 0;
+    let mut last_sse_type: String = String::new();
+    let mut last_sse_preview: String = String::new();
+    let mut logged_http_sent = false;
+    let mut logged_hdr_parsed = false;
+    let mut logged_first_body = false;
+    let mut logged_first_event = false;
 
     loop {
         for ev in events.drain(1024) {
@@ -983,6 +1011,16 @@ async fn fetch_on_device_sse(
                             data: req.into_bytes(),
                         });
                         http_sent = true;
+                        if !logged_http_sent {
+                            crate::log!(
+                                "vhttps-sse: request-sent host={} dev={} timeout_ms={} body_len={}\n",
+                                parsed.host,
+                                dev_idx,
+                                timeout_ms,
+                                body_json.len(),
+                            );
+                            logged_http_sent = true;
+                        }
                     }
                 }
                 TlsEvent::Data { handle, data } => {
@@ -1027,6 +1065,7 @@ async fn fetch_on_device_sse(
 
                     let headers = &plaintext[..hdr_end];
                     let status = parse_http_status(&plaintext).unwrap_or(0);
+                    last_http_status = status;
                     if status != 200 {
                         // Let existing error-body logging handle details.
                         if let Some(h) = tls_handle {
@@ -1036,6 +1075,19 @@ async fn fetch_on_device_sse(
                     }
 
                     let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    body_is_chunked = is_chunked;
+                    if !logged_hdr_parsed {
+                        crate::log!(
+                            "vhttps-sse: headers host={} dev={} status={} chunked={} hdr_bytes={} plain_bytes={}\n",
+                            parsed.host,
+                            dev_idx,
+                            status,
+                            is_chunked,
+                            hdr_end,
+                            plaintext.len(),
+                        );
+                        logged_hdr_parsed = true;
+                    }
                     let body_raw = &plaintext[hdr_end..];
 
                     if is_chunked {
@@ -1070,6 +1122,16 @@ async fn fetch_on_device_sse(
                                 return Err(FetchError::ResponseTooLarge);
                             }
                             sse_buf.extend_from_slice(chunk);
+                            if !logged_first_body {
+                                crate::log!(
+                                    "vhttps-sse: first-body host={} dev={} decoded={} raw_consumed={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    decoded_body_len,
+                                    raw_body_consumed,
+                                );
+                                logged_first_body = true;
+                            }
                             raw_body_consumed = after_line + size + 2;
                         }
                     } else {
@@ -1081,6 +1143,16 @@ async fn fetch_on_device_sse(
                                 return Err(FetchError::ResponseTooLarge);
                             }
                             sse_buf.extend_from_slice(new);
+                            if !logged_first_body {
+                                crate::log!(
+                                    "vhttps-sse: first-body host={} dev={} decoded={} raw_consumed={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    decoded_body_len,
+                                    raw_body_consumed,
+                                );
+                                logged_first_body = true;
+                            }
                             raw_body_consumed = body_raw.len();
                         }
                     }
@@ -1126,6 +1198,22 @@ async fn fetch_on_device_sse(
                             break;
                         }
                         if !data_out.is_empty() {
+                            sse_event_count = sse_event_count.saturating_add(1);
+                            last_sse_type.clear();
+                            if let Some(t) = sse_json_type_hint(data_out.as_str()) {
+                                last_sse_type.push_str(t);
+                            }
+                            set_preview(&mut last_sse_preview, data_out.as_str(), 96);
+                            if !logged_first_event {
+                                crate::log!(
+                                    "vhttps-sse: first-event host={} dev={} type={} preview={}\n",
+                                    parsed.host,
+                                    dev_idx,
+                                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
+                                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                                );
+                                logged_first_event = true;
+                            }
                             handler.on_data(data_out.as_str());
                         }
                     }
@@ -1141,6 +1229,21 @@ async fn fetch_on_device_sse(
                     if tls_handle != Some(handle) {
                         continue;
                     }
+                    crate::log!(
+                        "vhttps-sse: closed host={} dev={} status={} hdr={} chunked={} raw={} decoded={} sse_buf={} events={} done={} last_type={} last_preview={}\n",
+                        parsed.host,
+                        dev_idx,
+                        last_http_status,
+                        hdr_end_cached.is_some(),
+                        body_is_chunked,
+                        raw_body_consumed,
+                        decoded_body_len,
+                        sse_buf.len(),
+                        sse_event_count,
+                        saw_done_event,
+                        if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
+                        if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                    );
                     // Connection closed; treat as end of stream.
                     return Ok(());
                 }
@@ -1179,17 +1282,52 @@ async fn fetch_on_device_sse(
         if http_sent {
             let idle_deadline = last_activity + EmbassyDuration::from_millis(timeout_ms as u64);
             if now >= idle_deadline {
+                crate::log!(
+                    "vhttps-sse: body-timeout host={} dev={} status={} hdr={} chunked={} raw={} decoded={} sse_buf={} events={} done={} idle_ms={} last_type={} last_preview={}\n",
+                    parsed.host,
+                    dev_idx,
+                    last_http_status,
+                    hdr_end_cached.is_some(),
+                    body_is_chunked,
+                    raw_body_consumed,
+                    decoded_body_len,
+                    sse_buf.len(),
+                    sse_event_count,
+                    saw_done_event,
+                    timeout_ms,
+                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
+                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                );
                 return Err(FetchError::BodyTimeout);
             }
         }
         if now >= total_deadline {
-            return Err(if tls_handle.is_none() {
+            let err = if tls_handle.is_none() {
                 FetchError::ConnectTimeout
             } else if !http_sent {
                 FetchError::TlsTimeout
             } else {
                 FetchError::BodyTimeout
-            });
+            };
+            if matches!(err, FetchError::BodyTimeout) {
+                crate::log!(
+                    "vhttps-sse: total-timeout(body) host={} dev={} status={} hdr={} chunked={} raw={} decoded={} sse_buf={} events={} done={} total_ms={} last_type={} last_preview={}\n",
+                    parsed.host,
+                    dev_idx,
+                    last_http_status,
+                    hdr_end_cached.is_some(),
+                    body_is_chunked,
+                    raw_body_consumed,
+                    decoded_body_len,
+                    sse_buf.len(),
+                    sse_event_count,
+                    saw_done_event,
+                    timeout_ms,
+                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
+                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                );
+            }
+            return Err(err);
         }
 
         Timer::after(EmbassyDuration::from_millis(2)).await;

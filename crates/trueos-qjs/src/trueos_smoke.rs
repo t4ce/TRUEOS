@@ -77,11 +77,11 @@ unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSCont
             break;
         }
 
-        // Coarse status: once per ~1s while we're still waiting.
+        // Coarse status: once per ~60s while we're still waiting.
         if hz != 0 {
             let now_tick = embassy_time_driver::now();
-            let one_sec = hz;
-            if now_tick.saturating_sub(last_status_tick) >= one_sec {
+            let one_min = hz.saturating_mul(60);
+            if now_tick.saturating_sub(last_status_tick) >= one_min {
                 last_status_tick = now_tick;
                 log_str("quickjs: waiting async=");
                 log_str(if pending_async { "1" } else { "0" });

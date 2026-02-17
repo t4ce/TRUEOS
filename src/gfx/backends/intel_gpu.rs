@@ -1,6 +1,7 @@
 use trueos_gfx_core::{
-    BufferDesc, BufferId, CommandBuffer, DeviceCaps, FenceId, GfxDevice, GfxPresent, MapMode,
-    MappedRange, PipelineDesc, PipelineId, Result, ShaderDesc, ShaderId, SwapchainDesc,
+    BufferDesc, BufferId, CommandBuffer, DeviceCaps, FenceId, GfxDevice, GfxPresent, ImageDesc,
+    ImageId, MapMode, MappedRange, PipelineDesc, PipelineId, Result, ShaderDesc, ShaderId,
+    SwapchainDesc,
 };
 
 use super::limine_fb::LimineFbBackend;
@@ -103,6 +104,18 @@ impl GfxDevice for IntelGpuBackend {
 
     fn destroy_pipeline(&mut self, id: PipelineId) {
         self.inner.destroy_pipeline(id)
+    }
+
+    fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId> {
+        self.inner.create_image(desc)
+    }
+
+    fn destroy_image(&mut self, id: ImageId) {
+        self.inner.destroy_image(id)
+    }
+
+    fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()> {
+        self.inner.write_image(id, data)
     }
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()> {
