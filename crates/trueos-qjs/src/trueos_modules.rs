@@ -12,6 +12,8 @@ use crate::webgl;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool;
+    fn trueos_cabi_font_atlas_large(info: *mut FontAtlasInfo) -> bool;
 }
 
 static PROCESS_ARGV: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
@@ -20,6 +22,22 @@ static PROCESS_CWD: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 struct PackedJsValue {
     tag: i64,
     payload: i64,
+}
+
+#[repr(C)]
+struct FontAtlasInfo {
+    rgba_ptr: *const u8,
+    rgba_len: usize,
+    width: u32,
+    height: u32,
+    cell_w: u32,
+    cell_h: u32,
+    grid_w: u32,
+    grid_h: u32,
+    index_ptr: *const u16,
+    index_len: usize,
+    widths_ptr: *const u8,
+    widths_len: usize,
 }
 
 #[inline]
@@ -144,6 +162,154 @@ fn js_int32(v: i32) -> qjs::JSValue {
         u: qjs::JSValueUnion { int32: v },
         tag: qjs::JS_TAG_INT,
     }
+}
+
+fn u16_slice_to_le_bytes(src: &[u16]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len().saturating_mul(2)];
+    for (i, v) in src.iter().copied().enumerate() {
+        let off = i * 2;
+        out[off] = (v & 0xFF) as u8;
+        out[off + 1] = (v >> 8) as u8;
+    }
+    out
+}
+
+unsafe extern "C" fn qjs_text_get_atlas_small(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut info = FontAtlasInfo {
+        rgba_ptr: core::ptr::null(),
+        rgba_len: 0,
+        width: 0,
+        height: 0,
+        cell_w: 0,
+        cell_h: 0,
+        grid_w: 0,
+        grid_h: 0,
+        index_ptr: core::ptr::null(),
+        index_len: 0,
+        widths_ptr: core::ptr::null(),
+        widths_len: 0,
+    };
+    if !trueos_cabi_font_atlas_small(&mut info as *mut FontAtlasInfo) {
+        return qjs::JSValue::undefined();
+    }
+    if info.rgba_ptr.is_null() || info.index_ptr.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let rgba = core::slice::from_raw_parts(info.rgba_ptr, info.rgba_len);
+    let index_slice = core::slice::from_raw_parts(info.index_ptr, info.index_len);
+    let index_bytes = u16_slice_to_le_bytes(index_slice);
+
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return obj;
+    }
+
+    let pixels = qjs::JS_NewArrayBufferCopy(ctx, rgba.as_ptr(), rgba.len());
+    let index_ab = qjs::JS_NewArrayBufferCopy(ctx, index_bytes.as_ptr(), index_bytes.len());
+
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pixels\0".as_ptr() as *const c_char, pixels);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"width\0".as_ptr() as *const c_char, js_int32(info.width as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"height\0".as_ptr() as *const c_char, js_int32(info.height as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellW\0".as_ptr() as *const c_char, js_int32(info.cell_w as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellH\0".as_ptr() as *const c_char, js_int32(info.cell_h as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridW\0".as_ptr() as *const c_char, js_int32(info.grid_w as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridH\0".as_ptr() as *const c_char, js_int32(info.grid_h as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"index\0".as_ptr() as *const c_char, index_ab);
+
+    obj
+}
+
+unsafe extern "C" fn qjs_text_get_atlas_large(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut info = FontAtlasInfo {
+        rgba_ptr: core::ptr::null(),
+        rgba_len: 0,
+        width: 0,
+        height: 0,
+        cell_w: 0,
+        cell_h: 0,
+        grid_w: 0,
+        grid_h: 0,
+        index_ptr: core::ptr::null(),
+        index_len: 0,
+        widths_ptr: core::ptr::null(),
+        widths_len: 0,
+    };
+    if !trueos_cabi_font_atlas_large(&mut info as *mut FontAtlasInfo) {
+        return qjs::JSValue::undefined();
+    }
+    if info.rgba_ptr.is_null() || info.index_ptr.is_null() {
+        return qjs::JSValue::undefined();
+    }
+    let rgba = core::slice::from_raw_parts(info.rgba_ptr, info.rgba_len);
+    let index_slice = core::slice::from_raw_parts(info.index_ptr, info.index_len);
+    let index_bytes = u16_slice_to_le_bytes(index_slice);
+    let widths = if info.widths_ptr.is_null() || info.widths_len == 0 {
+        &[][..]
+    } else {
+        core::slice::from_raw_parts(info.widths_ptr, info.widths_len)
+    };
+
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return obj;
+    }
+
+    let pixels = qjs::JS_NewArrayBufferCopy(ctx, rgba.as_ptr(), rgba.len());
+    let index_ab = qjs::JS_NewArrayBufferCopy(ctx, index_bytes.as_ptr(), index_bytes.len());
+    let widths_ab = qjs::JS_NewArrayBufferCopy(ctx, widths.as_ptr(), widths.len());
+
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pixels\0".as_ptr() as *const c_char, pixels);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"width\0".as_ptr() as *const c_char, js_int32(info.width as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"height\0".as_ptr() as *const c_char, js_int32(info.height as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellW\0".as_ptr() as *const c_char, js_int32(info.cell_w as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellH\0".as_ptr() as *const c_char, js_int32(info.cell_h as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridW\0".as_ptr() as *const c_char, js_int32(info.grid_w as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridH\0".as_ptr() as *const c_char, js_int32(info.grid_h as i32));
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"index\0".as_ptr() as *const c_char, index_ab);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"widths\0".as_ptr() as *const c_char, widths_ab);
+
+    obj
+}
+
+unsafe extern "C" fn qjs_text_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+    let small_name = b"getFontAtlasSmall\0";
+    let large_name = b"getFontAtlasLarge\0";
+
+    let small_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_text_get_atlas_small),
+        small_name.as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, small_name.as_ptr() as *const c_char, small_fn) < 0 {
+        return -1;
+    }
+
+    let large_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_text_get_atlas_large),
+        large_name.as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    if qjs::JS_SetModuleExport(ctx, m, large_name.as_ptr() as *const c_char, large_fn) < 0 {
+        return -1;
+    }
+
+    0
 }
 
 unsafe extern "C" fn qjs_process_next_tick(
@@ -2237,6 +2403,11 @@ pub unsafe fn load_native_module(
                 b"setBlendEquation\0",
                 b"drawTrianglesU8\0",
             ],
+        )
+    } else if name == b"text" || name == b"trueos:text" {
+        (
+            qjs_text_module_init,
+            &[b"getFontAtlasSmall\0", b"getFontAtlasLarge\0"],
         )
     } else {
         return core::ptr::null_mut();

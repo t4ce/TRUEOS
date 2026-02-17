@@ -2,6 +2,7 @@ use super::matrix;
 
 pub const INDICATOR_COUNT: usize = matrix::STATUS_INDICATORS;
 pub const TEXT_WIDTH: usize = matrix::STATUS_TEXT_LEN;
+pub const CENTER_WIDTH: usize = matrix::STATUS_CENTER_LEN;
 
 pub type IndicatorCode = u8;
 
@@ -33,6 +34,11 @@ pub fn set_right(slot_id: u8, text: &str) -> bool {
 }
 
 #[inline]
+pub fn set_center(slot_id: u8, text: &str) -> bool {
+    matrix::status_set_center(slot_id, text)
+}
+
+#[inline]
 pub fn set_indicator(slot_id: u8, index: usize, color_code: IndicatorCode) -> bool {
     matrix::status_set_indicator(slot_id, index, color_code)
 }
@@ -45,6 +51,11 @@ pub fn set_left_active(text: &str) -> bool {
 #[inline]
 pub fn set_right_active(text: &str) -> bool {
     matrix::status_set_right_active(text)
+}
+
+#[inline]
+pub fn set_center_active(text: &str) -> bool {
+    matrix::status_set_center_active(text)
 }
 
 #[inline]
@@ -108,21 +119,24 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
         out
     }
 
-    let (indicators, left, right) = if let Some(s) = snapshot_active() {
+    let (indicators, left, center, right) = if let Some(s) = snapshot_active() {
         (
             s.indicators,
             fit_10(s.left.as_str()),
+            s.center,
             fit_10_right(s.right.as_str()),
         )
     } else {
         (
             [0u8; INDICATOR_COUNT],
             fit_10(""),
+            heapless::String::<CENTER_WIDTH>::new(),
             fit_10_right(""),
         )
     };
 
     let left: heapless::String<10> = left;
+    let center: heapless::String<CENTER_WIDTH> = center;
     let right: heapless::String<10> = right;
 
     let right_col = term_cols.saturating_sub(10).saturating_add(1);
@@ -151,6 +165,27 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
     // Left text: dark grey on white
     io.write_fmt(format_args!("{}", crate::ecma48::style(left.as_str()).fg((50, 50, 50)).bg(bar_bg)));
 
+    // Center text: medium gray, centered between left section and right section.
+    let center_zone_start = INDICATOR_COUNT + 3 + 10; // indicators + space + left text + one gap
+    let center_zone_end = right_col.saturating_sub(2);
+    if center_zone_end > center_zone_start {
+        let zone_width = center_zone_end - center_zone_start + 1;
+        let mut center_text: heapless::String<CENTER_WIDTH> = heapless::String::new();
+        for ch in center.chars() {
+            if center_text.push(ch).is_err() {
+                break;
+            }
+        }
+        let text_len = center_text.chars().count().min(zone_width);
+        let pad_left = (zone_width.saturating_sub(text_len)) / 2;
+        let col = center_zone_start.saturating_add(pad_left);
+        io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, col)));
+        io.write_fmt(format_args!(
+            "{}",
+            crate::ecma48::style(center_text.as_str()).fg((90, 90, 90)).bg(bar_bg)
+        ));
+    }
+
     io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, right_col)));
     // Right text: darker pink on white
     io.write_fmt(format_args!("{}", crate::ecma48::style(right.as_str()).bold().fg((200, 50, 150)).bg(bar_bg)));
@@ -158,4 +193,3 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
     io.write_str(crate::ecma48::RESTORE_CURSOR);
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
-
