@@ -10,7 +10,7 @@ use super::{
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -23,62 +23,6 @@ static SCOUT_SERVICE_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 
 const SCRATCHPAD_BUF_SIZE: usize = 4096;
-const ROOT_PORT_TRACKED_MAX: usize = 256;
-const ROOT_ENUM_COOLDOWN_BASE_MS: u64 = 250;
-const ROOT_ENUM_COOLDOWN_MAX_MS: u64 = 8_000;
-
-static ROOT_PORT_RETRY_AT_MS: [[AtomicU64; ROOT_PORT_TRACKED_MAX]; MAX_XHCI_CONTROLLERS] =
-    [const { [const { AtomicU64::new(0) }; ROOT_PORT_TRACKED_MAX] }; MAX_XHCI_CONTROLLERS];
-static ROOT_PORT_FAIL_STREAK: [[AtomicU32; ROOT_PORT_TRACKED_MAX]; MAX_XHCI_CONTROLLERS] =
-    [const { [const { AtomicU32::new(0) }; ROOT_PORT_TRACKED_MAX] }; MAX_XHCI_CONTROLLERS];
-
-#[inline(always)]
-fn now_ms() -> u64 {
-    let hz = embassy_time_driver::TICK_HZ as u64;
-    if hz == 0 {
-        return 0;
-    }
-    embassy_time_driver::now().saturating_mul(1000) / hz
-}
-
-fn root_port_should_backoff(controller_id: usize, port: u8, now_ms: u64) -> bool {
-    let idx = port as usize;
-    if idx == 0 || idx >= ROOT_PORT_TRACKED_MAX || controller_id >= MAX_XHCI_CONTROLLERS {
-        return false;
-    }
-    now_ms < ROOT_PORT_RETRY_AT_MS[controller_id][idx].load(Ordering::Acquire)
-}
-
-fn root_port_mark_result(controller_id: usize, port: u8, success: bool, now_ms: u64) {
-    let idx = port as usize;
-    if idx == 0 || idx >= ROOT_PORT_TRACKED_MAX || controller_id >= MAX_XHCI_CONTROLLERS {
-        return;
-    }
-    if success {
-        ROOT_PORT_FAIL_STREAK[controller_id][idx].store(0, Ordering::Release);
-        ROOT_PORT_RETRY_AT_MS[controller_id][idx].store(0, Ordering::Release);
-        return;
-    }
-
-    let streak_prev = ROOT_PORT_FAIL_STREAK[controller_id][idx].load(Ordering::Relaxed);
-    let streak = core::cmp::min(streak_prev.saturating_add(1), 8);
-    ROOT_PORT_FAIL_STREAK[controller_id][idx].store(streak, Ordering::Release);
-    let shift = streak.saturating_sub(1).min(5);
-    let cooldown = core::cmp::min(
-        ROOT_ENUM_COOLDOWN_BASE_MS.saturating_mul(1u64 << shift),
-        ROOT_ENUM_COOLDOWN_MAX_MS,
-    );
-    ROOT_PORT_RETRY_AT_MS[controller_id][idx].store(now_ms.saturating_add(cooldown), Ordering::Release);
-}
-
-fn root_port_clear_if_disconnected(controller_id: usize, port: u8) {
-    let idx = port as usize;
-    if idx == 0 || idx >= ROOT_PORT_TRACKED_MAX || controller_id >= MAX_XHCI_CONTROLLERS {
-        return;
-    }
-    ROOT_PORT_FAIL_STREAK[controller_id][idx].store(0, Ordering::Release);
-    ROOT_PORT_RETRY_AT_MS[controller_id][idx].store(0, Ordering::Release);
-}
 
 struct EnumReadyGuard {
     controller_id: usize,
@@ -470,29 +414,14 @@ async fn scout_pass(info: xhci::XhcInfo) {
         cleanup_disconnected(&connected, &mut state).await;
     }
 
-    // Clear per-port retry backoff for disconnected root ports so reconnects can enumerate immediately.
-    for port in 1..=state.ctx.port_count {
-        let still_connected = connected.iter().any(|(p, _)| *p == port);
-        if !still_connected {
-            root_port_clear_if_disconnected(controller_id, port);
-        }
-    }
-
     let mut hub_queue: heapless::Vec<HubWork, 16> = heapless::Vec::new();
-    let now_ms = now_ms();
 
     for (target_port, _port_status) in connected.iter().copied() {
         if has_device_on_port(controller_id, target_port) {
-            root_port_mark_result(controller_id, target_port, true, now_ms);
-            continue;
-        }
-        if root_port_should_backoff(controller_id, target_port, now_ms) {
             continue;
         }
 
         enumerate_port_recursive(&mut state, target_port, &mut hub_queue).await;
-        let success = has_device_on_port(controller_id, target_port);
-        root_port_mark_result(controller_id, target_port, success, now_ms);
     }
 
     let mut idx = 0usize;
