@@ -221,11 +221,19 @@ pub enum ColorFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TexCoordFormat {
+    None,
+    UvF32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VertexLayout {
     pub stride: u16,
     pub pos_offset: u16,
     pub color_offset: u16,
     pub color_format: ColorFormat,
+    pub texcoord_offset: u16,
+    pub texcoord_format: TexCoordFormat,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,6 +246,14 @@ pub struct PipelineDesc {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
     Rgbx8888,
+    Rgba8888,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageDesc {
+    pub width: u32,
+    pub height: u32,
+    pub format: ImageFormat,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -309,6 +325,7 @@ pub enum Command {
     },
     BindPipeline(PipelineId),
     BindVertexBuffer { buffer: BufferId, offset: u64 },
+    BindImage(ImageId),
     SetViewport(Viewport),
     Draw { vertex_count: u32, first_vertex: u32 },
     Present,
@@ -357,6 +374,10 @@ pub trait GfxDevice {
 
     fn create_pipeline(&mut self, desc: PipelineDesc) -> Result<PipelineId>;
     fn destroy_pipeline(&mut self, id: PipelineId);
+
+    fn create_image(&mut self, desc: ImageDesc) -> Result<ImageId>;
+    fn destroy_image(&mut self, id: ImageId);
+    fn write_image(&mut self, id: ImageId, data: &[u8]) -> Result<()>;
 
     fn write_buffer(&mut self, id: BufferId, offset: u64, data: &[u8]) -> Result<()>;
 

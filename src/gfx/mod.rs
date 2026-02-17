@@ -1,17 +1,16 @@
 pub mod backends;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
-#[cfg(feature = "gfx_virgl")]
-pub mod virtio_limine;
 
 use spin::{Once, Mutex};
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use trueos_gfx_core::GfxContext;
 use embassy_time_driver::{now, TICK_HZ};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
+static DISPLAY_SOURCE: AtomicU8 = AtomicU8::new(0);
 
 #[inline]
 pub fn backend_epoch() -> u64 {
@@ -21,6 +20,25 @@ pub fn backend_epoch() -> u64 {
 #[inline]
 fn bump_backend_epoch() {
     let _ = BACKEND_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DisplaySource {
+    Gfx = 0,
+    Vga = 1,
+}
+
+#[inline]
+pub fn display_source() -> DisplaySource {
+    match DISPLAY_SOURCE.load(Ordering::Relaxed) {
+        1 => DisplaySource::Vga,
+        _ => DisplaySource::Gfx,
+    }
+}
+
+#[inline]
+pub fn set_display_source(src: DisplaySource) {
+    DISPLAY_SOURCE.store(src as u8, Ordering::Relaxed);
 }
 
 pub struct System {
@@ -205,11 +223,10 @@ pub fn backend_kind() -> Option<BackendKind> {
 /// Toggle the gfx backend.
 ///
 /// A/B swap cycle:
-/// - VirtioSw (gfx) <-> LimineFb (visible via virtio_limine mirror)
+/// - VirtioSw (gfx) <-> LimineFb (direct)
 ///
 /// Notes:
-/// - `LimineFb` here is intended to be made visible via `virtio_limine` (virtio scanout backed
-///   by the Limine framebuffer + periodic transfer/flush), not by "making VGA the display".
+/// - `LimineFb` here uses direct framebuffer backend selection.
 pub fn toggle_backend() -> BackendKind {
     let Some(kind) = backend_kind() else {
         return BackendKind::None;

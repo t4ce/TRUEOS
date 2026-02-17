@@ -66,6 +66,7 @@ struct WorkerState {
     to_parent: VecDeque<Vec<u8>>,
     terminated: AtomicBool,
     exited: AtomicBool,
+    warned_no_worker_on_message: AtomicBool,
 }
 
 impl WorkerState {
@@ -76,6 +77,7 @@ impl WorkerState {
             to_parent: VecDeque::new(),
             terminated: AtomicBool::new(false),
             exited: AtomicBool::new(false),
+            warned_no_worker_on_message: AtomicBool::new(false),
         }
     }
 }
@@ -224,11 +226,16 @@ pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
             // Without including `to_worker`, the REPL can return to the prompt
             // immediately after `w.postMessage(...)` before the worker has a chance
             // to run and respond.
-            map.values().any(|st| !st.to_parent.is_empty() || !st.to_worker.is_empty())
+            map.values().any(|st| {
+                let exited = st.exited.load(Ordering::Acquire);
+                !st.to_parent.is_empty() || (!exited && !st.to_worker.is_empty())
+            })
         }
         CtxRole::Worker(id) => {
             let map = WORKERS.lock();
-            map.get(&id).is_some_and(|st| !st.to_worker.is_empty())
+            map.get(&id).is_some_and(|st| {
+                !st.exited.load(Ordering::Acquire) && !st.to_worker.is_empty()
+            })
         }
     }
 }
@@ -292,6 +299,17 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let cb = WORKER_ON_MESSAGE.lock().get(&(key_ctx, worker_id)).map(|c| c.val);
                 if let Some(cb) = cb {
                     unsafe { call_on_message(ctx, cb, msg.as_slice()) };
+                } else {
+                    let should_warn = worker_state_mut(worker_id, |st| {
+                        !st.warned_no_worker_on_message.swap(true, Ordering::AcqRel)
+                    })
+                    .unwrap_or(false);
+                    if should_warn {
+                        let _ = post_to_parent(
+                            worker_id,
+                            b"{\"ok\":0,\"dbg\":\"worker-no-onmessage-handler\"}",
+                        );
+                    }
                 }
             }
         }
@@ -358,6 +376,9 @@ fn is_terminated(worker_id: u32) -> bool {
 fn mark_exited(worker_id: u32) {
     let _ = worker_state_mut(worker_id, |st| {
         st.exited.store(true, Ordering::Release);
+        // Drop undeliverable parent->worker messages so dead workers don't keep
+        // the main pump in a perpetual "workers pending" state.
+        st.to_worker.clear();
     });
 }
 
@@ -366,6 +387,7 @@ async fn worker_task(worker_id: u32) {
     // Each worker owns its own QuickJS VM.
     let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node() }) else {
         log_str("qjs-worker: failed to create VM\n");
+        let _ = post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-vm-create-failed\"}");
         mark_exited(worker_id);
         return;
     };
@@ -393,6 +415,9 @@ async fn worker_task(worker_id: u32) {
         if v.is_exception() {
             log_str("qjs-worker: startup eval exception\n");
             unsafe { qjs::qjs_diag::dump_last_exception(ctx, "worker-startup-eval") };
+            let _ = post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}");
+        } else {
+            let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-startup-eval-ok\"}");
         }
         unsafe { qjs::js_free_value(ctx, v) };
     }

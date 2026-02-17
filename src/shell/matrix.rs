@@ -13,6 +13,7 @@ pub const MAX_LINES: usize = 64;
 pub const TITLE_LEN: usize = 32;
 pub const LINE_LEN: usize = 96;
 pub const STATUS_TEXT_LEN: usize = 10;
+pub const STATUS_CENTER_LEN: usize = 32;
 pub const STATUS_INDICATORS: usize = 5;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub struct SlotData {
     pub title: String<TITLE_LEN>,
     pub lines: Deque<String<LINE_LEN>, MAX_LINES>,
     pub status_left: String<STATUS_TEXT_LEN>,
+    pub status_center: String<STATUS_CENTER_LEN>,
     pub status_right: String<STATUS_TEXT_LEN>,
     pub status_indicators: [u8; STATUS_INDICATORS],
     pub blob: AVec<u8>,
@@ -39,6 +41,7 @@ impl SlotData {
             title: String::new(),
             lines: Deque::new(),
             status_left: String::new(),
+            status_center: String::new(),
             status_right: String::new(),
             status_indicators: [0u8; STATUS_INDICATORS],
             blob: AVec::new(),
@@ -50,6 +53,7 @@ impl SlotData {
         self.title.clear();
         self.lines.clear();
         self.status_left.clear();
+        self.status_center.clear();
         self.status_right.clear();
         self.status_indicators = [0u8; STATUS_INDICATORS];
         self.blob.clear();
@@ -60,6 +64,7 @@ impl SlotData {
         self.title.clear();
         self.lines.clear();
         self.status_left.clear();
+        self.status_center.clear();
         self.status_right.clear();
         self.status_indicators = [0u8; STATUS_INDICATORS];
         self.blob.clear();
@@ -451,6 +456,29 @@ pub fn status_set_right(slot_id: u8, text: &str) -> bool {
     true
 }
 
+pub fn status_set_center(slot_id: u8, text: &str) -> bool {
+    let Some(slot) = slot_ref(slot_id) else {
+        return false;
+    };
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut data = slot.data.lock();
+    if !slot.used.load(Ordering::Acquire) {
+        return false;
+    }
+    data.status_center.clear();
+    for ch in text.chars() {
+        if ch == '\r' || ch == '\n' {
+            continue;
+        }
+        if data.status_center.push(ch).is_err() {
+            break;
+        }
+    }
+    true
+}
+
 pub fn status_set_indicator(slot_id: u8, index: usize, color_code: u8) -> bool {
     let Some(slot) = slot_ref(slot_id) else {
         return false;
@@ -483,6 +511,13 @@ pub fn status_set_right_active(text: &str) -> bool {
     status_set_right(slot_id, text)
 }
 
+pub fn status_set_center_active(text: &str) -> bool {
+    let Some(slot_id) = active_status_slot() else {
+        return false;
+    };
+    status_set_center(slot_id, text)
+}
+
 pub fn status_set_indicator_active(index: usize, color_code: u8) -> bool {
     let Some(slot_id) = active_status_slot() else {
         return false;
@@ -493,6 +528,7 @@ pub fn status_set_indicator_active(index: usize, color_code: u8) -> bool {
 pub struct StatusBarSnapshot {
     pub indicators: [u8; STATUS_INDICATORS],
     pub left: String<STATUS_TEXT_LEN>,
+    pub center: String<STATUS_CENTER_LEN>,
     pub right: String<STATUS_TEXT_LEN>,
 }
 
@@ -501,6 +537,7 @@ pub fn active_status_snapshot() -> Option<StatusBarSnapshot> {
     with_slot(slot_id, |s| StatusBarSnapshot {
         indicators: s.status_indicators,
         left: s.status_left.clone(),
+        center: s.status_center.clone(),
         right: s.status_right.clone(),
     })
 }

@@ -1,4 +1,5 @@
 use core::ffi::{c_char, c_int};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate as qjs;
 
@@ -19,6 +20,8 @@ fn js_null() -> qjs::JSValue {
 }
 
 pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target: qjs::JSValue) {
+    static RAF_ID: AtomicU32 = AtomicU32::new(1);
+
     unsafe extern "C" fn dom_noop(
         _ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
@@ -41,12 +44,39 @@ pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target:
     }
 
     unsafe extern "C" fn dom_request_animation_frame(
-        _ctx: *mut qjs::JSContext,
+        ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
-        _argc: c_int,
-        _argv: *const qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
-        js_int32(1)
+        if argv.is_null() || argc < 1 {
+            return js_int32(0);
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let cb = qjs::js_dup_value(ctx, args[0]);
+
+        let global = qjs::JS_GetGlobalObject(ctx);
+        let proc = qjs::JS_GetPropertyStr(ctx, global, b"process\0".as_ptr() as *const c_char);
+        if !proc.is_exception() && proc.tag != qjs::JS_TAG_UNDEFINED {
+            let next_tick = qjs::JS_GetPropertyStr(ctx, proc, b"nextTick\0".as_ptr() as *const c_char);
+            if !next_tick.is_exception() && next_tick.tag != qjs::JS_TAG_UNDEFINED {
+                let argv2 = [cb];
+                let _ = qjs::JS_Call(
+                    ctx,
+                    next_tick,
+                    qjs::JSValue::undefined(),
+                    1,
+                    argv2.as_ptr() as *const qjs::JSValueConst,
+                );
+            }
+            qjs::js_free_value(ctx, next_tick);
+        }
+        qjs::js_free_value(ctx, proc);
+        qjs::js_free_value(ctx, global);
+        qjs::js_free_value(ctx, cb);
+
+        let id = RAF_ID.fetch_add(1, Ordering::Relaxed);
+        js_int32(id as i32)
     }
 
     macro_rules! install_fn {

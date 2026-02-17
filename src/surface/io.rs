@@ -786,17 +786,31 @@ pub mod cabi {
 
 	use trueos_gfx_core::{
 		BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, Extent2D, GfxContext,
-		ImageFormat, MemoryType, PipelineDesc, PipelineId, SwapchainDesc, VertexLayout, Viewport,
+		ImageDesc, ImageFormat, ImageId, MemoryType, PipelineDesc, PipelineId, SwapchainDesc,
+		TexCoordFormat, VertexLayout, Viewport,
 	};
+	use alloc::vec::Vec;
 
 	struct GfxCabiState {
 		pipeline: PipelineId,
 		vbuf: BufferId,
 		capacity: usize,
+		tex_pipeline: PipelineId,
+		tex_vbuf: BufferId,
+		tex_capacity: usize,
+		tex_images: Option<Vec<Option<TexImage>>>,
 		epoch: u64,
 		swapchain_configured: bool,
 		swapchain_desc: SwapchainDesc,
 		viewport_configured: bool,
+		frame_active: bool,
+		frame_clear_rgb: u32,
+	}
+
+	struct TexImage {
+		image: ImageId,
+		width: u32,
+		height: u32,
 	}
 
 	impl GfxCabiState {
@@ -805,6 +819,10 @@ pub mod cabi {
 				pipeline: PipelineId::invalid(),
 				vbuf: BufferId::invalid(),
 				capacity: 0,
+				tex_pipeline: PipelineId::invalid(),
+				tex_vbuf: BufferId::invalid(),
+				tex_capacity: 0,
+				tex_images: None,
 				epoch: 0,
 				swapchain_configured: false,
 					swapchain_desc: SwapchainDesc {
@@ -815,6 +833,8 @@ pub mod cabi {
 						},
 					},
 					viewport_configured: false,
+					frame_active: false,
+					frame_clear_rgb: 0x00_08_18_30,
 				}
 			}
 		}
@@ -838,8 +858,13 @@ pub mod cabi {
 			st.pipeline = PipelineId::invalid();
 			st.vbuf = BufferId::invalid();
 			st.capacity = 0;
+			st.tex_pipeline = PipelineId::invalid();
+			st.tex_vbuf = BufferId::invalid();
+			st.tex_capacity = 0;
+			st.tex_images = None;
 			st.swapchain_configured = false;
 			st.viewport_configured = false;
+			st.frame_active = false;
 			st.epoch = epoch;
 		}
 		if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -855,6 +880,8 @@ pub mod cabi {
 				pos_offset: 0,
 				color_offset: 8,
 				color_format: ColorFormat::RgbU8,
+				texcoord_offset: 0,
+				texcoord_format: TexCoordFormat::None,
 			};
 			let p = ctx
 				.create_pipeline(PipelineDesc {
@@ -887,6 +914,80 @@ pub mod cabi {
 		let need_set_viewport = !st.viewport_configured;
 		st.viewport_configured = true;
 		Some((st.pipeline, st.vbuf, need_set_viewport))
+	}
+
+	fn ensure_gfx_resources_tex(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId, bool)> {
+		let epoch = crate::gfx::backend_epoch();
+		let swap = ctx.swapchain_desc();
+		if swap.extent.width == 0 || swap.extent.height == 0 {
+			return None;
+		}
+		let desired_swap = SwapchainDesc {
+			format: swap.format,
+			extent: swap.extent,
+		};
+
+		let mut st = GFX_CABI_STATE.lock();
+		if st.epoch != epoch {
+			st.pipeline = PipelineId::invalid();
+			st.vbuf = BufferId::invalid();
+			st.capacity = 0;
+			st.tex_pipeline = PipelineId::invalid();
+			st.tex_vbuf = BufferId::invalid();
+			st.tex_capacity = 0;
+			st.tex_images = None;
+			st.swapchain_configured = false;
+			st.viewport_configured = false;
+			st.frame_active = false;
+			st.epoch = epoch;
+		}
+		if !st.swapchain_configured || st.swapchain_desc != desired_swap {
+			ctx.configure_swapchain(desired_swap).ok()?;
+			st.swapchain_desc = desired_swap;
+			st.swapchain_configured = true;
+			st.viewport_configured = false;
+		}
+
+		if !st.tex_pipeline.is_valid() {
+			let layout = VertexLayout {
+				stride: 20, // f32 x,y, f32 u,v, u8 r,g,b,a
+				pos_offset: 0,
+				color_offset: 16,
+				color_format: ColorFormat::RgbaU8,
+				texcoord_offset: 8,
+				texcoord_format: TexCoordFormat::UvF32,
+			};
+			let p = ctx
+				.create_pipeline(PipelineDesc {
+					vertex_layout: layout,
+					vs: None,
+					fs: None,
+				})
+				.ok()?;
+			st.tex_pipeline = p;
+		}
+
+		if !st.tex_vbuf.is_valid() || st.tex_capacity < need_bytes {
+			if st.tex_vbuf.is_valid() {
+				ctx.destroy_buffer(st.tex_vbuf);
+				st.tex_vbuf = BufferId::invalid();
+				st.tex_capacity = 0;
+			}
+			let cap = need_bytes.max(256);
+			let b = ctx
+				.create_buffer(BufferDesc {
+					size: cap as u64,
+					usage: BufferUsage::Vertex,
+					memory: MemoryType::HostVisible,
+				})
+				.ok()?;
+			st.tex_vbuf = b;
+			st.tex_capacity = cap;
+		}
+
+		let need_set_viewport = !st.viewport_configured;
+		st.viewport_configured = true;
+		Some((st.tex_pipeline, st.tex_vbuf, need_set_viewport))
 	}
 
 	/// Draw a list of RGB triangles and present.
@@ -983,6 +1084,264 @@ pub mod cabi {
 			}) else {
 				return -6;
 			};
+		ret
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba(
+		tex_id: u32,
+		width: u32,
+		height: u32,
+		data_ptr: *const u8,
+		data_len: usize,
+	) -> i32 {
+		if tex_id == 0 || width == 0 || height == 0 {
+			return -1;
+		}
+		if data_ptr.is_null() {
+			return -2;
+		}
+		let expected = (width as usize)
+			.saturating_mul(height as usize)
+			.saturating_mul(4);
+		if data_len < expected {
+			return -3;
+		}
+		let data = core::slice::from_raw_parts(data_ptr, expected);
+
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let mut st = GFX_CABI_STATE.lock();
+			let images = st.tex_images.get_or_insert_with(Vec::new);
+			let idx = tex_id.saturating_sub(1) as usize;
+			if idx >= images.len() {
+				images.resize_with(idx + 1, || None);
+			}
+			let mut image_id = ImageId::invalid();
+			let mut recreate = true;
+			if let Some(Some(entry)) = images.get(idx) {
+				if entry.width == width && entry.height == height {
+					image_id = entry.image;
+					recreate = false;
+				}
+			}
+			if recreate {
+				if image_id.is_valid() {
+					ctx.destroy_image(image_id);
+				}
+				let desc = ImageDesc {
+					width,
+					height,
+					format: ImageFormat::Rgba8888,
+				};
+				let Ok(img) = ctx.create_image(desc) else {
+					return -4;
+				};
+				image_id = img;
+				images[idx] = Some(TexImage {
+					image: image_id,
+					width,
+					height,
+				});
+			}
+			if ctx.write_image(image_id, data).is_err() {
+				return -5;
+			}
+			0
+		}) else {
+			return -6;
+		};
+		ret
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
+				Some(v) => v,
+				None => return -1,
+			};
+			let mut st = GFX_CABI_STATE.lock();
+			st.frame_active = true;
+			st.frame_clear_rgb = clear_rgb;
+
+			let swap = ctx.swapchain_desc();
+			let vp = Viewport {
+				x: 0,
+				y: 0,
+				width: swap.extent.width as i32,
+				height: swap.extent.height as i32,
+			};
+
+			let mut cmds_buf = [Command::ClearColor { rgb: clear_rgb }; 2];
+			let cmds = if need_set_viewport {
+				cmds_buf[0] = Command::SetViewport(vp);
+				cmds_buf[1] = Command::ClearColor { rgb: clear_rgb };
+				&cmds_buf[..2]
+			} else {
+				&cmds_buf[0..1]
+			};
+			match ctx.submit(CommandBuffer { commands: cmds }) {
+				Ok(_) => 0,
+				Err(_) => -2,
+			}
+		}) else {
+			return -3;
+		};
+		ret
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles_no_present(
+		vtx_ptr: *const u8,
+		vtx_len: usize,
+	) -> i32 {
+		if vtx_ptr.is_null() {
+			return if vtx_len == 0 { 0 } else { -1 };
+		}
+		if vtx_len == 0 {
+			return 0;
+		}
+		const VTX_SIZE: usize = 12;
+		let usable = vtx_len - (vtx_len % VTX_SIZE);
+		if usable == 0 {
+			return -2;
+		}
+		let vtx = core::slice::from_raw_parts(vtx_ptr, usable);
+		let vcount = (usable / VTX_SIZE) as u32;
+		if vcount == 0 {
+			return 0;
+		}
+
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let (pipeline, vbuf, _need_set_viewport) = match ensure_gfx_resources(ctx, usable) {
+				Some(v) => v,
+				None => return -3,
+			};
+			if ctx.write_buffer(vbuf, 0, vtx).is_err() {
+				return -4;
+			}
+			let cmds = [
+				Command::BindPipeline(pipeline),
+				Command::BindVertexBuffer {
+					buffer: vbuf,
+					offset: 0,
+				},
+				Command::Draw {
+					vertex_count: vcount,
+					first_vertex: 0,
+				},
+			];
+			match ctx.submit(CommandBuffer { commands: &cmds }) {
+				Ok(_) => 0,
+				Err(_) => -5,
+			}
+		}) else {
+			return -6;
+		};
+		ret
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_draw_tex_triangles_no_present(
+		tex_id: u32,
+		vtx_ptr: *const u8,
+		vtx_len: usize,
+	) -> i32 {
+		if tex_id == 0 {
+			return -1;
+		}
+		if vtx_ptr.is_null() {
+			return if vtx_len == 0 { 0 } else { -2 };
+		}
+		if vtx_len == 0 {
+			return 0;
+		}
+		const VTX_SIZE: usize = 20;
+		let usable = vtx_len - (vtx_len % VTX_SIZE);
+		if usable == 0 {
+			return -3;
+		}
+		let vtx = core::slice::from_raw_parts(vtx_ptr, usable);
+		let vcount = (usable / VTX_SIZE) as u32;
+		if vcount == 0 {
+			return 0;
+		}
+
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let (pipeline, vbuf, _need_set_viewport) = match ensure_gfx_resources_tex(ctx, usable) {
+				Some(v) => v,
+				None => return -4,
+			};
+
+			let image_id = {
+				let mut st = GFX_CABI_STATE.lock();
+				let images = st.tex_images.get_or_insert_with(Vec::new);
+				let idx = tex_id.saturating_sub(1) as usize;
+				let image = if let Some(Some(entry)) = images.get(idx) {
+					entry.image
+				} else {
+					if idx >= images.len() {
+						images.resize_with(idx + 1, || None);
+					}
+					let desc = ImageDesc {
+						width: 1,
+						height: 1,
+						format: ImageFormat::Rgba8888,
+					};
+					let Ok(img) = ctx.create_image(desc) else {
+						return -5;
+					};
+					let white = [0u8, 0u8, 0u8, 0u8];
+					let _ = ctx.write_image(img, &white);
+					images[idx] = Some(TexImage {
+						image: img,
+						width: 1,
+						height: 1,
+					});
+					img
+				};
+				image
+			};
+
+			if ctx.write_buffer(vbuf, 0, vtx).is_err() {
+				return -6;
+			}
+			let cmds = [
+				Command::BindPipeline(pipeline),
+				Command::BindImage(image_id),
+				Command::BindVertexBuffer {
+					buffer: vbuf,
+					offset: 0,
+				},
+				Command::Draw {
+					vertex_count: vcount,
+					first_vertex: 0,
+				},
+			];
+			match ctx.submit(CommandBuffer { commands: &cmds }) {
+				Ok(_) => 0,
+				Err(_) => -7,
+			}
+		}) else {
+			return -8;
+		};
+		ret
+	}
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
+		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let cmds = [Command::Present];
+			let result = match ctx.submit(CommandBuffer { commands: &cmds }) {
+				Ok(_) => 0,
+				Err(_) => -1,
+			};
+			let mut st = GFX_CABI_STATE.lock();
+			st.frame_active = false;
+			result
+		}) else {
+			return -2;
+		};
 		ret
 	}
 
