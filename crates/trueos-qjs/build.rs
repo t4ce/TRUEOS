@@ -74,19 +74,149 @@ Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
 
 fn build_host_qjs_bytecode_gen(quickjs_dir: &Path, out_dir: &Path) -> PathBuf {
     let exe = out_dir.join("qjs_bytecode_gen");
-    if exe.is_file() {
-        return exe;
-    }
-
     let gen_c = out_dir.join("qjs_bytecode_gen.c");
     // Minimal module-only bytecode generator.
-    // Usage: qjs_bytecode_gen <module_name> <input.mjs> <output.qjsc>
+    // Usage: qjs_bytecode_gen <app_root> <module_name> <input.mjs> <output.qjsc>
     let src = r#"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "quickjs.h"
+
+static const char *g_app_root = NULL;
+
+static int starts_with(const char *s, const char *pfx) {
+    size_t n = strlen(pfx);
+    return strncmp(s, pfx, n) == 0;
+}
+
+static char *strdup_or_null(const char *s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char *out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, s, n);
+    out[n] = 0;
+    return out;
+}
+
+static char *path_dirname(const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        return strdup_or_null("");
+    }
+    size_t n = (size_t)(slash - path);
+    char *out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, path, n);
+    out[n] = 0;
+    return out;
+}
+
+static char *join2(const char *a, const char *b) {
+    size_t na = a ? strlen(a) : 0;
+    size_t nb = b ? strlen(b) : 0;
+    int need_slash = 0;
+    if (na && nb) {
+        need_slash = (a[na - 1] != '/' && b[0] != '/');
+    }
+    size_t n = na + nb + (need_slash ? 1 : 0);
+    char *out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    size_t i = 0;
+    if (na) { memcpy(out + i, a, na); i += na; }
+    if (need_slash) out[i++] = '/';
+    if (nb) { memcpy(out + i, b, nb); i += nb; }
+    out[i] = 0;
+    return out;
+}
+
+static char *normalize_path(const char *path) {
+    // Very small normalizer for paths with '/' separators.
+    // - keeps leading '/'
+    // - resolves '.' and '..'
+    int is_abs = (path && path[0] == '/');
+    // Tokenize by '/'.
+    const char *p = path;
+    const char *segs[512];
+    int seg_is_dotdot[512];
+    int nseg = 0;
+    while (p && *p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        size_t len = (size_t)(p - start);
+        if (len == 1 && start[0] == '.') {
+            continue;
+        }
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            if (nseg > 0 && !seg_is_dotdot[nseg - 1]) {
+                nseg--;
+                continue;
+            }
+            if (is_abs) {
+                continue;
+            }
+            segs[nseg] = start;
+            seg_is_dotdot[nseg] = 1;
+            nseg++;
+            continue;
+        }
+        segs[nseg] = start;
+        seg_is_dotdot[nseg] = 0;
+        nseg++;
+        if (nseg >= 512) break;
+    }
+
+    // Compute output length.
+    size_t out_len = is_abs ? 1 : 0;
+    for (int i = 0; i < nseg; i++) {
+        if (i != 0) out_len++;
+        const char *s = segs[i];
+        const char *e = s;
+        while (*e && *e != '/') e++;
+        out_len += (size_t)(e - s);
+    }
+    char *out = (char*)malloc(out_len + 1);
+    if (!out) return NULL;
+    size_t oi = 0;
+    if (is_abs) out[oi++] = '/';
+    for (int i = 0; i < nseg; i++) {
+        if (i != 0) out[oi++] = '/';
+        const char *s = segs[i];
+        const char *e = s;
+        while (*e && *e != '/') e++;
+        size_t len = (size_t)(e - s);
+        memcpy(out + oi, s, len);
+        oi += len;
+    }
+    out[oi] = 0;
+    return out;
+}
+
+static char *resolve_spec(const char *base, const char *spec) {
+    if (!spec) return NULL;
+    if (starts_with(spec, "/")) {
+        return normalize_path(spec);
+    }
+    if (starts_with(spec, "./") || starts_with(spec, "../")) {
+        if (!base) {
+            return normalize_path(spec);
+        }
+        char *dir = path_dirname(base);
+        if (!dir) return NULL;
+        char *tmp = join2(dir, spec);
+        free(dir);
+        if (!tmp) return NULL;
+        char *norm = normalize_path(tmp);
+        free(tmp);
+        return norm;
+    }
+    // Bare specifiers not supported in the host precompiler.
+    return NULL;
+}
 
 static unsigned char *read_file_nul(const char *path, size_t *out_len) {
     FILE *f = fopen(path, "rb");
@@ -106,6 +236,47 @@ static unsigned char *read_file_nul(const char *path, size_t *out_len) {
     return buf;
 }
 
+static JSModuleDef *compile_module_from_buf(JSContext *ctx, const char *module_name, const uint8_t *buf, size_t len) {
+    int flags = JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY;
+    JSValue v = JS_Eval(ctx, (const char*)buf, len, module_name, flags);
+    if (JS_IsException(v)) {
+        return NULL;
+    }
+    if (JS_VALUE_GET_TAG(v) != JS_TAG_MODULE) {
+        JS_FreeValue(ctx, v);
+        return NULL;
+    }
+    JSModuleDef *m = (JSModuleDef*)JS_VALUE_GET_PTR(v);
+    JS_FreeValue(ctx, v);
+    return m;
+}
+
+static char *qjs_normalize(JSContext *ctx, const char *base_name, const char *name, void *opaque) {
+    (void)ctx; (void)opaque;
+    char *norm = resolve_spec(base_name, name);
+    if (!norm) return NULL;
+    return norm; // QuickJS frees with js_free_rt
+}
+
+static JSModuleDef *qjs_loader(JSContext *ctx, const char *module_name, void *opaque) {
+    (void)opaque;
+    if (!module_name || !g_app_root) return NULL;
+    if (!starts_with(module_name, "/qjs/")) {
+        return NULL;
+    }
+    const char *rel = module_name + 5; // strip "/qjs/"
+    char *fs_path = join2(g_app_root, rel);
+    if (!fs_path) return NULL;
+
+    size_t len = 0;
+    unsigned char *src = read_file_nul(fs_path, &len);
+    free(fs_path);
+    if (!src) return NULL;
+    JSModuleDef *m = compile_module_from_buf(ctx, module_name, src, len);
+    free(src);
+    return m;
+}
+
 static int write_file(const char *path, const unsigned char *buf, size_t len) {
     FILE *f = fopen(path, "wb");
     if (!f) return 0;
@@ -115,13 +286,14 @@ static int write_file(const char *path, const unsigned char *buf, size_t len) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <module_name> <input.mjs> <output.qjsc>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "usage: %s <app_root> <module_name> <input.mjs> <output.qjsc>\n", argv[0]);
         return 2;
     }
-    const char *module_name = argv[1];
-    const char *in_path = argv[2];
-    const char *out_path = argv[3];
+    g_app_root = argv[1];
+    const char *module_name = argv[2];
+    const char *in_path = argv[3];
+    const char *out_path = argv[4];
 
     size_t src_len = 0;
     unsigned char *src = read_file_nul(in_path, &src_len);
@@ -141,6 +313,8 @@ int main(int argc, char **argv) {
         free(src);
         return 5;
     }
+
+    JS_SetModuleLoaderFunc(rt, qjs_normalize, qjs_loader, NULL);
 
     int flags = JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY;
     JSValue v = JS_Eval(ctx, (const char*)src, src_len, module_name, flags);
@@ -210,22 +384,124 @@ int main(int argc, char **argv) {
     exe
 }
 
-fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path) {
-    let app_util = manifest_dir.join("app").join("util.mjs");
-    println!("cargo:rerun-if-changed={}", app_util.display());
+fn collect_mjs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if let Ok(ft) = ent.file_type() {
+            if ft.is_dir() {
+                collect_mjs_files(&p, out);
+                continue;
+            }
+        }
+        if p.extension().and_then(|s| s.to_str()) == Some("mjs") {
+            out.push(p);
+        }
+    }
+}
 
+fn to_qjs_specifier(app_root: &Path, file: &Path) -> String {
+    let rel = file
+        .strip_prefix(app_root)
+        .unwrap_or(file)
+        .to_string_lossy()
+        .replace('\\', "/");
+    format!("/qjs/{rel}")
+}
+
+fn out_qjsc_path(out_embedded: &Path, app_root: &Path, file: &Path) -> PathBuf {
+    let rel = file.strip_prefix(app_root).unwrap_or(file);
+    let mut out = out_embedded.join(rel);
+    out.set_extension("qjsc");
+    if let Some(parent) = out.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    out
+}
+
+fn write_embedded_table(out_embedded: &Path, entries: &[(String, PathBuf, Option<PathBuf>)]) {
+    // Generates Rust code that populates the embedded registry.
+    // Note: this is included by `src/trueos_module_loader/embedded.rs`.
+    let mut s = String::new();
+    s.push_str("// @generated by crates/trueos-qjs/build.rs\n");
+    s.push_str("// Embedded ES modules from crates/trueos-qjs/app/**/*.mjs\n\n");
+    s.push_str("static EMBEDDED: &[EmbeddedModule] = &[\n");
+    for (spec, src_path, qjsc_path) in entries {
+        let spec_bytes = format!("b\"{}\"", spec.replace('"', "\\\""));
+        // Use absolute (build-time) paths for include_bytes!.
+        let src_lit = src_path.to_string_lossy().replace('\\', "/");
+        s.push_str("    EmbeddedModule {\n");
+        s.push_str(&format!("        path: {spec_bytes},\n"));
+        s.push_str(&format!("        src: include_bytes!(\"{src_lit}\"),\n"));
+        if let Some(qjsc_path) = qjsc_path {
+            let qjsc_lit = qjsc_path.to_string_lossy().replace('\\', "/");
+            s.push_str(&format!("        bytecode: include_bytes!(\"{qjsc_lit}\"),\n"));
+        } else {
+            s.push_str("        bytecode: b\"\",\n");
+        }
+        s.push_str("    },\n");
+    }
+    s.push_str("];\n");
+
+    let out_rs = out_embedded.join("embedded_modules.rs");
+    std::fs::write(&out_rs, s).expect("write embedded_modules.rs");
+}
+
+fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path) {
+    let app_root = manifest_dir.join("app");
     let out_embedded = out_dir.join("embedded_qjs");
     std::fs::create_dir_all(&out_embedded).expect("create OUT_DIR/embedded_qjs");
 
-    let gen_exe = build_host_qjs_bytecode_gen(quickjs_dir, out_dir);
-    let out_qjsc = out_embedded.join("util.qjsc");
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_mjs_files(&app_root, &mut files);
+    files.sort();
 
-    run(
-        Command::new(gen_exe)
-            .arg("/qjs/util.mjs")
-            .arg(&app_util)
-            .arg(&out_qjsc),
-    );
+    // Track the whole directory tree for incremental builds by listing files explicitly.
+    for f in &files {
+        println!("cargo:rerun-if-changed={}", f.display());
+    }
+
+    let gen_exe = build_host_qjs_bytecode_gen(quickjs_dir, out_dir);
+
+    let mut entries: Vec<(String, PathBuf, Option<PathBuf>)> = Vec::new();
+    for f in &files {
+        let spec = to_qjs_specifier(&app_root, f);
+        let out_qjsc = out_qjsc_path(&out_embedded, &app_root, f);
+        let status = Command::new(&gen_exe)
+            .arg(&app_root)
+            .arg(&spec)
+            .arg(f)
+            .arg(&out_qjsc)
+            .status();
+        match status {
+            Ok(st) if st.success() => {
+                entries.push((spec, f.clone(), Some(out_qjsc)));
+            }
+            Ok(st) => {
+                let _ = std::fs::remove_file(&out_qjsc);
+                println!(
+                    "cargo:warning=embedded precompile skipped (exit={}) for {} (will embed source only)",
+                    st.code().unwrap_or(-1),
+                    f.display()
+                );
+                entries.push((spec, f.clone(), None));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&out_qjsc);
+                println!(
+                    "cargo:warning=embedded precompile skipped (spawn failed: {}) for {} (will embed source only)",
+                    e,
+                    f.display()
+                );
+                entries.push((spec, f.clone(), None));
+            }
+        }
+    }
+
+    // Always write the table (even if empty) so the include! path exists.
+    write_embedded_table(&out_embedded, &entries);
 }
 
 fn main() {
