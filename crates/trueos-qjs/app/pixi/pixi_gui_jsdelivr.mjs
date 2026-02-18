@@ -4,11 +4,13 @@ var W = Number((G.window && G.window.innerWidth) || 0);
 var H = Number((G.window && G.window.innerHeight) || 0);
 if (!isFinite(W) || W < 320) W = 1280;
 if (!isFinite(H) || H < 240) H = 800;
+if (G && G.console && G.console.log) G.console.log('pixi_gui: W/H', W, H);
 
 var canvas = (G.document && G.document.createElement) ? G.document.createElement('canvas') : null;
 if (!canvas) throw new Error('no canvas available');
 canvas.width = W;
 canvas.height = H;
+G.__trueos_canvas = canvas;
 
 var renderer = new PIXI.Renderer({
 	view: canvas,
@@ -20,47 +22,46 @@ var renderer = new PIXI.Renderer({
 
 var stage = new PIXI.Container();
 
-// --- Desktop background: full-screen mesh with white -> gray linear gradient.
-// 2 triangles in a quad, per-vertex RGBA colors.
-var bgPos = new Float32Array([
-	0, 0,
-	W, 0,
-	W, H,
-	0, H,
-]);
-var bgIdx = new Uint16Array([0, 1, 2, 0, 2, 3]);
-var top = 1.0;
-var bot = 0.55;
-var bgCol = new Float32Array([
-	top, top, top, 1.0,
-	top, top, top, 1.0,
-	bot, bot, bot, 1.0,
-	bot, bot, bot, 1.0,
-]);
-var bgGeom = new PIXI.Geometry()
-	.addAttribute('aVertexPosition', bgPos, 2)
-	.addAttribute('aColor', bgCol, 4)
-	.addIndex(bgIdx);
-var bgVS = `precision mediump float;
-attribute vec2 aVertexPosition;
-attribute vec4 aColor;
-uniform mat3 translationMatrix;
-uniform mat3 projectionMatrix;
-varying vec4 vColor;
-void main(){
-	vColor = aColor;
-	vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
-	gl_Position = vec4(pos.xy, 0.0, 1.0);
-}`;
-var bgFS = `precision mediump float;
-varying vec4 vColor;
-void main(){
-	gl_FragColor = vColor;
-}`;
-var bgProg = PIXI.Program.from(bgVS, bgFS);
-var bgShader = new PIXI.Shader(bgProg, {});
-var bgMesh = new PIXI.Mesh(bgGeom, bgShader);
-stage.addChild(bgMesh);
+// --- Desktop background: left -> right white -> black gradient.
+// Use a 2x1 texture stretched fullscreen so we don't depend on vertex color attributes.
+var bg = new PIXI.Container();
+stage.addChild(bg);
+
+function bgFallback() {
+	var g = new PIXI.Graphics();
+	var mid = Math.floor(W / 2);
+	g.beginFill(0xFFFFFF, 1);
+	g.drawRect(0, 0, mid, H);
+	g.endFill();
+	g.beginFill(0x000000, 1);
+	g.drawRect(mid, 0, Math.max(1, W - mid), H);
+	g.endFill();
+	bg.addChild(g);
+}
+
+try {
+	var buf = new Uint8Array([
+		255, 255, 255, 255,
+		0, 0, 0, 255,
+	]);
+	var base = (PIXI.BaseTexture && PIXI.BaseTexture.fromBuffer)
+		? PIXI.BaseTexture.fromBuffer(buf, 2, 1)
+		: null;
+	if (!base) throw new Error('BaseTexture.fromBuffer missing');
+	if (typeof base.scaleMode !== 'undefined' && PIXI.SCALE_MODES) {
+		base.scaleMode = PIXI.SCALE_MODES.LINEAR;
+	}
+	var tex = new PIXI.Texture(base);
+	var spr = new PIXI.Sprite(tex);
+	spr.x = 0;
+	spr.y = 0;
+	spr.width = W;
+	spr.height = H;
+	bg.addChild(spr);
+} catch (e) {
+	if (G && G.console && G.console.log) G.console.log('pixi_gui: bg texture failed', String(e));
+	bgFallback();
+}
 
 // --- Very small pixel font (5x7), drawn using Graphics so it doesn't rely on canvas text.
 // Only includes: A-Z, 0-9, space, dash, dot.
@@ -165,7 +166,7 @@ var frameH = Math.max(160, H - frameY - 32);
 
 var frame = new PIXI.Graphics();
 frame.lineStyle(2, 0x202020, 1);
-frame.beginFill(0xFFFFFF, 0.92);
+frame.beginFill(0xFFFFFF, 0.18);
 frame.drawRect(frameX, frameY, frameW, frameH);
 frame.endFill();
 chrome.addChild(frame);
@@ -202,6 +203,7 @@ var UI = {
 			try { appHost.removeChild(this._activeInst.root); } catch (e) {}
 		}
 		var spec = this.apps[idx];
+		if (G && G.console && G.console.log) G.console.log('pixi_gui: setActive name=', spec.name, 'len=', String(spec.name).length);
 		var inst = spec.factory ? spec.factory() : null;
 		if (!inst) inst = { root: new PIXI.Container(), tick: function(){} };
 		if (!inst.root) inst.root = new PIXI.Container();
@@ -215,20 +217,7 @@ var UI = {
 		if (this.apps.length === 0) {
 			this.registerApp('DEMO', function() {
 				var root = new PIXI.Container();
-				var box = new PIXI.Graphics();
-				box.beginFill(0x00C8FF, 1);
-				box.drawRect(0, 0, 64, 32);
-				box.endFill();
-				root.addChild(box);
-				var t = 0;
-				return {
-					root: root,
-					tick: function(dt) {
-						t += dt;
-						box.x = 32 + Math.sin(t * 0.002) * 80;
-						box.y = 32 + Math.cos(t * 0.0015) * 60;
-					}
-				};
+				return { root: root, tick: function(dt) {} };
 			});
 		}
 		this.setActive(0);
@@ -249,10 +238,72 @@ var UI = {
 G.__trueos_ui = UI;
 
 var last = 0;
+var __mx = Math.floor(W / 2);
+var __my = Math.floor(H / 2);
+var __mb = 0;
+
+function __dispatchMouse(target, type, props) {
+	if (!target || !target.dispatchEvent) return;
+	var e = props || {};
+	e.type = type;
+	try { target.dispatchEvent(e); } catch (err) {}
+}
+
+function __pumpMouse() {
+	if (!G.__trueos_poll_mouse_raw) return;
+	var canvas = G.__trueos_canvas;
+	for (var k = 0; k < 64; k++) {
+		var ev = null;
+		try { ev = G.__trueos_poll_mouse_raw(); } catch (e) { return; }
+		if (!ev) return;
+		var dx = (ev.dx|0);
+		var dy = (ev.dy|0);
+		var wh = (ev.wheel|0);
+		var buttons = (ev.buttons|0);
+		if (dx || dy) {
+			__mx = Math.max(0, Math.min(W - 1, __mx + dx));
+			__my = Math.max(0, Math.min(H - 1, __my + dy));
+			var props = { clientX: __mx, clientY: __my, movementX: dx, movementY: dy, buttons: buttons };
+			__dispatchMouse(canvas, 'mousemove', props);
+			__dispatchMouse(G, 'mousemove', props);
+		}
+		if (wh) {
+			var propsw = { clientX: __mx, clientY: __my, deltaY: wh, buttons: buttons };
+			__dispatchMouse(canvas, 'wheel', propsw);
+			__dispatchMouse(G, 'wheel', propsw);
+		}
+		var changed = (__mb ^ buttons) & 0xFF;
+		if (changed) {
+			var map = [ [1,0], [4,1], [2,2] ]; // HID:1 left,4 middle,2 right
+			for (var i = 0; i < map.length; i++) {
+				var mask = map[i][0];
+				var btn = map[i][1];
+				if (changed & mask) {
+					var down = (buttons & mask) ? 1 : 0;
+					var t = down ? 'mousedown' : 'mouseup';
+					var propsb = { clientX: __mx, clientY: __my, button: btn, buttons: buttons };
+					__dispatchMouse(canvas, t, propsb);
+					__dispatchMouse(G, t, propsb);
+					if (!down) {
+						__dispatchMouse(canvas, 'click', propsb);
+						__dispatchMouse(G, 'click', propsb);
+					}
+				}
+			}
+			__mb = buttons;
+		}
+	}
+}
+
 G.__trueos_pixi_ui_tick = function(angleRad) {
 	var now = (Date.now && Date.now()) ? Date.now() : (last + 50);
 	var dt = (last === 0) ? 50 : (now - last);
 	last = now;
+	if (G.__trueos_mouse_pump) {
+		try { G.__trueos_mouse_pump(); } catch (e) {}
+	} else {
+		__pumpMouse();
+	}
 	if (G.__trueos_ui) {
 		if (G.__trueos_ui.active < 0) G.__trueos_ui.start();
 		G.__trueos_ui.tick(dt);

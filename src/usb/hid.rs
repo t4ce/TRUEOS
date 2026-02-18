@@ -314,6 +314,9 @@ pub(crate) async fn input_logger() {
                                 mouse.wheel
                             );
                         }
+
+						// Feed a capped/coalesced mouse stream to QJS (max 1 move per 25ms).
+						input::qjs_mouse_offer(mouse);
                     }
                 }
             } else {
