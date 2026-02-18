@@ -40,13 +40,19 @@ if (!__Renderer) {
 	};
 
 	var renderer = null;
-	if (PIXI && typeof PIXI.autoDetectRenderer === 'function') {
-		renderer = PIXI.autoDetectRenderer(rendererOpts);
-	} else if (PIXI && typeof PIXI.Renderer === 'function') {
-		renderer = new PIXI.Renderer(rendererOpts);
+	// NOTE: Do not use PIXI.autoDetectRenderer() in TRUEOS.
+	// It tries to create its own “test canvas” and probe contexts; if that canvas
+	// doesn’t have getContext wired up in our shim, Pixi will fail to detect.
+	var __Renderer = (PIXI && typeof PIXI.Renderer === 'function')
+		? PIXI.Renderer
+		: (PIXI && PIXI.default && typeof PIXI.default.Renderer === 'function')
+			? PIXI.default.Renderer
+			: null;
+	if (__Renderer) {
+		renderer = new __Renderer(rendererOpts);
 	}
 	if (!renderer) {
-		throw new Error('pixi_gui: no renderer export (expected PIXI.autoDetectRenderer or PIXI.Renderer)');
+		throw new Error('pixi_gui: no renderer export (expected PIXI.Renderer)');
 	}
 
 var stage = new PIXI.Container();
