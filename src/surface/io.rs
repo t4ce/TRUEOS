@@ -791,13 +791,16 @@ pub mod cabi {
 	};
 	use alloc::vec::Vec;
 
+	const GFX_CABI_VBUF_RING_LEN: usize = 3;
+
 	struct GfxCabiState {
 		pipeline: PipelineId,
-		vbuf: BufferId,
-		capacity: usize,
+		ring_idx: usize,
+		vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
+		capacity: [usize; GFX_CABI_VBUF_RING_LEN],
 		tex_pipeline: PipelineId,
-		tex_vbuf: BufferId,
-		tex_capacity: usize,
+		tex_vbuf: [BufferId; GFX_CABI_VBUF_RING_LEN],
+		tex_capacity: [usize; GFX_CABI_VBUF_RING_LEN],
 		tex_images: Option<Vec<Option<TexImage>>>,
 		epoch: u64,
 		swapchain_configured: bool,
@@ -827,11 +830,12 @@ pub mod cabi {
 		const fn new() -> Self {
 			Self {
 				pipeline: PipelineId::invalid(),
-				vbuf: BufferId::invalid(),
-				capacity: 0,
+				ring_idx: 0,
+				vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
+				capacity: [0; GFX_CABI_VBUF_RING_LEN],
 				tex_pipeline: PipelineId::invalid(),
-				tex_vbuf: BufferId::invalid(),
-				tex_capacity: 0,
+				tex_vbuf: [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN],
+				tex_capacity: [0; GFX_CABI_VBUF_RING_LEN],
 				tex_images: None,
 				epoch: 0,
 				swapchain_configured: false,
@@ -871,11 +875,12 @@ pub mod cabi {
 		if st.epoch != epoch {
 			// Backend changed; cached IDs belong to a different backend.
 			st.pipeline = PipelineId::invalid();
-			st.vbuf = BufferId::invalid();
-			st.capacity = 0;
+			st.ring_idx = 0;
+			st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+			st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
 			st.tex_pipeline = PipelineId::invalid();
-			st.tex_vbuf = BufferId::invalid();
-			st.tex_capacity = 0;
+			st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+			st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
 			st.tex_images = None;
 			st.swapchain_configured = false;
 			st.viewport_configured = false;
@@ -913,11 +918,14 @@ pub mod cabi {
 			st.pipeline = p;
 		}
 
-		if !st.vbuf.is_valid() || st.capacity < need_bytes {
-			if st.vbuf.is_valid() {
-				ctx.destroy_buffer(st.vbuf);
-				st.vbuf = BufferId::invalid();
-				st.capacity = 0;
+		let idx = st.ring_idx % GFX_CABI_VBUF_RING_LEN;
+		let cur = st.vbuf[idx];
+		let cur_cap = st.capacity[idx];
+		if !cur.is_valid() || cur_cap < need_bytes {
+			if cur.is_valid() {
+				ctx.destroy_buffer(cur);
+				st.vbuf[idx] = BufferId::invalid();
+				st.capacity[idx] = 0;
 			}
 			let cap = need_bytes.max(256);
 			let b = ctx
@@ -927,13 +935,13 @@ pub mod cabi {
 					memory: MemoryType::HostVisible,
 				})
 				.ok()?;
-			st.vbuf = b;
-			st.capacity = cap;
+			st.vbuf[idx] = b;
+			st.capacity[idx] = cap;
 		}
 
 		let need_set_viewport = !st.viewport_configured;
 		st.viewport_configured = true;
-		Some((st.pipeline, st.vbuf, need_set_viewport))
+		Some((st.pipeline, st.vbuf[idx], need_set_viewport))
 	}
 
 	fn ensure_gfx_resources_tex(ctx: &mut dyn GfxContext, need_bytes: usize) -> Option<(PipelineId, BufferId, bool)> {
@@ -950,11 +958,12 @@ pub mod cabi {
 		let mut st = GFX_CABI_STATE.lock();
 		if st.epoch != epoch {
 			st.pipeline = PipelineId::invalid();
-			st.vbuf = BufferId::invalid();
-			st.capacity = 0;
+			st.ring_idx = 0;
+			st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+			st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
 			st.tex_pipeline = PipelineId::invalid();
-			st.tex_vbuf = BufferId::invalid();
-			st.tex_capacity = 0;
+			st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+			st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
 			st.tex_images = None;
 			st.swapchain_configured = false;
 			st.viewport_configured = false;
@@ -992,11 +1001,14 @@ pub mod cabi {
 			st.tex_pipeline = p;
 		}
 
-		if !st.tex_vbuf.is_valid() || st.tex_capacity < need_bytes {
-			if st.tex_vbuf.is_valid() {
-				ctx.destroy_buffer(st.tex_vbuf);
-				st.tex_vbuf = BufferId::invalid();
-				st.tex_capacity = 0;
+		let idx = st.ring_idx % GFX_CABI_VBUF_RING_LEN;
+		let cur = st.tex_vbuf[idx];
+		let cur_cap = st.tex_capacity[idx];
+		if !cur.is_valid() || cur_cap < need_bytes {
+			if cur.is_valid() {
+				ctx.destroy_buffer(cur);
+				st.tex_vbuf[idx] = BufferId::invalid();
+				st.tex_capacity[idx] = 0;
 			}
 			let cap = need_bytes.max(256);
 			let b = ctx
@@ -1006,13 +1018,13 @@ pub mod cabi {
 					memory: MemoryType::HostVisible,
 				})
 				.ok()?;
-			st.tex_vbuf = b;
-			st.tex_capacity = cap;
+			st.tex_vbuf[idx] = b;
+			st.tex_capacity[idx] = cap;
 		}
 
 		let need_set_viewport = !st.viewport_configured;
 		st.viewport_configured = true;
-		Some((st.tex_pipeline, st.tex_vbuf, need_set_viewport))
+		Some((st.tex_pipeline, st.tex_vbuf[idx], need_set_viewport))
 	}
 
 	/// Draw a list of RGB triangles and present.
@@ -1043,10 +1055,10 @@ pub mod cabi {
 		}
 
 		let Some(ret) = crate::gfx::with_context(|ctx| {
-				let (pipeline, vbuf, need_set_viewport) = match ensure_gfx_resources(ctx, usable) {
-					Some(v) => v,
-					None => return -3,
-				};
+			let (pipeline, vbuf, need_set_viewport) = match ensure_gfx_resources(ctx, usable) {
+				Some(v) => v,
+				None => return -3,
+			};
 
 			if ctx.write_buffer(vbuf, 0, vtx).is_err() {
 				return -4;
@@ -1060,27 +1072,23 @@ pub mod cabi {
 				height: swap.extent.height as i32,
 			};
 
-				if need_set_viewport {
-					let cmds = [
-						Command::SetViewport(vp),
-						Command::ClearColor { rgb: clear_rgb },
-						Command::BindPipeline(pipeline),
-						Command::BindVertexBuffer {
-							buffer: vbuf,
-							offset: 0,
-						},
-						Command::Draw {
-							vertex_count: vcount,
-							first_vertex: 0,
-						},
-						Command::Present,
-					];
-					return match ctx.submit(CommandBuffer { commands: &cmds }) {
-						Ok(_) => 0,
-						Err(_) => -5,
-					};
-				}
-
+			let submit_res = if need_set_viewport {
+				let cmds = [
+					Command::SetViewport(vp),
+					Command::ClearColor { rgb: clear_rgb },
+					Command::BindPipeline(pipeline),
+					Command::BindVertexBuffer {
+						buffer: vbuf,
+						offset: 0,
+					},
+					Command::Draw {
+						vertex_count: vcount,
+						first_vertex: 0,
+					},
+					Command::Present,
+				];
+				ctx.submit(CommandBuffer { commands: &cmds })
+			} else {
 				let cmds = [
 					Command::ClearColor { rgb: clear_rgb },
 					Command::BindPipeline(pipeline),
@@ -1094,11 +1102,17 @@ pub mod cabi {
 					},
 					Command::Present,
 				];
+				ctx.submit(CommandBuffer { commands: &cmds })
+			};
 
-				match ctx.submit(CommandBuffer { commands: &cmds }) {
-					Ok(_) => 0,
-					Err(_) => -5,
-				}
+			let ok = submit_res.is_ok();
+			if ok {
+				let mut st = GFX_CABI_STATE.lock();
+				st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+				0
+			} else {
+				-5
+			}
 			}) else {
 				return -6;
 			};
@@ -1446,12 +1460,14 @@ pub mod cabi {
 			}
 
 			cmds.push(Command::Present);
-			match ctx.submit(CommandBuffer {
+			let submit_res = ctx.submit(CommandBuffer {
 				commands: cmds.as_slice(),
-			}) {
-				Ok(_) => 0,
-				Err(_) => -11,
+			});
+			if submit_res.is_ok() {
+				let mut st = GFX_CABI_STATE.lock();
+				st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
 			}
+			if submit_res.is_ok() { 0 } else { -11 }
 		}) else {
 			return -12;
 		};
