@@ -1,4 +1,4 @@
-import * as PIXI from 'https://esm.sh/pixi.js@7.4.3?bundle';
+import * as PIXI from '/qjs/vendor/pixi.mjs';
 var G = (typeof globalThis !== 'undefined') ? globalThis : this;
 var W = Number((G.window && G.window.innerWidth) || 0);
 var H = Number((G.window && G.window.innerHeight) || 0);
