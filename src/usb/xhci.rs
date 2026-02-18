@@ -970,6 +970,18 @@ where
     buf.take_matching(predicate)
 }
 
+/// Try to pop one already-queued event from the software event buffer.
+///
+/// This does not touch the hardware event ring; it only drains events that were already
+/// enqueued by the controller poll task. Useful for catching up when the consumer falls
+/// behind (e.g. high-rate HID interrupt endpoints).
+pub fn try_take_buffered_event<F>(controller_id: usize, predicate: &mut F) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    try_take_matching_event(controller_id, predicate)
+}
+
 pub fn debug_peek_transfer_events(controller_id: usize, slot_id: u32, ep_target: u32, max: usize) {
     let buf = EVENT_BUFFERS[controller_id].lock();
     let mut shown = 0usize;
