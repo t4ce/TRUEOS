@@ -166,7 +166,7 @@ fn submit_rgb_triangles(clear_rgb: u32, vertices: Option<&[u8]>) {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
         let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if prev != rc || (n % 120) == 1 {
-            log_bytes(b"qjs-cmd-stream: submit rc=");
+            log_bytes(b"qjs-webgl-cmd-stream: submit rc=");
             log_i32_dec(rc);
             log_bytes(b"\n");
         }
@@ -182,7 +182,7 @@ fn flush_active_frame(st: &mut FrameState) {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
         let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if prev != rc || (n % 120) == 1 {
-            log_bytes(b"qjs-cmd-stream: begin rc=");
+            log_bytes(b"qjs-webgl-cmd-stream: begin rc=");
             log_i32_dec(rc);
             log_bytes(b"\n");
         }
@@ -209,8 +209,8 @@ fn flush_active_frame(st: &mut FrameState) {
             let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if prev != rc || (n % 120) == 1 {
                 match batch.kind {
-                    DrawKind::Rgb => log_bytes(b"qjs-cmd-stream: draw-rgb rc="),
-                    DrawKind::Tex { .. } => log_bytes(b"qjs-cmd-stream: draw-tex rc="),
+                    DrawKind::Rgb => log_bytes(b"qjs-webgl-cmd-stream: draw-rgb rc="),
+                    DrawKind::Tex { .. } => log_bytes(b"qjs-webgl-cmd-stream: draw-tex rc="),
                 }
                 log_i32_dec(rc);
                 log_bytes(b"\n");
@@ -223,16 +223,16 @@ fn flush_active_frame(st: &mut FrameState) {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
         let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if prev != rc || (n % 120) == 1 {
-            log_bytes(b"qjs-cmd-stream: end rc=");
+            log_bytes(b"qjs-webgl-cmd-stream: end rc=");
             log_i32_dec(rc);
             log_bytes(b"\n");
         }
     }
     let seq = FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-    if seq == 1 {
+    if seq <= 10 || (seq % 20) == 0 {
         let draw_batches = st.batches.len() as u32;
         let draw_bytes: usize = st.batches.iter().map(|b| b.vtx.len()).sum();
-        log_bytes(b"qjs-cmd-stream: frame seq=");
+        log_bytes(b"qjs-webgl-cmd-stream: frame seq=");
         log_i32_dec(seq as i32);
         log_bytes(b" batches=");
         log_i32_dec(draw_batches as i32);
@@ -365,7 +365,7 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
                 let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
                 let n = SUBMIT_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 if prev != rc || (n % 120) == 1 {
-                    log_bytes(b"qjs-cmd-stream: tex upload rc=");
+                    log_bytes(b"qjs-webgl-cmd-stream: tex upload rc=");
                     log_i32_dec(rc);
                     log_bytes(b"\n");
                 }
