@@ -42,8 +42,6 @@ impl SleepTypeCache {
 
 static SLEEP_TYPES: Once<Option<SleepTypeCache>> = Once::new();
 
-
-
 pub fn sleep_type_for_state(state: u8) -> Option<SleepType> {
     SLEEP_TYPES
         .call_once(resolve_sleep_types)
@@ -122,8 +120,14 @@ fn resolve_sx(ctx: &mut AmlContext, path: &str) -> Option<SleepType> {
         return None;
     }
 
-    let pm1a = elements[0].as_integer(ctx).ok().and_then(|v| u8::try_from(v).ok())?;
-    let pm1b = elements[1].as_integer(ctx).ok().and_then(|v| u8::try_from(v).ok());
+    let pm1a = elements[0]
+        .as_integer(ctx)
+        .ok()
+        .and_then(|v| u8::try_from(v).ok())?;
+    let pm1b = elements[1]
+        .as_integer(ctx)
+        .ok()
+        .and_then(|v| u8::try_from(v).ok());
     Some(SleepType { pm1a, pm1b })
 }
 
@@ -133,9 +137,8 @@ struct AmlRuntimeHandler;
 impl AmlRuntimeHandler {
     #[inline(always)]
     fn map_ptr(&self, phys_addr: usize, size: usize) -> core::ptr::NonNull<u8> {
-        mmio::map_mmio_region(phys_addr as u64, size).unwrap_or_else(|err| {
-            panic!("AML map {:x} size {} failed: {:?}", phys_addr, size, err)
-        })
+        mmio::map_mmio_region(phys_addr as u64, size)
+            .unwrap_or_else(|err| panic!("AML map {:x} size {} failed: {:?}", phys_addr, size, err))
     }
 
     #[inline(always)]
@@ -229,7 +232,15 @@ impl aml::Handler for AmlRuntimeHandler {
         pci::config_read_u32(bus, device, function, offset)
     }
 
-    fn write_pci_u8(&self, segment: u16, bus: u8, device: u8, function: u8, offset: u16, value: u8) {
+    fn write_pci_u8(
+        &self,
+        segment: u16,
+        bus: u8,
+        device: u8,
+        function: u8,
+        offset: u16,
+        value: u8,
+    ) {
         if segment != 0 {
             return;
         }

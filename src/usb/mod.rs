@@ -1,36 +1,38 @@
+mod attach;
+pub mod bot;
 pub mod cdc;
 pub mod cdc_acm;
+mod control;
+mod enumeration;
 pub mod hid;
 pub mod hub;
 pub mod input;
+pub mod isoch;
+pub mod leds;
 pub mod mass;
-pub mod bot;
-pub mod scsi;
+pub mod midi;
 pub mod pen;
 pub mod print;
-pub mod isoch;
-pub mod uac;
-pub mod midi;
-pub mod leds;
-pub mod truekey;
-pub mod xhci;
 mod scout;
-mod enumeration;
-mod control;
-mod attach;
+pub mod scsi;
+pub mod truekey;
+pub mod uac;
+pub mod xhci;
 
-#[allow(unused_imports)]
-pub use scout::{usb_scout_service, port_snapshot, ScoutedPort};
 pub(crate) use self::control::{control_in, control_out};
-pub(crate) use self::enumeration::{disable_slot, enable_slot, enumerate_port, enumerate_with_params};
+pub(crate) use self::enumeration::{
+    disable_slot, enable_slot, enumerate_port, enumerate_with_params,
+};
+#[allow(unused_imports)]
+pub use scout::{port_snapshot, usb_scout_service, ScoutedPort};
 
+use self::hub::{LOG_PORTS_MAX, MAX_DEVICES};
 use self::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
-use self::hub::{LOG_PORTS_MAX, MAX_DEVICES};
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
@@ -166,7 +168,6 @@ macro_rules! usbv {
     }};
 }
 
-
 fn register_device_inner(
     controller_id: usize,
     slot_id: u32,
@@ -191,7 +192,11 @@ fn register_device_inner(
             slot_id,
             port,
             kind,
-            resources: if kind == DeviceKind::Unknown { resources } else { None },
+            resources: if kind == DeviceKind::Unknown {
+                resources
+            } else {
+                None
+            },
         })
         .is_err()
     {
@@ -219,7 +224,13 @@ fn register_unclaimed_device(
     port: u8,
     resources: DeviceResources,
 ) {
-    register_device_inner(controller_id, slot_id, port, DeviceKind::Unknown, Some(resources));
+    register_device_inner(
+        controller_id,
+        slot_id,
+        port,
+        DeviceKind::Unknown,
+        Some(resources),
+    );
 }
 
 fn device_kind_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceKind> {

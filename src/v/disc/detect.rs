@@ -31,14 +31,21 @@ impl DiscStatus {
             DiscStatus::Unknown => "unknown",
             DiscStatus::Trueos { bootable: true } => "trueos (bootable)",
             DiscStatus::Trueos { bootable: false } => "trueos (data-only)",
-            DiscStatus::Detected { fs: KnownFs::Ext, .. } => "detected (ext)",
-            DiscStatus::Detected { fs: KnownFs::Ntfs, .. } => "detected (ntfs)",
-            DiscStatus::Detected { fs: KnownFs::Exfat, .. } => "detected (exfat)",
-            DiscStatus::Detected { fs: KnownFs::Fat, .. } => "detected (fat)",
+            DiscStatus::Detected {
+                fs: KnownFs::Ext, ..
+            } => "detected (ext)",
+            DiscStatus::Detected {
+                fs: KnownFs::Ntfs, ..
+            } => "detected (ntfs)",
+            DiscStatus::Detected {
+                fs: KnownFs::Exfat, ..
+            } => "detected (exfat)",
+            DiscStatus::Detected {
+                fs: KnownFs::Fat, ..
+            } => "detected (fat)",
         }
     }
 }
-
 
 fn looks_like_ntfs(bs0: &[u8]) -> bool {
     bs0.len() >= 11 && &bs0[3..11] == b"NTFS    "
@@ -59,7 +66,9 @@ pub async fn detect_physical_disk(handle: block::DeviceHandle) -> DiscStatus {
 
 /// Like `detect_physical_disk`, but also returns a best-effort error reason when the
 /// result is `Unknown` due to an I/O or parse failure.
-pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscStatus, Option<block::Error>) {
+pub async fn detect_physical_disk_detail(
+    handle: block::DeviceHandle,
+) -> (DiscStatus, Option<block::Error>) {
     // Only classify whole devices (not already-registered partitions).
     if handle.parent().is_some() {
         return (DiscStatus::Unknown, None);
@@ -112,7 +121,14 @@ pub async fn detect_physical_disk_detail(handle: block::DeviceHandle) -> (DiscSt
     // TRUEOSFS detection: the low-level placement logic decides whether this is
     // a bootable GPT layout (ESP + TRUEOS partition) or a data-only layout.
     match crate::v::fs::trueosfs::locate_async(handle).await {
-        Ok(Some(loc)) => return (DiscStatus::Trueos { bootable: loc.bootable }, None),
+        Ok(Some(loc)) => {
+            return (
+                DiscStatus::Trueos {
+                    bootable: loc.bootable,
+                },
+                None,
+            )
+        }
         Ok(None) => {}
         Err(e) => {
             if handle.info().kind == block::DeviceKind::Nvme {

@@ -34,7 +34,11 @@ pub(crate) async fn try_attach_device(
     // Device tracking / disconnect cleanup is currently keyed by root-port.
     // For hub children, `target_port` is the downstream hub port (not a root port),
     // so use `root_port` when it is known.
-    let registry_port = if root_port != 0 { root_port } else { target_port };
+    let registry_port = if root_port != 0 {
+        root_port
+    } else {
+        target_port
+    };
 
     // Known USB LED controllers.
     if leds::is_supported_led_controller(dev_vid, dev_pid) {
@@ -101,7 +105,12 @@ pub(crate) async fn try_attach_device(
                 dev_vid,
                 dev_pid
             );
-            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Uac);
+            super::register_device(
+                state.info.controller_id,
+                slot_id as u32,
+                registry_port,
+                DeviceKind::Uac,
+            );
             return Some(DeviceKind::Uac);
         }
     }
@@ -131,7 +140,12 @@ pub(crate) async fn try_attach_device(
                 dev_vid,
                 dev_pid
             );
-            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Midi);
+            super::register_device(
+                state.info.controller_id,
+                slot_id as u32,
+                registry_port,
+                DeviceKind::Midi,
+            );
             return Some(DeviceKind::Midi);
         }
     }
@@ -227,7 +241,12 @@ pub(crate) async fn try_attach_device(
                 dev_vid,
                 dev_pid
             );
-            super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Hub);
+            super::register_device(
+                state.info.controller_id,
+                slot_id as u32,
+                registry_port,
+                DeviceKind::Hub,
+            );
             hub::record_hub_ports(ctx, slot_id, desc.port_count);
             let _ = hub_queue.push(HubWork {
                 hub_slot_id: slot_id,
@@ -288,7 +307,12 @@ pub(crate) async fn try_attach_device(
             dev_pid,
             hid_count
         );
-        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Hid);
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Hid,
+        );
         return Some(DeviceKind::Hid);
     }
 
@@ -311,7 +335,12 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Mass);
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Mass,
+        );
         return Some(DeviceKind::Mass);
     }
 
@@ -321,7 +350,12 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Pen);
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Pen,
+        );
         return Some(DeviceKind::Pen);
     }
     if print::try_handle(cfg_slice, target_port) {
@@ -330,7 +364,12 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Printer);
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Printer,
+        );
         return Some(DeviceKind::Printer);
     }
 
@@ -356,7 +395,12 @@ pub(crate) async fn try_attach_device(
             target_port,
             slot_id
         );
-        super::register_device(state.info.controller_id, slot_id as u32, registry_port, DeviceKind::Cdc);
+        super::register_device(
+            state.info.controller_id,
+            slot_id as u32,
+            registry_port,
+            DeviceKind::Cdc,
+        );
         return Some(DeviceKind::Cdc);
     }
 

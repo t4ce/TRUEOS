@@ -363,7 +363,13 @@ pub fn list_slots(out: &mut String<512>) {
         if !slot.used.load(Ordering::Acquire) {
             continue;
         }
-        let _ = write!(out, "#{} {:?} {}\r\n", idx + 1, data.state, data.title.as_str());
+        let _ = write!(
+            out,
+            "#{} {:?} {}\r\n",
+            idx + 1,
+            data.state,
+            data.title.as_str()
+        );
     }
     if out.is_empty() {
         let _ = out.push_str("(no async jobs)\r\n");
@@ -385,7 +391,13 @@ pub fn dump_slot(out: &mut String<1024>, slot_id: u8) -> bool {
         return false;
     }
 
-    let _ = write!(out, "#{} {:?} {}\r\n", idx + 1, data.state, data.title.as_str());
+    let _ = write!(
+        out,
+        "#{} {:?} {}\r\n",
+        idx + 1,
+        data.state,
+        data.title.as_str()
+    );
     for line in data.lines.iter() {
         let _ = write!(out, "{}\r\n", line.as_str());
     }
@@ -574,7 +586,7 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
     if term_cols > 16 {
         let start_col = 9;
         // Leave space for the right-side Time (~8 chars).
-        let end_col = term_cols.saturating_sub(8); 
+        let end_col = term_cols.saturating_sub(8);
         if end_col > start_col {
             io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
             for _ in 0..(end_col - start_col) {
@@ -589,7 +601,7 @@ pub(crate) fn refresh_matrix_symbols(io: &dyn ShellIo, term_cols: usize) {
             .saturating_sub(visible_len)
             .saturating_div(2)
             .saturating_add(1);
-        
+
         // Clamp to avoid overwriting title
         start_col = start_col.max(9);
 

@@ -37,7 +37,11 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
             continue;
         }
         if rc < 0 {
-            let ctx = if !job_ctx.is_null() { job_ctx } else { fallback_ctx };
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
             if !ctx.is_null() {
                 qjs::qjs_diag::dump_last_exception(ctx, "stream-gfx-smoke pending-job");
             }

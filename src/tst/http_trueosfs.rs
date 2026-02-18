@@ -1,14 +1,14 @@
 extern crate alloc;
 
-use alloc::{format, string::String, string::ToString, vec::Vec};
 use alloc::vec;
+use alloc::{format, string::String, string::ToString, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use trueos_v::vnet as api;
 
-use crate::v::net::VNet;
 use crate::disc::block::DeviceHandle;
+use crate::v::net::VNet;
 
 #[inline]
 fn tsc_now() -> u64 {
@@ -61,8 +61,7 @@ const HTTP_TRUEOSFS_TCP_PORT: u16 = 80;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
 const HTTP_OCTET_STREAM: &str = "application/octet-stream";
 const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
-const HTTP_MULTIPART_CONTENT_TYPE: &str =
-    "multipart/byteranges; boundary=trueosfs-boundary";
+const HTTP_MULTIPART_CONTENT_TYPE: &str = "multipart/byteranges; boundary=trueosfs-boundary";
 
 fn http_stream_chunk_bytes(disk: DeviceHandle) -> usize {
     let mut base = disk.max_transfer_bytes() as usize;
@@ -107,10 +106,7 @@ fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn http_path_only(target: &str) -> &str {
-    target
-        .split_once('?')
-        .map(|(p, _)| p)
-        .unwrap_or(target)
+    target.split_once('?').map(|(p, _)| p).unwrap_or(target)
 }
 
 fn http_url_decode(s: &str, max_len: usize) -> Option<String> {
@@ -301,14 +297,9 @@ async fn http_prepare_file_response(
 ) -> HttpResponsePlan {
     let info = match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
         Ok(Some(v)) => v,
-        Ok(None) => {
-            return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n")
-        }
+        Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
         Err(_) => {
-            return http_plain_response(
-                "HTTP/1.1 500 Internal Server Error\r\n",
-                "read error\n",
-            )
+            return http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "read error\n")
         }
     };
 
@@ -382,11 +373,7 @@ async fn http_prepare_file_response(
         for (start, end) in ranges.into_iter() {
             let header = format!(
                 "--{}\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
-                HTTP_MULTIPART_BOUNDARY,
-                HTTP_OCTET_STREAM,
-                start,
-                end,
-                total_len
+                HTTP_MULTIPART_BOUNDARY, HTTP_OCTET_STREAM, start, end, total_len
             );
             let len = end.saturating_sub(start).saturating_add(1);
             total_len_out = total_len_out.saturating_add(header.as_bytes().len() as u64);

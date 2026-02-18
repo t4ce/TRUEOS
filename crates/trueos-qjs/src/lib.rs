@@ -57,7 +57,7 @@ pub use pixi::hex as stream_gfx_smoke;
 pub use pixi::pixi_gui as pixi_ui;
 
 #[cfg(feature = "trueos")]
-pub use pixi::webgl_smoke as webgl_smoke;
+pub use pixi::webgl_smoke;
 
 #[repr(C)]
 pub struct JSRuntime {
@@ -253,7 +253,11 @@ extern "C" {
         name_str: *const c_char,
         func: Option<JSModuleInitFunc>,
     ) -> *mut JSModuleDef;
-    pub fn JS_AddModuleExport(ctx: *mut JSContext, m: *mut JSModuleDef, name_str: *const c_char) -> c_int;
+    pub fn JS_AddModuleExport(
+        ctx: *mut JSContext,
+        m: *mut JSModuleDef,
+        name_str: *const c_char,
+    ) -> c_int;
     pub fn JS_SetModuleExport(
         ctx: *mut JSContext,
         m: *mut JSModuleDef,
@@ -265,7 +269,11 @@ extern "C" {
 
     pub fn JS_NewObject(ctx: *mut JSContext) -> JSValue;
     pub fn JS_NewArray(ctx: *mut JSContext) -> JSValue;
-    pub fn JS_GetPropertyStr(ctx: *mut JSContext, this_obj: JSValueConst, prop: *const c_char) -> JSValue;
+    pub fn JS_GetPropertyStr(
+        ctx: *mut JSContext,
+        this_obj: JSValueConst,
+        prop: *const c_char,
+    ) -> JSValue;
     pub fn JS_GetPropertyUint32(ctx: *mut JSContext, this_obj: JSValueConst, idx: u32) -> JSValue;
 
     pub fn JS_ToFloat64(ctx: *mut JSContext, pres: *mut f64, val: JSValueConst) -> c_int;
@@ -276,7 +284,12 @@ extern "C" {
         val: JSValue,
     ) -> c_int;
 
-    pub fn JS_SetPropertyUint32(ctx: *mut JSContext, this_obj: JSValueConst, idx: u32, val: JSValue) -> c_int;
+    pub fn JS_SetPropertyUint32(
+        ctx: *mut JSContext,
+        this_obj: JSValueConst,
+        idx: u32,
+        val: JSValue,
+    ) -> c_int;
 
     pub fn JS_Call(
         ctx: *mut JSContext,
@@ -309,7 +322,12 @@ extern "C" {
 
     pub fn JS_NewArrayBufferCopy(ctx: *mut JSContext, buf: *const u8, len: usize) -> JSValue;
 
-    pub fn JS_ReadObject(ctx: *mut JSContext, buf: *const u8, buf_len: usize, flags: c_int) -> JSValue;
+    pub fn JS_ReadObject(
+        ctx: *mut JSContext,
+        buf: *const u8,
+        buf_len: usize,
+        flags: c_int,
+    ) -> JSValue;
     pub fn JS_WriteObject(
         ctx: *mut JSContext,
         psize: *mut usize,

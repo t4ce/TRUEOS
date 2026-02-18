@@ -70,13 +70,11 @@ fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::v::fs::trueosfs::mount_service_task(),
-    ) {
+    match spawner.spawn(crate::v::fs::trueosfs::mount_service_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
-
 
 fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
     // Some drivers may fail to report a MAC early; treat any detected NIC as usable.
@@ -85,8 +83,7 @@ fn spawn_net_poll_tasks(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
     for idx in 0..count {
-        if let Err(e) = spawner.spawn(crate::net::adapter::net_poll_task(idx),
-        ) {
+        if let Err(e) = spawner.spawn(crate::net::adapter::net_poll_task(idx)) {
             crate::log!("net: spawn net_poll_task({}) failed: {:?}\n", idx, e);
         }
     }
@@ -104,8 +101,7 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::net::tls_socket::tls_socket_service_task(),
-    ) {
+    match spawner.spawn(crate::net::tls_socket::tls_socket_service_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -133,8 +129,7 @@ fn spawn_ai_qjs_repl(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task(),
-    ) {
+    match spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -154,17 +149,14 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
-        let _ = spawner.spawn(crate::usb::xhci::poll_task(info),
-        );
+        let _ = spawner.spawn(crate::usb::xhci::poll_task(info));
         // reads from our dma buffs into usb rings
         let _ = spawner.spawn(crate::usb::poll_task(info));
         // Single long-lived scout per controller. Rescans are triggered via a flag.
-        let _ = spawner.spawn(crate::usb::usb_scout_service(info),
-        );
+        let _ = spawner.spawn(crate::usb::usb_scout_service(info));
     }
     SpawnAttempt::Spawned
 }
@@ -229,32 +221,34 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_parse5_smoke_task(),
-    ) {
+    match spawner.spawn(crate::tst::boot_parse5_smoke_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task(),
-    ) {
+    match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(spawner, &crate::shell::UART1_COM1_BACKEND),
-    ) {
+    match spawner.spawn(crate::shell::task(
+        spawner,
+        &crate::shell::UART1_COM1_BACKEND,
+    )) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(spawner, &crate::shell::NET_TCP_SHELL_BACKEND),
-    ) {
+    match spawner.spawn(crate::shell::task(
+        spawner,
+        &crate::shell::NET_TCP_SHELL_BACKEND,
+    )) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -267,14 +261,12 @@ const HID_ANY_CLAIMED: u32 =
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const PARSE5_BOOT_READY: u32 =
-    crate::v::readiness::NET_GATEWAY_REACHABLE
+const PARSE5_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::v::readiness::QJS_ASYNC_FS_READY;
 
-const WS_BOOT_READY: u32 =
-    crate::v::readiness::NET_GATEWAY_REACHABLE
+const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::QJS_PARSE5_SMOKE_DONE;
 
@@ -309,7 +301,6 @@ static TASKS: &[TaskSpec] = &[
         started: &NET_SERVICE_STARTED,
         spawn: spawn_net_service,
     },
-
     // Network consumers
     TaskSpec {
         name: "tls-socket-service",
@@ -353,7 +344,6 @@ static TASKS: &[TaskSpec] = &[
         started: &FTP_SERVER_STARTED,
         spawn: spawn_ftp_server,
     },
-
     // USB core + peripherals
     TaskSpec {
         name: "tga",
@@ -362,7 +352,6 @@ static TASKS: &[TaskSpec] = &[
         started: &TGA_TASK_STARTED,
         spawn: spawn_tga_task,
     },
-
     TaskSpec {
         name: "usb-controller-tasks",
         disabled: false,
@@ -419,7 +408,6 @@ static TASKS: &[TaskSpec] = &[
         started: &PIANO_DRAIN_STARTED,
         spawn: spawn_piano_drain,
     },
-
     // Boot-time gated tasks
     TaskSpec {
         name: "boot-parse5-smoke",
@@ -449,7 +437,6 @@ static TASKS: &[TaskSpec] = &[
         started: &NET_TCP_SHELL_STARTED,
         spawn: spawn_net_tcp_shell,
     },
-
 ];
 
 #[embassy_executor::task]
@@ -508,8 +495,15 @@ pub async fn spawn_service_task(spawner: Spawner) {
 
             // If we made progress, poll again quickly so chains of dependent tasks start promptly.
             // If nothing changed, back off to reduce idle overhead.
-            let sleep_ms = if started_any { 10 } else if pending == 0 { 250 } else { 50 };
+            let sleep_ms = if started_any {
+                10
+            } else if pending == 0 {
+                250
+            } else {
+                50
+            };
             Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
         }
-    }.await;
+    }
+    .await;
 }

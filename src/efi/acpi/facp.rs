@@ -27,12 +27,6 @@ impl From<AcpiError> for FacpError {
     }
 }
 
-
-
-
-
-
-
 pub fn enter_s_state(pm1a_slp_typ: u8, pm1b_slp_typ: Option<u8>) -> FacpResult<()> {
     with_fadt(|fadt| {
         if fadt.pm1_control_length < 2 {
@@ -57,11 +51,11 @@ pub fn enter_named_sleep_state(state: u8) -> FacpResult<()> {
     if state == 0 || state > 5 {
         return Err(FacpError::InvalidSleepState);
     }
-    
+
     // Try ACPI
     if let Some(st) = sleep::sleep_type_for_state(state) {
         if enter_s_state(st.pm1a, st.pm1b).is_ok() {
-             return Ok(());
+            return Ok(());
         }
     }
 
@@ -88,7 +82,7 @@ pub fn reset_system() -> FacpResult<()> {
         }
         Ok(())
     });
-    
+
     // Fallback 1: PCI Reset (0xCF9)
     // 0xCF9 is Reset Control Register in PIIX3/4 and ICH.
     // Bit 2 (0x4) = System Reset, Bit 1 (0x2) = Reset CPU.
@@ -124,9 +118,7 @@ fn write_gas_u64(gas: &GenericAddress, value: u64) -> FacpResult<()> {
 
 fn with_fadt<T>(f: impl FnOnce(&Fadt) -> FacpResult<T>) -> FacpResult<T> {
     let tables = ensure_tables().ok_or(FacpError::TablesMissing)?;
-    let mapping = tables
-        .find_table::<Fadt>()
-        .ok_or(FacpError::FadtMissing)?;
+    let mapping = tables.find_table::<Fadt>().ok_or(FacpError::FadtMissing)?;
     let fadt_ref = unsafe { mapping.virtual_start.as_ref() };
     fadt_ref.validate()?;
     f(fadt_ref)

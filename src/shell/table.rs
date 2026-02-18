@@ -1,8 +1,8 @@
+use crate::shell::ShellIo;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::Write;
 use core::cell::RefCell;
-use crate::shell::ShellIo;
+use core::fmt::Write;
 
 pub struct TableColumn {
     pub header: &'static str,
@@ -26,7 +26,7 @@ pub struct Table<'a, 'io> {
 
 impl<'a, 'io> Table<'a, 'io> {
     pub fn new(cols: &'a [TableColumn]) -> Self {
-        Self { 
+        Self {
             cols,
             io: RefCell::new(None),
             lines: RefCell::new(Vec::new()),
@@ -54,15 +54,15 @@ impl<'a, 'io> Table<'a, 'io> {
     pub fn print_header(&self, io: &'io dyn ShellIo) {
         self.capture_io(io);
         let mut line: String = String::new();
-        
+
         // Header row
         for col in self.cols {
             let _ = write!(line, "{:width$}  ", col.header, width = col.width);
         }
-        
+
         let header_str = alloc::format!("{}\r\n", crate::ecma48::bold(&line));
         self.lines.borrow_mut().push(header_str);
-        
+
         // Underline
         let mut sep: String = String::new();
         for col in self.cols {
@@ -75,8 +75,8 @@ impl<'a, 'io> Table<'a, 'io> {
         self.lines.borrow_mut().push(sep_str);
     }
 
-    pub fn print_row<I, S>(&self, io: &'io dyn ShellIo, fields: I) 
-    where 
+    pub fn print_row<I, S>(&self, io: &'io dyn ShellIo, fields: I)
+    where
         I: IntoIterator<Item = S>,
         S: core::fmt::Display,
     {
@@ -87,20 +87,20 @@ impl<'a, 'io> Table<'a, 'io> {
                 break;
             }
             let width = self.cols[i].width;
-            
+
             let mut cell = String::new();
             let _ = write!(cell, "{}", field);
-            
+
             if cell.len() > width {
                 // Truncate
                 let keep = width.saturating_sub(1);
                 cell.truncate(keep);
                 let _ = cell.push('…');
             }
-            
+
             let _ = write!(line, "{:width$}  ", cell, width = width);
         }
-        
+
         // self.lines.borrow_mut().push(line + "\r\n");
         let mut slot = self.lines.borrow_mut();
         slot.push(line);
@@ -138,4 +138,3 @@ impl<'a, 'io> Drop for Table<'a, 'io> {
         }
     }
 }
-

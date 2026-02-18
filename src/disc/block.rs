@@ -1,3 +1,4 @@
+use crate::wait;
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
     fmt,
@@ -8,7 +9,6 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
     task::Waker,
 };
-use crate::wait;
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
@@ -51,7 +51,10 @@ impl<T> AsyncMutex<T> {
         core::future::poll_fn(|cx| self.poll_lock(cx)).await
     }
 
-    fn poll_lock(&self, cx: &mut core::task::Context<'_>) -> core::task::Poll<AsyncMutexGuard<'_, T>> {
+    fn poll_lock(
+        &self,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<AsyncMutexGuard<'_, T>> {
         if self
             .locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -347,9 +350,7 @@ impl DeviceHandle {
         if bs == 0 {
             return Err(Error::InvalidParam);
         }
-        let bytes = blocks_u64
-            .checked_mul(bs)
-            .ok_or(Error::InvalidParam)?;
+        let bytes = blocks_u64.checked_mul(bs).ok_or(Error::InvalidParam)?;
 
         if self.node.info.max_transfer_bytes > 0 && bytes > self.node.info.max_transfer_bytes {
             return Err(Error::InvalidParam);

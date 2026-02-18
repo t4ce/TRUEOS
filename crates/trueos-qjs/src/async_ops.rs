@@ -82,16 +82,25 @@ pub unsafe fn has_pending(ctx: *mut qjs::JSContext) -> bool {
 
 unsafe fn take_pending(ctx: *mut qjs::JSContext, op_id: u32) -> Option<PendingOp> {
     let mut pending = PENDING.lock();
-    let pos = pending.iter().position(|p| p.ctx_owner == ctx && p.op_id == op_id)?;
+    let pos = pending
+        .iter()
+        .position(|p| p.ctx_owner == ctx && p.op_id == op_id)?;
     Some(pending.remove(pos))
 }
 
 fn find_pending_owner(op_id: u32) -> Option<*mut qjs::JSContext> {
-    PENDING.lock().iter().find(|p| p.op_id == op_id).map(|p| p.ctx_owner)
+    PENDING
+        .lock()
+        .iter()
+        .find(|p| p.op_id == op_id)
+        .map(|p| p.ctx_owner)
 }
 
 fn push_completed(ctx: *mut qjs::JSContext, op_id: u32) {
-    COMPLETED.lock().push(CompletedOp { ctx_owner: ctx, op_id });
+    COMPLETED.lock().push(CompletedOp {
+        ctx_owner: ctx,
+        op_id,
+    });
 }
 
 fn take_completed_for_ctx(ctx: *mut qjs::JSContext) -> Option<u32> {
@@ -184,7 +193,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
             }
         };
 
-		let Some(op) = (unsafe { take_pending(ctx, done_id) }) else {
+        let Some(op) = (unsafe { take_pending(ctx, done_id) }) else {
             // Unknown/expired op id: drop completion to avoid leaks.
             let _ = async_fs::discard(done_id);
             continue;
@@ -208,7 +217,8 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let n = len as usize;
                 match read_completion_bytes(done_id, n) {
                     Ok(buf) => {
-                        let ab = unsafe { qjs::JS_NewArrayBufferCopy(ctx, buf.as_ptr(), buf.len()) };
+                        let ab =
+                            unsafe { qjs::JS_NewArrayBufferCopy(ctx, buf.as_ptr(), buf.len()) };
                         unsafe { resolve_with_value(ctx, &op, ab) };
                     }
                     Err(code) => unsafe { reject_with_code(ctx, &op, code) },

@@ -8,7 +8,6 @@ use trueos_gfx_core::{
 use crate::gfx::virtio_gpu_3d;
 
 pub enum Backend {
-
     #[cfg(feature = "gfx_virgl")]
     Virgl(virtio_gpu_3d::VirglGfxBackend),
 
@@ -107,7 +106,6 @@ impl Backend {
             }
             crate::log!("gfx: virgl auto init failed\n");
         }
-
 
         crate::log!("gfx: no accelerated backend available; gfx backend inactive\n");
         Backend::None(NullBackend)

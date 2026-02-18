@@ -186,7 +186,13 @@ mod tests {
         let center_index = (HEIGHT / 2) * WIDTH + (WIDTH / 2);
         let corner_index = 0;
 
-        assert_eq!(buffer[center_index], 0, "Center of the set should stay black");
-        assert_eq!(buffer[corner_index], 0xFF, "Corner should escape quickly and be white");
+        assert_eq!(
+            buffer[center_index], 0,
+            "Center of the set should stay black"
+        );
+        assert_eq!(
+            buffer[corner_index], 0xFF,
+            "Corner should escape quickly and be white"
+        );
     }
 }

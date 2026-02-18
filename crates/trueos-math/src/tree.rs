@@ -74,17 +74,15 @@ impl<T, const N: usize> Tree<T, N> {
             None => {
                 parent_node.first_child = Some(child);
             }
-            Some(mut cur) => {
-                loop {
-                    let next = self.node(cur).next_sibling;
-                    if let Some(n) = next {
-                        cur = n;
-                    } else {
-                        self.node_mut(cur).next_sibling = Some(child);
-                        break;
-                    }
+            Some(mut cur) => loop {
+                let next = self.node(cur).next_sibling;
+                if let Some(n) = next {
+                    cur = n;
+                } else {
+                    self.node_mut(cur).next_sibling = Some(child);
+                    break;
                 }
-            }
+            },
         }
         Some(child)
     }
@@ -148,17 +146,15 @@ impl<T, const N: usize> Tree<T, N> {
             None => {
                 self.node_mut(new_parent).first_child = Some(id);
             }
-            Some(mut last) => {
-                loop {
-                    let next = self.node(last).next_sibling;
-                    if let Some(n) = next {
-                        last = n;
-                    } else {
-                        self.node_mut(last).next_sibling = Some(id);
-                        break;
-                    }
+            Some(mut last) => loop {
+                let next = self.node(last).next_sibling;
+                if let Some(n) = next {
+                    last = n;
+                } else {
+                    self.node_mut(last).next_sibling = Some(id);
+                    break;
                 }
-            }
+            },
         }
 
         true
@@ -316,7 +312,13 @@ impl<T, const N: usize> Tree<T, N> {
     /// - The traversal is depth-first.
     /// - Sibling order is reverse insertion order (stack-based).
     /// - `max_entries` limits the number of printed nodes (including `start`).
-    pub fn write_ascii_tree<W, F>(&self, start: NodeId, out: &mut W, max_entries: usize, mut render: F) -> fmt::Result
+    pub fn write_ascii_tree<W, F>(
+        &self,
+        start: NodeId,
+        out: &mut W,
+        max_entries: usize,
+        mut render: F,
+    ) -> fmt::Result
     where
         W: Write,
         F: FnMut(&T, &mut W) -> fmt::Result,
@@ -335,10 +337,19 @@ impl<T, const N: usize> Tree<T, N> {
             is_last: true,
         });
 
-        write_ascii_tree(self, start, out, max_entries, &mut stack, &mut branches, "entries", |id, w| {
-            let v = &self.node(id).value;
-            render(v, w)
-        })
+        write_ascii_tree(
+            self,
+            start,
+            out,
+            max_entries,
+            &mut stack,
+            &mut branches,
+            "entries",
+            |id, w| {
+                let v = &self.node(id).value;
+                render(v, w)
+            },
+        )
     }
 
     /// Returns an HTML `<ul>/<li>` representation of the tree.
@@ -368,7 +379,9 @@ impl<T, const N: usize> crate::ascii_tree::AsciiTreeTraversal for Tree<T, N> {
         self.is_used(id)
     }
 
-    fn push_children_rev<S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>>(
+    fn push_children_rev<
+        S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>,
+    >(
         &self,
         parent: Self::NodeId,
         child_depth: usize,
@@ -413,7 +426,10 @@ mod tests {
         let a = t.add_child(root, "a").unwrap();
         let b = t.add_child(a, "b").unwrap();
 
-        assert!(!t.move_node(a, b), "should not allow moving a under its descendant");
+        assert!(
+            !t.move_node(a, b),
+            "should not allow moving a under its descendant"
+        );
         assert_eq!(t.parent(a), Some(root));
     }
 
@@ -426,7 +442,8 @@ mod tests {
         let _c = t.add_child(a, "c").unwrap();
 
         let mut out = String::new();
-        t.write_ascii_tree(root, &mut out, 64, |v, w| w.write_str(v)).unwrap();
+        t.write_ascii_tree(root, &mut out, 64, |v, w| w.write_str(v))
+            .unwrap();
 
         assert!(out.starts_with("root\n"));
         assert!(out.contains("|-- ") || out.contains("`-- "));
@@ -442,7 +459,8 @@ mod tests {
         let _d = t.add_child(b, "d").unwrap();
 
         let mut out = String::new();
-        t.write_ascii_tree(root, &mut out, 2, |v, w| w.write_str(v)).unwrap();
+        t.write_ascii_tree(root, &mut out, 2, |v, w| w.write_str(v))
+            .unwrap();
 
         // 2 entries printed, then truncation line.
         assert!(out.lines().count() >= 3);

@@ -1,11 +1,10 @@
-
-use crate::shell::{ShellIo, CommandAction, ShellBackend};
 use crate::shell::table::{Table, TableColumn};
+use crate::shell::{CommandAction, ShellBackend, ShellIo};
 
 // use embassy_executor::task;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
-use trueos_v::vnet as api;
 use crate::v::net::VNet;
+use trueos_v::vnet as api;
 
 enum AcpiAction {
     Reset,
@@ -31,11 +30,20 @@ fn parse_acpi_state(raw: &str) -> Option<AcpiAction> {
     None
 }
 
-pub(crate) fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_acpi(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let print_usage = |io: &dyn ShellIo| {
         let cols = [
-            TableColumn { header: "State", width: 8 },
-            TableColumn { header: "Description", width: 32 },
+            TableColumn {
+                header: "State",
+                width: 8,
+            },
+            TableColumn {
+                header: "Description",
+                width: 32,
+            },
         ];
         let t = Table::new(&cols);
         t.print_header(io);
@@ -70,17 +78,17 @@ pub(crate) fn cmd_acpi(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'
     }
 }
 
-pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_hv(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     #[inline]
     fn print_usage(io: &dyn ShellIo) {
         io.write_str("hv: usage hv [status|start|stop|log]\r\n");
         io.write_str("hv: single-VM milestone target is vm1\r\n");
     }
 
-    let op = args
-        .and_then(|a| a.get_str(0))
-        .unwrap_or("status")
-        .trim();
+    let op = args.and_then(|a| a.get_str(0)).unwrap_or("status").trim();
 
     if op.is_empty() || op.eq_ignore_ascii_case("status") {
         let s = crate::hv::status();
@@ -107,7 +115,9 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
         let io_static: &'static dyn ShellBackend = unsafe { core::mem::transmute(ctx.io) };
         match crate::hv::start(ctx.spawner, io_static) {
             Ok(()) => ctx.io.write_str("hv: vm1 started\r\n"),
-            Err(e) => ctx.io.write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
+            Err(e) => ctx
+                .io
+                .write_fmt(format_args!("hv: start failed: {:?}\r\n", e)),
         }
         return CommandAction::None;
     }
@@ -130,7 +140,10 @@ pub(crate) fn cmd_hv(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>
     CommandAction::None
 }
 
-pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_gfx(
+    ctx: &mut ShellCommandCtx<'_>,
+    _args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     crate::gfx::init(crate::limine::framebuffer_response());
     // match ctx
     //     .spawner
@@ -142,15 +155,11 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     //         e
     //     )),
     // }
-    match ctx
-        .spawner
-        .spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task())
-    {
+    match ctx.spawner.spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task()) {
         Ok(()) => ctx.io.write_str("gfx: started pixi_ui task (20Hz)\r\n"),
-        Err(e) => ctx.io.write_fmt(format_args!(
-            "gfx: pixi_ui task spawn failed: {:?}\r\n",
-            e
-        )),
+        Err(e) => ctx
+            .io
+            .write_fmt(format_args!("gfx: pixi_ui task spawn failed: {:?}\r\n", e)),
     }
 
     // match ctx
@@ -176,7 +185,10 @@ fn smp_state_name(st: u8) -> &'static str {
     }
 }
 
-pub(crate) fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_smp(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     if !crate::smp::is_init() {
         ctx.io.write_str("smp: not initialized\r\n");
         return CommandAction::None;
@@ -220,20 +232,22 @@ pub(crate) fn cmd_smp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::None
 }
 
-pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let op = args
-        .and_then(|a| a.get_str(0))
-        .unwrap_or("")
-        .trim();
+pub(crate) fn cmd_turbo(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let op = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
 
     if op.is_empty() || op.eq_ignore_ascii_case("status") {
         let armed = crate::turbo::armed();
         match crate::turbo::local_state() {
             Ok(st) => {
-                ctx.io.write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
+                ctx.io
+                    .write_fmt(format_args!("turbo: armed={} state={:?}\r\n", armed, st));
             }
             Err(crate::turbo::TurboSetError::Unsupported) => {
-                ctx.io.write_fmt(format_args!("turbo: unsupported (intel-only)\r\n"));
+                ctx.io
+                    .write_fmt(format_args!("turbo: unsupported (intel-only)\r\n"));
             }
             Err(crate::turbo::TurboSetError::Disarmed) => {
                 // Reads should never require arming; keep for forward-compat.
@@ -241,7 +255,8 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
             }
         }
         if !armed {
-            ctx.io.write_str("turbo: writes are disarmed (run 'turbo arm')\r\n");
+            ctx.io
+                .write_str("turbo: writes are disarmed (run 'turbo arm')\r\n");
         }
         return CommandAction::None;
     }
@@ -258,9 +273,7 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
     }
 
     if op.eq_ignore_ascii_case("verify") {
-        let spins = args
-            .and_then(|a| a.get_usize(1))
-            .unwrap_or(200_000);
+        let spins = args.and_then(|a| a.get_usize(1)).unwrap_or(200_000);
 
         match crate::turbo::verify_all(spins) {
             Ok(r) => {
@@ -281,7 +294,8 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
             }
             Err(crate::turbo::TurboSetError::Disarmed) => {
                 // verify is read-only; keep for forward-compat and clarity.
-                ctx.io.write_str("turbo: msr disarmed (verify should not require arm)\r\n");
+                ctx.io
+                    .write_str("turbo: msr disarmed (verify should not require arm)\r\n");
             }
             Err(crate::turbo::TurboSetError::Unsupported) => {
                 ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
@@ -300,7 +314,8 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
     };
 
     let Some(enable) = enable else {
-        ctx.io.write_str("turbo: usage turbo [status|arm|disarm|on|off|verify [spins]]\r\n");
+        ctx.io
+            .write_str("turbo: usage turbo [status|arm|disarm|on|off|verify [spins]]\r\n");
         return CommandAction::None;
     };
 
@@ -317,7 +332,8 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
             ));
         }
         Err(crate::turbo::TurboSetError::Disarmed) => {
-            ctx.io.write_str("turbo: msr disarmed (run 'turbo arm')\r\n");
+            ctx.io
+                .write_str("turbo: msr disarmed (run 'turbo arm')\r\n");
         }
         Err(crate::turbo::TurboSetError::Unsupported) => {
             ctx.io.write_str("turbo: unsupported (intel-only)\r\n");
@@ -327,19 +343,18 @@ pub(crate) fn cmd_turbo(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<
     CommandAction::None
 }
 
-pub(crate) fn cmd_pci_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
-    let sub = _args
-        .and_then(|a| a.get_str(0))
-        .unwrap_or("")
-        .trim();
+pub(crate) fn cmd_pci_usb(
+    ctx: &mut ShellCommandCtx<'_>,
+    _args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let sub = _args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
 
     if sub == "dump" {
         ctx.io.write_str(
             "pci.usb: targeted descriptor dump is printed automatically when an unclaimed device matches known LED IDs (0416:A125 or 1462:7E03).\r\n",
         );
-        ctx.io.write_str(
-            "pci.usb: replug the device (or reboot) to re-trigger enumeration.\r\n",
-        );
+        ctx.io
+            .write_str("pci.usb: replug the device (or reboot) to re-trigger enumeration.\r\n");
         return CommandAction::None;
     }
 
@@ -385,12 +400,19 @@ pub(crate) fn cmd_pci_usb(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedAr
     CommandAction::None
 }
 
-
-
-pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net(
+    ctx: &mut ShellCommandCtx<'_>,
+    _args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let cols = [
-        TableColumn { header: "Subcommand", width: 22 },
-        TableColumn { header: "Arguments", width: 28 },
+        TableColumn {
+            header: "Subcommand",
+            width: 22,
+        },
+        TableColumn {
+            header: "Arguments",
+            width: 28,
+        },
     ];
     let t = Table::new(&cols);
     t.print_header(ctx.io);
@@ -400,14 +422,18 @@ pub(crate) fn cmd_net(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     t.print_row(ctx.io, &["net.hostname", "[name]"]);
     t.print_row(ctx.io, &["net.http", "<url>"]);
     t.print_row(ctx.io, &["net.https", "<host>"]);
-    
+
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_icmp(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let target_str = args.and_then(|a| a.get_str(0)).unwrap_or("");
     if target_str.is_empty() {
-        ctx.io.write_str("net.icmp: usage net.icmp <host> [index|vid:pid|bb:dd.f]\r\n");
+        ctx.io
+            .write_str("net.icmp: usage net.icmp <host> [index|vid:pid|bb:dd.f]\r\n");
         return CommandAction::None;
     }
 
@@ -438,7 +464,7 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
         }
         None
     });
-    
+
     let mut target: heapless::String<128> = heapless::String::new();
     if target.push_str(target_str).is_err() {
         ctx.io.write_str("net.icmp: target too long\r\n");
@@ -450,7 +476,12 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
 
     crate::wait::spawn_and_wait_local(async move {
         // DNS
-        let ip = match crate::v::net::dns::resolve_ipv4_primary(target.as_str(), crate::v::net::dns::DnsConfig::default()).await {
+        let ip = match crate::v::net::dns::resolve_ipv4_primary(
+            target.as_str(),
+            crate::v::net::dns::DnsConfig::default(),
+        )
+        .await
+        {
             Ok(addr) => addr,
             Err(e) => {
                 io_static.write_fmt(format_args!("net.icmp: resolve failed {:?}\r\n", e));
@@ -460,7 +491,11 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
 
         io_static.write_fmt(format_args!(
             "PING {} ({}.{}.{}.{}): 56 data bytes\r\n",
-            target.as_str(), ip[0], ip[1], ip[2], ip[3]
+            target.as_str(),
+            ip[0],
+            ip[1],
+            ip[2],
+            ip[3]
         ));
 
         let vnet = match device_index {
@@ -474,42 +509,58 @@ pub(crate) fn cmd_net_icmp(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
 
         let mut seq = 1u16;
         for _ in 0..4 {
-             let payload = [0u8; 56];
-             if vnet.submit(api::Command::IcmpEcho { target: ip, seq, data: api::ByteBuf::from_slice_trunc(&payload) }).is_err() {
-                 io_static.write_str("net.icmp: send failed\r\n");
-             }
+            let payload = [0u8; 56];
+            if vnet
+                .submit(api::Command::IcmpEcho {
+                    target: ip,
+                    seq,
+                    data: api::ByteBuf::from_slice_trunc(&payload),
+                })
+                .is_err()
+            {
+                io_static.write_str("net.icmp: send failed\r\n");
+            }
 
-             // Wait for reply
-             let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(2);
-             let mut got = false;
-             while embassy_time::Instant::now() < deadline {
-                 if let Some(ev) = vnet.pop_event() {
-                     if let api::Event::IcmpReply { from, seq: rseq, rtt_ms, .. } = ev {
-                         if from == ip && rseq == seq {
-                             io_static.write_fmt(format_args!(
-                                "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n", 
+            // Wait for reply
+            let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(2);
+            let mut got = false;
+            while embassy_time::Instant::now() < deadline {
+                if let Some(ev) = vnet.pop_event() {
+                    if let api::Event::IcmpReply {
+                        from,
+                        seq: rseq,
+                        rtt_ms,
+                        ..
+                    } = ev
+                    {
+                        if from == ip && rseq == seq {
+                            io_static.write_fmt(format_args!(
+                                "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n",
                                 from[0], from[1], from[2], from[3], seq, rtt_ms
                             ));
-                             got = true;
-                             break;
-                         }
-                     }
-                 }
-                 embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
-             }
-             if !got {
-                 io_static.write_fmt(format_args!("net.icmp: request seq={} timeout\r\n", seq));
-             }
+                            got = true;
+                            break;
+                        }
+                    }
+                }
+                embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
+            }
+            if !got {
+                io_static.write_fmt(format_args!("net.icmp: request seq={} timeout\r\n", seq));
+            }
 
-             seq += 1;
-             embassy_time::Timer::after(embassy_time::Duration::from_millis(1000)).await;
+            seq += 1;
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(1000)).await;
         }
     });
 
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_nic(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let target = args.and_then(|a| a.get_str(0)).unwrap_or("");
     let specific_index = if target.is_empty() {
         None
@@ -519,25 +570,34 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
             match t.parse::<usize>() {
                 Ok(i) => Some(i),
                 Err(_) => {
-                    ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                    ctx.io
+                        .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
                     return CommandAction::None;
                 }
             }
         } else if t.contains('.') && t.contains(':') {
             // BDF selector: bb:dd.f (hex bus/slot; func dec/hex)
             let Some((bus_s, rest)) = t.split_once(':') else {
-                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                ctx.io
+                    .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
                 return CommandAction::None;
             };
             let Some((slot_s, func_s)) = rest.split_once('.') else {
-                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                ctx.io
+                    .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
                 return CommandAction::None;
             };
             let bus = u8::from_str_radix(bus_s.trim(), 16).ok();
             let slot = u8::from_str_radix(slot_s.trim(), 16).ok();
-            let func = func_s.trim().parse::<u8>().ok().or_else(|| u8::from_str_radix(func_s.trim(), 16).ok());
-            let Some((bus, slot, func)) = bus.zip(slot).zip(func).map(|((b,s),f)| (b,s,f)) else {
-                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+            let func = func_s
+                .trim()
+                .parse::<u8>()
+                .ok()
+                .or_else(|| u8::from_str_radix(func_s.trim(), 16).ok());
+            let Some((bus, slot, func)) = bus.zip(slot).zip(func).map(|((b, s), f)| (b, s, f))
+            else {
+                ctx.io
+                    .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
                 return CommandAction::None;
             };
             crate::net::find_device_by_bdf(bus, slot, func)
@@ -545,12 +605,14 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
             let vid = u16::from_str_radix(vid_s.trim(), 16).ok();
             let pid = u16::from_str_radix(pid_s.trim(), 16).ok();
             let Some((vid, pid)) = vid.zip(pid) else {
-                ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+                ctx.io
+                    .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
                 return CommandAction::None;
             };
             crate::net::find_device_by_vidpid(vid, pid)
         } else {
-            ctx.io.write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
+            ctx.io
+                .write_str("net.nic: usage net.nic [index|vid:pid|bb:dd.f]\r\n");
             return CommandAction::None;
         }
     };
@@ -562,14 +624,38 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     }
 
     let cols = [
-        TableColumn { header: "Idx", width: 4 },
-        TableColumn { header: "BDF", width: 8 },
-        TableColumn { header: "VID:PID", width: 9 },
-        TableColumn { header: "Interface", width: 20 },
-        TableColumn { header: "MAC Address", width: 17 },
-        TableColumn { header: "IPv4", width: 15 },
-        TableColumn { header: "Mode", width: 8 },
-        TableColumn { header: "IPv6", width: 39 },
+        TableColumn {
+            header: "Idx",
+            width: 4,
+        },
+        TableColumn {
+            header: "BDF",
+            width: 8,
+        },
+        TableColumn {
+            header: "VID:PID",
+            width: 9,
+        },
+        TableColumn {
+            header: "Interface",
+            width: 20,
+        },
+        TableColumn {
+            header: "MAC Address",
+            width: 17,
+        },
+        TableColumn {
+            header: "IPv4",
+            width: 15,
+        },
+        TableColumn {
+            header: "Mode",
+            width: 8,
+        },
+        TableColumn {
+            header: "IPv6",
+            width: 39,
+        },
     ];
     let t = Table::new(&cols);
     t.print_header(ctx.io);
@@ -596,9 +682,16 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         };
 
         let mac_raw = crate::net::mac_address_at(index).unwrap_or([0; 6]);
-        let mac = alloc::format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", 
-            mac_raw[0], mac_raw[1], mac_raw[2], mac_raw[3], mac_raw[4], mac_raw[5]);
-        
+        let mac = alloc::format!(
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            mac_raw[0],
+            mac_raw[1],
+            mac_raw[2],
+            mac_raw[3],
+            mac_raw[4],
+            mac_raw[5]
+        );
+
         let ip_raw = crate::net::adapter::ipv4_at(index);
         let ip = if let Some(ip) = ip_raw {
             alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
@@ -606,7 +699,11 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
             alloc::string::String::from(" - ")
         };
         let mode = if let Some(has_lease) = crate::net::adapter::dhcp_has_lease_at(index) {
-            if has_lease { "dhcp" } else { "fallback" }
+            if has_lease {
+                "dhcp"
+            } else {
+                "fallback"
+            }
         } else {
             "-"
         };
@@ -628,37 +725,51 @@ pub(crate) fn cmd_net_nic(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
         };
 
         let idx_s = alloc::format!("{}", index);
-        t.print_row(ctx.io, &[idx_s, bdf, vidpid, name.into(), mac, ip, mode.into(), ipv6]);
+        t.print_row(
+            ctx.io,
+            &[idx_s, bdf, vidpid, name.into(), mac, ip, mode.into(), ipv6],
+        );
     }
 
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_hostname(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_hostname(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let name = args.and_then(|a| a.get_str(0));
     match name {
         Some(n) => {
             if n.is_empty() {
-                 ctx.io.write_str("net.hostname: name cannot be empty\r\n");
+                ctx.io.write_str("net.hostname: name cannot be empty\r\n");
             } else {
-                 crate::net::adapter::set_hostname(n);
-                 ctx.io.write_fmt(format_args!("net.hostname: set to '{}'\r\n", n));
+                crate::net::adapter::set_hostname(n);
+                ctx.io
+                    .write_fmt(format_args!("net.hostname: set to '{}'\r\n", n));
             }
         }
         None => {
-             let current = crate::net::adapter::get_hostname();
-             ctx.io.write_fmt(format_args!("net.hostname: {}\r\n", current));
+            let current = crate::net::adapter::get_hostname();
+            ctx.io
+                .write_fmt(format_args!("net.hostname: {}\r\n", current));
         }
     }
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_http(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_http(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let url = args.and_then(|a| a.get_str(0)).unwrap_or("");
     if url.is_empty() {
-        ctx.io.write_str("net.http: usage net.http <host|http://url>\r\n");
-        ctx.io.write_str("net.http: example net.http http://example.com/\r\n");
-        ctx.io.write_str("net.http: note: plaintext HTTP only (no TLS)\r\n");
+        ctx.io
+            .write_str("net.http: usage net.http <host|http://url>\r\n");
+        ctx.io
+            .write_str("net.http: example net.http http://example.com/\r\n");
+        ctx.io
+            .write_str("net.http: note: plaintext HTTP only (no TLS)\r\n");
         return CommandAction::None;
     }
 
@@ -678,9 +789,11 @@ pub(crate) fn cmd_net_http(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
                     break;
                 }
             }
-                let _ = ctx.spawner.spawn(crate::tst::html::http_get_matrix_job(slot, u),
-                );
-            ctx.io.write_fmt(format_args!("net.http: started §{}\r\n", slot + 1));
+            let _ = ctx
+                .spawner
+                .spawn(crate::tst::html::http_get_matrix_job(slot, u));
+            ctx.io
+                .write_fmt(format_args!("net.http: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
         None => ctx.io.write_str("net.http: matrix full\r\n"),
@@ -689,9 +802,12 @@ pub(crate) fn cmd_net_http(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedAr
     CommandAction::None
 }
 
-pub(crate) fn cmd_net_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_net_https(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let host = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    
+
     let mut title: heapless::String<{ crate::matrix::TITLE_LEN }> = heapless::String::new();
     let _ = title.push_str("https ");
     let show_host = if host.is_empty() { "example.com" } else { host };
@@ -709,9 +825,11 @@ pub(crate) fn cmd_net_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedA
                     break;
                 }
             }
-                let _ = ctx.spawner.spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h),
-                );
-            ctx.io.write_fmt(format_args!("net.https: started §{}\r\n", slot + 1));
+            let _ = ctx
+                .spawner
+                .spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h));
+            ctx.io
+                .write_fmt(format_args!("net.https: started §{}\r\n", slot + 1));
             crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
         }
         None => ctx.io.write_str("net.https: matrix full\r\n"),
@@ -721,9 +839,13 @@ pub(crate) fn cmd_net_https(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedA
 }
 
 #[cfg(feature = "dma_nic_fpga")]
-pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_dmafpga(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let Some(arg) = args.and_then(|a| a.get_str(0)) else {
-        ctx.io.write_str("dmafpga: usage dmafpga <https://url>|status|off\r\n");
+        ctx.io
+            .write_str("dmafpga: usage dmafpga <https://url>|status|off\r\n");
         return CommandAction::None;
     };
 
@@ -752,7 +874,8 @@ pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     }
 
     if !arg.starts_with("https://") {
-        ctx.io.write_str("dmafpga: only https:// URLs are supported\r\n");
+        ctx.io
+            .write_str("dmafpga: only https:// URLs are supported\r\n");
         return CommandAction::None;
     }
 
@@ -772,7 +895,8 @@ pub(crate) fn cmd_dmafpga(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArg
     //    return CommandAction::None;
     // }
     // ctx.io.write_str("dmafpga: started\r\n");
-    ctx.io.write_str("dmafpga: background task disabled in prepend mode\r\n");
+    ctx.io
+        .write_str("dmafpga: background task disabled in prepend mode\r\n");
     CommandAction::None
 }
 
@@ -790,7 +914,12 @@ async fn net_dmafpga_task(io: &'static dyn ShellBackend, url: heapless::String<2
         return;
     };
 
-    match crate::v::net::dns::resolve_ipv4_primary(host.as_str(), crate::v::net::dns::DnsConfig::default()).await {
+    match crate::v::net::dns::resolve_ipv4_primary(
+        host.as_str(),
+        crate::v::net::dns::DnsConfig::default(),
+    )
+    .await
+    {
         Ok(remote_ip) => {
             let filter = crate::net::DmaFpgaFlowFilter {
                 proto: crate::net::DmaFpgaIpProto::Tcp,
@@ -818,7 +947,8 @@ async fn net_dmafpga_task(io: &'static dyn ShellBackend, url: heapless::String<2
 
     io.write_fmt(format_args!("dmafpga: fetching {}\r\n", url.as_str()));
 
-    let fetch = crate::v::net::https::fetch_https_body_async(url.as_str(), 30_000, 16 * 1024 * 1024).await;
+    let fetch =
+        crate::v::net::https::fetch_https_body_async(url.as_str(), 30_000, 16 * 1024 * 1024).await;
 
     match fetch {
         Ok(body) => {

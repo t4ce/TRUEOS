@@ -36,7 +36,8 @@ pub const CORE_KIND_UNKNOWN: u8 = 0;
 pub const CORE_KIND_PERF: u8 = 1;
 pub const CORE_KIND_EFF: u8 = 2;
 
-static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> = Mutex::new(BTreeMap::new());
+static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> =
+    Mutex::new(BTreeMap::new());
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static WARNED_SINGLE_CORE_FALLBACK: AtomicBool = AtomicBool::new(false);
@@ -233,9 +234,8 @@ pub fn has_pending_for_ctx(ctx: *mut qjs::JSContext) -> bool {
         }
         CtxRole::Worker(id) => {
             let map = WORKERS.lock();
-            map.get(&id).is_some_and(|st| {
-                !st.exited.load(Ordering::Acquire) && !st.to_worker.is_empty()
-            })
+            map.get(&id)
+                .is_some_and(|st| !st.exited.load(Ordering::Acquire) && !st.to_worker.is_empty())
         }
     }
 }
@@ -244,13 +244,17 @@ unsafe fn js_string(ctx: *mut qjs::JSContext, bytes: &[u8]) -> qjs::JSValue {
     qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
 }
 
-unsafe fn call_on_message(
-    ctx: *mut qjs::JSContext,
-    cb: qjs::JSValue,
-    msg_bytes: &[u8],
-) {
+unsafe fn call_on_message(ctx: *mut qjs::JSContext, cb: qjs::JSValue, msg_bytes: &[u8]) {
     let arg = unsafe { js_string(ctx, msg_bytes) };
-    let _ = unsafe { qjs::JS_Call(ctx, cb, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue) };
+    let _ = unsafe {
+        qjs::JS_Call(
+            ctx,
+            cb,
+            qjs::JSValue::undefined(),
+            1,
+            &arg as *const qjs::JSValue,
+        )
+    };
     unsafe { qjs::js_free_value(ctx, arg) };
 }
 
@@ -282,7 +286,10 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                     let Some(msg) = msg else { break };
                     progress = true;
 
-                    let cb = MAIN_ON_MESSAGE.lock().get(&(key_ctx, worker_id)).map(|c| c.val);
+                    let cb = MAIN_ON_MESSAGE
+                        .lock()
+                        .get(&(key_ctx, worker_id))
+                        .map(|c| c.val);
                     if let Some(cb) = cb {
                         unsafe { call_on_message(ctx, cb, msg.as_slice()) };
                     }
@@ -296,7 +303,10 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
                 let Some(msg) = msg else { break };
                 progress = true;
 
-                let cb = WORKER_ON_MESSAGE.lock().get(&(key_ctx, worker_id)).map(|c| c.val);
+                let cb = WORKER_ON_MESSAGE
+                    .lock()
+                    .get(&(key_ctx, worker_id))
+                    .map(|c| c.val);
                 if let Some(cb) = cb {
                     unsafe { call_on_message(ctx, cb, msg.as_slice()) };
                 } else {
@@ -347,7 +357,11 @@ pub unsafe fn drain_all_for_context(ctx: *mut qjs::JSContext) {
     let key_ctx = ctx as usize;
 
     let mut main = MAIN_ON_MESSAGE.lock();
-    let main_keys: Vec<(usize, u32)> = main.keys().copied().filter(|(c, _)| *c == key_ctx).collect();
+    let main_keys: Vec<(usize, u32)> = main
+        .keys()
+        .copied()
+        .filter(|(c, _)| *c == key_ctx)
+        .collect();
     for k in main_keys {
         if let Some(v) = main.remove(&k) {
             qjs::js_free_value(ctx, v.val);
@@ -414,7 +428,10 @@ async fn worker_task(worker_id: u32) {
         if v.is_exception() {
             log_str("qjs-worker: startup eval exception\n");
             unsafe { qjs::qjs_diag::dump_last_exception(ctx, "worker-startup-eval") };
-            let _ = post_to_parent(worker_id, b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}");
+            let _ = post_to_parent(
+                worker_id,
+                b"{\"ok\":0,\"dbg\":\"worker-startup-eval-exception\"}",
+            );
         } else {
             let _ = post_to_parent(worker_id, b"{\"ok\":1,\"dbg\":\"worker-startup-eval-ok\"}");
         }
@@ -434,7 +451,8 @@ async fn worker_task(worker_id: u32) {
         // Drain microtasks.
         loop {
             let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
-            let rc = unsafe { qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext) };
+            let rc =
+                unsafe { qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext) };
             if rc > 0 {
                 progress = true;
                 continue;
@@ -473,7 +491,9 @@ fn js_int32(v: i32) -> qjs::JSValue {
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
     qjs::JSValue {
-        u: qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        u: qjs::JSValueUnion {
+            int32: if v { 1 } else { 0 },
+        },
         tag: qjs::JS_TAG_BOOL,
     }
 }
@@ -497,8 +517,12 @@ unsafe fn arg_to_bytes(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option
     Some(bytes)
 }
 
-unsafe fn worker_id_from_this(ctx: *mut qjs::JSContext, this_val: qjs::JSValueConst) -> Option<u32> {
-    let v = unsafe { qjs::JS_GetPropertyStr(ctx, this_val, WORKER_ID_PROP.as_ptr() as *const c_char) };
+unsafe fn worker_id_from_this(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+) -> Option<u32> {
+    let v =
+        unsafe { qjs::JS_GetPropertyStr(ctx, this_val, WORKER_ID_PROP.as_ptr() as *const c_char) };
     if v.is_exception() {
         return None;
     }
@@ -572,7 +596,12 @@ pub unsafe extern "C" fn js_worker_ctor(
     );
 
     // threadId
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"threadId\0".as_ptr() as *const c_char, js_int32(worker_id as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"threadId\0".as_ptr() as *const c_char,
+        js_int32(worker_id as i32),
+    );
 
     // postMessage(message)
     let pm = qjs::JS_NewCFunction2(
@@ -606,7 +635,12 @@ pub unsafe extern "C" fn js_worker_ctor(
         0,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"onMessage\0".as_ptr() as *const c_char, onm);
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"onmessage\0".as_ptr() as *const c_char, qjs::JSValue::undefined());
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"onmessage\0".as_ptr() as *const c_char,
+        qjs::JSValue::undefined(),
+    );
 
     obj
 }
@@ -752,7 +786,10 @@ pub unsafe extern "C" fn js_parent_port_on_message(
     qjs::JSValue::undefined()
 }
 
-pub unsafe fn install_worker_threads_exports(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+pub unsafe fn install_worker_threads_exports(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     if ctx.is_null() || m.is_null() {
         return -1;
     }
@@ -767,11 +804,32 @@ pub unsafe fn install_worker_threads_exports(ctx: *mut qjs::JSContext, m: *mut q
                 qjs::JS_CFUNC_CONSTRUCTOR,
                 0,
             );
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"Worker\0".as_ptr() as *const c_char, worker_fn);
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"isMainThread\0".as_ptr() as *const c_char, js_bool(true));
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"parentPort\0".as_ptr() as *const c_char, js_null());
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"threadId\0".as_ptr() as *const c_char, js_int32(0));
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"workerData\0".as_ptr() as *const c_char, qjs::JSValue::undefined());
+            let _ =
+                qjs::JS_SetModuleExport(ctx, m, b"Worker\0".as_ptr() as *const c_char, worker_fn);
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"isMainThread\0".as_ptr() as *const c_char,
+                js_bool(true),
+            );
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"parentPort\0".as_ptr() as *const c_char,
+                js_null(),
+            );
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"threadId\0".as_ptr() as *const c_char,
+                js_int32(0),
+            );
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"workerData\0".as_ptr() as *const c_char,
+                qjs::JSValue::undefined(),
+            );
         }
         CtxRole::Worker(id) => {
             let port = qjs::JS_NewObject(ctx);
@@ -791,13 +849,31 @@ pub unsafe fn install_worker_threads_exports(ctx: *mut qjs::JSContext, m: *mut q
                 qjs::JS_CFUNC_GENERIC,
                 0,
             );
-            let _ = qjs::JS_SetPropertyStr(ctx, port, b"postMessage\0".as_ptr() as *const c_char, pm);
-            let _ = qjs::JS_SetPropertyStr(ctx, port, b"onMessage\0".as_ptr() as *const c_char, onm);
+            let _ =
+                qjs::JS_SetPropertyStr(ctx, port, b"postMessage\0".as_ptr() as *const c_char, pm);
+            let _ =
+                qjs::JS_SetPropertyStr(ctx, port, b"onMessage\0".as_ptr() as *const c_char, onm);
 
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"isMainThread\0".as_ptr() as *const c_char, js_bool(false));
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"parentPort\0".as_ptr() as *const c_char, port);
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"threadId\0".as_ptr() as *const c_char, js_int32(id as i32));
-            let _ = qjs::JS_SetModuleExport(ctx, m, b"workerData\0".as_ptr() as *const c_char, qjs::JSValue::undefined());
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"isMainThread\0".as_ptr() as *const c_char,
+                js_bool(false),
+            );
+            let _ =
+                qjs::JS_SetModuleExport(ctx, m, b"parentPort\0".as_ptr() as *const c_char, port);
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"threadId\0".as_ptr() as *const c_char,
+                js_int32(id as i32),
+            );
+            let _ = qjs::JS_SetModuleExport(
+                ctx,
+                m,
+                b"workerData\0".as_ptr() as *const c_char,
+                qjs::JSValue::undefined(),
+            );
         }
     }
 

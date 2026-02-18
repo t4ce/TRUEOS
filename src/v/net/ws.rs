@@ -3,16 +3,16 @@ extern crate alloc;
 use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embedded_websocket::{
-    WebSocketClient, WebSocketOptions, WebSocketSendMessageType, WebSocketReceiveMessageType,
-};
-use rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use embassy_time::{Duration, Timer};
-use trueos_v::vnet::{Command, Event, EndpointV4, ByteBuf, NetHandle, SocketKind};
+use embedded_websocket::{
+    WebSocketClient, WebSocketOptions, WebSocketReceiveMessageType, WebSocketSendMessageType,
+};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
+use trueos_v::vnet::{ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
-use crate::v::net::VNet;
 use crate::time::unix_time_seconds;
+use crate::v::net::VNet;
 
 static WS_SEQ: AtomicU32 = AtomicU32::new(1);
 const RX_BUF_SIZE: usize = 4096;
@@ -41,7 +41,13 @@ impl WsConnection {
         let (host, port, path) = parse_ws_url(url).ok_or(WsError::InvalidUrl)?;
 
         let dev_idx = crate::net::primary_device_index();
-        let api_ip = match super::dns::resolve_ipv4_for_device(dev_idx, &host, super::dns::DnsConfig::default()).await {
+        let api_ip = match super::dns::resolve_ipv4_for_device(
+            dev_idx,
+            &host,
+            super::dns::DnsConfig::default(),
+        )
+        .await
+        {
             Ok(ip) => ip,
             Err(_) => return Err(WsError::DnsFailed),
         };
@@ -74,7 +80,8 @@ impl WsConnection {
 
         net.submit(Command::OpenTcpConnect {
             remote: EndpointV4::new(api_ip, port),
-        }).map_err(|_| WsError::ConnectFailed)?;
+        })
+        .map_err(|_| WsError::ConnectFailed)?;
 
         let mut handle = None;
 
@@ -85,16 +92,17 @@ impl WsConnection {
             if let Some(ev) = net.pop_event() {
                 match ev {
                     Event::Opened { handle: h, kind } => {
-                       if kind == SocketKind::Tcp {
+                        if kind == SocketKind::Tcp {
                             handle = Some(h);
-                       }
+                        }
                     }
                     Event::TcpEstablished { handle: h } => {
                         if Some(h) == handle {
-                             net.submit(Command::SendTcp {
+                            net.submit(Command::SendTcp {
                                 handle: h,
                                 data: ByteBuf::from_slice_trunc(&handshake_data),
-                            }).map_err(|_| WsError::Io)?;
+                            })
+                            .map_err(|_| WsError::Io)?;
                             break;
                         }
                     }
@@ -112,7 +120,7 @@ impl WsConnection {
             }
             Timer::after(Duration::from_micros(100)).await;
         }
-        
+
         let mut rx_buf = Vec::new();
         loop {
             if let Some(ev) = net.pop_event() {
@@ -182,27 +190,33 @@ impl WsConnection {
     }
 
     pub fn send(&mut self, text: &str) -> Result<(), WsError> {
-        if self.closed || !self.connected { return Err(WsError::Closed); }
+        if self.closed || !self.connected {
+            return Err(WsError::Closed);
+        }
         let mut buf = [0u8; RX_BUF_SIZE];
 
         let len = self
-            .client.write(
+            .client
+            .write(
                 WebSocketSendMessageType::Text,
                 true, // fin
                 text.as_bytes(),
                 &mut buf,
-            ).map_err(|_| WsError::Protocol)?;
+            )
+            .map_err(|_| WsError::Protocol)?;
 
         if let Some(h) = self.handle {
-            self.net.submit(Command::SendTcp {
-                handle: h,
-                data: ByteBuf::from_slice_trunc(&buf[..len]),
-            }).map_err(|_| WsError::Io)?;
+            self.net
+                .submit(Command::SendTcp {
+                    handle: h,
+                    data: ByteBuf::from_slice_trunc(&buf[..len]),
+                })
+                .map_err(|_| WsError::Io)?;
         }
         Ok(())
     }
 
-     pub fn recv(&mut self) -> Option<String> {
+    pub fn recv(&mut self) -> Option<String> {
         while let Some(ev) = self.net.pop_event() {
             match ev {
                 Event::TcpData { handle, data } => {
@@ -211,15 +225,17 @@ impl WsConnection {
                     }
                 }
                 Event::Closed { handle } => {
-                     if Some(handle) == self.handle {
-                         self.closed = true;
-                     }
+                    if Some(handle) == self.handle {
+                        self.closed = true;
+                    }
                 }
                 _ => {}
             }
         }
 
-        if self.rx_buf.is_empty() { return None; }
+        if self.rx_buf.is_empty() {
+            return None;
+        }
 
         let mut out_buf = [0u8; RX_BUF_SIZE];
         match self.client.read(&self.rx_buf, &mut out_buf) {

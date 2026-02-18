@@ -122,7 +122,8 @@ pub async fn mount_service_task() {
 
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
-    }.await;
+    }
+    .await;
 }
 
 /// Async variant of [`format_blank`].
@@ -182,7 +183,11 @@ impl trueos_fs::BlockIo for KernelBlockIo {
     #[inline]
     fn max_transfer_bytes(&self) -> usize {
         let v = self.handle.info().max_transfer_bytes as usize;
-        if v == 0 { 256 * 1024 } else { v }
+        if v == 0 {
+            256 * 1024
+        } else {
+            v
+        }
     }
 
     async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
@@ -275,7 +280,9 @@ fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
 /// Async variant of [`mount_root`].
 ///
 /// Use this from async contexts to avoid `block_on` (which can starve other tasks such as USB polling).
-pub async fn mount_root_async(disk: block::DeviceHandle) -> Result<Option<block::DiscId>, block::Error> {
+pub async fn mount_root_async(
+    disk: block::DeviceHandle,
+) -> Result<Option<block::DiscId>, block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -368,11 +375,7 @@ fn file_record_cache_lookup(
     Some(cache[i].record)
 }
 
-fn file_record_cache_insert(
-    disk_id: block::DiscId,
-    path: &str,
-    record: trueos_fs::FileRecordRef,
-) {
+fn file_record_cache_insert(disk_id: block::DiscId, path: &str, record: trueos_fs::FileRecordRef) {
     let gen = root_cache_gen(disk_id);
     let seq = FILE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut cache = FILE_RECORD_CACHE.lock();
@@ -496,13 +499,12 @@ pub async fn file_write_begin_async(
 }
 
 /// Async TRUEOSFS: write a chunk into an open stream handle.
-pub async fn file_write_chunk_async(
-    stream_handle: u32,
-    bytes: &[u8],
-) -> Result<(), block::Error> {
+pub async fn file_write_chunk_async(stream_handle: u32, bytes: &[u8]) -> Result<(), block::Error> {
     let mut entry = {
         let mut streams = FILE_WRITE_STREAMS.lock();
-        streams.remove(&stream_handle).ok_or(block::Error::InvalidParam)?
+        streams
+            .remove(&stream_handle)
+            .ok_or(block::Error::InvalidParam)?
     };
 
     let io = KernelBlockIo::new(entry.disk);
@@ -526,7 +528,9 @@ pub async fn file_write_chunk_async(
 pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Error> {
     let entry = {
         let mut streams = FILE_WRITE_STREAMS.lock();
-        streams.remove(&stream_handle).ok_or(block::Error::InvalidParam)?
+        streams
+            .remove(&stream_handle)
+            .ok_or(block::Error::InvalidParam)?
     };
 
     let io = KernelBlockIo::new(entry.disk);
@@ -558,23 +562,23 @@ async fn lookup_via_index_async(
 ) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
     ensure_index_async(disk, placement).await?;
     let disk_id = disk.id();
-    
+
     let entry_lba = {
         let roots = ROOTS.lock();
         let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
-             return Ok(None);
+            return Ok(None);
         };
         let Some(index) = &mount.index else {
-             return Ok(None);
+            return Ok(None);
         };
         match index.get(name.as_bytes()) {
-             Some(entry) => {
-                 if entry.kind != trueos_fs::LogKind::Put {
-                     return Ok(None);
-                 }
-                 entry.entry_lba
-             },
-             None => return Ok(None),
+            Some(entry) => {
+                if entry.kind != trueos_fs::LogKind::Put {
+                    return Ok(None);
+                }
+                entry.entry_lba
+            }
+            None => return Ok(None),
         }
     };
 
@@ -584,7 +588,7 @@ async fn lookup_via_index_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    
+
     trueos_fs::get_file_record_at(&io, &params, entry_lba, name)
         .await
         .map_err(map_engine_err)
@@ -790,23 +794,23 @@ pub async fn file_exists_async(
     };
 
     let disk_id = disk.id();
-    
+
     // Check cache first for fast path
     if file_record_cache_lookup(disk_id, name).is_some() {
         return Ok(true);
     }
-    
+
     // Check index (metadata lookup only)
     if let Some(_) = lookup_via_index_async(disk, &placement, name).await? {
         // We could cache this here, but lookup_via_index_async returns FsRecordRef,
         // and if we cache it, we avoid re-reading the header later.
         // But here we return bool. Since lookup_via_index_async does IO (reads header),
-        // we probably should cache it if we could? 
+        // we probably should cache it if we could?
         // lookup_via_index_async doesn't currently cache.
         // Let's stick to true/false.
         return Ok(true);
     }
-    
+
     Ok(false)
 }
 
@@ -843,7 +847,7 @@ pub async fn list_dir_async(
     };
 
     let Some(index) = &mount.index else {
-        return Err(block::Error::Corrupted); 
+        return Err(block::Error::Corrupted);
     };
 
     // Normalize dir path
@@ -869,26 +873,26 @@ pub async fn list_dir_async(
     // Iterate BTreeMap
     // BTreeMap supports range, but keys are Vec<u8> paths.
     // Iterating everything is still faster than disk I/O, but we can optimize with range().
-    
+
     // Range start: prefix (e.g. "foo/")
     // Range end: prefix + next char
     // Simple iteration for now is robust.
     for (key, _) in index.iter() {
         if !prefix.is_empty() {
-             if !key.starts_with(prefix_bytes) {
-                 continue;
-             }
-             if key.len() <= prefix_bytes.len() {
-                 continue; 
-             }
-             let rest = &key[prefix_bytes.len()..];
-             // The key is a Vec<u8>, assuming utf-8 valid paths
-             if let Ok(rest_str) = core::str::from_utf8(rest) {
-                 let seg = rest_str.split('/').next().unwrap_or("");
-                 if !seg.is_empty() {
-                     children.insert(String::from(seg));
-                 }
-             }
+            if !key.starts_with(prefix_bytes) {
+                continue;
+            }
+            if key.len() <= prefix_bytes.len() {
+                continue;
+            }
+            let rest = &key[prefix_bytes.len()..];
+            // The key is a Vec<u8>, assuming utf-8 valid paths
+            if let Ok(rest_str) = core::str::from_utf8(rest) {
+                let seg = rest_str.split('/').next().unwrap_or("");
+                if !seg.is_empty() {
+                    children.insert(String::from(seg));
+                }
+            }
         } else {
             if let Ok(name) = core::str::from_utf8(key) {
                 let seg = name.split('/').next().unwrap_or("");
@@ -907,7 +911,7 @@ pub async fn list_dir_async(
         }
         out.push_str(entry);
         if out.len() > MAX_LISTING_BYTES {
-            break; 
+            break;
         }
     }
 
@@ -919,7 +923,7 @@ async fn ensure_index_async(
     placement: &TrueosFsPlacement,
 ) -> Result<(), block::Error> {
     let disk_id = disk.id();
-    
+
     // Check if we need to build
     {
         let roots = ROOTS.lock();
@@ -928,8 +932,8 @@ async fn ensure_index_async(
                 return Ok(());
             }
         } else {
-             // Not mounted?
-             return Err(block::Error::NotReady);
+            // Not mounted?
+            return Err(block::Error::NotReady);
         }
     }
 
@@ -940,43 +944,64 @@ async fn ensure_index_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    
+
     let mut tree = Box::new(BTreeMap::new());
 
     // Replay log
     let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
     let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
-    
+
     let mut replay_from = 0u64;
-    
-    if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params).await.map_err(map_engine_err) {
+
+    if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
+        .await
+        .map_err(map_engine_err)
+    {
         replay_from = ckpt.replay_from_rel_blocks;
         for (key, kind, lba) in ckpt.entries {
             match kind {
-               trueos_fs::LogKind::Put => {
-                   tree.insert(key, IndexRef { kind, entry_lba: lba });
-               }
-               trueos_fs::LogKind::Delete => {
-                   tree.remove(&key);
-               }
-               _ => {}
+                trueos_fs::LogKind::Put => {
+                    tree.insert(
+                        key,
+                        IndexRef {
+                            kind,
+                            entry_lba: lba,
+                        },
+                    );
+                }
+                trueos_fs::LogKind::Delete => {
+                    tree.remove(&key);
+                }
+                _ => {}
             }
         }
     }
 
     let end_rel = sb.log_head_rel_blocks;
-    
-    trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, lba| {
-         match kind {
-             trueos_fs::LogKind::Put => {
-                 tree.insert(name, IndexRef { kind, entry_lba: lba });
-             }
-             trueos_fs::LogKind::Delete => {
-                 tree.remove(&name);
-             }
-             _ => {}
-         }
-    }).await.map_err(map_engine_err)?;
+
+    trueos_fs::replay_log_range(
+        &io,
+        &params,
+        replay_from,
+        end_rel,
+        |kind, name, lba| match kind {
+            trueos_fs::LogKind::Put => {
+                tree.insert(
+                    name,
+                    IndexRef {
+                        kind,
+                        entry_lba: lba,
+                    },
+                );
+            }
+            trueos_fs::LogKind::Delete => {
+                tree.remove(&name);
+            }
+            _ => {}
+        },
+    )
+    .await
+    .map_err(map_engine_err)?;
 
     // Store in mount
     let mut roots = ROOTS.lock();
@@ -986,8 +1011,6 @@ async fn ensure_index_async(
 
     Ok(())
 }
-
-
 
 /// Best-effort: build an HTML `<ul>/<li>` tree of the TRUEOSFS directory structure.
 ///
@@ -1099,15 +1122,13 @@ pub async fn html_tree_async(
         }
     }
 
-    Ok(Some(tree.html_tree_string(root, |e, out| {
-        match e.kind {
-            FsKind::Root => out.push_str("/"),
-            FsKind::Dir => {
-                out.push_str(e.name.as_str());
-                out.push('/');
-            }
-            FsKind::File => out.push_str(e.name.as_str()),
+    Ok(Some(tree.html_tree_string(root, |e, out| match e.kind {
+        FsKind::Root => out.push_str("/"),
+        FsKind::Dir => {
+            out.push_str(e.name.as_str());
+            out.push('/');
         }
+        FsKind::File => out.push_str(e.name.as_str()),
     })))
 }
 
@@ -1145,7 +1166,6 @@ pub async fn file_append_async(
 
 // NOTE: synchronous TRUEOSFS file operations (`file_in`, `file_out`, etc.) were removed.
 // Use the async entrypoints above.
-
 
 // NOTE: Root index construction/checkpointing was part of the old synchronous TRUEOSFS path.
 // The async mount path intentionally avoids this (it would require blocking I/O).
@@ -1236,7 +1256,10 @@ fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
 }
 
 fn is_transient_io(e: block::Error) -> bool {
-    matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io)
+    matches!(
+        e,
+        block::Error::NotReady | block::Error::Timeout | block::Error::Io
+    )
 }
 
 #[inline]
@@ -1300,7 +1323,9 @@ async fn read_blocks_aligned_retry_async(
 /// Find where TRUEOSFS lives on a whole disk.
 ///
 /// This avoids `block_on` so it can be called from async contexts (e.g. installer jobs).
-pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFsPlacement>, block::Error> {
+pub async fn locate_async(
+    handle: block::DeviceHandle,
+) -> Result<Option<TrueosFsPlacement>, block::Error> {
     if handle.parent().is_some() {
         return Ok(None);
     }
@@ -1319,7 +1344,9 @@ pub async fn locate_async(handle: block::DeviceHandle) -> Result<Option<TrueosFs
                         }
 
                         // Our superblock is at the start of the TRUEOS data partition.
-                        if let Ok(p0) = read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await {
+                        if let Ok(p0) =
+                            read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await
+                        {
                             if looks_like_trueos_superblock(&p0) {
                                 let super_lba = p.range.first_lba();
                                 let end_lba_exclusive = p.range.last_lba().saturating_add(1);
@@ -1436,7 +1463,9 @@ pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(),
 // Use `format_blank_partition_async`.
 
 /// Async variant of [`format_blank_partition`].
-pub async fn format_blank_partition_async(partition: block::DeviceHandle) -> Result<(), block::Error> {
+pub async fn format_blank_partition_async(
+    partition: block::DeviceHandle,
+) -> Result<(), block::Error> {
     if partition.parent().is_none() {
         return Err(block::Error::InvalidParam);
     }
@@ -1446,7 +1475,10 @@ pub async fn format_blank_partition_async(partition: block::DeviceHandle) -> Res
     format_blank_at_async(partition, 0).await
 }
 
-pub(crate) async fn format_blank_at_async(handle: block::DeviceHandle, super_lba: u64) -> Result<(), block::Error> {
+pub(crate) async fn format_blank_at_async(
+    handle: block::DeviceHandle,
+    super_lba: u64,
+) -> Result<(), block::Error> {
     let info = handle.info();
     let bs = info.block_size as usize;
     if bs == 0 {
@@ -1485,7 +1517,8 @@ pub(crate) async fn format_blank_at_async(handle: block::DeviceHandle, super_lba
         if data_lba.saturating_add(2) <= info.block_count {
             let blocks_verify = core::cmp::min(2usize, max_blocks);
             let bytes_verify = bs.saturating_mul(blocks_verify);
-            let mut tmp2 = AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
+            let mut tmp2 =
+                AlignedBuf::new(bytes_verify, align).ok_or(block::Error::DmaUnavailable)?;
             let w = tmp2.as_mut_slice();
             w.fill(0);
             let tag = b"TRUEOSFS-NVME-VERIFY";

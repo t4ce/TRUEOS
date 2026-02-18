@@ -8,13 +8,12 @@ where
     let Some(tables) = ensure_tables() else {
         return;
     };
-    
+
     // Try to find the MADT table using the acpi crate's mechanism
     if let Some(madt) = tables.find_table::<Madt>() {
         callback(&"MADT Header Found:");
         unsafe {
-            callback(madt.virtual_start.as_ref()); 
+            callback(madt.virtual_start.as_ref());
         }
     }
 }
-

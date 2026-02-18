@@ -1,5 +1,5 @@
-use spin::Once;
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Once;
 
 use crate::{limine, pci::mmio, vga};
 
@@ -74,8 +74,8 @@ pub fn log_once() {
 
         // If it is a BMP we understand, blit (cropped to 256x256) into the framebuffer.
         if let Some(bmp) = bmp {
-            let Some((fb_w, fb_h)) = vga::framebuffer_dimensions()
-                .map(|(w, h)| (w as usize, h as usize))
+            let Some((fb_w, fb_h)) =
+                vga::framebuffer_dimensions().map(|(w, h)| (w as usize, h as usize))
             else {
                 return;
             };
@@ -378,8 +378,9 @@ fn blit_bmp32(
             let src_row_ptr = src.add(src_row.saturating_mul(row_stride));
             let dst_row_off = y.saturating_mul(copy_w);
             for x in 0..copy_w {
-                let px =
-                    core::ptr::read_volatile(src_row_ptr.add(src_x0.saturating_add(x).saturating_mul(4)) as *const u32);
+                let px = core::ptr::read_volatile(
+                    src_row_ptr.add(src_x0.saturating_add(x).saturating_mul(4)) as *const u32,
+                );
                 let r = ((px & rm) >> rshift) as u32;
                 let g = ((px & gm) >> gshift) as u32;
                 let b = ((px & bm) >> bshift) as u32;
@@ -463,7 +464,8 @@ fn blit_bmp_indexed(
             match bpp {
                 8 => {
                     for x in 0..copy_w {
-                        let idx = core::ptr::read_volatile(row_ptr.add(src_x0.saturating_add(x))) as usize;
+                        let idx = core::ptr::read_volatile(row_ptr.add(src_x0.saturating_add(x)))
+                            as usize;
                         BGRT_PIXELS[dst_row_off.saturating_add(x)] = PALETTE[idx % MAX_PALETTE];
                     }
                 }
@@ -471,7 +473,11 @@ fn blit_bmp_indexed(
                     for x in 0..copy_w {
                         let px_i = src_x0.saturating_add(x);
                         let byte = core::ptr::read_volatile(row_ptr.add(px_i / 2));
-                        let idx = if px_i % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
+                        let idx = if px_i % 2 == 0 {
+                            byte >> 4
+                        } else {
+                            byte & 0x0F
+                        } as usize;
                         BGRT_PIXELS[dst_row_off.saturating_add(x)] = PALETTE[idx % MAX_PALETTE];
                     }
                 }

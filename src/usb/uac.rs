@@ -510,7 +510,11 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
                 let current_alt = cfg[idx + 3];
                 current_cls = cfg[idx + 5];
                 current_sub = cfg[idx + 6];
-                current_if = Some((current_ifnum, current_alt, ((current_cls & 0xF) << 4) | (current_sub & 0xF)));
+                current_if = Some((
+                    current_ifnum,
+                    current_alt,
+                    ((current_cls & 0xF) << 4) | (current_sub & 0xF),
+                ));
 
                 // Reset endpoint state on new interface.
                 pending_ep = None;
@@ -633,7 +637,10 @@ fn parse_uac2_clock_source(cfg: &[u8]) -> Option<Uac2ClockSource> {
                         // CLOCK_SOURCE (UAC2): bClockID at offset 3.
                         let clock_id = cfg[idx + 3];
                         if let Some(ac_if) = current_ac_if {
-                            return Some(Uac2ClockSource { ac_interface: ac_if, clock_id });
+                            return Some(Uac2ClockSource {
+                                ac_interface: ac_if,
+                                clock_id,
+                            });
                         }
                     }
                     _ => {}
@@ -651,7 +658,6 @@ fn parse_uac2_clock_source(cfg: &[u8]) -> Option<Uac2ClockSource> {
 pub(crate) fn has_as_out_endpoint(cfg: &[u8]) -> bool {
     parse_as_out_endpoint(cfg).is_some()
 }
-
 
 pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     let AttachParams {
@@ -751,7 +757,12 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ctx,
         ep0_ring,
         slot_id,
-        setup_std_nodata(0x01, 0x0B, as_out.alt_setting as u16, as_out.interface as u16),
+        setup_std_nodata(
+            0x01,
+            0x0B,
+            as_out.alt_setting as u16,
+            as_out.interface as u16,
+        ),
         None,
         0,
         "uac-set-interface",
@@ -1007,9 +1018,9 @@ pub async fn event_drain_task() {
                 }
             }
         }
-    }.await;
+    }
+    .await;
 }
-
 
 #[embassy_executor::task]
 pub async fn song_task() {
@@ -1133,5 +1144,6 @@ pub async fn song_task() {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
         }
-    }.await;
+    }
+    .await;
 }

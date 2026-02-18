@@ -134,8 +134,7 @@ pub struct PartitionInfo {
     pub name: Option<String>,
 }
 
-impl PartitionInfo {
-}
+impl PartitionInfo {}
 
 #[derive(Clone, Debug)]
 pub struct RegisteredPartition {
@@ -217,7 +216,8 @@ pub async fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionIn
     }
 
     let header_buf = device.read_blocks(GPT_HEADER_LBA, 1).await?;
-    if header_buf.len() < GPT_SIGNATURE.len() || &header_buf[..GPT_SIGNATURE.len()] != GPT_SIGNATURE {
+    if header_buf.len() < GPT_SIGNATURE.len() || &header_buf[..GPT_SIGNATURE.len()] != GPT_SIGNATURE
+    {
         // Not a GPT disk (e.g. MBR, superfloppy, or wiped header).
         return Ok(Vec::new());
     }

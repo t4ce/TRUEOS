@@ -6,21 +6,21 @@ use crate::shell::cube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
 
 pub(crate) mod ecma48;
 
+mod actions;
 pub(crate) mod cube;
 pub(crate) mod shellqjs;
-pub(crate) mod txt;
 pub(crate) mod shelltetris;
-mod actions;
 pub(crate) mod table;
+pub(crate) mod txt;
 
+pub(crate) mod bench;
 pub(crate) mod cmd;
 pub(crate) mod matrix;
 pub(crate) mod statusbar;
-pub(crate) mod bench;
 pub(crate) mod wizards;
 pub use wizards::*;
 pub(crate) mod output;
-pub(crate) use output::{ReverseOutput, apply_shell_scroll_region};
+pub(crate) use output::{apply_shell_scroll_region, ReverseOutput};
 
 mod crlf;
 
@@ -108,19 +108,10 @@ pub(crate) async fn handle_command_action_for_tools(
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
     actions::handle_command_action(
-        action,
-        mode,
-        cube_mode,
-        cube,
-        io,
-        term_cols,
-        term_rows,
-        spawner,
-        history,
+        action, mode, cube_mode, cube, io, term_cols, term_rows, spawner, history,
     )
     .await;
 }
-
 
 #[inline]
 fn write_prompt(io: &dyn ShellIo) {
@@ -174,7 +165,8 @@ fn handle_tab_completion(
         if !cmd.is_empty() {
             let mut usage: String<192> = String::new();
             if crate::shell::cmd::registry::usage_text_for_name(cmd, &mut usage) {
-                ReverseOutput::new(io, term_cols, term_rows, history).write_overlay_hint(usage.as_str());
+                ReverseOutput::new(io, term_cols, term_rows, history)
+                    .write_overlay_hint(usage.as_str());
             }
         }
         return;
@@ -222,7 +214,8 @@ fn handle_tab_completion(
         }
         let mut usage: String<192> = String::new();
         if crate::shell::cmd::registry::usage_text_for_name(target, &mut usage) {
-            ReverseOutput::new(io, term_cols, term_rows, history).write_overlay_hint(usage.as_str());
+            ReverseOutput::new(io, term_cols, term_rows, history)
+                .write_overlay_hint(usage.as_str());
         } else {
             ReverseOutput::new(io, term_cols, term_rows, history).write_overlay_hint("");
         }
@@ -258,10 +251,10 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
         return;
     }
 
-    // Atomic update of Row 1 
+    // Atomic update of Row 1
     io.write_str(crate::ecma48::HIDE_CURSOR);
     io.write_str(crate::ecma48::SAVE_CURSOR);
-    
+
     io.write_fmt(format_args!("{}", crate::ecma48::pos(1, 1)));
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_fmt(format_args!("{}", crate::ecma48::bold("TRUEOS")));
@@ -271,26 +264,20 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
     let mut time_buf: heapless::String<32> = heapless::String::new();
     if let Some(ts) = crate::time::unix_time_seconds() {
         let (_year, _month, _day, hour, minute, _second) = unix_timestamp_to_ymdhms(ts);
-        let _ = core::fmt::write(
-            &mut time_buf,
-            format_args!(
-                "{:02}:{:02}",
-                hour, minute
-            ),
-        );
+        let _ = core::fmt::write(&mut time_buf, format_args!("{:02}:{:02}", hour, minute));
     } else {
         let _ = time_buf.push_str("time unavailable");
     }
 
     let text_len = time_buf.as_str().len();
     if text_len > 0 {
-        let start_col = term_cols
-            .saturating_sub(text_len)
-            .saturating_add(1);
+        let start_col = term_cols.saturating_sub(text_len).saturating_add(1);
         io.write_fmt(format_args!("{}", crate::ecma48::pos(1, start_col)));
         io.write_fmt(format_args!(
             "{}",
-            crate::ecma48::style(time_buf.as_str()).bold().fg((120, 210, 255))
+            crate::ecma48::style(time_buf.as_str())
+                .bold()
+                .fg((120, 210, 255))
         ));
     }
 
@@ -298,16 +285,7 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
 
-
 // refresh_status_bar moved to statusbar.rs
-
-
-
-
-
-
-
-
 
 pub(crate) enum CommandAction {
     None,
@@ -334,10 +312,6 @@ pub(crate) enum CommandAction {
     OpenAiChat { first: String<384> },
 }
 
-
-
-
-
 #[embassy_executor::task(pool_size = 3)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     io.init();
@@ -347,7 +321,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
 
     let mut term_cols: usize = DEFAULT_TERM_COLS;
     let mut term_rows: usize = DEFAULT_TERM_ROWS;
-    
+
     let mut history: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
     let mut scroll_offset: usize = 0;
 
@@ -358,7 +332,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     let mut line: String<128> = String::new();
     let mut utf8 = Utf8Decoder::new();
     let mut mode = ShellMode::Idle;
-    
+
     let mut cube_mode = true;
     let mut cube = CubeState::new();
     cube.set_shape(WireShape::Cube);
@@ -414,25 +388,25 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         let bottom = output::output_bottom_row(term_rows);
                         let height = bottom.saturating_sub(top).saturating_add(1);
                         let max_offset = history.len().saturating_sub(height);
-                        
+
                         if scroll_offset < max_offset {
-                             scroll_offset = scroll_offset.saturating_add(1);
-                             output::redraw_view(io, &history, scroll_offset, term_cols, term_rows);
+                            scroll_offset = scroll_offset.saturating_add(1);
+                            output::redraw_view(io, &history, scroll_offset, term_cols, term_rows);
                         }
-                    },
+                    }
                     b'B' => {
                         // Scroll Down (Forward in history) - "Newer"
                         if scroll_offset > 0 {
                             scroll_offset = scroll_offset.saturating_sub(1);
                             output::redraw_view(io, &history, scroll_offset, term_cols, term_rows);
                         }
-                    },
+                    }
                     _ => {}
                 }
                 esc_state = 0;
                 continue;
             }
-            
+
             // Handle special keys
             match b {
                 0x1B => {
@@ -441,7 +415,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 }
                 b'\r' | b'\n' => {
                     utf8.clear();
-                    
+
                     let result = mode.process_input(io, &line, &spawner).await;
                     match result {
                         InputResult::Handled => {
@@ -456,10 +430,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             continue;
                         }
                         InputResult::RunAction(action) => {
-                             handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner, &mut history).await;
-                             line.clear();
-                             wizards::write_prompt_for_state(io, &mode);
-                             continue;
+                            handle_command_action(
+                                action,
+                                &mut mode,
+                                &mut cube_mode,
+                                &mut cube,
+                                io,
+                                &mut term_cols,
+                                &mut term_rows,
+                                &spawner,
+                                &mut history,
+                            )
+                            .await;
+                            line.clear();
+                            wizards::write_prompt_for_state(io, &mode);
+                            continue;
                         }
                         InputResult::ProcessCommand => {
                             // Fall through to standard shell command processing
@@ -474,9 +459,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         let _ = input_buf.push_str(line.as_str());
                         let input = input_buf.as_str();
                         if !input.chars().any(|ch| ch.is_whitespace()) {
-                             // ... existing tab completion logic ...
+                            // ... existing tab completion logic ...
                         }
-                        
+
                         // Execute command
                         let action = handle_line(
                             &line,
@@ -489,36 +474,48 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         );
                         let cmd_echo = line.clone();
                         line.clear();
-                        
+
                         // We reset scroll offset on new command? Usually yes.
                         scroll_offset = 0;
-                        
-                        ReverseOutput::new(io, term_cols, term_rows, &mut history).echo_command(cmd_echo.trim());
-                        handle_command_action(action, &mut mode, &mut cube_mode, &mut cube, io, &mut term_cols, &mut term_rows, &spawner, &mut history).await;
+
+                        ReverseOutput::new(io, term_cols, term_rows, &mut history)
+                            .echo_command(cmd_echo.trim());
+                        handle_command_action(
+                            action,
+                            &mut mode,
+                            &mut cube_mode,
+                            &mut cube,
+                            io,
+                            &mut term_cols,
+                            &mut term_rows,
+                            &spawner,
+                            &mut history,
+                        )
+                        .await;
                         wizards::write_prompt_for_state(io, &mode);
                     } else {
-                         // Empty line
-                         line.clear();
-                         // Echo empty line? "ReverseOutput" handles newline?
-                         // io.write_str("\r\n"); 
-                         // But we want it in history maybe? No.
-                         // Standard shell just prints another prompt.
-                         // But we should probably advance the line physically?
-                         // If we just reprint prompt at same location it looks like nothing happened.
-                         // But handle_line usually scrolls output?
-                         
-                         // If we just print \r\n, it bypasses our history.
-                         // We should use ReverseOutput to "print nothing" but trigger a line shift?
-                         // Or just echo empty string?
-                         // ReverseOutput::echo_command("") returns early.
-                         
-                         // Let's just do io.write_str("\r\n") but it might mess up if we aren't careful.
-                         // Actually, write_prompt puts cursor at (2,1).
-                         // If we \r\n, cursor goes to (3,1).
-                         // We should validly consume a line in history buffer?
-                         // Let's just write \r\n for now.
-                         io.write_str("\r\n"); 
-                         wizards::write_prompt_for_state(io, &mode);
+                        // Empty line
+                        line.clear();
+                        // Echo empty line? "ReverseOutput" handles newline?
+                        // io.write_str("\r\n");
+                        // But we want it in history maybe? No.
+                        // Standard shell just prints another prompt.
+                        // But we should probably advance the line physically?
+                        // If we just reprint prompt at same location it looks like nothing happened.
+                        // But handle_line usually scrolls output?
+
+                        // If we just print \r\n, it bypasses our history.
+                        // We should use ReverseOutput to "print nothing" but trigger a line shift?
+                        // Or just echo empty string?
+                        // ReverseOutput::echo_command("") returns early.
+
+                        // Let's just do io.write_str("\r\n") but it might mess up if we aren't careful.
+                        // Actually, write_prompt puts cursor at (2,1).
+                        // If we \r\n, cursor goes to (3,1).
+                        // We should validly consume a line in history buffer?
+                        // Let's just write \r\n for now.
+                        io.write_str("\r\n");
+                        wizards::write_prompt_for_state(io, &mode);
                     }
                 }
                 0x08 | 0x7F => {
@@ -528,7 +525,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                         io.write_str("\x08 \x08");
                     }
                 }
-                0x03 => { // Ctrl+C
+                0x03 => {
+                    // Ctrl+C
                     utf8.clear();
                     line.clear();
                     io.write_str("^C\r\n");
@@ -537,14 +535,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 }
                 b'\t' => {
                     utf8.clear();
-                    handle_tab_completion(
-                        io,
-                        &mut line,
-                        term_cols,
-                        term_rows,
-                        &mode,
-                        &mut history,
-                    );
+                    handle_tab_completion(io, &mut line, term_cols, term_rows, &mode, &mut history);
                 }
                 _ => {
                     if b >= 0x20 {
@@ -556,7 +547,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     }
                 }
             }
-
         } else {
             if cube_mode {
                 cube.draw_frame(io);
@@ -564,18 +554,22 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 continue;
             }
 
-             if let ShellMode::Wait { deadline, action } = &mode {
+            if let ShellMode::Wait { deadline, action } = &mode {
                 if Instant::now() >= *deadline {
-                     // Check specific actions on timeout
-                     match action {
+                    // Check specific actions on timeout
+                    match action {
                         PendingAction::AcpiReset => {
                             if let Err(e) = crate::efi::acpi::facp::reset_system() {
                                 io.write_fmt(format_args!("\r\nacpi reset failed: {:?}\r\n", e));
                             }
                         }
                         PendingAction::AcpiState(level) => {
-                            if let Err(e) = crate::efi::acpi::facp::enter_named_sleep_state(*level) {
-                                io.write_fmt(format_args!("\r\nacpi s{} failed: {:?}\r\n", level, e));
+                            if let Err(e) = crate::efi::acpi::facp::enter_named_sleep_state(*level)
+                            {
+                                io.write_fmt(format_args!(
+                                    "\r\nacpi s{} failed: {:?}\r\n",
+                                    level, e
+                                ));
                             }
                         }
                         _ => {}
@@ -583,14 +577,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     mode = ShellMode::Idle;
                     wizards::write_prompt_for_state(io, &mode);
                 }
-             }
-            
+            }
+
             Timer::after(EmbassyDuration::from_millis(2)).await;
         }
     }
 }
-
-
 
 fn handle_line(
     line: &str,
@@ -722,15 +714,7 @@ async fn handle_command_action(
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
     actions::handle_command_action(
-        action,
-        mode,
-        cube_mode,
-        cube,
-        io,
-        term_cols,
-        term_rows,
-        spawner,
-        history,
+        action, mode, cube_mode, cube, io, term_cols, term_rows, spawner, history,
     )
     .await;
 }

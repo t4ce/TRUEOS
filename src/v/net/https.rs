@@ -5,20 +5,20 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use trueos_v::vnet as vnet;
+use trueos_v::vnet;
 
 use super::dns::{self, DnsConfig};
 use super::Queue;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use crate::surface::io::cabi::{
-    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND, FS_ERR_TIMEOUT,
-    FS_ERR_NO_SPACE, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
+    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND, FS_ERR_NO_SPACE,
+    FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
 };
-use spin::Mutex;
 use crate::wait::WaitQueue;
+use spin::Mutex;
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
@@ -59,7 +59,8 @@ impl Default for KeepAliveState {
     }
 }
 
-static VHTTPS_KEEPALIVE_POOL: Mutex<BTreeMap<String, &'static KeepAliveConn>> = Mutex::new(BTreeMap::new());
+static VHTTPS_KEEPALIVE_POOL: Mutex<BTreeMap<String, &'static KeepAliveConn>> =
+    Mutex::new(BTreeMap::new());
 
 fn keepalive_pool_key(dev_idx: usize, host: &str, port: u16) -> String {
     // host is already a DNS name in our URL parser; no IPv6 here.
@@ -129,7 +130,8 @@ struct InflightFetch {
     followers: Vec<u32>,
 }
 
-static CABI_NET_FETCH_INFLIGHT: Mutex<BTreeMap<String, InflightFetch>> = Mutex::new(BTreeMap::new());
+static CABI_NET_FETCH_INFLIGHT: Mutex<BTreeMap<String, InflightFetch>> =
+    Mutex::new(BTreeMap::new());
 
 async fn net_fetch_acquire_slot() {
     loop {
@@ -244,7 +246,11 @@ fn normalize_rel(path: &str, allow_empty: bool) -> Result<String, i32> {
     let mut out = String::new();
     let t = path.trim();
     if t.is_empty() {
-        return if allow_empty { Ok(out) } else { Err(FS_ERR_BAD_PATH) };
+        return if allow_empty {
+            Ok(out)
+        } else {
+            Err(FS_ERR_BAD_PATH)
+        };
     }
 
     for part in t.split('/') {
@@ -311,9 +317,7 @@ fn leak_str(s: String) -> &'static str {
 }
 
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
 fn parse_http_status(buf: &[u8]) -> Option<u16> {
@@ -367,7 +371,8 @@ fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         if k.len() != name.len() {
             continue;
         }
-        if !k.iter()
+        if !k
+            .iter()
             .zip(name.iter())
             .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
         {
@@ -505,7 +510,12 @@ fn log_http_head(prefix: &str, host: &str, head: HttpHead) {
             );
         }
         HttpBodyKind::Chunked => {
-            crate::log!("{} host={} status={} body=chunked\n", prefix, host, head.status);
+            crate::log!(
+                "{} host={} status={} body=chunked\n",
+                prefix,
+                host,
+                head.status
+            );
         }
     }
 }
@@ -515,9 +525,10 @@ async fn write_body_to_tmp_file(
     tmp_path: &str,
     body: &[u8],
 ) -> Result<(), i32> {
-    let Some(sh) = crate::v::fs::trueosfs::file_write_begin_async(disk, tmp_path, body.len() as u64)
-        .await
-        .map_err(block_error_to_code)?
+    let Some(sh) =
+        crate::v::fs::trueosfs::file_write_begin_async(disk, tmp_path, body.len() as u64)
+            .await
+            .map_err(block_error_to_code)?
     else {
         return Err(FS_ERR_NO_SPACE);
     };
@@ -542,7 +553,9 @@ async fn fetch_on_device(
     body_json: Option<&str>,
     auth_token: Option<&str>,
 ) -> Result<Vec<u8>, FetchError> {
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
+        .await
+    {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
         Err(_) => return Err(FetchError::DnsFailed),
@@ -694,7 +707,8 @@ async fn fetch_on_device(
                             let status = parse_http_status(&plaintext).unwrap_or(0);
                             if status != 200 {
                                 if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers) {
+                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                    {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
                                         }
@@ -703,7 +717,11 @@ async fn fetch_on_device(
                                 }
 
                                 // Log error bodies (often JSON) to aid debugging.
-                                let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                                let is_chunked = header_contains_token(
+                                    headers,
+                                    b"transfer-encoding",
+                                    b"chunked",
+                                );
                                 let decoded_body = if is_chunked {
                                     decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
                                 } else if let Some(len) = header_parse_content_length(headers) {
@@ -711,7 +729,11 @@ async fn fetch_on_device(
                                 } else {
                                     body.to_vec()
                                 };
-                                crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
+                                crate::log!(
+                                    "vhttps: http_error status={} body_len={}\n",
+                                    status,
+                                    decoded_body.len()
+                                );
                                 if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
                                     log_utf8_chunks("vhttps: http_error_body: ", s);
                                 } else {
@@ -731,7 +753,8 @@ async fn fetch_on_device(
                                 return Ok(Vec::new());
                             }
 
-                            let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                            let is_chunked =
+                                header_contains_token(headers, b"transfer-encoding", b"chunked");
                             if is_chunked {
                                 if let Some(decoded) = decode_http_chunked(body) {
                                     if decoded.len() > max_bytes {
@@ -745,7 +768,10 @@ async fn fetch_on_device(
                                     }
                                     return Ok(decoded);
                                 } else {
-                                     crate::log!("vhttps: incomplete chunked body. len={}\n", body.len());
+                                    crate::log!(
+                                        "vhttps: incomplete chunked body. len={}\n",
+                                        body.len()
+                                    );
                                 }
                             } else if let Some(len) = header_parse_content_length(headers) {
                                 if body.len() >= len {
@@ -788,7 +814,8 @@ async fn fetch_on_device(
                         }
 
                         // Log error bodies (often JSON) to aid debugging.
-                        let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                        let is_chunked =
+                            header_contains_token(headers, b"transfer-encoding", b"chunked");
                         let decoded_body = if is_chunked {
                             decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
                         } else if let Some(len) = header_parse_content_length(headers) {
@@ -796,7 +823,11 @@ async fn fetch_on_device(
                         } else {
                             body.to_vec()
                         };
-                        crate::log!("vhttps: http_error status={} body_len={}\n", status, decoded_body.len());
+                        crate::log!(
+                            "vhttps: http_error status={} body_len={}\n",
+                            status,
+                            decoded_body.len()
+                        );
                         if let Ok(s) = core::str::from_utf8(decoded_body.as_slice()) {
                             log_utf8_chunks("vhttps: http_error_body: ", s);
                         } else {
@@ -806,8 +837,9 @@ async fn fetch_on_device(
                         return Err(FetchError::Http(status));
                     }
 
-                    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
-                    let  decoded_body = if is_chunked {
+                    let is_chunked =
+                        header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let decoded_body = if is_chunked {
                         decode_http_chunked(body).unwrap_or_else(|| body.to_vec())
                     } else if let Some(len) = header_parse_content_length(headers) {
                         body.get(..len).unwrap_or(body).to_vec()
@@ -921,7 +953,9 @@ async fn fetch_on_device_sse(
         }
     }
 
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
+        .await
+    {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
         Err(_) => return Err(FetchError::DnsFailed),
@@ -1074,7 +1108,8 @@ async fn fetch_on_device_sse(
                         return Err(FetchError::Http(status));
                     }
 
-                    let is_chunked = header_contains_token(headers, b"transfer-encoding", b"chunked");
+                    let is_chunked =
+                        header_contains_token(headers, b"transfer-encoding", b"chunked");
                     body_is_chunked = is_chunked;
                     if !logged_hdr_parsed {
                         crate::log!(
@@ -1209,8 +1244,16 @@ async fn fetch_on_device_sse(
                                     "vhttps-sse: first-event host={} dev={} type={} preview={}\n",
                                     parsed.host,
                                     dev_idx,
-                                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
-                                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                                    if last_sse_type.is_empty() {
+                                        "-"
+                                    } else {
+                                        last_sse_type.as_str()
+                                    },
+                                    if last_sse_preview.is_empty() {
+                                        "-"
+                                    } else {
+                                        last_sse_preview.as_str()
+                                    },
                                 );
                                 logged_first_event = true;
                             }
@@ -1259,7 +1302,10 @@ async fn fetch_on_device_sse(
 
         if !sent_connect {
             let _ = cmds.push(TlsCommand::OpenTcpConnect {
-                remote: vnet::EndpointV4 { addr: ip, port: parsed.port },
+                remote: vnet::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
                 server_name,
                 cfg: cfg.clone(),
                 roots: roots.clone(),
@@ -1374,15 +1420,21 @@ async fn fetch_on_device_to_file_keepalive(
         let st = conn.state.lock();
         if st.handle.is_none() || !st.connected {
             drop(st);
-            match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+            match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
+                .await
+            {
                 Ok(v) => ip = Some(v),
                 Err(dns::DnsError::Timeout) => {
                     keepalive_release(conn);
-                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsTimeout)));
+                    return Err(FetchToFileError::Code(fetch_error_to_code(
+                        FetchError::DnsTimeout,
+                    )));
                 }
                 Err(_) => {
                     keepalive_release(conn);
-                    return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsFailed)));
+                    return Err(FetchToFileError::Code(fetch_error_to_code(
+                        FetchError::DnsFailed,
+                    )));
                 }
             }
         }
@@ -1412,7 +1464,9 @@ async fn fetch_on_device_to_file_keepalive(
         if handle.is_none() && !connect_in_flight {
             let Some(ip) = ip else {
                 keepalive_release(conn);
-                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ConnectTimeout)));
+                return Err(FetchToFileError::Code(fetch_error_to_code(
+                    FetchError::ConnectTimeout,
+                )));
             };
             let _ = conn.cmds.push(TlsCommand::OpenTcpConnect {
                 remote: vnet::EndpointV4 {
@@ -1464,7 +1518,9 @@ async fn fetch_on_device_to_file_keepalive(
 
         if Instant::now() >= deadline {
             keepalive_release(conn);
-            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::TlsTimeout)));
+            return Err(FetchToFileError::Code(fetch_error_to_code(
+                FetchError::TlsTimeout,
+            )));
         }
         Timer::after(EmbassyDuration::from_millis(2)).await;
     }
@@ -1507,7 +1563,9 @@ async fn fetch_on_device_to_file_keepalive(
                                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                             }
                             keepalive_release(conn);
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                            return Err(FetchToFileError::Code(fetch_error_to_code(
+                                FetchError::Http(0),
+                            )));
                         }
 
                         if let Some(hdr_end) = find_http_header_end(&header_buf) {
@@ -1515,18 +1573,26 @@ async fn fetch_on_device_to_file_keepalive(
                             let status = parse_http_status(headers).unwrap_or(0);
                             if status != 200 {
                                 if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers) {
+                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                    {
                                         keepalive_release(conn);
-                                        return Err(FetchToFileError::Redirect { status, url: next });
+                                        return Err(FetchToFileError::Redirect {
+                                            status,
+                                            url: next,
+                                        });
                                     }
                                 }
                                 keepalive_release(conn);
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(status))));
+                                return Err(FetchToFileError::Code(fetch_error_to_code(
+                                    FetchError::Http(status),
+                                )));
                             }
 
                             let Some(head) = parse_http_head(headers) else {
                                 keepalive_release(conn);
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                                return Err(FetchToFileError::Code(fetch_error_to_code(
+                                    FetchError::Http(0),
+                                )));
                             };
 
                             body_expected = match head.body {
@@ -1539,7 +1605,9 @@ async fn fetch_on_device_to_file_keepalive(
 
                             if !body_is_chunked && body_expected > max_bytes {
                                 keepalive_release(conn);
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                return Err(FetchToFileError::Code(fetch_error_to_code(
+                                    FetchError::ResponseTooLarge,
+                                )));
                             }
 
                             if !body_is_chunked {
@@ -1567,17 +1635,21 @@ async fn fetch_on_device_to_file_keepalive(
                             if header_buf.len() > body_start {
                                 let part = &header_buf[body_start..];
                                 if body_is_chunked {
-                                    let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                                    let room =
+                                        chunked_capture_cap.saturating_sub(chunked_raw_body.len());
                                     let take = part.len().min(room);
                                     chunked_raw_body.extend_from_slice(&part[..take]);
                                 } else if let Some(sh) = stream_handle {
                                     let rem = body_expected.saturating_sub(body_written);
                                     let take = part.len().min(rem);
                                     if take > 0 {
-                                        crate::v::fs::trueosfs::file_write_chunk_async(sh, &part[..take])
-                                            .await
-                                            .map_err(block_error_to_code)
-                                            .map_err(FetchToFileError::Code)?;
+                                        crate::v::fs::trueosfs::file_write_chunk_async(
+                                            sh,
+                                            &part[..take],
+                                        )
+                                        .await
+                                        .map_err(block_error_to_code)
+                                        .map_err(FetchToFileError::Code)?;
                                         body_written = body_written.saturating_add(take);
                                     }
                                 }
@@ -1604,7 +1676,9 @@ async fn fetch_on_device_to_file_keepalive(
                         if let Some(decoded) = decode_http_chunked(chunked_raw_body.as_slice()) {
                             if decoded.len() > max_bytes {
                                 keepalive_release(conn);
-                                return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::ResponseTooLarge)));
+                                return Err(FetchToFileError::Code(fetch_error_to_code(
+                                    FetchError::ResponseTooLarge,
+                                )));
                             }
                             write_body_to_tmp_file(disk, tmp_path, decoded.as_slice())
                                 .await
@@ -1648,7 +1722,9 @@ async fn fetch_on_device_to_file_keepalive(
                             let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                         }
                         keepalive_release(conn);
-                        return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
+                        return Err(FetchToFileError::Code(fetch_error_to_code(
+                            FetchError::BodyTimeout,
+                        )));
                     }
                 }
                 TlsEvent::TlsError { .. } => {
@@ -1672,7 +1748,9 @@ async fn fetch_on_device_to_file_keepalive(
                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
             }
             keepalive_release(conn);
-            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::BodyTimeout)));
+            return Err(FetchToFileError::Code(fetch_error_to_code(
+                FetchError::BodyTimeout,
+            )));
         }
         Timer::after(EmbassyDuration::from_millis(2)).await;
     }
@@ -1688,10 +1766,20 @@ async fn fetch_on_device_to_file(
 ) -> Result<(), FetchToFileError> {
     let t0 = Instant::now();
 
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default()).await {
+    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
+        .await
+    {
         Ok(ip) => ip,
-        Err(dns::DnsError::Timeout) => return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsTimeout))),
-        Err(_) => return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::DnsFailed))),
+        Err(dns::DnsError::Timeout) => {
+            return Err(FetchToFileError::Code(fetch_error_to_code(
+                FetchError::DnsTimeout,
+            )))
+        }
+        Err(_) => {
+            return Err(FetchToFileError::Code(fetch_error_to_code(
+                FetchError::DnsFailed,
+            )))
+        }
     };
 
     let t_dns = Instant::now();
@@ -1846,7 +1934,9 @@ async fn fetch_on_device_to_file(
                             if let Some(sh) = stream_handle.take() {
                                 let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                             }
-                            return Err(FetchToFileError::Code(fetch_error_to_code(FetchError::Http(0))));
+                            return Err(FetchToFileError::Code(fetch_error_to_code(
+                                FetchError::Http(0),
+                            )));
                         }
 
                         if let Some(hdr_end) = find_http_header_end(&header_buf) {
@@ -1855,12 +1945,15 @@ async fn fetch_on_device_to_file(
                             last_http_status = status;
                             if status != 200 {
                                 if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers) {
+                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                    {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
                                         }
                                         if let Some(sh) = stream_handle.take() {
-                                            let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                            let _ =
+                                                crate::v::fs::trueosfs::file_write_abort_async(sh)
+                                                    .await;
                                         }
                                         log_vhttps_file_timing(
                                             parsed.host.as_str(),
@@ -1876,7 +1969,10 @@ async fn fetch_on_device_to_file(
                                             t_write_done,
                                             fetch_error_to_code(FetchError::Http(status)),
                                         );
-                                        return Err(FetchToFileError::Redirect { status, url: next });
+                                        return Err(FetchToFileError::Redirect {
+                                            status,
+                                            url: next,
+                                        });
                                     }
                                 }
 
@@ -1884,7 +1980,8 @@ async fn fetch_on_device_to_file(
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
                                 if let Some(sh) = stream_handle.take() {
-                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                    let _ =
+                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 let rc = fetch_error_to_code(FetchError::Http(status));
                                 log_vhttps_file_timing(
@@ -1909,7 +2006,8 @@ async fn fetch_on_device_to_file(
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
                                 if let Some(sh) = stream_handle.take() {
-                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                    let _ =
+                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 crate::log!(
                                     "vhttps-file: invalid-http-head host={} hdr_bytes={}\n",
@@ -1947,7 +2045,8 @@ async fn fetch_on_device_to_file(
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
                                 }
                                 if let Some(sh) = stream_handle.take() {
-                                    let _ = crate::v::fs::trueosfs::file_write_abort_async(sh).await;
+                                    let _ =
+                                        crate::v::fs::trueosfs::file_write_abort_async(sh).await;
                                 }
                                 let rc = fetch_error_to_code(FetchError::ResponseTooLarge);
                                 log_vhttps_file_timing(
@@ -2010,7 +2109,8 @@ async fn fetch_on_device_to_file(
                             if header_buf.len() > body_start {
                                 let part = &header_buf[body_start..];
                                 if body_is_chunked {
-                                    let room = chunked_capture_cap.saturating_sub(chunked_raw_body.len());
+                                    let room =
+                                        chunked_capture_cap.saturating_sub(chunked_raw_body.len());
                                     if room == 0 {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -2059,10 +2159,13 @@ async fn fetch_on_device_to_file(
                                     let rem = body_expected.saturating_sub(body_written);
                                     let take = part.len().min(rem);
                                     if take > 0 {
-                                        crate::v::fs::trueosfs::file_write_chunk_async(sh, &part[..take])
-                                            .await
-                                            .map_err(block_error_to_code)
-                                            .map_err(FetchToFileError::Code)?;
+                                        crate::v::fs::trueosfs::file_write_chunk_async(
+                                            sh,
+                                            &part[..take],
+                                        )
+                                        .await
+                                        .map_err(block_error_to_code)
+                                        .map_err(FetchToFileError::Code)?;
                                         body_written = body_written.saturating_add(take);
                                     }
                                 }
@@ -2484,7 +2587,16 @@ pub async fn post_https_json_async(
         let mut redirect: Option<(u16, String)> = None;
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, Some(body_json.as_str()), auth_token).await {
+            match fetch_on_device(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                Some(body_json.as_str()),
+                auth_token,
+            )
+            .await
+            {
                 Ok(v) => return Ok(v),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
@@ -2616,9 +2728,18 @@ pub async fn fetch_https_to_file_async(
 
         for dev_idx in 0..dev_count {
             let r = if VHTTPS_KEEPALIVE_ENABLE {
-                fetch_on_device_to_file_keepalive(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str()).await
+                fetch_on_device_to_file_keepalive(
+                    &parsed,
+                    dev_idx,
+                    timeout_ms,
+                    max_bytes,
+                    disk,
+                    tmp.as_str(),
+                )
+                .await
             } else {
-                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str()).await
+                fetch_on_device_to_file(&parsed, dev_idx, timeout_ms, max_bytes, disk, tmp.as_str())
+                    .await
             };
 
             match r {
@@ -2659,7 +2780,8 @@ pub async fn fetch_https_to_file_async(
 
     let t_dl = Instant::now();
 
-    let rename_res = crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await;
+    let rename_res =
+        crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await;
     let t_ren = Instant::now();
 
     let total_ms = t_ren.saturating_duration_since(t0).as_millis() as u64;
@@ -2746,7 +2868,9 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     crate::wait::spawn_local_detached(async move {
         let t0 = Instant::now();
         net_fetch_acquire_slot().await;
-        let rc = match fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES).await {
+        let rc = match fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES)
+            .await
+        {
             Ok(()) => 0,
             Err(code) => code,
         };
@@ -2756,7 +2880,10 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
         // Complete leader + all followers.
         let followers = {
             let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
-            inflight.remove(&key).map(|e| e.followers).unwrap_or_default()
+            inflight
+                .remove(&key)
+                .map(|e| e.followers)
+                .unwrap_or_default()
         };
 
         let mut map = CABI_NET_FETCH_RESULTS.lock();

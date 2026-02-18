@@ -34,7 +34,9 @@ pub(super) async fn handle_command_action(
             super::print_netbench_nic_table(io).await;
             io.write_str("netbench: enter nic id (blank/q cancels)\r\n");
         }
-        CommandAction::Qjs { src } => handle_qjs(io, term_cols, term_rows, spawner, history, src).await,
+        CommandAction::Qjs { src } => {
+            handle_qjs(io, term_cols, term_rows, spawner, history, src).await
+        }
         CommandAction::EnterCube => handle_enter_cube(cube_mode, cube, io, term_cols, term_rows),
         CommandAction::EnterIco => handle_enter_ico(cube_mode, cube, io, term_cols, term_rows),
         CommandAction::EnterGo => handle_enter_go(io).await,
@@ -251,19 +253,29 @@ async fn handle_do_format(mode: &mut ShellMode, io: &'static dyn ShellBackend, d
                 if let Ok(reg) = crate::v::disc::partition::register_gpt_partitions(handle).await {
                     if let Some(first) = reg.first() {
                         if let Some(part_handle) = crate::disc::block::device_handle(first.id) {
-                            match crate::v::fs::trueosfs::format_blank_partition_async(part_handle).await {
+                            match crate::v::fs::trueosfs::format_blank_partition_async(part_handle)
+                                .await
+                            {
                                 Ok(()) => {
-                                    let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(handle).await;
+                                    let (status, err) =
+                                        crate::v::disc::detect::detect_physical_disk_detail(handle)
+                                            .await;
                                     io.write_fmt(format_args!(
                                         "format: ok (status now: {}{})\r\n",
                                         status.short(),
                                         match (&status, err) {
-                                            (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!("; err={:?}", e),
+                                            (
+                                                crate::v::disc::detect::DiscStatus::Unknown,
+                                                Some(e),
+                                            ) => alloc::format!("; err={:?}", e),
                                             _ => alloc::string::String::new(),
                                         }
                                     ));
                                 }
-                                Err(e) => io.write_fmt(format_args!("format: TRUEOSFS failed ({:?})\r\n", e)),
+                                Err(e) => io.write_fmt(format_args!(
+                                    "format: TRUEOSFS failed ({:?})\r\n",
+                                    e
+                                )),
                             }
                         }
                     }
@@ -288,12 +300,21 @@ async fn handle_do_install(
         .into_iter()
         .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
     if let Some(handle) = target {
-        if let (Some(kernel), Some(bootx64)) = (crate::limine::install_kernel_bytes(), crate::limine::install_bootx64_bytes()) {
+        if let (Some(kernel), Some(bootx64)) = (
+            crate::limine::install_kernel_bytes(),
+            crate::limine::install_bootx64_bytes(),
+        ) {
             io.write_str("\r\ninstall: starting...\r\n");
             match crate::matrix::alloc_slot(alloc::format!("install disc{:03}", disc_id).as_str()) {
                 Some(slot) => {
-                    let _ = spawner.spawn(crate::matrix::install_matrix_job(slot, handle, bootx64, kernel));
-                    io.write_fmt(format_args!("install: started §{} (dump logs with §{})\r\n", slot + 1, slot + 1));
+                    let _ = spawner.spawn(crate::matrix::install_matrix_job(
+                        slot, handle, bootx64, kernel,
+                    ));
+                    io.write_fmt(format_args!(
+                        "install: started §{} (dump logs with §{})\r\n",
+                        slot + 1,
+                        slot + 1
+                    ));
                     super::refresh_title_bar(io, *term_cols);
                 }
                 None => io.write_str("install: matrix full\r\n"),
@@ -322,7 +343,11 @@ async fn handle_do_update(
         match crate::matrix::alloc_slot(alloc::format!("update disc{:03}", disc_id).as_str()) {
             Some(slot) => {
                 let _ = spawner.spawn(crate::matrix::update_matrix_job(slot, handle));
-                io.write_fmt(format_args!("update: started §{} (dump logs with §{})\r\n", slot + 1, slot + 1));
+                io.write_fmt(format_args!(
+                    "update: started §{} (dump logs with §{})\r\n",
+                    slot + 1,
+                    slot + 1
+                ));
                 super::refresh_title_bar(io, *term_cols);
             }
             None => io.write_str("update: matrix full\r\n"),

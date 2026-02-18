@@ -23,7 +23,9 @@ pub trait NetDevice {
     }
 
     /// Return the number of pending RX frames.
-    fn rx_queue_len(&self) -> usize { 0 }
+    fn rx_queue_len(&self) -> usize {
+        0
+    }
     /// Transmit a raw Ethernet frame.
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
 }

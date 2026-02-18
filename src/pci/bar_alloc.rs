@@ -18,7 +18,9 @@ struct MmioAlloc32 {
     next: u64,
 }
 
-static MMIO32: Mutex<MmioAlloc32> = Mutex::new(MmioAlloc32 { next: TGA_MMIO32_BASE });
+static MMIO32: Mutex<MmioAlloc32> = Mutex::new(MmioAlloc32 {
+    next: TGA_MMIO32_BASE,
+});
 
 fn align_up(val: u64, align: u64) -> u64 {
     if align == 0 {

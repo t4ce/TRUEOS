@@ -68,7 +68,11 @@ impl<const N: usize> AsciiBranches for [bool; N] {
     }
 
     fn get(&self, idx: usize) -> bool {
-        if idx < N { self[idx] } else { false }
+        if idx < N {
+            self[idx]
+        } else {
+            false
+        }
     }
 
     fn set(&mut self, idx: usize, val: bool) {
