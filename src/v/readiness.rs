@@ -6,7 +6,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 //
 // These are monotonic: once set, they are never cleared.
 // Consumers can `await` prerequisites instead of guessing boot ordering.
-pub const HID_MOUSE_CLAIMED: u32 = 1 << 1;
 pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;
 pub const PIANO_CLAIMED: u32 = 1 << 3;
 pub const UAC_ATTACHED: u32 = 1 << 5;

@@ -256,8 +256,7 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
 
 // --- registry ---
 
-const HID_ANY_CLAIMED: u32 =
-    crate::v::readiness::HID_MOUSE_CLAIMED | crate::v::readiness::HID_KEYBOARD_CLAIMED;
+const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
