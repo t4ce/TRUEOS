@@ -165,7 +165,7 @@ pub(crate) async fn control_in(
             )
             .await
             .ok()
-            == Some(1)
+                == Some(1)
         {
             attempt = 1;
             continue;
@@ -282,7 +282,7 @@ pub(crate) async fn control_out(
             )
             .await
             .ok()
-            == Some(1)
+                == Some(1)
         {
             attempt = 1;
             continue;

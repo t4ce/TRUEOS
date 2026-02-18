@@ -1,8 +1,8 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
+use crate::wait;
 use raw_cpuid::CpuId;
 use x86_64::registers::model_specific::Msr;
-use crate::wait;
 
 const MSR_IA32_MISC_ENABLE: u32 = 0x1A0;
 const TURBO_DISABLE_BIT: u64 = 1 << 38;
@@ -67,7 +67,10 @@ fn supported_cpuid() -> bool {
         .get_vendor_info()
         .map(|v| v.as_str() == "GenuineIntel")
         .unwrap_or(false);
-    let has_msr = cpuid.get_feature_info().map(|f| f.has_msr()).unwrap_or(false);
+    let has_msr = cpuid
+        .get_feature_info()
+        .map(|f| f.has_msr())
+        .unwrap_or(false);
     vendor_intel && has_msr
 }
 

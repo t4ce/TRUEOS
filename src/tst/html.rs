@@ -104,9 +104,7 @@ fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
 }
 
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
 /// Minimal plaintext HTTP GET downloader.
@@ -155,7 +153,10 @@ pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
     };
 
     let _ = net.submit(api::Command::OpenTcpConnect {
-        remote: api::EndpointV4 { addr: ip, port: parsed.port },
+        remote: api::EndpointV4 {
+            addr: ip,
+            port: parsed.port,
+        },
     });
     crate::matrix::push_line(slot_id, "get: opening tcp");
 

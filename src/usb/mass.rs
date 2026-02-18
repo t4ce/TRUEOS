@@ -1,24 +1,26 @@
-use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN,
-    EP_TYPE_BULK_OUT,
-};
 use super::bot;
 use super::scsi;
-use crate::pci::dma;
+use super::xhci::{
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
+    Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+};
 use crate::disc::block as disc_block;
+use crate::pci::dma;
+use alloc::boxed::Box;
+use alloc::vec::Vec as AllocVec;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
-use alloc::boxed::Box;
-use alloc::vec::Vec as AllocVec;
 use heapless::Vec;
 use spin::Mutex;
 
 #[inline]
 fn sense_is_transient(key: scsi::SenseKey) -> bool {
-    matches!(key, scsi::SenseKey::NotReady | scsi::SenseKey::UnitAttention | scsi::SenseKey::AbortedCommand)
+    matches!(
+        key,
+        scsi::SenseKey::NotReady | scsi::SenseKey::UnitAttention | scsi::SenseKey::AbortedCommand
+    )
 }
 
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
@@ -547,8 +549,8 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     // Only register a block device if we got a sane capacity.
     if block_count > 0 {
-        let descriptor = disc_block::DeviceDescriptor::new(disc_block::DeviceKind::Unknown)
-            .with_label("usbms");
+        let descriptor =
+            disc_block::DeviceDescriptor::new(disc_block::DeviceKind::Unknown).with_label("usbms");
 
         let dev = UsbMassBlockDevice {
             controller_id,
@@ -581,7 +583,6 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         // Best-effort: defer TRUEOSFS probing/mounting.
         // Doing this synchronously here can stall USB enumeration and starve xHCI poll tasks.
         crate::v::fs::trueosfs::request_mount_root(handle);
-
     }
 
     Ok(())
@@ -603,7 +604,11 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
         self.block_count
     }
 
-    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> disc_block::BoxFuture<'a, disc_block::Result<AllocVec<u8>>> {
+    fn read_blocks<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+    ) -> disc_block::BoxFuture<'a, disc_block::Result<AllocVec<u8>>> {
         Box::pin(async move {
             let block_size = self.block_size_bytes() as usize;
             if block_size == 0 {
@@ -614,7 +619,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             }
 
             let blocks_total = blocks as u64;
-            let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+            let end = lba
+                .checked_add(blocks_total)
+                .ok_or(disc_block::Error::OutOfBounds)?;
             if end > self.block_count {
                 return Err(disc_block::Error::OutOfBounds);
             }
@@ -629,7 +636,8 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let mut remaining = out.as_mut_slice();
             let mut cur_lba = lba;
 
-            let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
+            let mut rt = take_runtime(self.controller_id, self.slot_id)
+                .ok_or(disc_block::Error::NotReady)?;
             let ctx = rt.ctx;
             let mut tag = rt.bot_tag;
 
@@ -687,11 +695,15 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 );
                                 if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
-                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
+                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25))
+                                        .await;
                                     continue;
                                 }
                             } else {
-                                crate::log!("usb: mass read csw={:?} request-sense failed\n", csw.status);
+                                crate::log!(
+                                    "usb: mass read csw={:?} request-sense failed\n",
+                                    csw.status
+                                );
                                 attempts = attempts.wrapping_add(1);
                                 embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                 continue;
@@ -732,7 +744,11 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
         })
     }
 
-    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
+    fn write_blocks<'a>(
+        &'a mut self,
+        lba: u64,
+        buf: &'a [u8],
+    ) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
         Box::pin(async move {
             let block_size = self.block_size_bytes() as usize;
             if block_size == 0 || buf.len() % block_size != 0 {
@@ -744,7 +760,9 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                 return Ok(());
             }
 
-            let end = lba.checked_add(blocks_total).ok_or(disc_block::Error::OutOfBounds)?;
+            let end = lba
+                .checked_add(blocks_total)
+                .ok_or(disc_block::Error::OutOfBounds)?;
             if end > self.block_count {
                 return Err(disc_block::Error::OutOfBounds);
             }
@@ -753,7 +771,8 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
             let mut remaining = buf;
             let mut cur_lba = lba;
 
-            let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
+            let mut rt = take_runtime(self.controller_id, self.slot_id)
+                .ok_or(disc_block::Error::NotReady)?;
             let ctx = rt.ctx;
             let mut tag = rt.bot_tag;
 
@@ -813,11 +832,15 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                                 );
                                 if sense_is_transient(sense.sense_key) {
                                     attempts = attempts.wrapping_add(1);
-                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
+                                    embassy_time::Timer::after(EmbassyDuration::from_millis(25))
+                                        .await;
                                     continue;
                                 }
                             } else {
-                                crate::log!("usb: mass write csw={:?} request-sense failed\n", csw.status);
+                                crate::log!(
+                                    "usb: mass write csw={:?} request-sense failed\n",
+                                    csw.status
+                                );
                                 attempts = attempts.wrapping_add(1);
                                 embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                                 continue;
@@ -865,68 +888,69 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
 
     fn flush<'a>(&'a mut self) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
         Box::pin(async move {
-        // Best-effort cache flush for USB mass storage.
-        // Many flash drives are fine without it, but some will not make data durable
-        // across power-loss/reboot unless we issue SYNCHRONIZE CACHE.
-        let mut rt = take_runtime(self.controller_id, self.slot_id).ok_or(disc_block::Error::NotReady)?;
+            // Best-effort cache flush for USB mass storage.
+            // Many flash drives are fine without it, but some will not make data durable
+            // across power-loss/reboot unless we issue SYNCHRONIZE CACHE.
+            let mut rt = take_runtime(self.controller_id, self.slot_id)
+                .ok_or(disc_block::Error::NotReady)?;
 
-        // Some devices (notably many thumb drives) do not implement SYNCHRONIZE CACHE
-        // and will return IllegalRequest forever. Once detected, disable flush for
-        // this device to avoid repeated log spam.
-        if rt.sync_cache_unsupported {
-            register_runtime(rt);
-            return Ok(());
-        }
+            // Some devices (notably many thumb drives) do not implement SYNCHRONIZE CACHE
+            // and will return IllegalRequest forever. Once detected, disable flush for
+            // this device to avoid repeated log spam.
+            if rt.sync_cache_unsupported {
+                register_runtime(rt);
+                return Ok(());
+            }
 
-        let ctx = rt.ctx;
-        let mut tag = rt.bot_tag;
+            let ctx = rt.ctx;
+            let mut tag = rt.bot_tag;
 
-        let mut attempts = 0u8;
-        while attempts < 10 {
-            let c = bot::scsi_synchronize_cache_10_sync(
-                &ctx,
-                &mut rt.ring_out,
-                &mut rt.ring_in,
-                self.slot_id,
-                rt.ep_out_target,
-                rt.ep_in_target,
-                tag,
-            );
-            tag = tag.wrapping_add(1);
+            let mut attempts = 0u8;
+            while attempts < 10 {
+                let c = bot::scsi_synchronize_cache_10_sync(
+                    &ctx,
+                    &mut rt.ring_out,
+                    &mut rt.ring_in,
+                    self.slot_id,
+                    rt.ep_out_target,
+                    rt.ep_in_target,
+                    tag,
+                );
+                tag = tag.wrapping_add(1);
 
-            match c {
-                Ok(csw) if csw.status == bot::BotStatus::Passed => {
-                    rt.bot_tag = tag;
-                    register_runtime(rt);
-                    return Ok(());
-                }
-                Ok(csw) => {
-                    // Some devices report IllegalRequest for sync-cache; treat as success.
-                    if let Some(sense) = bot::scsi_request_sense_fixed_sync(
-                        &ctx,
-                        &mut rt.ring_out,
-                        &mut rt.ring_in,
-                        self.slot_id,
-                        rt.ep_out_target,
-                        rt.ep_in_target,
-                        tag,
-                    ) {
-                        tag = tag.wrapping_add(1);
-                        if sense.sense_key == scsi::SenseKey::IllegalRequest {
-                            crate::log!(
+                match c {
+                    Ok(csw) if csw.status == bot::BotStatus::Passed => {
+                        rt.bot_tag = tag;
+                        register_runtime(rt);
+                        return Ok(());
+                    }
+                    Ok(csw) => {
+                        // Some devices report IllegalRequest for sync-cache; treat as success.
+                        if let Some(sense) = bot::scsi_request_sense_fixed_sync(
+                            &ctx,
+                            &mut rt.ring_out,
+                            &mut rt.ring_in,
+                            self.slot_id,
+                            rt.ep_out_target,
+                            rt.ep_in_target,
+                            tag,
+                        ) {
+                            tag = tag.wrapping_add(1);
+                            if sense.sense_key == scsi::SenseKey::IllegalRequest {
+                                crate::log!(
                                 "usb: mass: SYNCHRONIZE CACHE unsupported; disabling flush (slot={} csw={:?} asc={:#x} ascq={:#x})\n",
                                 self.slot_id,
                                 csw.status,
                                 sense.asc,
                                 sense.ascq
                             );
-                            rt.sync_cache_unsupported = true;
-                            rt.bot_tag = tag;
-                            register_runtime(rt);
-                            return Ok(());
-                        }
+                                rt.sync_cache_unsupported = true;
+                                rt.bot_tag = tag;
+                                register_runtime(rt);
+                                return Ok(());
+                            }
 
-                        crate::log!(
+                            crate::log!(
                             "usb: mass flush csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
                             csw.status,
                             sense.response_code,
@@ -934,33 +958,36 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             sense.asc,
                             sense.ascq
                         );
-                        if sense_is_transient(sense.sense_key) {
+                            if sense_is_transient(sense.sense_key) {
+                                attempts = attempts.wrapping_add(1);
+                                embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
+                                continue;
+                            }
+                        } else {
+                            crate::log!(
+                                "usb: mass flush csw={:?} request-sense failed\n",
+                                csw.status
+                            );
                             attempts = attempts.wrapping_add(1);
                             embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                             continue;
                         }
-                    } else {
-                        crate::log!("usb: mass flush csw={:?} request-sense failed\n", csw.status);
+
+                        rt.bot_tag = tag;
+                        register_runtime(rt);
+                        return Err(disc_block::Error::Io);
+                    }
+                    Err(()) => {
                         attempts = attempts.wrapping_add(1);
                         embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
                         continue;
                     }
-
-                    rt.bot_tag = tag;
-                    register_runtime(rt);
-                    return Err(disc_block::Error::Io);
-                }
-                Err(()) => {
-                    attempts = attempts.wrapping_add(1);
-                    embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;
-                    continue;
                 }
             }
-        }
 
-        rt.bot_tag = tag;
-        register_runtime(rt);
-        Err(disc_block::Error::Io)
+            rt.bot_tag = tag;
+            register_runtime(rt);
+            Err(disc_block::Error::Io)
         })
     }
 }

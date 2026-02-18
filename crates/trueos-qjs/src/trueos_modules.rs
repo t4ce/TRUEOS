@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 
 use core::ffi::{c_char, c_int, CStr};
 use spin::Mutex;
@@ -65,7 +65,6 @@ struct ProcessNextTickCall {
 }
 static PROCESS_NEXT_TICK_QUEUE: Mutex<Vec<ProcessNextTickCall>> = Mutex::new(Vec::new());
 
-
 pub fn set_process_argv(args: &[&str]) {
     let mut out: Vec<Vec<u8>> = Vec::new();
     for arg in args {
@@ -116,8 +115,10 @@ fn log_nl() {
     log_bytes(b"\n");
 }
 
-
-unsafe fn js_arg_to_utf8_bytes(ctx: *mut qjs::JSContext, val: qjs::JSValueConst) -> Option<(*const u8, usize, *const c_char)> {
+unsafe fn js_arg_to_utf8_bytes(
+    ctx: *mut qjs::JSContext,
+    val: qjs::JSValueConst,
+) -> Option<(*const u8, usize, *const c_char)> {
     let mut len: usize = 0;
     let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, val, 0);
     if cstr.is_null() {
@@ -213,12 +214,42 @@ unsafe extern "C" fn qjs_text_get_atlas_small(
     let index_ab = qjs::JS_NewArrayBufferCopy(ctx, index_bytes.as_ptr(), index_bytes.len());
 
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pixels\0".as_ptr() as *const c_char, pixels);
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"width\0".as_ptr() as *const c_char, js_int32(info.width as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"height\0".as_ptr() as *const c_char, js_int32(info.height as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellW\0".as_ptr() as *const c_char, js_int32(info.cell_w as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellH\0".as_ptr() as *const c_char, js_int32(info.cell_h as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridW\0".as_ptr() as *const c_char, js_int32(info.grid_w as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridH\0".as_ptr() as *const c_char, js_int32(info.grid_h as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"width\0".as_ptr() as *const c_char,
+        js_int32(info.width as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"height\0".as_ptr() as *const c_char,
+        js_int32(info.height as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"cellW\0".as_ptr() as *const c_char,
+        js_int32(info.cell_w as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"cellH\0".as_ptr() as *const c_char,
+        js_int32(info.cell_h as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"gridW\0".as_ptr() as *const c_char,
+        js_int32(info.grid_w as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"gridH\0".as_ptr() as *const c_char,
+        js_int32(info.grid_h as i32),
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"index\0".as_ptr() as *const c_char, index_ab);
 
     obj
@@ -269,19 +300,52 @@ unsafe extern "C" fn qjs_text_get_atlas_large(
     let widths_ab = qjs::JS_NewArrayBufferCopy(ctx, widths.as_ptr(), widths.len());
 
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"pixels\0".as_ptr() as *const c_char, pixels);
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"width\0".as_ptr() as *const c_char, js_int32(info.width as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"height\0".as_ptr() as *const c_char, js_int32(info.height as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellW\0".as_ptr() as *const c_char, js_int32(info.cell_w as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cellH\0".as_ptr() as *const c_char, js_int32(info.cell_h as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridW\0".as_ptr() as *const c_char, js_int32(info.grid_w as i32));
-    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"gridH\0".as_ptr() as *const c_char, js_int32(info.grid_h as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"width\0".as_ptr() as *const c_char,
+        js_int32(info.width as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"height\0".as_ptr() as *const c_char,
+        js_int32(info.height as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"cellW\0".as_ptr() as *const c_char,
+        js_int32(info.cell_w as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"cellH\0".as_ptr() as *const c_char,
+        js_int32(info.cell_h as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"gridW\0".as_ptr() as *const c_char,
+        js_int32(info.grid_w as i32),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"gridH\0".as_ptr() as *const c_char,
+        js_int32(info.grid_h as i32),
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"index\0".as_ptr() as *const c_char, index_ab);
     let _ = qjs::JS_SetPropertyStr(ctx, obj, b"widths\0".as_ptr() as *const c_char, widths_ab);
 
     obj
 }
 
-unsafe extern "C" fn qjs_text_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_text_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     let small_name = b"getFontAtlasSmall\0";
     let large_name = b"getFontAtlasLarge\0";
 
@@ -343,10 +407,7 @@ pub(crate) fn has_process_next_tick_pending(ctx: *mut qjs::JSContext) -> bool {
         return false;
     }
     let key = ctx as usize;
-    PROCESS_NEXT_TICK_QUEUE
-        .lock()
-        .iter()
-        .any(|c| c.ctx == key)
+    PROCESS_NEXT_TICK_QUEUE.lock().iter().any(|c| c.ctx == key)
 }
 
 pub(crate) unsafe fn pump_process_next_tick(ctx: *mut qjs::JSContext) -> bool {
@@ -696,11 +757,18 @@ unsafe extern "C" fn qjs_path_resolve(
         acc = prefixed;
     }
     let normalized = qjs::trueos_module_loader::normalize_path_bytes(acc.as_slice());
-    let out = if normalized.is_empty() { b"/".as_slice() } else { normalized.as_slice() };
+    let out = if normalized.is_empty() {
+        b"/".as_slice()
+    } else {
+        normalized.as_slice()
+    };
     qjs::JS_NewStringLen(ctx, out.as_ptr() as *const c_char, out.len())
 }
 
-unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_path_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     if ctx.is_null() || m.is_null() {
         return -1;
     }
@@ -716,7 +784,8 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
             0,
         )
     };
-    if unsafe { qjs::JS_SetModuleExport(ctx, m, join_name.as_ptr() as *const c_char, join_fn) } < 0 {
+    if unsafe { qjs::JS_SetModuleExport(ctx, m, join_name.as_ptr() as *const c_char, join_fn) } < 0
+    {
         return -1;
     }
 
@@ -731,7 +800,10 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
             0,
         )
     };
-    if unsafe { qjs::JS_SetModuleExport(ctx, m, dirname_name.as_ptr() as *const c_char, dirname_fn) } < 0 {
+    if unsafe {
+        qjs::JS_SetModuleExport(ctx, m, dirname_name.as_ptr() as *const c_char, dirname_fn)
+    } < 0
+    {
         return -1;
     }
 
@@ -746,7 +818,10 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
             0,
         )
     };
-    if unsafe { qjs::JS_SetModuleExport(ctx, m, basename_name.as_ptr() as *const c_char, basename_fn) } < 0 {
+    if unsafe {
+        qjs::JS_SetModuleExport(ctx, m, basename_name.as_ptr() as *const c_char, basename_fn)
+    } < 0
+    {
         return -1;
     }
 
@@ -761,7 +836,10 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
             0,
         )
     };
-    if unsafe { qjs::JS_SetModuleExport(ctx, m, extname_name.as_ptr() as *const c_char, extname_fn) } < 0 {
+    if unsafe {
+        qjs::JS_SetModuleExport(ctx, m, extname_name.as_ptr() as *const c_char, extname_fn)
+    } < 0
+    {
         return -1;
     }
 
@@ -776,14 +854,20 @@ unsafe extern "C" fn qjs_path_module_init(ctx: *mut qjs::JSContext, m: *mut qjs:
             0,
         )
     };
-    if unsafe { qjs::JS_SetModuleExport(ctx, m, resolve_name.as_ptr() as *const c_char, resolve_fn) } < 0 {
+    if unsafe {
+        qjs::JS_SetModuleExport(ctx, m, resolve_name.as_ptr() as *const c_char, resolve_fn)
+    } < 0
+    {
         return -1;
     }
 
     0
 }
 
-unsafe extern "C" fn qjs_worker_threads_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_worker_threads_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     qjs::workers::install_worker_threads_exports(ctx, m)
 }
 
@@ -850,7 +934,8 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"version\0".as_ptr() as *const c_char, version);
         let exec_path = qjs::JS_NewStringLen(ctx, b"/bin/qjs".as_ptr() as *const c_char, 8);
         let title = qjs::JS_NewStringLen(ctx, b"trueos-qjs".as_ptr() as *const c_char, 10);
-        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"execPath\0".as_ptr() as *const c_char, exec_path);
+        let _ =
+            qjs::JS_SetPropertyStr(ctx, obj, b"execPath\0".as_ptr() as *const c_char, exec_path);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"title\0".as_ptr() as *const c_char, title);
         let release = qjs::JS_NewObject(ctx);
         if release.is_exception() {
@@ -877,8 +962,18 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
         let _ = qjs::JS_SetPropertyStr(ctx, versions, b"node\0".as_ptr() as *const c_char, node_v);
         let _ = qjs::JS_SetPropertyStr(ctx, versions, b"v8\0".as_ptr() as *const c_char, v8_v);
         let _ = qjs::JS_SetPropertyStr(ctx, versions, b"uv\0".as_ptr() as *const c_char, uv_v);
-        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"modules\0".as_ptr() as *const c_char, modules_v);
-        let _ = qjs::JS_SetPropertyStr(ctx, versions, b"openssl\0".as_ptr() as *const c_char, openssl_v);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            versions,
+            b"modules\0".as_ptr() as *const c_char,
+            modules_v,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            versions,
+            b"openssl\0".as_ptr() as *const c_char,
+            openssl_v,
+        );
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"versions\0".as_ptr() as *const c_char, versions);
 
         // pid (placeholder)
@@ -925,7 +1020,8 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
             qjs::JS_CFUNC_GENERIC,
             0,
         );
-        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"nextTick\0".as_ptr() as *const c_char, next_tick);
+        let _ =
+            qjs::JS_SetPropertyStr(ctx, obj, b"nextTick\0".as_ptr() as *const c_char, next_tick);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cwd\0".as_ptr() as *const c_char, cwd);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"chdir\0".as_ptr() as *const c_char, chdir);
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"hrtime\0".as_ptr() as *const c_char, hrtime);
@@ -946,7 +1042,10 @@ unsafe fn ensure_global_process(ctx: *mut qjs::JSContext) -> Result<qjs::JSValue
     Ok(proc)
 }
 
-unsafe extern "C" fn qjs_process_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_process_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     let proc = match ensure_global_process(ctx) {
         Ok(v) => v,
         Err(_) => return -1,
@@ -1058,18 +1157,48 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
                         qjs::JS_CFUNC_GENERIC,
                         0,
                     );
-                    let _ = qjs::JS_SetPropertyStr(ctx, proto, b"postMessage\0".as_ptr() as *const c_char, pm);
-                    let _ = qjs::JS_SetPropertyStr(ctx, proto, b"terminate\0".as_ptr() as *const c_char, term);
-                    let _ = qjs::JS_SetPropertyStr(ctx, proto, b"onMessage\0".as_ptr() as *const c_char, onm);
-                    let _ = qjs::JS_SetPropertyStr(ctx, proto, b"addEventListener\0".as_ptr() as *const c_char, add_evt);
-                    let _ = qjs::JS_SetPropertyStr(ctx, proto, b"removeEventListener\0".as_ptr() as *const c_char, rm_evt);
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        proto,
+                        b"postMessage\0".as_ptr() as *const c_char,
+                        pm,
+                    );
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        proto,
+                        b"terminate\0".as_ptr() as *const c_char,
+                        term,
+                    );
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        proto,
+                        b"onMessage\0".as_ptr() as *const c_char,
+                        onm,
+                    );
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        proto,
+                        b"addEventListener\0".as_ptr() as *const c_char,
+                        add_evt,
+                    );
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        proto,
+                        b"removeEventListener\0".as_ptr() as *const c_char,
+                        rm_evt,
+                    );
                     let _ = qjs::JS_SetPropertyStr(
                         ctx,
                         proto,
                         b"constructor\0".as_ptr() as *const c_char,
                         qjs::js_dup_value(ctx, worker_ctor),
                     );
-                    let _ = qjs::JS_SetPropertyStr(ctx, worker_ctor, b"prototype\0".as_ptr() as *const c_char, proto);
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        worker_ctor,
+                        b"prototype\0".as_ptr() as *const c_char,
+                        proto,
+                    );
                 } else {
                     qjs::js_free_value(ctx, proto);
                 }
@@ -1149,8 +1278,10 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
                     qjs::JS_CFUNC_GENERIC,
                     0,
                 );
-                let _ = qjs::JS_SetPropertyStr(ctx, perf, b"now\0".as_ptr() as *const c_char, now_fn);
-                let _ = qjs::JS_SetPropertyStr(ctx, global, perf_key.as_ptr() as *const c_char, perf);
+                let _ =
+                    qjs::JS_SetPropertyStr(ctx, perf, b"now\0".as_ptr() as *const c_char, now_fn);
+                let _ =
+                    qjs::JS_SetPropertyStr(ctx, global, perf_key.as_ptr() as *const c_char, perf);
             } else {
                 qjs::js_free_value(ctx, perf);
             }
@@ -1192,10 +1323,30 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
                 return o;
             }
             unsafe {
-                let _ = qjs::JS_SetPropertyStr(ctx, o, b"buttons\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, buttons as f64));
-                let _ = qjs::JS_SetPropertyStr(ctx, o, b"dx\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, dx as f64));
-                let _ = qjs::JS_SetPropertyStr(ctx, o, b"dy\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, dy as f64));
-                let _ = qjs::JS_SetPropertyStr(ctx, o, b"wheel\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, wheel as f64));
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    o,
+                    b"buttons\0".as_ptr() as *const c_char,
+                    qjs::JS_NewFloat64(ctx, buttons as f64),
+                );
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    o,
+                    b"dx\0".as_ptr() as *const c_char,
+                    qjs::JS_NewFloat64(ctx, dx as f64),
+                );
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    o,
+                    b"dy\0".as_ptr() as *const c_char,
+                    qjs::JS_NewFloat64(ctx, dy as f64),
+                );
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    o,
+                    b"wheel\0".as_ptr() as *const c_char,
+                    qjs::JS_NewFloat64(ctx, wheel as f64),
+                );
             }
             o
         }
@@ -1210,7 +1361,14 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
                 0,
             )
         };
-        let _ = unsafe { qjs::JS_SetPropertyStr(ctx, global, b"__trueos_poll_mouse_raw\0".as_ptr() as *const c_char, f) };
+        let _ = unsafe {
+            qjs::JS_SetPropertyStr(
+                ctx,
+                global,
+                b"__trueos_poll_mouse_raw\0".as_ptr() as *const c_char,
+                f,
+            )
+        };
     }
     ensure_global_browser_rendering_ctors(ctx, global);
     let doc_obj = ensure_global_document_stub(ctx, global);
@@ -1245,7 +1403,10 @@ unsafe fn ensure_global_document_stub(
         let g = qjs::JS_GetGlobalObject(ctx);
         if !g.is_exception() {
             let doc = qjs::JS_GetPropertyStr(ctx, g, b"document\0".as_ptr() as *const c_char);
-            if !doc.is_exception() && doc.tag != qjs::JS_TAG_UNDEFINED && doc.tag != qjs::JS_TAG_NULL {
+            if !doc.is_exception()
+                && doc.tag != qjs::JS_TAG_UNDEFINED
+                && doc.tag != qjs::JS_TAG_NULL
+            {
                 let _ = qjs::JS_SetPropertyStr(
                     ctx,
                     node,
@@ -1262,10 +1423,21 @@ unsafe fn ensure_global_document_stub(
             // Make this object pass `instanceof HTMLCanvasElement` checks used by Pixi resource detection.
             let g2 = qjs::JS_GetGlobalObject(ctx);
             if !g2.is_exception() {
-                let ctor = qjs::JS_GetPropertyStr(ctx, g2, b"HTMLCanvasElement\0".as_ptr() as *const c_char);
-                if !ctor.is_exception() && ctor.tag != qjs::JS_TAG_UNDEFINED && ctor.tag != qjs::JS_TAG_NULL {
-                    let proto = qjs::JS_GetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char);
-                    if !proto.is_exception() && proto.tag != qjs::JS_TAG_UNDEFINED && proto.tag != qjs::JS_TAG_NULL {
+                let ctor = qjs::JS_GetPropertyStr(
+                    ctx,
+                    g2,
+                    b"HTMLCanvasElement\0".as_ptr() as *const c_char,
+                );
+                if !ctor.is_exception()
+                    && ctor.tag != qjs::JS_TAG_UNDEFINED
+                    && ctor.tag != qjs::JS_TAG_NULL
+                {
+                    let proto =
+                        qjs::JS_GetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char);
+                    if !proto.is_exception()
+                        && proto.tag != qjs::JS_TAG_UNDEFINED
+                        && proto.tag != qjs::JS_TAG_NULL
+                    {
                         let _ = qjs::JS_SetPropertyStr(
                             ctx,
                             node,
@@ -1321,8 +1493,14 @@ unsafe fn ensure_global_document_stub(
             // Remember the first created canvas as the primary event target.
             let g3 = qjs::JS_GetGlobalObject(ctx);
             if !g3.is_exception() {
-                let existing = qjs::JS_GetPropertyStr(ctx, g3, b"__trueos_primary_canvas\0".as_ptr() as *const c_char);
-                let needs = existing.is_exception() || existing.tag == qjs::JS_TAG_UNDEFINED || existing.tag == qjs::JS_TAG_NULL;
+                let existing = qjs::JS_GetPropertyStr(
+                    ctx,
+                    g3,
+                    b"__trueos_primary_canvas\0".as_ptr() as *const c_char,
+                );
+                let needs = existing.is_exception()
+                    || existing.tag == qjs::JS_TAG_UNDEFINED
+                    || existing.tag == qjs::JS_TAG_NULL;
                 qjs::js_free_value(ctx, existing);
                 if needs {
                     let _ = qjs::JS_SetPropertyStr(
@@ -1340,7 +1518,10 @@ unsafe fn ensure_global_document_stub(
     }
 
     let existing = qjs::JS_GetPropertyStr(ctx, global, b"document\0".as_ptr() as *const c_char);
-    if !existing.is_exception() && existing.tag != qjs::JS_TAG_UNDEFINED && existing.tag != qjs::JS_TAG_NULL {
+    if !existing.is_exception()
+        && existing.tag != qjs::JS_TAG_UNDEFINED
+        && existing.tag != qjs::JS_TAG_NULL
+    {
         return existing;
     }
     qjs::js_free_value(ctx, existing);
@@ -1353,7 +1534,12 @@ unsafe fn ensure_global_document_stub(
 
     let doc_el = qjs::browser::make_dom_like_element(ctx);
     if !doc_el.is_exception() {
-        let _ = qjs::JS_SetPropertyStr(ctx, doc, b"documentElement\0".as_ptr() as *const c_char, qjs::js_dup_value(ctx, doc_el));
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            doc,
+            b"documentElement\0".as_ptr() as *const c_char,
+            qjs::js_dup_value(ctx, doc_el),
+        );
         qjs::js_free_value(ctx, doc_el);
     }
 
@@ -1482,7 +1668,10 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext, global: qjs::JSValue) 
     }
 
     let existing = qjs::JS_GetPropertyStr(ctx, global, b"console\0".as_ptr() as *const c_char);
-    let console = if existing.is_exception() || existing.tag == qjs::JS_TAG_UNDEFINED || existing.tag == qjs::JS_TAG_NULL {
+    let console = if existing.is_exception()
+        || existing.tag == qjs::JS_TAG_UNDEFINED
+        || existing.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, existing);
         qjs::JS_NewObject(ctx)
     } else {
@@ -1523,7 +1712,12 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext, global: qjs::JSValue) 
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, global, b"globalLog\0".as_ptr() as *const c_char, global_log_fn);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"globalLog\0".as_ptr() as *const c_char,
+        global_log_fn,
+    );
 }
 
 unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
@@ -1561,7 +1755,8 @@ unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global
         // Give constructor a stable prototype object so instanceof checks can work.
         let proto = qjs::JS_NewObject(ctx);
         if !proto.is_exception() {
-            let _ = qjs::JS_SetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char, proto);
+            let _ =
+                qjs::JS_SetPropertyStr(ctx, ctor, b"prototype\0".as_ptr() as *const c_char, proto);
         } else {
             qjs::js_free_value(ctx, proto);
         }
@@ -1572,7 +1767,9 @@ unsafe fn ensure_global_browser_rendering_ctors(ctx: *mut qjs::JSContext, global
 unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
     let key = b"Intl\0";
     let existing = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
-    let needs_install = existing.is_exception() || existing.tag == qjs::JS_TAG_UNDEFINED || existing.tag == qjs::JS_TAG_NULL;
+    let needs_install = existing.is_exception()
+        || existing.tag == qjs::JS_TAG_UNDEFINED
+        || existing.tag == qjs::JS_TAG_NULL;
     qjs::js_free_value(ctx, existing);
     if !needs_install {
         return;
@@ -1629,7 +1826,12 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
             0,
         );
         let _ = qjs::JS_SetPropertyStr(ctx, obj, b"format\0".as_ptr() as *const c_char, format_fn);
-        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"resolvedOptions\0".as_ptr() as *const c_char, ro_fn);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            b"resolvedOptions\0".as_ptr() as *const c_char,
+            ro_fn,
+        );
         obj
     }
 
@@ -1660,7 +1862,12 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
             qjs::JS_CFUNC_GENERIC,
             0,
         );
-        let _ = qjs::JS_SetPropertyStr(ctx, obj, b"resolvedOptions\0".as_ptr() as *const c_char, ro_fn);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            obj,
+            b"resolvedOptions\0".as_ptr() as *const c_char,
+            ro_fn,
+        );
         obj
     }
 
@@ -1777,18 +1984,62 @@ unsafe fn ensure_global_intl(ctx: *mut qjs::JSContext, global: qjs::JSValue) {
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"NumberFormat\0".as_ptr() as *const c_char, number_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"DateTimeFormat\0".as_ptr() as *const c_char, dt_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"Collator\0".as_ptr() as *const c_char, collator_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"PluralRules\0".as_ptr() as *const c_char, plural_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"RelativeTimeFormat\0".as_ptr() as *const c_char, rtf_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"ListFormat\0".as_ptr() as *const c_char, list_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"DisplayNames\0".as_ptr() as *const c_char, display_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"Locale\0".as_ptr() as *const c_char, locale_ctor);
-    let _ = qjs::JS_SetPropertyStr(ctx, intl, b"getCanonicalLocales\0".as_ptr() as *const c_char, get_can);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"NumberFormat\0".as_ptr() as *const c_char,
+        number_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"DateTimeFormat\0".as_ptr() as *const c_char,
+        dt_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"Collator\0".as_ptr() as *const c_char,
+        collator_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"PluralRules\0".as_ptr() as *const c_char,
+        plural_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"RelativeTimeFormat\0".as_ptr() as *const c_char,
+        rtf_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"ListFormat\0".as_ptr() as *const c_char,
+        list_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"DisplayNames\0".as_ptr() as *const c_char,
+        display_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"Locale\0".as_ptr() as *const c_char,
+        locale_ctor,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        intl,
+        b"getCanonicalLocales\0".as_ptr() as *const c_char,
+        get_can,
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, intl);
 }
-
 
 unsafe fn js_read_complex(
     ctx: *mut qjs::JSContext,
@@ -1883,7 +2134,10 @@ unsafe extern "C" fn qjs_complex_square(
     js_make_complex(ctx, out.re, out.im)
 }
 
-unsafe extern "C" fn qjs_complex_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_complex_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     let make_name = b"make\0";
     let add_name = b"add\0";
     let square_name = b"square\0";
@@ -1959,7 +2213,13 @@ unsafe extern "C" fn qjs_fs_read_file_text_async(
         }
         Err(code) => {
             let arg = js_int32(code);
-            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &arg as *const qjs::JSValue,
+            );
         }
     }
 
@@ -2000,7 +2260,13 @@ unsafe extern "C" fn qjs_fs_read_file_bytes_async(
         }
         Err(code) => {
             let arg = js_int32(code);
-            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &arg as *const qjs::JSValue,
+            );
         }
     }
 
@@ -2049,7 +2315,13 @@ unsafe extern "C" fn qjs_fs_write_file_text_async(
         }
         Err(code) => {
             let arg = js_int32(code);
-            let _ = qjs::JS_Call(ctx, reject, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValue);
+            let _ = qjs::JS_Call(
+                ctx,
+                reject,
+                qjs::JSValue::undefined(),
+                1,
+                &arg as *const qjs::JSValue,
+            );
         }
     }
 
@@ -2058,7 +2330,10 @@ unsafe extern "C" fn qjs_fs_write_file_text_async(
     promise
 }
 
-unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_fs_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     let read_text_async_name = b"readFileAsync\0";
     let read_bytes_async_name = b"readFileBytesAsync\0";
     let write_text_async_name = b"writeFileAsync\0";
@@ -2071,7 +2346,13 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, read_text_async_name.as_ptr() as *const c_char, read_text_async_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        read_text_async_name.as_ptr() as *const c_char,
+        read_text_async_fn,
+    ) < 0
+    {
         return -1;
     }
 
@@ -2083,7 +2364,13 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, read_bytes_async_name.as_ptr() as *const c_char, read_bytes_async_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        read_bytes_async_name.as_ptr() as *const c_char,
+        read_bytes_async_fn,
+    ) < 0
+    {
         return -1;
     }
 
@@ -2095,7 +2382,13 @@ unsafe extern "C" fn qjs_fs_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::J
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, write_text_async_name.as_ptr() as *const c_char, write_text_async_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        write_text_async_name.as_ptr() as *const c_char,
+        write_text_async_fn,
+    ) < 0
+    {
         return -1;
     }
 
@@ -2291,7 +2584,10 @@ unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
     qjs::JSValue::undefined()
 }
 
-unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> c_int {
+unsafe extern "C" fn qjs_cmd_stream_module_init(
+    ctx: *mut qjs::JSContext,
+    m: *mut qjs::JSModuleDef,
+) -> c_int {
     let begin_frame_name = b"beginFrame\0";
     let end_frame_name = b"endFrame\0";
     let set_clear_rgb_name = b"setClearRgb\0";
@@ -2309,7 +2605,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, begin_frame_name.as_ptr() as *const c_char, begin_frame_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        begin_frame_name.as_ptr() as *const c_char,
+        begin_frame_fn,
+    ) < 0
+    {
         return -1;
     }
     let end_frame_fn = qjs::JS_NewCFunction2(
@@ -2320,7 +2622,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, end_frame_name.as_ptr() as *const c_char, end_frame_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        end_frame_name.as_ptr() as *const c_char,
+        end_frame_fn,
+    ) < 0
+    {
         return -1;
     }
     let set_clear_fn = qjs::JS_NewCFunction2(
@@ -2331,7 +2639,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, set_clear_rgb_name.as_ptr() as *const c_char, set_clear_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        set_clear_rgb_name.as_ptr() as *const c_char,
+        set_clear_fn,
+    ) < 0
+    {
         return -1;
     }
     let set_viewport_fn = qjs::JS_NewCFunction2(
@@ -2342,7 +2656,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, set_viewport_name.as_ptr() as *const c_char, set_viewport_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        set_viewport_name.as_ptr() as *const c_char,
+        set_viewport_fn,
+    ) < 0
+    {
         return -1;
     }
     let set_blend_enabled_fn = qjs::JS_NewCFunction2(
@@ -2353,7 +2673,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, set_blend_enabled_name.as_ptr() as *const c_char, set_blend_enabled_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        set_blend_enabled_name.as_ptr() as *const c_char,
+        set_blend_enabled_fn,
+    ) < 0
+    {
         return -1;
     }
     let set_blend_func_fn = qjs::JS_NewCFunction2(
@@ -2364,7 +2690,13 @@ unsafe extern "C" fn qjs_cmd_stream_module_init(ctx: *mut qjs::JSContext, m: *mu
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    if qjs::JS_SetModuleExport(ctx, m, set_blend_func_name.as_ptr() as *const c_char, set_blend_func_fn) < 0 {
+    if qjs::JS_SetModuleExport(
+        ctx,
+        m,
+        set_blend_func_name.as_ptr() as *const c_char,
+        set_blend_func_fn,
+    ) < 0
+    {
         return -1;
     }
     let set_blend_equation_fn = qjs::JS_NewCFunction2(
@@ -2460,7 +2792,13 @@ pub unsafe fn load_native_module(
     } else if name == b"path" || name == b"node:path" {
         (
             qjs_path_module_init,
-            &[b"join\0", b"dirname\0", b"basename\0", b"extname\0", b"resolve\0"],
+            &[
+                b"join\0",
+                b"dirname\0",
+                b"basename\0",
+                b"extname\0",
+                b"resolve\0",
+            ],
         )
     } else if name == b"cmd_stream" || name == b"trueos:cmd_stream" {
         (

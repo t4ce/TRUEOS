@@ -1,7 +1,7 @@
-use crate::{percpu, runtime, globalog, exceptions};
+use crate::{exceptions, globalog, percpu, runtime};
 use ::limine::mp::Cpu as LimineCpu;
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use core::arch::x86_64::__cpuid;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;

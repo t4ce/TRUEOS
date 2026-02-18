@@ -247,7 +247,6 @@ pub fn enumerate_impl() {
     *DEVICES.lock() = new_devices;
 }
 
-
 fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     CFG_ENABLE
         | ((bus as u32) << 16)
@@ -641,15 +640,9 @@ fn alloc_from_bridge_window(
 pub fn alloc_hotplug_mmio_base(target_bus: u8, size: u64, align: u64) -> Option<u64> {
     if let Some((b_bus, b_slot, b_fun)) = parent_bridge_for_bus(target_bus) {
         if let Some((base, limit_excl)) = bridge_mem_window(b_bus, b_slot, b_fun) {
-            if let Some(addr) = alloc_from_bridge_window(
-                b_bus,
-                b_slot,
-                b_fun,
-                base,
-                limit_excl,
-                size,
-                align,
-            ) {
+            if let Some(addr) =
+                alloc_from_bridge_window(b_bus, b_slot, b_fun, base, limit_excl, size, align)
+            {
                 return Some(addr);
             }
         }

@@ -156,14 +156,21 @@ impl FtpSocket {
         Ok(())
     }
 
-    pub async fn retr(&mut self, path: &str, timeout_ms: u32, max_bytes: usize) -> Result<Vec<u8>, FtpError> {
+    pub async fn retr(
+        &mut self,
+        path: &str,
+        timeout_ms: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, FtpError> {
         let data_remote = self.enter_passive(timeout_ms).await?;
         let data_handle = self.open_data_socket(data_remote, timeout_ms).await?;
 
         self.send_command(format!("RETR {}", path).as_str())?;
         let pre = self.read_response(timeout_ms).await?;
         if pre.code != 125 && pre.code != 150 {
-            let _ = self.net.submit(Command::Close { handle: data_handle });
+            let _ = self.net.submit(Command::Close {
+                handle: data_handle,
+            });
             return Err(FtpError::Protocol);
         }
 
@@ -177,14 +184,18 @@ impl FtpSocket {
                     if handle == data_handle {
                         let room = max_bytes.saturating_sub(out.len());
                         if room == 0 {
-                            let _ = self.net.submit(Command::Close { handle: data_handle });
+                            let _ = self.net.submit(Command::Close {
+                                handle: data_handle,
+                            });
                             return Err(FtpError::TooLarge);
                         }
                         let bytes = data.as_slice();
                         let take = bytes.len().min(room);
                         out.extend_from_slice(&bytes[..take]);
                         if take < bytes.len() {
-                            let _ = self.net.submit(Command::Close { handle: data_handle });
+                            let _ = self.net.submit(Command::Close {
+                                handle: data_handle,
+                            });
                             return Err(FtpError::TooLarge);
                         }
                     } else if handle == self.ctrl_handle {
@@ -204,7 +215,9 @@ impl FtpSocket {
             }
 
             if Instant::now() >= deadline {
-                let _ = self.net.submit(Command::Close { handle: data_handle });
+                let _ = self.net.submit(Command::Close {
+                    handle: data_handle,
+                });
                 return Err(FtpError::Timeout);
             }
             Timer::after(Duration::from_millis(1)).await;
@@ -225,7 +238,9 @@ impl FtpSocket {
         self.send_command(format!("STOR {}", path).as_str())?;
         let pre = self.read_response(timeout_ms).await?;
         if pre.code != 125 && pre.code != 150 {
-            let _ = self.net.submit(Command::Close { handle: data_handle });
+            let _ = self.net.submit(Command::Close {
+                handle: data_handle,
+            });
             return Err(FtpError::Protocol);
         }
 
@@ -239,7 +254,9 @@ impl FtpSocket {
         }
 
         self.net
-            .submit(Command::Close { handle: data_handle })
+            .submit(Command::Close {
+                handle: data_handle,
+            })
             .map_err(|_| FtpError::Io)?;
 
         let done = self.read_response(timeout_ms).await?;
@@ -325,7 +342,11 @@ impl FtpSocket {
         Ok(EndpointV4::new(addr, port))
     }
 
-    async fn open_data_socket(&mut self, remote: EndpointV4, timeout_ms: u32) -> Result<NetHandle, FtpError> {
+    async fn open_data_socket(
+        &mut self,
+        remote: EndpointV4,
+        timeout_ms: u32,
+    ) -> Result<NetHandle, FtpError> {
         self.net
             .submit(Command::OpenTcpConnect { remote })
             .map_err(|_| FtpError::Io)?;
@@ -539,7 +560,12 @@ pub async fn ftp_server_task() {
         let mut listener: Option<NetHandle> = None;
         let mut session: Option<FtpServerSession> = None;
 
-        if vnet.submit(Command::OpenTcpListen { port: FTP_SERVER_PORT }).is_err() {
+        if vnet
+            .submit(Command::OpenTcpListen {
+                port: FTP_SERVER_PORT,
+            })
+            .is_err()
+        {
             Timer::after(Duration::from_millis(250)).await;
             continue;
         }
@@ -599,7 +625,9 @@ pub async fn ftp_server_task() {
                     Event::Closed { handle } => {
                         if Some(handle) == listener {
                             listener = None;
-                            let _ = vnet.submit(Command::OpenTcpListen { port: FTP_SERVER_PORT });
+                            let _ = vnet.submit(Command::OpenTcpListen {
+                                port: FTP_SERVER_PORT,
+                            });
                             continue;
                         }
 
@@ -672,7 +700,11 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
                     match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
                         Ok(Some(_)) => {
-                            sess.cwd = if path.is_empty() { String::from("/") } else { format!("/{}", path) };
+                            sess.cwd = if path.is_empty() {
+                                String::from("/")
+                            } else {
+                                format!("/{}", path)
+                            };
                             let _ = ftp_send_reply(vnet, sess, 250, "directory changed");
                         }
                         _ => {
@@ -718,13 +750,19 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                     Ok(data_handle) => {
                         let root = crate::v::fs::trueosfs::primary_root_handle();
                         if let Some(disk) = root {
-                            let path = ftp_normalize_path(sess.cwd.as_str(), arg).unwrap_or_else(|| ftp_cwd_rel(sess.cwd.as_str()));
-                            let payload = match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
-                                Ok(Some(list)) => ftp_listing_from_names(list.as_str()),
-                                _ => Vec::new(),
-                            };
+                            let path = ftp_normalize_path(sess.cwd.as_str(), arg)
+                                .unwrap_or_else(|| ftp_cwd_rel(sess.cwd.as_str()));
+                            let payload =
+                                match crate::v::fs::trueosfs::list_dir_async(disk, path.as_str())
+                                    .await
+                                {
+                                    Ok(Some(list)) => ftp_listing_from_names(list.as_str()),
+                                    _ => Vec::new(),
+                                };
                             let _ = ftp_send_raw(vnet, data_handle, payload.as_slice());
-                            let _ = vnet.submit(Command::Close { handle: data_handle });
+                            let _ = vnet.submit(Command::Close {
+                                handle: data_handle,
+                            });
                             ftp_close_passive(vnet, sess);
                             let _ = ftp_send_reply(vnet, sess, 226, "transfer complete");
                         } else {
@@ -745,7 +783,12 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
                     match crate::v::fs::trueosfs::file_info_async(disk, path.as_str()).await {
                         Ok(Some(info)) => {
-                            let _ = ftp_send_reply(vnet, sess, 213, format!("{}", info.data_len).as_str());
+                            let _ = ftp_send_reply(
+                                vnet,
+                                sess,
+                                213,
+                                format!("{}", info.data_len).as_str(),
+                            );
                         }
                         _ => {
                             let _ = ftp_send_reply(vnet, sess, 550, "not found");
@@ -768,7 +811,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 };
 
                 let _ = ftp_send_reply(vnet, sess, 150, "opening data connection");
-                let Ok(data_handle) = ftp_wait_passive_data(vnet, sess, FTP_SERVER_IO_TIMEOUT_MS).await else {
+                let Ok(data_handle) =
+                    ftp_wait_passive_data(vnet, sess, FTP_SERVER_IO_TIMEOUT_MS).await
+                else {
                     ftp_close_passive(vnet, sess);
                     let _ = ftp_send_reply(vnet, sess, 425, "data connection failed");
                     return false;
@@ -777,12 +822,16 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 match crate::v::fs::trueosfs::file_out_async(disk, path.as_str()).await {
                     Ok(Some(bytes)) => {
                         let _ = ftp_send_raw(vnet, data_handle, bytes.as_slice());
-                        let _ = vnet.submit(Command::Close { handle: data_handle });
+                        let _ = vnet.submit(Command::Close {
+                            handle: data_handle,
+                        });
                         ftp_close_passive(vnet, sess);
                         let _ = ftp_send_reply(vnet, sess, 226, "transfer complete");
                     }
                     _ => {
-                        let _ = vnet.submit(Command::Close { handle: data_handle });
+                        let _ = vnet.submit(Command::Close {
+                            handle: data_handle,
+                        });
                         ftp_close_passive(vnet, sess);
                         let _ = ftp_send_reply(vnet, sess, 550, "not found");
                     }
@@ -801,17 +850,35 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                 };
 
                 let _ = ftp_send_reply(vnet, sess, 150, "opening data connection");
-                let Ok(data_handle) = ftp_wait_passive_data(vnet, sess, FTP_SERVER_IO_TIMEOUT_MS).await else {
+                let Ok(data_handle) =
+                    ftp_wait_passive_data(vnet, sess, FTP_SERVER_IO_TIMEOUT_MS).await
+                else {
                     ftp_close_passive(vnet, sess);
                     let _ = ftp_send_reply(vnet, sess, 425, "data connection failed");
                     return false;
                 };
 
-                match ftp_receive_data(vnet, sess, data_handle, FTP_SERVER_IO_TIMEOUT_MS, FTP_SERVER_MAX_UPLOAD_BYTES).await {
+                match ftp_receive_data(
+                    vnet,
+                    sess,
+                    data_handle,
+                    FTP_SERVER_IO_TIMEOUT_MS,
+                    FTP_SERVER_MAX_UPLOAD_BYTES,
+                )
+                .await
+                {
                     Ok(bytes) => {
-                        let _ = vnet.submit(Command::Close { handle: data_handle });
+                        let _ = vnet.submit(Command::Close {
+                            handle: data_handle,
+                        });
                         ftp_close_passive(vnet, sess);
-                        match crate::v::fs::trueosfs::file_in_async(disk, path.as_str(), bytes.as_slice()).await {
+                        match crate::v::fs::trueosfs::file_in_async(
+                            disk,
+                            path.as_str(),
+                            bytes.as_slice(),
+                        )
+                        .await
+                        {
                             Ok(true) => {
                                 let _ = ftp_send_reply(vnet, sess, 226, "transfer complete");
                             }
@@ -821,7 +888,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                         }
                     }
                     Err(_) => {
-                        let _ = vnet.submit(Command::Close { handle: data_handle });
+                        let _ = vnet.submit(Command::Close {
+                            handle: data_handle,
+                        });
                         ftp_close_passive(vnet, sess);
                         let _ = ftp_send_reply(vnet, sess, 426, "transfer aborted");
                     }
@@ -862,7 +931,12 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
     false
 }
 
-fn ftp_send_reply(vnet: &VNet, sess: &FtpServerSession, code: u16, message: &str) -> Result<(), ()> {
+fn ftp_send_reply(
+    vnet: &VNet,
+    sess: &FtpServerSession,
+    code: u16,
+    message: &str,
+) -> Result<(), ()> {
     let line = format!("{} {}\r\n", code, message);
     ftp_send_raw(vnet, sess.ctrl, line.as_bytes())
 }
@@ -928,7 +1002,10 @@ async fn ftp_wait_passive_data(
         while let Some(ev) = vnet.pop_event() {
             match ev {
                 Event::Opened { handle, kind } if kind == SocketKind::Tcp => {
-                    if sess.pasv_port.is_some() && sess.pasv_listener.is_none() && handle != sess.ctrl {
+                    if sess.pasv_port.is_some()
+                        && sess.pasv_listener.is_none()
+                        && handle != sess.ctrl
+                    {
                         sess.pasv_listener = Some(handle);
                     }
                 }

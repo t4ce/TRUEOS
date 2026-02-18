@@ -1,13 +1,13 @@
-use super::{Trb, TrbRing, XhciContext};
+use super::xhci::MAX_XHCI_CONTROLLERS;
 use super::xhci::{
     endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, trb_type,
     TrbRingState, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
-use super::xhci::MAX_XHCI_CONTROLLERS;
+use super::{Trb, TrbRing, XhciContext};
+use crate::pci::dma;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::pci::dma;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -155,9 +155,7 @@ pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
 
     with_interrupt_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
         let requested = rt.buf_len;
-        let transferred = requested
-            .saturating_sub(residual)
-            .min(requested) as usize;
+        let transferred = requested.saturating_sub(residual).min(requested) as usize;
 
         if completion == 1 || completion == 13 {
             if transferred > 0 {
@@ -313,7 +311,10 @@ pub fn record_hub_ports(ctx: &XhciContext, hub_slot_id: u32, port_count: u8) {
         };
 
         for port in 1..=port_count {
-            if hub_ports.iter().any(|(slot, p, _)| *slot == hub_slot_id && *p == port) {
+            if hub_ports
+                .iter()
+                .any(|(slot, p, _)| *slot == hub_slot_id && *p == port)
+            {
                 continue;
             }
             if let Some(node) = tree.add_child(
@@ -724,7 +725,12 @@ pub async fn configure_hub_context(params: HubConfigParams<'_>) -> Result<(), ()
         write_volatile(add_flags_ptr.add(1), 0x3);
         let in_add_flags = read_volatile(add_flags_ptr.add(1));
 
-        copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
+        copy_slot_ep0_contexts(
+            dev_ctx_virt,
+            input_cfg_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+        );
         let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
 
         let mut dw0 = read_volatile(slot_ctx.add(0));
@@ -901,8 +907,8 @@ pub async fn configure_hub_interrupt(params: HubInterruptParams<'_>) -> Result<(
     };
 
     const HUB_INT_TRBS: usize = 32;
-    let (ep_ring_phys, ep_ring_virt) = dma::alloc(HUB_INT_TRBS * core::mem::size_of::<Trb>(), 64)
-        .ok_or(())?;
+    let (ep_ring_phys, ep_ring_virt) =
+        dma::alloc(HUB_INT_TRBS * core::mem::size_of::<Trb>(), 64).ok_or(())?;
     unsafe { core::ptr::write_bytes(ep_ring_virt, 0, HUB_INT_TRBS * core::mem::size_of::<Trb>()) };
     let ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, HUB_INT_TRBS) };
 
@@ -927,7 +933,12 @@ pub async fn configure_hub_interrupt(params: HubInterruptParams<'_>) -> Result<(
         let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
         let ep_ctx = input_cfg_virt.add(ep_ctx_off) as *mut u32;
 
-        copy_slot_ep0_contexts(dev_ctx_virt, input_cfg_virt, ctx_stride_bytes, ctx_stride_words);
+        copy_slot_ep0_contexts(
+            dev_ctx_virt,
+            input_cfg_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+        );
 
         let mut dw0 = read_volatile(slot_ctx.add(0));
         dw0 |= 1 << 26;
@@ -1042,7 +1053,6 @@ pub async fn configure_hub_interrupt(params: HubInterruptParams<'_>) -> Result<(
 
     Ok(())
 }
-
 
 #[derive(Copy, Clone, Debug)]
 pub struct HubDescriptorInfo {
@@ -1184,9 +1194,16 @@ pub async fn scan_ports(
         let mut state_opt = None;
         while attempt < 3 {
             attempt += 1;
-            if let Some(state) =
-                read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code)
-                    .await
+            if let Some(state) = read_port_state(
+                ctx,
+                ep0_ring,
+                slot_id,
+                port,
+                buf_phys,
+                buf_virt,
+                hub_speed_code,
+            )
+            .await
             {
                 state_opt = Some(state);
                 break;
@@ -1233,8 +1250,16 @@ pub async fn ensure_port_enabled(
     while attempts < 4 {
         attempts += 1;
 
-        if let Some(state) =
-            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        if let Some(state) = read_port_state(
+            ctx,
+            ep0_ring,
+            slot_id,
+            port,
+            buf_phys,
+            buf_virt,
+            hub_speed_code,
+        )
+        .await
         {
             let saw_connect_change = (state.change & 0x0001) != 0;
             let need_reset = state.connected && (!state.enabled || saw_connect_change);
@@ -1260,7 +1285,8 @@ pub async fn ensure_port_enabled(
             }
 
             if (state.status & (1 << 8)) == 0 {
-                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
+                let _ =
+                    set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_POWER).await;
                 Timer::after(EmbassyDuration::from_millis(20)).await;
             }
 
@@ -1270,7 +1296,8 @@ pub async fn ensure_port_enabled(
             // Also, perform the reset before clearing change bits; some hubs
             // appear sensitive to the ordering here.
             if need_reset {
-                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
+                let _ =
+                    set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_RESET).await;
                 let mut wait = 0u32;
                 while wait < 12 {
                     Timer::after(EmbassyDuration::from_millis(20)).await;
@@ -1287,7 +1314,14 @@ pub async fn ensure_port_enabled(
                     .await
                     {
                         let reset_active = (after_reset.status & (1 << 4)) != 0;
-                        let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_reset.change).await;
+                        let _ = clear_port_change_bits(
+                            ctx,
+                            ep0_ring,
+                            slot_id,
+                            port,
+                            after_reset.change,
+                        )
+                        .await;
                         let ss_pls_ok = if hub_speed_code >= 4 {
                             // For SS hubs, wait until the link settles into a normal state.
                             // U0/U1/U2 are fine; transient states (Polling/Recovery/Hot Reset) are not.
@@ -1296,7 +1330,11 @@ pub async fn ensure_port_enabled(
                             true
                         };
 
-                        if after_reset.connected && after_reset.enabled && !reset_active && ss_pls_ok {
+                        if after_reset.connected
+                            && after_reset.enabled
+                            && !reset_active
+                            && ss_pls_ok
+                        {
                             crate::log!(
                                 "usb: hub port {} reset ok status=0x{:04X} change=0x{:04X}\n",
                                 port,
@@ -1320,7 +1358,8 @@ pub async fn ensure_port_enabled(
                     }
                 }
 
-                let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
+                let _ =
+                    set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
                 Timer::after(EmbassyDuration::from_millis(20)).await;
                 if let Some(after_enable) = read_port_state(
                     ctx,
@@ -1351,7 +1390,9 @@ pub async fn ensure_port_enabled(
                             after_enable.enabled as u8,
                         );
                     }
-                    let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change).await;
+                    let _ =
+                        clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change)
+                            .await;
                     if after_enable.connected && after_enable.enabled {
                         last = Some(after_enable);
                         break;
@@ -1362,8 +1403,16 @@ pub async fn ensure_port_enabled(
             let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, state.change).await;
         }
 
-        if let Some(state) =
-            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        if let Some(state) = read_port_state(
+            ctx,
+            ep0_ring,
+            slot_id,
+            port,
+            buf_phys,
+            buf_virt,
+            hub_speed_code,
+        )
+        .await
         {
             last = Some(state);
             if state.connected && state.enabled {
@@ -1410,8 +1459,16 @@ async fn force_port_reset(
     let delay_ms = core::cmp::max(20, power_on_good_ms as u64);
     Timer::after(EmbassyDuration::from_millis(delay_ms)).await;
 
-    let mut last =
-        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await;
+    let mut last = read_port_state(
+        ctx,
+        ep0_ring,
+        slot_id,
+        port,
+        buf_phys,
+        buf_virt,
+        hub_speed_code,
+    )
+    .await;
     let Some(state) = last else {
         dma::dealloc(buf_virt, 8);
         return None;
@@ -1448,8 +1505,16 @@ async fn force_port_reset(
     while wait < 12 {
         Timer::after(EmbassyDuration::from_millis(20)).await;
         wait += 1;
-        if let Some(after_reset) =
-            read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+        if let Some(after_reset) = read_port_state(
+            ctx,
+            ep0_ring,
+            slot_id,
+            port,
+            buf_phys,
+            buf_virt,
+            hub_speed_code,
+        )
+        .await
         {
             last = Some(after_reset);
             let reset_active = (after_reset.status & (1 << 4)) != 0;
@@ -1482,8 +1547,16 @@ async fn force_port_reset(
     // If reset didn't converge, try a final PORT_ENABLE poke.
     let _ = set_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_PORT_ENABLE).await;
     Timer::after(EmbassyDuration::from_millis(20)).await;
-    if let Some(after_enable) =
-        read_port_state(ctx, ep0_ring, slot_id, port, buf_phys, buf_virt, hub_speed_code).await
+    if let Some(after_enable) = read_port_state(
+        ctx,
+        ep0_ring,
+        slot_id,
+        port,
+        buf_phys,
+        buf_virt,
+        hub_speed_code,
+    )
+    .await
     {
         last = Some(after_enable);
         let _ = clear_port_change_bits(ctx, ep0_ring, slot_id, port, after_enable.change).await;
@@ -1510,14 +1583,23 @@ pub async fn collect_children(
     }
 
     let Some(ep0_state) = take_ep0_state(ctx, hub_slot_id) else {
-        crate::log!("usb: hub slot {} missing ep0 ring; cannot scan ports\n", hub_slot_id);
+        crate::log!(
+            "usb: hub slot {} missing ep0 ring; cannot scan ports\n",
+            hub_slot_id
+        );
         return out;
     };
     let mut ep0_ring = unsafe { TrbRing::from_state(ep0_state) };
 
-    let ports =
-        scan_ports(ctx, &mut ep0_ring, hub_slot_id, port_count, power_on_good_ms, hub_speed_code)
-            .await;
+    let ports = scan_ports(
+        ctx,
+        &mut ep0_ring,
+        hub_slot_id,
+        port_count,
+        power_on_good_ms,
+        hub_speed_code,
+    )
+    .await;
     for port_state in ports.iter() {
         crate::log!(
             "usb: hub child scan slot={} port={} status=0x{:04X} change=0x{:04X} ccs={} ped={} speed_code={}\n",
@@ -1573,15 +1655,19 @@ pub async fn collect_children(
         // xHCI Route String is a 20-bit value made of up to 5 4-bit hub port nibbles.
         // The first tier behind the root hub occupies bits 3:0, then 7:4, etc.
         let shift = (depth as u32) * 4;
-        let route = (parent_route & !(0xFu32 << shift))
-            | (((port_state.port as u32) & 0xF) << shift);
+        let route =
+            (parent_route & !(0xFu32 << shift)) | (((port_state.port as u32) & 0xF) << shift);
         let speed_code = enabled.speed_code;
         let tt_info = if speed_code <= 2 && hub_speed_code == 3 {
             Some((hub_slot_id, port_state.port))
         } else {
             None
         };
-        let tt_think_time = if tt_info.is_some() { hub_tt_think_time } else { 0 };
+        let tt_think_time = if tt_info.is_some() {
+            hub_tt_think_time
+        } else {
+            0
+        };
 
         let _ = out.push(HubChild {
             port: port_state.port,
@@ -1655,13 +1741,21 @@ async fn clear_port_change_bits(
     change: u16,
 ) -> Result<(), ()> {
     if (change & (1 << 0)) != 0 {
-        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_CONNECTION).await;
+        let _ =
+            clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_CONNECTION).await;
     }
     if (change & (1 << 1)) != 0 {
         let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_ENABLE).await;
     }
     if (change & (1 << 3)) != 0 {
-        let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_OVER_CURRENT).await;
+        let _ = clear_port_feature(
+            ctx,
+            ep0_ring,
+            slot_id,
+            port,
+            HUB_FEATURE_C_PORT_OVER_CURRENT,
+        )
+        .await;
     }
     if (change & (1 << 4)) != 0 {
         let _ = clear_port_feature(ctx, ep0_ring, slot_id, port, HUB_FEATURE_C_PORT_RESET).await;
@@ -1723,7 +1817,13 @@ async fn read_port_state(
     } else {
         let low = (status & (1 << 9)) != 0;
         let high = (status & (1 << 10)) != 0;
-        if high { 3 } else if low { 2 } else { 1 }
+        if high {
+            3
+        } else if low {
+            2
+        } else {
+            1
+        }
     };
 
     Some(HubPortState {
@@ -1735,7 +1835,6 @@ async fn read_port_state(
         speed_code,
     })
 }
-
 
 fn setup_get_hub_descriptor(desc_type: u8, length: u16) -> Trb {
     // bmRequestType=0xA0 (IN|Class|Device), bRequest=0x06 (GET_DESCRIPTOR)

@@ -1,8 +1,8 @@
 use super::cdc;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
+    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::pci::dma;
 use crate::wait;
@@ -171,7 +171,10 @@ static DETACH_CALLBACKS: Mutex<Vec<fn(CdcAttachEvent), MAX_CDC_CALLBACKS>> = Mut
 
 pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
     let mut guard = ATTACH_CALLBACKS.lock();
-    if guard.iter().any(|existing| core::ptr::fn_addr_eq(*existing, cb)) {
+    if guard
+        .iter()
+        .any(|existing| core::ptr::fn_addr_eq(*existing, cb))
+    {
         return true;
     }
     guard.push(cb).is_ok()
@@ -179,7 +182,10 @@ pub fn register_attach_callback(cb: fn(CdcAttachEvent)) -> bool {
 
 pub fn register_detach_callback(cb: fn(CdcAttachEvent)) -> bool {
     let mut guard = DETACH_CALLBACKS.lock();
-    if guard.iter().any(|existing| core::ptr::fn_addr_eq(*existing, cb)) {
+    if guard
+        .iter()
+        .any(|existing| core::ptr::fn_addr_eq(*existing, cb))
+    {
         return true;
     }
     guard.push(cb).is_ok()
@@ -267,12 +273,16 @@ fn register_tx_waker(controller_id: usize, slot_id: u32, waker: &Waker) {
 }
 
 fn wake_tx(controller_id: usize, slot_id: u32) {
-    let _ = with_runtime_mut_by_slot(controller_id, slot_id, |rt| wait::take_and_wake(&mut rt.tx_waker));
+    let _ = with_runtime_mut_by_slot(controller_id, slot_id, |rt| {
+        wait::take_and_wake(&mut rt.tx_waker)
+    });
 }
 
 fn tx_queue_has_room(controller_id: usize, slot_id: u32) -> bool {
-    with_runtime_by_slot(controller_id, slot_id, |rt| rt.tx_queue.len() < CDC_TX_QUEUE_CAP)
-        .unwrap_or(false)
+    with_runtime_by_slot(controller_id, slot_id, |rt| {
+        rt.tx_queue.len() < CDC_TX_QUEUE_CAP
+    })
+    .unwrap_or(false)
 }
 
 fn queue_tx_bytes(controller_id: usize, slot_id: u32, data: &[u8]) -> usize {

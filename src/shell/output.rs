@@ -1,8 +1,8 @@
+use crate::shell::{ShellBackend, ShellIo};
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt::Write;
 use core::cell::RefCell;
-use crate::shell::{ShellBackend, ShellIo};
+use core::fmt::Write;
 
 #[inline]
 pub(crate) fn output_bottom_row(term_rows: usize) -> usize {
@@ -25,8 +25,8 @@ impl<'a> ReverseOutput<'a> {
         term_rows: usize,
         history: &'a mut Vec<String>,
     ) -> Self {
-        Self { 
-            inner, 
+        Self {
+            inner,
             term_cols,
             term_rows,
             line_buf: RefCell::new(String::new()),
@@ -37,7 +37,7 @@ impl<'a> ReverseOutput<'a> {
 
     fn do_write(&self, s: &str) {
         let mut buf = self.line_buf.borrow_mut();
-        
+
         if !s.contains('\n') {
             buf.push_str(s);
             return;
@@ -69,7 +69,8 @@ impl<'a> ReverseOutput<'a> {
 
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
         self.inner.write_str("\x1b[K");
 
         let content_len = crate::shell::ecma48::visible_width(s);
@@ -117,7 +118,8 @@ impl<'a> ReverseOutput<'a> {
         }
         if !*self.live_line_inserted.borrow() {
             let bottom = output_bottom_row(self.term_rows);
-            self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+            self.inner
+                .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
             self.inner.write_str("\x1b[L");
             let _ = draw_scrollbar(
                 self.inner,
@@ -200,7 +202,7 @@ impl<'a> ReverseOutput<'a> {
             self.write_live_fragment(seg.as_str());
         }
     }
-    
+
     fn flush_line(&self, s: &str) {
         // Normalize CRLF writers: `do_write` splits on `\n`, so lines may carry a trailing `\r`.
         // Keeping `\r` would cause cursor-return artifacts and break alignment.
@@ -218,22 +220,24 @@ impl<'a> ReverseOutput<'a> {
         }
 
         let bottom = output_bottom_row(self.term_rows);
-        
+
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
 
         // 1. Insert Line at Row 3
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
         self.inner.write_str("\x1b[L");
 
         // 2. Write content
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Skip scrollbar col
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Skip scrollbar col
 
         // Clip/Pad content
         let content_len = crate::shell::ecma48::visible_width(s);
         let max_width = self.term_cols.saturating_sub(2);
         let padding = max_width.saturating_sub(content_len);
-        
+
         for _ in 0..padding {
             self.inner.write_str(" ");
         }
@@ -244,22 +248,31 @@ impl<'a> ReverseOutput<'a> {
             let mut w = 0;
             for ch in s.chars() {
                 w += 1;
-                if w > max_width { break; }
+                if w > max_width {
+                    break;
+                }
                 clipped.push(ch);
             }
             clipped
         } else {
             String::from(s)
         };
-        
+
         // Clock/System Message color: (120, 210, 255)
         self.inner.write_str("\x1b[38;2;120;210;255m");
         self.inner.write_str(&final_s);
         self.inner.write_str("\x1b[0m");
-        
+
         // 3. Redraw ENTIRE scrollbar to fix the shift (offset 0 presumed)
-        let _ = draw_scrollbar(self.inner, self.history.borrow().len(), bottom.saturating_sub(3), 0, 3, bottom);
-        
+        let _ = draw_scrollbar(
+            self.inner,
+            self.history.borrow().len(),
+            bottom.saturating_sub(3),
+            0,
+            3,
+            bottom,
+        );
+
         self.inner.write_str(crate::ecma48::RESTORE_CURSOR);
         self.inner.write_str(crate::ecma48::SHOW_CURSOR);
     }
@@ -272,10 +285,12 @@ impl<'a> ReverseOutput<'a> {
         self.history.borrow_mut().push(String::from(text));
         let bottom = output_bottom_row(self.term_rows);
 
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
         self.inner.write_str("\x1b[L");
 
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
         self.inner.write_str(" ");
         self.inner.write_str(ansi);
         self.inner.write_str(text);
@@ -292,15 +307,17 @@ impl<'a> ReverseOutput<'a> {
     }
 
     pub(crate) fn echo_command(&self, cmd: &str) {
-        if cmd.is_empty() { return; }
+        if cmd.is_empty() {
+            return;
+        }
 
         let verb = cmd.split_whitespace().next().unwrap_or("");
         let ansi = if verb.eq_ignore_ascii_case("install") || verb.eq_ignore_ascii_case("update") {
-             "\x1b[38;2;255;55;255m"
+            "\x1b[38;2;255;55;255m"
         } else if verb.eq_ignore_ascii_case("ai") {
-             "\x1b[38;2;150;150;150m"
+            "\x1b[38;2;150;150;150m"
         } else {
-             "\x1b[37m"
+            "\x1b[37m"
         };
         self.echo_with_ansi(cmd, ansi);
     }
@@ -316,7 +333,7 @@ impl<'a> ReverseOutput<'a> {
         // if text.is_empty() { return; } // Allow clearing? Original checked is_empty.
 
         if text.is_empty() {
-             return;
+            return;
         }
 
         // Clip text
@@ -335,25 +352,29 @@ impl<'a> ReverseOutput<'a> {
 
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
         let bottom = output_bottom_row(self.term_rows);
-        
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
-        self.inner.write_str("\x1b[L"); 
-        
+
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+        self.inner.write_str("\x1b[L");
+
         // Repair
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(4, 1)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(4, 1)));
         self.inner.write_str("\x1b[38;2;80;80;80m│\x1b[0m");
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(bottom, 1)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(bottom, 1)));
         self.inner.write_str("\x1b[38;2;80;80;80m┴\x1b[0m");
 
-        self.inner.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
         self.inner.write_str("\x1b[38;2;80;80;80m┬\x1b[0m ");
         self.inner.write_str(clipped.as_str());
-        
+
         // Fix scrollbar below (draw_scrollbar handles < max height)
         // If history has 0 items, len=0. draw_scrollbar may do nothing if height is small?
-        // Wait, write_overlay_hint doesn't push to history. 
+        // Wait, write_overlay_hint doesn't push to history.
         // So history.len() is correct for what was there.
-        // But write_overlay_hint overwrote row 3. 
+        // But write_overlay_hint overwrote row 3.
         // History items are stored. But visual row 3 is now hint.
         // It pushed down? "self.inner.write_str("\x1b[L");"
         // Yes it did insert line.
@@ -361,9 +382,16 @@ impl<'a> ReverseOutput<'a> {
         // We inserted a visual line but didn't push to history.
         // Next scroll redraw will wipe it out. That's desired (hints are transient).
         // But for now we need scrollbar to look correct.
-        
-        draw_scrollbar(self.inner, self.history.borrow().len(), bottom.saturating_sub(3), 0, 3, bottom);
-        
+
+        draw_scrollbar(
+            self.inner,
+            self.history.borrow().len(),
+            bottom.saturating_sub(3),
+            0,
+            3,
+            bottom,
+        );
+
         self.inner.write_str(crate::ecma48::RESTORE_CURSOR);
     }
 }
@@ -372,7 +400,7 @@ impl<'a> Drop for ReverseOutput<'a> {
     fn drop(&mut self) {
         let buf = self.line_buf.borrow();
         if !buf.is_empty() {
-             self.flush_line(&buf);
+            self.flush_line(&buf);
         }
     }
 }
@@ -402,11 +430,11 @@ impl ShellIo for ReverseOutput<'_> {
         if b == b'\n' {
             self.write_str("\n");
         } else {
-             let mut buf = [0u8; 1];
-             buf[0] = b;
-             if let Ok(s) = core::str::from_utf8(&buf) {
-                 self.write_str(s);
-             }
+            let mut buf = [0u8; 1];
+            buf[0] = b;
+            if let Ok(s) = core::str::from_utf8(&buf) {
+                self.write_str(s);
+            }
         }
     }
 }
@@ -420,7 +448,6 @@ impl ShellBackend for ReverseOutput<'_> {
     }
 }
 
-
 // Independent helpers
 
 pub(crate) fn apply_shell_scroll_region(io: &dyn ShellIo, term_rows: usize) {
@@ -428,13 +455,13 @@ pub(crate) fn apply_shell_scroll_region(io: &dyn ShellIo, term_rows: usize) {
     let bottom = output_bottom_row(term_rows);
     io.write_str(crate::ecma48::HIDE_CURSOR);
     io.write_fmt(format_args!("\x1b[{};{}r", top, bottom));
-    
+
     // Initial draw (total=0, offset=0)
     draw_scrollbar(io, 0, bottom.saturating_sub(top), 0, top, bottom);
 
     // Immediately force cursor to (3, 3)
     io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 3)));
-    
+
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
 
@@ -453,16 +480,16 @@ pub(crate) fn redraw_view(
     // Save cursor position to restore after drawing
     io.write_str(crate::ecma48::SAVE_CURSOR);
     io.write_str(crate::ecma48::HIDE_CURSOR);
-    
+
     // Clear area by overwriting lines.
     // Row 3 displays history[len - 1 - offset]
-    
+
     for i in 0..height {
         let row = top + i;
         io.write_fmt(format_args!("{}", crate::ecma48::pos(row, 2))); // Col 2 (skip scrollbar)
-        
+
         let hist_idx_opt = history.len().checked_sub(1 + offset + i);
-        
+
         // Clear To EOL
         io.write_str("\x1b[K");
 
@@ -470,30 +497,32 @@ pub(crate) fn redraw_view(
             if let Some(line) = history.get(hist_idx) {
                 // Determine color based on content?
                 // For now, let's keep it simple.
-                 
-                 // Apply padding if needed (Right Align in Redraw too)
-                 let content_len = crate::shell::ecma48::visible_width(line);
-                 let padding = max_width.saturating_sub(content_len);
-                 for _ in 0..padding {
-                     io.write_str(" ");
-                 }
 
-                 let final_line = if content_len > max_width {
-                     let mut clipped = String::new();
-                     let mut w = 0;
-                     for ch in line.chars() {
-                         w += 1;
-                         if w > max_width { break; }
-                         clipped.push(ch);
-                     }
-                     clipped
-                 } else {
-                     String::from(line)
-                 };
+                // Apply padding if needed (Right Align in Redraw too)
+                let content_len = crate::shell::ecma48::visible_width(line);
+                let padding = max_width.saturating_sub(content_len);
+                for _ in 0..padding {
+                    io.write_str(" ");
+                }
 
-                 io.write_str("\x1b[38;2;120;210;255m"); // Blue
-                 io.write_str(&final_line);
-                 io.write_str("\x1b[0m");
+                let final_line = if content_len > max_width {
+                    let mut clipped = String::new();
+                    let mut w = 0;
+                    for ch in line.chars() {
+                        w += 1;
+                        if w > max_width {
+                            break;
+                        }
+                        clipped.push(ch);
+                    }
+                    clipped
+                } else {
+                    String::from(line)
+                };
+
+                io.write_str("\x1b[38;2;120;210;255m"); // Blue
+                io.write_str(&final_line);
+                io.write_str("\x1b[0m");
             }
         }
     }
@@ -515,36 +544,38 @@ pub(crate) fn draw_scrollbar(
     // 1. Draw Top Joint
     io.write_fmt(format_args!("{}", crate::ecma48::pos(row_start, 1)));
     io.write_str("\x1b[38;2;80;80;80m┬\x1b[0m");
-    
+
     // 2. Draw Bottom Joint
     io.write_fmt(format_args!("{}", crate::ecma48::pos(row_end, 1)));
     io.write_str("\x1b[38;2;80;80;80m┴\x1b[0m");
 
     let track_start = row_start + 1;
     let track_end = row_end - 1;
-    if track_end < track_start { return; }
+    if track_end < track_start {
+        return;
+    }
 
     let track_height = track_end - track_start + 1;
-    
+
     // 3. Determine Indicator Position
     let thumb_row = if total_lines <= viewport_height {
-         // Center
-         row_start + (row_end - row_start) / 2
+        // Center
+        row_start + (row_end - row_start) / 2
     } else {
-         let max_offset = total_lines.saturating_sub(viewport_height);
-         if max_offset == 0 {
-             track_start
-         } else {
-             let eff_offset = core::cmp::min(offset, max_offset);
-             // We want offset 0 (Newest) at Top (track_start)
-             // max_offset (Oldest) at Bottom (track_end)
-             track_start + (eff_offset * (track_height - 1)) / max_offset
-         }
+        let max_offset = total_lines.saturating_sub(viewport_height);
+        if max_offset == 0 {
+            track_start
+        } else {
+            let eff_offset = core::cmp::min(offset, max_offset);
+            // We want offset 0 (Newest) at Top (track_start)
+            // max_offset (Oldest) at Bottom (track_end)
+            track_start + (eff_offset * (track_height - 1)) / max_offset
+        }
     };
-    
+
     // 4. Draw Track + Thumb
     io.write_str("\x1b[38;2;80;80;80m"); // Dim Gray
-    
+
     for r in track_start..=track_end {
         io.write_fmt(format_args!("{}", crate::ecma48::pos(r, 1)));
         if r == thumb_row {
@@ -553,6 +584,6 @@ pub(crate) fn draw_scrollbar(
             io.write_str("│");
         }
     }
-    
+
     io.write_str("\x1b[0m");
 }

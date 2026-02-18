@@ -5,7 +5,11 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use spin::Mutex;
 
 extern "C" {
-    fn trueos_cabi_gfx_draw_rgb_triangles(clear_rgb: u32, vtx_ptr: *const u8, vtx_len: usize) -> i32;
+    fn trueos_cabi_gfx_draw_rgb_triangles(
+        clear_rgb: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_gfx_draw_tex_triangles_no_present(
@@ -66,19 +70,39 @@ fn log_i32_dec(v: i32) {
 
 pub(crate) enum CmdStreamCommand {
     BeginFrame,
-    SetClearColor { clear_rgb: u32 },
-    SetViewport { w: i32, h: i32 },
-    SetBlendEnabled { enabled: bool },
+    SetClearColor {
+        clear_rgb: u32,
+    },
+    SetViewport {
+        w: i32,
+        h: i32,
+    },
+    SetBlendEnabled {
+        enabled: bool,
+    },
     SetBlendFunc {
         src_rgb: u32,
         dst_rgb: u32,
         src_alpha: u32,
         dst_alpha: u32,
     },
-    SetBlendEquation { rgb: u32, alpha: u32 },
-    DrawTriangles { vertices: Vec<u8> },
-    DrawTrianglesTex { tex_id: u32, vertices: Vec<u8> },
-    UploadTexture { tex_id: u32, width: u32, height: u32, rgba: Vec<u8> },
+    SetBlendEquation {
+        rgb: u32,
+        alpha: u32,
+    },
+    DrawTriangles {
+        vertices: Vec<u8>,
+    },
+    DrawTrianglesTex {
+        tex_id: u32,
+        vertices: Vec<u8>,
+    },
+    UploadTexture {
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
     EndFrame,
 }
 
@@ -97,11 +121,11 @@ impl Default for BlendState {
     fn default() -> Self {
         Self {
             enabled: false,
-            src_rgb: 1, // ONE
-            dst_rgb: 0, // ZERO
-            src_alpha: 1, // ONE
-            dst_alpha: 0, // ZERO
-            eq_rgb: 0x8006, // FUNC_ADD
+            src_rgb: 1,       // ONE
+            dst_rgb: 0,       // ZERO
+            src_alpha: 1,     // ONE
+            dst_alpha: 0,     // ZERO
+            eq_rgb: 0x8006,   // FUNC_ADD
             eq_alpha: 0x8006, // FUNC_ADD
         }
     }
@@ -167,9 +191,7 @@ fn submit_rgb_triangles(clear_rgb: u32, vertices: Option<&[u8]>) {
         Some(vtx) => unsafe {
             trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, vtx.as_ptr(), vtx.len())
         },
-        None => unsafe {
-            trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, core::ptr::null(), 0)
-        },
+        None => unsafe { trueos_cabi_gfx_draw_rgb_triangles(clear_rgb, core::ptr::null(), 0) },
     };
     if rc != 0 {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
@@ -200,10 +222,7 @@ fn flush_active_frame(st: &mut FrameState) {
     for batch in st.batches.iter() {
         let rc = match batch.kind {
             DrawKind::Rgb => unsafe {
-                trueos_cabi_gfx_draw_rgb_triangles_no_present(
-                    batch.vtx.as_ptr(),
-                    batch.vtx.len(),
-                )
+                trueos_cabi_gfx_draw_rgb_triangles_no_present(batch.vtx.as_ptr(), batch.vtx.len())
             },
             DrawKind::Tex { id } => unsafe {
                 trueos_cabi_gfx_draw_tex_triangles_no_present(

@@ -2,7 +2,7 @@ use crate::pci::mmio;
 use crate::wait;
 use core::mem::size_of;
 use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{AtomicBool, AtomicU32, fence, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -310,7 +310,6 @@ pub fn init_once() {
                     log_ports_table(&ctx);
                 }
             }
-
         }
     });
 
@@ -425,7 +424,6 @@ impl EventRingState {
             intr0: null_mut(),
         }
     }
-
 }
 
 static EVENT_RING_STATES: [Mutex<EventRingState>; MAX_XHCI_CONTROLLERS] =
@@ -921,7 +919,8 @@ pub async fn poll_task(info: XhcInfo) {
                 Timer::after(EmbassyDuration::from_millis(1)).await;
             }
         }
-    }.await;
+    }
+    .await;
 }
 
 fn enqueue_event(controller_id: usize, evt: Trb) {
@@ -1152,7 +1151,11 @@ where
 ///
 /// This is intended for blocking contexts (e.g. USB mass-storage synchronous reads/writes) where
 /// "N iterations" can look like a hang on slower hardware.
-pub fn wait_for_event_spin_ms<F>(ctx: &XhciContext, mut predicate: F, timeout_ms: u64) -> Option<Trb>
+pub fn wait_for_event_spin_ms<F>(
+    ctx: &XhciContext,
+    mut predicate: F,
+    timeout_ms: u64,
+) -> Option<Trb>
 where
     F: FnMut(&Trb) -> bool,
 {

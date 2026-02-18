@@ -35,12 +35,18 @@ static POOL_COLORS: Mutex<[Rgb8; LED_POOL_SIZE]> = Mutex::new([Rgb8::new(0, 0, 0
 
 #[derive(Clone, Debug)]
 enum LedCmd {
-    SetRgb { owner: u32, rgb: Rgb8 },
+    SetRgb {
+        owner: u32,
+        rgb: Rgb8,
+    },
     SetData {
         owner: u32,
         data: Vec<Rgb8, LED_POOL_SIZE>,
     },
-    SetEffect { owner: u32, effect: Effect },
+    SetEffect {
+        owner: u32,
+        effect: Effect,
+    },
     RawOut {
         owner: u32,
         report_id: u8,
@@ -160,11 +166,14 @@ pub fn alloc(count: usize) -> Option<VLed> {
     }
 
     let mut scopes = SCOPES.lock();
-    if scopes.push(LedScope {
-        token,
-        start: start as u16,
-        len: len_u16,
-    }).is_err() {
+    if scopes
+        .push(LedScope {
+            token,
+            start: start as u16,
+            len: len_u16,
+        })
+        .is_err()
+    {
         rollback_pool_range(start, count);
         return None;
     }
@@ -343,7 +352,8 @@ pub async fn task() {
                         data,
                     } => {
                         if online && scope_range(*owner).is_some() {
-                            let _ = crate::usb::leds::send_output_report_first(*report_id, data).await;
+                            let _ =
+                                crate::usb::leds::send_output_report_first(*report_id, data).await;
                         }
                     }
                 }
@@ -384,7 +394,8 @@ pub async fn task() {
                     if let Some(effect) = last_effect {
                         let (rid, data) = encode_set_effect(effect);
                         if rid == 0 {
-                            let _ = crate::usb::leds::send_preferred_output_report_first(&data).await;
+                            let _ =
+                                crate::usb::leds::send_preferred_output_report_first(&data).await;
                         } else {
                             let _ = crate::usb::leds::send_output_report_first(rid, &data).await;
                         }
@@ -396,7 +407,8 @@ pub async fn task() {
 
             Timer::after(EmbassyDuration::from_millis(1)).await;
         }
-    }.await;
+    }
+    .await;
 }
 
 #[embassy_executor::task]
@@ -438,5 +450,6 @@ pub async fn color_cycle_task() {
 
             Timer::after(EmbassyDuration::from_millis(20)).await;
         }
-    }.await;
+    }
+    .await;
 }

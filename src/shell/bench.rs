@@ -25,7 +25,13 @@ fn format_speed(bps: u64) -> alloc::string::String {
     format!("{:.1} TB/s", tb)
 }
 
-pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block::DeviceHandle, cols: usize, rows: usize, history: &mut alloc::vec::Vec<alloc::string::String>) {
+pub(crate) async fn run_bench_fs(
+    io: &dyn ShellBackend,
+    disk: crate::disc::block::DeviceHandle,
+    cols: usize,
+    rows: usize,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+) {
     const BENCH_PATH: &str = "bench-lorem-100mb.txt";
     const BENCH_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
     const UPDATE_MS: u64 = 100;
@@ -40,9 +46,9 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
             return;
         }
     };
-    
+
     // We cannot move slot into closure easily if we need it, so we replicate cleanup logic at return points.
-    
+
     let _ = crate::shell::statusbar::set_active_slot(slot);
     let _ = crate::shell::statusbar::set_left(slot, "fsbench");
     let _ = crate::shell::statusbar::set_right(slot, "init");
@@ -51,11 +57,15 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
     }
     crate::shell::statusbar::refresh(io, cols, rows);
 
-    let Some(placement) = crate::v::fs::trueosfs::locate_async(disk).await.ok().flatten() else {
-         let _ = rev_io.write_str("bench: selected disk is not TRUEOSFS\n");
-         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
-         let _ = crate::matrix::free_slot(slot);
-         return;
+    let Some(placement) = crate::v::fs::trueosfs::locate_async(disk)
+        .await
+        .ok()
+        .flatten()
+    else {
+        let _ = rev_io.write_str("bench: selected disk is not TRUEOSFS\n");
+        let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
+        let _ = crate::matrix::free_slot(slot);
+        return;
     };
     if !disk.supports_write() {
         let _ = rev_io.write_str("bench: selected disk is read-only\n");
@@ -81,19 +91,19 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
         256 * 1024
     };
 
-    let Some(stream_handle) = (match crate::v::fs::trueosfs::file_write_begin_async(
-        disk,
-        BENCH_PATH,
-        BENCH_TOTAL_BYTES,
-    ).await {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = rev_io.write_fmt(format_args!("bench: begin failed ({:?})\n", e));
-            let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
-            let _ = crate::matrix::free_slot(slot);
-            return;
-        }
-    }) else {
+    let Some(stream_handle) =
+        (match crate::v::fs::trueosfs::file_write_begin_async(disk, BENCH_PATH, BENCH_TOTAL_BYTES)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = rev_io.write_fmt(format_args!("bench: begin failed ({:?})\n", e));
+                let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
+                let _ = crate::matrix::free_slot(slot);
+                return;
+            }
+        })
+    else {
         let _ = rev_io.write_str("bench: begin failed (no space / no placement)\n");
         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
         let _ = crate::matrix::free_slot(slot);
@@ -114,7 +124,7 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
     let mut aborted = false;
     let mut write_err: Option<crate::disc::block::Error> = None;
     let mut finished_ok = false;
-    
+
     let start_tick = embassy_time_driver::now();
     let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
 
@@ -127,7 +137,9 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
         let remaining = (BENCH_TOTAL_BYTES - written) as usize;
         let n = core::cmp::min(remaining, chunk.len());
 
-        if let Err(e) = crate::v::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await {
+        if let Err(e) =
+            crate::v::fs::trueosfs::file_write_chunk_async(stream_handle, &chunk[..n]).await
+        {
             write_err = Some(e);
             break;
         }
@@ -137,13 +149,21 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
             let now_tick = embassy_time_driver::now();
             let elapsed_ticks = now_tick.saturating_sub(start_tick);
             let hz = embassy_time_driver::TICK_HZ as u64;
-            let elapsed_ms = if hz == 0 { 0 } else { elapsed_ticks.saturating_mul(1000) / hz };
-            let bps = if elapsed_ms == 0 { 0 } else { written.saturating_mul(1000) / elapsed_ms };
-            
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                written.saturating_mul(1000) / elapsed_ms
+            };
+
             let spd = format_speed(bps);
             let _ = crate::shell::statusbar::set_right(slot, spd.as_str());
             crate::shell::statusbar::refresh(io, cols, rows);
-            
+
             next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
         }
     }
@@ -174,7 +194,13 @@ pub(crate) async fn run_bench_fs(io: &dyn ShellBackend, disk: crate::disc::block
     let _ = crate::matrix::free_slot(slot);
 }
 
-pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: usize, rows: usize, history: &mut alloc::vec::Vec<alloc::string::String>) {
+pub(crate) async fn run_netbench(
+    io: &dyn ShellBackend,
+    nic_index: usize,
+    cols: usize,
+    rows: usize,
+    history: &mut alloc::vec::Vec<alloc::string::String>,
+) {
     use alloc::{string::String as AString, vec::Vec};
     use trueos_v::vnet as api;
 
@@ -215,9 +241,7 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
     }
 
     fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-        buf.windows(4)
-            .position(|w| w == b"\r\n\r\n")
-            .map(|p| p + 4)
+        buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
     }
 
     fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
@@ -273,7 +297,7 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
             return;
         }
     };
-    
+
     let _ = crate::shell::statusbar::set_active_slot(slot);
     let _ = crate::shell::statusbar::set_left(slot, "netbench");
     let _ = crate::shell::statusbar::set_right(slot, "resolving");
@@ -288,7 +312,7 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
         let _ = crate::matrix::free_slot(slot);
         return;
     };
-    
+
     let _ = rev_io.write_fmt(format_args!("netbench: resolving {}\n", host));
     let ip = match crate::v::net::dns::resolve_ipv4_for_device(
         nic_index,
@@ -319,7 +343,7 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
         let _ = crate::matrix::free_slot(slot);
         return;
     };
-    
+
     if vnet
         .submit(api::Command::OpenTcpConnect {
             remote: api::EndpointV4 { addr: ip, port },
@@ -345,10 +369,12 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
         }
         if let Some(ev) = vnet.pop_event() {
             match ev {
-                api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => break Some(handle),
+                api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
+                    break Some(handle)
+                }
                 api::Event::Error { msg } => {
-                     let _ = rev_io.write_fmt(format_args!("netbench: connect error: {:?}\n", msg));
-                     break None;
+                    let _ = rev_io.write_fmt(format_args!("netbench: connect error: {:?}\n", msg));
+                    break None;
                 }
                 _ => {}
             }
@@ -358,7 +384,9 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
     };
 
     let Some(tcp_handle) = tcp_handle else {
-        if aborted { let _ = rev_io.write_str("netbench: aborted\n"); }
+        if aborted {
+            let _ = rev_io.write_str("netbench: aborted\n");
+        }
         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
         let _ = crate::matrix::free_slot(slot);
         return;
@@ -389,14 +417,14 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
     let mut expected_len: Option<usize> = None;
     let mut received_bytes: usize = 0;
     let mut closed = false;
-    
+
     let start_tick = embassy_time_driver::now();
     let mut next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
-    
+
     let _ = rev_io.write_str("netbench: receiving data (press any key to abort)...\n");
 
     loop {
-         if io.read_byte().is_some() {
+        if io.read_byte().is_some() {
             aborted = true;
             break;
         }
@@ -404,7 +432,7 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
             let _ = rev_io.write_str("netbench: transfer timeout\n");
             break;
         }
-        
+
         let mut got_event = false;
         while let Some(ev) = vnet.pop_event() {
             got_event = true;
@@ -413,74 +441,103 @@ pub(crate) async fn run_netbench(io: &dyn ShellBackend, nic_index: usize, cols: 
                     let bytes = data.as_slice();
                     if !header_done {
                         if header_bytes.len() + bytes.len() > 16 * 1024 {
-                             let _ = rev_io.write_str("netbench: header too large\n");
-                             closed = true;
-                             break;
+                            let _ = rev_io.write_str("netbench: header too large\n");
+                            closed = true;
+                            break;
                         }
                         header_bytes.extend_from_slice(bytes);
-                        
+
                         if let Some(hend) = find_http_header_end(header_bytes.as_slice()) {
                             header_done = true;
                             expected_len = parse_content_length(&header_bytes[..hend]);
                             received_bytes += header_bytes.len() - hend;
                             if let Some(cl) = expected_len {
-                                if received_bytes >= cl { closed = true; break; }
+                                if received_bytes >= cl {
+                                    closed = true;
+                                    break;
+                                }
                             }
                         }
                     } else {
                         received_bytes += bytes.len();
                         if let Some(cl) = expected_len {
-                            if received_bytes >= cl { closed = true; break; }
+                            if received_bytes >= cl {
+                                closed = true;
+                                break;
+                            }
                         }
                     }
-                    overall_deadline = Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
+                    overall_deadline =
+                        Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);
                 }
                 api::Event::Closed { handle } if handle == tcp_handle => {
                     closed = true;
                     break;
                 }
                 api::Event::Error { msg } => {
-                     let _ = rev_io.write_fmt(format_args!("netbench: socket error: {:?}\n", msg));
-                     closed = true;
-                     break;
+                    let _ = rev_io.write_fmt(format_args!("netbench: socket error: {:?}\n", msg));
+                    closed = true;
+                    break;
                 }
-                 _ => {}
+                _ => {}
             }
         }
-        
-        if closed { break; }
-        
+
+        if closed {
+            break;
+        }
+
         if Instant::now() >= next_update {
-             let now_tick = embassy_time_driver::now();
-             let elapsed_ticks = now_tick.saturating_sub(start_tick);
-             let hz = embassy_time_driver::TICK_HZ as u64;
-             let elapsed_ms = if hz == 0 { 0 } else { elapsed_ticks.saturating_mul(1000) / hz };
-             let bps = if elapsed_ms == 0 { 0 } else { (received_bytes as u64).saturating_mul(1000) / elapsed_ms };
-            
-             let spd = format_speed(bps);
-             let _ = crate::shell::statusbar::set_right(slot, spd.as_str());
-             crate::shell::statusbar::refresh(io, cols, rows);
-             next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
+            let now_tick = embassy_time_driver::now();
+            let elapsed_ticks = now_tick.saturating_sub(start_tick);
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                (received_bytes as u64).saturating_mul(1000) / elapsed_ms
+            };
+
+            let spd = format_speed(bps);
+            let _ = crate::shell::statusbar::set_right(slot, spd.as_str());
+            crate::shell::statusbar::refresh(io, cols, rows);
+            next_update = Instant::now() + EmbassyDuration::from_millis(UPDATE_MS);
         }
 
         if !got_event {
-             Timer::after(EmbassyDuration::from_micros(IDLE_YIELD_US)).await;
+            Timer::after(EmbassyDuration::from_micros(IDLE_YIELD_US)).await;
         }
     }
 
     let _ = vnet.submit(api::Command::Close { handle: tcp_handle });
-    
+
     if aborted {
         let _ = rev_io.write_str("netbench: aborted\n");
     } else {
         let now_tick = embassy_time_driver::now();
         let elapsed_ticks = now_tick.saturating_sub(start_tick);
         let hz = embassy_time_driver::TICK_HZ as u64;
-        let elapsed_ms = if hz == 0 { 0 } else { elapsed_ticks.saturating_mul(1000) / hz };
-        let bps = if elapsed_ms == 0 { 0 } else { (received_bytes as u64).saturating_mul(1000) / elapsed_ms };
-        let _ = rev_io.write_fmt(format_args!("netbench: done. {} bytes received ({}/s)\n", received_bytes, format_speed(bps)));
+        let elapsed_ms = if hz == 0 {
+            0
+        } else {
+            elapsed_ticks.saturating_mul(1000) / hz
+        };
+        let bps = if elapsed_ms == 0 {
+            0
+        } else {
+            (received_bytes as u64).saturating_mul(1000) / elapsed_ms
+        };
+        let _ = rev_io.write_fmt(format_args!(
+            "netbench: done. {} bytes received ({}/s)\n",
+            received_bytes,
+            format_speed(bps)
+        ));
     }
-    
+
     let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
     let _ = crate::matrix::free_slot(slot);
 }

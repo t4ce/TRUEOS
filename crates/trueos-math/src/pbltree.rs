@@ -187,7 +187,12 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
     ///
     /// - `max_nodes` caps how many tree nodes will be printed.
     /// - `render_key` controls how keys are printed without requiring `Debug`.
-    pub fn write_ascii_tree<W, F>(&self, out: &mut W, max_nodes: usize, mut render_key: F) -> fmt::Result
+    pub fn write_ascii_tree<W, F>(
+        &self,
+        out: &mut W,
+        max_nodes: usize,
+        mut render_key: F,
+    ) -> fmt::Result
     where
         W: Write,
         F: FnMut(&K, &mut W) -> fmt::Result,
@@ -209,8 +214,15 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
             is_last: true,
         });
 
-        write_ascii_tree(self, root, out, max_nodes, &mut stack, &mut branches, "nodes", |id, w| {
-            match &self.nodes[id] {
+        write_ascii_tree(
+            self,
+            root,
+            out,
+            max_nodes,
+            &mut stack,
+            &mut branches,
+            "nodes",
+            |id, w| match &self.nodes[id] {
                 Node::Internal { keys, children } => {
                     w.write_str("I ")?;
                     write!(w, "keys={} children={}", keys.len(), children.len())?;
@@ -264,8 +276,8 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
                     }
                     Ok(())
                 }
-            }
-        })
+            },
+        )
     }
 
     fn seek_to_first_ge(&self, key: &K) -> (Option<NodeId>, usize) {
@@ -394,14 +406,18 @@ impl<K: Ord + Clone, V, const M: usize> Default for BPlusTree<K, V, M> {
     }
 }
 
-impl<K: Ord + Clone, V, const M: usize> crate::ascii_tree::AsciiTreeTraversal for BPlusTree<K, V, M> {
+impl<K: Ord + Clone, V, const M: usize> crate::ascii_tree::AsciiTreeTraversal
+    for BPlusTree<K, V, M>
+{
     type NodeId = NodeId;
 
     fn is_valid(&self, id: Self::NodeId) -> bool {
         id < self.nodes.len()
     }
 
-    fn push_children_rev<S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>>(
+    fn push_children_rev<
+        S: crate::ascii_tree::AsciiStack<crate::ascii_tree::Frame<Self::NodeId>>,
+    >(
         &self,
         parent: Self::NodeId,
         child_depth: usize,
@@ -544,7 +560,10 @@ mod tests {
         assert_eq!(t.get(&b"b".to_vec()), Some(&2));
 
         let keys: alloc::vec::Vec<alloc::vec::Vec<u8>> = t.iter().map(|(k, _)| k.clone()).collect();
-        assert_eq!(keys, alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]);
+        assert_eq!(
+            keys,
+            alloc::vec![b"a".to_vec(), b"aa".to_vec(), b"b".to_vec()]
+        );
     }
 
     #[test]
@@ -569,7 +588,8 @@ mod tests {
         }
 
         let mut out = alloc::string::String::new();
-        t.write_ascii_tree(&mut out, 64, |k, w| write!(w, "{}", k)).unwrap();
+        t.write_ascii_tree(&mut out, 64, |k, w| write!(w, "{}", k))
+            .unwrap();
 
         assert!(out.contains("I ") || out.contains("L "));
         assert!(out.lines().count() >= 1);
@@ -583,7 +603,8 @@ mod tests {
         }
 
         let mut out = alloc::string::String::new();
-        t.write_ascii_tree(&mut out, 2, |k, w| write!(w, "{}", k)).unwrap();
+        t.write_ascii_tree(&mut out, 2, |k, w| write!(w, "{}", k))
+            .unwrap();
         assert!(out.contains("... (max 2 nodes)"));
     }
 }

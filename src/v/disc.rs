@@ -5,6 +5,6 @@
 //!
 //! This is where block-device virtualization/stacking lives.
 
-pub mod partition;
 pub mod detect;
+pub mod partition;
 pub mod ramdisk;

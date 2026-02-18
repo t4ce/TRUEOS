@@ -1,13 +1,13 @@
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
+    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
 use crate::pci::dma;
 use crate::usb::input;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_time_driver::TICK_HZ;
 use heapless::{String as HString, Vec};
@@ -175,19 +175,7 @@ pub struct HidRuntime {
     pub seq: u64,
     pub last_nonzero_seq: u64,
 
-    // Mouse decode state. Some emulated/odd HID devices present a 4-byte report
-    // that looks like: [buttons, X, Y, wheel] where X/Y are *absolute* 8-bit
-    // coordinates centered around 0x7F. Treating that as boot-relative deltas
-    // produces the classic +127/+127 spam.
-    pub mouse_abs8: bool,
-    pub mouse_decode_locked: bool,
-    pub mouse_abs_votes: u8,
-    pub mouse_rel_votes: u8,
-    pub mouse_abs_inited: bool,
-    pub mouse_last_abs_x: u8,
-    pub mouse_last_abs_y: u8,
-    pub mouse_buttons_inited: bool,
-    pub mouse_last_buttons: u8,
+    pub mouse: MouseDecodeState,
 }
 
 unsafe impl Send for HidRuntime {}
@@ -196,6 +184,176 @@ unsafe impl Sync for HidRuntime {}
 const MAX_HID_DEVICES: usize = 16;
 const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
+
+#[derive(Copy, Clone, Debug)]
+enum MouseMode {
+    Unknown,
+    BootRelative,
+    CenteredRelative { cx: u8, cy: u8 },
+}
+
+/// State for decoding 3/4-byte HID mouse reports.
+///
+/// We intentionally support two common encodings:
+/// - BootRelative: dx/dy are signed i8 (idle at 0,0)
+/// - CenteredRelative: dx/dy are offset-binary around a neutral center (often 0x7F or 0x80)
+#[derive(Copy, Clone, Debug)]
+pub struct MouseDecodeState {
+    mode: MouseMode,
+
+    // Detection: observe early idle packets to decide between BootRelative and CenteredRelative.
+    detect_samples: u8,
+    idle_zero_votes: u8,
+    idle_center7f_votes: u8,
+    idle_center80_votes: u8,
+
+    // Buttons: always deliver transitions even when motion is unchanged.
+    buttons_inited: bool,
+    last_buttons: u8,
+}
+
+impl MouseDecodeState {
+    pub const fn new() -> Self {
+        Self {
+            mode: MouseMode::Unknown,
+            detect_samples: 0,
+            idle_zero_votes: 0,
+            idle_center7f_votes: 0,
+            idle_center80_votes: 0,
+            buttons_inited: false,
+            last_buttons: 0,
+        }
+    }
+
+    #[inline]
+    fn mode_id(&self) -> u8 {
+        match self.mode {
+            MouseMode::Unknown => 0,
+            MouseMode::BootRelative => 1,
+            MouseMode::CenteredRelative { .. } => 2,
+        }
+    }
+
+    #[inline]
+    fn centered_center(&self) -> Option<(u8, u8)> {
+        match self.mode {
+            MouseMode::CenteredRelative { cx, cy } => Some((cx, cy)),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn update_buttons_changed(&mut self, buttons: u8) -> bool {
+        if !self.buttons_inited {
+            self.buttons_inited = true;
+            self.last_buttons = buttons;
+            // First packet: only emit if buttons are already pressed.
+            buttons != 0
+        } else {
+            let changed = self.last_buttons != buttons;
+            self.last_buttons = buttons;
+            changed
+        }
+    }
+
+    #[inline]
+    fn observe_idle_for_detection(&mut self, buttons: u8, wheel: i8, b1: u8, b2: u8) {
+        if !matches!(self.mode, MouseMode::Unknown) {
+            return;
+        }
+
+        // Only learn from clean idle samples.
+        if buttons != 0 || wheel != 0 {
+            return;
+        }
+
+        self.detect_samples = self.detect_samples.saturating_add(1);
+
+        if b1 == 0 && b2 == 0 {
+            self.idle_zero_votes = self.idle_zero_votes.saturating_add(2);
+        }
+
+        if (b1 == 0x7F || b1 == 0x80) && (b2 == 0x7F || b2 == 0x80) {
+            // Strong signature for centered reports.
+            if b1 == 0x7F && b2 == 0x7F {
+                self.idle_center7f_votes = self.idle_center7f_votes.saturating_add(2);
+            } else if b1 == 0x80 && b2 == 0x80 {
+                self.idle_center80_votes = self.idle_center80_votes.saturating_add(2);
+            } else {
+                // Mixed (7F/80) still suggests centered.
+                self.idle_center7f_votes = self.idle_center7f_votes.saturating_add(1);
+                self.idle_center80_votes = self.idle_center80_votes.saturating_add(1);
+            }
+        }
+
+        // Decide after a small window; keep it conservative.
+        if self.detect_samples < 8 {
+            return;
+        }
+
+        let centered_votes = self
+            .idle_center7f_votes
+            .saturating_add(self.idle_center80_votes);
+
+        if centered_votes >= 8 && centered_votes > self.idle_zero_votes {
+            let (cx, cy) = if self.idle_center80_votes > self.idle_center7f_votes {
+                (0x80, 0x80)
+            } else {
+                (0x7F, 0x7F)
+            };
+            self.mode = MouseMode::CenteredRelative { cx, cy };
+        } else if self.idle_zero_votes >= 8 {
+            self.mode = MouseMode::BootRelative;
+        }
+    }
+
+    #[inline]
+    fn decode(&mut self, buttons: u8, wheel: i8, b1: u8, b2: u8) -> (i8, i8) {
+        self.observe_idle_for_detection(buttons, wheel, b1, b2);
+
+        match self.mode {
+            MouseMode::BootRelative => (b1 as i8, b2 as i8),
+            MouseMode::CenteredRelative { cx, cy } => {
+                let raw_dx = (b1 as i16) - (cx as i16);
+                let raw_dy = (b2 as i16) - (cy as i16);
+
+                let clamp_i8 = |v: i16| -> i8 {
+                    if v > i8::MAX as i16 {
+                        i8::MAX
+                    } else if v < i8::MIN as i16 {
+                        i8::MIN
+                    } else {
+                        v as i8
+                    }
+                };
+
+                // Tiny deadzone to kill common 7F/80 jitter.
+                let mut dx = clamp_i8(raw_dx);
+                let mut dy = clamp_i8(raw_dy);
+                if dx == 1 || dx == -1 {
+                    dx = 0;
+                }
+                if dy == 1 || dy == -1 {
+                    dy = 0;
+                }
+                (dx, dy)
+            }
+            MouseMode::Unknown => {
+                // Safe default while undecided: treat centered-idle as 0/0 so we don't
+                // ever emit +127/+127 spam just because a device idles at 0x7F/0x80.
+                let centered_idle = buttons == 0
+                    && wheel == 0
+                    && (b1 == 0x7F || b1 == 0x80)
+                    && (b2 == 0x7F || b2 == 0x80);
+                if centered_idle {
+                    (0, 0)
+                } else {
+                    (b1 as i8, b2 as i8)
+                }
+            }
+        }
+    }
+}
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
     // Placeholder: higher-level input stack not wired in yet.
     protocol
@@ -214,14 +372,11 @@ pub fn register_runtime(runtime: HidRuntime) {
     }
 
     let mut guard = HID_RUNTIMES.lock();
-    if let Some(existing) = guard
-        .iter_mut()
-        .find(|r| {
-            r.controller_id == runtime.controller_id
-                && r.slot_id == runtime.slot_id
-                && r.ep_target == runtime.ep_target
-        })
-    {
+    if let Some(existing) = guard.iter_mut().find(|r| {
+        r.controller_id == runtime.controller_id
+            && r.slot_id == runtime.slot_id
+            && r.ep_target == runtime.ep_target
+    }) {
         *existing = runtime;
         return;
     }
@@ -278,144 +433,28 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             let b2 = data[2];
             let wheel = if data.len() > 3 { data[3] as i8 } else { 0 };
 
-            // Heuristic: many absolute 8-bit pointer reports sit at (0x7F,0x7F) or (0x80,0x80)
-            // when idle. Interpreting those bytes as boot-relative deltas yields +127 spam.
-            // If we see the centered pattern with no buttons/wheel, treat it as idle movement
-            // even before we lock the decode mode.
-            let centered_idle = buttons == 0
-                && wheel == 0
-                && (b1 == 0x7F || b1 == 0x80)
-                && (b2 == 0x7F || b2 == 0x80);
-
-            // Strong signature: a boot-relative mouse is idle at 0/0. Seeing a stable centered
-            // value is almost certainly a centered 8-bit encoding. Lock immediately to avoid
-            // ever interpreting 0x7F/0x80 as +127 motion.
-            if centered_idle {
-                let was_abs8 = runtime.mouse_abs8;
-                if !runtime.mouse_abs8 {
-                    runtime.mouse_abs8 = true;
-
-                    // Capture the neutral center so we don't accidentally change it during
-                    // movement (e.g. dx=+1 often encodes as 0x80).
-                    runtime.mouse_last_abs_x = b1;
-                    runtime.mouse_last_abs_y = b2;
-                    runtime.mouse_abs_inited = true;
-
-                    // If we were previously locked to boot-relative, make the flip visible.
-                    if runtime.mouse_decode_locked && !was_abs8 {
-                        hidlog!(
-                            "[hid] mouse slot={} switching to centered8 decode (centered idle signature)\n",
-                            runtime.slot_id
-                        );
-                    }
-                }
-                if !runtime.mouse_decode_locked {
-                    runtime.mouse_decode_locked = true;
+            let mode_before = runtime.mouse.mode_id();
+            let (dx, dy) = runtime.mouse.decode(buttons, wheel, b1, b2);
+            let mode_after = runtime.mouse.mode_id();
+            if mode_before == 0 && mode_after != 0 {
+                if let Some((cx, cy)) = runtime.mouse.centered_center() {
                     hidlog!(
-                        "[hid] mouse slot={} selecting centered8 decode (centered idle signature)\n",
+                        "[hid] mouse slot={} decode=centered-relative center=0x{:02X}/0x{:02X}\n",
+                        runtime.slot_id,
+                        cx,
+                        cy
+                    );
+                } else {
+                    hidlog!(
+                        "[hid] mouse slot={} decode=boot-relative\n",
                         runtime.slot_id
                     );
                 }
             }
 
-            // Auto-detect report semantics if we haven't locked a mode yet.
-            if !runtime.mouse_decode_locked {
-                // Relative mice are idle at 0/0; absolute 8-bit tends to idle at 0x7F/0x80.
-                if buttons == 0 && wheel == 0 {
-                    if b1 == 0 && b2 == 0 {
-                        runtime.mouse_rel_votes = runtime.mouse_rel_votes.saturating_add(1);
-                    }
-                    if centered_idle {
-                        runtime.mouse_abs_votes = runtime.mouse_abs_votes.saturating_add(2);
-                    }
-                }
-
-                // Lock once we have a clear winner.
-                if runtime.mouse_abs_votes >= 6 {
-                    runtime.mouse_abs8 = true;
-                    runtime.mouse_decode_locked = true;
-
-                    // If we haven't captured a center yet, use the current sample when it
-                    // matches the centered-idle signature, otherwise default to 0x7F.
-                    if !runtime.mouse_abs_inited {
-                        if centered_idle {
-                            runtime.mouse_last_abs_x = b1;
-                            runtime.mouse_last_abs_y = b2;
-                        } else {
-                            runtime.mouse_last_abs_x = 0x7F;
-                            runtime.mouse_last_abs_y = 0x7F;
-                        }
-                        runtime.mouse_abs_inited = true;
-                    }
-                    hidlog!(
-                        "[hid] mouse slot={} selecting centered8 decode (votes abs={} rel={})\n",
-                        runtime.slot_id,
-                        runtime.mouse_abs_votes,
-                        runtime.mouse_rel_votes
-                    );
-                } else if runtime.mouse_rel_votes >= 6 && runtime.mouse_abs_votes == 0 {
-                    runtime.mouse_abs8 = false;
-                    runtime.mouse_decode_locked = true;
-                    hidlog!(
-                        "[hid] mouse slot={} selecting boot-relative decode (votes abs={} rel={})\n",
-                        runtime.slot_id,
-                        runtime.mouse_abs_votes,
-                        runtime.mouse_rel_votes
-                    );
-                }
-            }
-
-            let (dx, dy) = if runtime.mouse_abs8 {
-                // Centered 8-bit relative: interpret b1/b2 as deltas around a neutral center.
-                // This preserves continuous motion (constant dx repeats constant byte), unlike
-                // diffing successive samples.
-                let cx = if runtime.mouse_abs_inited {
-                    runtime.mouse_last_abs_x
-                } else {
-                    0x7F
-                };
-                let cy = if runtime.mouse_abs_inited {
-                    runtime.mouse_last_abs_y
-                } else {
-                    0x7F
-                };
-
-                let raw_dx = (b1 as i16) - (cx as i16);
-                let raw_dy = (b2 as i16) - (cy as i16);
-
-                // Clamp to i8 range; input pipeline expects i8 deltas.
-                let clamp_i8 = |v: i16| -> i8 {
-                    if v > i8::MAX as i16 {
-                        i8::MAX
-                    } else if v < i8::MIN as i16 {
-                        i8::MIN
-                    } else {
-                        v as i8
-                    }
-                };
-                (clamp_i8(raw_dx), clamp_i8(raw_dy))
-            } else {
-                // If we're still undecided and the report looks like an absolute-centered idle
-                // sample, suppress it as (0,0) to avoid spamming bogus +127/+127 motion.
-                if !runtime.mouse_decode_locked && centered_idle {
-                    (0i8, 0i8)
-                } else {
-                    (b1 as i8, b2 as i8)
-                }
-            };
-
             // Do not enqueue unchanged reports; this avoids building huge backlogs at 1000Hz.
-            // But we must still deliver button releases (buttons -> 0), so track last_buttons.
-            let buttons_changed = if !runtime.mouse_buttons_inited {
-                runtime.mouse_buttons_inited = true;
-                runtime.mouse_last_buttons = buttons;
-                // First packet: only emit if buttons are already pressed.
-                buttons != 0
-            } else {
-                let changed = runtime.mouse_last_buttons != buttons;
-                runtime.mouse_last_buttons = buttons;
-                changed
-            };
+            // But we must still deliver button releases (buttons -> 0).
+            let buttons_changed = runtime.mouse.update_buttons_changed(buttons);
 
             let interesting = buttons_changed || dx != 0 || dy != 0 || wheel != 0;
 
@@ -548,7 +587,8 @@ pub(crate) async fn input_logger() {
                         // NOTE: This is intentionally offered twice (architecture decision).
                         input::qjs_mouse_offer(mouse);
                         input::qjs_mouse_offer(mouse);
-                        if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
+                        if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0
+                        {
                             crate::log!(
                                 "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
                                 mouse.slot_id,
@@ -564,7 +604,8 @@ pub(crate) async fn input_logger() {
                 Timer::after(EmbassyDuration::from_millis(5)).await;
             }
         }
-    }.await;
+    }
+    .await;
 }
 
 // NOTE: No synthetic HID injections; reports now only reflect real device data.
@@ -842,8 +883,10 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
     // Best-effort: idle/protocol setup (works for many HID devices; errors ignored)
     for ep in endpoints.iter() {
-        let _ = class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-        let _ = class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
+        let _ =
+            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
+        let _ =
+            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
     }
 
     let mut attached = 0usize;
@@ -997,15 +1040,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             seq: 0,
             last_nonzero_seq: 0,
 
-            mouse_abs8: false,
-            mouse_decode_locked: false,
-            mouse_abs_votes: 0,
-            mouse_rel_votes: 0,
-            mouse_abs_inited: false,
-            mouse_last_abs_x: 0,
-            mouse_last_abs_y: 0,
-            mouse_buttons_inited: false,
-            mouse_last_buttons: 0,
+            mouse: MouseDecodeState::new(),
         });
 
         attached += 1;
@@ -1172,7 +1207,8 @@ pub(crate) async fn fetch_hid_get_report(
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
     // bmRequestType=IN|Class|Interface, bRequest=GET_REPORT (0x01),
     // wValue=(report_type<<8)|report_id, wIndex=interface.
-    let setup_d0 = (0xA1u32) | ((0x01u32) << 8) | (((report_type as u32) << 8) | (report_id as u32)) << 16;
+    let setup_d0 =
+        (0xA1u32) | ((0x01u32) << 8) | (((report_type as u32) << 8) | (report_id as u32)) << 16;
     let setup_d1 = iface as u32;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
 }
@@ -1656,15 +1692,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             seq: 0,
             last_nonzero_seq: 0,
 
-            mouse_abs8: false,
-            mouse_decode_locked: false,
-            mouse_abs_votes: 0,
-            mouse_rel_votes: 0,
-            mouse_abs_inited: false,
-            mouse_last_abs_x: 0,
-            mouse_last_abs_y: 0,
-            mouse_buttons_inited: false,
-            mouse_last_buttons: 0,
+            mouse: MouseDecodeState::new(),
         });
 
         attached += 1;

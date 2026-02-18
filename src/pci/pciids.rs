@@ -1,6 +1,7 @@
 pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
 
-pub fn load_raw_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_raw_from_root_blocking(
+) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let mut last_err: Option<crate::disc::block::Error> = None;
 
     // Try every mounted TRUEOSFS root (newest first) so a valid pci.ids on an
@@ -24,13 +25,13 @@ pub fn load_raw_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crat
     Ok(None)
 }
 
-pub fn load_sanitized_from_root_blocking() -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
+pub fn load_sanitized_from_root_blocking(
+) -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let Some(raw) = load_raw_from_root_blocking()? else {
         return Ok(None);
     };
     Ok(Some(sanitize_pci_ids(&raw)))
 }
-
 
 fn is_hex(b: u8) -> bool {
     matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
@@ -156,7 +157,9 @@ pub fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
             if rest.len() < 6 {
                 continue;
             }
-            let Some(id) = hex4_lower(&rest[..4]) else { continue };
+            let Some(id) = hex4_lower(&rest[..4]) else {
+                continue;
+            };
             // Require whitespace after the vendor ID.
             if rest[4] != b' ' && rest[4] != b'\t' {
                 continue;
@@ -173,7 +176,9 @@ pub fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
             if rest.len() < 6 {
                 continue;
             }
-            let Some(id) = hex4_lower(&rest[..4]) else { continue };
+            let Some(id) = hex4_lower(&rest[..4]) else {
+                continue;
+            };
             if rest[4] != b' ' && rest[4] != b'\t' {
                 continue;
             }
@@ -193,7 +198,9 @@ pub fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
             if rest.len() < 11 {
                 continue;
             }
-            let Some(subvendor) = hex4_lower(&rest[..4]) else { continue };
+            let Some(subvendor) = hex4_lower(&rest[..4]) else {
+                continue;
+            };
             if rest[4] != b' ' && rest[4] != b'\t' {
                 continue;
             }
@@ -204,7 +211,9 @@ pub fn sanitize_pci_ids(raw: &[u8]) -> alloc::vec::Vec<u8> {
             if j + 4 > rest.len() {
                 continue;
             }
-            let Some(subdevice) = hex4_lower(&rest[j..j + 4]) else { continue };
+            let Some(subdevice) = hex4_lower(&rest[j..j + 4]) else {
+                continue;
+            };
             j += 4;
             if j >= rest.len() || (rest[j] != b' ' && rest[j] != b'\t') {
                 continue;
@@ -295,7 +304,9 @@ pub fn lookup_vendor_device_from_db<'a>(
             if rest.len() < 6 {
                 continue;
             }
-            let Some(v) = hex4_to_u16(&rest[..4]) else { continue };
+            let Some(v) = hex4_to_u16(&rest[..4]) else {
+                continue;
+            };
             if rest[4] != b' ' {
                 continue;
             }
@@ -318,7 +329,9 @@ pub fn lookup_vendor_device_from_db<'a>(
             if rest.len() < 6 {
                 continue;
             }
-            let Some(d) = hex4_to_u16(&rest[..4]) else { continue };
+            let Some(d) = hex4_to_u16(&rest[..4]) else {
+                continue;
+            };
             if rest[4] != b' ' {
                 continue;
             }

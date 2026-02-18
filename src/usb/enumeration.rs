@@ -2,8 +2,7 @@ use super::hub::{HubWork, LOG_PORTS_MAX};
 use super::xhci;
 use super::xhci::{
     decode_port_status, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits,
-    ep_type_bits, hi, lo, trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED,
-    EP_TYPE_CONTROL,
+    ep_type_bits, hi, lo, trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_CONTROL,
 };
 use super::{
     attach, control, hub, mass, uac, UsbControllerState, NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
@@ -40,11 +39,13 @@ const HUB_CHILD_ENUM_COOLDOWN_MAX_MS: u64 = 2_000;
 const HUB_SLOT_TRACKED_MAX: usize = 32;
 
 static HUB_CHILD_RETRY_AT_MS: [[[AtomicU64; LOG_PORTS_MAX + 1]; HUB_SLOT_TRACKED_MAX + 1];
-    xhci::MAX_XHCI_CONTROLLERS] = [const { [const { [const { AtomicU64::new(0) }; LOG_PORTS_MAX + 1] };
-    HUB_SLOT_TRACKED_MAX + 1] }; xhci::MAX_XHCI_CONTROLLERS];
+    xhci::MAX_XHCI_CONTROLLERS] = [const {
+    [const { [const { AtomicU64::new(0) }; LOG_PORTS_MAX + 1] }; HUB_SLOT_TRACKED_MAX + 1]
+}; xhci::MAX_XHCI_CONTROLLERS];
 static HUB_CHILD_FAIL_STREAK: [[[AtomicU32; LOG_PORTS_MAX + 1]; HUB_SLOT_TRACKED_MAX + 1];
-    xhci::MAX_XHCI_CONTROLLERS] = [const { [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX + 1] };
-    HUB_SLOT_TRACKED_MAX + 1] }; xhci::MAX_XHCI_CONTROLLERS];
+    xhci::MAX_XHCI_CONTROLLERS] = [const {
+    [const { [const { AtomicU32::new(0) }; LOG_PORTS_MAX + 1] }; HUB_SLOT_TRACKED_MAX + 1]
+}; xhci::MAX_XHCI_CONTROLLERS];
 
 #[inline(always)]
 fn now_ms() -> u64 {
@@ -55,10 +56,20 @@ fn now_ms() -> u64 {
     embassy_time_driver::now().saturating_mul(1000) / hz
 }
 
-fn hub_child_mark_result(controller_id: usize, hub_slot: u32, hub_port: u8, success: bool, now_ms: u64) {
+fn hub_child_mark_result(
+    controller_id: usize,
+    hub_slot: u32,
+    hub_port: u8,
+    success: bool,
+    now_ms: u64,
+) {
     let hs = hub_slot as usize;
     let hp = hub_port as usize;
-    if controller_id >= xhci::MAX_XHCI_CONTROLLERS || hs == 0 || hs > HUB_SLOT_TRACKED_MAX || hp > LOG_PORTS_MAX {
+    if controller_id >= xhci::MAX_XHCI_CONTROLLERS
+        || hs == 0
+        || hs > HUB_SLOT_TRACKED_MAX
+        || hp > LOG_PORTS_MAX
+    {
         return;
     }
     if success {
@@ -74,7 +85,8 @@ fn hub_child_mark_result(controller_id: usize, hub_slot: u32, hub_port: u8, succ
         HUB_CHILD_ENUM_COOLDOWN_BASE_MS.saturating_mul(1u64 << shift),
         HUB_CHILD_ENUM_COOLDOWN_MAX_MS,
     );
-    HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp].store(now_ms.saturating_add(cooldown), Ordering::Release);
+    HUB_CHILD_RETRY_AT_MS[controller_id][hs][hp]
+        .store(now_ms.saturating_add(cooldown), Ordering::Release);
 }
 
 async fn update_ep0_max_packet(
@@ -265,10 +277,7 @@ async fn retry_hub_child_address_after_cc4(
     let mut backoff_ms = HUB_CHILD_ADDR_RETRY_BACKOFF_START_MS;
     for attempt in 1..=HUB_CHILD_ADDR_RETRY_ATTEMPTS {
         Timer::after(EmbassyDuration::from_millis(backoff_ms)).await;
-        backoff_ms = core::cmp::min(
-            backoff_ms + HUB_CHILD_ADDR_RETRY_BACKOFF_STEP_MS,
-            600,
-        );
+        backoff_ms = core::cmp::min(backoff_ms + HUB_CHILD_ADDR_RETRY_BACKOFF_STEP_MS, 600);
 
         match xhci::submit_cmd_and_wait_any_cc(
             ctx,
@@ -343,7 +352,10 @@ async fn retry_hub_child_address_after_cc4(
         }
     }
 
-    Timer::after(EmbassyDuration::from_millis(HUB_CHILD_ADDR_BSR_PRE_DELAY_MS)).await;
+    Timer::after(EmbassyDuration::from_millis(
+        HUB_CHILD_ADDR_BSR_PRE_DELAY_MS,
+    ))
+    .await;
     match xhci::submit_cmd_and_wait_any_cc(
         ctx,
         &mut state.cmd_ring,
@@ -602,9 +614,7 @@ fn slot_ctx_dw2_tt(tt_hub_slot: u32, tt_port: u8, tt_think_time: u8) -> u32 {
     // - TT Hub Slot ID: bits 7:0
     // - TT Port Number: bits 15:8
     // - TT Think Time: bits 17:16
-    (tt_hub_slot & 0xFF)
-        | (((tt_port as u32) & 0xFF) << 8)
-        | (((tt_think_time as u32) & 0x3) << 16)
+    (tt_hub_slot & 0xFF) | (((tt_port as u32) & 0xFF) << 8) | (((tt_think_time as u32) & 0x3) << 16)
 }
 
 fn hub_child_settle_delay_ms(speed_code: u32) -> u64 {
@@ -872,7 +882,10 @@ pub(crate) async fn enumerate_with_params(
     };
 
     if tree_parent.is_some() {
-        Timer::after(EmbassyDuration::from_millis(hub_child_settle_delay_ms(speed_code))).await;
+        Timer::after(EmbassyDuration::from_millis(hub_child_settle_delay_ms(
+            speed_code,
+        )))
+        .await;
     }
 
     // Default path: Address Device with BSR=0 (xHC issues SET_ADDRESS).
@@ -889,7 +902,11 @@ pub(crate) async fn enumerate_with_params(
             d3: trb_type(11) | if use_bsr { 1 << 9 } else { 0 } | (slot_id << 24),
         },
         Some(slot_id),
-        if use_bsr { "address-device-bsr" } else { "address-device" },
+        if use_bsr {
+            "address-device-bsr"
+        } else {
+            "address-device"
+        },
         CMD_TIMEOUT_ADDRESS_ITERS,
         EmbassyDuration::from_millis(USB_EVENT_POLL_DELAY_MS),
     )
@@ -918,7 +935,15 @@ pub(crate) async fn enumerate_with_params(
                     slot_id
                 );
             }
-            disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+            disable_slot_and_free(
+                state,
+                slot_id,
+                dev_ctx_virt,
+                input_ctx_virt,
+                ep0_virt_raw,
+                ep0_bytes,
+            )
+            .await;
             return;
         }
     };
@@ -985,14 +1010,14 @@ pub(crate) async fn enumerate_with_params(
             // HS companion hubs) reports the same port as connected.
             if super::USB_LOG_VERBOSE {
                 if let Some((hub_slot, hub_port)) = tree_parent {
-                let hubs = hub::list_hubs_with_saved_ep0(&ctx);
-                for h in hubs.iter() {
-                    if h.slot_id == hub_slot {
-                        continue;
-                    }
-                    // Heuristic: protocol==3 is a SS hub device; otherwise treat as USB2/HS hub.
-                    let speed_guess = if h.protocol == 3 { 4 } else { 3 };
-                    match hub::read_hub_port_state_via_saved_ep0(
+                    let hubs = hub::list_hubs_with_saved_ep0(&ctx);
+                    for h in hubs.iter() {
+                        if h.slot_id == hub_slot {
+                            continue;
+                        }
+                        // Heuristic: protocol==3 is a SS hub device; otherwise treat as USB2/HS hub.
+                        let speed_guess = if h.protocol == 3 { 4 } else { 3 };
+                        match hub::read_hub_port_state_via_saved_ep0(
                         &ctx,
                         h.slot_id,
                         hub_port,
@@ -1024,7 +1049,7 @@ pub(crate) async fn enumerate_with_params(
                             hub_port,
                         ),
                     }
-                }
+                    }
                 }
             }
 
@@ -1035,13 +1060,13 @@ pub(crate) async fn enumerate_with_params(
                 if let (Some((hub_slot, hub_port)), Some((hub_speed_code, power_on_good_ms))) =
                     (tree_parent, tree_parent_hub_params)
                 {
-                crate::log!(
-                    "usb[xHCI {}]: hub child port-recover hub_slot={} port={}\n",
-                    state.info.controller_id,
-                    hub_slot,
-                    hub_port
-                );
-                match hub::force_hub_port_reset_via_saved_ep0(
+                    crate::log!(
+                        "usb[xHCI {}]: hub child port-recover hub_slot={} port={}\n",
+                        state.info.controller_id,
+                        hub_slot,
+                        hub_port
+                    );
+                    match hub::force_hub_port_reset_via_saved_ep0(
                     &ctx,
                     hub_slot,
                     hub_port,
@@ -1152,7 +1177,15 @@ pub(crate) async fn enumerate_with_params(
                 ep0_dw1,
             );
         }
-        disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+        disable_slot_and_free(
+            state,
+            slot_id,
+            dev_ctx_virt,
+            input_ctx_virt,
+            ep0_virt_raw,
+            ep0_bytes,
+        )
+        .await;
         return;
     }
 
@@ -1195,7 +1228,15 @@ pub(crate) async fn enumerate_with_params(
                 target_port,
                 slot_id
             );
-            disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+            disable_slot_and_free(
+                state,
+                slot_id,
+                dev_ctx_virt,
+                input_ctx_virt,
+                ep0_virt_raw,
+                ep0_bytes,
+            )
+            .await;
             return;
         }
     };
@@ -1229,7 +1270,15 @@ pub(crate) async fn enumerate_with_params(
         .await
         .is_err()
         {
-            disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+            disable_slot_and_free(
+                state,
+                slot_id,
+                dev_ctx_virt,
+                input_ctx_virt,
+                ep0_virt_raw,
+                ep0_bytes,
+            )
+            .await;
             return;
         }
         ep0_mps = desired_mps0;
@@ -1257,7 +1306,15 @@ pub(crate) async fn enumerate_with_params(
             target_port,
             slot_id
         );
-        disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+        disable_slot_and_free(
+            state,
+            slot_id,
+            dev_ctx_virt,
+            input_ctx_virt,
+            ep0_virt_raw,
+            ep0_bytes,
+        )
+        .await;
         return;
     }
 
@@ -1267,24 +1324,44 @@ pub(crate) async fn enumerate_with_params(
         slot_id
     );
 
-    let (dev_vid, dev_pid, dev_cls, dev_sub, dev_prot, dev_mps0, dev_i_mfr, dev_i_prod, _dev_i_serial, dev_num_cfg) = unsafe {
+    let (
+        dev_vid,
+        dev_pid,
+        dev_cls,
+        dev_sub,
+        dev_prot,
+        dev_mps0,
+        dev_i_mfr,
+        dev_i_prod,
+        _dev_i_serial,
+        dev_num_cfg,
+    ) = unsafe {
         let dd = core::slice::from_raw_parts(desc_virt, 18);
         let vid = u16::from_le_bytes([dd[8], dd[9]]);
         let pid = u16::from_le_bytes([dd[10], dd[11]]);
-        (vid, pid, dd[4], dd[5], dd[6], dd[7], dd[14], dd[15], dd[16], dd[17])
+        (
+            vid, pid, dd[4], dd[5], dd[6], dd[7], dd[14], dd[15], dd[16], dd[17],
+        )
     };
 
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
         Some(pair) => pair,
         None => {
-            disable_slot_and_free(state, slot_id, dev_ctx_virt, input_ctx_virt, ep0_virt_raw, ep0_bytes).await;
+            disable_slot_and_free(
+                state,
+                slot_id,
+                dev_ctx_virt,
+                input_ctx_virt,
+                ep0_virt_raw,
+                ep0_bytes,
+            )
+            .await;
             return;
         }
     };
     unsafe { write_bytes(cfg_virt, 0, 256) };
 
-    let cfg_total_len =
-        fetch_cfg_total_len(&ctx, &mut ep0_ring, slot_id, cfg_phys, cfg_virt).await;
+    let cfg_total_len = fetch_cfg_total_len(&ctx, &mut ep0_ring, slot_id, cfg_phys, cfg_virt).await;
 
     usbv!(
         "usb: enum port {} cfgdesc len={} slot={}\n",
@@ -1509,7 +1586,11 @@ pub(crate) async fn enumerate_with_params(
 
     // Keep the slot assigned for unclaimed devices.
     // This avoids periodic rescans burning through slots and spamming logs.
-    let registry_port = if root_port != 0 { root_port } else { target_port };
+    let registry_port = if root_port != 0 {
+        root_port
+    } else {
+        target_port
+    };
     super::register_unclaimed_device(
         state.info.controller_id,
         slot_id,
@@ -1555,7 +1636,10 @@ pub(crate) async fn enable_slot(state: &mut UsbControllerState, target_port: u8)
     };
 
     if control::trb_cc(&enable_evt) != 1 {
-        usbv!("usb: enable-slot failed cc={}\n", control::trb_cc(&enable_evt));
+        usbv!(
+            "usb: enable-slot failed cc={}\n",
+            control::trb_cc(&enable_evt)
+        );
         return None;
     }
 

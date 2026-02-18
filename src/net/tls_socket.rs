@@ -8,10 +8,10 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
-use trueos_v::vnet as vnet;
+use trueos_v::vnet;
 
-use crate::v::net::{Queue, VNet};
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
+use crate::v::net::{Queue, VNet};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
 static TLS_CONN_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -276,20 +276,15 @@ fn tls_socket_tick_once() {
                     );
 
                     let mut rng = KernelTlsRng::new();
-                    let tls = match TlsClient::new(
-                        &cfg,
-                        &roots,
-                        server_name,
-                        &mut rng,
-                        &KERNEL_TIME,
-                    ) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            crate::log!("tls-socket: TlsClient::new failed: {:?}\n", e);
-                            let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
-                            continue;
-                        }
-                    };
+                    let tls =
+                        match TlsClient::new(&cfg, &roots, server_name, &mut rng, &KERNEL_TIME) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                crate::log!("tls-socket: TlsClient::new failed: {:?}\n", e);
+                                let _ = push_tls_event(owner, TlsEvent::TlsError { err: e });
+                                continue;
+                            }
+                        };
 
                     let conn = TlsConn {
                         user_owner: owner,
@@ -315,8 +310,7 @@ fn tls_socket_tick_once() {
                         }
                         if let Err(e) = conn.tls.write_plaintext(&data) {
                             conn.closed = true;
-                            let _ =
-                                push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
+                            let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
                             let _ = conn.net.submit(vnet::Command::Close { handle });
                             continue;
                         }
@@ -366,10 +360,7 @@ fn tls_socket_tick_once() {
         }
 
         // TLS timeout: have a handle but handshake didn't complete.
-        if !remove
-            && conns[idx].handle.is_some()
-            && !conns[idx].tls.is_connected()
-            && t.tls_ms != 0
+        if !remove && conns[idx].handle.is_some() && !conns[idx].tls.is_connected() && t.tls_ms != 0
         {
             let elapsed = now
                 .saturating_duration_since(conns[idx].last_activity)
@@ -427,8 +418,7 @@ fn tls_socket_tick_once() {
                     if kind == vnet::SocketKind::Tcp {
                         conns[idx].handle = Some(handle);
                         conns[idx].last_activity = Instant::now();
-                        let _ =
-                            push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
+                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
                     }
                 }
                 vnet::Event::TcpEstablished { handle } => {
@@ -464,10 +454,13 @@ fn tls_socket_tick_once() {
                     };
 
                     if !produced.is_empty() {
-                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Data {
-                            handle,
-                            data: produced,
-                        });
+                        let _ = push_tls_event(
+                            conns[idx].user_owner,
+                            TlsEvent::Data {
+                                handle,
+                                data: produced,
+                            },
+                        );
                     }
 
                     flush_outgoing_tls(&mut conns[idx]);
@@ -505,7 +498,6 @@ fn tls_socket_tick_once() {
     }
 }
 
-
 #[task]
 pub async fn tls_socket_service_task() {
     async move {
@@ -516,5 +508,6 @@ pub async fn tls_socket_service_task() {
             tls_socket_tick_once();
             Timer::after(EmbassyDuration::from_millis(5)).await;
         }
-    }.await;
+    }
+    .await;
 }

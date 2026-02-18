@@ -5,7 +5,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::net::adapter::{register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind};
+use crate::net::adapter::{
+    register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind,
+};
 use crate::shell::{ShellBackend, ShellIo};
 
 const NET_SHELL_TCP_PORT: u16 = 4245;
@@ -234,7 +236,13 @@ pub async fn net_shell_task() {
                             );
                         }
 
-                        if cmds.push(NetCommand::SendTcp { handle, data: chunk }).is_err() {
+                        if cmds
+                            .push(NetCommand::SendTcp {
+                                handle,
+                                data: chunk,
+                            })
+                            .is_err()
+                        {
                             // If the command queue is full, don't stall forever waiting for an event.
                             pending = None;
                             pending_ticks = 0;

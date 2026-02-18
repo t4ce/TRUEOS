@@ -3,8 +3,8 @@
 //! This is intended as a *fallback entropy source* for seeding the kernel CSPRNG
 //! when RDSEED/RDRAND are unavailable.
 
-use spin::{Mutex, Once};
 use crate::wait;
+use spin::{Mutex, Once};
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Transitional (legacy) virtio-rng PCI device id.
@@ -61,7 +61,11 @@ unsafe impl Send for DmaRegion {}
 impl DmaRegion {
     fn alloc(size: usize, align: usize) -> Option<Self> {
         let (phys, virt) = crate::pci::dma::alloc(size, align)?;
-        Some(Self { phys, virt, len: size })
+        Some(Self {
+            phys,
+            virt,
+            len: size,
+        })
     }
 
     fn phys(&self) -> u64 {
@@ -148,7 +152,8 @@ fn align_up(value: usize, align: usize) -> usize {
 }
 
 fn read_io_base(dev: &crate::pci::PciDevice) -> Result<u16, ()> {
-    let bar0 = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, VIRTIO_PCI_IOBAR_OFFSET);
+    let bar0 =
+        crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, VIRTIO_PCI_IOBAR_OFFSET);
     if (bar0 & 0x1) == 0 {
         return Err(());
     }
@@ -156,9 +161,16 @@ fn read_io_base(dev: &crate::pci::PciDevice) -> Result<u16, ()> {
 }
 
 fn enable_io_and_bus_master(dev: &crate::pci::PciDevice) {
-    let mut cmd = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
+    let mut cmd =
+        crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_IO | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    crate::pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
+    crate::pci::config_write_u16(
+        dev.bus,
+        dev.slot,
+        dev.function,
+        VIRTIO_PCI_COMMAND_OFFSET,
+        cmd,
+    );
 }
 
 fn reset_device(io_base: u16) {
@@ -268,7 +280,10 @@ impl VirtioRng {
 
         // Device is fully configured at this point.
         // Per virtio init sequence, set DRIVER_OK before submitting buffers.
-        set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
+        set_status(
+            io_base,
+            VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK,
+        );
 
         // Program a single writable descriptor (id=0) pointing at our entropy buffer.
         unsafe {
@@ -406,7 +421,8 @@ fn find_virtio_rng_device() -> Option<crate::pci::PciDevice> {
     crate::pci::with_devices(|list| {
         for dev in list {
             if dev.vendor == VIRTIO_PCI_VENDOR
-                && (dev.device == VIRTIO_RNG_DEVICE_LEGACY || dev.device == VIRTIO_RNG_DEVICE_MODERN)
+                && (dev.device == VIRTIO_RNG_DEVICE_LEGACY
+                    || dev.device == VIRTIO_RNG_DEVICE_MODERN)
             {
                 found = Some(*dev);
                 break;

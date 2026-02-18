@@ -5,7 +5,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::net::adapter::{register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind};
+use crate::net::adapter::{
+    register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind,
+};
 use crate::shell::{ShellBackend, ShellIo};
 
 const AI_TCP_PORT: u16 = 4246;
@@ -217,7 +219,13 @@ pub async fn ai_tcp_bridge_task() {
                             );
                         }
 
-                        if cmds.push(NetCommand::SendTcp { handle, data: chunk }).is_err() {
+                        if cmds
+                            .push(NetCommand::SendTcp {
+                                handle,
+                                data: chunk,
+                            })
+                            .is_err()
+                        {
                             pending = None;
                             pending_ticks = 0;
                             pending_len = 0;

@@ -30,7 +30,13 @@ pub fn openweather_onecall_url(
 }
 
 pub fn openweather_onecall_metric_de_url(latitude: f64, longitude: f64, api_key: &str) -> String {
-    openweather_onecall_url(latitude, longitude, "metric", DEFAULT_GERMAN_LANGUAGE_CODE, api_key)
+    openweather_onecall_url(
+        latitude,
+        longitude,
+        "metric",
+        DEFAULT_GERMAN_LANGUAGE_CODE,
+        api_key,
+    )
 }
 
 pub fn openweather_onecall_overview_url(latitude: f64, longitude: f64, api_key: &str) -> String {
@@ -45,7 +51,9 @@ pub enum RawDecodeError {
     InvalidJson,
 }
 
-pub fn decode_onecall_raw_safe(raw_json: &str) -> Result<crate::OpenWeatherResponse, RawDecodeError> {
+pub fn decode_onecall_raw_safe(
+    raw_json: &str,
+) -> Result<crate::OpenWeatherResponse, RawDecodeError> {
     let root: Value = serde_json::from_str(raw_json).map_err(|_| RawDecodeError::InvalidJson)?;
     Ok(map_onecall_root(&root))
 }
@@ -62,7 +70,9 @@ pub fn encode_model_json(model: &crate::OpenWeatherResponse) -> Result<String, s
     serde_json::to_string(model)
 }
 
-pub fn encode_model_json_pretty(model: &crate::OpenWeatherResponse) -> Result<String, serde_json::Error> {
+pub fn encode_model_json_pretty(
+    model: &crate::OpenWeatherResponse,
+) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(model)
 }
 
@@ -204,10 +214,7 @@ fn map_feels_like(v: Option<&Value>) -> crate::GefuehlteTemperaturDaten {
     }
 }
 
-fn map_weather_list_obj(
-    obj: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Vec<crate::WetterInfo> {
+fn map_weather_list_obj(obj: &serde_json::Map<String, Value>, key: &str) -> Vec<crate::WetterInfo> {
     obj.get(key)
         .and_then(|v| v.as_array())
         .map(|arr| {

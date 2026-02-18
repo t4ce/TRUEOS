@@ -245,8 +245,7 @@ impl R8168Adapter {
         crate::log!("net/r8168: pci cmd=0x{:04x}\n", cmd);
 
         let (bar_index, bar_phys) = find_mmio_bar_phys(&dev)?;
-        let bar_size = pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_index)
-            .unwrap_or(0);
+        let bar_size = pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_index).unwrap_or(0);
         let map_size = match usize::try_from(bar_size) {
             Ok(size) if size != 0 => size,
             _ => {
@@ -260,11 +259,7 @@ impl R8168Adapter {
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
             Ok(mapped) => mapped,
             Err(err) => {
-                crate::log!(
-                    "net/r8168: bar{} mmio map failed: {:?}\n",
-                    bar_index,
-                    err
-                );
+                crate::log!("net/r8168: bar{} mmio map failed: {:?}\n", bar_index, err);
                 return Err(());
             }
         };
@@ -333,7 +328,11 @@ impl R8168Adapter {
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
 
         // Allocate buffers and initialize descriptors
-        crate::log!("net/r8168: alloc rx bufs count={} size=0x{:x}\n", RX_DESC_COUNT, RX_BUF_SIZE);
+        crate::log!(
+            "net/r8168: alloc rx bufs count={} size=0x{:x}\n",
+            RX_DESC_COUNT,
+            RX_BUF_SIZE
+        );
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_DESC_COUNT);
         for i in 0..RX_DESC_COUNT {
             let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
@@ -351,7 +350,11 @@ impl R8168Adapter {
             rx_bufs.push(buf);
         }
 
-        crate::log!("net/r8168: alloc tx bufs count={} size=0x{:x}\n", TX_DESC_COUNT, TX_BUF_SIZE);
+        crate::log!(
+            "net/r8168: alloc tx bufs count={} size=0x{:x}\n",
+            TX_DESC_COUNT,
+            TX_BUF_SIZE
+        );
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
@@ -397,7 +400,12 @@ impl R8168Adapter {
 
         crate::log!(
             "net/r8168: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
         );
 
         crate::log!(
@@ -553,7 +561,8 @@ impl R8168Adapter {
         if isr != 0 {
             self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
             let unexpected = isr & !ISR_BENIGN_POLL_MASK;
-            if unexpected != 0 && (self.dbg_isr_nonzero <= 8 || (self.dbg_isr_nonzero & 0x3FF) == 0) {
+            if unexpected != 0 && (self.dbg_isr_nonzero <= 8 || (self.dbg_isr_nonzero & 0x3FF) == 0)
+            {
                 crate::log!(
                     "net/r8168: isr nonzero count={} isr=0x{:04x} unexpected=0x{:04x}\n",
                     self.dbg_isr_nonzero,
@@ -815,7 +824,11 @@ impl R8168Adapter {
         // Ensure the packet bytes are visible before we set DESC_OWN.
         compiler_fence(Ordering::Release);
 
-        let eor = if idx + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
+        let eor = if idx + 1 == TX_DESC_COUNT {
+            DESC_EOR
+        } else {
+            0
+        };
         let opts1 = DESC_OWN | eor | TX_FS | TX_LS | (len as u32 & 0x3FFF);
         unsafe {
             write_volatile(

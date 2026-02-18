@@ -244,21 +244,23 @@ async fn bot_command(
     }
 
     // Build and write CBW.
-    let cbw = build_cbw(
-        tag,
-        data_len as u32,
-        data_in.is_some(),
-        0,
-        cdb,
-    );
+    let cbw = build_cbw(tag, data_len as u32, data_in.is_some(), 0, cdb);
     unsafe {
         core::ptr::copy_nonoverlapping(cbw.as_ptr(), cbw_virt, CBW_LEN);
     }
 
     // Stage 1: CBW on bulk-out.
-    let (cc_cbw, _xfer_cbw) =
-        bulk_xfer(ctx, ring_out, slot_id, ep_out_target, cbw_phys, CBW_LEN as u32, "bot-cbw", 800)
-            .await?;
+    let (cc_cbw, _xfer_cbw) = bulk_xfer(
+        ctx,
+        ring_out,
+        slot_id,
+        ep_out_target,
+        cbw_phys,
+        CBW_LEN as u32,
+        "bot-cbw",
+        800,
+    )
+    .await?;
     if cc_cbw != 1 {
         crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
@@ -294,9 +296,17 @@ async fn bot_command(
     }
 
     // Stage 3: CSW on bulk-in.
-    let (cc_csw, xfer_csw) =
-        bulk_xfer(ctx, ring_in, slot_id, ep_in_target, csw_phys, CSW_LEN as u32, "bot-csw", 1200)
-            .await?;
+    let (cc_csw, xfer_csw) = bulk_xfer(
+        ctx,
+        ring_in,
+        slot_id,
+        ep_in_target,
+        csw_phys,
+        CSW_LEN as u32,
+        "bot-csw",
+        1200,
+    )
+    .await?;
     if cc_csw != 1 && cc_csw != 13 {
         crate::log!("usb: bot: csw cc={}\n", cc_csw);
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
@@ -369,9 +379,17 @@ async fn bot_command_out(
     }
 
     // Stage 1: CBW on bulk-out.
-    let (cc_cbw, _xfer_cbw) =
-        bulk_xfer(ctx, ring_out, slot_id, ep_out_target, cbw_phys, CBW_LEN as u32, "bot-cbw", 800)
-            .await?;
+    let (cc_cbw, _xfer_cbw) = bulk_xfer(
+        ctx,
+        ring_out,
+        slot_id,
+        ep_out_target,
+        cbw_phys,
+        CBW_LEN as u32,
+        "bot-cbw",
+        800,
+    )
+    .await?;
     if cc_cbw != 1 {
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
@@ -395,9 +413,17 @@ async fn bot_command_out(
     }
 
     // Stage 3: CSW on bulk-in.
-    let (cc_csw, xfer_csw) =
-        bulk_xfer(ctx, ring_in, slot_id, ep_in_target, csw_phys, CSW_LEN as u32, "bot-csw", 1200)
-            .await?;
+    let (cc_csw, xfer_csw) = bulk_xfer(
+        ctx,
+        ring_in,
+        slot_id,
+        ep_in_target,
+        csw_phys,
+        CSW_LEN as u32,
+        "bot-csw",
+        1200,
+    )
+    .await?;
     if cc_csw != 1 && cc_csw != 13 {
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
         return Err(());
@@ -547,7 +573,6 @@ fn bot_command_sync(
     Ok(csw)
 }
 
-
 fn goto_cleanup(cbw_virt: *mut u8, csw_virt: *mut u8, data_virt: *mut u8, data_len: usize) {
     if !data_virt.is_null() && data_len != 0 {
         dma::dealloc(data_virt, data_len);
@@ -579,9 +604,19 @@ pub async fn scsi_request_sense_fixed_async(
     let cdb = scsi::cdb_request_sense(18);
     let mut data = [0u8; 18];
 
-    let csw = bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
-        .await
-        .ok()?;
+    let csw = bot_command(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        Some(&mut data),
+    )
+    .await
+    .ok()?;
 
     if csw.status != BotStatus::Passed {
         return None;
@@ -602,8 +637,18 @@ pub fn scsi_request_sense_fixed_sync(
     let cdb = scsi::cdb_request_sense(18);
     let mut data = [0u8; 18];
 
-    let csw = bot_command_sync(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
-        .ok()?;
+    let csw = bot_command_sync(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        Some(&mut data),
+    )
+    .ok()?;
 
     if csw.status != BotStatus::Passed {
         return None;
@@ -622,7 +667,18 @@ pub async fn scsi_test_unit_ready(
     tag: u32,
 ) -> Result<(), ()> {
     let cdb = scsi::cdb_test_unit_ready();
-    let csw = bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, None).await?;
+    let csw = bot_command(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        None,
+    )
+    .await?;
 
     if csw.status != BotStatus::Passed {
         if let Some(sense) = scsi_request_sense_fixed_async(
@@ -658,12 +714,25 @@ pub async fn scsi_inquiry_basic(
     let cdb = scsi::cdb_inquiry(36);
     let mut data = [0u8; 64];
 
-    let csw =
-        bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
-            .await?;
+    let csw = bot_command(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        Some(&mut data),
+    )
+    .await?;
 
     if csw.status != BotStatus::Passed {
-        crate::log!("usb: bot: inquiry failed status={:?} residue={}\n", csw.status, csw.residue);
+        crate::log!(
+            "usb: bot: inquiry failed status={:?} residue={}\n",
+            csw.status,
+            csw.residue
+        );
         if let Some(sense) = scsi_request_sense_fixed_async(
             ctx,
             ring_out,
@@ -697,12 +766,25 @@ pub async fn scsi_read_capacity_10(
     let cdb = scsi::cdb_read_capacity_10();
     let mut data = [0u8; 16];
 
-    let csw =
-        bot_command(ctx, ring_out, ring_in, slot_id, ep_out_target, ep_in_target, tag, &cdb, Some(&mut data))
-            .await?;
+    let csw = bot_command(
+        ctx,
+        ring_out,
+        ring_in,
+        slot_id,
+        ep_out_target,
+        ep_in_target,
+        tag,
+        &cdb,
+        Some(&mut data),
+    )
+    .await?;
 
     if csw.status != BotStatus::Passed {
-        crate::log!("usb: bot: read-capacity failed status={:?} residue={}\n", csw.status, csw.residue);
+        crate::log!(
+            "usb: bot: read-capacity failed status={:?} residue={}\n",
+            csw.status,
+            csw.residue
+        );
         if let Some(sense) = scsi_request_sense_fixed_async(
             ctx,
             ring_out,

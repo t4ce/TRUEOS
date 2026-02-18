@@ -196,7 +196,12 @@ impl ShellApp {
                 1,
                 "TETRIS  |  A/D move  W rotate  Space drop  P pause  R restart  Q exit",
             );
-            self.write_at(io, start_row + 1, start_col, "┌────────────────────────────────────────┐");
+            self.write_at(
+                io,
+                start_row + 1,
+                start_col,
+                "┌────────────────────────────────────────┐",
+            );
 
             for view_y in 0..self.game.visible_height() {
                 let row = start_row + 2 + view_y;
@@ -253,16 +258,34 @@ impl ShellApp {
         let stats_row = start_row + 2;
         let stats_col = start_col + board_cols + 3;
         if !self.prev_valid || self.prev_level != self.game.level.current_level {
-            self.write_status_line(io, stats_row, stats_col, format_args!("level   {}", self.game.level.current_level));
+            self.write_status_line(
+                io,
+                stats_row,
+                stats_col,
+                format_args!("level   {}", self.game.level.current_level),
+            );
         }
         if !self.prev_valid || self.prev_rows != self.game.level.rows_deleted {
-            self.write_status_line(io, stats_row + 1, stats_col, format_args!("rows    {}", self.game.level.rows_deleted));
+            self.write_status_line(
+                io,
+                stats_row + 1,
+                stats_col,
+                format_args!("rows    {}", self.game.level.rows_deleted),
+            );
         }
         if !self.prev_valid || self.prev_points != self.game.level.total_points {
-            self.write_status_line(io, stats_row + 2, stats_col, format_args!("points  {}", self.game.level.total_points));
+            self.write_status_line(
+                io,
+                stats_row + 2,
+                stats_col,
+                format_args!("points  {}", self.game.level.total_points),
+            );
         }
 
-        if !self.prev_valid || self.prev_paused != self.paused || self.prev_game_over != self.game.is_game_over() {
+        if !self.prev_valid
+            || self.prev_paused != self.paused
+            || self.prev_game_over != self.game.is_game_over()
+        {
             self.clear_status_line(io, stats_row + 4, stats_col);
             self.clear_status_line(io, stats_row + 5, stats_col);
             if self.paused {
@@ -305,7 +328,13 @@ impl ShellApp {
     }
 
     #[inline]
-    fn write_at_fmt(&self, io: &dyn ShellIo, row: usize, col: usize, args: core::fmt::Arguments<'_>) {
+    fn write_at_fmt(
+        &self,
+        io: &dyn ShellIo,
+        row: usize,
+        col: usize,
+        args: core::fmt::Arguments<'_>,
+    ) {
         io.write_fmt(format_args!("\x1b[{};{}H", row.max(1), col.max(1)));
         io.write_fmt(args);
     }
@@ -316,7 +345,13 @@ impl ShellApp {
     }
 
     #[inline]
-    fn write_status_line(&self, io: &dyn ShellIo, row: usize, col: usize, args: core::fmt::Arguments<'_>) {
+    fn write_status_line(
+        &self,
+        io: &dyn ShellIo,
+        row: usize,
+        col: usize,
+        args: core::fmt::Arguments<'_>,
+    ) {
         self.clear_status_line(io, row, col);
         self.write_at_fmt(io, row, col, args);
     }

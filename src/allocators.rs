@@ -4,9 +4,7 @@ use core::mem::{align_of, size_of};
 use core::ptr::{addr_of_mut, null_mut, NonNull};
 use spin::Mutex;
 
-use crate::{
-    phys::{self, HeapArena},
-};
+use crate::phys::{self, HeapArena};
 
 pub const FALLBACK_HEAP_SIZE: usize = 256 * 1024;
 

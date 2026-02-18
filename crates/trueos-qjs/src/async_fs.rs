@@ -2,9 +2,9 @@
 
 extern crate alloc;
 
-use alloc::{collections::VecDeque, string::String, vec::Vec};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::ToString;
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
@@ -13,9 +13,8 @@ use spin::Mutex;
 
 use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
-    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish,
-    trueos_cabi_net_fetch_discard, trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start,
-    trueos_cabi_net_fetch_wait,
+    trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_net_fetch_discard,
+    trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
     trueos_cabi_poll_once,
 };
 
@@ -29,10 +28,22 @@ static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 enum AsyncFsRequest {
-    ReadFile { id: u32, path: String },
-    WriteBegin { id: u32, path: String, total_len: u64 },
-    WriteChunk { id: u32, data: Vec<u8> },
-    WriteFinish { id: u32 },
+    ReadFile {
+        id: u32,
+        path: String,
+    },
+    WriteBegin {
+        id: u32,
+        path: String,
+        total_len: u64,
+    },
+    WriteChunk {
+        id: u32,
+        data: Vec<u8>,
+    },
+    WriteFinish {
+        id: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +169,8 @@ fn has_completion() -> bool {
 }
 
 fn read_file_via_cabi(path: &str) -> Result<Vec<u8>, i32> {
-    let len = unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
+    let len =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(len as i32);
     }
@@ -176,7 +188,12 @@ fn read_file_via_cabi(path: &str) -> Result<Vec<u8>, i32> {
 fn write_begin_via_cabi(path: &str, total_len: u64) -> Result<u32, i32> {
     let mut handle = 0u32;
     let rc = unsafe {
-        trueos_cabi_fs_write_begin(path.as_ptr(), path.len(), total_len, &mut handle as *mut u32)
+        trueos_cabi_fs_write_begin(
+            path.as_ptr(),
+            path.len(),
+            total_len,
+            &mut handle as *mut u32,
+        )
     };
     if rc != 0 {
         return Err(rc);
@@ -201,9 +218,8 @@ fn write_finish_via_cabi(handle: u32) -> Result<(), i32> {
 }
 
 fn start_net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<u32, i32> {
-    let id = unsafe {
-        trueos_cabi_net_fetch_start(url.as_ptr(), url.len(), path.as_ptr(), path.len())
-    };
+    let id =
+        unsafe { trueos_cabi_net_fetch_start(url.as_ptr(), url.len(), path.as_ptr(), path.len()) };
     if id == 0 {
         return Err(FS_ERR_BAD_PARAM);
     }
@@ -247,7 +263,11 @@ pub async fn async_fs_service_task() {
                         data: Vec::new(),
                     }),
                 },
-                AsyncFsRequest::WriteBegin { id, path, total_len } => {
+                AsyncFsRequest::WriteBegin {
+                    id,
+                    path,
+                    total_len,
+                } => {
                     if has_result(id) {
                         processed = processed.saturating_add(1);
                         if processed >= ASYNC_FS_MAX_QUEUE {
@@ -399,9 +419,7 @@ pub fn start_write_file(path: &[u8], data: &[u8]) -> Result<u32, i32> {
             data: chunk.to_vec(),
         });
     }
-    let req = AsyncFsRequest::WriteFinish {
-        id,
-    };
+    let req = AsyncFsRequest::WriteFinish { id };
     push_async_fs_req_wait(req);
     Ok(id)
 }

@@ -5,40 +5,40 @@
 pub extern crate alloc;
 
 mod allocators;
-mod cpu;
 mod audio;
+mod cpu;
 mod disc;
+mod efi;
 mod exceptions;
+mod gfx;
+mod globalog;
+mod hv;
 mod limine;
 mod net;
 mod pci;
 mod percpu;
 mod phys;
 mod portio;
-mod rng;
 mod power;
-mod globalog;
-mod hv;
-mod gfx;
+mod rng;
 mod runtime;
 mod shell;
-mod tst;
+mod smp;
 mod surface;
 mod tga;
 mod time;
-mod wait;
-mod smp;
+mod tst;
 mod turbo;
-mod efi;
 mod usb;
 mod v;
 mod vga;
+mod wait;
 mod x2apic;
 
+use embassy_executor::{raw::Executor, Spawner};
+pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 pub(crate) use shell::ecma48;
 pub(crate) use shell::matrix;
-pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
-use embassy_executor::{raw::Executor, Spawner};
 pub use surface::pat as pattern;
 pub use surface::{io, path};
 
@@ -76,7 +76,9 @@ pub unsafe extern "C" fn _start() -> ! {
 
 #[no_mangle]
 pub extern "C" fn kmain() -> ! {
-    unsafe {cpu::enable_sse();}
+    unsafe {
+        cpu::enable_sse();
+    }
     exceptions::init();
     crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     phys::register_memory_metadata();
@@ -95,14 +97,15 @@ pub extern "C" fn kmain() -> ! {
         );
     }
     let smp_resp = limine::smp_response().unwrap();
-    let lapic_ids: alloc::vec::Vec<u32> = smp_resp.cpus().iter().map(|c| c.lapic_id as u32).collect();
+    let lapic_ids: alloc::vec::Vec<u32> =
+        smp_resp.cpus().iter().map(|c| c.lapic_id as u32).collect();
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     percpu::init_bsp();
     pci::dma::init_from_limine();
     pci::enumerate_impl();
     vga::init(limine::framebuffer_response());
     vga::cube::tick();
-    
+
     usb::xhci::init_once();
     usb::truekey::init();
     pci::vrng::init_once();
@@ -130,7 +133,7 @@ pub extern "C" fn kmain() -> ! {
 
     if trueos_qjs::async_fs::ensure_service_started(&spawner) {
         crate::v::readiness::set(crate::v::readiness::QJS_ASYNC_FS_READY);
-    } 
+    }
 
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
     tga::init_once();
@@ -153,16 +156,20 @@ pub extern "C" fn kmain() -> ! {
     _loop(executor, spawner, smp_resp)
 }
 
-fn _loop(executor: &'static Executor, _spawner: Spawner, resp: &'static ::limine::response::MpResponse) -> ! {
+fn _loop(
+    executor: &'static Executor,
+    _spawner: Spawner,
+    resp: &'static ::limine::response::MpResponse,
+) -> ! {
     resp.cpus()
         .iter()
         .filter(|c| c.lapic_id as u32 != percpu::this_cpu().lapic_id())
         .for_each(|c| c.goto_address.write(cpu::ap_start));
-   
+
     if let Err(e) = _spawner.spawn(crate::v::spawn_service::spawn_service_task(_spawner)) {
         crate::log!("spawn-svc: spawn failed: {:?}\n", e);
     }
-   
+
     let mut counter: u64 = 0;
     loop {
         if counter % 10_000 == 0 {

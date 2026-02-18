@@ -2,23 +2,23 @@ pub mod adapter;
 pub mod core;
 pub mod device;
 pub mod e1000;
-pub mod ring;
 pub mod r8125;
 pub mod r8168;
+pub mod ring;
+pub mod tls;
 pub mod tls_socket;
 pub mod vio;
-pub mod tls;
 
 use ::core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
-use crate::net::ring::NetRing;
+use crate::net::e1000::E1000Adapter;
 use crate::net::r8125::R8125Adapter;
 use crate::net::r8168::R8168Adapter;
+use crate::net::ring::NetRing;
 use crate::net::vio::VirtioNetAdapter;
-use crate::net::e1000::E1000Adapter;
 use crate::pci::PciDevice;
 
 const RX_DESC_COUNT: usize = 256;
@@ -176,7 +176,10 @@ fn parse_u8_dec_or_hex(s: &str) -> Option<u8> {
     if s.is_empty() {
         return None;
     }
-    let has_hex_alpha = s.as_bytes().iter().any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F'));
+    let has_hex_alpha = s
+        .as_bytes()
+        .iter()
+        .any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F'));
     if has_hex_alpha {
         parse_hex_u8(s)
     } else {
@@ -411,8 +414,6 @@ pub fn dma_fpga_stream_begin() -> Result<(), &'static str> {
     Ok(())
 }
 
-
-
 #[cfg(feature = "dma_nic_fpga")]
 fn rx_packet_matches_filter(packet: &[u8], filter: DmaFpgaFlowFilter) -> bool {
     if packet.len() < 14 {
@@ -514,6 +515,3 @@ pub(crate) fn dma_fpga_stream_on_rx_packet(packet: &[u8]) {
         Err(_) => st.queue_failures = st.queue_failures.saturating_add(1),
     }
 }
-
-
-
