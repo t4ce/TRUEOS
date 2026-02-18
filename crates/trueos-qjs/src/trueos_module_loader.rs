@@ -486,6 +486,17 @@ pub(crate) unsafe fn normalize_with_mode(
 
     // Absolute filesystem paths.
     if path_is_absolute(spec) {
+        // esm.sh sometimes emits absolute Node-shim paths like `/node/url.mjs`.
+        // TRUEOS embeds modules under `/qjs/**` (see build.rs::to_qjs_specifier),
+        // so rewrite these to `/qjs/node/...`.
+        if spec.starts_with(b"/node/") {
+            let mut rewritten = Vec::new();
+            rewritten.extend_from_slice(b"/qjs");
+            rewritten.extend_from_slice(spec);
+            log_normalized(&rewritten);
+            return js_strdup(ctx, &rewritten);
+        }
+
         let normalized = normalize_path_bytes(spec);
         log_normalized(&normalized);
         return js_strdup(ctx, &normalized);
