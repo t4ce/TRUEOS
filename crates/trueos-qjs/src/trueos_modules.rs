@@ -1091,6 +1091,9 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
         return Err(());
     }
 
+    // Mouse API + event pump helpers.
+    qjs::browser::install_mouse_api(ctx, global);
+
     // window/self -> globalThis
     {
         let win_key = b"window\0";
@@ -1157,6 +1160,58 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
     ensure_global_intl(ctx, global);
     ensure_global_console(ctx, global);
     qjs::browser::ensure_global_event_target_stubs(ctx, global);
+
+    // __trueos_poll_mouse_raw(): bridge to kernel mouse queue.
+    {
+        unsafe extern "C" fn poll_mouse_raw(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            _argc: c_int,
+            _argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let mut buttons: u8 = 0;
+            let mut dx: i8 = 0;
+            let mut dy: i8 = 0;
+            let mut wheel: i8 = 0;
+            let rc = unsafe {
+                qjs::trueos_shims::trueos_cabi_input_pop_mouse(
+                    &mut buttons as *mut u8,
+                    &mut dx as *mut i8,
+                    &mut dy as *mut i8,
+                    &mut wheel as *mut i8,
+                )
+            };
+            if rc <= 0 {
+                return qjs::JSValue {
+                    u: qjs::JSValueUnion { int32: 0 },
+                    tag: qjs::JS_TAG_NULL,
+                };
+            }
+            let o = unsafe { qjs::JS_NewObject(ctx) };
+            if o.is_exception() {
+                return o;
+            }
+            unsafe {
+                let _ = qjs::JS_SetPropertyStr(ctx, o, b"buttons\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, buttons as f64));
+                let _ = qjs::JS_SetPropertyStr(ctx, o, b"dx\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, dx as f64));
+                let _ = qjs::JS_SetPropertyStr(ctx, o, b"dy\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, dy as f64));
+                let _ = qjs::JS_SetPropertyStr(ctx, o, b"wheel\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, wheel as f64));
+            }
+            o
+        }
+
+        let f = unsafe {
+            qjs::JS_NewCFunction2(
+                ctx,
+                Some(poll_mouse_raw),
+                b"__trueos_poll_mouse_raw\0".as_ptr() as *const c_char,
+                0,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            )
+        };
+        let _ = unsafe { qjs::JS_SetPropertyStr(ctx, global, b"__trueos_poll_mouse_raw\0".as_ptr() as *const c_char, f) };
+    }
     ensure_global_browser_rendering_ctors(ctx, global);
     let doc_obj = ensure_global_document_stub(ctx, global);
     qjs::js_free_value(ctx, doc_obj);
@@ -1262,6 +1317,23 @@ unsafe fn ensure_global_document_stub(
                 b"getContext\0".as_ptr() as *const c_char,
                 get_ctx_fn,
             );
+
+            // Remember the first created canvas as the primary event target.
+            let g3 = qjs::JS_GetGlobalObject(ctx);
+            if !g3.is_exception() {
+                let existing = qjs::JS_GetPropertyStr(ctx, g3, b"__trueos_primary_canvas\0".as_ptr() as *const c_char);
+                let needs = existing.is_exception() || existing.tag == qjs::JS_TAG_UNDEFINED || existing.tag == qjs::JS_TAG_NULL;
+                qjs::js_free_value(ctx, existing);
+                if needs {
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        g3,
+                        b"__trueos_primary_canvas\0".as_ptr() as *const c_char,
+                        qjs::js_dup_value(ctx, node),
+                    );
+                }
+                qjs::js_free_value(ctx, g3);
+            }
         }
         qjs::JS_FreeCString(ctx, tag_cstr);
         node

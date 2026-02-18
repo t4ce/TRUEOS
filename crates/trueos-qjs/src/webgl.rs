@@ -218,10 +218,18 @@ struct TextureState {
     rev: u32,
 }
 
+#[derive(Clone, Copy)]
+struct VaoState {
+    attribs: [AttribState; MAX_ATTRS],
+    element_array_buffer: u32,
+}
+
 struct GlState {
     next_handle: u32,
     buffers: Vec<Option<Vec<u8>>>,
     textures: Vec<Option<TextureState>>,
+    vaos: Vec<Option<VaoState>>,
+    current_vao: u32,
     shaders: Vec<Option<ShaderState>>,
     programs: Vec<Option<ProgramState>>,
     current_array_buffer: u32,
@@ -254,6 +262,8 @@ impl GlState {
             next_handle: 1,
             buffers: Vec::new(),
             textures: Vec::new(),
+            vaos: Vec::new(),
+            current_vao: 0,
             shaders: Vec::new(),
             programs: Vec::new(),
             current_array_buffer: 0,
@@ -293,6 +303,63 @@ impl GlState {
         self.next_handle = self.next_handle.saturating_add(1);
         id
     }
+}
+
+const fn vao_default() -> VaoState {
+    VaoState {
+        attribs: [attrib_default(); MAX_ATTRS],
+        element_array_buffer: 0,
+    }
+}
+
+fn vao_slot_mut<'a>(st: &'a mut GlState, vao_id: u32) -> Option<&'a mut VaoState> {
+    if vao_id == 0 {
+        return None;
+    }
+    let idx = (vao_id - 1) as usize;
+    if idx >= st.vaos.len() {
+        st.vaos.resize_with(idx + 1, || None);
+    }
+    if st.vaos[idx].is_none() {
+        st.vaos[idx] = Some(vao_default());
+    }
+    st.vaos[idx].as_mut()
+}
+
+fn vao_slot(st: &GlState, vao_id: u32) -> Option<VaoState> {
+    if vao_id == 0 {
+        return None;
+    }
+    st.vaos
+        .get((vao_id - 1) as usize)
+        .and_then(|v| v.as_ref())
+        .copied()
+}
+
+fn save_current_vao(st: &mut GlState) {
+    let cur = st.current_vao;
+    if cur == 0 {
+        return;
+    }
+    let attribs = st.attribs;
+    let element_array_buffer = st.current_element_array_buffer;
+    if let Some(v) = vao_slot_mut(st, cur) {
+        v.attribs = attribs;
+        v.element_array_buffer = element_array_buffer;
+    }
+}
+
+fn load_vao(st: &mut GlState, vao_id: u32) {
+    if vao_id == 0 {
+        st.attribs = [attrib_default(); MAX_ATTRS];
+        st.current_element_array_buffer = 0;
+        st.current_vao = 0;
+        return;
+    }
+    let v = vao_slot(st, vao_id).unwrap_or_else(vao_default);
+    st.attribs = v.attribs;
+    st.current_element_array_buffer = v.element_array_buffer;
+    st.current_vao = vao_id;
 }
 
 static GL_STATE: Mutex<GlState> = Mutex::new(GlState::new());
@@ -970,7 +1037,8 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         } else {
             (0, 0, 0, 0, 0, 0)
         };
-    let tex_id = st.bound_texture_2d[0];
+    let unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
+    let tex_id = st.bound_texture_2d[unit];
     let tex_rev = if tex_id != 0 {
         st.texture_revs
             .get((tex_id - 1) as usize)
@@ -1389,7 +1457,8 @@ unsafe extern "C" fn gl_tex_image_2d(
     }
 
     let mut st = GL_STATE.lock();
-    let tex_id = st.bound_texture_2d[0];
+    let unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
+    let tex_id = st.bound_texture_2d[unit];
     let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
     let mut rgba = vec![0u8; expected];
     if !data_ptr.is_null() && data_len > 0 {
@@ -1489,7 +1558,8 @@ unsafe extern "C" fn gl_tex_sub_image_2d(
     }
 
     let mut st = GL_STATE.lock();
-    let tex_id = st.bound_texture_2d[0];
+    let tex_unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
+    let tex_id = st.bound_texture_2d[tex_unit];
     let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
     if ptr.is_null() || len == 0 {
         return qjs::JSValue::undefined();
@@ -1561,6 +1631,84 @@ unsafe extern "C" fn gl_bind_buffer(
         st.current_element_array_buffer = id;
     }
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_create_vertex_array_oes(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut st = GL_STATE.lock();
+    let id = st.alloc_handle();
+    let idx = (id - 1) as usize;
+    if idx >= st.vaos.len() {
+        st.vaos.resize_with(idx + 1, || None);
+    }
+    st.vaos[idx] = Some(vao_default());
+    js_new_handle_obj(ctx, id)
+}
+
+unsafe extern "C" fn gl_bind_vertex_array_oes(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let mut vao_id = 0u32;
+    if !argv.is_null() && argc >= 1 {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        vao_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    }
+    let mut st = GL_STATE.lock();
+    if vao_id == st.current_vao {
+        return qjs::JSValue::undefined();
+    }
+    save_current_vao(&mut st);
+    load_vao(&mut st, vao_id);
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_delete_vertex_array_oes(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    if id == 0 {
+        return qjs::JSValue::undefined();
+    }
+    let mut st = GL_STATE.lock();
+    if id == st.current_vao {
+        load_vao(&mut st, 0);
+    }
+    if let Some(slot) = st.vaos.get_mut((id - 1) as usize) {
+        *slot = None;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_is_vertex_array_oes(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_bool(false);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    if id == 0 {
+        return js_bool(false);
+    }
+    let st = GL_STATE.lock();
+    js_bool(vao_slot(&st, id).is_some())
 }
 
 unsafe extern "C" fn gl_buffer_data(
@@ -2743,7 +2891,7 @@ unsafe extern "C" fn gl_get_extension(
         }
         let create = qjs::JS_NewCFunction2(
             ctx,
-            Some(gl_create_buffer),
+            Some(gl_create_vertex_array_oes),
             b"createVertexArrayOES\0".as_ptr() as *const c_char,
             0,
             qjs::JS_CFUNC_GENERIC,
@@ -2751,7 +2899,7 @@ unsafe extern "C" fn gl_get_extension(
         );
         let bind = qjs::JS_NewCFunction2(
             ctx,
-            Some(gl_noop),
+            Some(gl_bind_vertex_array_oes),
             b"bindVertexArrayOES\0".as_ptr() as *const c_char,
             1,
             qjs::JS_CFUNC_GENERIC,
@@ -2759,7 +2907,7 @@ unsafe extern "C" fn gl_get_extension(
         );
         let del = qjs::JS_NewCFunction2(
             ctx,
-            Some(gl_noop),
+            Some(gl_delete_vertex_array_oes),
             b"deleteVertexArrayOES\0".as_ptr() as *const c_char,
             1,
             qjs::JS_CFUNC_GENERIC,
@@ -2767,7 +2915,7 @@ unsafe extern "C" fn gl_get_extension(
         );
         let is = qjs::JS_NewCFunction2(
             ctx,
-            Some(gl_is_handle_object),
+            Some(gl_is_vertex_array_oes),
             b"isVertexArrayOES\0".as_ptr() as *const c_char,
             1,
             qjs::JS_CFUNC_GENERIC,

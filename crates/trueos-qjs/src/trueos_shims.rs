@@ -40,6 +40,28 @@ extern "C" {
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
+        pub fn trueos_cabi_input_pop_mouse(
+            out_buttons: *mut u8,
+            out_dx: *mut i8,
+            out_dy: *mut i8,
+            out_wheel: *mut i8,
+        ) -> i32;
+
+    pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
+    pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosMouseState {
+    pub x: i32,
+    pub y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub wheel: i32,
+    pub buttons: u32,
+    pub seq: u32,
+    pub slot_id: u32,
 }
 
 #[inline]
