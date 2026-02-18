@@ -174,8 +174,6 @@ pub struct HidRuntime {
     pub ep_ring: TrbRing,
     pub seq: u64,
     pub last_nonzero_seq: u64,
-
-    pub mouse: MouseDecodeState,
 }
 
 unsafe impl Send for HidRuntime {}
@@ -185,186 +183,21 @@ const MAX_HID_DEVICES: usize = 16;
 const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 
-#[derive(Copy, Clone, Debug)]
-enum MouseMode {
-    Unknown,
-    BootRelative,
-    CenteredRelative { cx: u8, cy: u8 },
-}
-
-/// State for decoding 3/4-byte HID mouse reports.
-///
-/// We intentionally support two common encodings:
-/// - BootRelative: dx/dy are signed i8 (idle at 0,0)
-/// - CenteredRelative: dx/dy are offset-binary around a neutral center (often 0x7F or 0x80)
-#[derive(Copy, Clone, Debug)]
-pub struct MouseDecodeState {
-    mode: MouseMode,
-
-    // Detection: observe early idle packets to decide between BootRelative and CenteredRelative.
-    detect_samples: u8,
-    idle_zero_votes: u8,
-    idle_center7f_votes: u8,
-    idle_center80_votes: u8,
-
-    // Buttons: always deliver transitions even when motion is unchanged.
-    buttons_inited: bool,
-    last_buttons: u8,
-}
-
-impl MouseDecodeState {
-    pub const fn new() -> Self {
-        Self {
-            mode: MouseMode::Unknown,
-            detect_samples: 0,
-            idle_zero_votes: 0,
-            idle_center7f_votes: 0,
-            idle_center80_votes: 0,
-            buttons_inited: false,
-            last_buttons: 0,
-        }
-    }
-
-    #[inline]
-    fn mode_id(&self) -> u8 {
-        match self.mode {
-            MouseMode::Unknown => 0,
-            MouseMode::BootRelative => 1,
-            MouseMode::CenteredRelative { .. } => 2,
-        }
-    }
-
-    #[inline]
-    fn centered_center(&self) -> Option<(u8, u8)> {
-        match self.mode {
-            MouseMode::CenteredRelative { cx, cy } => Some((cx, cy)),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    fn update_buttons_changed(&mut self, buttons: u8) -> bool {
-        if !self.buttons_inited {
-            self.buttons_inited = true;
-            self.last_buttons = buttons;
-            // First packet: only emit if buttons are already pressed.
-            buttons != 0
-        } else {
-            let changed = self.last_buttons != buttons;
-            self.last_buttons = buttons;
-            changed
-        }
-    }
-
-    #[inline]
-    fn observe_idle_for_detection(&mut self, buttons: u8, wheel: i8, b1: u8, b2: u8) {
-        if !matches!(self.mode, MouseMode::Unknown) {
-            return;
-        }
-
-        // Only learn from clean idle samples.
-        if buttons != 0 || wheel != 0 {
-            return;
-        }
-
-        self.detect_samples = self.detect_samples.saturating_add(1);
-
-        if b1 == 0 && b2 == 0 {
-            self.idle_zero_votes = self.idle_zero_votes.saturating_add(2);
-        }
-
-        if (b1 == 0x7F || b1 == 0x80) && (b2 == 0x7F || b2 == 0x80) {
-            // Strong signature for centered reports.
-            if b1 == 0x7F && b2 == 0x7F {
-                self.idle_center7f_votes = self.idle_center7f_votes.saturating_add(2);
-            } else if b1 == 0x80 && b2 == 0x80 {
-                self.idle_center80_votes = self.idle_center80_votes.saturating_add(2);
-            } else {
-                // Mixed (7F/80) still suggests centered.
-                self.idle_center7f_votes = self.idle_center7f_votes.saturating_add(1);
-                self.idle_center80_votes = self.idle_center80_votes.saturating_add(1);
-            }
-        }
-
-        // Decide after a small window; keep it conservative.
-        if self.detect_samples < 8 {
-            return;
-        }
-
-        let centered_votes = self
-            .idle_center7f_votes
-            .saturating_add(self.idle_center80_votes);
-
-        if centered_votes >= 8 && centered_votes > self.idle_zero_votes {
-            let (cx, cy) = if self.idle_center80_votes > self.idle_center7f_votes {
-                (0x80, 0x80)
-            } else {
-                (0x7F, 0x7F)
-            };
-            self.mode = MouseMode::CenteredRelative { cx, cy };
-        } else if self.idle_zero_votes >= 8 {
-            self.mode = MouseMode::BootRelative;
-        }
-    }
-
-    #[inline]
-    fn decode(&mut self, buttons: u8, wheel: i8, b1: u8, b2: u8) -> (i8, i8) {
-        self.observe_idle_for_detection(buttons, wheel, b1, b2);
-
-        match self.mode {
-            MouseMode::BootRelative => (b1 as i8, b2 as i8),
-            MouseMode::CenteredRelative { cx, cy } => {
-                let raw_dx = (b1 as i16) - (cx as i16);
-                let raw_dy = (b2 as i16) - (cy as i16);
-
-                let clamp_i8 = |v: i16| -> i8 {
-                    if v > i8::MAX as i16 {
-                        i8::MAX
-                    } else if v < i8::MIN as i16 {
-                        i8::MIN
-                    } else {
-                        v as i8
-                    }
-                };
-
-                // Tiny deadzone to kill common 7F/80 jitter.
-                let mut dx = clamp_i8(raw_dx);
-                let mut dy = clamp_i8(raw_dy);
-                if dx == 1 || dx == -1 {
-                    dx = 0;
-                }
-                if dy == 1 || dy == -1 {
-                    dy = 0;
-                }
-                (dx, dy)
-            }
-            MouseMode::Unknown => {
-                // Safe default while undecided: treat centered-idle as 0/0 so we don't
-                // ever emit +127/+127 spam just because a device idles at 0x7F/0x80.
-                let centered_idle = buttons == 0
-                    && wheel == 0
-                    && (b1 == 0x7F || b1 == 0x80)
-                    && (b2 == 0x7F || b2 == 0x80);
-                if centered_idle {
-                    (0, 0)
-                } else {
-                    (b1 as i8, b2 as i8)
-                }
-            }
-        }
-    }
-}
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
-    // Placeholder: higher-level input stack not wired in yet.
-    protocol
+    // We only implement boot keyboard input at this layer.
+    // Mouse support was intentionally removed from the xHCI/HID stack.
+    match protocol {
+        1 => 1,
+        2 => 0,
+        _ => protocol,
+    }
 }
 
 pub fn register_runtime(runtime: HidRuntime) {
-    // Signal v-layer readiness once we have a boot keyboard/mouse runtime.
+    // Signal v-layer readiness once we have a boot keyboard runtime.
     // These flags are monotonic (set-only) by design.
     let claimed_flags = match runtime.hid_kind {
         1 => crate::v::readiness::HID_KEYBOARD_CLAIMED,
-        2 => crate::v::readiness::HID_MOUSE_CLAIMED,
         _ => 0,
     };
     if claimed_flags != 0 {
@@ -423,77 +256,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
     // we hit a sampling point. This keeps HID_LOGS usable in practice.
     let sample = hid_log_allow_chatter(runtime.seq);
 
-    if runtime.hid_kind == 2 {
-        // Boot mouse (commonly): buttons, dx, dy, wheel (optional).
-        // But some devices (notably in emulators) send [buttons, X, Y, wheel]
-        // where X/Y are centered at 0x7F/0x80 when idle (offset-binary encoding).
-        if data.len() >= 3 {
-            let buttons = data[0];
-            let b1 = data[1];
-            let b2 = data[2];
-            let wheel = if data.len() > 3 { data[3] as i8 } else { 0 };
-
-            let mode_before = runtime.mouse.mode_id();
-            let (dx, dy) = runtime.mouse.decode(buttons, wheel, b1, b2);
-            let mode_after = runtime.mouse.mode_id();
-            if mode_before == 0 && mode_after != 0 {
-                if let Some((cx, cy)) = runtime.mouse.centered_center() {
-                    hidlog!(
-                        "[hid] mouse slot={} decode=centered-relative center=0x{:02X}/0x{:02X}\n",
-                        runtime.slot_id,
-                        cx,
-                        cy
-                    );
-                } else {
-                    hidlog!(
-                        "[hid] mouse slot={} decode=boot-relative\n",
-                        runtime.slot_id
-                    );
-                }
-            }
-
-            // Do not enqueue unchanged reports; this avoids building huge backlogs at 1000Hz.
-            // But we must still deliver button releases (buttons -> 0).
-            let buttons_changed = runtime.mouse.update_buttons_changed(buttons);
-
-            let interesting = buttons_changed || dx != 0 || dy != 0 || wheel != 0;
-
-            if HID_LOGS && (interesting || sample) {
-                hidlog!(
-                    "[hid] interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X} data={:02X?}\n",
-                    runtime.slot_id,
-                    completion,
-                    residual,
-                    data.len(),
-                    runtime.ep.address,
-                    runtime.hid_kind,
-                    runtime.seq,
-                    lo(runtime.report_phys),
-                    data
-                );
-            }
-
-            if buttons_changed || dx != 0 || dy != 0 || wheel != 0 {
-                runtime.last_nonzero_seq = runtime.seq;
-                hidlog!(
-                    "[mouse] buttons=0x{:02X} dx={} dy={} wheel={} (slot={} seq={})\n",
-                    buttons,
-                    dx,
-                    dy,
-                    wheel,
-                    runtime.slot_id,
-                    runtime.seq
-                );
-                input::push_event(input::InputEvent::Mouse(input::MouseEvent {
-                    slot_id: runtime.slot_id,
-                    buttons,
-                    dx,
-                    dy,
-                    wheel,
-                }));
-            }
-        }
-    } else if runtime.hid_kind == 1 {
+    if runtime.hid_kind == 1 {
         // Boot keyboard: modifiers + 6 keycodes
         if data.len() >= 8 {
             let modifiers = data[0];
@@ -549,6 +312,22 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 ascii,
             }));
         }
+    } else {
+        // Mouse support was intentionally removed from the xHCI/HID stack.
+        // Keep optional debug visibility for unexpected protocols.
+        if HID_LOGS && sample {
+            hidlog!(
+                "[hid] ignoring interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X}\n",
+                runtime.slot_id,
+                completion,
+                residual,
+                data.len(),
+                runtime.ep.address,
+                runtime.hid_kind,
+                runtime.seq,
+                lo(runtime.report_phys)
+            );
+        }
     }
 }
 
@@ -582,23 +361,9 @@ pub(crate) async fn input_logger() {
                             );
                         }
                     }
-                    input::InputEvent::Mouse(mouse) => {
-                        // Feed the QJS-safe, kernel-capped mouse stream.
-                        // NOTE: This is intentionally offered twice (architecture decision).
-                        input::qjs_mouse_offer(mouse);
-                        input::qjs_mouse_offer(mouse);
-                        if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0
-                        {
-                            crate::log!(
-                                "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
-                                mouse.slot_id,
-                                mouse.dx,
-                                mouse.dy,
-                                mouse.buttons,
-                                mouse.wheel
-                            );
-                        }
-                    }
+                    // Mouse support is intentionally not implemented at the xHCI/HID layer.
+                    // Other subsystems may still enqueue mouse events; they are ignored here.
+                    input::InputEvent::Mouse(_mouse) => {}
                 }
             } else {
                 Timer::after(EmbassyDuration::from_millis(5)).await;
@@ -653,7 +418,7 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                 if let Some(iface) = current_iface {
                     let subclass = current_subclass;
                     let proto = current_proto;
-                    if current_alt == 0 && subclass == 0x01 && (proto == 0x01 || proto == 0x02) {
+                    if current_alt == 0 && subclass == 0x01 && proto == 0x01 {
                         if len >= 7 {
                             let ep_addr = cfg[idx + 2];
                             let attrs = cfg[idx + 3];
@@ -891,6 +656,15 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
 
     let mut attached = 0usize;
     for ep in endpoints.into_iter() {
+        // Do not claim boot-mouse protocol interfaces at this layer.
+        if ep.protocol == 2 {
+            hidlog!(
+                "usb: hid(generic) skipping mouse iface={} ep=0x{:02X}\n",
+                ep.interface,
+                ep.address
+            );
+            continue;
+        }
         hidlog!(
             "usb: hid(generic) ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
             ep.address,
@@ -1039,8 +813,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
-
-            mouse: MouseDecodeState::new(),
         });
 
         attached += 1;
@@ -1504,6 +1276,15 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     let mut attached = 0usize;
 
     for ep in endpoints.into_iter() {
+        // parse_boot_endpoints already filters to boot keyboard, but keep a guardrail.
+        if ep.protocol == 2 {
+            hidlog!(
+                "usb: hid(boot) skipping mouse iface={} ep=0x{:02X}\n",
+                ep.interface,
+                ep.address
+            );
+            continue;
+        }
         hidlog!(
             "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
             ep.address,
@@ -1691,8 +1472,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
-
-            mouse: MouseDecodeState::new(),
         });
 
         attached += 1;
