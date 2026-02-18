@@ -128,6 +128,11 @@ snipe:
 run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
+# Seed URL module cache files into crates/trueos-qjs/app/cdn/ so URL imports can run offline.
+# This is intentionally opt-in (network access) and does not run as part of normal builds.
+qjs-cdn-seed:
+	@python3 tools/qjs_cdn_seed.py crates/trueos-qjs/app/cdn/seedlist.txt --recursive
+
 dbg: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
 	@echo "Waiting for debugger..."
