@@ -326,9 +326,41 @@ pub enum Command {
     BindPipeline(PipelineId),
     BindVertexBuffer { buffer: BufferId, offset: u64 },
     BindImage(ImageId),
+    SetSampler(SamplerDesc),
     SetViewport(Viewport),
     Draw { vertex_count: u32, first_vertex: u32 },
     Present,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SamplerWrap {
+    ClampToEdge,
+    Repeat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SamplerFilter {
+    Nearest,
+    Linear,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SamplerDesc {
+    pub wrap_s: SamplerWrap,
+    pub wrap_t: SamplerWrap,
+    pub min_filter: SamplerFilter,
+    pub mag_filter: SamplerFilter,
+}
+
+impl SamplerDesc {
+    pub const fn default_2d() -> Self {
+        Self {
+            wrap_s: SamplerWrap::ClampToEdge,
+            wrap_t: SamplerWrap::ClampToEdge,
+            min_filter: SamplerFilter::Nearest,
+            mag_filter: SamplerFilter::Nearest,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

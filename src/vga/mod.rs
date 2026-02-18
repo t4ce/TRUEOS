@@ -262,11 +262,16 @@ impl FramebufferSurface {
     }
 
     fn clear(&self, color: u32) {
+        if self.bytes_per_pixel != 4 || self.width == 0 || self.height == 0 {
+            return;
+        }
+
         for y in 0..self.height {
             let row_ptr = unsafe { self.addr.add(y.saturating_mul(self.pitch)) as *mut u32 };
-            for x in 0..self.width {
-                unsafe { row_ptr.add(x).write_volatile(color) };
-            }
+            // Safety: Limine framebuffer is 32bpp RGB and rows are at least `width * 4` bytes.
+            // We only touch the visible `width` pixels, not the full `pitch`.
+            let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, self.width) };
+            row.fill(color);
         }
     }
     fn blit_text(
@@ -477,12 +482,20 @@ impl FramebufferSurface {
         height: usize,
         color: u32,
     ) {
+        if self.bytes_per_pixel != 4 {
+            return;
+        }
         let max_x = origin_x.saturating_add(width).min(self.width);
         let max_y = origin_y.saturating_add(height).min(self.height);
+        if origin_x >= max_x || origin_y >= max_y {
+            return;
+        }
+
         for y in origin_y..max_y {
-            for x in origin_x..max_x {
-                self.write_pixel(x, y, color);
-            }
+            let row_ptr = unsafe { self.addr.add(y.saturating_mul(self.pitch)) as *mut u32 };
+            // Safety: same as `clear()`; we only touch the visible `width` pixels.
+            let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, self.width) };
+            row[origin_x..max_x].fill(color);
         }
     }
 
@@ -495,20 +508,24 @@ impl FramebufferSurface {
             return;
         }
 
-        for y in 0..image.height {
-            let dst_y = origin_y.saturating_add(y);
-            if dst_y >= self.height {
-                break;
-            }
-            let row_off = y.saturating_mul(image.width);
-            for x in 0..image.width {
-                let dst_x = origin_x.saturating_add(x);
-                if dst_x >= self.width {
-                    break;
-                }
-                let src = image.pixels[row_off.saturating_add(x)];
-                self.write_pixel(dst_x, dst_y, src);
-            }
+        if self.bytes_per_pixel != 4 || origin_x >= self.width || origin_y >= self.height {
+            return;
+        }
+
+        let copy_w = image.width.min(self.width - origin_x);
+        let copy_h = image.height.min(self.height - origin_y);
+        if copy_w == 0 || copy_h == 0 {
+            return;
+        }
+
+        for y in 0..copy_h {
+            let dst_y = origin_y + y;
+            let dst_row_ptr = unsafe { self.addr.add(dst_y.saturating_mul(self.pitch)) as *mut u32 };
+            let dst_row = unsafe { core::slice::from_raw_parts_mut(dst_row_ptr, self.width) };
+
+            let src_off = y * image.width;
+            let src_row = &image.pixels[src_off..src_off + copy_w];
+            dst_row[origin_x..origin_x + copy_w].copy_from_slice(src_row);
         }
     }
 }

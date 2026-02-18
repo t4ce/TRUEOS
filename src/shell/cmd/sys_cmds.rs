@@ -142,26 +142,27 @@ pub(crate) fn cmd_gfx(ctx: &mut ShellCommandCtx<'_>, _args: Option<&ParsedArgs<'
     //         e
     //     )),
     // }
-    // match ctx
-    //     .spawner
-    //     .spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task())
-    // {
-    //     Ok(()) => ctx.io.write_str("gfx: started pixi_ui task (20Hz)\r\n"),
-    //     Err(e) => ctx.io.write_fmt(format_args!(
-    //         "gfx: pixi_ui task spawn failed: {:?}\r\n",
-    //         e
-    //     )),
-    // }
     match ctx
         .spawner
-        .spawn(trueos_qjs::webgl_smoke::boot_webgl_smoke_task())
+        .spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task())
     {
-        Ok(()) => ctx.io.write_str("gfx: started webgl_smoke task (20Hz, no-qjs)\r\n"),
+        Ok(()) => ctx.io.write_str("gfx: started pixi_ui task (20Hz)\r\n"),
         Err(e) => ctx.io.write_fmt(format_args!(
-            "gfx: webgl_smoke task spawn failed: {:?}\r\n",
+            "gfx: pixi_ui task spawn failed: {:?}\r\n",
             e
         )),
     }
+
+    // match ctx
+    //     .spawner
+    //     .spawn(trueos_qjs::webgl_smoke::boot_webgl_smoke_task())
+    // {
+    //     Ok(()) => ctx.io.write_str("gfx: started webgl_smoke task (20Hz, no-qjs)\r\n"),
+    //     Err(e) => ctx.io.write_fmt(format_args!(
+    //         "gfx: webgl_smoke task spawn failed: {:?}\r\n",
+    //         e
+    //     )),
+    // }
     CommandAction::None
 }
 

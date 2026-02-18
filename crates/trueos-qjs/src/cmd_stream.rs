@@ -23,6 +23,7 @@ extern "C" {
     ) -> i32;
 
     fn trueos_cabi_gfx_frame_done_signal(bits: u32);
+    fn trueos_cabi_gfx_frame_done_is_ready() -> u32;
     fn trueos_cabi_gfx_frame_done_consume_if_ready() -> u32;
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
@@ -128,6 +129,7 @@ struct DrawBatch {
 
 struct FrameState {
     active: bool,
+    end_requested: bool,
     // GL-style clear color state
     clear_rgb: u32,
     // Captured at BeginFrame and used when submitting that frame.
@@ -141,6 +143,7 @@ struct FrameState {
 
 static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
     active: false,
+    end_requested: false,
     clear_rgb: 0x00_08_18_30,
     frame_clear_rgb: 0x00_08_18_30,
     viewport_w: 0,
@@ -247,6 +250,24 @@ fn flush_active_frame(st: &mut FrameState) {
     }
     st.batches.clear();
     st.active = false;
+    st.end_requested = false;
+}
+
+#[inline]
+fn maybe_flush_on_frame_done(st: &mut FrameState) {
+    if !st.end_requested {
+        return;
+    }
+
+    unsafe { trueos_cabi_gfx_frame_done_signal(FRAME_DONE_SRC_WEBGL) };
+
+    if unsafe { trueos_cabi_gfx_frame_done_is_ready() } == 0 {
+        return;
+    }
+
+    // Consume the boundary before flushing so the next frame can begin immediately.
+    let _seq = unsafe { trueos_cabi_gfx_frame_done_consume_if_ready() };
+    flush_active_frame(st);
 }
 
 fn current_pipeline_key(st: &FrameState, textured: bool, tex_id: u32) -> PipelineKey {
@@ -265,6 +286,7 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
         CmdStreamCommand::BeginFrame => {
             flush_active_frame(&mut st);
             st.active = true;
+            st.end_requested = false;
             st.frame_clear_rgb = st.clear_rgb;
         }
         CmdStreamCommand::SetClearColor { clear_rgb } => {
@@ -377,10 +399,8 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
             }
         }
         CmdStreamCommand::EndFrame => {
-            // For now this is informational only; do not gate flushing on it.
-            unsafe { trueos_cabi_gfx_frame_done_signal(FRAME_DONE_SRC_WEBGL) };
-            let _ = unsafe { trueos_cabi_gfx_frame_done_consume_if_ready() };
-            flush_active_frame(&mut st);
+            st.end_requested = true;
+            maybe_flush_on_frame_done(&mut st);
         }
     }
 }

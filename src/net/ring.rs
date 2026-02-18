@@ -7,11 +7,21 @@ static PACKET_POOL: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 const POOL_MAX: usize = 1024;
 const RX_BUF_SIZE: usize = 2048;
 
+#[inline]
+fn alloc_uninit_buf(len: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(len);
+    // Safety: callers must ensure the buffer is fully overwritten before any read.
+    // This is used for DMA RX/TX staging where the device (or an explicit copy)
+    // writes the bytes before the buffer is observed.
+    unsafe { v.set_len(len) };
+    v
+}
+
 pub fn alloc_rx_buf() -> Vec<u8> {
     if let Some(buf) = PACKET_POOL.lock().pop() {
         buf
     } else {
-        alloc::vec![0u8; RX_BUF_SIZE]
+        alloc_uninit_buf(RX_BUF_SIZE)
     }
 }
 
@@ -88,7 +98,7 @@ impl RxRing {
         let mut slots = Vec::with_capacity(desc_count.max(1));
         for _ in 0..desc_count.max(1) {
             slots.push(RxSlot {
-                buf: alloc::vec![0u8; buf_size],
+                buf: alloc_uninit_buf(buf_size),
                 len: 0,
                 owned_by_hw: true,
             });
@@ -104,7 +114,7 @@ impl RxRing {
     }
 
     pub fn poll(&mut self, budget: usize) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(budget.min(self.slots.len()));
         let mut processed = 0;
         while processed < budget {
             let slot = &mut self.slots[self.head];
