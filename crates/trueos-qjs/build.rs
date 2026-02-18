@@ -72,6 +72,162 @@ Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
     checkout_dir
 }
 
+fn build_host_qjs_bytecode_gen(quickjs_dir: &Path, out_dir: &Path) -> PathBuf {
+    let exe = out_dir.join("qjs_bytecode_gen");
+    if exe.is_file() {
+        return exe;
+    }
+
+    let gen_c = out_dir.join("qjs_bytecode_gen.c");
+    // Minimal module-only bytecode generator.
+    // Usage: qjs_bytecode_gen <module_name> <input.mjs> <output.qjsc>
+    let src = r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "quickjs.h"
+
+static unsigned char *read_file_nul(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    size_t len = (size_t)sz;
+    unsigned char *buf = (unsigned char*)malloc(len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, len, f);
+    fclose(f);
+    if (got != len) { free(buf); return NULL; }
+    buf[len] = 0;
+    *out_len = len;
+    return buf;
+}
+
+static int write_file(const char *path, const unsigned char *buf, size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t got = fwrite(buf, 1, len, f);
+    fclose(f);
+    return got == len;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s <module_name> <input.mjs> <output.qjsc>\n", argv[0]);
+        return 2;
+    }
+    const char *module_name = argv[1];
+    const char *in_path = argv[2];
+    const char *out_path = argv[3];
+
+    size_t src_len = 0;
+    unsigned char *src = read_file_nul(in_path, &src_len);
+    if (!src) {
+        fprintf(stderr, "read failed: %s\n", in_path);
+        return 3;
+    }
+
+    JSRuntime *rt = JS_NewRuntime();
+    if (!rt) {
+        free(src);
+        return 4;
+    }
+    JSContext *ctx = JS_NewContext(rt);
+    if (!ctx) {
+        JS_FreeRuntime(rt);
+        free(src);
+        return 5;
+    }
+
+    int flags = JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY;
+    JSValue v = JS_Eval(ctx, (const char*)src, src_len, module_name, flags);
+    if (JS_IsException(v)) {
+        JSValue exc = JS_GetException(ctx);
+        const char *s = JS_ToCString(ctx, exc);
+        if (s) {
+            fprintf(stderr, "compile exception: %s\n", s);
+            JS_FreeCString(ctx, s);
+        } else {
+            fprintf(stderr, "compile exception\n");
+        }
+        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, v);
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        free(src);
+        return 6;
+    }
+
+    size_t bc_len = 0;
+    uint8_t *bc = JS_WriteObject(ctx, &bc_len, v, JS_WRITE_OBJ_BYTECODE);
+    JS_FreeValue(ctx, v);
+    if (!bc || bc_len == 0) {
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        free(src);
+        return 7;
+    }
+
+    int ok = write_file(out_path, bc, bc_len);
+    js_free(ctx, bc);
+
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    free(src);
+
+    return ok ? 0 : 8;
+}
+"#;
+    std::fs::write(&gen_c, src).expect("write qjs_bytecode_gen.c");
+
+    let sources = [
+        "quickjs.c",
+        "libregexp.c",
+        "libunicode.c",
+        "cutils.c",
+        "dtoa.c",
+    ];
+
+    // Build the generator as a host executable (never freestanding).
+    let host_cc = env::var("HOST_CC").ok().unwrap_or_else(|| "cc".to_string());
+    let mut cmd = Command::new(host_cc);
+    cmd.arg("-O2")
+        .arg("-I")
+        .arg(quickjs_dir)
+        .arg("-DCONFIG_VERSION=\"TRUEOS\"")
+        .arg("-o")
+        .arg(&exe)
+        .arg(&gen_c);
+    for s in &sources {
+        cmd.arg(quickjs_dir.join(s));
+    }
+    cmd.arg("-lm").arg("-ldl").arg("-pthread");
+    run(&mut cmd);
+
+    exe
+}
+
+fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path) {
+    let app_util = manifest_dir.join("app").join("util.mjs");
+    println!("cargo:rerun-if-changed={}", app_util.display());
+
+    let out_embedded = out_dir.join("embedded_qjs");
+    std::fs::create_dir_all(&out_embedded).expect("create OUT_DIR/embedded_qjs");
+
+    let gen_exe = build_host_qjs_bytecode_gen(quickjs_dir, out_dir);
+    let out_qjsc = out_embedded.join("util.qjsc");
+
+    run(
+        Command::new(gen_exe)
+            .arg("/qjs/util.mjs")
+            .arg(&app_util)
+            .arg(&out_qjsc),
+    );
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
@@ -142,4 +298,7 @@ fn main() {
         .define("EMSCRIPTEN", None)
         .define("CONFIG_VERSION", Some("\"TRUEOS\""))
         .compile("quickjs");
+
+    // Build-time embedded module bytecode blobs (tiny, deterministic, no runtime compilation).
+    gen_embedded_bytecode(&quickjs_dir, &manifest_dir, &out_dir);
 }

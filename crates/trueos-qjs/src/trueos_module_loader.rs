@@ -9,6 +9,7 @@ use embassy_time_driver::{now, TICK_HZ};
 
 use crate as qjs;
 mod compiled;
+mod embedded;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -726,6 +727,51 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
     // Only attempt filesystem loading for absolute paths or explicit relative paths.
     if !(path_is_absolute(path) || path_is_relative(path)) {
         return core::ptr::null_mut();
+    }
+
+    // Embedded modules: compile from the embedded source blob (optionally using the on-disk
+    // compiled cache, just like URL modules do).
+    if path_is_absolute(path) {
+        if let Some(m) = embedded::find(path) {
+            let compiled_cache_path = compiled::compiled_cache_path_for_source(path);
+            match compiled::try_load_compiled_module(ctx, &compiled_cache_path) {
+                Ok(m) => return m,
+                Err(_) => {}
+            }
+
+            // Fast-path: if we have build-time bytecode, load it directly.
+            if !m.bytecode.is_empty() {
+                let v = qjs::JS_ReadObject(
+                    ctx,
+                    m.bytecode.as_ptr(),
+                    m.bytecode.len(),
+                    qjs::JS_READ_OBJ_BYTECODE,
+                );
+                if !v.is_exception() {
+                    if v.tag == qjs::JS_TAG_MODULE {
+                        let md = v.u.ptr as *mut qjs::JSModuleDef;
+                        qjs::js_free_value(ctx, v);
+                        return md;
+                    }
+                    qjs::js_free_value(ctx, v);
+                }
+            }
+
+            trace_str("qjs: embedded compile start\n");
+            let v = compile_module_value_from_buf(ctx, module_name, m.src.as_ptr(), m.src.len());
+            trace_str("qjs: embedded compile done\n");
+
+            if v.is_exception() || v.tag != qjs::JS_TAG_MODULE {
+                if !v.is_exception() {
+                    qjs::js_free_value(ctx, v);
+                }
+                return core::ptr::null_mut();
+            }
+            compiled::persist_compiled_module(ctx, &compiled_cache_path, v);
+            let md = v.u.ptr as *mut qjs::JSModuleDef;
+            qjs::js_free_value(ctx, v);
+            return md;
+        }
     }
 
     let (buf, len) = match read_file_js_malloc_rc(ctx, path) {
