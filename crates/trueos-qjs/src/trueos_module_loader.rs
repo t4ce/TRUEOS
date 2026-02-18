@@ -604,6 +604,46 @@ unsafe fn load_url_module(
     trace_bytes(&cache_path);
     trace_nl();
 
+    // If the URL cache file is provided as an embedded module (via crates/trueos-qjs/app/cdn/*),
+    // prefer that over touching the filesystem or network.
+    if let Some(em) = embedded::find(&cache_path) {
+        // Fast-path: build-time bytecode.
+        if !em.bytecode.is_empty() {
+            let v = qjs::JS_ReadObject(
+                ctx,
+                em.bytecode.as_ptr(),
+                em.bytecode.len(),
+                qjs::JS_READ_OBJ_BYTECODE,
+            );
+            if !v.is_exception() {
+                if v.tag == qjs::JS_TAG_MODULE {
+                    let md = v.u.ptr as *mut qjs::JSModuleDef;
+                    qjs::js_free_value(ctx, v);
+                    return md;
+                }
+                qjs::js_free_value(ctx, v);
+            }
+        }
+
+        // Fallback: compile embedded source.
+        trace_str("qjs: url embedded compile start\n");
+        let v = compile_module_value_from_buf(ctx, module_name, em.src.as_ptr(), em.src.len());
+        trace_str("qjs: url embedded compile done\n");
+
+        if v.is_exception() || v.tag != qjs::JS_TAG_MODULE {
+            if !v.is_exception() {
+                qjs::js_free_value(ctx, v);
+            }
+            return core::ptr::null_mut();
+        }
+
+        // Optional: persist compiled module alongside the normal cache naming.
+        compiled::persist_compiled_module(ctx, &compiled_cache_path, v);
+        let md = v.u.ptr as *mut qjs::JSModuleDef;
+        qjs::js_free_value(ctx, v);
+        return md;
+    }
+
     match compiled::try_load_compiled_module(ctx, &compiled_cache_path) {
         Ok(m) => {
             trace_str("qjs: compiled cache hit path=");
@@ -729,16 +769,11 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
         return core::ptr::null_mut();
     }
 
-    // Embedded modules: compile from the embedded source blob (optionally using the on-disk
-    // compiled cache, just like URL modules do).
+    // Embedded modules: load from the embedded blob.
+    // IMPORTANT: do not consult/persist the on-disk compiled cache for embedded modules.
+    // Otherwise an old `/qjs/*.qjsc` left on disk can override freshly embedded updates.
     if path_is_absolute(path) {
         if let Some(m) = embedded::find(path) {
-            let compiled_cache_path = compiled::compiled_cache_path_for_source(path);
-            match compiled::try_load_compiled_module(ctx, &compiled_cache_path) {
-                Ok(m) => return m,
-                Err(_) => {}
-            }
-
             // Fast-path: if we have build-time bytecode, load it directly.
             if !m.bytecode.is_empty() {
                 let v = qjs::JS_ReadObject(
@@ -767,7 +802,6 @@ unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -
                 }
                 return core::ptr::null_mut();
             }
-            compiled::persist_compiled_module(ctx, &compiled_cache_path, v);
             let md = v.u.ptr as *mut qjs::JSModuleDef;
             qjs::js_free_value(ctx, v);
             return md;

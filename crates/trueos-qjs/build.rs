@@ -402,6 +402,22 @@ fn collect_mjs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn collect_dirs(dir: &Path, out: &mut Vec<PathBuf>) {
+    out.push(dir.to_path_buf());
+    let rd = match std::fs::read_dir(dir) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    for ent in rd.flatten() {
+        let p = ent.path();
+        if let Ok(ft) = ent.file_type() {
+            if ft.is_dir() {
+                collect_dirs(&p, out);
+            }
+        }
+    }
+}
+
 fn to_qjs_specifier(app_root: &Path, file: &Path) -> String {
     let rel = file
         .strip_prefix(app_root)
@@ -453,6 +469,17 @@ fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path
     let app_root = manifest_dir.join("app");
     let out_embedded = out_dir.join("embedded_qjs");
     std::fs::create_dir_all(&out_embedded).expect("create OUT_DIR/embedded_qjs");
+
+    // Important: Cargo only reruns build scripts when watched paths change.
+    // If we only watch the current file list, adding a new .mjs won't trigger a rebuild.
+    // Watching directories keeps the embedded table in sync when new modules are added.
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    collect_dirs(&app_root, &mut dirs);
+    dirs.sort();
+    dirs.dedup();
+    for d in &dirs {
+        println!("cargo:rerun-if-changed={}", d.display());
+    }
 
     let mut files: Vec<PathBuf> = Vec::new();
     collect_mjs_files(&app_root, &mut files);
