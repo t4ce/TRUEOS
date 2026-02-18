@@ -86,16 +86,8 @@ unsafe fn eval_or_log(
 		true
 }
 
-fn init_script_jsdelivr() -> &'static [u8] {
-		br#"import '/qjs/pixi/pixi_gui_jsdelivr.mjs';"#
-}
-
-fn init_script_esmsh() -> &'static [u8] {
-		br#"import '/qjs/pixi/pixi_gui_esmsh.mjs';"#
-}
-
-fn init_script_unpkg() -> &'static [u8] {
-		br#"import '/qjs/pixi/pixi_gui_unpkg.mjs';"#
+fn init_script() -> &'static [u8] {
+		br#"import '/qjs/pixi/pixi_gui.mjs';"#
 }
 
 #[embassy_executor::task]
@@ -119,38 +111,14 @@ pub async fn boot_pixi_ui_task() {
 				let ctx = vm.ctx_ptr();
 				qjs::node::install_globals(ctx);
 
-				let init_filename_jsdelivr = b"<pixi-gui-init-v1-jsdelivr>\0";
-				let init_filename_esmsh = b"<pixi-gui-init-v1-esmsh>\0";
-				let init_filename_unpkg = b"<pixi-gui-init-v1-unpkg>\0";
-
-				let mut init_ok = false;
-				init_ok |= eval_or_log(
+				let init_filename = b"<pixi-gui-init-v1>\0";
+				let init_ok = eval_or_log(
 						ctx,
-						init_script_jsdelivr(),
-						init_filename_jsdelivr.as_ptr() as *const c_char,
+						init_script(),
+						init_filename.as_ptr() as *const c_char,
 						qjs::JS_EVAL_TYPE_MODULE,
-						"init(jsdelivr)",
+						"init(pixi_gui.mjs)",
 				);
-				if !init_ok {
-						log_str("qjs-pixi-gui: retrying Pixi import via esm.sh\n");
-						init_ok |= eval_or_log(
-								ctx,
-								init_script_esmsh(),
-								init_filename_esmsh.as_ptr() as *const c_char,
-								qjs::JS_EVAL_TYPE_MODULE,
-								"init(esm.sh)",
-						);
-				}
-				if !init_ok {
-						log_str("qjs-pixi-gui: retrying Pixi import via unpkg\n");
-						init_ok |= eval_or_log(
-								ctx,
-								init_script_unpkg(),
-								init_filename_unpkg.as_ptr() as *const c_char,
-								qjs::JS_EVAL_TYPE_MODULE,
-								"init(unpkg)",
-						);
-				}
 				if !init_ok {
 						drop(vm);
 						PIXI_UI_TASK_STARTED.store(false, Ordering::SeqCst);

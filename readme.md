@@ -17,6 +17,10 @@ A constant influx of resources, money, and safety.
 
 
 # Steps Fresh Sys, clone repo , then
+./tools/bootstrap_debian.sh
+
+# (rust-toolchain.toml pins the Rust toolchain + components; system deps and
+# `cargo install` tools live in the bootstrap script.)
 sudo apt update 
 sudo apt install -y rustup
 sudo apt install autoconf automake mtools nasm xorriso

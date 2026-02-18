@@ -1,4 +1,4 @@
-import * as PIXI from 'https://unpkg.com/pixi.js@7.4.3/dist/pixi.mjs';
+import * as PIXI from 'https://cdn.jsdelivr.net/npm/pixi.js@7.4.3/+esm';
 var G = (typeof globalThis !== 'undefined') ? globalThis : this;
 var W = Number((G.window && G.window.innerWidth) || 0);
 var H = Number((G.window && G.window.innerHeight) || 0);
@@ -117,6 +117,7 @@ function drawPixelText(g, text, x, y, scale, color) {
 	g.clear();
 	g.beginFill(color >>> 0);
 	var cx = x;
+	var cy = y;
 	var s = scale;
 	for (var i = 0; i < text.length; i++) {
 		var ch = String(text[i]).toUpperCase();
@@ -125,7 +126,7 @@ function drawPixelText(g, text, x, y, scale, color) {
 			var line = glyph[row];
 			for (var col = 0; col < 5; col++) {
 				if (line[col] === '1') {
-					g.drawRect(cx + col * s, y + row * s, s, s);
+					g.drawRect(cx + col * s, cy + row * s, s, s);
 				}
 			}
 		}
@@ -151,160 +152,175 @@ function countNodes(root) {
 	return n;
 }
 
-// --- Shared chrome / app host
-var chrome = new PIXI.Container();
-stage.addChild(chrome);
+function createWindow(frameX, frameY, frameW, frameH, appIdx) {
+	var win = {
+		frameX: frameX|0,
+		frameY: frameY|0,
+		frameW: frameW|0,
+		frameH: frameH|0,
+		appIdx: appIdx|0,
+		inst: null,
+		chrome: new PIXI.Container(),
+		host: new PIXI.Container(),
+		nameGfx: new PIXI.Graphics(),
+		countGfx: new PIXI.Graphics(),
+	};
+	stage.addChild(win.host);
+	stage.addChild(win.chrome);
 
-var appHost = new PIXI.Container();
-stage.addChild(appHost);
+	var frame = new PIXI.Graphics();
+	frame.lineStyle(2, 0x202020, 1);
+	frame.beginFill(0xFFFFFF, 0.18);
+	frame.drawRect(win.frameX, win.frameY, win.frameW, win.frameH);
+	frame.endFill();
+	win.chrome.addChild(frame);
 
-var frameX = Math.max(24, Math.floor(W * 0.08));
-var frameY = Math.max(40, Math.floor(H * 0.10));
-var frameW = Math.max(200, W - frameX - 24);
-var frameH = Math.max(160, H - frameY - 32);
+	// 3 buttons that stick outside on the left/top
+	var btn = new PIXI.Graphics();
+	btn.beginFill(0x202020, 1);
+	btn.drawRect(win.frameX - 18, win.frameY + 18, 14, 14);
+	btn.drawRect(win.frameX - 18, win.frameY + 38, 14, 14);
+	btn.drawRect(win.frameX + win.frameW - 32, win.frameY - 18, 14, 14);
+	btn.endFill();
+	win.chrome.addChild(btn);
 
-var frame = new PIXI.Graphics();
-frame.lineStyle(2, 0x202020, 1);
-frame.beginFill(0xFFFFFF, 0.18);
-frame.drawRect(frameX, frameY, frameW, frameH);
-frame.endFill();
-chrome.addChild(frame);
-
-// 3 buttons that stick outside on the left/top
-var btn = new PIXI.Graphics();
-btn.beginFill(0x202020, 1);
-btn.drawRect(frameX - 18, frameY + 18, 14, 14);
-btn.drawRect(frameX - 18, frameY + 38, 14, 14);
-btn.drawRect(frameX + 18, frameY - 18, 14, 14);
-btn.endFill();
-chrome.addChild(btn);
-
-var nameGfx = new PIXI.Graphics();
-chrome.addChild(nameGfx);
-
-var countGfx = new PIXI.Graphics();
-chrome.addChild(countGfx);
+	win.chrome.addChild(win.nameGfx);
+	win.chrome.addChild(win.countGfx);
+	return win;
+}
 
 // --- Multi-app registry
 var UI = {
 	apps: [],
-	active: -1,
-	_activeInst: null,
+	windows: [],
+	started: false,
+	_cursor: null,
+	_cursorX: 0,
+	_cursorY: 0,
 	registerApp: function(name, factory) {
 		this.apps.push({ name: String(name || 'APP'), factory: factory });
 		return this.apps.length - 1;
 	},
-	setActive: function(idx) {
-		idx = Number(idx|0);
-		if (idx < 0 || idx >= this.apps.length) return;
-		this.active = idx;
-		if (this._activeInst && this._activeInst.root) {
-			try { appHost.removeChild(this._activeInst.root); } catch (e) {}
-		}
-		var spec = this.apps[idx];
-		if (G && G.console && G.console.log) G.console.log('pixi_gui: setActive name=', spec.name, 'len=', String(spec.name).length);
-		var inst = spec.factory ? spec.factory() : null;
-		if (!inst) inst = { root: new PIXI.Container(), tick: function(){} };
-		if (!inst.root) inst.root = new PIXI.Container();
-		inst.root.x = frameX;
-		inst.root.y = frameY;
-		appHost.addChild(inst.root);
-		this._activeInst = inst;
-	    drawPixelText(nameGfx, spec.name, frameX, Math.max(2, frameY - 28), 2, 0x202020);
-	},
 	start: function() {
+		if (this.started) return;
+		this.started = true;
+
 		if (this.apps.length === 0) {
 			this.registerApp('DEMO', function() {
 				var root = new PIXI.Container();
 				return { root: root, tick: function(dt) {} };
 			});
+			this.registerApp('BOX', function() {
+				var root = new PIXI.Container();
+				var g = new PIXI.Graphics();
+				g.lineStyle(2, 0x202020, 1);
+				g.beginFill(0xFFFFFF, 0.35);
+				g.drawRect(10, 10, 180, 120);
+				g.endFill();
+				g.beginFill(0x000000, 0.20);
+				g.drawRect(20, 150, 160, 220);
+				g.endFill();
+				root.addChild(g);
+				return { root: root, tick: function(dt) {} };
+			});
 		}
-		this.setActive(0);
+
+		// Smaller default windows, placed left/center/right.
+		var y = Math.max(40, Math.floor(H * 0.10));
+		var w = Math.min(200, Math.max(120, Math.floor((W - 24 * 4) / 3)));
+		var h = Math.min(400, Math.max(160, H - y - 40));
+		var xL = 24;
+		var xC = Math.max(24, Math.floor((W - w) / 2));
+		var xR = Math.max(24, W - w - 24);
+
+		this.windows.push(createWindow(xL, y, w, h, 0));
+		this.windows.push(createWindow(xC, y, w, h, 1));
+		this.windows.push(createWindow(xR, y, w, h, 0));
+
+		// Cursor triangle (single triangle). Tip is exactly at cursor position.
+		this._cursorX = Math.floor(W / 2);
+		this._cursorY = Math.floor(H / 2);
+		this._cursor = new PIXI.Graphics();
+		stage.addChild(this._cursor);
+
+		if (G && G.addEventListener) {
+			var self = this;
+			try {
+				G.addEventListener('mousemove', function(e) {
+					if (!e) return;
+					var dx = Number(e.movementX);
+					var dy = Number(e.movementY);
+					if (isFinite(dx) && isFinite(dy) && ((dx|0) !== 0 || (dy|0) !== 0)) {
+						self._cursorX = Math.max(0, Math.min(W - 1, (self._cursorX + (dx|0))|0));
+						self._cursorY = Math.max(0, Math.min(H - 1, (self._cursorY + (dy|0))|0));
+						return;
+					}
+					var x = Number(e.clientX);
+					var y = Number(e.clientY);
+					if (!isFinite(x) || !isFinite(y)) return;
+					self._cursorX = Math.max(0, Math.min(W - 1, x|0));
+					self._cursorY = Math.max(0, Math.min(H - 1, y|0));
+				}, false);
+			} catch (e) {}
+		}
+	},
+	_ensureWindowInst: function(win) {
+		if (!win || win.inst) return;
+		var idx = (this.apps.length > 0) ? (win.appIdx % this.apps.length) : 0;
+		var spec = this.apps[idx];
+		var inst = spec.factory ? spec.factory() : null;
+		if (!inst) inst = { root: new PIXI.Container(), tick: function(){} };
+		if (!inst.root) inst.root = new PIXI.Container();
+		inst.root.x = win.frameX;
+		inst.root.y = win.frameY;
+		win.host.addChild(inst.root);
+		win.inst = inst;
+		drawPixelText(win.nameGfx, spec.name, win.frameX, Math.max(2, win.frameY - 28), 2, 0x202020);
 	},
 	tick: function(dt) {
-		if (this._activeInst && this._activeInst.tick) {
-			try { this._activeInst.tick(dt); } catch (e) {}
+		for (var i = 0; i < this.windows.length; i++) {
+			var win = this.windows[i];
+			this._ensureWindowInst(win);
+			if (win && win.inst && win.inst.tick) {
+				try { win.inst.tick(dt); } catch (e) {}
+			}
+			// element count: number only, bottom-right outside frame (per window)
+			var n = (win && win.inst && win.inst.root) ? countNodes(win.inst.root) : 0;
+			var s = String(n|0);
+			var x = win.frameX + win.frameW - (s.length * 12) - 4;
+			var y = Math.min(H - 24, win.frameY + win.frameH + 8);
+			drawPixelText(win.countGfx, s, x, y, 2, 0x202020);
 		}
-		// element count: number only, bottom-right outside frame
-		var n = (this._activeInst && this._activeInst.root) ? countNodes(this._activeInst.root) : 0;
-		var s = String(n|0);
-		var x = frameX + frameW - (s.length * 12) - 4;
-	    var y = Math.min(H - 24, frameY + frameH + 8);
-		drawPixelText(countGfx, s, x, y, 2, 0x202020);
+
+		// Draw cursor last.
+		if (this._cursor) {
+			var x = this._cursorX|0;
+			var y = this._cursorY|0;
+			this._cursor.clear();
+			this._cursor.lineStyle(1, 0xFFFFFF, 1);
+			this._cursor.beginFill(0x202020, 1);
+			// Simple arrow-like triangle; tip is exactly at (x,y).
+			this._cursor.moveTo(x, y);
+			this._cursor.lineTo(x + 14, y + 7);
+			this._cursor.lineTo(x + 6, y + 20);
+			this._cursor.lineTo(x, y);
+			this._cursor.endFill();
+		}
 	}
 };
 
 G.__trueos_ui = UI;
 
 var last = 0;
-var __mx = Math.floor(W / 2);
-var __my = Math.floor(H / 2);
-var __mb = 0;
-
-function __dispatchMouse(target, type, props) {
-	if (!target || !target.dispatchEvent) return;
-	var e = props || {};
-	e.type = type;
-	try { target.dispatchEvent(e); } catch (err) {}
-}
-
-function __pumpMouse() {
-	if (!G.__trueos_poll_mouse_raw) return;
-	var canvas = G.__trueos_canvas;
-	for (var k = 0; k < 64; k++) {
-		var ev = null;
-		try { ev = G.__trueos_poll_mouse_raw(); } catch (e) { return; }
-		if (!ev) return;
-		var dx = (ev.dx|0);
-		var dy = (ev.dy|0);
-		var wh = (ev.wheel|0);
-		var buttons = (ev.buttons|0);
-		if (dx || dy) {
-			__mx = Math.max(0, Math.min(W - 1, __mx + dx));
-			__my = Math.max(0, Math.min(H - 1, __my + dy));
-			var props = { clientX: __mx, clientY: __my, movementX: dx, movementY: dy, buttons: buttons };
-			__dispatchMouse(canvas, 'mousemove', props);
-			__dispatchMouse(G, 'mousemove', props);
-		}
-		if (wh) {
-			var propsw = { clientX: __mx, clientY: __my, deltaY: wh, buttons: buttons };
-			__dispatchMouse(canvas, 'wheel', propsw);
-			__dispatchMouse(G, 'wheel', propsw);
-		}
-		var changed = (__mb ^ buttons) & 0xFF;
-		if (changed) {
-			var map = [ [1,0], [4,1], [2,2] ];
-			for (var i = 0; i < map.length; i++) {
-				var mask = map[i][0];
-				var btn = map[i][1];
-				if (changed & mask) {
-					var down = (buttons & mask) ? 1 : 0;
-					var t = down ? 'mousedown' : 'mouseup';
-					var propsb = { clientX: __mx, clientY: __my, button: btn, buttons: buttons };
-					__dispatchMouse(canvas, t, propsb);
-					__dispatchMouse(G, t, propsb);
-					if (!down) {
-						__dispatchMouse(canvas, 'click', propsb);
-						__dispatchMouse(G, 'click', propsb);
-					}
-				}
-			}
-			__mb = buttons;
-		}
-	}
-}
-
 G.__trueos_pixi_ui_tick = function(angleRad) {
 	var now = (Date.now && Date.now()) ? Date.now() : (last + 50);
 	var dt = (last === 0) ? 50 : (now - last);
 	last = now;
 	if (G.__trueos_mouse_pump) {
 		try { G.__trueos_mouse_pump(); } catch (e) {}
-	} else {
-		__pumpMouse();
 	}
 	if (G.__trueos_ui) {
-		if (G.__trueos_ui.active < 0) G.__trueos_ui.start();
+		if (!G.__trueos_ui.started) G.__trueos_ui.start();
 		G.__trueos_ui.tick(dt);
 	}
 	renderer.render(stage);

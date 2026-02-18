@@ -304,6 +304,8 @@ pub(crate) async fn input_logger() {
                         }
                     }
                     input::InputEvent::Mouse(mouse) => {
+                        // Feed the QJS-safe, kernel-capped mouse stream.
+                        input::qjs_mouse_offer(mouse);
                         if mouse.buttons != 0 || mouse.dx != 0 || mouse.dy != 0 || mouse.wheel != 0 {
                             crate::log!(
                                 "[mouse] [{}] [move] {:+}/{:+} [click] {:08b} [wheel] {:+}\n",
