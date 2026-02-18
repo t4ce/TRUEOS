@@ -1,10 +1,12 @@
-import * as PIXI from 'https://cdn.jsdelivr.net/npm/pixi.js@7.4.3/+esm';
+import * as PIXI from 'https://esm.sh/pixi.js@7.4.3?bundle';
 var G = (typeof globalThis !== 'undefined') ? globalThis : this;
 var W = Number((G.window && G.window.innerWidth) || 0);
 var H = Number((G.window && G.window.innerHeight) || 0);
 if (!isFinite(W) || W < 320) W = 1280;
 if (!isFinite(H) || H < 240) H = 800;
-if (G && G.console && G.console.log) G.console.log('pixi_gui: W/H', W, H);
+if (G && G.console && typeof G.console.log === 'function') {
+	try { G.console.log('pixi_gui: W/H ' + String(W) + ' ' + String(H)); } catch (e) {}
+}
 
 var canvas = (G.document && G.document.createElement) ? G.document.createElement('canvas') : null;
 if (!canvas) throw new Error('no canvas available');
@@ -12,13 +14,40 @@ canvas.width = W;
 canvas.height = H;
 G.__trueos_canvas = canvas;
 
-var renderer = new PIXI.Renderer({
-	view: canvas,
-	width: W,
-	height: H,
-	backgroundColor: 0xFFFFFF,
-	antialias: false
-});
+var __Renderer = (PIXI && typeof PIXI.Renderer === 'function')
+	? PIXI.Renderer
+	: (PIXI && PIXI.default && typeof PIXI.default.Renderer === 'function')
+		? PIXI.default.Renderer
+		: null;
+if (!__Renderer) {
+	if (G && G.console && typeof G.console.log === 'function') {
+		try {
+			G.console.log('pixi_gui: missing PIXI.Renderer; keys=' + String(Object.keys(PIXI || {}).slice(0, 20)));
+			G.console.log('pixi_gui: has default=' + String(!!(PIXI && PIXI.default)));
+		} catch (e) {}
+	}
+	throw new Error('pixi_gui: PIXI.Renderer not found');
+}
+
+	G.__trueos_canvas = canvas;
+
+	var rendererOpts = {
+		view: canvas,
+		width: W,
+		height: H,
+		backgroundColor: 0xFFFFFF,
+		antialias: false
+	};
+
+	var renderer = null;
+	if (PIXI && typeof PIXI.autoDetectRenderer === 'function') {
+		renderer = PIXI.autoDetectRenderer(rendererOpts);
+	} else if (PIXI && typeof PIXI.Renderer === 'function') {
+		renderer = new PIXI.Renderer(rendererOpts);
+	}
+	if (!renderer) {
+		throw new Error('pixi_gui: no renderer export (expected PIXI.autoDetectRenderer or PIXI.Renderer)');
+	}
 
 var stage = new PIXI.Container();
 
@@ -59,7 +88,9 @@ try {
 	spr.height = H;
 	bg.addChild(spr);
 } catch (e) {
-	if (G && G.console && G.console.log) G.console.log('pixi_gui: bg texture failed', String(e));
+	if (G && G.console && typeof G.console.log === 'function') {
+		try { G.console.log('pixi_gui: bg texture failed ' + String(e)); } catch (e2) {}
+	}
 	bgFallback();
 }
 
