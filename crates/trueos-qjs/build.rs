@@ -465,7 +465,7 @@ fn write_embedded_table(out_embedded: &Path, entries: &[(String, PathBuf, Option
     std::fs::write(&out_rs, s).expect("write embedded_modules.rs");
 }
 
-fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path) {
+fn gen_embedded_modules(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path) {
     let app_root = manifest_dir.join("app");
     let out_embedded = out_dir.join("embedded_qjs");
     std::fs::create_dir_all(&out_embedded).expect("create OUT_DIR/embedded_qjs");
@@ -490,40 +490,54 @@ fn gen_embedded_bytecode(quickjs_dir: &Path, manifest_dir: &Path, out_dir: &Path
         println!("cargo:rerun-if-changed={}", f.display());
     }
 
-    let gen_exe = build_host_qjs_bytecode_gen(quickjs_dir, out_dir);
+    let want_bytecode = env::var("TRUEOS_QJS_EMBED_BYTECODE")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+        .unwrap_or(false);
+
+    let gen_exe = if want_bytecode {
+        Some(build_host_qjs_bytecode_gen(quickjs_dir, out_dir))
+    } else {
+        None
+    };
 
     let mut entries: Vec<(String, PathBuf, Option<PathBuf>)> = Vec::new();
     for f in &files {
         let spec = to_qjs_specifier(&app_root, f);
-        let out_qjsc = out_qjsc_path(&out_embedded, &app_root, f);
-        let status = Command::new(&gen_exe)
-            .arg(&app_root)
-            .arg(&spec)
-            .arg(f)
-            .arg(&out_qjsc)
-            .status();
-        match status {
-            Ok(st) if st.success() => {
-                entries.push((spec, f.clone(), Some(out_qjsc)));
+
+        if let Some(gen_exe) = &gen_exe {
+            let out_qjsc = out_qjsc_path(&out_embedded, &app_root, f);
+            let status = Command::new(gen_exe)
+                .arg(&app_root)
+                .arg(&spec)
+                .arg(f)
+                .arg(&out_qjsc)
+                .status();
+            match status {
+                Ok(st) if st.success() => {
+                    entries.push((spec, f.clone(), Some(out_qjsc)));
+                }
+                Ok(st) => {
+                    let _ = std::fs::remove_file(&out_qjsc);
+                    println!(
+                        "cargo:warning=embedded precompile skipped (exit={}) for {} (will embed source only)",
+                        st.code().unwrap_or(-1),
+                        f.display()
+                    );
+                    entries.push((spec, f.clone(), None));
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&out_qjsc);
+                    println!(
+                        "cargo:warning=embedded precompile skipped (spawn failed: {}) for {} (will embed source only)",
+                        e,
+                        f.display()
+                    );
+                    entries.push((spec, f.clone(), None));
+                }
             }
-            Ok(st) => {
-                let _ = std::fs::remove_file(&out_qjsc);
-                println!(
-                    "cargo:warning=embedded precompile skipped (exit={}) for {} (will embed source only)",
-                    st.code().unwrap_or(-1),
-                    f.display()
-                );
-                entries.push((spec, f.clone(), None));
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&out_qjsc);
-                println!(
-                    "cargo:warning=embedded precompile skipped (spawn failed: {}) for {} (will embed source only)",
-                    e,
-                    f.display()
-                );
-                entries.push((spec, f.clone(), None));
-            }
+        } else {
+            entries.push((spec, f.clone(), None));
         }
     }
 
@@ -538,6 +552,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_DIR");
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_REPO");
     println!("cargo:rerun-if-env-changed=TRUEOS_QJS_QUICKJS_REF");
+    println!("cargo:rerun-if-env-changed=TRUEOS_QJS_EMBED_BYTECODE");
     println!("cargo:rerun-if-env-changed=CARGO_NET_OFFLINE");
 
     let quickjs_dir = ensure_quickjs_checkout(&out_dir);
@@ -602,6 +617,6 @@ fn main() {
         .define("CONFIG_VERSION", Some("\"TRUEOS\""))
         .compile("quickjs");
 
-    // Build-time embedded module bytecode blobs (tiny, deterministic, no runtime compilation).
-    gen_embedded_bytecode(&quickjs_dir, &manifest_dir, &out_dir);
+    // Embedded module registry; bytecode blobs are opt-in via TRUEOS_QJS_EMBED_BYTECODE=1.
+    gen_embedded_modules(&quickjs_dir, &manifest_dir, &out_dir);
 }
