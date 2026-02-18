@@ -31,6 +31,7 @@ extern "C" {
 static LAST_SUBMIT_RC: AtomicI32 = AtomicI32::new(i32::MIN);
 static SUBMIT_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
 static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
+static UPLOAD_OK_COUNT: AtomicU32 = AtomicU32::new(0);
 
 const FRAME_DONE_SRC_WEBGL: u32 = 1 << 0;
 
@@ -394,6 +395,18 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
                 if prev != rc || (n % 120) == 1 {
                     log_bytes(b"qjs-webgl-cmd-stream: tex upload rc=");
                     log_i32_dec(rc);
+                    log_bytes(b"\n");
+                }
+            } else {
+                // Log only the first few successful uploads to validate the pipeline.
+                let n = UPLOAD_OK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 16 {
+                    log_bytes(b"qjs-webgl-cmd-stream: tex upload ok id=");
+                    log_i32_dec(tex_id as i32);
+                    log_bytes(b" w=");
+                    log_i32_dec(width as i32);
+                    log_bytes(b" h=");
+                    log_i32_dec(height as i32);
                     log_bytes(b"\n");
                 }
             }

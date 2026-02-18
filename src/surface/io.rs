@@ -790,6 +790,7 @@ pub mod cabi {
 		TexCoordFormat, VertexLayout, Viewport,
 	};
 	use alloc::vec::Vec;
+	use crate::usb;
 
 	const GFX_CABI_VBUF_RING_LEN: usize = 3;
 
@@ -1150,7 +1151,30 @@ pub mod cabi {
 		let data = core::slice::from_raw_parts(data_ptr, expected);
 
 		let Some(ret) = crate::gfx::with_context(|ctx| {
+			let epoch = crate::gfx::backend_epoch();
 			let mut st = GFX_CABI_STATE.lock();
+			if st.epoch != epoch {
+				// Backend changed (or first use). Drop cached IDs so future draws don't
+				// reference resources from a different backend, and so early texture uploads
+				// won't be wiped by the first ensure_gfx_resources* call.
+				st.pipeline = PipelineId::invalid();
+				st.ring_idx = 0;
+				st.vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+				st.capacity = [0; GFX_CABI_VBUF_RING_LEN];
+				st.tex_pipeline = PipelineId::invalid();
+				st.tex_vbuf = [BufferId::invalid(); GFX_CABI_VBUF_RING_LEN];
+				st.tex_capacity = [0; GFX_CABI_VBUF_RING_LEN];
+				st.tex_images = None;
+				st.swapchain_configured = false;
+				st.viewport_configured = false;
+				st.frame_active = false;
+				st.frame_seq = 0;
+				st.frame_rgb_draws = 0;
+				st.frame_tex_draws = 0;
+				st.frame_draw_bytes = 0;
+				st.frame_draws.clear();
+				st.epoch = epoch;
+			}
 			let images = st.tex_images.get_or_insert_with(Vec::new);
 			let idx = tex_id.saturating_sub(1) as usize;
 			if idx >= images.len() {
@@ -1507,6 +1531,28 @@ pub mod cabi {
 			));
 		}
 		ret
+	}
+
+	// --- Input C-ABI ---
+
+	#[no_mangle]
+	pub unsafe extern "C" fn trueos_cabi_input_pop_mouse(
+		out_buttons: *mut u8,
+		out_dx: *mut i8,
+		out_dy: *mut i8,
+		out_wheel: *mut i8,
+	) -> i32 {
+		if out_buttons.is_null() || out_dx.is_null() || out_dy.is_null() || out_wheel.is_null() {
+			return -1;
+		}
+		let Some(m) = usb::input::pop_mouse_event() else {
+			return 0;
+		};
+		*out_buttons = m.buttons;
+		*out_dx = m.dx;
+		*out_dy = m.dy;
+		*out_wheel = m.wheel;
+		1
 	}
 
 }
