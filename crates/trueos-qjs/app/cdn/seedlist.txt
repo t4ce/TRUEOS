@@ -1,0 +1,17 @@
+# URL module seed list for TRUEOS QuickJS loader.
+#
+# Goal: make URL imports work offline by pre-seeding the URL cache files
+# that the kernel module loader expects under:
+#   /qjs/cdn/<fnv1a64(url)>.mjs
+#
+# How to use:
+#   make qjs-cdn-seed
+#   make run
+#
+# Notes:
+# - Lines starting with '#' are comments.
+# - Blank lines are ignored.
+# - Keep URLs pinned (include versions) to make builds deterministic.
+
+# Pixi entry module (will pull in many submodules if you run the seed script with --recursive).
+https://cdn.jsdelivr.net/npm/pixi.js@7.4.3/+esm
