@@ -62,7 +62,7 @@ nvme.img:
 	truncate -s $(IMG_SIZE) $@
 
 kernel:
-	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc --target 86_64.json
+	cargo +nightly build $(CARGO_BUILD_FLAGS) -Z build-std=core,compiler_builtins,alloc -Z json-target-spec --target 86_64.json
 
 artifacts: kernel
 	mkdir -p $(ARTIFACT_DIR)
@@ -127,11 +127,6 @@ snipe:
 
 run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
-
-# Seed URL module cache files into crates/trueos-qjs/app/cdn/ so URL imports can run offline.
-# This is intentionally opt-in (network access) and does not run as part of normal builds.
-qjs-cdn-seed:
-	@python3 tools/qjs_cdn_seed.py crates/trueos-qjs/app/cdn/seedlist.txt --recursive
 
 dbg: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
