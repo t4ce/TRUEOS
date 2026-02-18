@@ -813,6 +813,8 @@ pub mod cabi {
 		frame_tex_draws: u32,
 		frame_draw_bytes: usize,
 		frame_draws: Vec<PendingDraw>,
+		last_missing_tex_id: u32,
+		missing_tex_logs: u32,
 	}
 
 	struct TexImage {
@@ -854,6 +856,8 @@ pub mod cabi {
 					frame_tex_draws: 0,
 					frame_draw_bytes: 0,
 					frame_draws: Vec::new(),
+					last_missing_tex_id: 0,
+					missing_tex_logs: 0,
 				}
 			}
 		}
@@ -1036,6 +1040,8 @@ pub mod cabi {
 		vtx_ptr: *const u8,
 		vtx_len: usize,
 	) -> i32 {
+		crate::gfx::init(crate::limine::framebuffer_response());
+
 		if vtx_ptr.is_null() {
 			return if vtx_len == 0 { 0 } else { -1 };
 		}
@@ -1127,6 +1133,8 @@ pub mod cabi {
 		data_ptr: *const u8,
 		data_len: usize,
 	) -> i32 {
+		crate::gfx::init(crate::limine::framebuffer_response());
+
 		if tex_id == 0 || width == 0 || height == 0 {
 			return -1;
 		}
@@ -1187,6 +1195,8 @@ pub mod cabi {
 
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
+		crate::gfx::init(crate::limine::framebuffer_response());
+
 		let mut st = GFX_CABI_STATE.lock();
 		st.frame_seq = st.frame_seq.wrapping_add(1);
 		st.frame_active = true;
@@ -1285,6 +1295,8 @@ pub mod cabi {
 
 	#[no_mangle]
 	pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
+		crate::gfx::init(crate::limine::framebuffer_response());
+
 		let (seq, rgb_draws, tex_draws, draw_bytes, was_active, clear_rgb, draws) = {
 			let mut st = GFX_CABI_STATE.lock();
 			let out = (
@@ -1316,18 +1328,6 @@ pub mod cabi {
 				width: swap.extent.width as i32,
 				height: swap.extent.height as i32,
 			};
-
-			let mut begin_cmds = [Command::ClearColor { rgb: clear_rgb }; 2];
-			let begin_slice = if need_set_viewport {
-				begin_cmds[0] = Command::SetViewport(vp);
-				begin_cmds[1] = Command::ClearColor { rgb: clear_rgb };
-				&begin_cmds[..2]
-			} else {
-				&begin_cmds[..1]
-			};
-			if ctx.submit(CommandBuffer { commands: begin_slice }).is_err() {
-				return -2;
-			}
 
 			enum Plan {
 				Rgb { offset: u64, vcount: u32 },
@@ -1420,16 +1420,28 @@ pub mod cabi {
 						let Some((pipeline, vbuf)) = tex_res else {
 							return -9;
 						};
-						let image_id = {
+						let (image_id, log_missing_tex) = {
 							let mut st = GFX_CABI_STATE.lock();
-							let images = st.tex_images.get_or_insert_with(Vec::new);
 							let idx = tex_id.saturating_sub(1) as usize;
-							if idx >= images.len() {
-								images.resize_with(idx + 1, || None);
-							}
-							if let Some(Some(entry)) = images.get(idx) {
-								entry.image
+
+							// First: check if the texture already exists.
+							let existing = {
+								let images = st.tex_images.get_or_insert_with(Vec::new);
+								if idx >= images.len() {
+									images.resize_with(idx + 1, || None);
+								}
+								images.get(idx).and_then(|e| e.as_ref()).map(|e| e.image)
+							};
+							if let Some(img) = existing {
+								(img, false)
 							} else {
+								// Now that `images` borrow is dropped, we can touch other `st.*` fields.
+								let should_log = st.missing_tex_logs < 16 && st.last_missing_tex_id != tex_id;
+								if should_log {
+									st.last_missing_tex_id = tex_id;
+									st.missing_tex_logs = st.missing_tex_logs.saturating_add(1);
+								}
+
 								let desc = ImageDesc {
 									width: 1,
 									height: 1,
@@ -1438,16 +1450,28 @@ pub mod cabi {
 								let Ok(img) = ctx.create_image(desc) else {
 									return -10;
 								};
-								let white = [0u8, 0u8, 0u8, 0u8];
+								let white = [255u8, 255u8, 255u8, 255u8];
 								let _ = ctx.write_image(img, &white);
+
+								// Re-borrow images to insert.
+								let images = st.tex_images.get_or_insert_with(Vec::new);
+								if idx >= images.len() {
+									images.resize_with(idx + 1, || None);
+								}
 								images[idx] = Some(TexImage {
 									image: img,
 									width: 1,
 									height: 1,
 								});
-								img
+								(img, should_log)
 							}
 						};
+						if log_missing_tex {
+							crate::globalog::log(format_args!(
+								"gfx-cabi: missing texture tex_id={} (using 1x1 fallback)\n",
+								tex_id
+							));
+						}
 						cmds.push(Command::BindPipeline(pipeline));
 						cmds.push(Command::BindImage(image_id));
 						cmds.push(Command::BindVertexBuffer { buffer: vbuf, offset });

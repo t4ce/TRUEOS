@@ -414,9 +414,10 @@ impl VirtioNetAdapter {
             if let Some(ring_ptr) = self.ring {
                 // Safety: ring pointer is owned and kept alive by NetCore.
                 let ring = unsafe { &mut *ring_ptr };
-                let slot = ring.rx_ring_mut().push_hw_owned().ok();
+                let rx_ring = ring.rx_ring_mut();
+                let slot = rx_ring.push_hw_owned().ok();
                 if let Some(slot) = slot {
-                    let dst = ring.rx_ring_mut().buffer_mut(slot);
+                    let dst = rx_ring.buffer_mut(slot);
                     let buf = &self.rx_bufs[desc_id];
                     let src = unsafe {
                         core::slice::from_raw_parts(buf.virt(), RX_BUF_SIZE)
@@ -424,7 +425,7 @@ impl VirtioNetAdapter {
                     let len = (elem_len as usize).saturating_sub(VIRTIO_NET_HDR_SIZE);
                     let copy_len = len.min(dst.len());
                     dst[..copy_len].copy_from_slice(&src[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]);
-                    ring.rx_ring_mut().mark_complete(slot, copy_len);
+                    rx_ring.mark_complete(slot, copy_len);
                 }
             }
 
@@ -465,12 +466,13 @@ impl VirtioNetAdapter {
         };
 
         let buf = &self.tx_bufs[desc_id as usize];
-        let header = [0u8; VIRTIO_NET_HDR_SIZE];
         unsafe {
+            // Zero the virtio-net header directly in the DMA buffer.
+            core::ptr::write_bytes(buf.virt(), 0, VIRTIO_NET_HDR_SIZE);
             let dst = core::slice::from_raw_parts_mut(buf.virt(), TX_BUF_SIZE);
-            dst[..VIRTIO_NET_HDR_SIZE].copy_from_slice(&header);
             let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
-            dst[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len].copy_from_slice(&frame[..copy_len]);
+            dst[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]
+                .copy_from_slice(&frame[..copy_len]);
         }
 
         let desc = unsafe { &mut *self.txq.desc.add(desc_id as usize) };
