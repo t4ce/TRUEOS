@@ -64,14 +64,16 @@ fn trace_usize_dec(v: usize) {
 }
 
 fn read_file_sync(path: &[u8]) -> Result<Vec<u8>, i32> {
-    let len = unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
+    let len =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(len as i32);
     }
     let len = len as usize;
     let mut out = Vec::new();
     out.resize(len, 0);
-    let got = unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), out.as_mut_ptr(), out.len()) };
+    let got =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), out.as_mut_ptr(), out.len()) };
     if got < 0 {
         return Err(got as i32);
     }
@@ -123,12 +125,7 @@ pub(super) unsafe fn try_load_compiled_module(
         return Err(super::FS_ERR_NOT_FOUND);
     }
 
-    let v = qjs::JS_ReadObject(
-        ctx,
-        buf.as_ptr(),
-        buf.len(),
-        qjs::JS_READ_OBJ_BYTECODE,
-    );
+    let v = qjs::JS_ReadObject(ctx, buf.as_ptr(), buf.len(), qjs::JS_READ_OBJ_BYTECODE);
     if v.is_exception() {
         return Err(super::FS_ERR_IO);
     }

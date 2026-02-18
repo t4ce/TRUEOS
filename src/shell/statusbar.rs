@@ -105,9 +105,11 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
         let mut len = 0;
         for _ in src.chars() {
             len += 1;
-            if len >= 10 { break; }
+            if len >= 10 {
+                break;
+            }
         }
-        
+
         for _ in 0..(10 - len) {
             let _ = out.push(' ');
         }
@@ -148,7 +150,10 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
 
     // White background for status bar
     let bar_bg = (255u8, 255u8, 255u8);
-    io.write_fmt(format_args!("\x1b[48;2;{};{};{}m", bar_bg.0, bar_bg.1, bar_bg.2));
+    io.write_fmt(format_args!(
+        "\x1b[48;2;{};{};{}m",
+        bar_bg.0, bar_bg.1, bar_bg.2
+    ));
     for _ in 0..term_cols {
         io.write_byte(b' ');
     }
@@ -157,13 +162,25 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
     io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, left_col)));
     for c in indicators {
         // Adjust indicator color 7 (white) to be dark so it's visible on white bg
-        let fg = if c == 7 { (0u8, 0u8, 0u8) } else { indicator_rgb(c) };
-        io.write_fmt(format_args!("{}", crate::ecma48::style("o").fg(fg).bg(bar_bg)));
+        let fg = if c == 7 {
+            (0u8, 0u8, 0u8)
+        } else {
+            indicator_rgb(c)
+        };
+        io.write_fmt(format_args!(
+            "{}",
+            crate::ecma48::style("o").fg(fg).bg(bar_bg)
+        ));
     }
     io.write_fmt(format_args!("{}", crate::ecma48::style(" ").bg(bar_bg)));
-    
+
     // Left text: dark grey on white
-    io.write_fmt(format_args!("{}", crate::ecma48::style(left.as_str()).fg((50, 50, 50)).bg(bar_bg)));
+    io.write_fmt(format_args!(
+        "{}",
+        crate::ecma48::style(left.as_str())
+            .fg((50, 50, 50))
+            .bg(bar_bg)
+    ));
 
     // Center text: medium gray, centered between left section and right section.
     let center_zone_start = INDICATOR_COUNT + 3 + 10; // indicators + space + left text + one gap
@@ -182,13 +199,21 @@ pub fn refresh(io: &dyn crate::shell::ShellIo, term_cols: usize, term_rows: usiz
         io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, col)));
         io.write_fmt(format_args!(
             "{}",
-            crate::ecma48::style(center_text.as_str()).fg((90, 90, 90)).bg(bar_bg)
+            crate::ecma48::style(center_text.as_str())
+                .fg((90, 90, 90))
+                .bg(bar_bg)
         ));
     }
 
     io.write_fmt(format_args!("{}", crate::ecma48::pos(term_rows, right_col)));
     // Right text: darker pink on white
-    io.write_fmt(format_args!("{}", crate::ecma48::style(right.as_str()).bold().fg((200, 50, 150)).bg(bar_bg)));
+    io.write_fmt(format_args!(
+        "{}",
+        crate::ecma48::style(right.as_str())
+            .bold()
+            .fg((200, 50, 150))
+            .bg(bar_bg)
+    ));
 
     io.write_str(crate::ecma48::RESTORE_CURSOR);
     io.write_str(crate::ecma48::SHOW_CURSOR);

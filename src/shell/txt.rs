@@ -75,7 +75,11 @@ impl TextEditor {
     fn new(cols: usize, rows: usize, filename: &str, buf: Vec<u8>) -> Self {
         let mut name: String<FILENAME_MAX> = String::new();
         let trimmed = filename.trim();
-        let fallback = if trimmed.is_empty() { "untitled.txt" } else { trimmed };
+        let fallback = if trimmed.is_empty() {
+            "untitled.txt"
+        } else {
+            trimmed
+        };
         for ch in fallback.chars() {
             if name.push(ch).is_err() {
                 break;
@@ -144,21 +148,19 @@ impl TextEditor {
                     b'B' => self.move_down(),
                     b'C' => self.move_right(),
                     b'D' => self.move_left(),
-                    b'~' => {
-                        match self.csi_param {
-                            11 => {
-                                self.save();
-                                self.redraw(io);
-                                self.esc = EscState::None;
-                                return false;
-                            }
-                            12 => {
-                                self.esc = EscState::None;
-                                return true;
-                            }
-                            _ => {}
+                    b'~' => match self.csi_param {
+                        11 => {
+                            self.save();
+                            self.redraw(io);
+                            self.esc = EscState::None;
+                            return false;
                         }
-                    }
+                        12 => {
+                            self.esc = EscState::None;
+                            return true;
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
 
@@ -406,7 +408,10 @@ impl TextEditor {
                     let _ = clipped.push(ch);
                 }
                 let used = clipped.chars().count();
-                io.write_fmt(format_args!("{}", ecma48::color(clipped.as_str(), DIRTY_RGB)));
+                io.write_fmt(format_args!(
+                    "{}",
+                    ecma48::color(clipped.as_str(), DIRTY_RGB)
+                ));
                 remaining = remaining.saturating_sub(used);
             } else {
                 let mut used = 0usize;

@@ -44,7 +44,11 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
 ///
 /// Unlike the shell REPL, boot smokes are not async; they must explicitly yield to the kernel
 /// via `trueos_cabi_poll_once()` while waiting for completions.
-unsafe fn drain_jobs_and_promises(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext, max_wait_ms: u64) -> bool {
+unsafe fn drain_jobs_and_promises(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    max_wait_ms: u64,
+) -> bool {
     if rt.is_null() || ctx.is_null() {
         return true;
     }
@@ -209,7 +213,8 @@ pub unsafe fn run() {
     qjs::node::install_globals(ctx);
 
     let mod_filename = b"<smoke-module>\0";
-    let mod_script = b"import proc, { argv, env, cwd, hrtime, nextTick, uptime } from 'node:process';\n\
+    let mod_script =
+        b"import proc, { argv, env, cwd, hrtime, nextTick, uptime } from 'node:process';\n\
 if (proc !== globalThis.process) throw new Error('process global mismatch');\n\
 if (!Array.isArray(argv)) throw new Error('process.argv not array');\n\
 if (typeof env !== 'object' || env === null) throw new Error('process.env not object');\n\

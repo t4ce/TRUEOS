@@ -3,18 +3,18 @@ extern crate alloc;
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embedded_websocket::{
-    WebSocketClient, WebSocketOptions, WebSocketSendMessageType, WebSocketReceiveMessageType,
-};
-use rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use embassy_time::{Duration, Timer};
+use embedded_websocket::{
+    WebSocketClient, WebSocketOptions, WebSocketReceiveMessageType, WebSocketSendMessageType,
+};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 
 use trueos_v::vnet;
 
-use crate::time::unix_time_seconds;
 use crate::net::tls::{TlsClientConfig, TlsRoots};
 use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::time::unix_time_seconds;
 use crate::v::net::Queue;
 
 static WSS_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -60,7 +60,13 @@ impl WssConnection {
         let (host, port, path) = parse_wss_url(url).ok_or(WssError::InvalidUrl)?;
 
         let dev_idx = crate::net::primary_device_index();
-        let api_ip = match super::dns::resolve_ipv4_for_device(dev_idx, &host, super::dns::DnsConfig::default()).await {
+        let api_ip = match super::dns::resolve_ipv4_for_device(
+            dev_idx,
+            &host,
+            super::dns::DnsConfig::default(),
+        )
+        .await
+        {
             Ok(ip) => ip,
             Err(_) => return Err(WssError::DnsFailed),
         };
@@ -82,7 +88,7 @@ impl WssConnection {
         register_tls_app_queues(owner, cmds, events);
 
         let roots = TlsRoots::mozilla();
-        let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]); 
+        let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
 
         let mut seed = [0u8; 32];
         let t = unix_time_seconds().unwrap_or(0);
@@ -103,9 +109,9 @@ impl WssConnection {
         let mut frame_buf = [0u8; RX_BUF_SIZE];
         let (len, ws_key) = match client.client_connect(&options, &mut frame_buf) {
             Ok(res) => res,
-            Err(_) => return Err(WssError::Protocol), 
+            Err(_) => return Err(WssError::Protocol),
         };
-        let handshake_buffer = Vec::from(&frame_buf[..len]); 
+        let handshake_buffer = Vec::from(&frame_buf[..len]);
 
         cmds.push(TlsCommand::OpenTcpConnect {
             remote: vnet::EndpointV4::new(api_ip, port),
@@ -117,19 +123,20 @@ impl WssConnection {
                 tls_ms: 15_000,
                 idle_ms: 60_000,
             },
-        }).map_err(|_| WssError::ConnectFailed)?;
+        })
+        .map_err(|_| WssError::ConnectFailed)?;
 
-        let mut handle = None; 
-        
+        let mut handle = None;
+
         let mut established = false;
-        
+
         // Polling loop for connect
         let start = crate::time::uptime_seconds();
         let deadline = start + 15;
 
         // TLS Connect Loop
         loop {
-              // Drain events
+            // Drain events
             let mut got_event = false;
             while let Some(ev) = events.pop() {
                 got_event = true;
@@ -140,30 +147,34 @@ impl WssConnection {
                     TlsEvent::Connected { handle: h } => {
                         if Some(h) == handle {
                             established = true;
-                             // TLS established, send WS handshake
+                            // TLS established, send WS handshake
                             cmds.push(TlsCommand::Send {
                                 handle: h,
                                 data: handshake_buffer.clone(),
-                            }).map_err(|_| WssError::Io)?;
+                            })
+                            .map_err(|_| WssError::Io)?;
                             break;
-                            
                         }
                     }
-                     TlsEvent::Error { .. } | TlsEvent::TlsError { .. } | TlsEvent::Closed { .. } => {
+                    TlsEvent::Error { .. }
+                    | TlsEvent::TlsError { .. }
+                    | TlsEvent::Closed { .. } => {
                         return Err(WssError::TlsFailed);
                     }
                     _ => {}
                 }
             }
-            if established { break; }
-             if crate::time::uptime_seconds() > deadline {
+            if established {
+                break;
+            }
+            if crate::time::uptime_seconds() > deadline {
                 return Err(WssError::ConnectFailed);
             }
             if !got_event {
-                 Timer::after(Duration::from_micros(100)).await;
+                Timer::after(Duration::from_micros(100)).await;
             }
         }
-        
+
         // Silence warning for unused variable  if loop breaks early
         let _ = established;
 
@@ -197,7 +208,9 @@ impl WssConnection {
                                 }
                                 Err(embedded_websocket::Error::HttpHeaderIncomplete) => {}
                                 Err(e) => {
-                                    if let Ok(s) = core::str::from_utf8(handshake_response.as_slice()) {
+                                    if let Ok(s) =
+                                        core::str::from_utf8(handshake_response.as_slice())
+                                    {
                                         if let Some(line_end) = s.find("\r\n") {
                                             let line = &s[..line_end];
                                             crate::log!(
@@ -242,29 +255,35 @@ impl WssConnection {
     }
 
     pub fn send(&mut self, text: &str) -> Result<(), WssError> {
-        if self.closed || !self.connected { return Err(WssError::Closed); }
+        if self.closed || !self.connected {
+            return Err(WssError::Closed);
+        }
         let mut buf = [0u8; RX_BUF_SIZE];
 
         let len = self
-            .client.write(
+            .client
+            .write(
                 WebSocketSendMessageType::Text,
                 true, // fin
                 text.as_bytes(),
                 &mut buf,
-            ).map_err(|_| WssError::Protocol)?;
-        
+            )
+            .map_err(|_| WssError::Protocol)?;
+
         if let Some(h) = self.handle {
-             self.cmds.push(TlsCommand::Send {
-                handle: h,
-                data: Vec::from(&buf[..len]),
-            }).map_err(|_| WssError::Io)?;
+            self.cmds
+                .push(TlsCommand::Send {
+                    handle: h,
+                    data: Vec::from(&buf[..len]),
+                })
+                .map_err(|_| WssError::Io)?;
         }
         Ok(())
     }
 
-     pub fn recv(&mut self) -> Option<String> {
-         // Drain TLS events
-          while let Some(ev) = self.events.pop() {
+    pub fn recv(&mut self) -> Option<String> {
+        // Drain TLS events
+        while let Some(ev) = self.events.pop() {
             match ev {
                 TlsEvent::Data { handle, data } => {
                     if Some(handle) == self.handle {
@@ -272,28 +291,30 @@ impl WssConnection {
                     }
                 }
                 TlsEvent::Closed { handle } => {
-                     if Some(handle) == self.handle {
-                         self.closed = true;
-                     }
+                    if Some(handle) == self.handle {
+                        self.closed = true;
+                    }
                 }
                 _ => {}
             }
         }
-        
-        if self.rx_buf.is_empty() { return None; }
+
+        if self.rx_buf.is_empty() {
+            return None;
+        }
 
         let mut out_buf = [0u8; RX_BUF_SIZE];
         match self.client.read(&self.rx_buf, &mut out_buf) {
             Ok(read_result) => {
                 let consumed = read_result.len_from;
                 self.rx_buf.drain(0..consumed);
-                
+
                 match read_result.message_type {
                     WebSocketReceiveMessageType::Text => {
                         let s = core::str::from_utf8(&out_buf[..read_result.len_to]).ok()?;
                         Some(String::from(s))
                     }
-                    WebSocketReceiveMessageType::Binary => None, 
+                    WebSocketReceiveMessageType::Binary => None,
                     WebSocketReceiveMessageType::Ping => {
                         // RFC6455: reply to Ping with Pong including identical payload.
                         let mut buf = [0u8; RX_BUF_SIZE];

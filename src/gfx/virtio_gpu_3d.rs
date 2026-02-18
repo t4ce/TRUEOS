@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::vec::Vec;
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 use libm::{floorf, roundf};
 
@@ -142,14 +142,10 @@ impl VirglCmdBuf {
 
     fn as_bytes(&self) -> &[u8] {
         unsafe {
-            core::slice::from_raw_parts(
-                self.dwords.as_ptr() as *const u8,
-                self.dwords.len() * 4,
-            )
+            core::slice::from_raw_parts(self.dwords.as_ptr() as *const u8, self.dwords.len() * 4)
         }
     }
 }
-
 
 // Virtio queues.
 const QUEUE_CONTROL: u16 = 0;
@@ -225,7 +221,11 @@ unsafe impl Send for DmaRegion {}
 impl DmaRegion {
     fn alloc(size: usize, align: usize) -> Option<Self> {
         let (phys, virt) = crate::pci::dma::alloc(size, align)?;
-        Some(Self { phys, virt, len: size })
+        Some(Self {
+            phys,
+            virt,
+            len: size,
+        })
     }
 
     fn phys(&self) -> u64 {
@@ -517,7 +517,13 @@ fn parse_modern_caps(dev: &pci::PciDevice) -> Option<VirtioModernCaps> {
 fn enable_mem_and_bus_master(dev: &pci::PciDevice) {
     let mut cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_MEM | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
+    pci::config_write_u16(
+        dev.bus,
+        dev.slot,
+        dev.function,
+        VIRTIO_PCI_COMMAND_OFFSET,
+        cmd,
+    );
 }
 
 fn setup_queue_modern(
@@ -758,7 +764,7 @@ pub struct VirtioGpu3d {
     resp: DmaRegion,
 }
 
-use spin::{Once, Mutex};
+use spin::{Mutex, Once};
 
 // -------------------------------------------------------------------------------------------------
 // Serialized virtio-gpu access ("GPU actor")
@@ -782,7 +788,8 @@ static GPU_ACTOR_GPU: Mutex<Option<VirtioGpu3d>> = Mutex::new(None);
 static GPU_ACTOR_QUEUE: Mutex<VecDeque<(u32, GpuCmd)>> = Mutex::new(VecDeque::new());
 static GPU_ACTOR_RESP: Mutex<BTreeMap<u32, GpuResp>> = Mutex::new(BTreeMap::new());
 static GPU_ACTOR_NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static GPU_ACTOR_PROCESSING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static GPU_ACTOR_PROCESSING: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug)]
 enum GpuCmd {
@@ -823,7 +830,9 @@ enum GpuResp {
 }
 
 fn gpu_submit(cmd: GpuCmd) -> u32 {
-    let id = GPU_ACTOR_NEXT_ID.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let id = GPU_ACTOR_NEXT_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
     GPU_ACTOR_QUEUE.lock().push_back((id, cmd));
     id
 }
@@ -853,29 +862,48 @@ fn gpu_service_step() {
     if let Some((id, cmd)) = maybe_cmd {
         let mut gpu_guard = GPU_ACTOR_GPU.lock();
         if !gpu_ensure_inited_locked(&mut *gpu_guard) {
-            GPU_ACTOR_RESP.lock().insert(id, match cmd {
-                GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(None),
-                _ => GpuResp::Bool(false),
-            });
+            GPU_ACTOR_RESP.lock().insert(
+                id,
+                match cmd {
+                    GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(None),
+                    _ => GpuResp::Bool(false),
+                },
+            );
         } else {
             let gpu = gpu_guard.as_mut().expect("gpu init");
             let resp = match cmd {
                 GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(gpu.get_display_info()),
-                GpuCmd::ResourceCreate2D { resource_id, format, width, height } => {
-                    GpuResp::Bool(gpu.resource_create_2d(resource_id, format, width, height))
-                }
-                GpuCmd::ResourceAttachBacking { resource_id, backing_phys, backing_len } => {
-                    GpuResp::Bool(gpu.resource_attach_backing(resource_id, backing_phys, backing_len))
-                }
-                GpuCmd::SetScanout { scanout_id, resource_id, width, height } => {
-                    GpuResp::Bool(gpu.set_scanout(scanout_id, resource_id, width, height))
-                }
-                GpuCmd::TransferToHost2D { resource_id, width, height } => {
-                    GpuResp::Bool(gpu.transfer_to_host_2d(resource_id, width, height))
-                }
-                GpuCmd::ResourceFlush { resource_id, width, height } => {
-                    GpuResp::Bool(gpu.resource_flush(resource_id, width, height))
-                }
+                GpuCmd::ResourceCreate2D {
+                    resource_id,
+                    format,
+                    width,
+                    height,
+                } => GpuResp::Bool(gpu.resource_create_2d(resource_id, format, width, height)),
+                GpuCmd::ResourceAttachBacking {
+                    resource_id,
+                    backing_phys,
+                    backing_len,
+                } => GpuResp::Bool(gpu.resource_attach_backing(
+                    resource_id,
+                    backing_phys,
+                    backing_len,
+                )),
+                GpuCmd::SetScanout {
+                    scanout_id,
+                    resource_id,
+                    width,
+                    height,
+                } => GpuResp::Bool(gpu.set_scanout(scanout_id, resource_id, width, height)),
+                GpuCmd::TransferToHost2D {
+                    resource_id,
+                    width,
+                    height,
+                } => GpuResp::Bool(gpu.transfer_to_host_2d(resource_id, width, height)),
+                GpuCmd::ResourceFlush {
+                    resource_id,
+                    width,
+                    height,
+                } => GpuResp::Bool(gpu.resource_flush(resource_id, width, height)),
             };
             GPU_ACTOR_RESP.lock().insert(id, resp);
         }
@@ -923,28 +951,67 @@ pub fn gpu_get_display_info(timeout_ms: u64) -> Option<(u32, u32, u32)> {
     }
 }
 
-pub fn gpu_resource_create_2d(resource_id: u32, format: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceCreate2D { resource_id, format, width, height });
+pub fn gpu_resource_create_2d(
+    resource_id: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    timeout_ms: u64,
+) -> bool {
+    let id = gpu_submit(GpuCmd::ResourceCreate2D {
+        resource_id,
+        format,
+        width,
+        height,
+    });
     matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
 }
 
-pub fn gpu_resource_attach_backing(resource_id: u32, backing_phys: u64, backing_len: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceAttachBacking { resource_id, backing_phys, backing_len });
+pub fn gpu_resource_attach_backing(
+    resource_id: u32,
+    backing_phys: u64,
+    backing_len: u32,
+    timeout_ms: u64,
+) -> bool {
+    let id = gpu_submit(GpuCmd::ResourceAttachBacking {
+        resource_id,
+        backing_phys,
+        backing_len,
+    });
     matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
 }
 
-pub fn gpu_set_scanout(scanout_id: u32, resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::SetScanout { scanout_id, resource_id, width, height });
+pub fn gpu_set_scanout(
+    scanout_id: u32,
+    resource_id: u32,
+    width: u32,
+    height: u32,
+    timeout_ms: u64,
+) -> bool {
+    let id = gpu_submit(GpuCmd::SetScanout {
+        scanout_id,
+        resource_id,
+        width,
+        height,
+    });
     matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
 }
 
 pub fn gpu_transfer_to_host_2d(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::TransferToHost2D { resource_id, width, height });
+    let id = gpu_submit(GpuCmd::TransferToHost2D {
+        resource_id,
+        width,
+        height,
+    });
     matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
 }
 
 pub fn gpu_resource_flush(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceFlush { resource_id, width, height });
+    let id = gpu_submit(GpuCmd::ResourceFlush {
+        resource_id,
+        width,
+        height,
+    });
     matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
 }
 
@@ -969,11 +1036,9 @@ impl VirtioGpu3d {
             (caps.common_len as usize).max(core::mem::size_of::<VirtioPciCommonCfg>()),
         )
         .ok()?;
-        let notify_map = pci::mmio::map_mmio_region_exact(
-            caps.notify_phys,
-            (caps.notify_len as usize).max(4),
-        )
-        .ok()?;
+        let notify_map =
+            pci::mmio::map_mmio_region_exact(caps.notify_phys, (caps.notify_len as usize).max(4))
+                .ok()?;
 
         let common = core::ptr::NonNull::new(common_map.as_ptr() as *mut VirtioPciCommonCfg)?;
         let notify = core::ptr::NonNull::new(notify_map.as_ptr() as *mut u8)?;
@@ -1073,7 +1138,13 @@ impl VirtioGpu3d {
         Some((0, 1024, 768))
     }
 
-    pub fn set_scanout(&mut self, scanout_id: u32, resource_id: u32, width: u32, height: u32) -> bool {
+    pub fn set_scanout(
+        &mut self,
+        scanout_id: u32,
+        resource_id: u32,
+        width: u32,
+        height: u32,
+    ) -> bool {
         let req = CmdSetScanout {
             hdr: CtrlHdr {
                 type_: VIRTIO_GPU_CMD_SET_SCANOUT,
@@ -1082,7 +1153,12 @@ impl VirtioGpu3d {
                 ctx_id: 0,
                 padding: 0,
             },
-            r: Rect { x: 0, y: 0, width, height },
+            r: Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
             scanout_id,
             resource_id,
         };
@@ -1131,14 +1207,24 @@ impl VirtioGpu3d {
                 ctx_id: 0,
                 padding: 0,
             },
-            r: Rect { x: 0, y: 0, width, height },
+            r: Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
             resource_id,
             padding: 0,
         };
         self.ctrl_submit_bytes(as_bytes(&req))
     }
 
-    pub fn resource_attach_backing(&mut self, resource_id: u32, backing_phys: u64, backing_len: u32) -> bool {
+    pub fn resource_attach_backing(
+        &mut self,
+        resource_id: u32,
+        backing_phys: u64,
+        backing_len: u32,
+    ) -> bool {
         let hdr = CtrlHdr {
             type_: VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
             flags: 0,
@@ -1164,7 +1250,11 @@ impl VirtioGpu3d {
             return false;
         }
         unsafe {
-            core::ptr::copy_nonoverlapping(header_bytes.as_ptr(), self.req.virt(), header_bytes.len());
+            core::ptr::copy_nonoverlapping(
+                header_bytes.as_ptr(),
+                self.req.virt(),
+                header_bytes.len(),
+            );
             core::ptr::copy_nonoverlapping(
                 entry_bytes.as_ptr(),
                 self.req.virt().add(header_bytes.len()),
@@ -1184,7 +1274,12 @@ impl VirtioGpu3d {
                 ctx_id: 0,
                 padding: 0,
             },
-            r: Rect { x: 0, y: 0, width, height },
+            r: Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
             offset: 0,
             resource_id,
             padding: 0,
@@ -1257,7 +1352,11 @@ impl VirtioGpu3d {
         }
 
         unsafe {
-            core::ptr::copy_nonoverlapping(header_bytes.as_ptr(), self.req.virt(), header_bytes.len());
+            core::ptr::copy_nonoverlapping(
+                header_bytes.as_ptr(),
+                self.req.virt(),
+                header_bytes.len(),
+            );
             core::ptr::copy_nonoverlapping(
                 cmd_stream.as_ptr(),
                 self.req.virt().add(header_bytes.len()),
@@ -1317,7 +1416,12 @@ impl VirtioGpu3d {
 
         self.ctrlq.push_avail(0);
         fence(Ordering::Release);
-        notify_queue_modern(self.notify, self.notify_mult, self.ctrlq.queue_index, self.ctrlq.notify_off);
+        notify_queue_modern(
+            self.notify,
+            self.notify_mult,
+            self.ctrlq.queue_index,
+            self.ctrlq.notify_off,
+        );
 
         // IMPORTANT: do not poll the executor while waiting for ctrlq progress.
         // This function is often called under the global virtio-gpu mutex, and can also be
@@ -1331,7 +1435,9 @@ impl VirtioGpu3d {
             return false;
         }
 
-        let used = self.ctrlq.used_elem(self.ctrlq.last_used_idx % self.ctrlq.size);
+        let used = self
+            .ctrlq
+            .used_elem(self.ctrlq.last_used_idx % self.ctrlq.size);
         self.ctrlq.last_used_idx = self.ctrlq.last_used_idx.wrapping_add(1);
         if used.id != 0 {
             crate::log!("virtio-gpu3d: ctrlq used id={} (expected 0)\n", used.id);
@@ -1339,7 +1445,8 @@ impl VirtioGpu3d {
         }
 
         let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
-        resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_DISPLAY_INFO
+        resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA
+            || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_DISPLAY_INFO
     }
 }
 
@@ -1350,8 +1457,7 @@ struct Vertex {
     color: [f32; 4],
 }
 
-const VS_TEXT: &str =
-    "VERT\n\
+const VS_TEXT: &str = "VERT\n\
 DCL IN[0]\n\
 DCL IN[1]\n\
 DCL OUT[0], POSITION\n\
@@ -1360,8 +1466,7 @@ DCL OUT[1], COLOR\n\
   1: MOV OUT[0], IN[0]\n\
   2: END\n";
 
-const FS_TEXT: &str =
-    "FRAG\n\
+const FS_TEXT: &str = "FRAG\n\
 DCL IN[0], COLOR, LINEAR\n\
 DCL OUT[0], COLOR\n\
   0: MOV OUT[0], IN[0]\n\
@@ -1370,10 +1475,10 @@ DCL OUT[0], COLOR\n\
 // --- gfx-core backend (virgl) ---
 
 use trueos_gfx_core::{
-    BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
-    FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
-    MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderDesc,
-    ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
+    BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error, FenceId,
+    GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange, MemoryType,
+    PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderDesc, ShaderId,
+    SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1539,11 +1644,12 @@ impl VirglGfxBackend {
         // Prefer borrowing Limine FB backing (shared memory) so toggling back to LimineFB is visible.
         // IMPORTANT: Limine's chosen framebuffer size can differ from virtio-gpu display-info size.
         // If we borrow, we drive the scanout size from the Limine FB (clamped to display size).
-        let (scanout_backing, res_w, res_h, res_bytes, present_w, present_h) =
-            if let Some(b) = Self::try_borrow_limine_scanout(framebuffers) {
-                let pw = b.fb_width.min(disp_w).max(1);
-                let ph = b.fb_height.min(disp_h).max(1);
-                crate::log!(
+        let (scanout_backing, res_w, res_h, res_bytes, present_w, present_h) = if let Some(b) =
+            Self::try_borrow_limine_scanout(framebuffers)
+        {
+            let pw = b.fb_width.min(disp_w).max(1);
+            let ph = b.fb_height.min(disp_h).max(1);
+            crate::log!(
                     "virgl-backend: scanout backing=limine-fb fb={}x{} pitch={} present={}x{} res={}x{} bytes={}\n",
                     b.fb_width,
                     b.fb_height,
@@ -1554,22 +1660,27 @@ impl VirglGfxBackend {
                     b.res_height,
                     b.res_bytes
                 );
-                (b.backing, b.res_width, b.res_height, b.res_bytes, pw, ph)
-            } else {
-                let bytes = (disp_w as usize)
-                    .saturating_mul(disp_h as usize)
-                    .saturating_mul(4)
-                    .max(4096);
-                crate::log!("virgl-backend: scanout backing=dma display={}x{} bytes={}\n", disp_w, disp_h, bytes);
-                (
-                    ScanoutBacking::Owned(DmaRegion::alloc(bytes, 4096)?),
-                    disp_w,
-                    disp_h,
-                    bytes,
-                    disp_w,
-                    disp_h,
-                )
-            };
+            (b.backing, b.res_width, b.res_height, b.res_bytes, pw, ph)
+        } else {
+            let bytes = (disp_w as usize)
+                .saturating_mul(disp_h as usize)
+                .saturating_mul(4)
+                .max(4096);
+            crate::log!(
+                "virgl-backend: scanout backing=dma display={}x{} bytes={}\n",
+                disp_w,
+                disp_h,
+                bytes
+            );
+            (
+                ScanoutBacking::Owned(DmaRegion::alloc(bytes, 4096)?),
+                disp_w,
+                disp_h,
+                bytes,
+                disp_w,
+                disp_h,
+            )
+        };
 
         if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, res_w, res_h) {
             crate::log!("virgl-backend: resource_create_2d scanout failed\n");
@@ -1742,7 +1853,10 @@ impl VirglGfxBackend {
         let fb = fb_resp.framebuffers().next()?;
 
         if fb.bpp() != 32 {
-            crate::log!("virgl-backend: borrow-limine: bpp != 32 (bpp={})\n", fb.bpp());
+            crate::log!(
+                "virgl-backend: borrow-limine: bpp != 32 (bpp={})\n",
+                fb.bpp()
+            );
             return None;
         }
         let pitch = fb.pitch() as usize;
@@ -1750,7 +1864,11 @@ impl VirglGfxBackend {
         let fb_h = fb.height() as usize;
         let len = pitch.saturating_mul(fb_h);
         if len == 0 {
-            crate::log!("virgl-backend: borrow-limine: len==0 pitch={} h={}\n", pitch, fb_h);
+            crate::log!(
+                "virgl-backend: borrow-limine: len==0 pitch={} h={}\n",
+                pitch,
+                fb_h
+            );
             return None;
         }
 
@@ -1760,12 +1878,18 @@ impl VirglGfxBackend {
             return None;
         }
         let Some(phys) = crate::phys::virt_to_phys_checked(virt as *const u8) else {
-            crate::log!("virgl-backend: borrow-limine: virt_to_phys failed addr=0x{:X}\n", virt as usize);
+            crate::log!(
+                "virgl-backend: borrow-limine: virt_to_phys failed addr=0x{:X}\n",
+                virt as usize
+            );
             return None;
         };
 
         if (pitch % 4) != 0 {
-            crate::log!("virgl-backend: borrow-limine: pitch not multiple of 4 (pitch={})\n", pitch);
+            crate::log!(
+                "virgl-backend: borrow-limine: pitch not multiple of 4 (pitch={})\n",
+                pitch
+            );
             return None;
         }
 
@@ -1774,7 +1898,12 @@ impl VirglGfxBackend {
         let fb_height = fb.height() as u32;
 
         if stride_pixels == 0 || fb_height == 0 {
-            crate::log!("virgl-backend: borrow-limine: bad dims stride={} fb={}x{}\n", stride_pixels, fb_width, fb_height);
+            crate::log!(
+                "virgl-backend: borrow-limine: bad dims stride={} fb={}x{}\n",
+                stride_pixels,
+                fb_width,
+                fb_height
+            );
             return None;
         }
 
@@ -1830,7 +1959,12 @@ impl VirglGfxBackend {
 
         // Re-bind the vertex buffer state.
         let mut cmd = VirglCmdBuf::new();
-        encode_set_vertex_buffer(&mut cmd, core::mem::size_of::<Vertex>() as u32, 0, new_vbo_res);
+        encode_set_vertex_buffer(
+            &mut cmd,
+            core::mem::size_of::<Vertex>() as u32,
+            0,
+            new_vbo_res,
+        );
         if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), 0) {
             return false;
         }
@@ -1988,10 +2122,7 @@ impl VirglGfxBackend {
                 let sample = |x: isize, y: isize| -> (u8, u8, u8, u8) {
                     let xi = axis_idx(x, tw, sampler.wrap_s);
                     let yi = axis_idx(y, th, sampler.wrap_t);
-                    let t_idx = yi
-                        .saturating_mul(tw)
-                        .saturating_add(xi)
-                        .saturating_mul(4);
+                    let t_idx = yi.saturating_mul(tw).saturating_add(xi).saturating_mul(4);
                     if t_idx + 3 <= img.bytes.len() {
                         (
                             img.bytes[t_idx],
@@ -2374,8 +2505,16 @@ impl GfxDevice for VirglGfxBackend {
         // Ensure viewport matches our swapchain.
         let vp_w = self.state.viewport.width.max(0) as u32;
         let vp_h = self.state.viewport.height.max(0) as u32;
-        let vp_w = if vp_w == 0 { self.width } else { vp_w.min(self.width) };
-        let vp_h = if vp_h == 0 { self.height } else { vp_h.min(self.height) };
+        let vp_w = if vp_w == 0 {
+            self.width
+        } else {
+            vp_w.min(self.width)
+        };
+        let vp_h = if vp_h == 0 {
+            self.height
+        } else {
+            vp_h.min(self.height)
+        };
         encode_set_viewport(&mut cmd, vp_w, vp_h);
 
         // Clear.
@@ -2422,16 +2561,17 @@ impl GfxDevice for VirglGfxBackend {
             };
 
             if self.converted_cache.key != Some(cache_key) {
-                let bound_image = if pipe.desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                    if !self.state.image.is_valid() {
-                        return Err(Error::Invalid);
-                    }
-                    self.images
-                        .get(self.state.image.raw().saturating_sub(1) as usize)
-                        .and_then(|i| i.as_ref())
-                } else {
-                    None
-                };
+                let bound_image =
+                    if pipe.desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                        if !self.state.image.is_valid() {
+                            return Err(Error::Invalid);
+                        }
+                        self.images
+                            .get(self.state.image.raw().saturating_sub(1) as usize)
+                            .and_then(|i| i.as_ref())
+                    } else {
+                        None
+                    };
                 let verts = self
                     .build_virgl_vertices(
                         &vb.bytes,
@@ -2464,7 +2604,11 @@ impl GfxDevice for VirglGfxBackend {
             let need_upload = self.uploaded_cache_key != Some(cache_key)
                 || self.uploaded_cache_vbo_generation != self.vbo_generation;
             if need_upload {
-                encode_inline_write_buffer(&mut cmd, self.vbo_res, self.converted_cache.bytes.as_slice());
+                encode_inline_write_buffer(
+                    &mut cmd,
+                    self.vbo_res,
+                    self.converted_cache.bytes.as_slice(),
+                );
                 self.uploaded_cache_key = Some(cache_key);
                 self.uploaded_cache_vbo_generation = self.vbo_generation;
                 draw_upload_needed = true;
@@ -2491,7 +2635,13 @@ impl GfxDevice for VirglGfxBackend {
         // Our scanout is produced via virgl/host-side rendering + copy, so a transfer-to-host
         // here can overwrite the freshly rendered image with stale (often zeroed) guest memory,
         // resulting in a persistent black screen.
-        encode_resource_copy_region(&mut cmd, self.scanout_res, self.rt_res, self.width, self.height);
+        encode_resource_copy_region(
+            &mut cmd,
+            self.scanout_res,
+            self.rt_res,
+            self.width,
+            self.height,
+        );
         let fence = self.next_fence;
         self.next_fence = self.next_fence.wrapping_add(1);
 
@@ -2499,7 +2649,9 @@ impl GfxDevice for VirglGfxBackend {
             return Err(Error::Unsupported);
         }
 
-        let _ = self.gpu.resource_flush(self.scanout_res, self.width, self.height);
+        let _ = self
+            .gpu
+            .resource_flush(self.scanout_res, self.width, self.height);
 
         self.last_submitted_frame = Some(frame_key);
         self.completed_fence = fence;
@@ -2557,7 +2709,11 @@ fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &st
 
     // Base header size=5 dwords: handle, type, offlen, num_tokens, num_outputs.
     let len_dwords = 5 + ((bytes.len() as u32 + 3) / 4);
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SHADER, len_dwords));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_SHADER,
+        len_dwords,
+    ));
     buf.push(handle);
     buf.push(shader_type);
     buf.push(offlen);
@@ -2573,7 +2729,11 @@ fn encode_bind_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32) {
 }
 
 fn encode_link_shader(buf: &mut VirglCmdBuf, vs: u32, fs: u32) {
-    buf.push(virgl_cmd0(VIRGL_CCMD_LINK_SHADER, 0, VIRGL_LINK_SHADER_SIZE));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_LINK_SHADER,
+        0,
+        VIRGL_LINK_SHADER_SIZE,
+    ));
     buf.push(vs);
     buf.push(fs);
     buf.push(0);
@@ -2583,7 +2743,11 @@ fn encode_link_shader(buf: &mut VirglCmdBuf, vs: u32, fs: u32) {
 }
 
 fn encode_create_surface(buf: &mut VirglCmdBuf, surf_handle: u32, res_handle: u32, format: u32) {
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SURFACE, VIRGL_OBJ_SURFACE_SIZE));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_SURFACE,
+        VIRGL_OBJ_SURFACE_SIZE,
+    ));
     buf.push(surf_handle);
     buf.push(res_handle);
     buf.push(format);
@@ -2619,7 +2783,11 @@ fn encode_create_vertex_elements(buf: &mut VirglCmdBuf, ve_handle: u32) {
     // VIRGL_OBJ_VERTEX_ELEMENTS_SIZE(num) = num*4 + 1
     let num = 2u32;
     let len = 1 + num * 4;
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_VERTEX_ELEMENTS, len));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_VERTEX_ELEMENTS,
+        len,
+    ));
     buf.push(ve_handle);
 
     // element 0: position vec4 at offset 0 from vbo
@@ -2715,7 +2883,11 @@ fn encode_set_viewport(buf: &mut VirglCmdBuf, width: u32, height: u32) {
 }
 
 fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_BLEND, VIRGL_OBJ_BLEND_SIZE));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_BLEND,
+        VIRGL_OBJ_BLEND_SIZE,
+    ));
     buf.push(blend_handle);
     buf.push(0); // s0
     buf.push(0); // s1
@@ -2729,7 +2901,11 @@ fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
 }
 
 fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_DSA, VIRGL_OBJ_DSA_SIZE));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_DSA,
+        VIRGL_OBJ_DSA_SIZE,
+    ));
     buf.push(dsa_handle);
     buf.push(0);
     buf.push(0);
@@ -2738,7 +2914,11 @@ fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
 }
 
 fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32) {
-    buf.push(virgl_cmd0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_RASTERIZER, VIRGL_OBJ_RS_SIZE));
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_RASTERIZER,
+        VIRGL_OBJ_RS_SIZE,
+    ));
     buf.push(rs_handle);
 
     let mut s0 = 0u32;
@@ -2782,7 +2962,11 @@ static VIRGL_NEXT_RES_ID: AtomicU32 = AtomicU32::new(1);
 fn alloc_ctx_id() -> u32 {
     // ctx_id 0 is reserved.
     let id = VIRGL_NEXT_CTX_ID.fetch_add(1, Ordering::Relaxed);
-    if id == 0 { 1 } else { id }
+    if id == 0 {
+        1
+    } else {
+        id
+    }
 }
 
 fn alloc_res_pair() -> (u32, u32) {
@@ -2803,7 +2987,10 @@ fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> b
     unsafe {
         let c = common.as_ptr();
         core::ptr::write_volatile(&mut (*c).device_status, 0);
-        core::ptr::write_volatile(&mut (*c).device_status, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER);
+        core::ptr::write_volatile(
+            &mut (*c).device_status,
+            VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER,
+        );
 
         core::ptr::write_volatile(&mut (*c).device_feature_select, 0);
         let dev_lo = core::ptr::read_volatile(&(*c).device_feature) as u64;
@@ -2820,7 +3007,10 @@ fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> b
         }
 
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 0);
-        core::ptr::write_volatile(&mut (*c).driver_feature, (guest_features & 0xFFFF_FFFF) as u32);
+        core::ptr::write_volatile(
+            &mut (*c).driver_feature,
+            (guest_features & 0xFFFF_FFFF) as u32,
+        );
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 1);
         core::ptr::write_volatile(&mut (*c).driver_feature, (guest_features >> 32) as u32);
 
@@ -2844,7 +3034,9 @@ fn find_device() -> Option<pci::PciDevice> {
             if dev.vendor != VIRTIO_PCI_VENDOR {
                 continue;
             }
-            if dev.device != VIRTIO_GPU_DEVICE_MODERN && dev.device != VIRTIO_GPU_DEVICE_TRANSITIONAL {
+            if dev.device != VIRTIO_GPU_DEVICE_MODERN
+                && dev.device != VIRTIO_GPU_DEVICE_TRANSITIONAL
+            {
                 continue;
             }
             found = Some(*dev);
@@ -2856,9 +3048,6 @@ fn find_device() -> Option<pci::PciDevice> {
 
 fn as_bytes<T: Copy>(value: &T) -> &[u8] {
     unsafe {
-        core::slice::from_raw_parts(
-            (value as *const T) as *const u8,
-            core::mem::size_of::<T>(),
-        )
+        core::slice::from_raw_parts((value as *const T) as *const u8, core::mem::size_of::<T>())
     }
 }

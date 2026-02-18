@@ -2,8 +2,8 @@
 
 extern crate alloc;
 pub mod config;
-pub mod lang;
 pub mod helper;
+pub mod lang;
 pub mod oc3;
 
 use alloc::string::String;

@@ -1,4 +1,8 @@
-use core::{mem, ptr::NonNull, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
+use core::{
+    mem,
+    ptr::NonNull,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use spin::Mutex;
 
@@ -130,9 +134,13 @@ impl DmaPool {
 
                 let header = header_ptr as *mut AllocHeader;
                 (*header).size = alloc_end.saturating_sub(header_ptr);
-                self.bytes_used = self.bytes_used.saturating_add(alloc_end.saturating_sub(header_ptr));
+                self.bytes_used = self
+                    .bytes_used
+                    .saturating_add(alloc_end.saturating_sub(header_ptr));
 
-                let phys = self.phys_base.saturating_add((user_ptr - self.virt_base as usize) as u64);
+                let phys = self
+                    .phys_base
+                    .saturating_add((user_ptr - self.virt_base as usize) as u64);
                 return Some((phys, user_ptr as *mut u8));
             }
         }
@@ -325,12 +333,8 @@ fn init_pools() {
     }
 
     if DMA_POOL_ANY_SIZE > 0 {
-        let any_phys = crate::phys::alloc_phys_range(
-            DMA_POOL_ANY_SIZE,
-            DMA_POOL_ALIGN,
-            MIN_DMA_BASE,
-            None,
-        );
+        let any_phys =
+            crate::phys::alloc_phys_range(DMA_POOL_ANY_SIZE, DMA_POOL_ALIGN, MIN_DMA_BASE, None);
         if let Some(phys) = any_phys {
             let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
             let pool = DmaPool::new(phys, virt, DMA_POOL_ANY_SIZE);

@@ -8,9 +8,9 @@ use heapless::{Deque, String};
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
+use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
 use x86_64::registers::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
-use x86_64::registers::model_specific::Msr;
 
 use crate::shell::{ShellBackend, ShellIo};
 
@@ -299,7 +299,9 @@ pub fn stop() -> bool {
         hvlogf(format_args!("hv: vm1 lifecycle: stop requested"));
         true
     } else {
-        hvlogf(format_args!("hv: vm1 lifecycle: stop ignored (not running)"));
+        hvlogf(format_args!(
+            "hv: vm1 lifecycle: stop ignored (not running)"
+        ));
         false
     }
 }
@@ -339,8 +341,12 @@ async fn vm1_task(_io: &'static dyn ShellBackend) {
     let guest = crate::limine::guest_kernel_bytes();
     let guest_len = guest.map(|b| b.len()).unwrap_or(0);
     hvlogf(format_args!("hv: vm1 lifecycle: guest bytes={}", guest_len));
-    hvlogf(format_args!("hv: vm1 reporting: vmx preflight ok, stage=m1"));
-    hvlogf(format_args!("hv: vm1 reporting: vlayer policy=integrity-first"));
+    hvlogf(format_args!(
+        "hv: vm1 reporting: vmx preflight ok, stage=m1"
+    ));
+    hvlogf(format_args!(
+        "hv: vm1 reporting: vlayer policy=integrity-first"
+    ));
     match vmx_smoke() {
         Ok(()) => hvlogf(format_args!(
             "hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"
@@ -358,13 +364,18 @@ async fn vm1_task(_io: &'static dyn ShellBackend) {
                 lr.guest_rip
             ));
         }
-        Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmlaunch/ept failed ({})", e)),
+        Err(e) => hvlogf(format_args!(
+            "hv: vm1 reporting: vmlaunch/ept failed ({})",
+            e
+        )),
     }
 
     if let Some(bytes) = guest {
         if contains_bytes(bytes, MAIN_LOOP_MARKER) {
             VM1_MARKER_SEEN.store(true, Ordering::Release);
-            hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
+            hvlogf(format_args!(
+                "hv: vm1 reporting: main: entering executor loop"
+            ));
         } else {
             hvlogf(format_args!(
                 "hv: vm1 reporting: guest image missing marker '{}'",
@@ -401,11 +412,11 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
     // GenuineIntel
     let r0 = __cpuid(0);
     let vendor_intel = r0.ebx == 0x756e6547 && r0.edx == 0x49656e69 && r0.ecx == 0x6c65746e;
-    
+
     // Also accept generic TCG if VMX is present (we can't check VMX here easily without r1, but checking vendor is enough for this flag)
     // TCGTCGTCGTCG: EBX=0x54474354 EDX=0x47435447 ECX=0x43544743
     // AuthenticAMD: EBX=0x68747541 EDX=0x69746e65 ECX=0x444d4163
-    let known_compatible = vendor_intel 
+    let known_compatible = vendor_intel
         || (r0.ebx == 0x54474354 && r0.edx == 0x47435447 && r0.ecx == 0x43544743) // TCGTCGTCGTCG
         || (r0.ebx == 0x68747541 && r0.edx == 0x69746e65 && r0.ecx == 0x444d4163); // AuthenticAMD (if has_vmx, emulated)
 
@@ -506,9 +517,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
     } else if lr.entered != 0 {
         hvlogf(format_args!(
             "hv: vm1 reporting: first vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
-            lr.exit_reason,
-            lr.exit_qualification,
-            lr.guest_rip
+            lr.exit_reason, lr.exit_qualification, lr.guest_rip
         ));
         if (lr.exit_reason & 0xFFFF) == 0xC {
             match handle_hlt_exit_resume_once() {
@@ -549,13 +558,32 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
 fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     let basic = unsafe { Msr::new(IA32_VMX_BASIC).read() };
     let true_ctls = ((basic >> 55) & 1) != 0;
-    let pin_msr = if true_ctls { IA32_VMX_TRUE_PINBASED_CTLS } else { 0x481 };
-    let proc_msr = if true_ctls { IA32_VMX_TRUE_PROCBASED_CTLS } else { 0x482 };
-    let exit_msr = if true_ctls { IA32_VMX_TRUE_EXIT_CTLS } else { 0x483 };
-    let entry_msr = if true_ctls { IA32_VMX_TRUE_ENTRY_CTLS } else { 0x484 };
+    let pin_msr = if true_ctls {
+        IA32_VMX_TRUE_PINBASED_CTLS
+    } else {
+        0x481
+    };
+    let proc_msr = if true_ctls {
+        IA32_VMX_TRUE_PROCBASED_CTLS
+    } else {
+        0x482
+    };
+    let exit_msr = if true_ctls {
+        IA32_VMX_TRUE_EXIT_CTLS
+    } else {
+        0x483
+    };
+    let entry_msr = if true_ctls {
+        IA32_VMX_TRUE_ENTRY_CTLS
+    } else {
+        0x484
+    };
 
     let pin = adjust_vmx_ctrl(pin_msr, 0);
-    let proc = adjust_vmx_ctrl(proc_msr, PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY);
+    let proc = adjust_vmx_ctrl(
+        proc_msr,
+        PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY,
+    );
     let proc2 = adjust_vmx_ctrl(IA32_VMX_PROCBASED_CTLS2, PROC2_BASED_ENABLE_EPT);
     let exit = adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
     let entry = adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
@@ -836,9 +864,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     if host_cs == 0 || host_ss == 0 || host_tr == 0 {
         hvlogf(format_args!(
             "hv: vm1 reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-            host_cs as u16,
-            host_ss as u16,
-            host_tr as u16
+            host_cs as u16, host_ss as u16, host_tr as u16
         ));
         return Err("host selectors");
     }
@@ -860,10 +886,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     }
     hvlogf(format_args!(
         "hv: vm1 reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-        host_cs as u16,
-        host_ss as u16,
-        host_tr as u16,
-        tr_base
+        host_cs as u16, host_ss as u16, host_tr as u16, tr_base
     ));
 
     vmwrite(VMCS_HOST_CR0, host_cr0)?;
@@ -1048,7 +1071,11 @@ fn vmread(field: u64) -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 { Some(out) } else { None }
+        if fail == 0 {
+            Some(out)
+        } else {
+            None
+        }
     }
 }
 
@@ -1479,7 +1506,11 @@ fn vmptrst() -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 { Some(out) } else { None }
+        if fail == 0 {
+            Some(out)
+        } else {
+            None
+        }
     }
 }
 

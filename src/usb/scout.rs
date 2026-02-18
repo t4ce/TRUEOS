@@ -54,7 +54,8 @@ async fn cleanup_disconnected<const N: usize>(
     connected: &Vec<(u8, u32), N>,
     state: &mut UsbControllerState,
 ) {
-    let mut removed: Vec<(u32, DeviceKind, Option<super::DeviceResources>), MAX_DEVICES> = Vec::new();
+    let mut removed: Vec<(u32, DeviceKind, Option<super::DeviceResources>), MAX_DEVICES> =
+        Vec::new();
     let controller_id = state.info.controller_id;
     {
         let mut guard = DEVICES[controller_id].lock();
@@ -217,35 +218,45 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
 
     let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
     let supports_64bit = (ctx.hccparams1 & 0x1) != 0;
-    let dma_max_exclusive = if supports_64bit { None } else { Some(0x1_0000_0000) };
-
-    let (dcbaa_phys, dcbaa_virt) = match dma::alloc_with_max((max_slots + 1) * 8, 64, dma_max_exclusive) {
-        Some(pair) => pair,
-        None => {
-            crate::log!("usb[xHCI {}]: failed to alloc dcbaa\n", controller_id);
-            return Err(());
-        }
+    let dma_max_exclusive = if supports_64bit {
+        None
+    } else {
+        Some(0x1_0000_0000)
     };
+
+    let (dcbaa_phys, dcbaa_virt) =
+        match dma::alloc_with_max((max_slots + 1) * 8, 64, dma_max_exclusive) {
+            Some(pair) => pair,
+            None => {
+                crate::log!("usb[xHCI {}]: failed to alloc dcbaa\n", controller_id);
+                return Err(());
+            }
+        };
     unsafe { write_bytes(dcbaa_virt, 0, (max_slots + 1) * 8) };
 
     let scratchpad_count = ctx.max_scratchpad_buffers() as usize;
     if scratchpad_count > 0 {
         let array_bytes = scratchpad_count * core::mem::size_of::<u64>();
-        let (sp_array_phys, sp_array_virt) = match dma::alloc_with_max(array_bytes, 64, dma_max_exclusive) {
-            Some(pair) => pair,
-            None => {
-                crate::log!(
-                    "usb[xHCI {}]: failed to alloc scratchpad array count={}\n",
-                    controller_id,
-                    scratchpad_count
-                );
-                return Err(());
-            }
-        };
+        let (sp_array_phys, sp_array_virt) =
+            match dma::alloc_with_max(array_bytes, 64, dma_max_exclusive) {
+                Some(pair) => pair,
+                None => {
+                    crate::log!(
+                        "usb[xHCI {}]: failed to alloc scratchpad array count={}\n",
+                        controller_id,
+                        scratchpad_count
+                    );
+                    return Err(());
+                }
+            };
         unsafe { write_bytes(sp_array_virt, 0, array_bytes) };
 
         for idx in 0..scratchpad_count {
-            let (buf_phys, buf_virt) = match dma::alloc_with_max(SCRATCHPAD_BUF_SIZE, SCRATCHPAD_BUF_SIZE, dma_max_exclusive) {
+            let (buf_phys, buf_virt) = match dma::alloc_with_max(
+                SCRATCHPAD_BUF_SIZE,
+                SCRATCHPAD_BUF_SIZE,
+                dma_max_exclusive,
+            ) {
                 Some(pair) => pair,
                 None => {
                     crate::log!(
@@ -568,47 +579,47 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
 
         // Check registered devices
         {
-             let devs = super::DEVICES[controller_id].lock();
-             if let Some(dev) = devs.iter().find(|d| d.port == (port + 1) as u8) {
-                  kind_str = Some(match dev.kind {
-                        DeviceKind::Hid => "hid",
-                        DeviceKind::Hub => "hub",
-                        DeviceKind::Mass => "mass",
-                        DeviceKind::Printer => "printer",
-                        DeviceKind::Pen => "pen",
-                        DeviceKind::Cdc => "cdc",
-                        DeviceKind::Uac => "uac",
-                        DeviceKind::Midi => "midi",
-                        DeviceKind::Leds => "leds",
-                        DeviceKind::Unknown => "unknown",
-                  });
+            let devs = super::DEVICES[controller_id].lock();
+            if let Some(dev) = devs.iter().find(|d| d.port == (port + 1) as u8) {
+                kind_str = Some(match dev.kind {
+                    DeviceKind::Hid => "hid",
+                    DeviceKind::Hub => "hub",
+                    DeviceKind::Mass => "mass",
+                    DeviceKind::Printer => "printer",
+                    DeviceKind::Pen => "pen",
+                    DeviceKind::Cdc => "cdc",
+                    DeviceKind::Uac => "uac",
+                    DeviceKind::Midi => "midi",
+                    DeviceKind::Leds => "leds",
+                    DeviceKind::Unknown => "unknown",
+                });
 
-                  // Try to get VID/PID from identity cache
-                  if let Some(ident) = super::hub::identity_for_slot(controller_id, dev.slot_id) {
-                      vid = Some(ident.vid);
-                      pid = Some(ident.pid);
-                      if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid) {
-                          if matches!(dev.kind, DeviceKind::Unknown) {
-                              kind_str = Some(name);
-                          }
-                      }
-                  }
-             }
+                // Try to get VID/PID from identity cache
+                if let Some(ident) = super::hub::identity_for_slot(controller_id, dev.slot_id) {
+                    vid = Some(ident.vid);
+                    pid = Some(ident.pid);
+                    if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid) {
+                        if matches!(dev.kind, DeviceKind::Unknown) {
+                            kind_str = Some(name);
+                        }
+                    }
+                }
+            }
         }
 
         // Fallback or detecting state
         if kind_str.is_none() && connected {
-             if let Some((v, p)) = xhci::get_port_vidpid(controller_id, (port + 1) as u8) {
-                 vid = Some(v);
-                 pid = Some(p);
-                 if let Some(name) = super::friendly_name_for_vidpid(v, p) {
-                     kind_str = Some(name);
-                 } else if v != 0 || p != 0 {
-                     kind_str = Some("detecting");
-                 }
-             } else {
-                 kind_str = Some("present");
-             }
+            if let Some((v, p)) = xhci::get_port_vidpid(controller_id, (port + 1) as u8) {
+                vid = Some(v);
+                pid = Some(p);
+                if let Some(name) = super::friendly_name_for_vidpid(v, p) {
+                    kind_str = Some(name);
+                } else if v != 0 || p != 0 {
+                    kind_str = Some("detecting");
+                }
+            } else {
+                kind_str = Some("present");
+            }
         }
 
         let _ = results.push(ScoutedPort {
@@ -619,7 +630,7 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
             speed,
             device_kind: kind_str,
             vid,
-            pid
+            pid,
         });
     }
     results

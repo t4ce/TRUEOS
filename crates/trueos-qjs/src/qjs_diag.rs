@@ -66,7 +66,13 @@ unsafe fn try_log_via_global_string(ctx: *mut qjs::JSContext, v: qjs::JSValueCon
     let mut arg = v;
     // Keep argument alive while calling into JS.
     arg = qjs::js_dup_value(ctx, arg);
-    let out = qjs::JS_Call(ctx, string_fn, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValueConst);
+    let out = qjs::JS_Call(
+        ctx,
+        string_fn,
+        qjs::JSValue::undefined(),
+        1,
+        &arg as *const qjs::JSValueConst,
+    );
     qjs::js_free_value(ctx, arg);
     qjs::js_free_value(ctx, string_fn);
     if out.is_exception() {
@@ -102,7 +108,12 @@ fn log_value(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) {
 }
 
 #[inline]
-unsafe fn log_named_prop(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &[u8], prefix: &str) {
+unsafe fn log_named_prop(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    key: &[u8],
+    prefix: &str,
+) {
     let v = qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
     if !v.is_exception() && v.tag != qjs::JS_TAG_UNDEFINED {
         log_str(prefix);
@@ -185,7 +196,11 @@ pub unsafe fn install_runtime(rt: *mut qjs::JSRuntime) {
     if rt.is_null() {
         return;
     }
-    qjs::JS_SetHostPromiseRejectionTracker(rt, Some(host_promise_rejection_tracker), core::ptr::null_mut());
+    qjs::JS_SetHostPromiseRejectionTracker(
+        rt,
+        Some(host_promise_rejection_tracker),
+        core::ptr::null_mut(),
+    );
 }
 
 pub unsafe fn install_context(ctx: *mut qjs::JSContext) {

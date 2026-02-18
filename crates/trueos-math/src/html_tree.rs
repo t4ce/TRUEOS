@@ -67,7 +67,12 @@ where
     out
 }
 
-fn begin_node_at_depth(out: &mut String, depth: usize, have_any: &mut bool, prev_depth: &mut usize) {
+fn begin_node_at_depth(
+    out: &mut String,
+    depth: usize,
+    have_any: &mut bool,
+    prev_depth: &mut usize,
+) {
     if !*have_any {
         *have_any = true;
         *prev_depth = depth;

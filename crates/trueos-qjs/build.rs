@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn run(cmd: &mut Command) {
-    let status = cmd.status().unwrap_or_else(|e| panic!("spawn {:?} failed: {e}", cmd));
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("spawn {:?} failed: {e}", cmd));
     if !status.success() {
         panic!("command {:?} failed with status {status}", cmd);
     }
@@ -26,7 +28,8 @@ fn ensure_quickjs_checkout(out_dir: &Path) -> PathBuf {
 
     // Otherwise, fetch QuickJS into OUT_DIR so `cargo build` works without submodules
     // or pre-cloned dependencies in the repo.
-    let repo = env::var("TRUEOS_QJS_QUICKJS_REPO").unwrap_or_else(|_| "https://github.com/bellard/quickjs".to_string());
+    let repo = env::var("TRUEOS_QJS_QUICKJS_REPO")
+        .unwrap_or_else(|_| "https://github.com/bellard/quickjs".to_string());
     let reference = env::var("TRUEOS_QJS_QUICKJS_REF").unwrap_or_else(|_| "master".to_string());
 
     // If Cargo is in offline mode, don't try to hit the network.
@@ -51,16 +54,14 @@ Set TRUEOS_QJS_QUICKJS_DIR=/path/to/quickjs or run with network access."
     }
 
     // Prefer git because it's widely available and QuickJS doesn't always publish tarball tags.
-    run(
-        Command::new("git")
-            .arg("clone")
-            .arg("--depth")
-            .arg("1")
-            .arg("--branch")
-            .arg(&reference)
-            .arg(&repo)
-            .arg(&checkout_dir),
-    );
+    run(Command::new("git")
+        .arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg("--branch")
+        .arg(&reference)
+        .arg(&repo)
+        .arg(&checkout_dir));
 
     if !checkout_dir.join("quickjs.c").is_file() {
         panic!(
@@ -453,7 +454,9 @@ fn write_embedded_table(out_embedded: &Path, entries: &[(String, PathBuf, Option
         s.push_str(&format!("        src: include_bytes!(\"{src_lit}\"),\n"));
         if let Some(qjsc_path) = qjsc_path {
             let qjsc_lit = qjsc_path.to_string_lossy().replace('\\', "/");
-            s.push_str(&format!("        bytecode: include_bytes!(\"{qjsc_lit}\"),\n"));
+            s.push_str(&format!(
+                "        bytecode: include_bytes!(\"{qjsc_lit}\"),\n"
+            ));
         } else {
             s.push_str("        bytecode: b\"\",\n");
         }
@@ -578,9 +581,18 @@ fn main() {
         println!("cargo:rerun-if-changed={}", quickjs_dir.join(src).display());
     }
     println!("cargo:rerun-if-changed={}", trueos_stdio.display());
-    println!("cargo:rerun-if-changed={}", quickjs_dir.join("quickjs.h").display());
-    println!("cargo:rerun-if-changed={}", quickjs_dir.join("libregexp.h").display());
-    println!("cargo:rerun-if-changed={}", quickjs_dir.join("libunicode.h").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        quickjs_dir.join("quickjs.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        quickjs_dir.join("libregexp.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        quickjs_dir.join("libunicode.h").display()
+    );
 
     let target = env::var("TARGET").unwrap_or_default();
     let mut build = cc::Build::new();

@@ -6,13 +6,16 @@ use alloc::vec::Vec;
 use embassy_executor::task;
 use heapless::String as HString;
 
-use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
+use crate::shell::CommandAction;
 
 const FROG_LATITUDE: f64 = 51.832427;
 const FROG_LONGITUDE: f64 = 9.456766;
 
-pub(crate) fn cmd_frog(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_frog(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let Some(api_key) = args.and_then(|a| a.get_str(0)) else {
         ctx.io.write_str("frog: usage frog <api_key>\r\n");
         return CommandAction::None;
@@ -21,7 +24,8 @@ pub(crate) fn cmd_frog(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'
     let mut key: HString<128> = HString::new();
     for ch in api_key.chars() {
         if key.push(ch).is_err() {
-            ctx.io.write_str("frog: api_key too long (max 128 chars)\r\n");
+            ctx.io
+                .write_str("frog: api_key too long (max 128 chars)\r\n");
             return CommandAction::None;
         }
     }
@@ -50,7 +54,8 @@ pub(crate) fn cmd_frog(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'
 #[task]
 pub async fn frog_job(slot_id: u8, api_key: HString<128>) {
     crate::matrix::push_line(slot_id, "frog: requesting openweather reverse-geo");
-    let url = trueos_weather::oc3::openweather_geo_url(FROG_LATITUDE, FROG_LONGITUDE, api_key.as_str());
+    let url =
+        trueos_weather::oc3::openweather_geo_url(FROG_LATITUDE, FROG_LONGITUDE, api_key.as_str());
 
     match crate::v::net::json::get_json(url.as_str()).await {
         Ok(raw) => {

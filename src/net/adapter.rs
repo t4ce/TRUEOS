@@ -3,16 +3,15 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, PollResult};
+use smoltcp::iface::{Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxToken};
 use smoltcp::socket::{dhcpv4, icmp, raw, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpProtocol, IpVersion, Ipv4Address,
-    Icmpv4Packet, Icmpv4Repr,
-    Icmpv6Packet, Icmpv6Repr, Ipv6Address, Ipv6Packet, Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr,
-    RawHardwareAddress,
+    EthernetAddress, HardwareAddress, Icmpv4Packet, Icmpv4Repr, Icmpv6Packet, Icmpv6Repr,
+    IpAddress, IpCidr, IpEndpoint, IpProtocol, IpVersion, Ipv4Address, Ipv6Address, Ipv6Packet,
+    Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
 };
 
 use crate::log;
@@ -55,7 +54,9 @@ pub fn primary_dhcp_dns_snapshot() -> ([[u8; 4]; DHCP_DNS_MAX], u8) {
 pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    services.get(index).and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
+    services
+        .get(index)
+        .and_then(|s| s.local_ipv4.map(|ip| ip.octets()))
 }
 
 pub fn ipv6_link_local_at(index: usize) -> Option<[u8; 16]> {
@@ -67,7 +68,9 @@ pub fn ipv6_link_local_at(index: usize) -> Option<[u8; 16]> {
 pub fn ipv6_global_at(index: usize) -> Option<[u8; 16]> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
-    services.get(index).and_then(|s| s.local_ipv6_global.map(|ip| ip.octets()))
+    services
+        .get(index)
+        .and_then(|s| s.local_ipv6_global.map(|ip| ip.octets()))
 }
 
 pub fn dhcp_has_lease_at(index: usize) -> Option<bool> {
@@ -80,7 +83,10 @@ pub fn dhcp_has_lease_at(index: usize) -> Option<bool> {
 static HOSTNAME: spin::Mutex<Option<alloc::string::String>> = spin::Mutex::new(None);
 
 pub fn get_hostname() -> alloc::string::String {
-    HOSTNAME.lock().clone().unwrap_or_else(|| alloc::string::String::from("TRUEOS"))
+    HOSTNAME
+        .lock()
+        .clone()
+        .unwrap_or_else(|| alloc::string::String::from("TRUEOS"))
 }
 
 pub fn set_hostname(name: &str) {
@@ -218,7 +224,10 @@ fn dhcp_fixup_broadcast_and_udp_checksum(buf: &mut [u8]) {
         let udp_bytes = &buf[udp_off..udp_off + udp_len];
         let mut i = 0usize;
         while i + 1 < udp_bytes.len() {
-            add16(&mut sum, u16::from_be_bytes([udp_bytes[i], udp_bytes[i + 1]]));
+            add16(
+                &mut sum,
+                u16::from_be_bytes([udp_bytes[i], udp_bytes[i + 1]]),
+            );
             i += 2;
         }
         if (udp_bytes.len() & 1) != 0 {
@@ -470,16 +479,16 @@ impl<'a> Device for AdapterDeviceAt<'a> {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let packet = if let Some(p) = self.rx_buffer.pop_front() {
-             p
+            p
         } else {
-             let packets = crate::net::drain_rx_packets_at(self.index, 128);
-             if packets.is_empty() {
-                 return None;
-             }
-             self.rx_buffer.extend(packets);
-             self.rx_buffer.pop_front()?
+            let packets = crate::net::drain_rx_packets_at(self.index, 128);
+            if packets.is_empty() {
+                return None;
+            }
+            self.rx_buffer.extend(packets);
+            self.rx_buffer.pop_front()?
         };
-        
+
         Some(packet).map(|packet| {
             #[cfg(feature = "dma_nic_fpga")]
             crate::net::dma_fpga_stream_on_rx_packet(&packet);
@@ -714,7 +723,7 @@ impl Drop for AdapterRxToken {
     fn drop(&mut self) {
         let buf = core::mem::take(&mut self.buffer);
         if !buf.is_empty() {
-             crate::net::ring::recycle_rx_buf(buf);
+            crate::net::ring::recycle_rx_buf(buf);
         }
     }
 }
@@ -817,10 +826,14 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                     buf[l2_off + 18],
                                     buf[l2_off + 19],
                                 ];
-                                let ip_tot_len = u16::from_be_bytes([buf[l2_off + 2], buf[l2_off + 3]]);
-                                let ip_hdr_csum = u16::from_be_bytes([buf[l2_off + 10], buf[l2_off + 11]]);
-                                let udp_len = u16::from_be_bytes([buf[udp_off + 4], buf[udp_off + 5]]);
-                                let udp_csum = u16::from_be_bytes([buf[udp_off + 6], buf[udp_off + 7]]);
+                                let ip_tot_len =
+                                    u16::from_be_bytes([buf[l2_off + 2], buf[l2_off + 3]]);
+                                let ip_hdr_csum =
+                                    u16::from_be_bytes([buf[l2_off + 10], buf[l2_off + 11]]);
+                                let udp_len =
+                                    u16::from_be_bytes([buf[udp_off + 4], buf[udp_off + 5]]);
+                                let udp_csum =
+                                    u16::from_be_bytes([buf[udp_off + 6], buf[udp_off + 7]]);
 
                                 // Verify IPv4 header checksum.
                                 let mut sum: u32 = 0;
@@ -830,10 +843,9 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         i += 2;
                                         continue;
                                     }
-                                    let w = u16::from_be_bytes([
-                                        buf[l2_off + i],
-                                        buf[l2_off + i + 1],
-                                    ]) as u32;
+                                    let w =
+                                        u16::from_be_bytes([buf[l2_off + i], buf[l2_off + i + 1]])
+                                            as u32;
                                     sum = sum.wrapping_add(w);
                                     i += 2;
                                 }
@@ -939,9 +951,9 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                 crate::log!("net: tx-tap dev={} len={} (short)\n", self.index, buf.len());
             }
         }
-        
+
         self.tx_buffer.push_back(buf);
-        
+
         if (new_total & NET_FRAME_LOG_MASK) == 0 {
             log!(
                 "net: tx frames={} dropped={}\n",
@@ -1011,7 +1023,7 @@ impl NetService {
 
         let mut cfg = IfaceConfig::new(hw_addr);
         cfg.random_seed = crate::rng::rdrand_u64().unwrap_or(0x9E37_79B9);
-        
+
         let mut rx_buffer = VecDeque::new();
         let mut tx_buffer = VecDeque::new();
         let mut device = AdapterDeviceAt {
@@ -1024,7 +1036,8 @@ impl NetService {
         let ipv6_ll = ipv6_link_local_from_mac(mac);
 
         // Bring-up default: install static IPv4 before DHCP starts.
-        let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll);
+        let (fallback_ip, fallback_gw) =
+            apply_static_fallback_ipv4(&mut iface, device_index, ipv6_ll);
         let ip_o = fallback_ip.octets();
         let gw_o = fallback_gw.octets();
         crate::log!(
@@ -1057,7 +1070,8 @@ impl NetService {
         let raw_tx_buf = vec![0u8; 256];
         let raw_rx = raw::PacketBuffer::new(raw_rx_meta, raw_rx_buf);
         let raw_tx = raw::PacketBuffer::new(raw_tx_meta, raw_tx_buf);
-        let raw_icmpv6_socket = raw::Socket::new(IpVersion::Ipv6, IpProtocol::Icmpv6, raw_rx, raw_tx);
+        let raw_icmpv6_socket =
+            raw::Socket::new(IpVersion::Ipv6, IpProtocol::Icmpv6, raw_rx, raw_tx);
 
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
@@ -1070,7 +1084,10 @@ impl NetService {
         //     data: current_hostname.as_bytes(),
         // }]);
         let dhcp = sockets.add(dhcp_socket);
-        crate::log!("net: dhcp start dev={} mode=static-fallback\n", device_index);
+        crate::log!(
+            "net: dhcp start dev={} mode=static-fallback\n",
+            device_index
+        );
 
         Self {
             device_index,
@@ -1193,10 +1210,7 @@ impl NetService {
 
         let local_ip = self.local_ipv4.ok_or("no ipv4 configured")?;
 
-        let local = IpEndpoint::new(
-            IpAddress::Ipv4(local_ip),
-            local_port,
-        );
+        let local = IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port);
         let remote_addr = remote.addr;
         let remote_port = remote.port;
         let remote = IpEndpoint::new(
@@ -1330,7 +1344,12 @@ impl NetService {
                     }
                 }
                 Err(_) => {
-                    let _ = push_event(owner, NetEvent::Error { msg: "tcp send fail" });
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Error {
+                            msg: "tcp send fail",
+                        },
+                    );
                     break;
                 }
             }
@@ -1341,14 +1360,25 @@ impl NetService {
         }
 
         if total_sent != 0 {
-            let _ = push_event(owner, NetEvent::TcpSent { handle, len: total_sent });
+            let _ = push_event(
+                owner,
+                NetEvent::TcpSent {
+                    handle,
+                    len: total_sent,
+                },
+            );
         }
     }
 
     fn send_icmp_echo(&mut self, owner: &'static str, target: [u8; 4], seq: u16, data: Vec<u8>) {
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
-            let _ = push_event(owner, NetEvent::Error { msg: "icmp send blocked" });
+            let _ = push_event(
+                owner,
+                NetEvent::Error {
+                    msg: "icmp send blocked",
+                },
+            );
             return;
         }
 
@@ -1375,14 +1405,30 @@ impl NetService {
                 sent_at: now(),
             });
         } else {
-            let _ = push_event(owner, NetEvent::Error { msg: "icmp send fail" });
+            let _ = push_event(
+                owner,
+                NetEvent::Error {
+                    msg: "icmp send fail",
+                },
+            );
         }
     }
 
-    fn send_icmp_echo_v6(&mut self, owner: &'static str, target: [u8; 16], seq: u16, data: Vec<u8>) {
+    fn send_icmp_echo_v6(
+        &mut self,
+        owner: &'static str,
+        target: [u8; 16],
+        seq: u16,
+        data: Vec<u8>,
+    ) {
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
-            let _ = push_event(owner, NetEvent::Error { msg: "icmp6 send blocked" });
+            let _ = push_event(
+                owner,
+                NetEvent::Error {
+                    msg: "icmp6 send blocked",
+                },
+            );
             return;
         }
 
@@ -1410,7 +1456,12 @@ impl NetService {
                 sent_at: now(),
             });
         } else {
-            let _ = push_event(owner, NetEvent::Error { msg: "icmp6 send fail" });
+            let _ = push_event(
+                owner,
+                NetEvent::Error {
+                    msg: "icmp6 send fail",
+                },
+            );
         }
     }
 
@@ -1493,7 +1544,12 @@ impl NetService {
                 Err(_) => continue,
             };
 
-            let Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert { router_lifetime, prefix_info, .. }) = icmp_repr else {
+            let Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert {
+                router_lifetime,
+                prefix_info,
+                ..
+            }) = icmp_repr
+            else {
                 continue;
             };
 
@@ -1530,7 +1586,10 @@ impl NetService {
                 }
             }
 
-            let v6_ll = IpCidr::new(IpAddress::Ipv6(self.local_ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN);
+            let v6_ll = IpCidr::new(
+                IpAddress::Ipv6(self.local_ipv6_ll),
+                IPV6_LINK_LOCAL_PREFIX_LEN,
+            );
             let v6_global = IpCidr::new(IpAddress::Ipv6(global), 64);
             self.iface.update_ip_addrs(|addrs| {
                 addrs.clear();
@@ -1573,22 +1632,20 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
-            NetCommand::OpenTcpConnect { remote } => {
-                match self.open_tcp_connect(owner, remote) {
-                    Ok(handle) => {
-                        let _ = push_event(
-                            owner,
-                            NetEvent::Opened {
-                                handle,
-                                kind: SocketKind::Tcp,
-                            },
-                        );
-                    }
-                    Err(msg) => {
-                        let _ = push_event(owner, NetEvent::Error { msg });
-                    }
+            NetCommand::OpenTcpConnect { remote } => match self.open_tcp_connect(owner, remote) {
+                Ok(handle) => {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Opened {
+                            handle,
+                            kind: SocketKind::Tcp,
+                        },
+                    );
                 }
-            }
+                Err(msg) => {
+                    let _ = push_event(owner, NetEvent::Error { msg });
+                }
+            },
             NetCommand::OpenTcpConnectV6 { remote } => {
                 match self.open_tcp_connect_v6(owner, remote) {
                     Ok(handle) => {
@@ -1650,7 +1707,12 @@ impl NetService {
                     );
                     let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
                     if socket.send_slice(&data, endpoint).is_err() {
-                        let _ = push_event(owner, NetEvent::Error { msg: "udp6 send fail" });
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Error {
+                                msg: "udp6 send fail",
+                            },
+                        );
                     }
                 } else {
                     let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
@@ -1763,7 +1825,7 @@ impl NetService {
                 // Match vnet MAX_MSG (8KiB) to avoid large stack buffers per poll.
                 let mut buf_guard = POLL_SCRATCH_BUF.lock();
                 let buf = &mut *buf_guard;
-                
+
                 while let Ok(len) = socket.recv_slice(buf) {
                     if len == 0 {
                         break;
@@ -1853,13 +1915,13 @@ impl NetService {
                 rx_buffer,
                 tx_buffer,
             };
-            
+
             // Always poll at least once
             let _ = iface.poll(timestamp, &mut device, sockets);
-            
+
             // Drain packets with a higher limit.
             // If we hit the limit, we return true to hint "call me again immediately".
-            let limit = 128; 
+            let limit = 128;
             let mut count = 0;
             loop {
                 if count >= limit {
@@ -1877,7 +1939,7 @@ impl NetService {
                     }
                 }
             }
-            
+
             // Flush buffered TX packets
             if !self.tx_buffer.is_empty() {
                 crate::net::transmit_batch_at(device_index, self.tx_buffer.drain(..));
@@ -1888,16 +1950,13 @@ impl NetService {
         // then periodically solicit one while we have no router/global address.
         self.poll_router_advertisements();
         self.maybe_send_router_solicit(timestamp);
-        
-        // Also drain the TX queue for sockets (esp. TCP)
-         if let Some(idx) = self.records.iter().position(|r| r.kind == SocketKind::Tcp) {
-             self.flush_tcp_tx(idx);
-         }
 
-        let dhcp_event = self
-            .sockets
-            .get_mut::<dhcpv4::Socket>(self.dhcp)
-            .poll();
+        // Also drain the TX queue for sockets (esp. TCP)
+        if let Some(idx) = self.records.iter().position(|r| r.kind == SocketKind::Tcp) {
+            self.flush_tcp_tx(idx);
+        }
+
+        let dhcp_event = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).poll();
         match dhcp_event {
             None => {}
             Some(dhcpv4::Event::Configured(config)) => {
@@ -1962,7 +2021,11 @@ impl NetService {
                     self.dhcp_dns[i] = s.octets();
                     self.dhcp_dns_count = (i as u8) + 1;
                 }
-                crate::log!("net: dhcp dns-count dev={} count={}\n", self.device_index, self.dhcp_dns_count);
+                crate::log!(
+                    "net: dhcp dns-count dev={} count={}\n",
+                    self.device_index,
+                    self.dhcp_dns_count
+                );
                 for i in 0..(self.dhcp_dns_count as usize) {
                     let d = self.dhcp_dns[i];
                     crate::log!(
@@ -1983,8 +2046,11 @@ impl NetService {
             Some(dhcpv4::Event::Deconfigured) => {
                 if self.dhcp_has_lease {
                     self.dhcp_has_lease = false;
-                    let (fallback_ip, fallback_gw) =
-                        apply_static_fallback_ipv4(&mut self.iface, self.device_index, self.local_ipv6_ll);
+                    let (fallback_ip, fallback_gw) = apply_static_fallback_ipv4(
+                        &mut self.iface,
+                        self.device_index,
+                        self.local_ipv6_ll,
+                    );
                     self.local_ipv4 = Some(fallback_ip);
                     self.router_ipv4 = Some(fallback_gw);
                     self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];
@@ -2016,7 +2082,7 @@ impl NetService {
 
         // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
         self.maybe_send_icmp_ping(timestamp);
-        
+
         work_done
     }
 
@@ -2086,20 +2152,34 @@ impl NetService {
         let mut buf = [0u8; 2048];
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         while socket.can_recv() {
-            let Ok((len, from)) = socket.recv_slice(&mut buf) else { break };
+            let Ok((len, from)) = socket.recv_slice(&mut buf) else {
+                break;
+            };
             match from {
                 IpAddress::Ipv4(src_v4) => {
-                    let Ok(pkt) = Icmpv4Packet::new_checked(&buf[..len]) else { continue };
-                    let Ok(repr) = Icmpv4Repr::parse(&pkt, &ChecksumCapabilities::ignored()) else { continue };
+                    let Ok(pkt) = Icmpv4Packet::new_checked(&buf[..len]) else {
+                        continue;
+                    };
+                    let Ok(repr) = Icmpv4Repr::parse(&pkt, &ChecksumCapabilities::ignored()) else {
+                        continue;
+                    };
 
                     match repr {
-                        Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
+                        Icmpv4Repr::EchoRequest {
+                            ident,
+                            seq_no,
+                            data,
+                        } => {
                             // Only reply to our bound ident; smoltcp already filters, but keep it explicit.
                             if ident != ICMP_IDENT {
                                 continue;
                             }
 
-                            let reply = Icmpv4Repr::EchoReply { ident, seq_no, data };
+                            let reply = Icmpv4Repr::EchoReply {
+                                ident,
+                                seq_no,
+                                data,
+                            };
                             let mut out = vec![0u8; reply.buffer_len()];
                             reply.emit(
                                 &mut Icmpv4Packet::new_unchecked(&mut out),
@@ -2112,7 +2192,9 @@ impl NetService {
                                 continue;
                             }
 
-                            if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
+                            if let Some(pos) =
+                                self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no)
+                            {
                                 let inflight = self.icmp_vnet_inflight.remove(pos);
                                 let rtt = now() - inflight.sent_at;
                                 let _ = push_event(
@@ -2145,7 +2227,9 @@ impl NetService {
                                             "net: icmp ok dev={} (gateway reachable)\n",
                                             self.device_index
                                         );
-                                        crate::v::readiness::set(crate::v::readiness::NET_GATEWAY_REACHABLE);
+                                        crate::v::readiness::set(
+                                            crate::v::readiness::NET_GATEWAY_REACHABLE,
+                                        );
                                     }
                                 }
                             }
@@ -2169,7 +2253,8 @@ impl NetService {
                     }
                     let seq_no = u16::from_be_bytes([buf[6], buf[7]]);
 
-                    if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no) {
+                    if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no)
+                    {
                         let inflight = self.icmp_vnet_inflight.remove(pos);
                         let rtt = now() - inflight.sent_at;
                         let _ = push_event(
@@ -2240,7 +2325,10 @@ fn apply_static_fallback_ipv4(
 
     iface.update_ip_addrs(|addrs| {
         addrs.clear();
-        let _ = addrs.push(IpCidr::new(IpAddress::Ipv6(ipv6_ll), IPV6_LINK_LOCAL_PREFIX_LEN));
+        let _ = addrs.push(IpCidr::new(
+            IpAddress::Ipv6(ipv6_ll),
+            IPV6_LINK_LOCAL_PREFIX_LEN,
+        ));
         let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), STATIC_FALLBACK_PREFIX_LEN));
     });
     let routes = iface.routes_mut();
@@ -2301,10 +2389,9 @@ fn service_tick_once() -> bool {
     for svc in services.iter_mut() {
         svc.poll_sockets();
     }
-    
+
     busy
 }
-
 
 /// Per-NIC RX poll loop.
 ///
@@ -2320,7 +2407,8 @@ pub async fn net_poll_task(index: usize) {
                 Timer::after(EmbassyDuration::from_micros(NET_POLL_SLEEP_US)).await;
             }
         }
-    }.await;
+    }
+    .await;
 }
 
 #[task]
@@ -2341,5 +2429,6 @@ pub async fn net_service_task() {
                 Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;
             }
         }
-    }.await;
+    }
+    .await;
 }

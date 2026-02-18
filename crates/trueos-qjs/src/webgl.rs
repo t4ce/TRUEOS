@@ -1,15 +1,14 @@
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, CStr};
 use spin::Mutex;
 
 use crate as qjs;
 use crate::cmd_stream;
 
-extern "C" {
-}
+extern "C" {}
 
 const MAX_ATTRS: usize = 16;
 
@@ -367,7 +366,9 @@ static GL_STATE: Mutex<GlState> = Mutex::new(GlState::new());
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
     qjs::JSValue {
-        u: qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        u: qjs::JSValueUnion {
+            int32: if v { 1 } else { 0 },
+        },
         tag: qjs::JS_TAG_BOOL,
     }
 }
@@ -501,7 +502,8 @@ unsafe fn js_new_handle_obj(ctx: *mut qjs::JSContext, id: u32) -> qjs::JSValue {
 }
 
 fn set_i32_const(ctx: *mut qjs::JSContext, obj: qjs::JSValue, name: &'static [u8], v: i32) {
-    let _ = unsafe { qjs::JS_SetPropertyStr(ctx, obj, name.as_ptr() as *const c_char, js_int32(v)) };
+    let _ =
+        unsafe { qjs::JS_SetPropertyStr(ctx, obj, name.as_ptr() as *const c_char, js_int32(v)) };
 }
 
 fn buffer_slot_mut(st: &mut GlState, id: u32) -> Option<&mut Vec<u8>> {
@@ -725,7 +727,11 @@ where
     let mut st = GL_STATE.lock();
     let prog_id = {
         let p = uniform_loc_program(ctx, loc_obj);
-        if p != 0 { p } else { st.current_program }
+        if p != 0 {
+            p
+        } else {
+            st.current_program
+        }
     };
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return qjs::JSValue::undefined();
@@ -811,10 +817,18 @@ fn find_uniform_mat3(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32
 fn transform_xy(st: &GlState, x: f32, y: f32) -> (f32, f32) {
     let mut tx = x;
     let mut ty = y;
-    if let Some(m) = find_uniform_mat3(st, st.current_program, &[b"translationMatrix", b"uTranslationMatrix"]) {
+    if let Some(m) = find_uniform_mat3(
+        st,
+        st.current_program,
+        &[b"translationMatrix", b"uTranslationMatrix"],
+    ) {
         (tx, ty) = mat3_apply(&m, tx, ty);
     }
-    if let Some(m) = find_uniform_mat3(st, st.current_program, &[b"projectionMatrix", b"uProjectionMatrix"]) {
+    if let Some(m) = find_uniform_mat3(
+        st,
+        st.current_program,
+        &[b"projectionMatrix", b"uProjectionMatrix"],
+    ) {
         (tx, ty) = mat3_apply(&m, tx, ty);
         return (tx, ty);
     }
@@ -1001,26 +1015,39 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         .get((pa.buffer_id - 1) as usize)
         .copied()
         .unwrap_or(0);
-    let (color_buffer_id, color_buffer_rev, color_stride, color_offset, color_size, color_type_enum) =
-        if let Some(ca) = color_attr {
-            let cstride = if ca.stride <= 0 {
-                match ca.type_enum {
-                    GL_UNSIGNED_BYTE => ca.size as usize,
-                    GL_FLOAT => (ca.size as usize).saturating_mul(4),
-                    _ => 0,
-                }
-            } else {
-                ca.stride as usize
-            };
-            let crev = st
-                .buffer_revs
-                .get((ca.buffer_id - 1) as usize)
-                .copied()
-                .unwrap_or(0);
-            (ca.buffer_id, crev, cstride, ca.offset, ca.size, ca.type_enum)
+    let (
+        color_buffer_id,
+        color_buffer_rev,
+        color_stride,
+        color_offset,
+        color_size,
+        color_type_enum,
+    ) = if let Some(ca) = color_attr {
+        let cstride = if ca.stride <= 0 {
+            match ca.type_enum {
+                GL_UNSIGNED_BYTE => ca.size as usize,
+                GL_FLOAT => (ca.size as usize).saturating_mul(4),
+                _ => 0,
+            }
         } else {
-            (0, 0, 0, 0, 0, 0)
+            ca.stride as usize
         };
+        let crev = st
+            .buffer_revs
+            .get((ca.buffer_id - 1) as usize)
+            .copied()
+            .unwrap_or(0);
+        (
+            ca.buffer_id,
+            crev,
+            cstride,
+            ca.offset,
+            ca.size,
+            ca.type_enum,
+        )
+    } else {
+        (0, 0, 0, 0, 0, 0)
+    };
     let (uv_buffer_id, uv_buffer_rev, uv_stride, uv_offset, uv_size, uv_type_enum) =
         if let Some(ua) = uv_attr {
             let ustride = if ua.stride <= 0 {
@@ -1033,7 +1060,14 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                 .get((ua.buffer_id - 1) as usize)
                 .copied()
                 .unwrap_or(0);
-            (ua.buffer_id, urev, ustride, ua.offset, ua.size, ua.type_enum)
+            (
+                ua.buffer_id,
+                urev,
+                ustride,
+                ua.offset,
+                ua.size,
+                ua.type_enum,
+            )
         } else {
             (0, 0, 0, 0, 0, 0)
         };
@@ -1111,7 +1145,9 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
     } else {
         decoded_local.reserve(indices.len().saturating_mul(2));
         for idx in indices {
-            let off = pa.offset.saturating_add((*idx as usize).saturating_mul(stride));
+            let off = pa
+                .offset
+                .saturating_add((*idx as usize).saturating_mul(stride));
             let Some(px) = vb.get(off..off + 4) else {
                 continue;
             };
@@ -1126,7 +1162,8 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         decoded_local.as_slice()
     };
 
-    let mut out = Vec::with_capacity((src_xy.len() / 2).saturating_mul(if use_tex { 20 } else { 12 }));
+    let mut out =
+        Vec::with_capacity((src_xy.len() / 2).saturating_mul(if use_tex { 20 } else { 12 }));
     let color_buf = color_attr.and_then(|ca| {
         st.buffers
             .get((ca.buffer_id - 1) as usize)
@@ -1188,7 +1225,8 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                     }
                     if ca.size >= 4 {
                         if let Some(pw) = cb.get(coff + 12..coff + 16) {
-                            let v = f32::from_le_bytes([pw[0], pw[1], pw[2], pw[3]]).clamp(0.0, 1.0);
+                            let v =
+                                f32::from_le_bytes([pw[0], pw[1], pw[2], pw[3]]).clamp(0.0, 1.0);
                             a = (v * 255.0) as u8;
                         }
                     }
@@ -1221,7 +1259,9 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         i += 2;
     }
 
-    if st.vertex_decode_cache.key != Some(cache_key) || st.vertex_decode_cache.indices.as_slice() != indices {
+    if st.vertex_decode_cache.key != Some(cache_key)
+        || st.vertex_decode_cache.indices.as_slice() != indices
+    {
         st.vertex_decode_cache.key = Some(cache_key);
         st.vertex_decode_cache.indices.clear();
         st.vertex_decode_cache.indices.extend_from_slice(indices);
@@ -1443,11 +1483,15 @@ unsafe extern "C" fn gl_tex_image_2d(
         let Some(width) = js_get_obj_u32(ctx, source, b"width\0".as_ptr() as *const c_char) else {
             return qjs::JSValue::undefined();
         };
-        let Some(height) = js_get_obj_u32(ctx, source, b"height\0".as_ptr() as *const c_char) else {
+        let Some(height) = js_get_obj_u32(ctx, source, b"height\0".as_ptr() as *const c_char)
+        else {
             return qjs::JSValue::undefined();
         };
-        let pixels = js_get_obj_arraybuffer_view(ctx, source, b"pixels\0".as_ptr() as *const c_char)
-            .or_else(|| js_get_obj_arraybuffer_view(ctx, source, b"data\0".as_ptr() as *const c_char));
+        let pixels =
+            js_get_obj_arraybuffer_view(ctx, source, b"pixels\0".as_ptr() as *const c_char)
+                .or_else(|| {
+                    js_get_obj_arraybuffer_view(ctx, source, b"data\0".as_ptr() as *const c_char)
+                });
         let (ptr, len) = pixels.unwrap_or((core::ptr::null(), 0));
         (width, height, format, ty, ptr, len)
     };
@@ -1459,7 +1503,9 @@ unsafe extern "C" fn gl_tex_image_2d(
     let mut st = GL_STATE.lock();
     let unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
     let tex_id = st.bound_texture_2d[unit];
-    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
     let mut rgba = vec![0u8; expected];
     if !data_ptr.is_null() && data_len > 0 {
         let src = core::slice::from_raw_parts(data_ptr, data_len.min(expected));
@@ -1544,11 +1590,15 @@ unsafe extern "C" fn gl_tex_sub_image_2d(
         let Some(width) = js_get_obj_u32(ctx, source, b"width\0".as_ptr() as *const c_char) else {
             return qjs::JSValue::undefined();
         };
-        let Some(height) = js_get_obj_u32(ctx, source, b"height\0".as_ptr() as *const c_char) else {
+        let Some(height) = js_get_obj_u32(ctx, source, b"height\0".as_ptr() as *const c_char)
+        else {
             return qjs::JSValue::undefined();
         };
-        let pixels = js_get_obj_arraybuffer_view(ctx, source, b"pixels\0".as_ptr() as *const c_char)
-            .or_else(|| js_get_obj_arraybuffer_view(ctx, source, b"data\0".as_ptr() as *const c_char));
+        let pixels =
+            js_get_obj_arraybuffer_view(ctx, source, b"pixels\0".as_ptr() as *const c_char)
+                .or_else(|| {
+                    js_get_obj_arraybuffer_view(ctx, source, b"data\0".as_ptr() as *const c_char)
+                });
         let (ptr, len) = pixels.unwrap_or((core::ptr::null(), 0));
         (xoff, yoff, width, height, format, ty, ptr, len)
     };
@@ -1560,7 +1610,9 @@ unsafe extern "C" fn gl_tex_sub_image_2d(
     let mut st = GL_STATE.lock();
     let tex_unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
     let tex_id = st.bound_texture_2d[tex_unit];
-    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
     if ptr.is_null() || len == 0 {
         return qjs::JSValue::undefined();
     }
@@ -1821,7 +1873,9 @@ unsafe extern "C" fn gl_create_shader(
     let mut shader_type = GL_FRAGMENT_SHADER;
     if !argv.is_null() && argc >= 1 {
         let args = core::slice::from_raw_parts(argv, argc as usize);
-        shader_type = js_get_f64(ctx, args[0]).unwrap_or(GL_FRAGMENT_SHADER as f64).max(0.0) as u32;
+        shader_type = js_get_f64(ctx, args[0])
+            .unwrap_or(GL_FRAGMENT_SHADER as f64)
+            .max(0.0) as u32;
     }
     let mut st = GL_STATE.lock();
     let id = st.alloc_handle();
@@ -1893,7 +1947,9 @@ unsafe extern "C" fn gl_attach_shader(
     let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
     let shader_id = js_get_handle_id(ctx, args[1]).unwrap_or(0);
     let mut st = GL_STATE.lock();
-    let shader_type = shader_slot(&st, shader_id).map(|s| s.shader_type).unwrap_or(0);
+    let shader_type = shader_slot(&st, shader_id)
+        .map(|s| s.shader_type)
+        .unwrap_or(0);
     if let Some(p) = program_slot_mut(&mut st, prog_id) {
         if shader_type == GL_VERTEX_SHADER {
             p.attached_vertex_shader = shader_id;
@@ -1950,8 +2006,12 @@ unsafe extern "C" fn gl_link_program(
         .and_then(|p| p.as_ref())
         .map(|p| (p.attached_vertex_shader, p.attached_fragment_shader))
         .unwrap_or((0, 0));
-    let vs_src = shader_slot(&st, vs_id).map(|s| s.source.clone()).unwrap_or_default();
-    let fs_src = shader_slot(&st, fs_id).map(|s| s.source.clone()).unwrap_or_default();
+    let vs_src = shader_slot(&st, vs_id)
+        .map(|s| s.source.clone())
+        .unwrap_or_default();
+    let fs_src = shader_slot(&st, fs_id)
+        .map(|s| s.source.clone())
+        .unwrap_or_default();
     if let Some(p) = program_slot_mut(&mut st, prog_id) {
         p.active_attribs.clear();
         p.active_uniforms.clear();
@@ -2004,7 +2064,12 @@ unsafe extern "C" fn gl_get_active_attrib(
         b"name\0".as_ptr() as *const c_char,
         qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len()),
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"type\0".as_ptr() as *const c_char, js_int32(*type_enum as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"type\0".as_ptr() as *const c_char,
+        js_int32(*type_enum as i32),
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, o, b"size\0".as_ptr() as *const c_char, js_int32(*size));
     o
 }
@@ -2038,7 +2103,12 @@ unsafe extern "C" fn gl_get_active_uniform(
         b"name\0".as_ptr() as *const c_char,
         qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len()),
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"type\0".as_ptr() as *const c_char, js_int32(*type_enum as i32));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"type\0".as_ptr() as *const c_char,
+        js_int32(*type_enum as i32),
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, o, b"size\0".as_ptr() as *const c_char, js_int32(*size));
     o
 }
@@ -2193,7 +2263,12 @@ unsafe extern "C" fn gl_get_uniform_location(
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return js_null();
     };
-    let idx = if let Some((i, _)) = p.uniform_names.iter().enumerate().find(|(_, n)| **n == name) {
+    let idx = if let Some((i, _)) = p
+        .uniform_names
+        .iter()
+        .enumerate()
+        .find(|(_, n)| **n == name)
+    {
         i
     } else {
         p.uniform_names.push(name);
@@ -2248,7 +2323,11 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
     let mut st = GL_STATE.lock();
     let prog_id = {
         let p = uniform_loc_program(ctx, loc_obj);
-        if p != 0 { p } else { st.current_program }
+        if p != 0 {
+            p
+        } else {
+            st.current_program
+        }
     };
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return qjs::JSValue::undefined();
@@ -2817,8 +2896,12 @@ unsafe extern "C" fn gl_get_parameter(
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let pname = js_get_f64(ctx, args[0]).unwrap_or(0.0).max(0.0) as u32;
     match pname {
-        GL_VERSION => qjs::JS_NewStringLen(ctx, b"WebGL 1.0 TRUEOS\0".as_ptr() as *const c_char, 16),
-        GL_RENDERER => qjs::JS_NewStringLen(ctx, b"TRUEOS CmdStream\0".as_ptr() as *const c_char, 16),
+        GL_VERSION => {
+            qjs::JS_NewStringLen(ctx, b"WebGL 1.0 TRUEOS\0".as_ptr() as *const c_char, 16)
+        }
+        GL_RENDERER => {
+            qjs::JS_NewStringLen(ctx, b"TRUEOS CmdStream\0".as_ptr() as *const c_char, 16)
+        }
         GL_VENDOR => qjs::JS_NewStringLen(ctx, b"TRUEOS\0".as_ptr() as *const c_char, 6),
         GL_MAX_VERTEX_ATTRIBS => js_int32(MAX_ATTRS as i32),
         GL_MAX_TEXTURE_IMAGE_UNITS => js_int32(8),
@@ -2857,7 +2940,8 @@ unsafe extern "C" fn gl_get_extension(
             qjs::JS_CFUNC_GENERIC,
             0,
         );
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawBuffersWEBGL\0".as_ptr() as *const c_char, f);
+        let _ =
+            qjs::JS_SetPropertyStr(ctx, ext, b"drawBuffersWEBGL\0".as_ptr() as *const c_char, f);
         let _ = qjs::JS_SetPropertyStr(
             ctx,
             ext,
@@ -2921,10 +3005,30 @@ unsafe extern "C" fn gl_get_extension(
             qjs::JS_CFUNC_GENERIC,
             0,
         );
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"createVertexArrayOES\0".as_ptr() as *const c_char, create);
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"bindVertexArrayOES\0".as_ptr() as *const c_char, bind);
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"deleteVertexArrayOES\0".as_ptr() as *const c_char, del);
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"isVertexArrayOES\0".as_ptr() as *const c_char, is);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"createVertexArrayOES\0".as_ptr() as *const c_char,
+            create,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"bindVertexArrayOES\0".as_ptr() as *const c_char,
+            bind,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"deleteVertexArrayOES\0".as_ptr() as *const c_char,
+            del,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"isVertexArrayOES\0".as_ptr() as *const c_char,
+            is,
+        );
         let _ = qjs::JS_SetPropertyStr(
             ctx,
             ext,
@@ -2962,9 +3066,24 @@ unsafe extern "C" fn gl_get_extension(
             qjs::JS_CFUNC_GENERIC,
             0,
         );
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawArraysInstancedANGLE\0".as_ptr() as *const c_char, draw_arrays);
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawElementsInstancedANGLE\0".as_ptr() as *const c_char, draw_elements);
-        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"vertexAttribDivisorANGLE\0".as_ptr() as *const c_char, divisor);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"drawArraysInstancedANGLE\0".as_ptr() as *const c_char,
+            draw_arrays,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"drawElementsInstancedANGLE\0".as_ptr() as *const c_char,
+            draw_elements,
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"vertexAttribDivisorANGLE\0".as_ptr() as *const c_char,
+            divisor,
+        );
         return ext;
     }
     if name.eq_ignore_ascii_case(b"OES_element_index_uint") {
@@ -3038,11 +3157,19 @@ unsafe extern "C" fn canvas2d_measure_text(
     if m.is_exception() {
         return m;
     }
-    let _ = qjs::JS_SetPropertyStr(ctx, m, b"width\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, 0.0));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        m,
+        b"width\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 0.0),
+    );
     m
 }
 
-unsafe fn make_canvas_2d_context(ctx: *mut qjs::JSContext, canvas: qjs::JSValueConst) -> qjs::JSValue {
+unsafe fn make_canvas_2d_context(
+    ctx: *mut qjs::JSContext,
+    canvas: qjs::JSValueConst,
+) -> qjs::JSValue {
     let c2d = qjs::JS_NewObject(ctx);
     if c2d.is_exception() {
         return c2d;
@@ -3137,10 +3264,26 @@ unsafe extern "C" fn gl_get_supported_extensions(
     if arr.is_exception() {
         return arr;
     }
-    let v0 = qjs::JS_NewStringLen(ctx, b"OES_vertex_array_object\0".as_ptr() as *const c_char, 23);
-    let v1 = qjs::JS_NewStringLen(ctx, b"OES_element_index_uint\0".as_ptr() as *const c_char, 22);
-    let v2 = qjs::JS_NewStringLen(ctx, b"ANGLE_instanced_arrays\0".as_ptr() as *const c_char, 22);
-    let v3 = qjs::JS_NewStringLen(ctx, b"EXT_texture_filter_anisotropic\0".as_ptr() as *const c_char, 30);
+    let v0 = qjs::JS_NewStringLen(
+        ctx,
+        b"OES_vertex_array_object\0".as_ptr() as *const c_char,
+        23,
+    );
+    let v1 = qjs::JS_NewStringLen(
+        ctx,
+        b"OES_element_index_uint\0".as_ptr() as *const c_char,
+        22,
+    );
+    let v2 = qjs::JS_NewStringLen(
+        ctx,
+        b"ANGLE_instanced_arrays\0".as_ptr() as *const c_char,
+        22,
+    );
+    let v3 = qjs::JS_NewStringLen(
+        ctx,
+        b"EXT_texture_filter_anisotropic\0".as_ptr() as *const c_char,
+        30,
+    );
     let _ = qjs::JS_SetPropertyUint32(ctx, arr, 0, v0);
     let _ = qjs::JS_SetPropertyUint32(ctx, arr, 1, v1);
     let _ = qjs::JS_SetPropertyUint32(ctx, arr, 2, v2);
@@ -3167,9 +3310,24 @@ unsafe extern "C" fn gl_get_shader_precision_format(
     if o.is_exception() {
         return o;
     }
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"rangeMin\0".as_ptr() as *const c_char, js_int32(127));
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"rangeMax\0".as_ptr() as *const c_char, js_int32(127));
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"precision\0".as_ptr() as *const c_char, js_int32(23));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"rangeMin\0".as_ptr() as *const c_char,
+        js_int32(127),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"rangeMax\0".as_ptr() as *const c_char,
+        js_int32(127),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"precision\0".as_ptr() as *const c_char,
+        js_int32(23),
+    );
     o
 }
 
@@ -3193,8 +3351,18 @@ unsafe extern "C" fn gl_get_context_attributes(
         return o;
     }
     let _ = qjs::JS_SetPropertyStr(ctx, o, b"alpha\0".as_ptr() as *const c_char, js_bool(false));
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"antialias\0".as_ptr() as *const c_char, js_bool(false));
-    let _ = qjs::JS_SetPropertyStr(ctx, o, b"stencil\0".as_ptr() as *const c_char, js_bool(false));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"antialias\0".as_ptr() as *const c_char,
+        js_bool(false),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        o,
+        b"stencil\0".as_ptr() as *const c_char,
+        js_bool(false),
+    );
     let _ = qjs::JS_SetPropertyStr(ctx, o, b"depth\0".as_ptr() as *const c_char, js_bool(false));
     o
 }
@@ -3216,8 +3384,15 @@ pub unsafe extern "C" fn canvas_get_context(
     let kind = CStr::from_ptr(kind_c).to_bytes();
     if kind.eq_ignore_ascii_case(b"2d") {
         qjs::JS_FreeCString(ctx, kind_c);
-        let existing2d = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_2d_ctx\0".as_ptr() as *const c_char);
-        if !existing2d.is_exception() && existing2d.tag != qjs::JS_TAG_UNDEFINED && existing2d.tag != qjs::JS_TAG_NULL {
+        let existing2d = qjs::JS_GetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_2d_ctx\0".as_ptr() as *const c_char,
+        );
+        if !existing2d.is_exception()
+            && existing2d.tag != qjs::JS_TAG_UNDEFINED
+            && existing2d.tag != qjs::JS_TAG_NULL
+        {
             return existing2d;
         }
         qjs::js_free_value(ctx, existing2d);
@@ -3226,18 +3401,31 @@ pub unsafe extern "C" fn canvas_get_context(
             return c2d;
         }
         let keep = qjs::js_dup_value(ctx, c2d);
-        let _ = qjs::JS_SetPropertyStr(ctx, this_val, b"__trueos_2d_ctx\0".as_ptr() as *const c_char, keep);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_2d_ctx\0".as_ptr() as *const c_char,
+            keep,
+        );
         return c2d;
     }
 
-    let ok = kind.eq_ignore_ascii_case(b"webgl") || kind.eq_ignore_ascii_case(b"experimental-webgl");
+    let ok =
+        kind.eq_ignore_ascii_case(b"webgl") || kind.eq_ignore_ascii_case(b"experimental-webgl");
     qjs::JS_FreeCString(ctx, kind_c);
     if !ok {
         return js_null();
     }
 
-    let existing = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_gl_ctx\0".as_ptr() as *const c_char);
-    if !existing.is_exception() && existing.tag != qjs::JS_TAG_UNDEFINED && existing.tag != qjs::JS_TAG_NULL {
+    let existing = qjs::JS_GetPropertyStr(
+        ctx,
+        this_val,
+        b"__trueos_gl_ctx\0".as_ptr() as *const c_char,
+    );
+    if !existing.is_exception()
+        && existing.tag != qjs::JS_TAG_UNDEFINED
+        && existing.tag != qjs::JS_TAG_NULL
+    {
         return existing;
     }
     qjs::js_free_value(ctx, existing);
@@ -3282,10 +3470,18 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("getProgramInfoLog", gl_get_info_log, 1);
     gl_fn!("getActiveAttrib", gl_get_active_attrib, 2);
     gl_fn!("getActiveUniform", gl_get_active_uniform, 2);
-    gl_fn!("getShaderPrecisionFormat", gl_get_shader_precision_format, 2);
+    gl_fn!(
+        "getShaderPrecisionFormat",
+        gl_get_shader_precision_format,
+        2
+    );
     gl_fn!("getAttribLocation", gl_get_attrib_location, 2);
     gl_fn!("enableVertexAttribArray", gl_enable_vertex_attrib_array, 1);
-    gl_fn!("disableVertexAttribArray", gl_disable_vertex_attrib_array, 1);
+    gl_fn!(
+        "disableVertexAttribArray",
+        gl_disable_vertex_attrib_array,
+        1
+    );
     gl_fn!("vertexAttribPointer", gl_vertex_attrib_pointer, 6);
     gl_fn!("getUniformLocation", gl_get_uniform_location, 2);
     gl_fn!("uniformMatrix3fv", gl_uniform_matrix3fv, 3);
@@ -3373,7 +3569,12 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("getContextAttributes", gl_get_context_attributes, 0);
 
     set_i32_const(ctx, gl, b"ARRAY_BUFFER\0", GL_ARRAY_BUFFER as i32);
-    set_i32_const(ctx, gl, b"ELEMENT_ARRAY_BUFFER\0", GL_ELEMENT_ARRAY_BUFFER as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"ELEMENT_ARRAY_BUFFER\0",
+        GL_ELEMENT_ARRAY_BUFFER as i32,
+    );
     set_i32_const(ctx, gl, b"STATIC_DRAW\0", 0x88E4);
     set_i32_const(ctx, gl, b"DYNAMIC_DRAW\0", 0x88E8);
     set_i32_const(ctx, gl, b"FLOAT\0", GL_FLOAT as i32);
@@ -3412,9 +3613,24 @@ pub unsafe extern "C" fn canvas_get_context(
     set_i32_const(ctx, gl, b"VENDOR\0", GL_VENDOR as i32);
     set_i32_const(ctx, gl, b"FRAGMENT_SHADER\0", GL_FRAGMENT_SHADER as i32);
     set_i32_const(ctx, gl, b"VERTEX_SHADER\0", GL_VERTEX_SHADER as i32);
-    set_i32_const(ctx, gl, b"MAX_VERTEX_ATTRIBS\0", GL_MAX_VERTEX_ATTRIBS as i32);
-    set_i32_const(ctx, gl, b"MAX_TEXTURE_IMAGE_UNITS\0", GL_MAX_TEXTURE_IMAGE_UNITS as i32);
-    set_i32_const(ctx, gl, b"MAX_COMBINED_TEXTURE_IMAGE_UNITS\0", GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"MAX_VERTEX_ATTRIBS\0",
+        GL_MAX_VERTEX_ATTRIBS as i32,
+    );
+    set_i32_const(
+        ctx,
+        gl,
+        b"MAX_TEXTURE_IMAGE_UNITS\0",
+        GL_MAX_TEXTURE_IMAGE_UNITS as i32,
+    );
+    set_i32_const(
+        ctx,
+        gl,
+        b"MAX_COMBINED_TEXTURE_IMAGE_UNITS\0",
+        GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS as i32,
+    );
     set_i32_const(ctx, gl, b"STENCIL_BITS\0", GL_STENCIL_BITS as i32);
     set_i32_const(ctx, gl, b"HIGH_FLOAT\0", GL_HIGH_FLOAT as i32);
     set_i32_const(ctx, gl, b"MEDIUM_FLOAT\0", GL_MEDIUM_FLOAT as i32);
@@ -3442,13 +3658,33 @@ pub unsafe extern "C" fn canvas_get_context(
     set_i32_const(ctx, gl, b"FLOAT_MAT4\0", GL_FLOAT_MAT4 as i32);
     set_i32_const(ctx, gl, b"SAMPLER_2D\0", GL_SAMPLER_2D as i32);
     set_i32_const(ctx, gl, b"INT_SAMPLER_2D\0", GL_INT_SAMPLER_2D as i32);
-    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_2D\0", GL_UNSIGNED_INT_SAMPLER_2D as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"UNSIGNED_INT_SAMPLER_2D\0",
+        GL_UNSIGNED_INT_SAMPLER_2D as i32,
+    );
     set_i32_const(ctx, gl, b"SAMPLER_CUBE\0", GL_SAMPLER_CUBE as i32);
     set_i32_const(ctx, gl, b"INT_SAMPLER_CUBE\0", GL_INT_SAMPLER_CUBE as i32);
-    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_CUBE\0", GL_UNSIGNED_INT_SAMPLER_CUBE as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"UNSIGNED_INT_SAMPLER_CUBE\0",
+        GL_UNSIGNED_INT_SAMPLER_CUBE as i32,
+    );
     set_i32_const(ctx, gl, b"SAMPLER_2D_ARRAY\0", GL_SAMPLER_2D_ARRAY as i32);
-    set_i32_const(ctx, gl, b"INT_SAMPLER_2D_ARRAY\0", GL_INT_SAMPLER_2D_ARRAY as i32);
-    set_i32_const(ctx, gl, b"UNSIGNED_INT_SAMPLER_2D_ARRAY\0", GL_UNSIGNED_INT_SAMPLER_2D_ARRAY as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"INT_SAMPLER_2D_ARRAY\0",
+        GL_INT_SAMPLER_2D_ARRAY as i32,
+    );
+    set_i32_const(
+        ctx,
+        gl,
+        b"UNSIGNED_INT_SAMPLER_2D_ARRAY\0",
+        GL_UNSIGNED_INT_SAMPLER_2D_ARRAY as i32,
+    );
 
     let mut w = 1280.0f64;
     let mut h = 800.0f64;
@@ -3458,8 +3694,18 @@ pub unsafe extern "C" fn canvas_get_context(
     let _ = qjs::JS_ToFloat64(ctx, &mut h as *mut f64, hv);
     qjs::js_free_value(ctx, wv);
     qjs::js_free_value(ctx, hv);
-    let _ = qjs::JS_SetPropertyStr(ctx, gl, b"drawingBufferWidth\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, w.max(1.0)));
-    let _ = qjs::JS_SetPropertyStr(ctx, gl, b"drawingBufferHeight\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, h.max(1.0)));
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        gl,
+        b"drawingBufferWidth\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, w.max(1.0)),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        gl,
+        b"drawingBufferHeight\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, h.max(1.0)),
+    );
 
     {
         let mut st = GL_STATE.lock();
@@ -3468,6 +3714,11 @@ pub unsafe extern "C" fn canvas_get_context(
     }
 
     let keep = qjs::js_dup_value(ctx, gl);
-    let _ = qjs::JS_SetPropertyStr(ctx, this_val, b"__trueos_gl_ctx\0".as_ptr() as *const c_char, keep);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        this_val,
+        b"__trueos_gl_ctx\0".as_ptr() as *const c_char,
+        keep,
+    );
     gl
 }

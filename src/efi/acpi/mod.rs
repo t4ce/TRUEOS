@@ -1,7 +1,7 @@
 use core::ptr::NonNull;
 
-use acpi::{AcpiTables, Handler as AcpiHandler, PciAddress, PhysicalMapping};
 use crate::wait;
+use acpi::{AcpiTables, Handler as AcpiHandler, PciAddress, PhysicalMapping};
 use embassy_time_driver::TICK_HZ;
 use spin::Once;
 
@@ -45,7 +45,10 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                     }
                 }
                 if ssdt_count != 0 {
-                    crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
+                    crate::log!(
+                        "ACPI TABLE SSDT count={} (see ssdt::log_once)\n",
+                        ssdt_count
+                    );
                 }
                 crate::log!("ACPI RSDP 0x{:X} tables={}\n", rsdp, count);
                 Some(tables)
@@ -227,9 +230,5 @@ impl AcpiHandler for AcpiIdentityHandler {
         Ok(())
     }
 
-    fn release(&self, _handle: acpi::Handle) {
-    }
+    fn release(&self, _handle: acpi::Handle) {}
 }
-
-
-

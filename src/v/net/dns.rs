@@ -7,7 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::Vec as HVec;
 use spin::Mutex;
 
-use trueos_v::vnet as vnet;
+use trueos_v::vnet;
 
 use super::VNet;
 
@@ -86,7 +86,11 @@ fn alloc_dns_id() -> u16 {
     // Avoid 0; keep reasonably unique.
     let s = DNS_SEQ.fetch_add(1, Ordering::Relaxed);
     let id = (s as u16) ^ ((s >> 16) as u16) ^ 0xBEEF;
-    if id == 0 { 1 } else { id }
+    if id == 0 {
+        1
+    } else {
+        id
+    }
 }
 
 #[inline]
@@ -291,7 +295,12 @@ fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
 
         if class == 1 {
             if typ == 1 && rdlen == 4 {
-                return Some(DnsAnswer::A([pkt[idx], pkt[idx + 1], pkt[idx + 2], pkt[idx + 3]]));
+                return Some(DnsAnswer::A([
+                    pkt[idx],
+                    pkt[idx + 1],
+                    pkt[idx + 2],
+                    pkt[idx + 3],
+                ]));
             }
             if typ == 5 && cname.is_none() {
                 if let Some((name, _next)) = dns_read_name(pkt, idx) {
@@ -478,7 +487,8 @@ pub async fn resolve_ipv4_for_device(
                         .find(|e| e.dev_idx as usize == dev_idx && e.host.as_str() == hs.as_str())
                     {
                         e.ip = ip;
-                        e.expires_at = embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS);
+                        e.expires_at =
+                            embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS);
                     } else {
                         let dev = dev_idx.min(255) as u8;
                         let _ = cache.push(DnsCacheEntry {
@@ -490,7 +500,8 @@ pub async fn resolve_ipv4_for_device(
                                 s
                             },
                             ip,
-                            expires_at: embassy_time_driver::now().saturating_add(DNS_CACHE_TTL_TICKS),
+                            expires_at: embassy_time_driver::now()
+                                .saturating_add(DNS_CACHE_TTL_TICKS),
                         });
                     }
                 }

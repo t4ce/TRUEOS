@@ -1,19 +1,19 @@
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
 use alloc::string::ToString;
+use alloc::{boxed::Box, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String as HString;
 
-use trueos_v::vnet as vnet;
+use trueos_v::vnet;
 
+use crate::net::tls::{TlsClientConfig, TlsRoots};
+use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
 use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::Queue;
-use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
-use crate::net::tls::{TlsClientConfig, TlsRoots};
 
 // Default host for the demo.
 // NOTE: We now resolve via the slirp DNS server so the demo is resilient to
@@ -22,9 +22,7 @@ const DEMO_HOST: &str = "example.com";
 const DEMO_PORT: u16 = 443;
 
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
 fn parse_http_status(buf: &[u8]) -> Option<u16> {
@@ -317,7 +315,10 @@ fn header_parse_content_length(headers: &[u8]) -> Option<usize> {
         let name = &line[..colon];
         const CL: &[u8] = b"content-length";
         if name.len() != CL.len()
-            || !name.iter().zip(CL.iter()).all(|(&a, &b)| ascii_lower(a) == b)
+            || !name
+                .iter()
+                .zip(CL.iter())
+                .all(|(&a, &b)| ascii_lower(a) == b)
         {
             continue;
         }
@@ -443,8 +444,8 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     );
 
     let preferred = TLS_DEMO_PREFERRED_DEV.load(Ordering::Relaxed);
-    let preferred = (preferred != u32::MAX && (preferred as usize) < dev_count)
-        .then_some(preferred as usize);
+    let preferred =
+        (preferred != u32::MAX && (preferred as usize) < dev_count).then_some(preferred as usize);
 
     if let Some(dev_idx) = preferred {
         if tls_demo_attempt_device(slot_id, initial_host, dev_idx).await {
@@ -481,7 +482,8 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
     'redirects: loop {
         crate::matrix::push_line(slot_id, "https: opening tls/tcp");
 
-        let Ok(ip) = dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::default()).await else {
+        let Ok(ip) = dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::default()).await
+        else {
             crate::log!("tls_demo: dns failed (device={})\n", dev_idx);
             break 'redirects;
         };
@@ -499,7 +501,12 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
         let seq = TLS_DEMO_JOB_SEQ.fetch_add(1, Ordering::Relaxed);
         // Suffix with "@<idx>" so tls-socket can pin the underlying TCP socket to
         // the chosen NIC.
-        let owner = leak_str(alloc::format!("tlsdemo-{}-{}@{}", slot_id + 1, seq, dev_idx));
+        let owner = leak_str(alloc::format!(
+            "tlsdemo-{}-{}@{}",
+            slot_id + 1,
+            seq,
+            dev_idx
+        ));
         let cmds_name = leak_str(alloc::format!("{}-tls-cmd", owner));
         let evts_name = leak_str(alloc::format!("{}-tls-evt", owner));
         let cmds = Queue::new_leaked(cmds_name, 128);
@@ -598,7 +605,8 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                     crate::matrix::push_line(slot_id, line.as_str());
                                 }
 
-                                let content_encoding = header_get_value(headers, b"content-encoding");
+                                let content_encoding =
+                                    header_get_value(headers, b"content-encoding");
                                 if let Some(ce) = content_encoding {
                                     let ce = core::str::from_utf8(ce).unwrap_or("<non-utf8>");
                                     let line = alloc::format!("https: content-encoding={}", ce);
@@ -617,7 +625,8 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                 // (Google frequently uses gzip.)
                                 if let Some(ce) = content_encoding {
                                     if header_value_contains_token(ce, b"gzip") {
-                                        if let Some(out) = decode_gzip(&decoded_body, MAX_PLAINTEXT) {
+                                        if let Some(out) = decode_gzip(&decoded_body, MAX_PLAINTEXT)
+                                        {
                                             let msg = alloc::format!(
                                                 "https: gunzip {} -> {} bytes",
                                                 decoded_body.len(),
@@ -626,10 +635,16 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                             crate::matrix::push_line(slot_id, msg.as_str());
                                             decoded_body = out;
                                         } else {
-                                            crate::matrix::push_line(slot_id, "https: gunzip failed (maybe truncated)");
+                                            crate::matrix::push_line(
+                                                slot_id,
+                                                "https: gunzip failed (maybe truncated)",
+                                            );
                                         }
                                     } else if header_value_contains_token(ce, b"br") {
-                                        crate::matrix::push_line(slot_id, "https: brotli body (not decoded)");
+                                        crate::matrix::push_line(
+                                            slot_id,
+                                            "https: brotli body (not decoded)",
+                                        );
                                     }
                                 }
 
@@ -639,10 +654,15 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                 // Redirect handling: follow up to 3 redirects.
                                 if redirects < 3 {
                                     if let Some(code) = status_code {
-                                        let is_redirect = matches!(code, 301 | 302 | 303 | 307 | 308);
+                                        let is_redirect =
+                                            matches!(code, 301 | 302 | 303 | 307 | 308);
                                         if is_redirect {
-                                            if let Some(loc) = header_get_value(headers, b"location") {
-                                                if let Some(next) = parse_redirect_target(&target, loc) {
+                                            if let Some(loc) =
+                                                header_get_value(headers, b"location")
+                                            {
+                                                if let Some(next) =
+                                                    parse_redirect_target(&target, loc)
+                                                {
                                                     redirects += 1;
                                                     let msg = alloc::format!(
                                                         "https: redirect {}/3 -> {}{}",
@@ -666,7 +686,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                         }
                                     }
                                 } else {
-                                    crate::matrix::push_line(slot_id, "https: redirect limit reached (3)");
+                                    crate::matrix::push_line(
+                                        slot_id,
+                                        "https: redirect limit reached (3)",
+                                    );
                                 }
 
                                 merged
@@ -708,7 +731,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
 
             if !sent_connect {
                 let _ = cmds.push(TlsCommand::OpenTcpConnect {
-                    remote: vnet::EndpointV4 { addr: ip, port: target.port },
+                    remote: vnet::EndpointV4 {
+                        addr: ip,
+                        port: target.port,
+                    },
                     server_name: target.host,
                     cfg: cfg.clone(),
                     roots: roots.clone(),

@@ -41,7 +41,10 @@ pub async fn install_bootable_uefi_gpt_with_log(
             log(alloc::format!("install: trueosfs::locate failed ({:?}); continuing", e).as_str());
             // If the disk is temporarily not ready or I/O is failing, abort rather than
             // attempting a destructive repartition.
-            if matches!(e, block::Error::NotReady | block::Error::Timeout | block::Error::Io) {
+            if matches!(
+                e,
+                block::Error::NotReady | block::Error::Timeout | block::Error::Io
+            ) {
                 return Err(e);
             }
             None
@@ -57,7 +60,9 @@ pub async fn install_bootable_uefi_gpt_with_log(
     let parent_id = disk.id();
     let parent_info = disk.info();
 
-    let (esp_range, trueos_range) = if let (Some(loc), Some(parts)) = (existing_trueosfs, existing_parts) {
+    let (esp_range, trueos_range) = if let (Some(loc), Some(parts)) =
+        (existing_trueosfs, existing_parts)
+    {
         let esp = parts
             .iter()
             .find(|p| p.type_guid.as_bytes() == &partition::GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES)
@@ -72,18 +77,20 @@ pub async fn install_bootable_uefi_gpt_with_log(
             (esp, trueos)
         } else {
             log("install: stage=write_gpt (refresh)");
-            let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await {
-                Ok(v) => v,
-                Err(e) => {
-                    log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
-                    return Err(e);
-                }
-            };
+            let layout =
+                match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
+                        return Err(e);
+                    }
+                };
             (layout.esp, layout.trueos)
         }
     } else {
         log("install: stage=write_gpt (fresh)");
-        let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await {
+        let layout = match gpt::write_trueos_bootable_gpt_layout_with_log(disk, esp_mib, log).await
+        {
             Ok(v) => v,
             Err(e) => {
                 log(alloc::format!("install: gpt write failed ({:?})", e).as_str());
@@ -93,20 +100,19 @@ pub async fn install_bootable_uefi_gpt_with_log(
         (layout.esp, layout.trueos)
     };
 
-    log(
-        alloc::format!(
-            "install: preserve_trueosfs={} (esp lba={} blocks={}, trueos lba={} blocks={})",
-            preserve_trueosfs,
-            esp_range.first_lba(),
-            esp_range.block_count(),
-            trueos_range.first_lba(),
-            trueos_range.block_count(),
-        )
-        .as_str(),
-    );
+    log(alloc::format!(
+        "install: preserve_trueosfs={} (esp lba={} blocks={}, trueos lba={} blocks={})",
+        preserve_trueosfs,
+        esp_range.first_lba(),
+        esp_range.block_count(),
+        trueos_range.first_lba(),
+        trueos_range.block_count(),
+    )
+    .as_str());
 
     let esp_handle = {
-        let mut d = block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
+        let mut d =
+            block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
         d.label = Some("TRUEOS ESP".into());
         d.pci = parent_info.pci;
         if !parent_info.writable {
@@ -117,7 +123,8 @@ pub async fn install_bootable_uefi_gpt_with_log(
     };
 
     let trueos_handle = {
-        let mut d = block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
+        let mut d =
+            block::DeviceDescriptor::new(block::DeviceKind::Partition).with_parent(parent_id);
         d.label = Some("TRUEOS".into());
         d.pci = parent_info.pci;
         if !parent_info.writable {
@@ -138,15 +145,13 @@ kernel_path: boot():/TRUEOS.ELF\n\
 resolution: 1920x1080x32\n\n";
 
     log("install: stage=format_esp_fat32");
-    log(
-        alloc::format!(
-            "install: esp range lba={} blocks={} (~{} MiB)",
-            esp_range.first_lba(),
-            esp_range.block_count(),
-            (esp_range.block_count().saturating_mul(512) + (1024 * 1024 - 1)) / (1024 * 1024)
-        )
-        .as_str(),
-    );
+    log(alloc::format!(
+        "install: esp range lba={} blocks={} (~{} MiB)",
+        esp_range.first_lba(),
+        esp_range.block_count(),
+        (esp_range.block_count().saturating_mul(512) + (1024 * 1024 - 1)) / (1024 * 1024)
+    )
+    .as_str());
     if let Err(e) = fat32::format_and_populate_esp_with_log(
         esp_handle,
         fat32::EspImage {
@@ -156,7 +161,8 @@ resolution: 1920x1080x32\n\n";
         },
         log,
     )
-    .await {
+    .await
+    {
         log(alloc::format!("install: fat32 format/populate failed ({:?})", e).as_str());
         return Err(e);
     }

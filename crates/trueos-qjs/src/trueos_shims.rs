@@ -1,8 +1,8 @@
 extern crate alloc;
 
+use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
-use core::ffi::CStr;
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -28,8 +28,18 @@ extern "C" {
     pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
-    pub fn trueos_cabi_fs_rename(src_ptr: *const u8, src_len: usize, dst_ptr: *const u8, dst_len: usize) -> i32;
-    pub fn trueos_cabi_fs_list_dir(path_ptr: *const u8, path_len: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_fs_rename(
+        src_ptr: *const u8,
+        src_len: usize,
+        dst_ptr: *const u8,
+        dst_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_fs_list_dir(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_start(
         url_ptr: *const u8,
@@ -40,12 +50,12 @@ extern "C" {
     pub fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
-        pub fn trueos_cabi_input_pop_mouse(
-            out_buttons: *mut u8,
-            out_dx: *mut i8,
-            out_dy: *mut i8,
-            out_wheel: *mut i8,
-        ) -> i32;
+    pub fn trueos_cabi_input_pop_mouse(
+        out_buttons: *mut u8,
+        out_dx: *mut i8,
+        out_dy: *mut i8,
+        out_wheel: *mut i8,
+    ) -> i32;
 
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
@@ -142,7 +152,11 @@ pub unsafe extern "C" fn __assert_fail(
 
 #[no_mangle]
 pub unsafe extern "C" fn abs(x: c_int) -> c_int {
-    if x < 0 { -x } else { x }
+    if x < 0 {
+        -x
+    } else {
+        x
+    }
 }
 
 #[no_mangle]
@@ -281,7 +295,14 @@ fn unix_timestamp_to_ymdhms(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64)
     (year, month, mday, hour, min, sec, wday, yday)
 }
 
-fn ymdhms_to_unix_timestamp(year: i64, month0: i64, mday: i64, hour: i64, min: i64, sec: i64) -> Option<i64> {
+fn ymdhms_to_unix_timestamp(
+    year: i64,
+    month0: i64,
+    mday: i64,
+    hour: i64,
+    min: i64,
+    sec: i64,
+) -> Option<i64> {
     if month0 < 0 || month0 > 11 || mday < 1 || mday > 31 {
         return None;
     }

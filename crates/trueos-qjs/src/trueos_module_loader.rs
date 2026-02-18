@@ -176,7 +176,11 @@ unsafe fn read_file_js_malloc_rc(
     Ok((buf, got as usize))
 }
 
-unsafe fn fetch_to_cache_rc_async(url: &[u8], cache_path: &[u8], timeout_ms: u64) -> Result<(), i32> {
+unsafe fn fetch_to_cache_rc_async(
+    url: &[u8],
+    cache_path: &[u8],
+    timeout_ms: u64,
+) -> Result<(), i32> {
     let hz = TICK_HZ as u64;
     let total_ticks = if timeout_ms == 0 || hz == 0 {
         0
@@ -503,8 +507,8 @@ pub(crate) unsafe fn normalize_with_mode(
     }
 
     // Bare specifiers.
-        if !path_is_relative(spec) {
-            // Always keep known TRUEOS native modules.
+    if !path_is_relative(spec) {
+        // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"
             || spec == b"cmd_stream"
@@ -766,7 +770,10 @@ unsafe fn load_url_module(
     m
 }
 
-unsafe fn load_fs_module(ctx: *mut qjs::JSContext, module_name: *const c_char) -> *mut qjs::JSModuleDef {
+unsafe fn load_fs_module(
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
+) -> *mut qjs::JSModuleDef {
     if module_name.is_null() {
         return core::ptr::null_mut();
     }
@@ -923,5 +930,10 @@ pub unsafe fn install(rt: *mut qjs::JSRuntime) {
     if rt.is_null() {
         return;
     }
-    qjs::JS_SetModuleLoaderFunc(rt, Some(trueos_module_normalize), Some(trueos_module_loader), core::ptr::null_mut());
+    qjs::JS_SetModuleLoaderFunc(
+        rt,
+        Some(trueos_module_normalize),
+        Some(trueos_module_loader),
+        core::ptr::null_mut(),
+    );
 }

@@ -34,7 +34,11 @@ fn js_bool(b: bool) -> qjs::JSValue {
 unsafe fn js_get_f64(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<f64> {
     let mut out = 0.0f64;
     let rc = unsafe { qjs::JS_ToFloat64(ctx, &mut out as *mut f64, v) };
-    if rc == 0 { Some(out) } else { None }
+    if rc == 0 {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -51,9 +55,9 @@ unsafe fn js_value_strict_eq(a: qjs::JSValueConst, b: qjs::JSValueConst) -> bool
         return false;
     }
     match a.tag {
-        qjs::JS_TAG_INT | qjs::JS_TAG_BOOL | qjs::JS_TAG_NULL | qjs::JS_TAG_UNDEFINED => {
-            unsafe { a.u.int32 == b.u.int32 }
-        }
+        qjs::JS_TAG_INT | qjs::JS_TAG_BOOL | qjs::JS_TAG_NULL | qjs::JS_TAG_UNDEFINED => unsafe {
+            a.u.int32 == b.u.int32
+        },
         qjs::JS_TAG_FLOAT64 => unsafe { a.u.float64 == b.u.float64 },
         _ => unsafe { a.u.ptr == b.u.ptr },
     }
@@ -62,8 +66,15 @@ unsafe fn js_value_strict_eq(a: qjs::JSValueConst, b: qjs::JSValueConst) -> bool
 pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target: qjs::JSValue) {
     static RAF_ID: AtomicU32 = AtomicU32::new(1);
 
-    unsafe fn get_or_create_listeners_obj(ctx: *mut qjs::JSContext, target: qjs::JSValueConst) -> qjs::JSValue {
-        let v = qjs::JS_GetPropertyStr(ctx, target, b"__trueos_listeners\0".as_ptr() as *const c_char);
+    unsafe fn get_or_create_listeners_obj(
+        ctx: *mut qjs::JSContext,
+        target: qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let v = qjs::JS_GetPropertyStr(
+            ctx,
+            target,
+            b"__trueos_listeners\0".as_ptr() as *const c_char,
+        );
         if !v.is_exception() && v.tag != qjs::JS_TAG_UNDEFINED && v.tag != qjs::JS_TAG_NULL {
             return v;
         }
@@ -108,7 +119,10 @@ pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target:
             return qjs::JSValue::undefined();
         }
         let arr0 = qjs::JS_GetPropertyStr(ctx, listeners, ty_c);
-        let arr = if arr0.is_exception() || arr0.tag == qjs::JS_TAG_UNDEFINED || arr0.tag == qjs::JS_TAG_NULL {
+        let arr = if arr0.is_exception()
+            || arr0.tag == qjs::JS_TAG_UNDEFINED
+            || arr0.tag == qjs::JS_TAG_NULL
+        {
             qjs::js_free_value(ctx, arr0);
             let a = qjs::JS_NewArray(ctx);
             let _ = qjs::JS_SetPropertyStr(ctx, listeners, ty_c, qjs::js_dup_value(ctx, a));
@@ -139,8 +153,15 @@ pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target:
         if ty_c.is_null() {
             return qjs::JSValue::undefined();
         }
-        let listeners = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_listeners\0".as_ptr() as *const c_char);
-        if listeners.is_exception() || listeners.tag == qjs::JS_TAG_UNDEFINED || listeners.tag == qjs::JS_TAG_NULL {
+        let listeners = qjs::JS_GetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_listeners\0".as_ptr() as *const c_char,
+        );
+        if listeners.is_exception()
+            || listeners.tag == qjs::JS_TAG_UNDEFINED
+            || listeners.tag == qjs::JS_TAG_NULL
+        {
             qjs::JS_FreeCString(ctx, ty_c);
             qjs::js_free_value(ctx, listeners);
             return qjs::JSValue::undefined();
@@ -189,8 +210,15 @@ pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target:
             return js_bool(true);
         }
 
-        let listeners = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_listeners\0".as_ptr() as *const c_char);
-        if listeners.is_exception() || listeners.tag == qjs::JS_TAG_UNDEFINED || listeners.tag == qjs::JS_TAG_NULL {
+        let listeners = qjs::JS_GetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_listeners\0".as_ptr() as *const c_char,
+        );
+        if listeners.is_exception()
+            || listeners.tag == qjs::JS_TAG_UNDEFINED
+            || listeners.tag == qjs::JS_TAG_NULL
+        {
             qjs::JS_FreeCString(ctx, ty_c);
             qjs::js_free_value(ctx, listeners);
             return js_bool(true);
@@ -243,7 +271,8 @@ pub unsafe fn ensure_global_event_target_stubs(ctx: *mut qjs::JSContext, target:
         let global = qjs::JS_GetGlobalObject(ctx);
         let proc = qjs::JS_GetPropertyStr(ctx, global, b"process\0".as_ptr() as *const c_char);
         if !proc.is_exception() && proc.tag != qjs::JS_TAG_UNDEFINED {
-            let next_tick = qjs::JS_GetPropertyStr(ctx, proc, b"nextTick\0".as_ptr() as *const c_char);
+            let next_tick =
+                qjs::JS_GetPropertyStr(ctx, proc, b"nextTick\0".as_ptr() as *const c_char);
             if !next_tick.is_exception() && next_tick.tag != qjs::JS_TAG_UNDEFINED {
                 let argv2 = [cb];
                 let _ = qjs::JS_Call(
@@ -303,9 +332,24 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
         let _ = qjs::JS_SetPropertyStr(ctx, o, b"y\0".as_ptr() as *const c_char, js_int32(st.y));
         let _ = qjs::JS_SetPropertyStr(ctx, o, b"dx\0".as_ptr() as *const c_char, js_int32(st.dx));
         let _ = qjs::JS_SetPropertyStr(ctx, o, b"dy\0".as_ptr() as *const c_char, js_int32(st.dy));
-        let _ = qjs::JS_SetPropertyStr(ctx, o, b"wheel\0".as_ptr() as *const c_char, js_int32(st.wheel));
-        let _ = qjs::JS_SetPropertyStr(ctx, o, b"buttons\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, st.buttons as f64));
-        let _ = qjs::JS_SetPropertyStr(ctx, o, b"seq\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, st.seq as f64));
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            o,
+            b"wheel\0".as_ptr() as *const c_char,
+            js_int32(st.wheel),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            o,
+            b"buttons\0".as_ptr() as *const c_char,
+            qjs::JS_NewFloat64(ctx, st.buttons as f64),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            o,
+            b"seq\0".as_ptr() as *const c_char,
+            qjs::JS_NewFloat64(ctx, st.seq as f64),
+        );
         o
     }
 
@@ -323,7 +367,11 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
         }
 
         // Track last buttons on the window object.
-        let last_btn_v = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_mouse_last_buttons\0".as_ptr() as *const c_char);
+        let last_btn_v = qjs::JS_GetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_mouse_last_buttons\0".as_ptr() as *const c_char,
+        );
         let last_buttons = js_get_f64(ctx, last_btn_v).unwrap_or(0.0).max(0.0) as u32;
         qjs::js_free_value(ctx, last_btn_v);
         let cur_buttons = st.buttons as u32;
@@ -343,7 +391,11 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
         }
 
         // Find primary canvas if present.
-        let canvas = qjs::JS_GetPropertyStr(ctx, this_val, b"__trueos_primary_canvas\0".as_ptr() as *const c_char);
+        let canvas = qjs::JS_GetPropertyStr(
+            ctx,
+            this_val,
+            b"__trueos_primary_canvas\0".as_ptr() as *const c_char,
+        );
 
         let mk_evt = |ty: &[u8]| -> qjs::JSValue {
             let e = qjs::JS_NewObject(ctx);
@@ -356,12 +408,42 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
                 b"type\0".as_ptr() as *const c_char,
                 qjs::JS_NewStringLen(ctx, ty.as_ptr() as *const c_char, ty.len()),
             );
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"clientX\0".as_ptr() as *const c_char, js_int32(st.x));
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"clientY\0".as_ptr() as *const c_char, js_int32(st.y));
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"movementX\0".as_ptr() as *const c_char, js_int32(st.dx));
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"movementY\0".as_ptr() as *const c_char, js_int32(st.dy));
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"buttons\0".as_ptr() as *const c_char, qjs::JS_NewFloat64(ctx, st.buttons as f64));
-            let _ = qjs::JS_SetPropertyStr(ctx, e, b"deltaY\0".as_ptr() as *const c_char, js_int32(st.wheel));
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"clientX\0".as_ptr() as *const c_char,
+                js_int32(st.x),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"clientY\0".as_ptr() as *const c_char,
+                js_int32(st.y),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"movementX\0".as_ptr() as *const c_char,
+                js_int32(st.dx),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"movementY\0".as_ptr() as *const c_char,
+                js_int32(st.dy),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"buttons\0".as_ptr() as *const c_char,
+                qjs::JS_NewFloat64(ctx, st.buttons as f64),
+            );
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                e,
+                b"deltaY\0".as_ptr() as *const c_char,
+                js_int32(st.wheel),
+            );
             e
         };
 
@@ -369,7 +451,8 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
             if target.is_exception() || target.tag != qjs::JS_TAG_OBJECT {
                 return;
             }
-            let disp = qjs::JS_GetPropertyStr(ctx, target, b"dispatchEvent\0".as_ptr() as *const c_char);
+            let disp =
+                qjs::JS_GetPropertyStr(ctx, target, b"dispatchEvent\0".as_ptr() as *const c_char);
             if disp.is_exception() || disp.tag == qjs::JS_TAG_UNDEFINED {
                 qjs::js_free_value(ctx, disp);
                 return;
@@ -417,14 +500,24 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
                     &b"mouseup"[..]
                 };
                 let evt = mk_evt(ty);
-                let _ = qjs::JS_SetPropertyStr(ctx, evt, b"button\0".as_ptr() as *const c_char, js_int32(button_idx));
+                let _ = qjs::JS_SetPropertyStr(
+                    ctx,
+                    evt,
+                    b"button\0".as_ptr() as *const c_char,
+                    js_int32(button_idx),
+                );
                 dispatch_to(this_val, evt);
                 dispatch_to(canvas, evt);
                 qjs::js_free_value(ctx, evt);
 
                 if !down {
                     let evt2 = mk_evt(b"click");
-                    let _ = qjs::JS_SetPropertyStr(ctx, evt2, b"button\0".as_ptr() as *const c_char, js_int32(button_idx));
+                    let _ = qjs::JS_SetPropertyStr(
+                        ctx,
+                        evt2,
+                        b"button\0".as_ptr() as *const c_char,
+                        js_int32(button_idx),
+                    );
                     dispatch_to(this_val, evt2);
                     dispatch_to(canvas, evt2);
                     qjs::js_free_value(ctx, evt2);
@@ -452,8 +545,18 @@ pub unsafe fn install_mouse_api(ctx: *mut qjs::JSContext, target: qjs::JSValue) 
         qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = qjs::JS_SetPropertyStr(ctx, target, b"__trueos_mouse_poll\0".as_ptr() as *const c_char, poll);
-    let _ = qjs::JS_SetPropertyStr(ctx, target, b"__trueos_mouse_pump\0".as_ptr() as *const c_char, pump);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        target,
+        b"__trueos_mouse_poll\0".as_ptr() as *const c_char,
+        poll,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        target,
+        b"__trueos_mouse_pump\0".as_ptr() as *const c_char,
+        pump,
+    );
 }
 
 pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
@@ -497,7 +600,12 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
         }
         let args = core::slice::from_raw_parts(argv, argc as usize);
         let child = qjs::js_dup_value(ctx, args[0]);
-        let _ = qjs::JS_SetPropertyStr(ctx, child, b"parentNode\0".as_ptr() as *const c_char, js_null());
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            child,
+            b"parentNode\0".as_ptr() as *const c_char,
+            js_null(),
+        );
         child
     }
 
@@ -516,10 +624,18 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
             return qjs::JSValue::undefined();
         }
         let attrs = qjs::JS_GetPropertyStr(ctx, this_val, b"__attrs\0".as_ptr() as *const c_char);
-        let attrs_obj = if attrs.is_exception() || attrs.tag == qjs::JS_TAG_UNDEFINED || attrs.tag == qjs::JS_TAG_NULL {
+        let attrs_obj = if attrs.is_exception()
+            || attrs.tag == qjs::JS_TAG_UNDEFINED
+            || attrs.tag == qjs::JS_TAG_NULL
+        {
             qjs::js_free_value(ctx, attrs);
             let o = qjs::JS_NewObject(ctx);
-            let _ = qjs::JS_SetPropertyStr(ctx, this_val, b"__attrs\0".as_ptr() as *const c_char, qjs::js_dup_value(ctx, o));
+            let _ = qjs::JS_SetPropertyStr(
+                ctx,
+                this_val,
+                b"__attrs\0".as_ptr() as *const c_char,
+                qjs::js_dup_value(ctx, o),
+            );
             o
         } else {
             attrs
@@ -545,7 +661,10 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
             return js_null();
         }
         let attrs = qjs::JS_GetPropertyStr(ctx, this_val, b"__attrs\0".as_ptr() as *const c_char);
-        if attrs.is_exception() || attrs.tag == qjs::JS_TAG_UNDEFINED || attrs.tag == qjs::JS_TAG_NULL {
+        if attrs.is_exception()
+            || attrs.tag == qjs::JS_TAG_UNDEFINED
+            || attrs.tag == qjs::JS_TAG_NULL
+        {
             qjs::JS_FreeCString(ctx, key);
             qjs::js_free_value(ctx, attrs);
             return js_null();
@@ -633,7 +752,12 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
         qjs::js_free_value(ctx, style);
     }
 
-    let _ = qjs::JS_SetPropertyStr(ctx, node, b"parentNode\0".as_ptr() as *const c_char, js_null());
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        node,
+        b"parentNode\0".as_ptr() as *const c_char,
+        js_null(),
+    );
 
     macro_rules! node_fn {
         ($name:literal, $func:expr, $argc:expr) => {{

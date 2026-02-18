@@ -66,7 +66,7 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
 
     fn drain_rx(&mut self, limit: usize) -> Vec<Vec<u8>> {
         if self.rx_queue.is_empty() {
-             return Vec::new();
+            return Vec::new();
         }
         let len = self.rx_queue.len().min(limit);
         self.rx_queue.drain(..len).collect()

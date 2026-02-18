@@ -315,7 +315,9 @@ impl DeviceCaps {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
-    ClearColor { rgb: u32 },
+    ClearColor {
+        rgb: u32,
+    },
     ClearRect {
         rgb: u32,
         x: u32,
@@ -324,11 +326,17 @@ pub enum Command {
         height: u32,
     },
     BindPipeline(PipelineId),
-    BindVertexBuffer { buffer: BufferId, offset: u64 },
+    BindVertexBuffer {
+        buffer: BufferId,
+        offset: u64,
+    },
     BindImage(ImageId),
     SetSampler(SamplerDesc),
     SetViewport(Viewport),
-    Draw { vertex_count: u32, first_vertex: u32 },
+    Draw {
+        vertex_count: u32,
+        first_vertex: u32,
+    },
     Present,
 }
 

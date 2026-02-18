@@ -3,9 +3,7 @@ use core::ptr::NonNull;
 use acpi::sdt::hpet::HpetInfo;
 use spin::Once;
 
-use crate::{
-    pci::mmio::{self, MapError as MmioMapError},
-};
+use crate::pci::mmio::{self, MapError as MmioMapError};
 
 use super::ensure_tables;
 

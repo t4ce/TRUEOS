@@ -10,9 +10,9 @@
 
 extern crate alloc;
 
-use alloc::sync::Arc;
 use alloc::boxed::Box;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use rustls::time_provider::TimeProvider;
@@ -67,8 +67,7 @@ impl TlsClientConfig {
 
     pub fn with_alpn_protocols(mut self, protos: &[&[u8]]) -> Self {
         self.alpn.clear();
-        self.alpn
-            .extend(protos.iter().map(|p| (*p).to_vec()));
+        self.alpn.extend(protos.iter().map(|p| (*p).to_vec()));
         self
     }
 }
@@ -283,11 +282,12 @@ impl TlsClient {
         }
 
         let provider = Arc::new(rustls_rustcrypto::provider());
-        let mut config = rustls::client::ClientConfig::builder_with_details(provider, time_provider)
-            .with_safe_default_protocol_versions()
-            .map_err(|_| TlsError::InvalidConfig)?
-            .with_root_certificates(roots.store.clone())
-            .with_no_client_auth();
+        let mut config =
+            rustls::client::ClientConfig::builder_with_details(provider, time_provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|_| TlsError::InvalidConfig)?
+                .with_root_certificates(roots.store.clone())
+                .with_no_client_auth();
 
         if !cfg.alpn.is_empty() {
             config.alpn_protocols = cfg.alpn.clone();

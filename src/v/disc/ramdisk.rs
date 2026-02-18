@@ -43,14 +43,20 @@ impl block::BlockDevice for RamdiskDevice {
         self.block_count
     }
 
-    fn read_blocks<'a>(&'a mut self, lba: u64, blocks: usize) -> block::BoxFuture<'a, block::Result<Vec<u8>>> {
+    fn read_blocks<'a>(
+        &'a mut self,
+        lba: u64,
+        blocks: usize,
+    ) -> block::BoxFuture<'a, block::Result<Vec<u8>>> {
         Box::pin(async move {
             if blocks == 0 {
                 return Ok(Vec::new());
             }
             let bs = self.block_size as usize;
             let blocks_u64 = blocks as u64;
-            let end = lba.checked_add(blocks_u64).ok_or(block::Error::OutOfBounds)?;
+            let end = lba
+                .checked_add(blocks_u64)
+                .ok_or(block::Error::OutOfBounds)?;
             if end > self.block_count {
                 return Err(block::Error::OutOfBounds);
             }
@@ -69,7 +75,11 @@ impl block::BlockDevice for RamdiskDevice {
         })
     }
 
-    fn write_blocks<'a>(&'a mut self, lba: u64, buf: &'a [u8]) -> block::BoxFuture<'a, block::Result<()>> {
+    fn write_blocks<'a>(
+        &'a mut self,
+        lba: u64,
+        buf: &'a [u8],
+    ) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
             let bs = self.block_size as usize;
             if bs == 0 || (buf.len() % bs) != 0 {
@@ -89,7 +99,9 @@ impl block::BlockDevice for RamdiskDevice {
                 .ok()
                 .and_then(|v| v.checked_mul(bs))
                 .ok_or(block::Error::InvalidParam)?;
-            let stop = start.checked_add(buf.len()).ok_or(block::Error::InvalidParam)?;
+            let stop = start
+                .checked_add(buf.len())
+                .ok_or(block::Error::InvalidParam)?;
             if stop > self.data.len() {
                 return Err(block::Error::OutOfBounds);
             }
@@ -114,6 +126,7 @@ impl block::BlockDevice for RamdiskDevice {
 
 pub fn create(size_bytes: u64, block_size: u32) -> Result<block::DeviceHandle, block::Error> {
     let dev = RamdiskDevice::new(size_bytes, block_size)?;
-    let desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk).with_label(String::from("ramdisk"));
+    let desc = block::DeviceDescriptor::new(block::DeviceKind::Ramdisk)
+        .with_label(String::from("ramdisk"));
     Ok(block::register_device(desc, dev))
 }

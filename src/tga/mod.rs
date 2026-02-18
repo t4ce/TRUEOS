@@ -234,7 +234,11 @@ fn log_tga_state(prefix: &str, tga: &Tga) {
         tga.bar_phys,
         tga.bar_size,
         if tga.bar_is_64 { "64b" } else { "32b" },
-        if tga.bar_assigned_by_os { "assigned" } else { "fw" },
+        if tga.bar_assigned_by_os {
+            "assigned"
+        } else {
+            "fw"
+        },
         tga.mmio_base
     );
 }

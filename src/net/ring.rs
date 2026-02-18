@@ -31,8 +31,10 @@ pub fn recycle_rx_buf(mut buf: Vec<u8>) {
     }
     // Safety: we are about to put this into the ring for DMA overwrite.
     // The previous contents don't matter, and we don't need to zero-fill (costly).
-    unsafe { buf.set_len(RX_BUF_SIZE); }
-    
+    unsafe {
+        buf.set_len(RX_BUF_SIZE);
+    }
+
     let mut pool = PACKET_POOL.lock();
     if pool.len() < POOL_MAX {
         pool.push(buf);
@@ -51,7 +53,11 @@ unsafe impl Send for DmaRegion {}
 impl DmaRegion {
     pub fn alloc(size: usize, align: usize) -> Option<Self> {
         let (phys, virt) = crate::pci::dma::alloc(size, align)?;
-        Some(Self { phys, virt, len: size })
+        Some(Self {
+            phys,
+            virt,
+            len: size,
+        })
     }
 
     pub fn phys(&self) -> u64 {
@@ -86,7 +92,6 @@ struct RxSlot {
     owned_by_hw: bool,
 }
 
-
 pub struct RxRing {
     slots: Vec<RxSlot>,
     head: usize,
@@ -103,7 +108,11 @@ impl RxRing {
                 owned_by_hw: true,
             });
         }
-        Self { slots, head: 0, tail: 0 }
+        Self {
+            slots,
+            head: 0,
+            tail: 0,
+        }
     }
 
     pub fn mark_complete(&mut self, slot: usize, len: usize) {
@@ -121,13 +130,13 @@ impl RxRing {
             if slot.owned_by_hw || slot.len == 0 {
                 break;
             }
-            
+
             // Swap buffer from pool to avoid allocation and copy
             let new_buf = alloc_rx_buf();
             let len = slot.len;
             let mut packet = core::mem::replace(&mut slot.buf, new_buf);
             packet.truncate(len);
-            
+
             out.push(packet);
             slot.len = 0;
             slot.owned_by_hw = true;
@@ -178,11 +187,7 @@ pub struct NetRing {
 }
 
 impl NetRing {
-    pub fn new(
-        rx_desc: usize,
-        rx_buf_size: usize,
-        poll_budget: usize,
-    ) -> Self {
+    pub fn new(rx_desc: usize, rx_buf_size: usize, poll_budget: usize) -> Self {
         Self {
             rx: RxRing::new(rx_desc, rx_buf_size),
             poll_budget: poll_budget.max(1),
@@ -197,7 +202,6 @@ impl NetRing {
     pub fn push_rx_packet(&mut self, data: &[u8]) -> Result<(), RxError> {
         self.rx.push_packet(data)
     }
-
 
     pub fn rx_ring_mut(&mut self) -> &mut RxRing {
         &mut self.rx

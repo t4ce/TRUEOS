@@ -375,7 +375,10 @@ async fn read_exact_bytes<D: BlockIo>(
             blocks = MAX_BLOCKS_PER_READ;
         }
 
-        let scratch = dev.read_blocks(lba, blocks).await.map_err(FsError::Device)?;
+        let scratch = dev
+            .read_blocks(lba, blocks)
+            .await
+            .map_err(FsError::Device)?;
         let need_bytes = blocks.saturating_mul(bs);
         if scratch.len() < need_bytes {
             return Err(FsError::Corrupted);
@@ -515,7 +518,9 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         buf
     };
 
-    let Some((mut sb, entry_lba, blocks)) = check_space_for_put(dev, params, 0, payload.len()).await? else {
+    let Some((mut sb, entry_lba, blocks)) =
+        check_space_for_put(dev, params, 0, payload.len()).await?
+    else {
         return Ok(false);
     };
 
@@ -529,7 +534,9 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0)
+        .await
+        .map_err(FsError::Device)?;
 
     // 2) Payload blocks.
     let payload_blocks = (payload.len() + (bs - 1)) / bs;
@@ -566,7 +573,9 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr1)
+        .await
+        .map_err(FsError::Device)?;
     dev.flush().await.map_err(FsError::Device)?;
 
     // 4) Update superblock: advance log head and point checkpoint pointer here.
@@ -696,7 +705,9 @@ async fn write_stream_at_lba<D: BlockIo>(
             written_exact = written_exact.saturating_add(n);
         }
 
-        dev.write_blocks(lba, &chunk).await.map_err(FsError::Device)?;
+        dev.write_blocks(lba, &chunk)
+            .await
+            .map_err(FsError::Device)?;
         lba = lba.saturating_add(blocks_here as u64);
         written = written.saturating_add(bytes_here);
     }
@@ -751,7 +762,9 @@ fn batch_maybe_compact(stream: &mut PutWriteStream) {
     if stream.batch_off == 0 {
         return;
     }
-    if stream.batch_off >= stream.max_transfer_bytes || stream.batch_off.saturating_mul(2) >= stream.batch.len() {
+    if stream.batch_off >= stream.max_transfer_bytes
+        || stream.batch_off.saturating_mul(2) >= stream.batch.len()
+    {
         let remain = stream.batch.len().saturating_sub(stream.batch_off);
         stream.batch.copy_within(stream.batch_off.., 0);
         stream.batch.truncate(remain);
@@ -790,7 +803,9 @@ pub async fn begin_write_file_stream<D: BlockIo>(
         integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0)
+        .await
+        .map_err(FsError::Device)?;
 
     // Name blocks (padded).
     let name_len = name.as_bytes().len();
@@ -811,13 +826,16 @@ pub async fn begin_write_file_stream<D: BlockIo>(
             core::cmp::max(bs, mt - (mt % bs))
         }
     };
-    let batch_capacity = core::cmp::min(2 * 1024 * 1024, core::cmp::max(bs, max_transfer_bytes * 2));
+    let batch_capacity =
+        core::cmp::min(2 * 1024 * 1024, core::cmp::max(bs, max_transfer_bytes * 2));
 
     Ok(Some(PutWriteStream {
         sb_before: sb,
         entry_lba,
         total_blocks,
-        data_lba: entry_lba.saturating_add(1).saturating_add(name_blocks as u64),
+        data_lba: entry_lba
+            .saturating_add(1)
+            .saturating_add(name_blocks as u64),
         data_len,
         written: 0,
         name_len: name_len as u16,
@@ -886,9 +904,7 @@ pub async fn write_file_stream_chunk<D: BlockIo>(
         dev.write_blocks(stream.data_lba, &stream.batch[start..stop])
             .await
             .map_err(FsError::Device)?;
-        stream.data_lba = stream
-            .data_lba
-            .saturating_add((bytes_here / bs) as u64);
+        stream.data_lba = stream.data_lba.saturating_add((bytes_here / bs) as u64);
         stream.batch_off = stop;
         batch_maybe_compact(stream);
     }
@@ -917,9 +933,7 @@ pub async fn finish_write_file_stream<D: BlockIo>(
             dev.write_blocks(stream.data_lba, &stream.batch[start..stop])
                 .await
                 .map_err(FsError::Device)?;
-            stream.data_lba = stream
-                .data_lba
-                .saturating_add((bytes_here / bs) as u64);
+            stream.data_lba = stream.data_lba.saturating_add((bytes_here / bs) as u64);
             stream.batch_off = stop;
         }
         stream.batch.clear();
@@ -981,7 +995,9 @@ async fn write_delete_entry<D: BlockIo>(
         integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr0);
-    dev.write_blocks(entry_lba, &hdr0).await.map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr0)
+        .await
+        .map_err(FsError::Device)?;
 
     let name_bytes = name.as_bytes();
     let name_blocks = (name_bytes.len() + (bs - 1)) / bs;
@@ -1045,7 +1061,9 @@ async fn write_delete_entry<D: BlockIo>(
         integrity_tag: ZERO_INTEGRITY_TAG,
     }
     .encode_into_block(&mut hdr1);
-    dev.write_blocks(entry_lba, &hdr1).await.map_err(FsError::Device)?;
+    dev.write_blocks(entry_lba, &hdr1)
+        .await
+        .map_err(FsError::Device)?;
     dev.flush().await.map_err(FsError::Device)?;
     Ok(blocks)
 }
@@ -1074,7 +1092,9 @@ async fn read_put_entry_data<D: BlockIo>(
     }
 
     let name_blocks = (name_len + (bs - 1)) / bs;
-    let data_lba = entry_lba.saturating_add(1).saturating_add(name_blocks as u64);
+    let data_lba = entry_lba
+        .saturating_add(1)
+        .saturating_add(name_blocks as u64);
 
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
@@ -1157,9 +1177,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
                         latest_delete = None;
                     }
                     LogKind::Delete => {
-                        let ref_lba = lba
-                            .saturating_add(1)
-                            .saturating_add(name_blocks as u64);
+                        let ref_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
                         let mut ref_bytes = [0u8; DELETE_REF_BYTES];
                         read_exact_bytes(dev, ref_lba, 0, &mut ref_bytes).await?;
                         let deleted_entry_lba = u64::from_le_bytes(ref_bytes);
@@ -1290,7 +1308,8 @@ pub async fn write_file<D: BlockIo>(
     name: &str,
     bytes: &[u8],
 ) -> Result<bool, FsError<D::Error>> {
-    let Some(mut stream) = begin_write_file_stream(dev, params, name, bytes.len() as u64).await? else {
+    let Some(mut stream) = begin_write_file_stream(dev, params, name, bytes.len() as u64).await?
+    else {
         return Ok(false);
     };
     write_file_stream_chunk(dev, &mut stream, bytes).await?;
@@ -1318,7 +1337,9 @@ pub async fn read_file_info<D: BlockIo>(
     let Some(rec) = find_latest_record(dev, params, name).await? else {
         return Ok(None);
     };
-    Ok(Some(FileInfo { data_len: rec.data_len }))
+    Ok(Some(FileInfo {
+        data_len: rec.data_len,
+    }))
 }
 
 pub async fn lookup_file_record<D: BlockIo>(
@@ -1425,7 +1446,7 @@ pub async fn get_file_record_at<D: BlockIo>(
     if expected_name.as_bytes().len() != name_len {
         return Ok(None);
     }
-    
+
     // Verify name matches.
     let name_lba = entry_lba.saturating_add(1);
     let mut name_bytes = vec![0u8; name_len];

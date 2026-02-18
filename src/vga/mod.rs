@@ -3,11 +3,11 @@ use fontdue::{Font, FontSettings};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
+use alloc::vec;
+use alloc::vec::Vec;
 use core::f32::consts::PI;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use alloc::vec::Vec;
-use alloc::vec;
 
 pub struct Image<'a> {
     pub width: usize,
@@ -102,7 +102,8 @@ pub fn init_font_cache() {
 pub(crate) async fn init_font_cache_task() {
     async move {
         init_font_cache();
-    }.await;
+    }
+    .await;
 }
 
 pub fn current_colors() -> Option<(u32, u32, u32)> {
@@ -164,12 +165,9 @@ pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
 }
 
 pub fn log_fmt(args: fmt::Arguments<'_>) -> bool {
-    let (fg, bg, shadow) = current_colors().unwrap_or((DEFAULT_FG_COLOR, DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR));
-    let mut w = VgaLogWriter {
-        fg,
-        bg,
-        shadow,
-    };
+    let (fg, bg, shadow) =
+        current_colors().unwrap_or((DEFAULT_FG_COLOR, DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR));
+    let mut w = VgaLogWriter { fg, bg, shadow };
     fmt::write(&mut w, args).is_ok()
 }
 
@@ -520,7 +518,8 @@ impl FramebufferSurface {
 
         for y in 0..copy_h {
             let dst_y = origin_y + y;
-            let dst_row_ptr = unsafe { self.addr.add(dst_y.saturating_mul(self.pitch)) as *mut u32 };
+            let dst_row_ptr =
+                unsafe { self.addr.add(dst_y.saturating_mul(self.pitch)) as *mut u32 };
             let dst_row = unsafe { core::slice::from_raw_parts_mut(dst_row_ptr, self.width) };
 
             let src_off = y * image.width;
@@ -569,12 +568,7 @@ fn build_font_cache_small() -> FontCacheSmall {
     let mut glyphs = Vec::new();
     let mut index = [u16::MAX; 256];
 
-    fn add_glyph(
-        font: &Font,
-        ch: char,
-        glyphs: &mut Vec<GlyphCell>,
-        index: &mut [u16; 256],
-    ) {
+    fn add_glyph(font: &Font, ch: char, glyphs: &mut Vec<GlyphCell>, index: &mut [u16; 256]) {
         let (metrics, bitmap) = font.rasterize(ch, FONT_CELL_H as f32);
         let mut cell = [0u8; FONT_CELL_W * FONT_CELL_H];
 
@@ -666,7 +660,9 @@ impl FontCacheLarge {
 }
 
 pub fn get_banner_glyph(ch: char) -> Option<(&'static [u8], usize)> {
-    font_cache_large().lookup(ch).map(|g| (&g.alpha[..], g.width as usize))
+    font_cache_large()
+        .lookup(ch)
+        .map(|g| (&g.alpha[..], g.width as usize))
 }
 
 pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
@@ -677,7 +673,11 @@ pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
 
     for ch in text.chars() {
         if let Some((alpha, w)) = get_banner_glyph(ch) {
-            let rgb = if ch == '§' { 0x00_FF_37_FF } else { 0x00_FF_FF_FF };
+            let rgb = if ch == '§' {
+                0x00_FF_37_FF
+            } else {
+                0x00_FF_FF_FF
+            };
             glyph_runs.push((alpha, w, rgb));
             total_width += w + 1;
         }
@@ -897,12 +897,7 @@ fn build_font_cache_large() -> FontCacheLarge {
     let mut glyphs = Vec::new();
     let mut index = [u16::MAX; 256];
 
-    fn add_glyph(
-        font: &Font,
-        ch: char,
-        glyphs: &mut Vec<GlyphCellLarge>,
-        index: &mut [u16; 256],
-    ) {
+    fn add_glyph(font: &Font, ch: char, glyphs: &mut Vec<GlyphCellLarge>, index: &mut [u16; 256]) {
         let (metrics, bitmap) = font.rasterize(ch, BANNER_CELL_H as f32);
         let mut cell = [0u8; BANNER_CELL_W * BANNER_CELL_H];
         let mut width = (metrics.advance_width + 0.5) as i32;
@@ -1008,8 +1003,7 @@ const MANDELBROT_W: usize = 256;
 const MANDELBROT_H: usize = 256;
 
 #[link_section = ".bss"]
-static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] =
-    [0; MANDELBROT_W * MANDELBROT_H];
+static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] = [0; MANDELBROT_W * MANDELBROT_H];
 
 pub(crate) fn draw_mandelbrot() {
     let Some((fb_w, fb_h)) = framebuffer_dimensions() else {

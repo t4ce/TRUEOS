@@ -1,7 +1,6 @@
-
-use core::fmt::Write;
-use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
+use crate::shell::CommandAction;
+use core::fmt::Write;
 
 pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     // Keep this comfortably above the total command count because `list_command_names()` includes
@@ -11,10 +10,10 @@ pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
     cmds.as_mut_slice().sort_unstable();
 
     ctx.io.write_str("\r\n");
-    
+
     let light_green = (100, 255, 100);
     let mut col_count = 0;
-    
+
     for name in cmds {
         // Skip subcommands (containing dot)
         if name.contains('.') {
@@ -22,21 +21,22 @@ pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         }
 
         // [name] + space
-        let len = name.len() + 3; 
+        let len = name.len() + 3;
         if col_count + len > *ctx.term_cols {
             ctx.io.write_str("\r\n");
             col_count = 0;
         }
-        
+
         ctx.io.write_str("[");
         let color = if name.eq_ignore_ascii_case("install") || name.eq_ignore_ascii_case("update") {
-             (255, 55, 255)
+            (255, 55, 255)
         } else {
-             light_green
+            light_green
         };
-        ctx.io.write_fmt(format_args!("{}", crate::ecma48::color(name, color)));
+        ctx.io
+            .write_fmt(format_args!("{}", crate::ecma48::color(name, color)));
         ctx.io.write_str("] ");
-        
+
         col_count += len;
     }
     ctx.io.write_str("\r\n");
@@ -44,14 +44,18 @@ pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
     CommandAction::None
 }
 
-pub(crate) fn cmd_section(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_section(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     // No args: list slots.
     let Some(args) = args else {
         let mut buf: heapless::String<512> = heapless::String::new();
         crate::matrix::list_slots(&mut buf);
         ctx.io.write_str(buf.as_str());
         if let Some(active) = crate::shell::statusbar::active_slot() {
-            ctx.io.write_fmt(format_args!("status: active §{}\r\n", active + 1));
+            ctx.io
+                .write_fmt(format_args!("status: active §{}\r\n", active + 1));
         } else {
             ctx.io.write_str("status: active (none)\r\n");
         }
@@ -104,12 +108,14 @@ fn write_crlf_lines(io: &dyn crate::shell::ShellIo, s: &str) {
     }
 }
 
-pub(crate) fn cmd_ecma48(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_ecma48(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     // Escaped IO not needed, forward not possible with new lifetimes easily for spawned tasks
-    ctx.io.write_str("ecma48: local echo only in prepend mode\r\n");
-    let arg = args
-        .and_then(|a| a.get_str(0))
-        .unwrap_or("");
+    ctx.io
+        .write_str("ecma48: local echo only in prepend mode\r\n");
+    let arg = args.and_then(|a| a.get_str(0)).unwrap_or("");
     crate::shell::ecma48::handle_ecma48(ctx.io, arg, *ctx.term_cols);
     CommandAction::None
 }
@@ -118,17 +124,26 @@ pub(crate) fn cmd_go(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
     CommandAction::EnterGo
 }
 
-pub(crate) fn cmd_go_two(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_go_two(
+    _ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     CommandAction::EnterGoTwo
 }
 
-pub(crate) fn cmd_mandel(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_mandel(
+    ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     crate::vga::draw_mandelbrot();
     ctx.io.write_str("mandel ok\r\n");
     CommandAction::None
 }
 
-pub(crate) fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_set(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let Some(args) = args else {
         ctx.io.write_str("set: usage set <cols> <rows>\r\n");
         return CommandAction::None;
@@ -148,7 +163,8 @@ pub(crate) fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
 
     crate::shell::apply_shell_scroll_region(ctx.io, rows);
     // Restore cursor to safe area (Row 3) because DECSTBM resets to (1,1)
-    ctx.io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+    ctx.io
+        .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
 
     let mut buf: heapless::String<64> = heapless::String::new();
     let _ = write!(&mut buf, "term set: {}x{}\r\n", cols, rows);
@@ -157,7 +173,10 @@ pub(crate) fn cmd_set(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::None
 }
 
-pub(crate) fn cmd_cube(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_cube(
+    _ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     CommandAction::EnterCube
 }
 
@@ -165,7 +184,10 @@ pub(crate) fn cmd_ico(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>
     CommandAction::EnterIco
 }
 
-pub(crate) fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_txt(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let arg = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
 
     if !arg.is_empty() {
@@ -182,13 +204,20 @@ pub(crate) fn cmd_txt(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     CommandAction::EnterTxtEdt { filename, slot_id }
 }
 
-pub(crate) fn cmd_tetris(_ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_tetris(
+    _ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     CommandAction::EnterTetris
 }
 
-pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_insane(
+    ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     let cols = (*ctx.term_cols).max(1);
-    ctx.io.write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
+    ctx.io
+        .write_str("insane: iterating U+0000..=U+10FFFF (Ctrl-C to abort)\r\n");
 
     let mut col: usize = 0;
     for cp in 0u32..=0x10FFFF {
@@ -223,7 +252,10 @@ pub(crate) fn cmd_insane(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_
     CommandAction::None
 }
 
-pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_>>) -> CommandAction {
+pub(crate) fn cmd_qjs(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
     // Shell UX: default to the QJS REPL.
     // Keep only a minimal help escape hatch so users can discover REPL commands.
     let rest = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
@@ -233,5 +265,7 @@ pub(crate) fn cmd_qjs(ctx: &mut ShellCommandCtx<'_>, args: Option<&ParsedArgs<'_
     }
 
     // (Other execution paths still exist for internal callers like the AI bridge.)
-    CommandAction::Qjs { src: heapless::String::new() }
+    CommandAction::Qjs {
+        src: heapless::String::new(),
+    }
 }

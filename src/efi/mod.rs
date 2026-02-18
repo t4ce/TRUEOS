@@ -1,6 +1,4 @@
-
 use crate::pci::mmio;
-
 
 use crate::limine;
 
@@ -331,22 +329,23 @@ pub unsafe fn runtime_services_reset(reset_type: EfiResetType) {
     let Some(st) = system_table() else { return };
     // st.runtime_services is physical.
     // Map the RuntimeServices table structure.
-    let Ok(rt_ptr) = mmio::map_limine_struct::<EfiRuntimeServices>(st.runtime_services as u64) else { return };
+    let Ok(rt_ptr) = mmio::map_limine_struct::<EfiRuntimeServices>(st.runtime_services as u64)
+    else {
+        return;
+    };
     let rt = rt_ptr.as_ref();
-    
+
     // rt.reset_system is physical (function pointer).
     // Convert to virtual via HHDM (assuming Limine provides it and it's executable).
-    let Some(hhdm) = limine::hhdm_offset() else { return };
-    
+    let Some(hhdm) = limine::hhdm_offset() else {
+        return;
+    };
+
     let fn_phys = rt.reset_system as u64;
     let fn_virt = hhdm + fn_phys;
-    
-    let reset_fn: unsafe extern "efiapi" fn(EfiResetType, usize, usize, *const u8) -> ! = 
+
+    let reset_fn: unsafe extern "efiapi" fn(EfiResetType, usize, usize, *const u8) -> ! =
         core::mem::transmute(fn_virt as usize);
 
     reset_fn(reset_type, 0, 0, core::ptr::null());
 }
-
-
-
-

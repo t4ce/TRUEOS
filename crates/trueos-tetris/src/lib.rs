@@ -343,7 +343,11 @@ where
         self.current
     }
 
-    pub fn soft_drop<R: RandomSource, T: TetrisEvents>(&mut self, rng: &mut R, events: &mut T) -> TickResult {
+    pub fn soft_drop<R: RandomSource, T: TetrisEvents>(
+        &mut self,
+        rng: &mut R,
+        events: &mut T,
+    ) -> TickResult {
         if self.game_over {
             return TickResult::GameOver;
         }
@@ -369,7 +373,11 @@ where
         TickResult::Locked
     }
 
-    pub fn hard_drop<R: RandomSource, T: TetrisEvents>(&mut self, rng: &mut R, events: &mut T) -> TickResult {
+    pub fn hard_drop<R: RandomSource, T: TetrisEvents>(
+        &mut self,
+        rng: &mut R,
+        events: &mut T,
+    ) -> TickResult {
         if self.game_over {
             return TickResult::GameOver;
         }
@@ -846,4 +854,3 @@ fn normalize_points(points: &mut [Point; MAX_PIECE_CELLS], count: usize) {
         point.y -= min_y;
     }
 }
-

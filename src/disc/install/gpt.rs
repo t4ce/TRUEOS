@@ -2,7 +2,8 @@ use alloc::{vec, vec::Vec};
 
 use crate::disc::block::{DeviceHandle, Error, Result};
 use crate::v::disc::partition::{
-    BlockRange, TrueosBootLayout, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES, GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+    BlockRange, TrueosBootLayout, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES,
+    GPT_TYPE_LINUX_FILESYSTEM_BYTES,
 };
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
@@ -135,15 +136,13 @@ async fn write_blocks_aligned_with_log(
     match device.write_blocks(lba, tmp.as_mut_slice()).await {
         Ok(()) => Ok(()),
         Err(e) => {
-            log(
-                alloc::format!(
-                    "install: gpt: write failed lba={} bytes={} err={:?}",
-                    lba,
-                    buf.len(),
-                    e
-                )
-                .as_str(),
-            );
+            log(alloc::format!(
+                "install: gpt: write failed lba={} bytes={} err={:?}",
+                lba,
+                buf.len(),
+                e
+            )
+            .as_str());
             Err(e)
         }
     }
@@ -315,7 +314,10 @@ pub async fn write_gpt_layout_with_log(
         entries[off + 48..off + 56].copy_from_slice(&p.attributes.to_le_bytes());
 
         // name (UTF-16LE, fixed field)
-        write_utf16le_fixed(&mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES], p.name);
+        write_utf16le_fixed(
+            &mut entries[off + 56..off + 56 + GPT_PARTITION_NAME_BYTES],
+            p.name,
+        );
     }
 
     let entries_crc = crc32_ieee(&entries);

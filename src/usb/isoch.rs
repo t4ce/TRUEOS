@@ -2,30 +2,13 @@
 //! This keeps TRB/endpoint-context details inside xHCI while exposing a small API
 //! for class drivers (e.g., UAC) to queue periodic packets.
 
-use crate::usb::xhci::{
-    self,
-    context_index,
-    endpoint_target,
-    ep_avg_trb_len_bits,
-    ep_cerr_bits,
-    ep_interval_bits,
-    ep_max_burst_bits,
-    ep_max_esit_payload_hi_bits,
-    ep_max_esit_payload_lo_bits,
-    ep_max_packet_bits,
-    ep_mult_bits,
-    ep_type_bits,
-    ep_state_bits,
-    hi,
-    lo,
-    trb_type,
-    Trb,
-    TrbRing,
-    XhciContext,
-    EP_STATE_DISABLED,
-    EP_TYPE_ISOCH_OUT,
-};
 use crate::pci::dma;
+use crate::usb::xhci::{
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
+    ep_max_burst_bits, ep_max_esit_payload_hi_bits, ep_max_esit_payload_lo_bits,
+    ep_max_packet_bits, ep_mult_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type, Trb, TrbRing,
+    XhciContext, EP_STATE_DISABLED, EP_TYPE_ISOCH_OUT,
+};
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;
@@ -81,8 +64,7 @@ impl IsochOutPipe {
         // UAC keeps an explicit in-flight budget; this ring only needs to be "reasonably big".
         const ISOCH_TRBS: usize = 256;
         let ring_bytes = ISOCH_TRBS * size_of::<Trb>();
-        let (ep_ring_phys, ep_ring_virt) =
-            dma::alloc(ring_bytes, 64).ok_or(())?;
+        let (ep_ring_phys, ep_ring_virt) = dma::alloc(ring_bytes, 64).ok_or(())?;
         unsafe { write_bytes(ep_ring_virt, 0, ring_bytes) };
         let ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, ISOCH_TRBS) };
 
@@ -126,7 +108,11 @@ impl IsochOutPipe {
             write_volatile(slot_ctx.add(1), dw1);
 
             // Endpoint context
-            let mult_field = if is_super_speed { (ss_mult & 0x3) as u32 } else { 0 };
+            let mult_field = if is_super_speed {
+                (ss_mult & 0x3) as u32
+            } else {
+                0
+            };
             let burst_field = if is_super_speed {
                 ss_max_burst as u32
             } else if is_high_speed {

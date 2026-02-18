@@ -1,16 +1,16 @@
+use alloc::borrow::ToOwned;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::borrow::ToOwned;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use crate::wait::{select2, Either};
 
-use crate::shell::{CommandAction, ShellBackend, ShellMode};
 use crate::shell::interface::ShellIo;
 use crate::shell::output::ReverseOutput;
 use crate::shell::statusbar;
+use crate::shell::{CommandAction, ShellBackend, ShellMode};
 use crate::v::net::https::{post_https_json_async, post_https_sse_async, SseHandler};
 
 fn log_utf8_chunks(prefix: &str, s: &str) {
@@ -48,8 +48,7 @@ fn should_log_sse_data(event_type: Option<&str>) -> bool {
     }
     matches!(
         event_type,
-        Some("response.completed")
-            | Some("response.error")
+        Some("response.completed") | Some("response.error")
     )
 }
 
@@ -70,25 +69,48 @@ fn draw_ai_prompt_row(io: &dyn ShellIo, line: &str) {
     io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
-    io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)));
+    io.write_fmt(format_args!(
+        "{}",
+        crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)
+    ));
     // Ensure typed text is never tinted by prior row styling.
     io.write_str("\x1b[0m");
     io.write_str(line);
 }
 
 #[inline]
-fn ai_status_wave(io: &dyn ShellIo, term_cols: usize, term_rows: usize, slot_id: u8, center: &str, step: usize, active: u8, idle: u8) {
+fn ai_status_wave(
+    io: &dyn ShellIo,
+    term_cols: usize,
+    term_rows: usize,
+    slot_id: u8,
+    center: &str,
+    step: usize,
+    active: u8,
+    idle: u8,
+) {
     let _ = statusbar::set_center(slot_id, center);
     let _ = statusbar::set_right(slot_id, center);
     for i in 0..statusbar::INDICATOR_COUNT {
-        let code = if i == (step % statusbar::INDICATOR_COUNT) { active } else { idle };
+        let code = if i == (step % statusbar::INDICATOR_COUNT) {
+            active
+        } else {
+            idle
+        };
         let _ = statusbar::set_indicator(slot_id, i, code);
     }
     statusbar::refresh(io, term_cols, term_rows);
 }
 
 #[inline]
-fn ai_status_solid(io: &dyn ShellIo, term_cols: usize, term_rows: usize, slot_id: u8, center: &str, color: u8) {
+fn ai_status_solid(
+    io: &dyn ShellIo,
+    term_cols: usize,
+    term_rows: usize,
+    slot_id: u8,
+    center: &str,
+    color: u8,
+) {
     let _ = statusbar::set_center(slot_id, center);
     let _ = statusbar::set_right(slot_id, center);
     for i in 0..statusbar::INDICATOR_COUNT {
@@ -106,13 +128,14 @@ async fn read_next_byte(io: &dyn ShellBackend) -> u8 {
     }
 }
 
-pub fn cmd_ai(_ctx: &mut crate::shell::cmd::registry::ShellCommandCtx, args: Option<&crate::shell::cmd::registry::ParsedArgs>) -> CommandAction {
+pub fn cmd_ai(
+    _ctx: &mut crate::shell::cmd::registry::ShellCommandCtx,
+    args: Option<&crate::shell::cmd::registry::ParsedArgs>,
+) -> CommandAction {
     let first = args.and_then(|a| a.get_str(0)).unwrap_or("");
     let mut s: heapless::String<384> = heapless::String::new();
     let _ = s.push_str(first);
-    CommandAction::OpenAiChat {
-        first: s,
-    }
+    CommandAction::OpenAiChat { first: s }
 }
 
 pub async fn run_ai_wizard(
@@ -125,14 +148,17 @@ pub async fn run_ai_wizard(
 ) {
     const API_KEY: &str = "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";
     const URL: &str = "https://api.openai.com/v1/responses";
-    
+
     // Ensure correct scroll region (Row 3..Bottom)
     crate::shell::output::apply_shell_scroll_region(io, term_rows);
     // When entering AI mode, keep prompt row clean (`§ ` only).
     io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
-    io.write_fmt(format_args!("{}", crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)));
+    io.write_fmt(format_args!(
+        "{}",
+        crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)
+    ));
 
     let slot = match crate::matrix::alloc_slot("ai") {
         Some(s) => s,
@@ -156,7 +182,9 @@ pub async fn run_ai_wizard(
 
     let mut previous_response_id: Option<String> = ai_prev_get();
     let mut pending_shell_outputs: Vec<ShellCallOutput> = Vec::new();
-    let mut active_request: Option<core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + '_>>> = None;
+    let mut active_request: Option<
+        core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()> + '_>>,
+    > = None;
 
     if !initial_prompt.trim().is_empty() {
         // Do not echo here: the outer shell already echoed `ai <initial_prompt>`.
@@ -207,7 +235,7 @@ pub async fn run_ai_wizard(
                 }
                 let input = line.trim().to_owned();
                 line.clear();
-                
+
                 if input.eq_ignore_ascii_case("exit") {
                     ai_status_solid(io, term_cols, term_rows, slot, "exit", 0);
                     active_request = None;
@@ -237,10 +265,11 @@ pub async fn run_ai_wizard(
                     )));
                 }
             }
-            0x7F | 0x08 => { // Backspace
-                     if !line.is_empty() {
-                        line.pop();
-                     }
+            0x7F | 0x08 => {
+                // Backspace
+                if !line.is_empty() {
+                    line.pop();
+                }
             }
             c => {
                 line.push(c as char);
@@ -286,7 +315,16 @@ async fn process_input(
     crate::log!("ai: request_json_end\n");
 
     statusbar::set_right_active(if stream { "streaming" } else { "thinking" });
-    ai_status_wave(io, term_cols, term_rows, slot_id, if stream { "sse.open" } else { "json.req" }, 0, 3, 0);
+    ai_status_wave(
+        io,
+        term_cols,
+        term_rows,
+        slot_id,
+        if stream { "sse.open" } else { "json.req" },
+        0,
+        3,
+        0,
+    );
     statusbar::refresh(io, term_cols, term_rows);
 
     // Increase timeout to 120s since web search can be slow.
@@ -321,17 +359,49 @@ async fn process_input(
                     match t {
                         "response.created" => {
                             self.pulse = self.pulse.wrapping_add(1);
-                            ai_status_wave(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.create", self.pulse, 4, 0);
+                            ai_status_wave(
+                                self.io,
+                                self.term_cols,
+                                self.term_rows,
+                                self.slot_id,
+                                "evt.create",
+                                self.pulse,
+                                4,
+                                0,
+                            );
                         }
                         "response.output_text.delta" => {
                             self.pulse = self.pulse.wrapping_add(1);
-                            ai_status_wave(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.delta", self.pulse, 5, 0);
+                            ai_status_wave(
+                                self.io,
+                                self.term_cols,
+                                self.term_rows,
+                                self.slot_id,
+                                "evt.delta",
+                                self.pulse,
+                                5,
+                                0,
+                            );
                         }
                         "response.completed" => {
-                            ai_status_solid(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.done", 2);
+                            ai_status_solid(
+                                self.io,
+                                self.term_cols,
+                                self.term_rows,
+                                self.slot_id,
+                                "evt.done",
+                                2,
+                            );
                         }
                         "response.error" => {
-                            ai_status_solid(self.io, self.term_cols, self.term_rows, self.slot_id, "evt.error", 1);
+                            ai_status_solid(
+                                self.io,
+                                self.term_cols,
+                                self.term_rows,
+                                self.slot_id,
+                                "evt.error",
+                                1,
+                            );
                         }
                         _ => {}
                     }
@@ -404,7 +474,8 @@ async fn process_input(
             pulse: 0,
         };
 
-        let result = post_https_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
+        let result =
+            post_https_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
 
         // Clear status
         statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
@@ -432,117 +503,117 @@ async fn process_input(
     // Clear status
     statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
     statusbar::refresh(io, term_cols, term_rows);
- 
+
     match result {
         Ok(bytes) => {
-                    if let Ok(s) = core::str::from_utf8(&bytes) {
-                        crate::log!("ai: response_json_begin len={}\n", s.len());
-                        log_utf8_chunks("ai: response_json: ", s);
-                        crate::log!("ai: response_json_end\n");
+            if let Ok(s) = core::str::from_utf8(&bytes) {
+                crate::log!("ai: response_json_begin len={}\n", s.len());
+                log_utf8_chunks("ai: response_json: ", s);
+                crate::log!("ai: response_json_end\n");
 
-                        // Track response id for multi-turn and for tool follow-ups.
-                        if let Some(id) = extract_response_id(s) {
-                            *previous_response_id = Some(id);
-                            ai_prev_set(previous_response_id.clone());
+                // Track response id for multi-turn and for tool follow-ups.
+                if let Some(id) = extract_response_id(s) {
+                    *previous_response_id = Some(id);
+                    ai_prev_set(previous_response_id.clone());
+                }
+
+                // If the model requested shell execution, run it locally and submit outputs.
+                let shell_calls = extract_shell_calls(s);
+                if !shell_calls.is_empty() {
+                    pending_shell_outputs.clear();
+                    for call in shell_calls {
+                        out.write_str("ai: shell_call\n");
+                        for cmd in call.commands.iter() {
+                            out.write_str("  $ ");
+                            out.write_str(cmd);
+                            out.write_str("\n");
                         }
+                        let out_item =
+                            run_shell_call(spawner, io, term_cols, term_rows, call).await;
 
-                        // If the model requested shell execution, run it locally and submit outputs.
-                        let shell_calls = extract_shell_calls(s);
-                        if !shell_calls.is_empty() {
-                            pending_shell_outputs.clear();
-                            for call in shell_calls {
-                                out.write_str("ai: shell_call\n");
-                                for cmd in call.commands.iter() {
-                                    out.write_str("  $ ");
-                                    out.write_str(cmd);
-                                    out.write_str("\n");
-                                }
-                                let out_item = run_shell_call(spawner, io, term_cols, term_rows, call).await;
-
-                                // Echo a clipped summary so the user can see that something happened.
-                                for entry in out_item.output.iter() {
-                                    if !entry.stdout.trim().is_empty() {
-                                        out.write_str("ai: [stdout] ");
-                                        out.write_str(&clip_visible(entry.stdout.as_str(), 1024));
-                                        out.write_str("\n");
-                                    }
-                                    if !entry.stderr.trim().is_empty() {
-                                        out.write_str("ai: [stderr] ");
-                                        out.write_str(&clip_visible(entry.stderr.as_str(), 512));
-                                        out.write_str("\n");
-                                    }
-                                }
-                                pending_shell_outputs.push(out_item);
+                        // Echo a clipped summary so the user can see that something happened.
+                        for entry in out_item.output.iter() {
+                            if !entry.stdout.trim().is_empty() {
+                                out.write_str("ai: [stdout] ");
+                                out.write_str(&clip_visible(entry.stdout.as_str(), 1024));
+                                out.write_str("\n");
                             }
+                            if !entry.stderr.trim().is_empty() {
+                                out.write_str("ai: [stderr] ");
+                                out.write_str(&clip_visible(entry.stderr.as_str(), 512));
+                                out.write_str("\n");
+                            }
+                        }
+                        pending_shell_outputs.push(out_item);
+                    }
 
-                            // Try to immediately continue by sending shell_call_output back.
-                            let followup_body = build_openai_request_body(
-                                "",
-                                previous_response_id.as_deref(),
-                                pending_shell_outputs,
-                                false,
-                            );
+                    // Try to immediately continue by sending shell_call_output back.
+                    let followup_body = build_openai_request_body(
+                        "",
+                        previous_response_id.as_deref(),
+                        pending_shell_outputs,
+                        false,
+                    );
 
-                            crate::log!(
-                                "ai: followup_request_json_begin len={}\n",
-                                followup_body.len()
-                            );
-                            log_utf8_chunks("ai: followup_request_json: ", followup_body.as_str());
-                            crate::log!("ai: followup_request_json_end\n");
+                    crate::log!(
+                        "ai: followup_request_json_begin len={}\n",
+                        followup_body.len()
+                    );
+                    log_utf8_chunks("ai: followup_request_json: ", followup_body.as_str());
+                    crate::log!("ai: followup_request_json_end\n");
 
-                            let follow = post_https_json_async(
-                                url,
-                                followup_body,
-                                Some(key),
-                                120_000,
-                                256 * 1024,
-                            )
+                    let follow =
+                        post_https_json_async(url, followup_body, Some(key), 120_000, 256 * 1024)
                             .await;
 
-                            match follow {
-                                Ok(bytes) => {
-                                    if let Ok(s2) = core::str::from_utf8(&bytes) {
-                                        crate::log!("ai: followup_response_json_begin len={}\n", s2.len());
-                                        log_utf8_chunks("ai: followup_response_json: ", s2);
-                                        crate::log!("ai: followup_response_json_end\n");
+                    match follow {
+                        Ok(bytes) => {
+                            if let Ok(s2) = core::str::from_utf8(&bytes) {
+                                crate::log!("ai: followup_response_json_begin len={}\n", s2.len());
+                                log_utf8_chunks("ai: followup_response_json: ", s2);
+                                crate::log!("ai: followup_response_json_end\n");
 
-                                        if let Some(id2) = extract_response_id(s2) {
-                                            *previous_response_id = Some(id2);
-                                            ai_prev_set(previous_response_id.clone());
-                                        }
-                                        pending_shell_outputs.clear();
-                                        write_openai_text(out, s2);
-                                        return;
-                                    }
+                                if let Some(id2) = extract_response_id(s2) {
+                                    *previous_response_id = Some(id2);
+                                    ai_prev_set(previous_response_id.clone());
                                 }
-                                Err(e) => {
-                                    out.write_fmt(format_args!(
+                                pending_shell_outputs.clear();
+                                write_openai_text(out, s2);
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            out.write_fmt(format_args!(
                                         "ai: tool follow-up network error {:?} (will retry on next prompt)\n",
                                         e
                                     ));
-                                }
-                            }
-
-                            // If we couldn't complete the follow-up, keep outputs stashed.
-                            out.write_str("ai: shell outputs captured (will be sent with your next prompt)\n");
-                            return;
                         }
-
-                        // Debug aid: if the user likely wanted command execution but we got no tool call.
-                        if looks_like_execute_request(input.as_str()) {
-                            out.write_str("ai: note: model did not issue shell_call for this prompt\n");
-                            out.write_str("ai: tip: prefix with '!' to force tool usage (example: !tlb.pci)\n");
-                        }
-
-                        // Normal text response.
-                        pending_shell_outputs.clear();
-                        write_openai_text(out, s);
-                        ai_status_solid(io, term_cols, term_rows, slot_id, "ready", 2);
-                    } else {
-                        ai_status_solid(io, term_cols, term_rows, slot_id, "utf8.err", 1);
-                        out.write_str("ai: error decoding utf8\n");
                     }
+
+                    // If we couldn't complete the follow-up, keep outputs stashed.
+                    out.write_str(
+                        "ai: shell outputs captured (will be sent with your next prompt)\n",
+                    );
+                    return;
                 }
+
+                // Debug aid: if the user likely wanted command execution but we got no tool call.
+                if looks_like_execute_request(input.as_str()) {
+                    out.write_str("ai: note: model did not issue shell_call for this prompt\n");
+                    out.write_str(
+                        "ai: tip: prefix with '!' to force tool usage (example: !tlb.pci)\n",
+                    );
+                }
+
+                // Normal text response.
+                pending_shell_outputs.clear();
+                write_openai_text(out, s);
+                ai_status_solid(io, term_cols, term_rows, slot_id, "ready", 2);
+            } else {
+                ai_status_solid(io, term_cols, term_rows, slot_id, "utf8.err", 1);
+                out.write_str("ai: error decoding utf8\n");
+            }
+        }
         Err(e) => {
             ai_status_solid(io, term_cols, term_rows, slot_id, "net.err", 1);
             out.write_fmt(format_args!("ai: network error {:?}\n", e));
@@ -665,7 +736,8 @@ fn build_openai_request_body(
 ) -> String {
     // Tools: enable local shell execution and keep web_search available.
     // If `!` is used (force_tools), expose ONLY shell so tool_choice=required can't pick web_search.
-    let tools_auto = "[{\"type\":\"shell\",\"environment\":{\"type\":\"local\"}},{\"type\":\"web_search\"}]";
+    let tools_auto =
+        "[{\"type\":\"shell\",\"environment\":{\"type\":\"local\"}},{\"type\":\"web_search\"}]";
     let tools_shell_only = "[{\"type\":\"shell\",\"environment\":{\"type\":\"local\"}}]";
 
     // Input items may include pending tool outputs first (to complete the tool turn),
@@ -798,9 +870,12 @@ fn looks_like_execute_request(s: &str) -> bool {
     // Minimal keyword scan without allocating.
     // (We don't need full Unicode case-folding here.)
     fn contains_ascii(hay: &[u8], needle: &[u8]) -> bool {
-        hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+        hay.windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
     }
-    contains_ascii(lower, b"execute") || contains_ascii(lower, b"run ") || contains_ascii(lower, b"shell")
+    contains_ascii(lower, b"execute")
+        || contains_ascii(lower, b"run ")
+        || contains_ascii(lower, b"shell")
 }
 
 fn clip_visible(s: &str, max_chars: usize) -> String {
@@ -885,7 +960,10 @@ fn extract_shell_calls(json: &str) -> Vec<ShellCall> {
 
     loop {
         let hay = &json[idx..];
-        let rel = find_any(hay, &["\"type\":\"shell_call\"", "\"type\": \"shell_call\""]);
+        let rel = find_any(
+            hay,
+            &["\"type\":\"shell_call\"", "\"type\": \"shell_call\""],
+        );
         let Some(rel_pos) = rel else { break };
         let pos = idx + rel_pos;
 
@@ -897,8 +975,10 @@ fn extract_shell_calls(json: &str) -> Vec<ShellCall> {
             }
         };
 
-        let commands = extract_json_string_array_field_from(json, pos, "\"commands\":").unwrap_or_default();
-        let timeout_ms = extract_json_u64_field_from(json, pos, "\"timeout_ms\":").unwrap_or(60_000);
+        let commands =
+            extract_json_string_array_field_from(json, pos, "\"commands\":").unwrap_or_default();
+        let timeout_ms =
+            extract_json_u64_field_from(json, pos, "\"timeout_ms\":").unwrap_or(60_000);
         let max_output_length = extract_json_usize_field_from(json, pos, "\"max_output_length\":")
             .unwrap_or(4096)
             .min(64 * 1024);
@@ -962,7 +1042,11 @@ fn extract_json_usize_field_from(json: &str, start: usize, needle: &str) -> Opti
     extract_json_u64_field_from(json, start, needle).and_then(|v| usize::try_from(v).ok())
 }
 
-fn extract_json_string_array_field_from(json: &str, start: usize, needle: &str) -> Option<Vec<String>> {
+fn extract_json_string_array_field_from(
+    json: &str,
+    start: usize,
+    needle: &str,
+) -> Option<Vec<String>> {
     let sub = &json[start..];
     let rel = sub.find(needle)?;
     let mut i = rel + needle.len();
@@ -981,7 +1065,13 @@ fn extract_json_string_array_field_from(json: &str, start: usize, needle: &str) 
     let mut out: Vec<String> = Vec::new();
     let bytes = sub.as_bytes();
     while i < bytes.len() {
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\r' || bytes[i] == b'\t' || bytes[i] == b',') {
+        while i < bytes.len()
+            && (bytes[i] == b' '
+                || bytes[i] == b'\n'
+                || bytes[i] == b'\r'
+                || bytes[i] == b'\t'
+                || bytes[i] == b',')
+        {
             i += 1;
         }
         if i >= bytes.len() {
@@ -1037,7 +1127,9 @@ struct CaptureBackend {
 
 impl CaptureBackend {
     const fn new() -> Self {
-        Self { buf: spin::Mutex::new(String::new()) }
+        Self {
+            buf: spin::Mutex::new(String::new()),
+        }
     }
 
     fn clear(&self) {
@@ -1306,7 +1398,9 @@ fn json_escape_into(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => { let _ = write!(out, "\\u{:04x}", c as u32); }
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -1317,21 +1411,31 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
     let mut j = i + needle.len();
     while j < json.len() {
         let b = json.as_bytes()[j];
-        if b == b'"' { break; }
-        if b != b' ' && b != b':' && b != b'\n' && b != b'\r' { return None; }
+        if b == b'"' {
+            break;
+        }
+        if b != b' ' && b != b':' && b != b'\n' && b != b'\r' {
+            return None;
+        }
         j += 1;
     }
-    if j >= json.len() { return None; }
-    
+    if j >= json.len() {
+        return None;
+    }
+
     j += 1;
     let bytes = json.as_bytes();
     let mut out = String::new();
     while j < bytes.len() {
         let b = bytes[j];
-        if b == b'"' { return Some(out); }
+        if b == b'"' {
+            return Some(out);
+        }
         if b == b'\\' {
             j += 1;
-            if j >= bytes.len() { break; }
+            if j >= bytes.len() {
+                break;
+            }
             match bytes[j] {
                 b'"' => out.push('"'),
                 b'\\' => out.push('\\'),
@@ -1342,13 +1446,13 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
                 b'u' => {
                     // Primitive \uXXXX support
                     if j + 4 < bytes.len() {
-                        if let Ok(hex_str) = core::str::from_utf8(&bytes[j+1..j+5]) {
-                             if let Ok(cp) = u32::from_str_radix(hex_str, 16) {
-                                 if let Some(ch) = core::char::from_u32(cp) {
-                                     out.push(ch);
-                                     j += 4;
-                                 }
-                             }
+                        if let Ok(hex_str) = core::str::from_utf8(&bytes[j + 1..j + 5]) {
+                            if let Ok(cp) = u32::from_str_radix(hex_str, 16) {
+                                if let Some(ch) = core::char::from_u32(cp) {
+                                    out.push(ch);
+                                    j += 4;
+                                }
+                            }
                         }
                     }
                 }

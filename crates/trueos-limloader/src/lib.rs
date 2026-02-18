@@ -27,7 +27,8 @@ fn write_string(path: &Path, contents: &str) {
 
 fn remove_dir_if_exists(path: &Path) {
     if path.exists() {
-        fs::remove_dir_all(path).unwrap_or_else(|e| panic!("remove {} failed: {e}", path.display()));
+        fs::remove_dir_all(path)
+            .unwrap_or_else(|e| panic!("remove {} failed: {e}", path.display()));
     }
 }
 
@@ -81,7 +82,8 @@ fn default_config_args(prefix: &Path) -> String {
 fn should_build(paths: &LiminePaths) -> bool {
     let share = paths.share_dir();
     // ISO build needs these.
-    let need_uefi = is_file(&share.join("BOOTX64.EFI")) && is_file(&share.join("limine-uefi-cd.bin"));
+    let need_uefi =
+        is_file(&share.join("BOOTX64.EFI")) && is_file(&share.join("limine-uefi-cd.bin"));
 
     !need_uefi || !is_file(&paths.stamp())
 }
@@ -149,9 +151,14 @@ Set TRUEOS_LIMINE_REF/TRUEOS_LIMINE_REPO and build with network access once.",
 
     // Bootstrap if needed.
     if !paths.src_dir.join("configure").is_file() {
-        require_tool("autoreconf", "Install autoconf + automake (and likely libtool)");
+        require_tool(
+            "autoreconf",
+            "Install autoconf + automake (and likely libtool)",
+        );
         let mut cmd = Command::new("sh");
-        cmd.current_dir(&paths.src_dir).arg("-lc").arg("./bootstrap");
+        cmd.current_dir(&paths.src_dir)
+            .arg("-lc")
+            .arg("./bootstrap");
         run(&mut cmd);
     }
 

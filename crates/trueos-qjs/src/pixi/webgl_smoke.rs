@@ -2,9 +2,9 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::cmd_stream::{self, CmdStreamCommand};
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use crate::cmd_stream::{self, CmdStreamCommand};
 
 extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);

@@ -160,7 +160,10 @@ pub fn parse_read_capacity_10(buf: &[u8]) -> Option<Capacity10> {
 
     let last_lba = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
     let block_size = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-    Some(Capacity10 { last_lba, block_size })
+    Some(Capacity10 {
+        last_lba,
+        block_size,
+    })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

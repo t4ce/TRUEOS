@@ -1,4 +1,8 @@
-use core::{cmp, ptr::NonNull, sync::atomic::{AtomicU64, Ordering}};
+use core::{
+    cmp,
+    ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use spin::Mutex;
 use x86_64::{
@@ -82,9 +86,7 @@ pub fn map_limine_slice<T>(addr: u64, count: usize) -> Result<(NonNull<T>, usize
     if align != 0 && (addr as usize) % align != 0 {
         return Err(MapError::InvalidArgs);
     }
-    let byte_len = elem_size
-        .checked_mul(count)
-        .ok_or(MapError::InvalidArgs)?;
+    let byte_len = elem_size.checked_mul(count).ok_or(MapError::InvalidArgs)?;
     let mapped = map_limine_addr_exact(addr, byte_len)?;
     let ptr = NonNull::new(mapped.as_ptr() as *mut T).ok_or(MapError::InvalidPointer)?;
     Ok((ptr, count))

@@ -77,10 +77,18 @@ pub const MAX_MSG: usize = 8192;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    OpenUdp { port: u16 },
-    OpenTcpListen { port: u16 },
-    OpenTcpConnect { remote: EndpointV4 },
-    OpenTcpConnectV6 { remote: EndpointV6 },
+    OpenUdp {
+        port: u16,
+    },
+    OpenTcpListen {
+        port: u16,
+    },
+    OpenTcpConnect {
+        remote: EndpointV4,
+    },
+    OpenTcpConnectV6 {
+        remote: EndpointV6,
+    },
     SendUdp {
         handle: NetHandle,
         remote: EndpointV4,
@@ -95,7 +103,9 @@ pub enum Command {
         handle: NetHandle,
         data: ByteBuf<MAX_MSG>,
     },
-    Close { handle: NetHandle },
+    Close {
+        handle: NetHandle,
+    },
     IcmpEcho {
         target: [u8; 4],
         seq: u16,
@@ -110,9 +120,16 @@ pub enum Command {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Opened { handle: NetHandle, kind: SocketKind },
-    Closed { handle: NetHandle },
-    Error { msg: &'static str },
+    Opened {
+        handle: NetHandle,
+        kind: SocketKind,
+    },
+    Closed {
+        handle: NetHandle,
+    },
+    Error {
+        msg: &'static str,
+    },
     UdpPacket {
         handle: NetHandle,
         from: EndpointV4,
@@ -123,9 +140,17 @@ pub enum Event {
         from: EndpointV6,
         data: ByteBuf<MAX_MSG>,
     },
-    TcpEstablished { handle: NetHandle },
-    TcpData { handle: NetHandle, data: ByteBuf<MAX_MSG> },
-    TcpSent { handle: NetHandle, len: u16 },
+    TcpEstablished {
+        handle: NetHandle,
+    },
+    TcpData {
+        handle: NetHandle,
+        data: ByteBuf<MAX_MSG>,
+    },
+    TcpSent {
+        handle: NetHandle,
+        len: u16,
+    },
     IcmpReply {
         from: [u8; 4],
         seq: u16,

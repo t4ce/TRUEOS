@@ -190,7 +190,10 @@ impl VirtioNetAdapter {
         let (rx_bufs, rxq) = init_rx_buffers(io_base, rxq)?;
         let (tx_bufs, tx_free) = init_tx_buffers(&mut txq)?;
 
-        set_status(io_base, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
+        set_status(
+            io_base,
+            VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK,
+        );
 
         Ok(Self {
             ring: None,
@@ -239,7 +242,8 @@ fn find_virtio_net_devices() -> alloc::vec::Vec<pci::PciDevice> {
     pci::with_devices(|list| {
         for dev in list {
             if dev.vendor == VIRTIO_PCI_VENDOR
-                && (dev.device == VIRTIO_NET_DEVICE_LEGACY || dev.device == VIRTIO_NET_DEVICE_MODERN)
+                && (dev.device == VIRTIO_NET_DEVICE_LEGACY
+                    || dev.device == VIRTIO_NET_DEVICE_MODERN)
             {
                 out.push(*dev);
             }
@@ -260,7 +264,13 @@ fn read_io_base(dev: &pci::PciDevice) -> Result<u16, ()> {
 fn enable_io_and_bus_master(dev: &pci::PciDevice) {
     let mut cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET);
     cmd |= VIRTIO_PCI_COMMAND_IO | VIRTIO_PCI_COMMAND_BUS_MASTER;
-    pci::config_write_u16(dev.bus, dev.slot, dev.function, VIRTIO_PCI_COMMAND_OFFSET, cmd);
+    pci::config_write_u16(
+        dev.bus,
+        dev.slot,
+        dev.function,
+        VIRTIO_PCI_COMMAND_OFFSET,
+        cmd,
+    );
 }
 
 fn reset_device(io_base: u16) {
@@ -318,13 +328,13 @@ fn setup_queue(io_base: u16, queue_index: u16) -> Result<VirtQueue, ()> {
     }
 
     let desc_size = size as usize * core::mem::size_of::<VirtqDesc>();
-	// Legacy virtqueue layout (no EVENT_IDX negotiated):
-	// avail: flags(u16) + idx(u16) + ring[size](u16)
-	let avail_size = 4 + (size as usize * 2);
+    // Legacy virtqueue layout (no EVENT_IDX negotiated):
+    // avail: flags(u16) + idx(u16) + ring[size](u16)
+    let avail_size = 4 + (size as usize * 2);
     // For virtio-pci legacy, the used ring is page-aligned (Linux/QEMU use align=PAGE_SIZE).
     let used_offset = align_up(desc_size + avail_size, 4096);
-	// used: flags(u16) + idx(u16) + ring[size](VirtqUsedElem)
-	let used_size = 4 + (size as usize * 8);
+    // used: flags(u16) + idx(u16) + ring[size](VirtqUsedElem)
+    let used_size = 4 + (size as usize * 8);
     let total = align_up(used_offset + used_size, 4096);
 
     let mem = DmaRegion::alloc(total, 4096).ok_or(())?;
@@ -419,12 +429,11 @@ impl VirtioNetAdapter {
                 if let Some(slot) = slot {
                     let dst = rx_ring.buffer_mut(slot);
                     let buf = &self.rx_bufs[desc_id];
-                    let src = unsafe {
-                        core::slice::from_raw_parts(buf.virt(), RX_BUF_SIZE)
-                    };
+                    let src = unsafe { core::slice::from_raw_parts(buf.virt(), RX_BUF_SIZE) };
                     let len = (elem_len as usize).saturating_sub(VIRTIO_NET_HDR_SIZE);
                     let copy_len = len.min(dst.len());
-                    dst[..copy_len].copy_from_slice(&src[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]);
+                    dst[..copy_len]
+                        .copy_from_slice(&src[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]);
                     rx_ring.mark_complete(slot, copy_len);
                 }
             }

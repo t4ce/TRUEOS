@@ -205,7 +205,11 @@ impl R8125Adapter {
 
     #[inline]
     fn tx_start_index() -> usize {
-        if EXP_R8125_SKIP_DESC0 { 1 } else { 0 }
+        if EXP_R8125_SKIP_DESC0 {
+            1
+        } else {
+            0
+        }
     }
 
     fn cplus_programmed(current: u16) -> u16 {
@@ -329,8 +333,10 @@ impl R8125Adapter {
         let tx_tail_desc = unsafe { read_volatile(self.tx_desc.add(tail_idx)) };
         let rx_desc = unsafe { read_volatile(self.rx_desc.add(rx_idx)) };
 
-        let tx_head_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_head_desc.opts1)) };
-        let tx_tail_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_tail_desc.opts1)) };
+        let tx_head_opts1 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_head_desc.opts1)) };
+        let tx_tail_opts1 =
+            unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(tx_tail_desc.opts1)) };
         let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
 
         crate::log!(
@@ -396,8 +402,7 @@ impl R8125Adapter {
         crate::log!("net/r8125: pci cmd=0x{:04x}\n", cmd);
 
         let (bar_index, bar_phys) = find_mmio_bar_phys(&dev)?;
-        let bar_size = pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_index)
-            .unwrap_or(0);
+        let bar_size = pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_index).unwrap_or(0);
         let map_size = match usize::try_from(bar_size) {
             Ok(size) if size != 0 => size,
             _ => {
@@ -411,11 +416,7 @@ impl R8125Adapter {
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
             Ok(mapped) => mapped,
             Err(err) => {
-                crate::log!(
-                    "net/r8125: bar{} mmio map failed: {:?}\n",
-                    bar_index,
-                    err
-                );
+                crate::log!("net/r8125: bar{} mmio map failed: {:?}\n", bar_index, err);
                 return Err(());
             }
         };
@@ -484,7 +485,11 @@ impl R8125Adapter {
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
 
         // Allocate buffers and initialize descriptors
-        crate::log!("net/r8125: alloc rx bufs count={} size=0x{:x}\n", RX_DESC_COUNT, RX_BUF_SIZE);
+        crate::log!(
+            "net/r8125: alloc rx bufs count={} size=0x{:x}\n",
+            RX_DESC_COUNT,
+            RX_BUF_SIZE
+        );
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_DESC_COUNT);
         for i in 0..RX_DESC_COUNT {
             let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
@@ -502,7 +507,11 @@ impl R8125Adapter {
             rx_bufs.push(buf);
         }
 
-        crate::log!("net/r8125: alloc tx bufs count={} size=0x{:x}\n", TX_DESC_COUNT, TX_BUF_SIZE);
+        crate::log!(
+            "net/r8125: alloc tx bufs count={} size=0x{:x}\n",
+            TX_DESC_COUNT,
+            TX_BUF_SIZE
+        );
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_DESC_COUNT);
         for i in 0..TX_DESC_COUNT {
             let buf = DmaRegion::alloc(TX_BUF_SIZE, 16).ok_or(())?;
@@ -544,7 +553,8 @@ impl R8125Adapter {
             // Basic RX/TX config (promiscuous off; accept broadcast/multicast).
             // Values here are intentionally conservative for bring-up.
             mmio.write_u32(REG_RCR, 0x0000E70F);
-            let tcr = EXP_R8125_TCR_OVERRIDE.unwrap_or(0x03000700); mmio.write_u32(REG_TCR, tcr);
+            let tcr = EXP_R8125_TCR_OVERRIDE.unwrap_or(0x03000700);
+            mmio.write_u32(REG_TCR, tcr);
 
             // Enable Rx/Tx
             mmio.write_u8(REG_CMD, CMD_RX_EN | CMD_TX_EN);
@@ -553,7 +563,12 @@ impl R8125Adapter {
 
         crate::log!(
             "net/r8125: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
         );
 
         crate::log!(
@@ -875,7 +890,9 @@ impl R8125Adapter {
 
             if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
                 self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
-                if self.dbg_rx_bad_flags == 1 || (self.dbg_rx_bad_flags % RX_BAD_FLAGS_LOG_EVERY) == 0 {
+                if self.dbg_rx_bad_flags == 1
+                    || (self.dbg_rx_bad_flags % RX_BAD_FLAGS_LOG_EVERY) == 0
+                {
                     crate::log!(
                         "net/r8125: rx flags missing fs/ls count={} opts1=0x{:08x} (continuing)\n",
                         self.dbg_rx_bad_flags,
@@ -999,7 +1016,9 @@ impl R8125Adapter {
             self.kick_tx_engine();
             self.reclaim_tx();
             if (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head {
-                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0 {
+                if self.dbg_tx_ring_full == 1
+                    || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0
+                {
                     let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
                         (
                             self.mmio.read_u8(REG_CMD),
@@ -1041,7 +1060,9 @@ impl R8125Adapter {
             let cur2 = unsafe { read_volatile(self.tx_desc.add(idx)) };
             let cur2_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur2.opts1)) };
             if (cur2_opts1 & DESC_OWN) != 0 {
-                if self.dbg_tx_ring_full == 1 || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0 {
+                if self.dbg_tx_ring_full == 1
+                    || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0
+                {
                     crate::log!(
                         "net/r8125: tx desc busy count={} idx={} head={} tail={} opts1=0x{:08x} kicks={}\n",
                         self.dbg_tx_ring_full,
@@ -1069,7 +1090,11 @@ impl R8125Adapter {
         // Ensure the packet bytes are visible before we set DESC_OWN.
         compiler_fence(Ordering::Release);
 
-        let eor = if idx + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
+        let eor = if idx + 1 == TX_DESC_COUNT {
+            DESC_EOR
+        } else {
+            0
+        };
         let opts1 = DESC_OWN | eor | TX_FS | TX_LS | (len as u32 & 0x3FFF);
         unsafe {
             write_volatile(

@@ -1,8 +1,8 @@
 #![allow(dead_code)]
+use crate::wait;
 use alloc::vec::Vec;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use crate::wait;
 
 pub type CpuCallFn = fn(u64) -> u64;
 
@@ -176,9 +176,13 @@ pub fn poll() {
         return;
     }
 
-    if m
-        .state
-        .compare_exchange(STATE_PENDING, STATE_RUNNING, Ordering::AcqRel, Ordering::Acquire)
+    if m.state
+        .compare_exchange(
+            STATE_PENDING,
+            STATE_RUNNING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
         .is_err()
     {
         return;

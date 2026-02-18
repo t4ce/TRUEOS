@@ -83,15 +83,13 @@ impl DmaWriter {
         match handle.write_blocks(lba, buf).await {
             Ok(()) => Ok(()),
             Err(e) => {
-                log(
-                    alloc::format!(
-                        "install: fat32: write failed lba={} bytes={} err={:?}",
-                        lba,
-                        buf.len(),
-                        e
-                    )
-                    .as_str(),
-                );
+                log(alloc::format!(
+                    "install: fat32: write failed lba={} bytes={} err={:?}",
+                    lba,
+                    buf.len(),
+                    e
+                )
+                .as_str());
                 Err(e)
             }
         }
@@ -142,18 +140,16 @@ async fn write_blocks_aligned_with_log(
     let align = info.dma_alignment.max(1) as usize;
     let mut tmp = AlignedBuf::new(buf.len(), align).ok_or(block::Error::DmaUnavailable)?;
     tmp.as_mut_slice().copy_from_slice(buf);
-        match handle.write_blocks(lba, tmp.as_mut_slice()).await {
+    match handle.write_blocks(lba, tmp.as_mut_slice()).await {
         Ok(()) => Ok(()),
         Err(e) => {
-            log(
-                alloc::format!(
-                    "install: fat32: write failed lba={} bytes={} err={:?}",
-                    lba,
-                    buf.len(),
-                    e
-                )
-                .as_str(),
-            );
+            log(alloc::format!(
+                "install: fat32: write failed lba={} bytes={} err={:?}",
+                lba,
+                buf.len(),
+                e
+            )
+            .as_str());
             Err(e)
         }
     }
@@ -318,14 +314,12 @@ pub async fn format_and_populate_esp_fat32_with_log(
 
     let total_sectors = core::cmp::min(info.block_count, u32::MAX as u64) as u32;
 
-    log(
-        alloc::format!(
-            "install: esp: total_sectors={} (~{} MiB)",
-            total_sectors,
-            (total_sectors as u64 * 512 + (1024 * 1024 - 1)) / (1024 * 1024)
-        )
-        .as_str(),
-    );
+    log(alloc::format!(
+        "install: esp: total_sectors={} (~{} MiB)",
+        total_sectors,
+        (total_sectors as u64 * 512 + (1024 * 1024 - 1)) / (1024 * 1024)
+    )
+    .as_str());
 
     let limine_conf_len = image.limine_conf.len();
     let Some((sectors_per_cluster, reserved, fat_sectors, first_data_sector)) = pick_fat32_geometry(
@@ -334,26 +328,22 @@ pub async fn format_and_populate_esp_fat32_with_log(
         image.kernel_elf.len(),
         limine_conf_len,
     ) else {
-        log(
-            alloc::format!(
-                "install: esp: failed to pick FAT32 geometry (total_sectors={})",
-                total_sectors
-            )
-            .as_str(),
-        );
+        log(alloc::format!(
+            "install: esp: failed to pick FAT32 geometry (total_sectors={})",
+            total_sectors
+        )
+        .as_str());
         return Err(block::Error::OutOfBounds);
     };
 
-    log(
-        alloc::format!(
-            "install: esp: fat32 geometry spc={} reserved={} fat_sectors={} first_data_sector={}",
-            sectors_per_cluster,
-            reserved,
-            fat_sectors,
-            first_data_sector
-        )
-        .as_str(),
-    );
+    log(alloc::format!(
+        "install: esp: fat32 geometry spc={} reserved={} fat_sectors={} first_data_sector={}",
+        sectors_per_cluster,
+        reserved,
+        fat_sectors,
+        first_data_sector
+    )
+    .as_str());
 
     let mut writer = DmaWriter::new(esp)?;
 
@@ -441,7 +431,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     boot[44..48].copy_from_slice(&cl_root.to_le_bytes());
     boot[48..50].copy_from_slice(&1u16.to_le_bytes()); // FSInfo sector
     boot[50..52].copy_from_slice(&6u16.to_le_bytes()); // backup boot sector
-    // boot[52..64] reserved zeros
+                                                       // boot[52..64] reserved zeros
 
     boot[64] = 0x80;
     boot[66] = 0x29;
@@ -607,8 +597,15 @@ pub async fn format_and_populate_esp_fat32_with_log(
             image.limine_conf.len() as u32,
         ));
 
-        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_root, &dir, log)
-            .await?;
+        write_cluster(
+            &mut writer,
+            sectors_per_cluster,
+            first_data_sector,
+            cl_root,
+            &dir,
+            log,
+        )
+        .await?;
     }
 
     // EFI dir
@@ -623,8 +620,15 @@ pub async fn format_and_populate_esp_fat32_with_log(
             dir[off..off + 32].copy_from_slice(&e);
             off += 32;
         }
-        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_efi, &dir, log)
-            .await?;
+        write_cluster(
+            &mut writer,
+            sectors_per_cluster,
+            first_data_sector,
+            cl_efi,
+            &dir,
+            log,
+        )
+        .await?;
     }
 
     // BOOT dir
@@ -659,8 +663,15 @@ pub async fn format_and_populate_esp_fat32_with_log(
         );
         dir[off..off + 32].copy_from_slice(&de);
 
-        write_cluster(&mut writer, sectors_per_cluster, first_data_sector, cl_boot, &dir, log)
-            .await?;
+        write_cluster(
+            &mut writer,
+            sectors_per_cluster,
+            first_data_sector,
+            cl_boot,
+            &dir,
+            log,
+        )
+        .await?;
     }
 
     // --- File data ---
@@ -674,8 +685,8 @@ pub async fn format_and_populate_esp_fat32_with_log(
             data: &[u8],
             log: &mut dyn FnMut(&str),
         ) -> Result<(), block::Error> {
-            let first_sector =
-                (start_cluster - 2) as u64 * (sectors_per_cluster as u64) + (first_data_sector as u64);
+            let first_sector = (start_cluster - 2) as u64 * (sectors_per_cluster as u64)
+                + (first_data_sector as u64);
             let total_sectors = (clusters as u64).saturating_mul(sectors_per_cluster as u64);
             let total_bytes = (total_sectors as usize).saturating_mul(512);
             writer

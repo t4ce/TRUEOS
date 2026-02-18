@@ -1,8 +1,8 @@
 use embassy_executor::Spawner;
 use embassy_time::Instant;
 
-use crate::shell::{ShellBackend, ShellIo, PROMPT_RGB, CommandAction};
 use crate::ecma48;
+use crate::shell::{CommandAction, ShellBackend, ShellIo, PROMPT_RGB};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallWizardStage {
@@ -28,7 +28,10 @@ pub enum ShellMode {
     Idle,
     Wizard(InstallWizardStage),
     Confirm(PendingAction),
-    Wait { action: PendingAction, deadline: Instant },
+    Wait {
+        action: PendingAction,
+        deadline: Instant,
+    },
 }
 
 impl Default for ShellMode {
@@ -105,10 +108,12 @@ async fn handle_wizard_input_internal(
     stage: InstallWizardStage,
 ) -> InputResult {
     let mut s = line.trim();
-    
+
     match stage {
         InstallWizardStage::SelectDisk => {
-            if let Some(rest) = s.strip_prefix("install") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("install") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\ninstall: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -119,12 +124,14 @@ async fn handle_wizard_input_internal(
                 io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
                 return InputResult::Handled;
             }
-            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let target = crate::disc::block::device_handles()
+                .into_iter()
+                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\ninstall: no such disk\r\n");
                 return InputResult::Handled;
             };
-            
+
             let info = handle.info();
             let status = crate::v::disc::detect::detect_physical_disk(handle).await;
             io.write_fmt(format_args!(
@@ -133,12 +140,16 @@ async fn handle_wizard_input_internal(
             ));
             io.write_str("install: DANGER: this may REPARTITION and FORMAT the disk\r\n");
             io.write_str("install: press Enter to confirm (any other key cancels)\r\n");
-            
-            InputResult::Transition(ShellMode::Confirm(PendingAction::InstallConfirm { disc_id: raw_id }))
+
+            InputResult::Transition(ShellMode::Confirm(PendingAction::InstallConfirm {
+                disc_id: raw_id,
+            }))
         }
-        
+
         InstallWizardStage::UpdateSelectDisk => {
-            if let Some(rest) = s.strip_prefix("update") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("update") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\nupdate: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -149,7 +160,9 @@ async fn handle_wizard_input_internal(
                 io.write_str("update: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
                 return InputResult::Handled;
             }
-            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let target = crate::disc::block::device_handles()
+                .into_iter()
+                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nupdate: no such disk\r\n");
                 return InputResult::Handled;
@@ -170,15 +183,23 @@ async fn handle_wizard_input_internal(
                 return InputResult::Handled;
             }
 
-            io.write_str("update: downloads BOOTX64.EFI + TRUEOS.elf and refreshes ESP boot files\r\n");
-            io.write_str("update: will NOT repartition/format (refuses if TRUEOSFS is not detected)\r\n");
+            io.write_str(
+                "update: downloads BOOTX64.EFI + TRUEOS.elf and refreshes ESP boot files\r\n",
+            );
+            io.write_str(
+                "update: will NOT repartition/format (refuses if TRUEOSFS is not detected)\r\n",
+            );
             io.write_str("update: press Enter to confirm (any other key cancels)\r\n");
 
-            InputResult::Transition(ShellMode::Confirm(PendingAction::UpdateConfirm { disc_id: raw_id }))
+            InputResult::Transition(ShellMode::Confirm(PendingAction::UpdateConfirm {
+                disc_id: raw_id,
+            }))
         }
-        
+
         InstallWizardStage::FormatSelectDisk => {
-            if let Some(rest) = s.strip_prefix("format") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("format") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\nformat: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -189,7 +210,9 @@ async fn handle_wizard_input_internal(
                 io.write_str("format: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
                 return InputResult::Handled;
             }
-            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let target = crate::disc::block::device_handles()
+                .into_iter()
+                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nformat: no such disk\r\n");
                 return InputResult::Handled;
@@ -204,11 +227,15 @@ async fn handle_wizard_input_internal(
             io.write_str("format: DANGER: this destroys all data on the disk\r\n");
             io.write_str("format: press Enter to confirm (any other key cancels)\r\n");
 
-            InputResult::Transition(ShellMode::Confirm(PendingAction::FormatConfirm { disc_id: raw_id }))
+            InputResult::Transition(ShellMode::Confirm(PendingAction::FormatConfirm {
+                disc_id: raw_id,
+            }))
         }
-        
+
         InstallWizardStage::FileSelectMount => {
-            if let Some(rest) = s.strip_prefix("file") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("file") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\nfile: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -222,17 +249,27 @@ async fn handle_wizard_input_internal(
             let roots = crate::v::fs::trueosfs::list_roots();
             let (handle, shown_id) = if let Ok(idx) = s.parse::<usize>() {
                 if let Some(r) = roots.get(idx) {
-                    (crate::disc::block::device_handle(r.disk_id), Some(r.disk_id.raw()))
+                    (
+                        crate::disc::block::device_handle(r.disk_id),
+                        Some(r.disk_id.raw()),
+                    )
                 } else {
                     (None, None)
                 }
             } else {
                 let raw_id = parse_disc_id_raw(s).unwrap_or(0);
-                if raw_id == 0 { (None, None) } else {
-                    (crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id), Some(raw_id))
+                if raw_id == 0 {
+                    (None, None)
+                } else {
+                    (
+                        crate::disc::block::device_handles()
+                            .into_iter()
+                            .find(|h| h.parent().is_none() && h.id().raw() == raw_id),
+                        Some(raw_id),
+                    )
                 }
             };
-            
+
             let Some(handle) = handle else {
                 io.write_str("\r\nfile: invalid mount id (try 'ls')\r\n");
                 io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
@@ -241,16 +278,19 @@ async fn handle_wizard_input_internal(
 
             io.write_fmt(format_args!(
                 "\r\nfile: printing tree for {} (raw={})\r\n",
-                handle.id(), shown_id.unwrap_or(handle.id().raw())
+                handle.id(),
+                shown_id.unwrap_or(handle.id().raw())
             ));
 
             print_trueosfs_tree_25(io, handle).await;
             io.write_str("\r\nfile: enter another mount index/id, 'ls', or 'q'\r\n");
             InputResult::Handled
         }
-        
+
         InstallWizardStage::BenchSelectDisk => {
-            if let Some(rest) = s.strip_prefix("bench") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("bench") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\nbench: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -262,7 +302,9 @@ async fn handle_wizard_input_internal(
                 return InputResult::Handled;
             }
 
-            let target = crate::disc::block::device_handles().into_iter().find(|h| h.parent().is_none() && h.id().raw() == raw_id);
+            let target = crate::disc::block::device_handles()
+                .into_iter()
+                .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nbench: no such disk\r\n");
                 return InputResult::Handled;
@@ -272,35 +314,39 @@ async fn handle_wizard_input_internal(
             if !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
                 io.write_fmt(format_args!(
                     "\r\nbench: refused (id={} is not TRUEOSFS; status={}{} )\r\n",
-                    raw_id, status.short(),
+                    raw_id,
+                    status.short(),
                     match (&status, err) {
-                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) => alloc::format!(" err={:?}", e),
+                        (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) =>
+                            alloc::format!(" err={:?}", e),
                         _ => alloc::string::String::new(),
                     }
                 ));
                 return InputResult::Handled;
             }
-            
+
             InputResult::RunAction(CommandAction::RunBenchFs { disk_id: raw_id })
         }
-        
+
         InstallWizardStage::NetbenchSelectNic => {
-            if let Some(rest) = s.strip_prefix("netbench") { s = rest.trim(); }
+            if let Some(rest) = s.strip_prefix("netbench") {
+                s = rest.trim();
+            }
             if should_cancel(s) {
                 io.write_str("\r\nnetbench: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
             }
             let nic_index = s.parse::<usize>().ok();
             let Some(nic_index) = nic_index else {
-                 io.write_str("\r\nnetbench: invalid nic id\r\n");
-                 io.write_str("netbench: enter a nic id or 'q'\r\n");
-                 return InputResult::Handled;
+                io.write_str("\r\nnetbench: invalid nic id\r\n");
+                io.write_str("netbench: enter a nic id or 'q'\r\n");
+                return InputResult::Handled;
             };
             if nic_index >= crate::net::device_count() {
                 io.write_str("\r\nnetbench: no such nic\r\n");
                 return InputResult::Handled;
             }
-            
+
             InputResult::RunAction(CommandAction::RunNetbench { nic_index })
         }
     }
@@ -327,7 +373,7 @@ fn write_inserted_line(io: &dyn ShellIo, args: core::fmt::Arguments) {
 
     // Write scrollbar for the new line
     io.write_str("\x1b[38;2;80;80;80m│\x1b[0m");
-    
+
     io.write_fmt(args);
     // Move to next line (which puts us on top of the pushed content, ready to insert again)
     io.write_str("\r\n");
@@ -337,18 +383,38 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
     // Start at top of scroll region
     io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
 
-    let title = crate::ecma48::style(header).bold().fg(crate::shell::PROMPT_RGB);
-    write_inserted_line(io, format_args!("{} {}", title, crate::ecma48::dim("disk detection stage")));
-    write_inserted_line(io, format_args!("\r\n{}", crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")));
+    let title = crate::ecma48::style(header)
+        .bold()
+        .fg(crate::shell::PROMPT_RGB);
+    write_inserted_line(
+        io,
+        format_args!("{} {}", title, crate::ecma48::dim("disk detection stage")),
+    );
+    write_inserted_line(
+        io,
+        format_args!(
+            "\r\n{}",
+            crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")
+        ),
+    );
 
     let mut found = false;
 
     // Header
-    write_inserted_line(io, format_args!(
-        "  {:<3} {:<8} {:<10} {:<6} {:<12} {}",
-        "ID", "Name", "Size", "Mode", "Status", "Label"
-    ));
-    write_inserted_line(io, format_args!("  {}", crate::ecma48::dim("---------------------------------------------------------")));
+    write_inserted_line(
+        io,
+        format_args!(
+            "  {:<3} {:<8} {:<10} {:<6} {:<12} {}",
+            "ID", "Name", "Size", "Mode", "Status", "Label"
+        ),
+    );
+    write_inserted_line(
+        io,
+        format_args!(
+            "  {}",
+            crate::ecma48::dim("---------------------------------------------------------")
+        ),
+    );
 
     for h in crate::disc::block::device_handles().into_iter() {
         if h.parent().is_some() {
@@ -356,7 +422,7 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
         }
         let info = h.info();
         let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
-        
+
         if filter_trueos && !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
             continue;
         }
@@ -370,33 +436,40 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
         } else {
             (total / 1024, "KB")
         };
-        
+
         let status_color = match status {
             crate::v::disc::detect::DiscStatus::Trueos { .. } => (100, 255, 100),
             crate::v::disc::detect::DiscStatus::Unknown => (255, 100, 100),
             _ => (255, 200, 100),
         };
 
-        write_inserted_line(io, format_args!(
-            "  {:<3} {:<8} {:>4} {:<5} {:<6} {:<12} {}",
-            crate::ecma48::bold(&alloc::format!("{}", info.id.raw())),
-            info.id,
-            size_val, size_suffix,
-            if info.writable { "RW" } else { "RO" },
-            crate::ecma48::color(status.short(), status_color),
-            crate::ecma48::dim(info.label.as_deref().unwrap_or("-"))
-        ));
+        write_inserted_line(
+            io,
+            format_args!(
+                "  {:<3} {:<8} {:>4} {:<5} {:<6} {:<12} {}",
+                crate::ecma48::bold(&alloc::format!("{}", info.id.raw())),
+                info.id,
+                size_val,
+                size_suffix,
+                if info.writable { "RW" } else { "RO" },
+                crate::ecma48::color(status.short(), status_color),
+                crate::ecma48::dim(info.label.as_deref().unwrap_or("-"))
+            ),
+        );
 
         if let Some(e) = err {
-             write_inserted_line(io, format_args!(
-                 "       {}", 
-                 crate::ecma48::color(&alloc::format!("Error: {:?}", e), (255, 80, 80))
-             ));
+            write_inserted_line(
+                io,
+                format_args!(
+                    "       {}",
+                    crate::ecma48::color(&alloc::format!("Error: {:?}", e), (255, 80, 80))
+                ),
+            );
         }
     }
 
     if !found {
-         write_inserted_line(io, format_args!("  (no suitable disks found)"));
+        write_inserted_line(io, format_args!("  (no suitable disks found)"));
     }
 
     write_inserted_line(io, format_args!(""));
@@ -421,7 +494,10 @@ pub(crate) async fn print_bench_disk_table(io: &dyn ShellIo) {
 pub(crate) async fn print_netbench_nic_table(io: &dyn ShellIo) {
     io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
     write_inserted_line(io, format_args!("netbench: NIC selection"));
-    write_inserted_line(io, format_args!("netbench: enter a nic id (blank/q cancels)"));
+    write_inserted_line(
+        io,
+        format_args!("netbench: enter a nic id (blank/q cancels)"),
+    );
     write_inserted_line(io, format_args!(""));
 
     let count = crate::net::device_count();
@@ -439,10 +515,13 @@ pub(crate) async fn print_netbench_nic_table(io: &dyn ShellIo) {
         };
         match mac {
             Some([a, b, c, d, e, f]) => {
-                write_inserted_line(io, format_args!(
-                    "  id={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                    idx, a, b, c, d, e, f
-                ));
+                write_inserted_line(
+                    io,
+                    format_args!(
+                        "  id={} mac={:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                        idx, a, b, c, d, e, f
+                    ),
+                );
             }
             None => {
                 write_inserted_line(io, format_args!("  id={} mac=unavailable", idx));
@@ -478,17 +557,23 @@ pub(crate) async fn print_trueosfs_mount_table(io: &dyn ShellIo) {
         return;
     }
     for (idx, r) in roots.iter().enumerate() {
-        write_inserted_line(io, format_args!(
-            "file: {:>2}: {} (raw={} seq={})",
-            idx,
-            r.disk_id,
-            r.disk_id.raw(),
-            r.seq
-        ));
+        write_inserted_line(
+            io,
+            format_args!(
+                "file: {:>2}: {} (raw={} seq={})",
+                idx,
+                r.disk_id,
+                r.disk_id.raw(),
+                r.seq
+            ),
+        );
     }
 }
 
-pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::block::DeviceHandle) {
+pub(crate) async fn print_trueosfs_tree_25(
+    io: &dyn ShellIo,
+    disk: crate::disc::block::DeviceHandle,
+) {
     use alloc::string::String as AString;
     use alloc::vec::Vec;
     use core::fmt::Write;
@@ -525,7 +610,7 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
             Ok(())
         }
     }
-    
+
     impl<'a> Drop for IoWriter<'a> {
         fn drop(&mut self) {
             if !self.buf.is_empty() {
@@ -587,10 +672,11 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
                 p
             };
 
-            let is_file = match crate::v::fs::trueosfs::file_exists_async(disk, child_path.as_str()).await {
-                Ok(v) => v,
-                Err(_) => false,
-            };
+            let is_file =
+                match crate::v::fs::trueosfs::file_exists_async(disk, child_path.as_str()).await {
+                    Ok(v) => v,
+                    Err(_) => false,
+                };
             let kind = if is_file { FsKind::File } else { FsKind::Dir };
 
             let Some(node) = tree.add_child(
@@ -609,7 +695,10 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
         }
     }
 
-    let mut w = IoWriter { io, buf: AString::new() };
+    let mut w = IoWriter {
+        io,
+        buf: AString::new(),
+    };
     let _ = tree.write_ascii_tree(root, &mut w, MAX_PRINT, |e, w| {
         match e.kind {
             FsKind::Root => w.write_str("/")?,
@@ -623,12 +712,8 @@ pub(crate) async fn print_trueosfs_tree_25(io: &dyn ShellIo, disk: crate::disc::
     });
 }
 
-
 #[inline]
-pub(crate) fn write_prompt_for_state(
-    io: &dyn ShellIo,
-    mode: &ShellMode,
-) {
+pub(crate) fn write_prompt_for_state(io: &dyn ShellIo, mode: &ShellMode) {
     io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
     io.write_str(crate::ecma48::CLEAR_LINE);
     io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
@@ -640,9 +725,9 @@ pub(crate) fn write_prompt_for_state(
         }
         ShellMode::Confirm(action) => {
             let hint = match action {
-                PendingAction::FormatConfirm { .. } |
-                PendingAction::InstallConfirm { .. } |
-                PendingAction::UpdateConfirm { .. } => "confirm",
+                PendingAction::FormatConfirm { .. }
+                | PendingAction::InstallConfirm { .. }
+                | PendingAction::UpdateConfirm { .. } => "confirm",
                 _ => "wait",
             };
             io.write_fmt(format_args!("[{}] ", crate::ecma48::dim(hint)));
@@ -650,4 +735,3 @@ pub(crate) fn write_prompt_for_state(
         _ => {}
     }
 }
-

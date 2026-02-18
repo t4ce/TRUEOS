@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use spin::{Mutex, Once};
 
-use crate::shell::{ShellBackend, ShellIo, CommandAction};
+use crate::shell::{CommandAction, ShellBackend, ShellIo};
 
 // Re-export or common types needed by handlers
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -125,7 +125,8 @@ pub(crate) struct ShellCommandCtx<'a> {
     pub(crate) mode: &'a mut crate::shell::ShellMode,
 }
 
-pub(crate) type ShellCmdHandler = fn(&mut ShellCommandCtx<'_>, Option<&ParsedArgs<'_>>) -> CommandAction;
+pub(crate) type ShellCmdHandler =
+    fn(&mut ShellCommandCtx<'_>, Option<&ParsedArgs<'_>>) -> CommandAction;
 
 #[derive(Clone)]
 pub(crate) struct ShellCommand {
@@ -166,7 +167,10 @@ pub(crate) fn list_command_names<const N: usize>(out: &mut heapless::Vec<&'stati
     }
 }
 
-pub(crate) fn usage_text_for_name<const N: usize>(name: &str, out: &mut heapless::String<N>) -> bool {
+pub(crate) fn usage_text_for_name<const N: usize>(
+    name: &str,
+    out: &mut heapless::String<N>,
+) -> bool {
     init_builtin_shell_commands();
     let cmd = {
         let cmds = registry().lock();
@@ -201,7 +205,11 @@ pub(crate) fn reg_sh_cmd(
         return Err(RegisterError::EmptyName);
     }
 
-    let leaked: &'static ShellCommand = Box::leak(Box::new(ShellCommand { name, args, handler }));
+    let leaked: &'static ShellCommand = Box::leak(Box::new(ShellCommand {
+        name,
+        args,
+        handler,
+    }));
 
     let mut cmds = registry().lock();
     if cmds.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
@@ -284,9 +292,20 @@ struct ArgError {
 
 #[derive(Clone, Debug)]
 enum ArgErrorKind {
-    Missing { name: &'static str, ty: ArgType },
-    TooMany { expected: usize, got: usize },
-    BadValue { name: &'static str, ty: ArgType, value: alloc::string::String, hint: &'static str },
+    Missing {
+        name: &'static str,
+        ty: ArgType,
+    },
+    TooMany {
+        expected: usize,
+        got: usize,
+    },
+    BadValue {
+        name: &'static str,
+        ty: ArgType,
+        value: alloc::string::String,
+        hint: &'static str,
+    },
     RestNotLast,
 }
 
@@ -294,21 +313,35 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
     if cmd.args.is_empty() {
         let got = rest.split_whitespace().count();
         if got != 0 {
-            return Err(ArgError { kind: ArgErrorKind::TooMany { expected: 0, got } });
+            return Err(ArgError {
+                kind: ArgErrorKind::TooMany { expected: 0, got },
+            });
         }
         return Ok(ParsedArgs { values: Vec::new() });
     }
 
-    if let Some((idx, _)) = cmd.args.iter().enumerate().find(|(_, a)| a.ty == ArgType::Rest) {
+    if let Some((idx, _)) = cmd
+        .args
+        .iter()
+        .enumerate()
+        .find(|(_, a)| a.ty == ArgType::Rest)
+    {
         if idx + 1 != cmd.args.len() {
-            return Err(ArgError { kind: ArgErrorKind::RestNotLast });
+            return Err(ArgError {
+                kind: ArgErrorKind::RestNotLast,
+            });
         }
     }
 
     if cmd.args.len() == 1 && cmd.args[0].ty == ArgType::Rest {
         let arg0 = cmd.args[0];
         if arg0.mandatory && rest.is_empty() {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: arg0.name, ty: arg0.ty } });
+            return Err(ArgError {
+                kind: ArgErrorKind::Missing {
+                    name: arg0.name,
+                    ty: arg0.ty,
+                },
+            });
         }
         let mut values = Vec::new();
         if !rest.is_empty() {
@@ -319,17 +352,35 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
 
     let tokens: Vec<&'a str> = rest.split_whitespace().collect();
 
-    let has_rest = cmd.args.last().map(|a| a.ty == ArgType::Rest).unwrap_or(false);
-    let positional_count = if has_rest { cmd.args.len() - 1 } else { cmd.args.len() };
+    let has_rest = cmd
+        .args
+        .last()
+        .map(|a| a.ty == ArgType::Rest)
+        .unwrap_or(false);
+    let positional_count = if has_rest {
+        cmd.args.len() - 1
+    } else {
+        cmd.args.len()
+    };
 
     if !has_rest && tokens.len() > cmd.args.len() {
-        return Err(ArgError { kind: ArgErrorKind::TooMany { expected: cmd.args.len(), got: tokens.len() } });
+        return Err(ArgError {
+            kind: ArgErrorKind::TooMany {
+                expected: cmd.args.len(),
+                got: tokens.len(),
+            },
+        });
     }
 
     for i in 0..positional_count {
         let spec = cmd.args[i];
         if spec.mandatory && tokens.get(i).is_none() {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: spec.name, ty: spec.ty } });
+            return Err(ArgError {
+                kind: ArgErrorKind::Missing {
+                    name: spec.name,
+                    ty: spec.ty,
+                },
+            });
         }
     }
 
@@ -347,7 +398,12 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
     if has_rest {
         let spec = *cmd.args.last().unwrap();
         if spec.mandatory && tokens.len() <= positional_count {
-            return Err(ArgError { kind: ArgErrorKind::Missing { name: spec.name, ty: spec.ty } });
+            return Err(ArgError {
+                kind: ArgErrorKind::Missing {
+                    name: spec.name,
+                    ty: spec.ty,
+                },
+            });
         }
 
         if tokens.len() > positional_count {
@@ -400,7 +456,8 @@ fn parse_u(tok: &str) -> Result<u64, &'static str> {
     if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).map_err(|_| "expected unsigned integer (dec or 0xHEX)")
     } else {
-        t.parse::<u64>().map_err(|_| "expected unsigned integer (dec or 0xHEX)")
+        t.parse::<u64>()
+            .map_err(|_| "expected unsigned integer (dec or 0xHEX)")
     }
 }
 
@@ -465,7 +522,12 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
             ));
             print_usage(io, cmd);
         }
-        ArgErrorKind::BadValue { name, ty, value, hint } => {
+        ArgErrorKind::BadValue {
+            name,
+            ty,
+            value,
+            hint,
+        } => {
             io.write_fmt(format_args!(
                 "{} {}: bad value for '{}' (expected {}, got '{}')\r\n",
                 style_error_label("error"),
@@ -489,7 +551,11 @@ fn print_arg_error(io: &dyn ShellIo, cmd: &ShellCommand, err: &ArgError) {
 }
 
 pub(crate) fn print_schema(io: &dyn ShellIo, cmd: &ShellCommand) {
-    io.write_fmt(format_args!("{} {}\r\n", crate::ecma48::dim("cmd:"), style_cmd_name(cmd.name)));
+    io.write_fmt(format_args!(
+        "{} {}\r\n",
+        crate::ecma48::dim("cmd:"),
+        style_cmd_name(cmd.name)
+    ));
     if cmd.args.is_empty() {
         io.write_fmt(format_args!("  {}\r\n", crate::ecma48::dim("(no args)")));
         return;
@@ -533,9 +599,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static FROG_ARGS: [ArgSpec; 1] = [ArgSpec::new("api_key", ArgType::Str).mandatory()];
 
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
-        static AI_ARGS: [ArgSpec; 1] = [
-            ArgSpec::new("first", ArgType::Rest),
-        ];
+        static AI_ARGS: [ArgSpec; 1] = [ArgSpec::new("first", ArgType::Rest)];
 
         static TURBO_ARGS: [ArgSpec; 2] = [
             ArgSpec::new("op", ArgType::Str),
@@ -610,6 +674,5 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("rain", &NO_ARGS, cmd::cmd_rain);
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
         let _ = REGSHCMD("gfx", &NO_ARGS, cmd::cmd_gfx);
-
     });
 }

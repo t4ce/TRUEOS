@@ -91,7 +91,6 @@ impl fmt::Display for BgAnsi<'_> {
     }
 }
 
-
 struct FgRgbChar {
     ch: char,
     rgb: (u8, u8, u8),
@@ -662,7 +661,10 @@ pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend, rest: &str, cols: usiz
     }
 
     if let Some(text) = arg.strip_prefix("sanitize ") {
-        io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("sanitize: {}", sanitize(text)), cols)));
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right(&alloc::format!("sanitize: {}", sanitize(text)), cols)
+        ));
         return;
     }
 
@@ -671,7 +673,10 @@ pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend, rest: &str, cols: usiz
         io.write_str(CLEAR_TO_EOL);
         io.write_str(CLEAR_DOWN);
         io.write_str(CLEAR_LINE);
-        io.write_fmt(format_args!("{}\r\n", align_right("ecma48: clear sequences emitted", cols)));
+        io.write_fmt(format_args!(
+            "{}\r\n",
+            align_right("ecma48: clear sequences emitted", cols)
+        ));
         return;
     }
 
@@ -680,44 +685,110 @@ pub(crate) fn handle_ecma48(io: &dyn super::ShellBackend, rest: &str, cols: usiz
         return;
     }
 
-    io.write_fmt(format_args!("{}\r\n", align_right("ecma48: demo (ANSI sequences)", cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", dim("dim text (SGR 2)")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", italic("italic text (SGR 3)")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", underline("underline text (SGR 4)")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", blink("blink text (SGR 5)")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", invert("invert text (SGR 7)")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", strike("strike text (SGR 9)")), cols)));
     io.write_fmt(format_args!(
         "{}\r\n",
-        align_right(&alloc::format!("{}", bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))), cols)
-    ));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", fg_ansi("foreground ANSI idx 196", 196)), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("{}", bg_ansi("background ANSI idx 24", 24)), cols)));
-    io.write_fmt(format_args!(
-        "{}\r\n",
-        align_right(&alloc::format!("{}", style("composed style builder")
-            .bold()
-            .underline()
-            .fg((255, 255, 0))
-            .bg8(52)), cols)
+        align_right("ecma48: demo (ANSI sequences)", cols)
     ));
     io.write_fmt(format_args!(
         "{}\r\n",
-        align_right(&alloc::format!("{}", style("builder dim+italic+fg8")
-            .dim()
-            .italic()
-            .fg8(214)), cols)
+        align_right(&alloc::format!("{}", dim("dim text (SGR 2)")), cols)
     ));
     io.write_fmt(format_args!(
         "{}\r\n",
-        align_right(&alloc::format!("{}", style("builder invert+blink+strike+bg")
-            .invert()
-            .blink()
-            .strike()
-            .bg((32, 64, 96))), cols)
+        align_right(&alloc::format!("{}", italic("italic text (SGR 3)")), cols)
     ));
-    io.write_fmt(format_args!("{}\r\n", align_right(&alloc::format!("sanitize: {}", sanitize("\x1b[31mraw\x07")), cols)));
-    io.write_fmt(format_args!("{}\r\n", align_right("cursor edits: [ABCDE]", cols)));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!("{}", underline("underline text (SGR 4)")),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(&alloc::format!("{}", blink("blink text (SGR 5)")), cols)
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(&alloc::format!("{}", invert("invert text (SGR 7)")), cols)
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(&alloc::format!("{}", strike("strike text (SGR 9)")), cols)
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!(
+                "{}",
+                bg_color("background RGB (48;2;0;128;255)", (0, 128, 255))
+            ),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!("{}", fg_ansi("foreground ANSI idx 196", 196)),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!("{}", bg_ansi("background ANSI idx 24", 24)),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!(
+                "{}",
+                style("composed style builder")
+                    .bold()
+                    .underline()
+                    .fg((255, 255, 0))
+                    .bg8(52)
+            ),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!(
+                "{}",
+                style("builder dim+italic+fg8").dim().italic().fg8(214)
+            ),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!(
+                "{}",
+                style("builder invert+blink+strike+bg")
+                    .invert()
+                    .blink()
+                    .strike()
+                    .bg((32, 64, 96))
+            ),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right(
+            &alloc::format!("sanitize: {}", sanitize("\x1b[31mraw\x07")),
+            cols
+        )
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n",
+        align_right("cursor edits: [ABCDE]", cols)
+    ));
 
     // Demonstrate cursor moves without disrupting where the shell continues printing.
     {

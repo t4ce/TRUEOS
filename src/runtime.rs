@@ -1,6 +1,6 @@
+use crate::time;
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
-use crate::time;
 
 static FIRST_AP_SPAWNER: Mutex<Option<SendSpawner>> = Mutex::new(None);
 

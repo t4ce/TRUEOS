@@ -127,7 +127,8 @@ pub async fn piano_drain_loop() {
                 );
             }
         }
-    }.await;
+    }
+    .await;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -218,7 +219,8 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                 // Endpoint descriptor
                 if let Some(iface) = current_iface {
                     let _ = iface;
-                    if current_class == USB_CLASS_AUDIO && current_sub == USB_SUBCLASS_MIDISTREAMING {
+                    if current_class == USB_CLASS_AUDIO && current_sub == USB_SUBCLASS_MIDISTREAMING
+                    {
                         if len >= 7 {
                             let ep_addr = cfg[idx + 2];
                             let attrs = cfg[idx + 3];
@@ -607,12 +609,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         ctx,
         ep0_ring,
         slot_id,
-        setup_std_nodata(
-            0x01,
-            0x0B,
-            info.alt_setting as u16,
-            info.interface as u16,
-        ),
+        setup_std_nodata(0x01, 0x0B, info.alt_setting as u16, info.interface as u16),
         None,
         0,
         "midi-set-interface",
@@ -735,7 +732,11 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     let posted = with_runtime_mut_by_slot(ctx.controller_id, slot_id, |rt| rt.post_rx_locked());
     if posted != Some(true) {
-        crate::log!("usb: midi warn: failed to post initial rx slot={} ep_in={:?}\n", slot_id, info.ep_in.map(|e| e.addr));
+        crate::log!(
+            "usb: midi warn: failed to post initial rx slot={} ep_in={:?}\n",
+            slot_id,
+            info.ep_in.map(|e| e.addr)
+        );
     }
 
     crate::log!(

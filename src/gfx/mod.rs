@@ -2,11 +2,11 @@ pub mod backends;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 
-use spin::{Once, Mutex};
+use spin::{Mutex, Once};
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use trueos_gfx_core::GfxContext;
 use embassy_time_driver::{now, TICK_HZ};
+use trueos_gfx_core::GfxContext;
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -50,7 +50,9 @@ pub fn frame_done_consume_if_ready() -> Option<u32> {
 
     // Consume the boundary: clear done bits and bump sequence.
     FRAME_DONE_BITS.store(0, Ordering::Release);
-    let seq = FRAME_DONE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    let seq = FRAME_DONE_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
     Some(seq)
 }
 
@@ -66,7 +68,11 @@ pub extern "C" fn trueos_cabi_gfx_frame_done_signal(bits: u32) {
 
 #[no_mangle]
 pub extern "C" fn trueos_cabi_gfx_frame_done_is_ready() -> u32 {
-    if frame_done_is_ready() { 1 } else { 0 }
+    if frame_done_is_ready() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Returns a monotonically increasing sequence when a ready frame boundary is consumed, or 0.
@@ -114,7 +120,10 @@ impl System {
         backend: backends::Backend,
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Self {
-        Self { backend, framebuffers }
+        Self {
+            backend,
+            framebuffers,
+        }
     }
 
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {
@@ -169,7 +178,9 @@ pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {
     with_system(|sys| f(sys.context_mut()))
 }
 
-pub fn with_framebuffers<R>(f: impl FnOnce(Option<&'static ::limine::response::FramebufferResponse>) -> R) -> Option<R> {
+pub fn with_framebuffers<R>(
+    f: impl FnOnce(Option<&'static ::limine::response::FramebufferResponse>) -> R,
+) -> Option<R> {
     with_system(|sys| f(sys.framebuffers))
 }
 
@@ -193,7 +204,6 @@ pub fn switch_to_virgl() -> bool {
     })
     .unwrap_or(false)
 }
-
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
@@ -219,10 +229,7 @@ pub fn toggle_backend() -> BackendKind {
     };
 
     match kind {
-        BackendKind::Virgl => {
-          
-            BackendKind::Virgl
-        }
+        BackendKind::Virgl => BackendKind::Virgl,
         BackendKind::None => {
             if switch_to_virgl() {
                 return BackendKind::Virgl;

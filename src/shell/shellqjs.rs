@@ -3,8 +3,8 @@ use core::ffi::{c_char, c_int, CStr};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::shell::{ShellBackend, ShellIo};
 use crate::shell::table::{Table, TableColumn};
+use crate::shell::{ShellBackend, ShellIo};
 
 #[repr(C)]
 struct QjsShellOpaque {
@@ -15,7 +15,9 @@ struct QjsShellOpaque {
 #[inline]
 fn js_bool(v: bool) -> trueos_qjs::JSValue {
     trueos_qjs::JSValue {
-        u: trueos_qjs::JSValueUnion { int32: if v { 1 } else { 0 } },
+        u: trueos_qjs::JSValueUnion {
+            int32: if v { 1 } else { 0 },
+        },
         tag: trueos_qjs::JS_TAG_BOOL,
     }
 }
@@ -184,7 +186,8 @@ unsafe fn install_qjs_shell_globals(ctx: *mut trueos_qjs::JSContext) {
         trueos_qjs::JS_CFUNC_GENERIC,
         0,
     );
-    let _ = trueos_qjs::JS_SetPropertyStr(ctx, global, print_name.as_ptr() as *const c_char, print_fn);
+    let _ =
+        trueos_qjs::JS_SetPropertyStr(ctx, global, print_name.as_ptr() as *const c_char, print_fn);
 
     let trueos_obj = trueos_qjs::JS_NewObject(ctx);
 
@@ -237,21 +240,15 @@ unsafe fn install_qjs_shell_globals(ctx: *mut trueos_qjs::JSContext) {
     );
 
     let trueos_name = b"TRUEOS\0";
-    let _ = trueos_qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        trueos_name.as_ptr() as *const c_char,
-        unsafe { trueos_qjs::js_dup_value(ctx, trueos_obj) },
-    );
+    let _ =
+        trueos_qjs::JS_SetPropertyStr(ctx, global, trueos_name.as_ptr() as *const c_char, unsafe {
+            trueos_qjs::js_dup_value(ctx, trueos_obj)
+        });
 
     // UTF-8 for '§' + NUL
     const SEC_NAME: [u8; 3] = [0xC2, 0xA7, 0x00];
-    let _ = trueos_qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        SEC_NAME.as_ptr() as *const c_char,
-        trueos_obj,
-    );
+    let _ =
+        trueos_qjs::JS_SetPropertyStr(ctx, global, SEC_NAME.as_ptr() as *const c_char, trueos_obj);
 
     trueos_qjs::js_free_value(ctx, global);
 }
@@ -289,7 +286,11 @@ fn dump_exception(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext) {
         unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
     }
 
-    unsafe fn write_js_string(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext, val: trueos_qjs::JSValueConst) -> bool {
+    unsafe fn write_js_string(
+        io: &dyn ShellIo,
+        ctx: *mut trueos_qjs::JSContext,
+        val: trueos_qjs::JSValueConst,
+    ) -> bool {
         let cstr = trueos_qjs::js_to_cstring(ctx, val);
         if cstr.is_null() {
             return false;
@@ -307,7 +308,13 @@ fn dump_exception(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext) {
         true
     }
 
-    unsafe fn dump_prop(io: &dyn ShellIo, ctx: *mut trueos_qjs::JSContext, obj: trueos_qjs::JSValueConst, key: &[u8], label: &str) {
+    unsafe fn dump_prop(
+        io: &dyn ShellIo,
+        ctx: *mut trueos_qjs::JSContext,
+        obj: trueos_qjs::JSValueConst,
+        key: &[u8],
+        label: &str,
+    ) {
         let v = trueos_qjs::JS_GetPropertyStr(ctx, obj, key.as_ptr() as *const c_char);
         if v.is_exception() {
             let exc2 = trueos_qjs::JS_GetException(ctx);
@@ -371,7 +378,10 @@ pub(crate) fn looks_like_module_bytes(bytes: &[u8]) -> bool {
     let rest = &bytes[i..];
 
     fn is_import_suffix(b: u8) -> bool {
-        matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"')
+        matches!(
+            b,
+            b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"'
+        )
     }
     fn is_export_suffix(b: u8) -> bool {
         matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*')
@@ -395,7 +405,10 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
             return true;
         }
         if let Some(&next) = b.get(6) {
-            if matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"') {
+            if matches!(
+                next,
+                b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"'
+            ) {
                 return true;
             }
         }
@@ -554,19 +567,28 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
     false
 }
 
-unsafe fn drain_pending_jobs(io: &dyn ShellIo, rt: *mut trueos_qjs::JSRuntime, fallback_ctx: *mut trueos_qjs::JSContext) -> bool {
+unsafe fn drain_pending_jobs(
+    io: &dyn ShellIo,
+    rt: *mut trueos_qjs::JSRuntime,
+    fallback_ctx: *mut trueos_qjs::JSContext,
+) -> bool {
     if rt.is_null() {
         return true;
     }
 
     loop {
         let mut job_ctx: *mut trueos_qjs::JSContext = core::ptr::null_mut();
-        let rc = trueos_qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut trueos_qjs::JSContext);
+        let rc =
+            trueos_qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut trueos_qjs::JSContext);
         if rc > 0 {
             continue;
         }
         if rc < 0 {
-            let ctx = if !job_ctx.is_null() { job_ctx } else { fallback_ctx };
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
             if !ctx.is_null() {
                 dump_exception(io, ctx);
             } else {
@@ -727,7 +749,10 @@ async fn repl(io: &'static dyn ShellBackend) {
         let opaque = QjsShellOpaque {
             io_ref: (&backend_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
         };
-        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
+        trueos_qjs::JS_SetContextOpaque(
+            ctx,
+            (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void,
+        );
 
         install_qjs_shell_globals(ctx);
 
@@ -860,7 +885,10 @@ pub(crate) async fn repl_shell(
         let opaque = QjsShellOpaque {
             io_ref: (&sys_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
         };
-        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
+        trueos_qjs::JS_SetContextOpaque(
+            ctx,
+            (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void,
+        );
 
         install_qjs_shell_globals(ctx);
         trueos_qjs::node::install_globals(ctx);
@@ -1018,9 +1046,21 @@ pub(crate) fn help_with_term_cols(io: &dyn ShellIo, term_cols: usize) {
         t.print_row(io, &["TRUEOS.acpi(\"s0\")", "ACPI helper"]);
         t.print_row(io, &["import * as path from ...", "Builtin module"]);
         t.print_row(io, &["import leftPad from ...", "3rd-party module"]);
-        t.print_row(io, &["import(\"node:worker_threads\")", "Worker demo: load module"]);
+        t.print_row(
+            io,
+            &[
+                "import(\"node:worker_threads\")",
+                "Worker demo: load module",
+            ],
+        );
         t.print_row(io, &["new Worker('...')", "Worker demo: spawn"]);
-        t.print_row(io, &["w.onMessage(...); w.postMessage(...)", "Worker demo: ping/pong"]);
+        t.print_row(
+            io,
+            &[
+                "w.onMessage(...); w.postMessage(...)",
+                "Worker demo: ping/pong",
+            ],
+        );
     }
 }
 
@@ -1100,7 +1140,11 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
         return;
     }
 
-    let remaining = if code.is_some() { "" } else { rest.trim_start() };
+    let remaining = if code.is_some() {
+        ""
+    } else {
+        rest.trim_start()
+    };
 
     if code.is_none() {
         if let Some(path) = remaining.strip_prefix('@') {
@@ -1111,9 +1155,16 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
         } else {
             // Upstream `qjs` takes a filename argument. We support that too when it looks like a path.
             let single = !remaining.is_empty() && !remaining.contains(char::is_whitespace);
-            let looks_like_path = remaining.starts_with('/') || remaining.starts_with("./") || remaining.starts_with("../") || remaining.ends_with(".js") || remaining.ends_with(".mjs");
+            let looks_like_path = remaining.starts_with('/')
+                || remaining.starts_with("./")
+                || remaining.starts_with("../")
+                || remaining.ends_with(".js")
+                || remaining.ends_with(".mjs");
             if single && looks_like_path {
-                if matches!(crate::surface::io::kfs::exists_async(remaining).await, Ok(true)) {
+                if matches!(
+                    crate::surface::io::kfs::exists_async(remaining).await,
+                    Ok(true)
+                ) {
                     file = Some(remaining);
                 }
             }
@@ -1135,12 +1186,23 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
                     }
                 });
 
-                let print_result = if suppress_result { false } else { explicit_print };
+                let print_result = if suppress_result {
+                    false
+                } else {
+                    explicit_print
+                };
 
                 let mut filename_buf: Vec<u8> = Vec::with_capacity(path.len() + 1);
                 filename_buf.extend_from_slice(path.as_bytes());
                 filename_buf.push(0);
-                eval_bytes_opts_async(io, filename_buf.as_ptr() as *const c_char, &bytes, flags, print_result).await;
+                eval_bytes_opts_async(
+                    io,
+                    filename_buf.as_ptr() as *const c_char,
+                    &bytes,
+                    flags,
+                    print_result,
+                )
+                .await;
             }
             Err(e) => io.write_fmt(format_args!("qjs: read_file failed ({:?})\r\n", e)),
         }
@@ -1160,7 +1222,11 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
         }
     });
 
-    let print_result = if suppress_result { false } else { explicit_print };
+    let print_result = if suppress_result {
+        false
+    } else {
+        explicit_print
+    };
 
     let filename = if flags == trueos_qjs::JS_EVAL_TYPE_MODULE {
         b"<eval-module>\0".as_ptr() as *const c_char
@@ -1192,7 +1258,10 @@ pub(crate) async fn eval_bytes_opts_async(
         let opaque = QjsShellOpaque {
             io_ref: (&backend_ref as *const &dyn ShellBackend) as *const core::ffi::c_void,
         };
-        trueos_qjs::JS_SetContextOpaque(ctx, (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void);
+        trueos_qjs::JS_SetContextOpaque(
+            ctx,
+            (&opaque as *const QjsShellOpaque) as *mut core::ffi::c_void,
+        );
 
         install_qjs_shell_globals(ctx);
 

@@ -193,10 +193,10 @@ impl E1000Adapter {
             }
         };
 
-            let mut adapter = Self {
-                mmio,
-                pci: dev,
-                mac: [0; 6],
+        let mut adapter = Self {
+            mmio,
+            pci: dev,
+            mac: [0; 6],
             ring: None,
             rx_desc: rx_desc_mem.virt() as *mut RxDesc,
             rx_desc_mem,
@@ -271,7 +271,11 @@ impl E1000Adapter {
 
     fn setup_rx(&mut self) -> Result<(), ()> {
         unsafe {
-            core::ptr::write_bytes(self.rx_desc as *mut u8, 0, size_of::<RxDesc>() * RX_RING_SIZE);
+            core::ptr::write_bytes(
+                self.rx_desc as *mut u8,
+                0,
+                size_of::<RxDesc>() * RX_RING_SIZE,
+            );
         }
 
         let mut rx_bufs: Vec<DmaRegion> = Vec::with_capacity(RX_RING_SIZE);
@@ -296,7 +300,8 @@ impl E1000Adapter {
         self.rx_idx = 0;
 
         unsafe {
-            self.mmio.write_u32(REG_RDBAL, self.rx_desc_mem.phys() as u32);
+            self.mmio
+                .write_u32(REG_RDBAL, self.rx_desc_mem.phys() as u32);
             self.mmio
                 .write_u32(REG_RDBAH, (self.rx_desc_mem.phys() >> 32) as u32);
             self.mmio
@@ -317,7 +322,11 @@ impl E1000Adapter {
 
     fn setup_tx(&mut self) -> Result<(), ()> {
         unsafe {
-            core::ptr::write_bytes(self.tx_desc as *mut u8, 0, size_of::<TxDesc>() * TX_RING_SIZE);
+            core::ptr::write_bytes(
+                self.tx_desc as *mut u8,
+                0,
+                size_of::<TxDesc>() * TX_RING_SIZE,
+            );
         }
 
         let mut tx_bufs: Vec<DmaRegion> = Vec::with_capacity(TX_RING_SIZE);
@@ -343,7 +352,8 @@ impl E1000Adapter {
         self.tx_idx = 0;
 
         unsafe {
-            self.mmio.write_u32(REG_TDBAL, self.tx_desc_mem.phys() as u32);
+            self.mmio
+                .write_u32(REG_TDBAL, self.tx_desc_mem.phys() as u32);
             self.mmio
                 .write_u32(REG_TDBAH, (self.tx_desc_mem.phys() >> 32) as u32);
             self.mmio
@@ -505,11 +515,7 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
 
         // IO BAR?
         if (bar_lo & 0x1) != 0 {
-            crate::log!(
-                "net/e1000: bar{} is IO (raw=0x{:08x})\n",
-                i,
-                bar_lo
-            );
+            crate::log!("net/e1000: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
             i += 1;
             continue;
         }

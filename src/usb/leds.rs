@@ -1,8 +1,8 @@
 use super::hid;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
-    trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
+    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
     EP_TYPE_INT_IN, EP_TYPE_INT_OUT,
 };
 use crate::pci::dma;
@@ -29,7 +29,7 @@ struct LedIfaceInfo {
     interface: u8,
     protocol: u8,
     report_desc_len: u16,
-    ep_in: Option<(u8, u16, u8, u32)>,  // (addr, mps, interval, xhci_ep_type)
+    ep_in: Option<(u8, u16, u8, u32)>, // (addr, mps, interval, xhci_ep_type)
     ep_out: Option<(u8, u16, u8, u32)>, // (addr, mps, interval, xhci_ep_type)
 }
 
@@ -148,7 +148,11 @@ async fn send_output_report(
         else {
             return Err(());
         };
-        (rt.ep_out_target, rt.ep_out_ring.snapshot(), rt.out_report_total_len)
+        (
+            rt.ep_out_target,
+            rt.ep_out_ring.snapshot(),
+            rt.out_report_total_len,
+        )
     };
 
     // Build report bytes. For report_id=0, many devices expect no ID byte; for non-zero,
@@ -697,7 +701,9 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                 }
 
                 if !recovered {
-                    match hid::fetch_report_descriptor_device(ctx, ep0_ring, slot_id, full_len).await {
+                    match hid::fetch_report_descriptor_device(ctx, ep0_ring, slot_id, full_len)
+                        .await
+                    {
                         Ok(desc) => {
                             crate::log!(
                                 "usb: leds: report-desc fallback device len={}\n",
@@ -765,20 +771,20 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     };
 
     let Some((ep_out_target, ep_out_ring, out_ring_virt, out_ring_bytes)) = configure_endpoint(
-            ctx,
-            cmd_ring,
-            slot_id,
-            dev_ctx_virt,
-            ctx_stride_bytes,
-            ctx_stride_words,
-            speed_code,
-            target_port,
-            ep_out_addr,
-            ep_out_mps,
-            ep_out_interval,
-            ep_out_type,
-        )
-        .await
+        ctx,
+        cmd_ring,
+        slot_id,
+        dev_ctx_virt,
+        ctx_stride_bytes,
+        ctx_stride_words,
+        speed_code,
+        target_port,
+        ep_out_addr,
+        ep_out_mps,
+        ep_out_interval,
+        ep_out_type,
+    )
+    .await
     else {
         crate::log!("usb: leds: config OUT endpoint failed\n");
         return Err(());

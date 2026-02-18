@@ -180,7 +180,11 @@ impl WaitQueue {
         } else {
             ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
         };
-        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
+        let deadline = if ticks == 0 {
+            0
+        } else {
+            now().saturating_add(ticks)
+        };
         let mut observed = self.seq.load(Ordering::Acquire);
 
         core::future::poll_fn(|cx: &mut Context<'_>| {
@@ -218,7 +222,11 @@ impl WaitQueue {
         } else {
             ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
         };
-        let deadline = if ticks == 0 { 0 } else { now().saturating_add(ticks) };
+        let deadline = if ticks == 0 {
+            0
+        } else {
+            now().saturating_add(ticks)
+        };
         let observed = self.seq.load(Ordering::Acquire);
 
         loop {
@@ -237,7 +245,6 @@ impl WaitQueue {
             spin_step();
         }
     }
-
 }
 
 type JobFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -288,7 +295,8 @@ pub async fn job_runner_task() {
                 }
             }
         }
-    }.await;
+    }
+    .await;
 }
 
 fn enqueue_local_job(job: LocalJobFuture) {

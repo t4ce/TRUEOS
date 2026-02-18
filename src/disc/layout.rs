@@ -2,9 +2,19 @@ use crate::disc::block;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatVolumeLayout {
-    FatAtLba0 { total_sectors: u32, whole_disk: bool },
-    MbrPartition { start_lba: u32, sectors: u32, part_type: u8 },
-    GptPartition { start_lba: u64, sectors: u64 },
+    FatAtLba0 {
+        total_sectors: u32,
+        whole_disk: bool,
+    },
+    MbrPartition {
+        start_lba: u32,
+        sectors: u32,
+        part_type: u8,
+    },
+    GptPartition {
+        start_lba: u64,
+        sectors: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +29,6 @@ impl From<block::Error> for ProbeError {
         ProbeError::DeviceIo(value)
     }
 }
-
 
 fn read_u16_le(bs: &[u8; 512], off: usize) -> u16 {
     u16::from_le_bytes([bs[off], bs[off + 1]])
@@ -88,8 +97,10 @@ fn looks_like_fat_boot_sector(bs: &[u8; 512]) -> Option<u32> {
     }
 
     // Basic sanity: compute first data sector like in the FAT spec.
-    let root_dir_sectors = ((root_entry_count as u32 * 32) + (bytes_per_sector as u32 - 1)) / (bytes_per_sector as u32);
-    let first_data_sector = (reserved_sectors as u32) + (fats as u32) * sectors_per_fat + root_dir_sectors;
+    let root_dir_sectors = ((root_entry_count as u32 * 32) + (bytes_per_sector as u32 - 1))
+        / (bytes_per_sector as u32);
+    let first_data_sector =
+        (reserved_sectors as u32) + (fats as u32) * sectors_per_fat + root_dir_sectors;
     if first_data_sector >= total_sectors {
         return None;
     }
@@ -98,11 +109,12 @@ fn looks_like_fat_boot_sector(bs: &[u8; 512]) -> Option<u32> {
 }
 
 fn is_fat_mbr_type(t: u8) -> bool {
-    matches!(t,
+    matches!(
+        t,
         0x01 | // FAT12
         0x04 | 0x06 | // FAT16
         0x0B | 0x0C | // FAT32
-        0x0E   // FAT16 LBA
+        0x0E // FAT16 LBA
     )
 }
 
@@ -222,9 +234,7 @@ pub async fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLa
                     let mut bs = [0u8; 512];
                     bs.copy_from_slice(&bs_vec[..512]);
                     if looks_like_fat_boot_sector(&bs).is_some() {
-                        let sectors = last_lba
-                            .saturating_sub(first_lba)
-                            .saturating_add(1);
+                        let sectors = last_lba.saturating_sub(first_lba).saturating_add(1);
                         return Ok(FatVolumeLayout::GptPartition {
                             start_lba: first_lba,
                             sectors,
