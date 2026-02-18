@@ -126,15 +126,45 @@ var renderer = new PIXI.Renderer({
   antialias: false
 });
 var stage = new PIXI.Container();
-var rect = new PIXI.Graphics();
-rect.beginFill(0xffe45e);
-rect.drawRect(-120, -80, 240, 160);
-rect.endFill();
-rect.x = W * 0.5;
-rect.y = H * 0.5;
-stage.addChild(rect);
+// 50x50 RGB triangle via Mesh (per-vertex colors), no textures.
+var positions = new Float32Array([
+        0, 0,
+        50, 0,
+        50, 50,
+]);
+var indices = new Uint16Array([0, 1, 2]);
+var colors = new Float32Array([
+    1.0, 0.0, 0.0, 1.0,
+    0.0, 1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0, 1.0,
+]);
+var geometry = new PIXI.Geometry()
+        .addAttribute('aVertexPosition', positions, 2)
+    .addAttribute('aColor', colors, 4)
+        .addIndex(indices);
+var vs = `precision mediump float;
+attribute vec2 aVertexPosition;
+attribute vec4 aColor;
+uniform mat3 translationMatrix;
+uniform mat3 projectionMatrix;
+varying vec4 vColor;
+void main(){
+    vColor = aColor;
+    vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
+    gl_Position = vec4(pos.xy, 0.0, 1.0);
+}`;
+var fs = `precision mediump float;
+varying vec4 vColor;
+void main(){
+    gl_FragColor = vColor;
+}`;
+var program = PIXI.Program.from(vs, fs);
+var shader = new PIXI.Shader(program, {});
+var mesh = new PIXI.Mesh(geometry, shader);
+mesh.x = W - 50;
+mesh.y = 0;
+stage.addChild(mesh);
 G.__trueos_pixi_ui_tick = function(angleRad) {
-  rect.rotation = angleRad;
   renderer.render(stage);
 };"#;
         let init_script_esmsh = br#"import * as PIXI from 'https://esm.sh/pixi.js@7.4.3';
@@ -153,15 +183,45 @@ var renderer = new PIXI.Renderer({
   antialias: false
 });
 var stage = new PIXI.Container();
-var rect = new PIXI.Graphics();
-rect.beginFill(0xffe45e);
-rect.drawRect(-120, -80, 240, 160);
-rect.endFill();
-rect.x = W * 0.5;
-rect.y = H * 0.5;
-stage.addChild(rect);
+// 50x50 RGB triangle via Mesh (per-vertex colors), no textures.
+var positions = new Float32Array([
+        0, 0,
+        50, 0,
+        50, 50,
+]);
+var indices = new Uint16Array([0, 1, 2]);
+var colors = new Float32Array([
+    1.0, 0.0, 0.0, 1.0,
+    0.0, 1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0, 1.0,
+]);
+var geometry = new PIXI.Geometry()
+        .addAttribute('aVertexPosition', positions, 2)
+    .addAttribute('aColor', colors, 4)
+        .addIndex(indices);
+var vs = `precision mediump float;
+attribute vec2 aVertexPosition;
+attribute vec4 aColor;
+uniform mat3 translationMatrix;
+uniform mat3 projectionMatrix;
+varying vec4 vColor;
+void main(){
+    vColor = aColor;
+    vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
+    gl_Position = vec4(pos.xy, 0.0, 1.0);
+}`;
+var fs = `precision mediump float;
+varying vec4 vColor;
+void main(){
+    gl_FragColor = vColor;
+}`;
+var program = PIXI.Program.from(vs, fs);
+var shader = new PIXI.Shader(program, {});
+var mesh = new PIXI.Mesh(geometry, shader);
+mesh.x = W - 50;
+mesh.y = 0;
+stage.addChild(mesh);
 G.__trueos_pixi_ui_tick = function(angleRad) {
-  rect.rotation = angleRad;
   renderer.render(stage);
 };"#;
         let init_script_unpkg = br#"import * as PIXI from 'https://unpkg.com/pixi.js@7.4.3/dist/pixi.mjs';
@@ -180,15 +240,45 @@ var renderer = new PIXI.Renderer({
   antialias: false
 });
 var stage = new PIXI.Container();
-var rect = new PIXI.Graphics();
-rect.beginFill(0xffe45e);
-rect.drawRect(-120, -80, 240, 160);
-rect.endFill();
-rect.x = W * 0.5;
-rect.y = H * 0.5;
-stage.addChild(rect);
+// 50x50 RGB triangle via Mesh (per-vertex colors), no textures.
+var positions = new Float32Array([
+        0, 0,
+        50, 0,
+        50, 50,
+]);
+var indices = new Uint16Array([0, 1, 2]);
+var colors = new Float32Array([
+    1.0, 0.0, 0.0, 1.0,
+    0.0, 1.0, 0.0, 1.0,
+    0.0, 0.0, 1.0, 1.0,
+]);
+var geometry = new PIXI.Geometry()
+        .addAttribute('aVertexPosition', positions, 2)
+    .addAttribute('aColor', colors, 4)
+        .addIndex(indices);
+var vs = `precision mediump float;
+attribute vec2 aVertexPosition;
+attribute vec4 aColor;
+uniform mat3 translationMatrix;
+uniform mat3 projectionMatrix;
+varying vec4 vColor;
+void main(){
+    vColor = aColor;
+    vec3 pos = projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0);
+    gl_Position = vec4(pos.xy, 0.0, 1.0);
+}`;
+var fs = `precision mediump float;
+varying vec4 vColor;
+void main(){
+    gl_FragColor = vColor;
+}`;
+var program = PIXI.Program.from(vs, fs);
+var shader = new PIXI.Shader(program, {});
+var mesh = new PIXI.Mesh(geometry, shader);
+mesh.x = W - 50;
+mesh.y = 0;
+stage.addChild(mesh);
 G.__trueos_pixi_ui_tick = function(angleRad) {
-  rect.rotation = angleRad;
   renderer.render(stage);
 };"#;
 

@@ -28,6 +28,9 @@ const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 const GL_TEXTURE_2D: u32 = 0x0DE1;
 const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
 
+const GL_TEXTURE0: u32 = 0x84C0;
+const MAX_TEXTURE_UNITS: usize = 8;
+
 const GL_BLEND: u32 = 0x0BE2;
 const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
@@ -223,7 +226,8 @@ struct GlState {
     programs: Vec<Option<ProgramState>>,
     current_array_buffer: u32,
     current_element_array_buffer: u32,
-    current_texture_2d: u32,
+    active_texture_unit: usize,
+    bound_texture_2d: [u32; MAX_TEXTURE_UNITS],
     current_program: u32,
     attribs: [AttribState; MAX_ATTRS],
     buffer_revs: Vec<u32>,
@@ -254,7 +258,8 @@ impl GlState {
             programs: Vec::new(),
             current_array_buffer: 0,
             current_element_array_buffer: 0,
-            current_texture_2d: 0,
+            active_texture_unit: 0,
+            bound_texture_2d: [0; MAX_TEXTURE_UNITS],
             current_program: 0,
             attribs: [attrib_default(); MAX_ATTRS],
             buffer_revs: Vec::new(),
@@ -965,7 +970,7 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         } else {
             (0, 0, 0, 0, 0, 0)
         };
-    let tex_id = st.current_texture_2d;
+    let tex_id = st.bound_texture_2d[0];
     let tex_rev = if tex_id != 0 {
         st.texture_revs
             .get((tex_id - 1) as usize)
@@ -1223,22 +1228,36 @@ unsafe extern "C" fn gl_create_texture(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    let mut st = GL_STATE.lock();
-    let id = st.alloc_handle();
-    let idx = (id - 1) as usize;
-    if idx >= st.textures.len() {
-        st.textures.resize_with(idx + 1, || None);
-    }
-    if idx >= st.texture_revs.len() {
-        st.texture_revs.resize(idx + 1, 0);
-    }
-    st.textures[idx] = Some(TextureState {
-        width: 0,
-        height: 0,
-        rgba: Vec::new(),
-        rev: 1,
+    let (id, upload_rgba) = {
+        let mut st = GL_STATE.lock();
+        let id = st.alloc_handle();
+        let idx = (id - 1) as usize;
+        if idx >= st.textures.len() {
+            st.textures.resize_with(idx + 1, || None);
+        }
+        if idx >= st.texture_revs.len() {
+            st.texture_revs.resize(idx + 1, 0);
+        }
+
+        // Seed with a 1x1 opaque white texture so sampling works immediately.
+        // This matches Pixi’s internal use of a default "white" texture.
+        let rgba = vec![255u8, 255u8, 255u8, 255u8];
+        st.textures[idx] = Some(TextureState {
+            width: 1,
+            height: 1,
+            rgba: rgba.clone(),
+            rev: 1,
+        });
+        st.texture_revs[idx] = 1;
+        (id, rgba)
+    };
+
+    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::UploadTexture {
+        tex_id: id,
+        width: 1,
+        height: 1,
+        rgba: upload_rgba,
     });
-    st.texture_revs[idx] = 1;
     js_new_handle_obj(ctx, id)
 }
 
@@ -1258,7 +1277,29 @@ unsafe extern "C" fn gl_bind_texture(
     let id = js_get_handle_id(ctx, args[1]).unwrap_or(0);
     let mut st = GL_STATE.lock();
     if target == GL_TEXTURE_2D {
-        st.current_texture_2d = id;
+        let unit = st.active_texture_unit.min(MAX_TEXTURE_UNITS - 1);
+        st.bound_texture_2d[unit] = id;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_active_texture(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(tex_enum) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    if tex_enum >= GL_TEXTURE0 {
+        let unit = (tex_enum - GL_TEXTURE0) as usize;
+        st.active_texture_unit = unit.min(MAX_TEXTURE_UNITS - 1);
     }
     qjs::JSValue::undefined()
 }
@@ -1348,7 +1389,7 @@ unsafe extern "C" fn gl_tex_image_2d(
     }
 
     let mut st = GL_STATE.lock();
-    let tex_id = st.current_texture_2d;
+    let tex_id = st.bound_texture_2d[0];
     let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
     let mut rgba = vec![0u8; expected];
     if !data_ptr.is_null() && data_len > 0 {
@@ -1448,7 +1489,7 @@ unsafe extern "C" fn gl_tex_sub_image_2d(
     }
 
     let mut st = GL_STATE.lock();
-    let tex_id = st.current_texture_2d;
+    let tex_id = st.bound_texture_2d[0];
     let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
     if ptr.is_null() || len == 0 {
         return qjs::JSValue::undefined();
@@ -3148,7 +3189,7 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("createTexture", gl_create_texture, 0);
     gl_fn!("deleteTexture", gl_noop, 1);
     gl_fn!("bindTexture", gl_bind_texture, 2);
-    gl_fn!("activeTexture", gl_noop, 1);
+    gl_fn!("activeTexture", gl_active_texture, 1);
     gl_fn!("generateMipmap", gl_noop, 1);
     gl_fn!("pixelStorei", gl_pixel_storei, 2);
     gl_fn!("texParameteri", gl_noop, 3);

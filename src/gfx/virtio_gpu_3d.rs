@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use alloc::collections::{BTreeMap, VecDeque};
 use core::sync::atomic::{fence, AtomicU32, Ordering};
-use libm::roundf;
+use libm::{floorf, roundf};
 
 use crate::{pci, wait};
 use embassy_time_driver::{now, TICK_HZ};
@@ -1372,8 +1372,8 @@ DCL OUT[0], COLOR\n\
 use trueos_gfx_core::{
     BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
     FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
-    MemoryType, PipelineDesc, PipelineId, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat,
-    VertexLayout, Viewport,
+    MemoryType, PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderDesc,
+    ShaderId, SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1436,6 +1436,7 @@ struct VirglDrawState {
     pipeline: PipelineId,
     vertex: VirglBufferBinding,
     image: ImageId,
+    sampler: SamplerDesc,
     viewport: Viewport,
     clear_rgb: u32,
 }
@@ -1455,6 +1456,7 @@ impl Default for VirglDrawState {
                 offset: 0,
             },
             image: ImageId::invalid(),
+            sampler: SamplerDesc::default_2d(),
             viewport: Viewport {
                 x: 0,
                 y: 0,
@@ -1936,30 +1938,121 @@ impl VirglGfxBackend {
                 let v = f32::from_le_bytes(buf[tex_off + 4..tex_off + 8].try_into().ok()?);
                 let tw = img.desc.width.max(1) as usize;
                 let th = img.desc.height.max(1) as usize;
-                let tx = (roundf(u.clamp(0.0, 1.0) * (tw.saturating_sub(1) as f32)) as usize)
-                    .min(tw.saturating_sub(1));
-                let ty = (roundf(v.clamp(0.0, 1.0) * (th.saturating_sub(1) as f32)) as usize)
-                    .min(th.saturating_sub(1));
-                let t_idx = ty
-                    .saturating_mul(tw)
-                    .saturating_add(tx)
-                    .saturating_mul(4);
-                if t_idx + 3 <= img.bytes.len() {
-                    let tr = img.bytes[t_idx] as u16;
-                    let tg = img.bytes[t_idx + 1] as u16;
-                    let tb = img.bytes[t_idx + 2] as u16;
-                    let ta = img.bytes[t_idx + 3] as u16;
-                    r_u8 = ((r_u8 as u16).saturating_mul(tr) / 255) as u8;
-                    g_u8 = ((g_u8 as u16).saturating_mul(tg) / 255) as u8;
-                    b_u8 = ((b_u8 as u16).saturating_mul(tb) / 255) as u8;
-                    a_u8 = ((a_u8 as u16).saturating_mul(ta) / 255) as u8;
+                let sampler = self.state.sampler;
+
+                let wrap_coord = |c: f32, w: SamplerWrap| -> f32 {
+                    match w {
+                        SamplerWrap::ClampToEdge => c.clamp(0.0, 1.0),
+                        SamplerWrap::Repeat => {
+                            let mut f = c - floorf(c);
+                            if f < 0.0 {
+                                f += 1.0;
+                            }
+                            if f >= 1.0 {
+                                0.0
+                            } else {
+                                f
+                            }
+                        }
+                    }
+                };
+
+                let clamp_idx = |i: isize, len: usize| -> usize {
+                    if len == 0 {
+                        return 0;
+                    }
+                    if i <= 0 {
+                        0
+                    } else if (i as usize) >= len {
+                        len - 1
+                    } else {
+                        i as usize
+                    }
+                };
+
+                let repeat_idx = |i: isize, len: usize| -> usize {
+                    if len == 0 {
+                        return 0;
+                    }
+                    let m = len as isize;
+                    (((i % m) + m) % m) as usize
+                };
+
+                let axis_idx = |i: isize, len: usize, w: SamplerWrap| -> usize {
+                    match w {
+                        SamplerWrap::ClampToEdge => clamp_idx(i, len),
+                        SamplerWrap::Repeat => repeat_idx(i, len),
+                    }
+                };
+
+                let sample = |x: isize, y: isize| -> (u8, u8, u8, u8) {
+                    let xi = axis_idx(x, tw, sampler.wrap_s);
+                    let yi = axis_idx(y, th, sampler.wrap_t);
+                    let t_idx = yi
+                        .saturating_mul(tw)
+                        .saturating_add(xi)
+                        .saturating_mul(4);
+                    if t_idx + 3 <= img.bytes.len() {
+                        (
+                            img.bytes[t_idx],
+                            img.bytes[t_idx + 1],
+                            img.bytes[t_idx + 2],
+                            img.bytes[t_idx + 3],
+                        )
+                    } else {
+                        (0, 0, 0, 0)
+                    }
+                };
+
+                let u = wrap_coord(u, sampler.wrap_s);
+                let v = wrap_coord(v, sampler.wrap_t);
+
+                let (tr, tg, tb, ta) = if sampler.mag_filter == SamplerFilter::Linear
+                    || sampler.min_filter == SamplerFilter::Linear
+                {
+                    let fx = u * (tw.saturating_sub(1) as f32);
+                    let fy = v * (th.saturating_sub(1) as f32);
+                    let x0 = floorf(fx) as isize;
+                    let y0 = floorf(fy) as isize;
+                    let x1 = x0 + 1;
+                    let y1 = y0 + 1;
+                    let tx = fx - (x0 as f32);
+                    let ty = fy - (y0 as f32);
+
+                    let (c00r, c00g, c00b, c00a) = sample(x0, y0);
+                    let (c10r, c10g, c10b, c10a) = sample(x1, y0);
+                    let (c01r, c01g, c01b, c01a) = sample(x0, y1);
+                    let (c11r, c11g, c11b, c11a) = sample(x1, y1);
+
+                    let lerp = |a: f32, b: f32, t: f32| -> f32 { a + (b - a) * t };
+
+                    let r0 = lerp(c00r as f32, c10r as f32, tx);
+                    let r1 = lerp(c01r as f32, c11r as f32, tx);
+                    let g0 = lerp(c00g as f32, c10g as f32, tx);
+                    let g1 = lerp(c01g as f32, c11g as f32, tx);
+                    let b0 = lerp(c00b as f32, c10b as f32, tx);
+                    let b1 = lerp(c01b as f32, c11b as f32, tx);
+                    let a0 = lerp(c00a as f32, c10a as f32, tx);
+                    let a1 = lerp(c01a as f32, c11a as f32, tx);
+
+                    (
+                        roundf(lerp(r0, r1, ty)).clamp(0.0, 255.0) as u8,
+                        roundf(lerp(g0, g1, ty)).clamp(0.0, 255.0) as u8,
+                        roundf(lerp(b0, b1, ty)).clamp(0.0, 255.0) as u8,
+                        roundf(lerp(a0, a1, ty)).clamp(0.0, 255.0) as u8,
+                    )
                 } else {
-                    // Missing texel data behaves like transparent black.
-                    r_u8 = 0;
-                    g_u8 = 0;
-                    b_u8 = 0;
-                    a_u8 = 0;
-                }
+                    let tx = (roundf(u * (tw.saturating_sub(1) as f32)) as isize)
+                        .clamp(0, tw.saturating_sub(1) as isize);
+                    let ty = (roundf(v * (th.saturating_sub(1) as f32)) as isize)
+                        .clamp(0, th.saturating_sub(1) as isize);
+                    sample(tx, ty)
+                };
+
+                r_u8 = ((r_u8 as u16).saturating_mul(tr as u16) / 255) as u8;
+                g_u8 = ((g_u8 as u16).saturating_mul(tg as u16) / 255) as u8;
+                b_u8 = ((b_u8 as u16).saturating_mul(tb as u16) / 255) as u8;
+                a_u8 = ((a_u8 as u16).saturating_mul(ta as u16) / 255) as u8;
             }
 
             let rf = (r_u8 as f32) / 255.0;
@@ -2253,6 +2346,9 @@ impl GfxDevice for VirglGfxBackend {
                 }
                 Command::BindImage(image) => {
                     self.state.image = image;
+                }
+                Command::SetSampler(s) => {
+                    self.state.sampler = s;
                 }
                 Command::Draw {
                     vertex_count,
