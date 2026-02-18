@@ -21,12 +21,17 @@ extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+
+    fn trueos_cabi_gfx_frame_done_signal(bits: u32);
+    fn trueos_cabi_gfx_frame_done_consume_if_ready() -> u32;
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 
 static LAST_SUBMIT_RC: AtomicI32 = AtomicI32::new(i32::MIN);
 static SUBMIT_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
 static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
+
+const FRAME_DONE_SRC_WEBGL: u32 = 1 << 0;
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -372,6 +377,9 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
             }
         }
         CmdStreamCommand::EndFrame => {
+            // For now this is informational only; do not gate flushing on it.
+            unsafe { trueos_cabi_gfx_frame_done_signal(FRAME_DONE_SRC_WEBGL) };
+            let _ = unsafe { trueos_cabi_gfx_frame_done_consume_if_ready() };
             flush_active_frame(&mut st);
         }
     }

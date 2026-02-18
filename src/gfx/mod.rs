@@ -4,13 +4,76 @@ pub mod virtio_gpu_3d;
 
 use spin::{Once, Mutex};
 
-use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use trueos_gfx_core::GfxContext;
 use embassy_time_driver::{now, TICK_HZ};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
 static DISPLAY_SOURCE: AtomicU8 = AtomicU8::new(0);
+
+// Frame completion register.
+//
+// The command stream owner (e.g. QJS WebGL shim) knows when a logical frame is complete.
+// Multiple producers can OR-in their "done" bit; once all required bits are present, the
+// frame boundary can be consumed and the register resets for the next frame.
+static FRAME_DONE_REQUIRED: AtomicU32 = AtomicU32::new(1);
+static FRAME_DONE_BITS: AtomicU32 = AtomicU32::new(0);
+static FRAME_DONE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+pub fn frame_done_set_required(mask: u32) {
+    // Require at least one bit by default to avoid accidental always-ready if a caller passes 0.
+    let req = if mask == 0 { 1 } else { mask };
+    FRAME_DONE_REQUIRED.store(req, Ordering::Release);
+}
+
+#[inline]
+pub fn frame_done_signal(bits: u32) {
+    if bits != 0 {
+        let _ = FRAME_DONE_BITS.fetch_or(bits, Ordering::AcqRel);
+    }
+}
+
+#[inline]
+pub fn frame_done_is_ready() -> bool {
+    let req = FRAME_DONE_REQUIRED.load(Ordering::Acquire);
+    let done = FRAME_DONE_BITS.load(Ordering::Acquire);
+    (done & req) == req
+}
+
+#[inline]
+pub fn frame_done_consume_if_ready() -> Option<u32> {
+    if !frame_done_is_ready() {
+        return None;
+    }
+
+    // Consume the boundary: clear done bits and bump sequence.
+    FRAME_DONE_BITS.store(0, Ordering::Release);
+    let seq = FRAME_DONE_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+    Some(seq)
+}
+
+#[no_mangle]
+pub extern "C" fn trueos_cabi_gfx_frame_done_set_required(mask: u32) {
+    frame_done_set_required(mask);
+}
+
+#[no_mangle]
+pub extern "C" fn trueos_cabi_gfx_frame_done_signal(bits: u32) {
+    frame_done_signal(bits);
+}
+
+#[no_mangle]
+pub extern "C" fn trueos_cabi_gfx_frame_done_is_ready() -> u32 {
+    if frame_done_is_ready() { 1 } else { 0 }
+}
+
+/// Returns a monotonically increasing sequence when a ready frame boundary is consumed, or 0.
+#[no_mangle]
+pub extern "C" fn trueos_cabi_gfx_frame_done_consume_if_ready() -> u32 {
+    frame_done_consume_if_ready().unwrap_or(0)
+}
 
 #[inline]
 pub fn backend_epoch() -> u64 {
