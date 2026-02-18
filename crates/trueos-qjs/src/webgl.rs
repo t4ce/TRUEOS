@@ -2655,11 +2655,130 @@ unsafe extern "C" fn gl_get_extension(
     }
     let name = CStr::from_ptr(name_c).to_bytes();
     qjs::JS_FreeCString(ctx, name_c);
-    if name.eq_ignore_ascii_case(b"OES_vertex_array_object")
-        || name.eq_ignore_ascii_case(b"OES_element_index_uint")
-        || name.eq_ignore_ascii_case(b"ANGLE_instanced_arrays")
-        || name.eq_ignore_ascii_case(b"WEBGL_draw_buffers")
-    {
+    if name.eq_ignore_ascii_case(b"WEBGL_draw_buffers") {
+        let ext = qjs::JS_NewObject(ctx);
+        if ext.is_exception() {
+            return ext;
+        }
+        let f = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"drawBuffersWEBGL\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawBuffersWEBGL\0".as_ptr() as *const c_char, f);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"COLOR_ATTACHMENT0_WEBGL\0".as_ptr() as *const c_char,
+            js_int32(0x8CE0),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"DRAW_BUFFER0_WEBGL\0".as_ptr() as *const c_char,
+            js_int32(0x8825),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"MAX_COLOR_ATTACHMENTS_WEBGL\0".as_ptr() as *const c_char,
+            js_int32(1),
+        );
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"MAX_DRAW_BUFFERS_WEBGL\0".as_ptr() as *const c_char,
+            js_int32(1),
+        );
+        return ext;
+    }
+    if name.eq_ignore_ascii_case(b"OES_vertex_array_object") {
+        let ext = qjs::JS_NewObject(ctx);
+        if ext.is_exception() {
+            return ext;
+        }
+        let create = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_create_buffer),
+            b"createVertexArrayOES\0".as_ptr() as *const c_char,
+            0,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let bind = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"bindVertexArrayOES\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let del = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"deleteVertexArrayOES\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let is = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_is_handle_object),
+            b"isVertexArrayOES\0".as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"createVertexArrayOES\0".as_ptr() as *const c_char, create);
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"bindVertexArrayOES\0".as_ptr() as *const c_char, bind);
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"deleteVertexArrayOES\0".as_ptr() as *const c_char, del);
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"isVertexArrayOES\0".as_ptr() as *const c_char, is);
+        let _ = qjs::JS_SetPropertyStr(
+            ctx,
+            ext,
+            b"VERTEX_ARRAY_BINDING_OES\0".as_ptr() as *const c_char,
+            js_int32(0x85B5),
+        );
+        return ext;
+    }
+    if name.eq_ignore_ascii_case(b"ANGLE_instanced_arrays") {
+        let ext = qjs::JS_NewObject(ctx);
+        if ext.is_exception() {
+            return ext;
+        }
+        let draw_arrays = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"drawArraysInstancedANGLE\0".as_ptr() as *const c_char,
+            4,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let draw_elements = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"drawElementsInstancedANGLE\0".as_ptr() as *const c_char,
+            5,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let divisor = qjs::JS_NewCFunction2(
+            ctx,
+            Some(gl_noop),
+            b"vertexAttribDivisorANGLE\0".as_ptr() as *const c_char,
+            2,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawArraysInstancedANGLE\0".as_ptr() as *const c_char, draw_arrays);
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"drawElementsInstancedANGLE\0".as_ptr() as *const c_char, draw_elements);
+        let _ = qjs::JS_SetPropertyStr(ctx, ext, b"vertexAttribDivisorANGLE\0".as_ptr() as *const c_char, divisor);
+        return ext;
+    }
+    if name.eq_ignore_ascii_case(b"OES_element_index_uint") {
         return qjs::JS_NewObject(ctx);
     }
     if name.eq_ignore_ascii_case(b"EXT_texture_filter_anisotropic")
@@ -2694,6 +2813,21 @@ unsafe extern "C" fn gl_noop(
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_is_handle_object(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return js_bool(false);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let v = args[0];
+    let is_obj = v.tag == qjs::JS_TAG_OBJECT && !v.is_exception();
+    js_bool(is_obj)
 }
 
 unsafe extern "C" fn canvas2d_noop(
@@ -2907,9 +3041,7 @@ pub unsafe extern "C" fn canvas_get_context(
         return c2d;
     }
 
-    let ok = kind.eq_ignore_ascii_case(b"webgl")
-        || kind.eq_ignore_ascii_case(b"webgl2")
-        || kind.eq_ignore_ascii_case(b"experimental-webgl");
+    let ok = kind.eq_ignore_ascii_case(b"webgl") || kind.eq_ignore_ascii_case(b"experimental-webgl");
     qjs::JS_FreeCString(ctx, kind_c);
     if !ok {
         return js_null();

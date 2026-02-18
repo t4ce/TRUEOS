@@ -2,3 +2,4 @@
 
 pub mod hex;
 pub mod pixi_ui;
+pub mod webgl_smoke;

@@ -56,6 +56,9 @@ pub use pixi::hex as stream_gfx_smoke;
 #[cfg(feature = "trueos")]
 pub use pixi::pixi_ui as pixi_ui;
 
+#[cfg(feature = "trueos")]
+pub use pixi::webgl_smoke as webgl_smoke;
+
 #[repr(C)]
 pub struct JSRuntime {
     _private: [u8; 0],
