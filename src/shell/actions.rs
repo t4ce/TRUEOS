@@ -4,7 +4,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use alloc::boxed::Box;
 
 use super::cube::{CubeState, WireShape};
-use super::{CommandAction, PendingAction, ShellBackend, ShellMode};
+use super::{CommandAction, PendingAction, ShellBackend, ShellIo, ShellMode};
 
 pub(super) async fn handle_command_action(
     action: CommandAction,
@@ -22,14 +22,17 @@ pub(super) async fn handle_command_action(
         CommandAction::ShowInstallDiskTable => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
             super::print_install_disk_table(&rev).await;
+            rev.write_str("install: enter a disk id (e.g. 1 or disc001), 'ls', or 'q'\r\n");
         }
         CommandAction::ShowFormatDiskTable => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
             super::print_format_disk_table(&rev).await;
+            rev.write_str("format: enter a disk id (e.g. 1 or disc001), 'ls', or 'q'\r\n");
         }
         CommandAction::ShowUpdateDiskTable => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
             super::print_update_disk_table(&rev).await;
+            rev.write_str("update: enter a disk id (e.g. 1 or disc001), 'ls', or 'q'\r\n");
         }
         CommandAction::ShowFileMountTable => {
             super::print_trueosfs_mount_table(io).await;
@@ -59,13 +62,16 @@ pub(super) async fn handle_command_action(
             handle_enter_tetris(cube_mode, io, term_cols, term_rows).await;
         }
         CommandAction::DoFormat { disc_id } => {
-            handle_do_format(mode, io, disc_id).await;
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            handle_do_format(mode, &rev, disc_id).await;
         }
         CommandAction::DoInstall { disc_id } => {
-            handle_do_install(mode, io, term_cols, spawner, disc_id).await;
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            handle_do_install(mode, &rev, term_cols, spawner, disc_id).await;
         }
         CommandAction::DoUpdate { disc_id } => {
-            handle_do_update(mode, io, term_cols, spawner, disc_id).await;
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            handle_do_update(mode, &rev, term_cols, spawner, disc_id).await;
         }
         CommandAction::RunNetbench { nic_index } => {
             super::bench::run_netbench(io, nic_index, *term_cols, *term_rows, history).await;
@@ -241,7 +247,7 @@ async fn handle_enter_tetris(
     reset_shell_display(io, *term_cols, *term_rows);
 }
 
-async fn handle_do_format(mode: &mut ShellMode, io: &'static dyn ShellBackend, disc_id: u32) {
+async fn handle_do_format(mode: &mut ShellMode, io: &dyn ShellBackend, disc_id: u32) {
     let target = crate::disc::block::device_handles()
         .into_iter()
         .find(|h| h.parent().is_none() && h.id().raw() == disc_id);
@@ -301,7 +307,7 @@ async fn handle_do_format(mode: &mut ShellMode, io: &'static dyn ShellBackend, d
 
 async fn handle_do_install(
     mode: &mut ShellMode,
-    io: &'static dyn ShellBackend,
+    io: &dyn ShellBackend,
     term_cols: &mut usize,
     spawner: &Spawner,
     disc_id: u32,
@@ -340,7 +346,7 @@ async fn handle_do_install(
 
 async fn handle_do_update(
     mode: &mut ShellMode,
-    io: &'static dyn ShellBackend,
+    io: &dyn ShellBackend,
     term_cols: &mut usize,
     spawner: &Spawner,
     disc_id: u32,

@@ -115,6 +115,12 @@ async fn handle_wizard_input_internal(
             if let Some(rest) = s.strip_prefix("install") {
                 s = rest.trim();
             }
+            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                io.write_str("\r\n");
+                print_install_disk_table(io).await;
+                io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
             if should_cancel(s) {
                 io.write_str("\r\ninstall: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -123,6 +129,7 @@ async fn handle_wizard_input_internal(
             if raw_id == 0 {
                 io.write_str("\r\ninstall: invalid id\r\n");
                 io.write_str("install: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                print_install_disk_table(io).await;
                 return InputResult::Handled;
             }
             let target = crate::disc::block::device_handles()
@@ -130,6 +137,7 @@ async fn handle_wizard_input_internal(
                 .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\ninstall: no such disk\r\n");
+                print_install_disk_table(io).await;
                 return InputResult::Handled;
             };
 
@@ -151,6 +159,12 @@ async fn handle_wizard_input_internal(
             if let Some(rest) = s.strip_prefix("update") {
                 s = rest.trim();
             }
+            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                io.write_str("\r\n");
+                print_update_disk_table(io).await;
+                io.write_str("update: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
             if should_cancel(s) {
                 io.write_str("\r\nupdate: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -159,6 +173,7 @@ async fn handle_wizard_input_internal(
             if raw_id == 0 {
                 io.write_str("\r\nupdate: invalid id\r\n");
                 io.write_str("update: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                print_update_disk_table(io).await;
                 return InputResult::Handled;
             }
             let target = crate::disc::block::device_handles()
@@ -166,6 +181,7 @@ async fn handle_wizard_input_internal(
                 .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nupdate: no such disk\r\n");
+                print_update_disk_table(io).await;
                 return InputResult::Handled;
             };
 
@@ -202,6 +218,12 @@ async fn handle_wizard_input_internal(
             if let Some(rest) = s.strip_prefix("format") {
                 s = rest.trim();
             }
+            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                io.write_str("\r\n");
+                print_format_disk_table(io).await;
+                io.write_str("format: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                return InputResult::Handled;
+            }
             if should_cancel(s) {
                 io.write_str("\r\nformat: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -210,6 +232,7 @@ async fn handle_wizard_input_internal(
             if raw_id == 0 {
                 io.write_str("\r\nformat: invalid id\r\n");
                 io.write_str("format: enter a disk id (e.g. 1 or disc001) or 'q'\r\n");
+                print_format_disk_table(io).await;
                 return InputResult::Handled;
             }
             let target = crate::disc::block::device_handles()
@@ -217,6 +240,7 @@ async fn handle_wizard_input_internal(
                 .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nformat: no such disk\r\n");
+                print_format_disk_table(io).await;
                 return InputResult::Handled;
             };
 
