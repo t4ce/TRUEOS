@@ -29,16 +29,6 @@ pub(crate) fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -
     }
 }
 
-pub(crate) fn setup_set_address(address: u8) -> Trb {
-    // bmRequestType=0x00 (OUT|Standard|Device), bRequest=0x05 (SET_ADDRESS)
-    Trb {
-        d0: (0x00u32) | (0x05u32 << 8) | ((address as u32) << 16),
-        d1: 0,
-        d2: 8,
-        d3: trb_type(2) | (1 << 6),
-    }
-}
-
 pub(crate) fn setup_clear_endpoint_halt(ep_addr: u8) -> Trb {
     // bmRequestType=0x02 (OUT|Standard|Endpoint), bRequest=0x01 (CLEAR_FEATURE)
     // wValue=0 (ENDPOINT_HALT), wIndex=endpoint address

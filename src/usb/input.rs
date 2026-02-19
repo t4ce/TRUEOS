@@ -50,6 +50,7 @@ struct QjsMousePipe {
     y: i32,
     dx: i32,
     dy: i32,
+    #[allow(dead_code)]
     wheel: i32,
     buttons: u32,
     seq: u32,
@@ -58,6 +59,7 @@ struct QjsMousePipe {
     // For motion: last time we emitted a motion update.
 
     // For buttons: track state transitions and buffer them.
+    #[allow(dead_code)]
     last_buttons_seen: u32,
 
     // For motion consumers: last button state we returned (not strictly needed, but useful).
@@ -109,6 +111,7 @@ fn now_ms() -> u64 {
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub struct KeyboardEvent {
     pub slot_id: u32,
     pub modifiers: u8,
@@ -123,10 +126,12 @@ pub struct MouseEvent {
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
+    #[allow(dead_code)]
     pub has_wheel: bool, // true=4-byte, false=3-byte
 }
 
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub enum InputEvent {
     Keyboard(KeyboardEvent),
     Mouse(MouseEvent),
@@ -212,6 +217,7 @@ pub unsafe extern "C" fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i
 /// Policy:
 /// - Motion (dx/dy) is coalesced and only emitted at most once per 25ms.
 /// - Wheel and button transitions are emitted immediately.
+#[allow(dead_code)]
 pub fn qjs_mouse_offer(m: MouseEvent) {
     let mut p = QJS_MOUSE_PIPE.lock();
 

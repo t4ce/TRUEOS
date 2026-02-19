@@ -1,8 +1,13 @@
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
-    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
+    Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
+use super::control;
+pub mod descripto;
+pub mod classreq;
+
+use self::descripto as usbdesc;
 use crate::pci::dma;
 use crate::usb::input;
 use core::mem::size_of;
@@ -18,7 +23,6 @@ const HID_TABLET_RING_CAP: usize = 512;
 const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
 const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
-const HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN: usize = 256;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -192,16 +196,6 @@ pub fn mouse_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     out
 }
 
-pub fn for_each_tablet_cursor(mut f: impl FnMut(f64, f64)) {
-    let guard = HID_RUNTIMES.lock();
-    for rt in guard.iter() {
-        if rt.hid_kind != 3 {
-            continue;
-        }
-        f(rt.tablet_x, rt.tablet_y);
-    }
-}
-
 pub fn tablet_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     let guard = HID_RUNTIMES.lock();
     let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
@@ -277,8 +271,10 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
 pub struct HidEpInfo {
     pub configuration: u8,
     pub interface: u8,
+    pub subclass: u8,
     pub address: u8,
     pub max_packet: u16,
+    #[allow(dead_code)]
     pub interval: u8,
     pub protocol: u8,
     pub report_desc_len: u16,
@@ -288,12 +284,14 @@ pub struct HidRuntime {
     pub controller_id: usize,
     pub ep: HidEpInfo,
 
+    #[allow(dead_code)]
     pub report_desc: Vec<u8, MAX_REPORT_DESC>,
     pub report_phys: u64,
     pub report_virt: *mut u8,
     pub report_len: u32,
     pub hid_kind: u8,
     pub slot_id: u32,
+    pub ep0_state: TrbRingState,
     pub ep_target: u32,
     pub ep_ring: TrbRing,
     pub seq: u64,
@@ -314,16 +312,27 @@ unsafe impl Send for HidRuntime {}
 unsafe impl Sync for HidRuntime {}
 
 const MAX_HID_DEVICES: usize = 16;
-const MAX_BOOT_INTERFACES: usize = 8;
+const MAX_HID_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 
-pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
-    match protocol {
-        1 => 1,
-        2 => 2,
-        _ => protocol,
+pub(crate) fn ep0_state_for_slot(controller_id: usize, slot_id: u32) -> Option<TrbRingState> {
+    let guard = HID_RUNTIMES.lock();
+    guard
+        .iter()
+        .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        .map(|r| r.ep0_state)
+}
+
+pub(crate) fn set_ep0_state_for_slot(controller_id: usize, slot_id: u32, st: TrbRingState) {
+    let mut guard = HID_RUNTIMES.lock();
+    for r in guard.iter_mut() {
+        if r.controller_id == controller_id && r.slot_id == slot_id {
+            r.ep0_state = st;
+        }
     }
 }
+
+ 
 
 pub fn register_runtime(runtime: HidRuntime) {
     let claimed_flags = match runtime.hid_kind {
@@ -690,160 +699,70 @@ pub(crate) async fn input_logger() {
     }
 }
 
-pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
-    let mut idx = 0usize;
-    let mut config_value = 1u8;
-    let mut current_iface: Option<u8> = None;
-    let mut current_alt: u8 = 0;
-    let mut current_proto: u8 = 0;
-    let mut current_subclass: u8 = 0;
-    let mut current_report_len: u16 = 0;
-    let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
+pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_HID_INTERFACES> {
+    let mut report_len_by_iface: [u16; 256] = [0; 256];
 
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        let ty = cfg[idx + 1];
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
-            }
-            4 => {
-                if len >= 9 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_alt = cfg[idx + 3];
-                    current_subclass = cfg[idx + 6];
-                    current_proto = cfg[idx + 7];
-                    current_report_len = 0;
-                } else {
-                    current_iface = None;
-                }
-            }
-            0x21 => {
-                if len >= 9 {
-                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
-                }
-            }
-            5 => {
-                if let Some(iface) = current_iface {
-                    let subclass = current_subclass;
-                    let proto = current_proto;
-                    if current_alt == 0 && subclass == 0x01 && proto == 0x01 {
-                        if len >= 7 {
-                            let ep_addr = cfg[idx + 2];
-                            let attrs = cfg[idx + 3];
-                            let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                            let interval = cfg[idx + 6];
-                            if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
-                                if endpoints
-                                    .iter()
-                                    .any(|e| e.interface == iface && e.address == ep_addr)
-                                {
-                                } else if endpoints
-                                    .push(HidEpInfo {
-                                        configuration: config_value,
-                                        interface: iface,
-                                        address: ep_addr,
-                                        max_packet,
-                                        interval,
-                                        protocol: proto,
-                                        report_desc_len: current_report_len,
-                                    })
-                                    .is_err()
-                                {
-                                } else {
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        idx += len;
-    }
-
-    endpoints
-}
-
-pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
-    let mut idx = 0usize;
     let mut config_value = 1u8;
     let mut current_iface: Option<u8> = None;
     let mut current_alt: u8 = 0;
     let mut current_class: u8 = 0;
+    let mut current_subclass: u8 = 0;
     let mut current_proto: u8 = 0;
-    let mut current_report_len: u16 = 0;
-    let mut endpoints: Vec<HidEpInfo, MAX_BOOT_INTERFACES> = Vec::new();
 
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        let ty = cfg[idx + 1];
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-        match ty {
-            2 => {
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
+    let mut endpoints: Vec<HidEpInfo, MAX_HID_INTERFACES> = Vec::new();
+
+    for raw in usbdesc::DescriptorIter::new(cfg) {
+        match usbdesc::parse_any_descriptor(raw) {
+            usbdesc::ParsedDescriptor::Configuration(cd) => {
+                config_value = cd.configuration_value;
             }
-            4 => {
-                if len >= 9 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_alt = cfg[idx + 3];
-                    current_class = cfg[idx + 5];
-                    current_proto = cfg[idx + 7];
-                    current_report_len = 0;
-                } else {
-                    current_iface = None;
-                }
+            usbdesc::ParsedDescriptor::Interface(id) => {
+                current_iface = Some(id.interface_number);
+                current_alt = id.alternate_setting;
+                current_class = id.interface_class;
+                current_subclass = id.interface_subclass;
+                current_proto = id.interface_protocol;
             }
-            0x21 => {
-                if len >= 9 {
-                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
-                }
-            }
-            5 => {
+            usbdesc::ParsedDescriptor::Hid(hd) => {
                 if let Some(iface) = current_iface {
-                    if current_alt == 0 && current_class == 0x03 {
-                        if len >= 7 {
-                            let ep_addr = cfg[idx + 2];
-                            let attrs = cfg[idx + 3];
-                            let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                            let interval = cfg[idx + 6];
-
-                            if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
-                                if endpoints
-                                    .iter()
-                                    .any(|e| e.interface == iface && e.address == ep_addr)
-                                {
-                                } else if endpoints
-                                    .push(HidEpInfo {
-                                        configuration: config_value,
-                                        interface: iface,
-                                        address: ep_addr,
-                                        max_packet,
-                                        interval,
-                                        protocol: current_proto,
-                                        report_desc_len: current_report_len,
-                                    })
-                                    .is_err()
-                                {
-                                } else {
-                                }
-                            }
+                    if current_alt == 0 {
+                        if let Some(len) = hd.report_desc_len {
+                            report_len_by_iface[iface as usize] = len;
                         }
                     }
                 }
             }
+            usbdesc::ParsedDescriptor::Endpoint(ed) => {
+                let Some(iface) = current_iface else {
+                    continue;
+                };
+                if current_alt != 0 || current_class != 0x03 {
+                    continue;
+                }
+                let ep_addr = ed.endpoint_address;
+                let attrs = ed.attributes;
+                if (attrs & 0x3) != 0x3 || (ep_addr & 0x80) == 0 {
+                    continue;
+                }
+                if endpoints
+                    .iter()
+                    .any(|e| e.interface == iface && e.address == ep_addr)
+                {
+                    continue;
+                }
+                let _ = endpoints.push(HidEpInfo {
+                    configuration: config_value,
+                    interface: iface,
+                    subclass: current_subclass,
+                    address: ep_addr,
+                    max_packet: ed.max_packet_size,
+                    interval: ed.interval,
+                    protocol: current_proto,
+                    report_desc_len: report_len_by_iface[iface as usize],
+                });
+            }
             _ => {}
         }
-        idx += len;
     }
 
     endpoints
@@ -913,22 +832,12 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         return Err(());
     }
 
-    let is_qemu_tablet = xhci::get_port_vidpid(ctx.controller_id, target_port)
-        .map(|(vid, pid)| vid == 0x0627 && pid == 0x0001)
-        .unwrap_or(false);
-
     let mut attached = 0usize;
     for ep in endpoints.into_iter() {
-        let mut hid_kind = hid_kind_from_protocol(ep.protocol);
-        if is_qemu_tablet {
-            hid_kind = if ep.protocol == 1 { 1 } else { 3 };
+        let want_desc_len = ep.report_desc_len as usize;
+        if want_desc_len == 0 {
+            continue;
         }
-
-        let want_desc_len = if ep.report_desc_len != 0 {
-            ep.report_desc_len as usize
-        } else {
-            HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN
-        };
         let report_desc = match fetch_report_descriptor(
             ctx,
             &mut *ep0_ring,
@@ -948,6 +857,15 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
                 continue;
             }
         };
+
+        let hid_kind = usbdesc::hid_kind_from_report_desc(ep.subclass, ep.protocol, &report_desc);
+        if hid_kind == 0 {
+            continue;
+        }
+
+        if ep.subclass == 0x01 && (ep.protocol == 0x01 || ep.protocol == 0x02) {
+            let _ = classreq::set_protocol(ctx, &mut *ep0_ring, slot_id, ep.interface, 0).await;
+        }
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
@@ -1063,6 +981,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             report_len,
             hid_kind,
             slot_id,
+            ep0_state: ep0_ring.snapshot(),
             ep_target: ep_target as u32,
             ep_ring,
             seq: 0,
@@ -1105,99 +1024,47 @@ async fn fetch_control_in(
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
     let want_len = core::cmp::min(len, MAX_REPORT_DESC);
+    if want_len == 0 {
+        return Ok(Vec::new());
+    }
+
     let (phys, virt) = dma::alloc(want_len, 64).ok_or(FetchReportError::Alloc)?;
     unsafe { write_bytes(virt, 0, want_len) };
 
     let w_length = want_len as u16;
     let setup_d1 = (setup_d1 & 0xFFFF) | ((w_length as u32) << 16);
-
     let setup = Trb {
         d0: setup_d0,
         d1: setup_d1,
-        d2: 8 | (2 << 16),
+        d2: 8 | (2u32 << 16),
         d3: trb_type(2) | (1 << 6),
     };
 
-    let data = Trb {
-        d0: lo(phys),
-        d1: hi(phys),
-        d2: want_len as u32,
-        d3: trb_type(3) | (1 << 16),
-    };
-
-    let status = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-
-        d3: trb_type(4) | (1 << 5),
-    };
-
-    let Some(setup_trb_phys) = ep0_ring.push_with_phys(setup) else {
-        dma::dealloc(virt, want_len);
-        return Err(FetchReportError::RingOverflow);
-    };
-    let Some(data_trb_phys) = ep0_ring.push_with_phys(data) else {
-        dma::dealloc(virt, want_len);
-        return Err(FetchReportError::RingOverflow);
-    };
-    let Some(status_trb_phys) = ep0_ring.push_with_phys(status) else {
-        dma::dealloc(virt, want_len);
-        return Err(FetchReportError::RingOverflow);
-    };
-
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-
-    let Some(evt) = xhci::wait_for_event(
+    let transferred = match control::control_in(
         ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_slot != slot_id {
-                return false;
-            }
-
-            let evt_target = (evt.d3 >> 16) & 0x1F;
-            if evt_target != 1 && evt_target != 2 {
-                return false;
-            }
-
-            let evt_ptr = (evt.d0 as u64) | ((evt.d1 as u64) << 32);
-            let evt_ptr = evt_ptr & !0xFu64;
-            evt_ptr == (setup_trb_phys & !0xFu64)
-                || evt_ptr == (data_trb_phys & !0xFu64)
-                || evt_ptr == (status_trb_phys & !0xFu64)
-        },
-        1,
-        EmbassyDuration::from_millis(5),
+        ep0_ring,
+        slot_id,
+        setup,
+        phys,
+        w_length,
+        "hid-ctrl-in",
+        800,
     )
     .await
-    else {
-        dma::dealloc(virt, want_len);
-        return Err(FetchReportError::Timeout);
+    {
+        Ok((_, xfer)) => xfer as usize,
+        Err(()) => {
+            dma::dealloc(virt, want_len);
+            return Err(FetchReportError::Timeout);
+        }
     };
-
-    let completion = ((evt.d2 >> 24) & 0xFF) as u8;
-
-    if completion != 1 && completion != 13 {
-        dma::dealloc(virt, want_len);
-        return Err(FetchReportError::Completion(completion));
-    }
-
-    let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
-    let requested = want_len as u32;
-    let transferred = requested.saturating_sub(remaining).min(requested) as usize;
 
     let mut out = Vec::<u8, MAX_REPORT_DESC>::new();
     let data_slice = unsafe { core::slice::from_raw_parts(virt, want_len) };
-    let _ = out.extend_from_slice(&data_slice[..transferred]);
+    let _ = out.extend_from_slice(&data_slice[..core::cmp::min(transferred, want_len)]);
     dma::dealloc(virt, want_len);
     Ok(out)
 }
-
 pub(crate) async fn fetch_report_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
@@ -1205,33 +1072,19 @@ pub(crate) async fn fetch_report_descriptor(
     iface: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    let setup_d0 = (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
-    let setup_d1 = iface as u32;
-    fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
+    fetch_hid_descriptor(ctx, ep0_ring, slot_id, iface, 0x22, len).await
 }
 
-pub(crate) async fn fetch_report_descriptor_device(
-    ctx: &XhciContext,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    len: usize,
-) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    let setup_d0 = (0x80u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
-    let setup_d1 = 0;
-    fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
-}
-
-pub(crate) async fn fetch_hid_get_report(
+pub(crate) async fn fetch_hid_descriptor(
     ctx: &XhciContext,
     ep0_ring: &mut TrbRing,
     slot_id: u32,
     iface: u8,
-    report_type: u8,
-    report_id: u8,
+    desc_type: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    let setup_d0 =
-        (0xA1u32) | ((0x01u32) << 8) | (((report_type as u32) << 8) | (report_id as u32)) << 16;
+    let w_value = ((desc_type as u32) << 8) | 0u32;
+    let setup_d0 = (0x81u32) | ((0x06u32) << 8) | (w_value << 16);
     let setup_d1 = iface as u32;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
 }
@@ -1247,117 +1100,6 @@ pub(crate) fn hid_log_allow_chatter(seq: u64) -> bool {
     false
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct HidOutputReportFormat {
-    pub report_id: u8,
-    pub total_len_bytes: u16,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-struct HidGlobalState {
-    report_size_bits: u32,
-    report_count: u32,
-    report_id: u8,
-}
-
-pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportFormat> {
-    let mut idx: usize = 0;
-    let mut state = HidGlobalState {
-        report_size_bits: 0,
-        report_count: 0,
-        report_id: 0,
-    };
-    let mut stack: [HidGlobalState; 4] = [HidGlobalState::default(); 4];
-    let mut sp: usize = 0;
-
-    let mut best_id: u8 = 0;
-    let mut best_payload_bytes: u16 = 0;
-
-    while idx < desc.len() {
-        let b = desc[idx];
-        idx += 1;
-
-        if b == 0xFE {
-            if idx + 2 > desc.len() {
-                break;
-            }
-            let data_size = desc[idx] as usize;
-            idx += 2;
-            idx = idx.saturating_add(data_size);
-            continue;
-        }
-
-        let size_code = (b & 0x03) as usize;
-        let data_size = match size_code {
-            0 => 0,
-            1 => 1,
-            2 => 2,
-            3 => 4,
-            _ => 0,
-        };
-        let item_type = (b >> 2) & 0x03;
-        let tag = (b >> 4) & 0x0F;
-
-        if idx + data_size > desc.len() {
-            break;
-        }
-
-        let mut value_u32: u32 = 0;
-        for i in 0..data_size {
-            value_u32 |= (desc[idx + i] as u32) << (8 * i);
-        }
-        idx += data_size;
-
-        match (item_type, tag) {
-            (1, 7) => {
-                state.report_size_bits = value_u32;
-            }
-            (1, 9) => {
-                state.report_count = value_u32;
-            }
-            (1, 8) => {
-                state.report_id = (value_u32 & 0xFF) as u8;
-            }
-            (1, 10) => {
-                if sp < stack.len() {
-                    stack[sp] = state;
-                    sp += 1;
-                }
-            }
-            (1, 11) => {
-                if sp > 0 {
-                    sp -= 1;
-                    state = stack[sp];
-                }
-            }
-
-            (0, 9) => {
-                let bits = state.report_size_bits.saturating_mul(state.report_count);
-                if bits == 0 {
-                    continue;
-                }
-                let payload_bytes = ((bits + 7) / 8) as u16;
-                if payload_bytes >= best_payload_bytes {
-                    best_payload_bytes = payload_bytes;
-                    best_id = state.report_id;
-                }
-            }
-
-            _ => {}
-        }
-    }
-
-    if best_payload_bytes == 0 {
-        return None;
-    }
-
-    let total_len_bytes = best_payload_bytes.saturating_add((best_id != 0) as u16);
-    Some(HidOutputReportFormat {
-        report_id: best_id,
-        total_len_bytes,
-    })
-}
-
 pub struct BootAttachParams<'a> {
     pub ctx: &'a XhciContext,
     pub cmd_ring: &'a mut TrbRing,
@@ -1369,315 +1111,4 @@ pub struct BootAttachParams<'a> {
     pub ctx_stride_words: usize,
     pub speed_code: u32,
     pub target_port: u8,
-}
-
-pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, ()> {
-    let BootAttachParams {
-        ctx,
-        cmd_ring,
-        ep0_ring,
-        slot_id,
-        cfg,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-    } = params;
-
-    if cfg.is_empty() {
-        return Err(());
-    }
-
-    let endpoints = parse_boot_endpoints(cfg);
-    if endpoints.is_empty() {
-        return Err(());
-    }
-
-    let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
-
-    let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
-        d1: 0,
-
-        d2: 8,
-        d3: trb_type(2) | (1 << 6),
-    };
-    let status_cfg = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-
-        d3: trb_type(4) | (1 << 5) | (1 << 16),
-    };
-    if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        return Err(());
-    }
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-    let Some(set_cfg_evt) = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
-        },
-        400,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    else {
-        return Err(());
-    };
-
-    let completion = (set_cfg_evt.d2 >> 24) & 0xFF;
-    if completion != 1 {
-        return Err(());
-    }
-
-    let is_qemu_tablet = xhci::get_port_vidpid(ctx.controller_id, target_port)
-        .map(|(vid, pid)| vid == 0x0627 && pid == 0x0001)
-        .unwrap_or(false);
-
-    for ep in endpoints.iter() {
-        let _ =
-            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-        let _ =
-            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
-    }
-
-    let mut attached = 0usize;
-
-    for ep in endpoints.into_iter() {
-        let mut hid_kind = hid_kind_from_protocol(ep.protocol);
-        if is_qemu_tablet {
-            hid_kind = if ep.protocol == 1 { 1 } else { 3 };
-        }
-
-        let want_desc_len = if ep.report_desc_len != 0 {
-            ep.report_desc_len as usize
-        } else {
-            HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN
-        };
-        let report_desc = match fetch_report_descriptor(
-            ctx,
-            &mut *ep0_ring,
-            slot_id,
-            ep.interface,
-            want_desc_len,
-        )
-        .await
-        {
-            Ok(desc) => {
-                if desc.is_empty() {
-                    continue;
-                }
-                desc
-            }
-            Err(_err) => {
-                continue;
-            }
-        };
-
-        let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
-            Some(pair) => pair,
-            None => {
-                continue;
-            }
-        };
-        unsafe { write_bytes(ep_ring_virt, 0, 32 * size_of::<Trb>()) };
-        let mut ep_ring = unsafe { TrbRing::new(ep_ring_phys, ep_ring_virt as *mut Trb, 32) };
-
-        let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
-            Some(pair) => pair,
-            None => {
-                continue;
-            }
-        };
-        unsafe { write_bytes(input_cfg_virt, 0, 4096) };
-
-        let ep_target = endpoint_target(ep.address);
-
-        let ep_ctx_index = context_index(ep.address);
-
-        let ep_add_bit = ep_ctx_index - 1;
-
-        unsafe {
-            let add_flags_ptr = input_cfg_virt as *mut u32;
-            write_volatile(add_flags_ptr.add(1), (1 << 0) | (1 << ep_add_bit));
-
-            let slot_ctx = input_cfg_virt.add(ctx_stride_bytes) as *mut u32;
-            let ep_ctx_off: usize = ctx_stride_bytes * (ep_ctx_index as usize);
-            let ep_ctx = input_cfg_virt.add(ep_ctx_off) as *mut u32;
-
-            let dev_slot_ctx = dev_ctx_virt as *const u32;
-            for i in 0..ctx_stride_words {
-                write_volatile(slot_ctx.add(i), read_volatile(dev_slot_ctx.add(i)));
-            }
-
-            let mut dw0 = read_volatile(slot_ctx.add(0));
-
-            dw0 = (dw0 & !(0x1F << 27)) | (ep_add_bit << 27);
-            write_volatile(slot_ctx.add(0), dw0);
-
-            let mut dw1 = read_volatile(slot_ctx.add(1));
-            dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
-            write_volatile(slot_ctx.add(1), dw1);
-
-            let mps = (ep.max_packet as u32) & 0x7FF;
-
-            let interval = if speed_code == 3 { 3 } else { 1 };
-
-            write_volatile(
-                ep_ctx.add(0),
-                ep_state_bits(EP_STATE_DISABLED) | ep_interval_bits(interval),
-            );
-            let mut ep_cfg = ep_cerr_bits(3);
-            ep_cfg |= ep_type_bits(EP_TYPE_INT_IN);
-            ep_cfg |= ep_max_packet_bits(mps);
-            write_volatile(ep_ctx.add(1), ep_cfg);
-
-            let dq = ep_ring.dequeue_ptr();
-            write_volatile(ep_ctx.add(2), lo(dq));
-            write_volatile(ep_ctx.add(3), hi(dq));
-
-            let avg_trb_len = mps;
-            let max_esit_payload = mps;
-            write_volatile(
-                ep_ctx.add(4),
-                ep_avg_trb_len_bits(avg_trb_len) | ep_max_esit_payload_lo_bits(max_esit_payload),
-            );
-        }
-
-        let cfg_ep_cmd = Trb {
-            d0: lo(input_cfg_phys),
-            d1: hi(input_cfg_phys),
-            d2: 0,
-            d3: trb_type(12) | (slot_id << 24),
-        };
-        if xhci::submit_cmd_and_wait(
-            ctx,
-            cmd_ring,
-            cfg_ep_cmd,
-            Some(slot_id),
-            "hid-config-ep",
-            400,
-            EmbassyDuration::from_millis(5),
-        )
-        .await
-        .is_err()
-        {
-            continue;
-        }
-
-        let report_bytes = core::cmp::max(usize::from(ep.max_packet), 8);
-        let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
-            Some(pair) => pair,
-            None => {
-                continue;
-            }
-        };
-        unsafe { write_bytes(rep_virt, 0, report_bytes) };
-
-        let report_len = ep.max_packet as u32;
-
-        let _ = is_qemu_tablet;
-        let _ = hid_kind;
-
-        let normal = Trb {
-            d0: lo(rep_phys),
-            d1: hi(rep_phys),
-            d2: report_len,
-            d3: trb_type(1) | (1 << 5),
-        };
-        if !ep_ring.push(normal) {
-            continue;
-        }
-        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
-
-        register_runtime(HidRuntime {
-            controller_id: ctx.controller_id,
-            ep,
-            report_desc,
-            report_phys: rep_phys,
-            report_virt: rep_virt,
-            report_len,
-            hid_kind,
-            slot_id,
-            ep_target: ep_target as u32,
-            ep_ring,
-            seq: 0,
-            last_nonzero_seq: 0,
-            mouse_ring: MouseRing::new(),
-            mouse_x: 0.5,
-            mouse_y: 0.5,
-            tablet_ring: TabletRing::new(),
-            tablet_x: 0.5,
-            tablet_y: 0.5,
-            tablet_last_sample_ms: 0,
-        });
-
-        attached += 1;
-    }
-
-    if attached > 0 {
-        Ok(attached)
-    } else {
-        Err(())
-    }
-}
-
-pub async fn class_request_nodata(
-    ctx: &XhciContext,
-    ep0_ring: &mut TrbRing,
-    slot_id: u32,
-    request: u8,
-    value: u16,
-    index: u16,
-) -> Result<(), ()> {
-    let setup = Trb {
-        d0: (0x21u32) | ((request as u32) << 8) | ((value as u32) << 16),
-        d1: index as u32,
-
-        d2: 8,
-        d3: trb_type(2) | (1 << 6),
-    };
-    let status = Trb {
-        d0: 0,
-        d1: 0,
-        d2: 0,
-
-        d3: trb_type(4) | (1 << 5) | (1 << 16),
-    };
-    if !ep0_ring.push(setup) || !ep0_ring.push(status) {
-        return Err(());
-    }
-    unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
-
-    let Some(evt) = xhci::wait_for_event(
-        ctx,
-        |evt| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            evt_slot == slot_id
-        },
-        400,
-        EmbassyDuration::from_millis(5),
-    )
-    .await
-    else {
-        return Err(());
-    };
-
-    let completion = (evt.d2 >> 24) & 0xFF;
-    if completion == 1 {
-        Ok(())
-    } else {
-        Err(())
-    }
 }

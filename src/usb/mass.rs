@@ -2,7 +2,7 @@ use super::bot;
 use super::scsi;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
+    ep_max_burst_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
     Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::disc::block as disc_block;
@@ -35,6 +35,8 @@ pub struct BulkPair {
     pub ep_out: u8,
     pub max_packet_in: u16,
     pub max_packet_out: u16,
+    pub ss_max_burst_in: u8,
+    pub ss_max_burst_out: u8,
 }
 
 pub struct MassRuntime {
@@ -196,6 +198,14 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
     let mut ep_in: Option<(u8, u16)> = None;
     let mut ep_out: Option<(u8, u16)> = None;
 
+    // SuperSpeed Endpoint Companion (0x30) applies to the immediately preceding endpoint
+    // descriptor. Track per-endpoint bMaxBurst so we can program the xHCI endpoint context.
+    let mut ss_burst_in: u8 = 0;
+    let mut ss_burst_out: u8 = 0;
+    let mut last_ep_addr: Option<u8> = None;
+
+    let mut best: Option<BulkPair> = None;
+
     while idx + 2 <= cfg.len() {
         let len = cfg[idx] as usize;
         let ty = cfg[idx + 1];
@@ -210,6 +220,21 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
             }
             4 => {
                 if len >= 9 {
+                    if let (Some(iface), Some((in_addr, in_mps)), Some((out_addr, out_mps))) =
+                        (current_iface, ep_in, ep_out)
+                    {
+                        best = Some(BulkPair {
+                            configuration: config_value,
+                            interface: iface,
+                            ep_in: in_addr,
+                            ep_out: out_addr,
+                            max_packet_in: in_mps,
+                            max_packet_out: out_mps,
+                            ss_max_burst_in: ss_burst_in,
+                            ss_max_burst_out: ss_burst_out,
+                        });
+                    }
+
                     current_iface = Some(cfg[idx + 2]);
                     current_alt = cfg[idx + 3];
                     current_class = cfg[idx + 5];
@@ -217,6 +242,9 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                     current_proto = cfg[idx + 7];
                     ep_in = None;
                     ep_out = None;
+                    ss_burst_in = 0;
+                    ss_burst_out = 0;
+                    last_ep_addr = None;
                 } else {
                     current_iface = None;
                 }
@@ -233,6 +261,7 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                             let attrs = cfg[idx + 3];
                             if (attrs & 0x3) == 0x2 {
                                 let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                                last_ep_addr = Some(ep_addr);
                                 if (ep_addr & 0x80) != 0 {
                                     if ep_in.is_none() {
                                         ep_in = Some((ep_addr, max_packet));
@@ -240,20 +269,20 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                                 } else if ep_out.is_none() {
                                     ep_out = Some((ep_addr, max_packet));
                                 }
-
-                                if let (Some((in_addr, in_mps)), Some((out_addr, out_mps))) =
-                                    (ep_in, ep_out)
-                                {
-                                    return Some(BulkPair {
-                                        configuration: config_value,
-                                        interface: iface,
-                                        ep_in: in_addr,
-                                        ep_out: out_addr,
-                                        max_packet_in: in_mps,
-                                        max_packet_out: out_mps,
-                                    });
-                                }
                             }
+                        }
+                    }
+                }
+            }
+            0x30 => {
+                // SuperSpeed Endpoint Companion
+                if len >= 6 {
+                    if let Some(ep) = last_ep_addr {
+                        let max_burst = cfg[idx + 2];
+                        if ep == ep_in.map(|(a, _)| a).unwrap_or(0xFF) {
+                            ss_burst_in = max_burst;
+                        } else if ep == ep_out.map(|(a, _)| a).unwrap_or(0xFF) {
+                            ss_burst_out = max_burst;
                         }
                     }
                 }
@@ -263,7 +292,22 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
         idx += len;
     }
 
-    None
+    if let (Some(iface), Some((in_addr, in_mps)), Some((out_addr, out_mps))) =
+        (current_iface, ep_in, ep_out)
+    {
+        best = Some(BulkPair {
+            configuration: config_value,
+            interface: iface,
+            ep_in: in_addr,
+            ep_out: out_addr,
+            max_packet_in: in_mps,
+            max_packet_out: out_mps,
+            ss_max_burst_in: ss_burst_in,
+            ss_max_burst_out: ss_burst_out,
+        });
+    }
+
+    best
 }
 
 pub struct AttachParams<'a> {
@@ -418,29 +462,25 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         write_volatile(ep_in_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
         let mut ep_in_cfg = ep_cerr_bits(3);
         ep_in_cfg |= ep_type_bits(EP_TYPE_BULK_IN);
+        ep_in_cfg |= ep_max_burst_bits(pair.ss_max_burst_in as u32);
         ep_in_cfg |= ep_max_packet_bits(mps_in);
         write_volatile(ep_in_ctx.add(1), ep_in_cfg);
         let dq_in = ring_in.dequeue_ptr();
         write_volatile(ep_in_ctx.add(2), lo(dq_in));
         write_volatile(ep_in_ctx.add(3), hi(dq_in));
-        write_volatile(
-            ep_in_ctx.add(4),
-            ep_avg_trb_len_bits(mps_in) | ep_max_esit_payload_lo_bits(mps_in),
-        );
+        write_volatile(ep_in_ctx.add(4), ep_avg_trb_len_bits(mps_in));
 
         // Bulk OUT endpoint
         write_volatile(ep_out_ctx.add(0), ep_state_bits(EP_STATE_DISABLED));
         let mut ep_out_cfg = ep_cerr_bits(3);
         ep_out_cfg |= ep_type_bits(EP_TYPE_BULK_OUT);
+        ep_out_cfg |= ep_max_burst_bits(pair.ss_max_burst_out as u32);
         ep_out_cfg |= ep_max_packet_bits(mps_out);
         write_volatile(ep_out_ctx.add(1), ep_out_cfg);
         let dq_out = ring_out.dequeue_ptr();
         write_volatile(ep_out_ctx.add(2), lo(dq_out));
         write_volatile(ep_out_ctx.add(3), hi(dq_out));
-        write_volatile(
-            ep_out_ctx.add(4),
-            ep_avg_trb_len_bits(mps_out) | ep_max_esit_payload_lo_bits(mps_out),
-        );
+        write_volatile(ep_out_ctx.add(4), ep_avg_trb_len_bits(mps_out));
     }
 
     let cfg_ep_cmd = Trb {
@@ -449,7 +489,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         d2: 0,
         d3: trb_type(12) | (slot_id << 24),
     };
-    xhci::submit_cmd_and_wait(
+    let cfg_res = xhci::submit_cmd_and_wait(
         ctx,
         cmd_ring,
         cfg_ep_cmd,
@@ -458,7 +498,12 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
         400,
         EmbassyDuration::from_millis(5),
     )
-    .await?;
+    .await;
+
+    // Temporary DMA buffer only needed for the duration of the Configure Endpoint command.
+    dma::dealloc(input_cfg_virt, 4096);
+
+    cfg_res?;
 
     // Build the runtime locally first so we can perform best-effort async probing
     // without ever holding MASS_RUNTIMES across an .await.
