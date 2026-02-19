@@ -20,6 +20,12 @@ const MAX_REPORT_DESC: usize = 512;
 // but do not emit them into the normal input/QJS/log pipelines.
 const HID_MOUSE_RING_CAP: usize = 2048; // ~2s at 1kHz
 
+// Tablet samples are intentionally decimated (10ms cadence), so a smaller ring is fine.
+const HID_TABLET_RING_CAP: usize = 512; // ~5s at 10ms
+const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
+// QEMU usb-tablet reports absolute coordinates in the 0..=0x7FFF range.
+const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
+
 // Tuning knob: how much a HID boot-mouse delta of 1 moves the normalized cursor.
 // This is intentionally simple for now; we can revisit acceleration, DPI, and
 // time-based scaling once we have a direct GPU cursor consumer.
@@ -40,6 +46,18 @@ pub struct TrueosHidMouseSample {
     pub flags: u8, // bit0=has_wheel
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidTabletSample {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub x: u16,
+    pub y: u16,
+    pub flags: u8,
+}
+
 const ZERO_MOUSE_SAMPLE: TrueosHidMouseSample = TrueosHidMouseSample {
     t_ms: 0,
     seq: 0,
@@ -51,6 +69,16 @@ const ZERO_MOUSE_SAMPLE: TrueosHidMouseSample = TrueosHidMouseSample {
     flags: 0,
 };
 
+const ZERO_TABLET_SAMPLE: TrueosHidTabletSample = TrueosHidTabletSample {
+    t_ms: 0,
+    seq: 0,
+    slot_id: 0,
+    buttons: 0,
+    x: 0,
+    y: 0,
+    flags: 0,
+};
+
 #[derive(Copy, Clone, Debug)]
 struct MouseRing {
     buf: [TrueosHidMouseSample; HID_MOUSE_RING_CAP],
@@ -58,6 +86,58 @@ struct MouseRing {
     w: u32,
     len: u32,
     dropped: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct TabletRing {
+    buf: [TrueosHidTabletSample; HID_TABLET_RING_CAP],
+    r: u32,
+    w: u32,
+    len: u32,
+    dropped: u32,
+}
+
+impl TabletRing {
+    fn new() -> Self {
+        Self {
+            buf: [ZERO_TABLET_SAMPLE; HID_TABLET_RING_CAP],
+            r: 0,
+            w: 0,
+            len: 0,
+            dropped: 0,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, s: TrueosHidTabletSample) {
+        let cap = HID_TABLET_RING_CAP as u32;
+        if cap == 0 {
+            return;
+        }
+
+        if self.len == cap {
+            self.r = (self.r + 1) % cap;
+            self.dropped = self.dropped.wrapping_add(1);
+        } else {
+            self.len += 1;
+        }
+
+        self.buf[self.w as usize] = s;
+        self.w = (self.w + 1) % cap;
+    }
+
+    #[inline]
+    #[allow(dead_code)] // kept for future consumers/tests
+    fn pop(&mut self) -> Option<TrueosHidTabletSample> {
+        if self.len == 0 {
+            return None;
+        }
+        let cap = HID_TABLET_RING_CAP as u32;
+        let s = self.buf[self.r as usize];
+        self.r = (self.r + 1) % cap;
+        self.len -= 1;
+        Some(s)
+    }
 }
 
 impl MouseRing {
@@ -116,6 +196,15 @@ fn clamp01(v: f64) -> f64 {
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 struct MousePosSnap {
+    controller_id: usize,
+    slot_id: u32,
+    ep_target: u32,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+struct TabletPosSnap {
     controller_id: usize,
     slot_id: u32,
     ep_target: u32,
@@ -182,6 +271,60 @@ fn log_mouse_positions_if_changed(prev: &mut Vec<MousePosSnap, MAX_HID_DEVICES>)
     *prev = cur;
 }
 
+fn tablet_snapshots_sorted() -> Vec<TabletPosSnap, MAX_HID_DEVICES> {
+    let guard = HID_RUNTIMES.lock();
+    let mut out: Vec<TabletPosSnap, MAX_HID_DEVICES> = Vec::new();
+
+    for rt in guard.iter() {
+        if rt.hid_kind != 3 {
+            continue;
+        }
+        let _ = out.push(TabletPosSnap {
+            controller_id: rt.controller_id,
+            slot_id: rt.slot_id,
+            ep_target: rt.ep_target,
+            x: rt.tablet_x,
+            y: rt.tablet_y,
+        });
+    }
+
+    let n = out.len();
+    let mut i = 0usize;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            let a = out[i];
+            let b = out[j];
+            let swap = (b.controller_id, b.slot_id, b.ep_target)
+                < (a.controller_id, a.slot_id, a.ep_target);
+            if swap {
+                out[i] = b;
+                out[j] = a;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn log_tablet_positions_if_changed(prev: &mut Vec<TabletPosSnap, MAX_HID_DEVICES>) {
+    let cur = tablet_snapshots_sorted();
+    if &cur == prev {
+        return;
+    }
+
+    let mut line: HString<512> = HString::new();
+    let _ = write!(&mut line, "[tablets]");
+    for (idx, s) in cur.iter().enumerate() {
+        let _ = write!(&mut line, " {} ({:.4},{:.4})", idx + 1, s.x, s.y);
+    }
+    line.push('\n').ok();
+    crate::log!("{}", line.as_str());
+
+    *prev = cur;
+}
+
 /// Call `f(x, y)` for each currently-registered HID mouse runtime.
 ///
 /// `x`/`y` are normalized to [0,1].
@@ -192,6 +335,19 @@ pub fn for_each_mouse_cursor(mut f: impl FnMut(f64, f64)) {
             continue;
         }
         f(rt.mouse_x, rt.mouse_y);
+    }
+}
+
+/// Call `f(x, y)` for each currently-registered HID tablet runtime.
+///
+/// `x`/`y` are normalized to [0,1].
+pub fn for_each_tablet_cursor(mut f: impl FnMut(f64, f64)) {
+    let guard = HID_RUNTIMES.lock();
+    for rt in guard.iter() {
+        if rt.hid_kind != 3 {
+            continue;
+        }
+        f(rt.tablet_x, rt.tablet_y);
     }
 }
 
@@ -366,6 +522,11 @@ pub struct HidRuntime {
     // Normalized cursor position in [0,1]. Stored per HID mouse runtime.
     mouse_x: f64,
     mouse_y: f64,
+
+    tablet_ring: TabletRing,
+    tablet_x: f64,
+    tablet_y: f64,
+    tablet_last_sample_ms: u32,
 }
 
 unsafe impl Send for HidRuntime {}
@@ -376,8 +537,8 @@ const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
-    // We only implement boot keyboard input at this layer.
-    // Mouse support was intentionally removed from the xHCI/HID stack.
+    // Boot protocols: 1=keyboard, 2=mouse.
+    // Tablets are detected separately (currently via VID:PID) and assigned kind=3.
     match protocol {
         1 => 1,
         2 => 2,
@@ -535,6 +696,39 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 flags: 1 << 0, // has_wheel
             });
         }
+    } else if runtime.hid_kind == 3 {
+        // HID tablet (absolute): decimate to avoid high-rate spam.
+        let _ = completion;
+        let _ = residual;
+
+        let now_ms = hid_uptime_ms() as u32;
+        if now_ms.wrapping_sub(runtime.tablet_last_sample_ms) < HID_TABLET_SAMPLE_PERIOD_MS {
+            return;
+        }
+        runtime.tablet_last_sample_ms = now_ms;
+
+        // QEMU usb-tablet commonly reports: [buttons, x_lo, x_hi, y_lo, y_hi, ...]
+        if data.len() >= 5 {
+            let buttons = data[0];
+            let x = u16::from_le_bytes([data[1], data[2]]);
+            let y = u16::from_le_bytes([data[3], data[4]]);
+
+            // Map to [0,1] using the known QEMU tablet range.
+            let xf = (x as f64) / (HID_TABLET_ABS_MAX as f64);
+            let yf = (y as f64) / (HID_TABLET_ABS_MAX as f64);
+            runtime.tablet_x = clamp01(xf);
+            runtime.tablet_y = clamp01(yf);
+
+            runtime.tablet_ring.push(TrueosHidTabletSample {
+                t_ms: now_ms,
+                seq: runtime.seq as u32,
+                slot_id: runtime.slot_id,
+                buttons,
+                x,
+                y,
+                flags: 0,
+            });
+        }
     } else {
         // Unknown protocols.
         // Keep optional debug visibility for unexpected protocols.
@@ -623,10 +817,79 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
     if ok { 0 } else { -3 }
 }
 
+// C-ABI: drain up to N decimated tablet samples from a specific HID runtime.
+#[no_mangle]
+pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: *mut TrueosHidTabletSample,
+    out_cap: u32,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out.is_null() {
+        return 0;
+    }
+
+    let mut wrote = 0u32;
+    let mut dropped = 0u32;
+
+    let controller_id = controller_id as usize;
+    if controller_id >= super::xhci::MAX_XHCI_CONTROLLERS {
+        return 0;
+    }
+
+    let _ = with_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        dropped = rt.tablet_ring.dropped;
+        rt.tablet_ring.dropped = 0;
+
+        while wrote < out_cap {
+            let Some(s) = rt.tablet_ring.pop() else {
+                break;
+            };
+            core::ptr::write(out.add(wrote as usize), s);
+            wrote += 1;
+        }
+    });
+
+    if !out_dropped.is_null() {
+        *out_dropped = dropped;
+    }
+    wrote
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out_x: *mut f64,
+    out_y: *mut f64,
+) -> i32 {
+    if out_x.is_null() || out_y.is_null() {
+        return -1;
+    }
+
+    let controller_id = controller_id as usize;
+    if controller_id >= super::xhci::MAX_XHCI_CONTROLLERS {
+        return -2;
+    }
+
+    let mut ok = false;
+    let _ = with_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        *out_x = rt.tablet_x;
+        *out_y = rt.tablet_y;
+        ok = true;
+    });
+
+    if ok { 0 } else { -3 }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
     async move {
         let mut prev_mouse: Vec<MousePosSnap, MAX_HID_DEVICES> = Vec::new();
+        let mut prev_tablet: Vec<TabletPosSnap, MAX_HID_DEVICES> = Vec::new();
         let mut last_mouse_log = hid_uptime_ms();
 
         loop {
@@ -667,6 +930,7 @@ pub(crate) async fn input_logger() {
             let now = hid_uptime_ms();
             if now.saturating_sub(last_mouse_log) >= MOUSE_POS_LOG_PERIOD_MS {
                 log_mouse_positions_if_changed(&mut prev_mouse);
+                log_tablet_positions_if_changed(&mut prev_tablet);
                 last_mouse_log = now;
             }
         }
@@ -947,6 +1211,10 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         return Err(());
     }
 
+    let is_qemu_tablet = xhci::get_port_vidpid(ctx.controller_id, target_port)
+        .map(|(vid, pid)| vid == 0x0627 && pid == 0x0001)
+        .unwrap_or(false);
+
     // Best-effort: idle/protocol setup (works for many HID devices; errors ignored)
     for ep in endpoints.iter() {
         let _ =
@@ -976,7 +1244,10 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             ep.protocol
         );
 
-        let hid_kind = hid_kind_from_protocol(ep.protocol);
+        let mut hid_kind = hid_kind_from_protocol(ep.protocol);
+        if is_qemu_tablet {
+            hid_kind = 3;
+        }
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
@@ -1119,6 +1390,10 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             mouse_ring: MouseRing::new(),
             mouse_x: 0.5,
             mouse_y: 0.5,
+            tablet_ring: TabletRing::new(),
+            tablet_x: 0.5,
+            tablet_y: 0.5,
+            tablet_last_sample_ms: 0,
         });
 
         attached += 1;
@@ -1572,6 +1847,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         return Err(());
     }
 
+    let is_qemu_tablet = xhci::get_port_vidpid(ctx.controller_id, target_port)
+        .map(|(vid, pid)| vid == 0x0627 && pid == 0x0001)
+        .unwrap_or(false);
+
     for ep in endpoints.iter() {
         let _ =
             class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
@@ -1600,7 +1879,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             ep.configuration,
             ep.protocol
         );
-        let hid_kind = hid_kind_from_protocol(ep.protocol);
+        let mut hid_kind = hid_kind_from_protocol(ep.protocol);
+        if is_qemu_tablet {
+            hid_kind = 3;
+        }
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
@@ -1783,6 +2065,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             mouse_ring: MouseRing::new(),
             mouse_x: 0.5,
             mouse_y: 0.5,
+            tablet_ring: TabletRing::new(),
+            tablet_x: 0.5,
+            tablet_y: 0.5,
+            tablet_last_sample_ms: 0,
         });
 
         attached += 1;

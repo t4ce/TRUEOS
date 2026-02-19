@@ -50,12 +50,23 @@ pub fn poll_local_executor() {
 }
 
 pub fn run_ap_forever() -> ! {
+    // Key detail: Embassy timers only fire when `crate::time::poll()` runs.
+    // If APs poll time/executor infrequently, `Timer::after(1ms)` will appear
+    // "frame-locked" to whatever other subsystem happens to call `time::poll()`.
     let mut counter: u64 = 0;
     loop {
-        if counter % 10_000_000 == 0 {
+        // Drive async wakeups and progress continuously on APs.
+        // (Embassy timers only advance when `crate::time::poll()` runs.)
+        crate::wait::spin_step();
+
+        // Low-rate maintenance / indicator.
+        if counter % 100_000 == 0 {
+            crate::smp::poll();
+        }
+
+        if counter % 250_000 == 0 {
             let slot = crate::percpu::this_cpu().cpu_index() as usize;
             let total = crate::smp::cpu_count().max(1);
-
             let outline = match crate::cpu::intel_core_kind_hint() {
                 trueos_qjs::workers::CORE_KIND_PERF => 0x00_FF_37_FF, // 255,55,255
                 _ => 0x00_FF_FF_FF,
@@ -68,11 +79,7 @@ pub fn run_ap_forever() -> ! {
                 (counter % 360) as u32,
             );
         }
-        if counter % 100_000 == 0 {
-            crate::smp::poll();
-            time::poll();
-            poll_local_executor();
-        }
+
         counter = counter.wrapping_add(1);
     }
 }

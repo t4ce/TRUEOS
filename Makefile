@@ -118,7 +118,8 @@ iso: artifacts images
 iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
-	7z a -t7z -mx=9 -m0=lzma2 $(ISO_DIR)/TrueOS.7z $(ISO_PATH)
+	# Add the ISO without the leading "bld/" directory in the archive.
+	cd $(ISO_DIR) && 7z a -t7z -mx=9 -m0=lzma2 TrueOS.7z $(notdir $(ISO_PATH))
 	gio mount smb://t4ce@pdjb/home-share || true
 	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
