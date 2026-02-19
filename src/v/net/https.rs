@@ -553,6 +553,10 @@ async fn write_body_to_tmp_file(
 
 static VHTTPS_SEQ: AtomicU32 = AtomicU32::new(1);
 
+// Keep vhttps logging minimal by default; verbose prints are useful for debugging
+// but can flood globalog during downloads.
+const VHTTPS_VERBOSE: bool = false;
+
 async fn fetch_on_device(
     parsed: &ParsedHttpsUrl,
     dev_idx: usize,
@@ -562,6 +566,10 @@ async fn fetch_on_device(
     auth_token: Option<&str>,
     mut progress: Option<&mut dyn FetchProgress>,
 ) -> Result<Vec<u8>, FetchError> {
+    // If the caller asked for progress updates, this is likely a large transfer.
+    // Avoid per-chunk logging (which floods globalog); emit a single completion line instead.
+    let want_done_log = progress.is_some();
+
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
         .await
     {
@@ -569,16 +577,6 @@ async fn fetch_on_device(
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
         Err(_) => return Err(FetchError::DnsFailed),
     };
-
-    crate::log!(
-        "vhttps: host={} dev={} ip={}.{}.{}.{}\n",
-        parsed.host,
-        dev_idx,
-        ip[0],
-        ip[1],
-        ip[2],
-        ip[3]
-    );
 
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
     // Suffix with a stable selector so tls-socket can pin the underlying TCP socket to the chosen NIC.
@@ -731,13 +729,7 @@ async fn fetch_on_device(
                         }
                         if hdr_end != 0 {
                             let headers = &plaintext[..hdr_end];
-                            // Debug logging for headers
-                            if let Ok(h_str) = core::str::from_utf8(headers) {
-                                crate::log!("vhttps: headers:\n{}\n", h_str);
-                            }
                             let body = &plaintext[hdr_end..];
-                            // Debug logging for body length
-                            crate::log!("vhttps: body_len={}\n", body.len());
 
                             let status = parse_http_status(&plaintext).unwrap_or(0);
                             if status != 200 {
@@ -804,12 +796,16 @@ async fn fetch_on_device(
                                     if let Some(ref mut p) = progress {
                                         p.on_progress(decoded.len(), Some(decoded.len()));
                                     }
+                                    if want_done_log {
+                                        crate::log!(
+                                            "vhttps: done host={} dev={} status={} bytes={}\n",
+                                            parsed.host,
+                                            dev_idx,
+                                            status,
+                                            decoded.len(),
+                                        );
+                                    }
                                     return Ok(decoded);
-                                } else {
-                                    crate::log!(
-                                        "vhttps: incomplete chunked body. len={}\n",
-                                        body.len()
-                                    );
                                 }
                             } else if let Some(len) = header_parse_content_length(headers) {
                                 if body.len() >= len {
@@ -825,6 +821,15 @@ async fn fetch_on_device(
                                     }
                                     if let Some(ref mut p) = progress {
                                         p.on_progress(out.len(), Some(out.len()));
+                                    }
+                                    if want_done_log {
+                                        crate::log!(
+                                            "vhttps: done host={} dev={} status={} bytes={}\n",
+                                            parsed.host,
+                                            dev_idx,
+                                            status,
+                                            out.len(),
+                                        );
                                     }
                                     return Ok(out);
                                 }
@@ -894,6 +899,16 @@ async fn fetch_on_device(
 
                     if let Some(ref mut p) = progress {
                         p.on_progress(decoded_body.len(), Some(decoded_body.len()));
+                    }
+
+                    if want_done_log {
+                        crate::log!(
+                            "vhttps: done host={} dev={} status={} bytes={}\n",
+                            parsed.host,
+                            dev_idx,
+                            status,
+                            decoded_body.len(),
+                        );
                     }
 
                     // Trim any accidental leading/trailing whitespace? No: callers want exact bytes.
@@ -1829,16 +1844,6 @@ async fn fetch_on_device_to_file(
 
     let t_dns = Instant::now();
 
-    crate::log!(
-        "vhttps: host={} dev={} ip={}.{}.{}.{}\n",
-        parsed.host,
-        dev_idx,
-        ip[0],
-        ip[1],
-        ip[2],
-        ip[3]
-    );
-
     let seq = VHTTPS_SEQ.fetch_add(1, Ordering::Relaxed);
     let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
         format!("{:02x}:{:02x}.{}", bus, slot, func)
@@ -1902,6 +1907,11 @@ async fn fetch_on_device_to_file(
         t_write_done: Option<Instant>,
         rc: i32,
     ) {
+        // Successful fetches are already summarized by the higher-level cache log.
+        // Keep detailed timing only for failures (or when explicitly enabled).
+        if rc == 0 && !VHTTPS_VERBOSE {
+            return;
+        }
         let t_end = Instant::now();
         let dns_ms = ms_since(t0, t_dns);
         let tcp_ms = match (t_open_sent, t_tcp_opened) {
@@ -2076,7 +2086,9 @@ async fn fetch_on_device_to_file(
                                 );
                                 return Err(FetchToFileError::Code(rc));
                             };
-                            log_http_head("vhttps-file: head", parsed.host.as_str(), head);
+                            if VHTTPS_VERBOSE {
+                                log_http_head("vhttps-file: head", parsed.host.as_str(), head);
+                            }
 
                             body_expected = match head.body {
                                 HttpBodyKind::ContentLength(v) => v,
@@ -2809,6 +2821,8 @@ pub async fn fetch_https_to_file_async(
         Ok(false) => {}
         Err(e) => return Err(block_error_to_code(e)),
     }
+
+    crate::log!("vhttps-cache: start key={} url={}\n", key, url);
 
     let t_exists = Instant::now();
 

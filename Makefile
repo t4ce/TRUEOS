@@ -41,7 +41,7 @@ QEMU_ISO_FLAGS = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-mode
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
-	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
+	-device usb-tablet,bus=xhci.0,port=1,id=usbtablet \
 	-device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
@@ -118,8 +118,8 @@ iso: artifacts images
 iso-release: BUILD_MODE := release
 iso-release: CARGO_BUILD_FLAGS += --release
 iso-release: iso
-	# Add the ISO without the leading "bld/" directory in the archive.
-	cd $(ISO_DIR) && 7z a -t7z -mx=9 -m0=lzma2 TrueOS.7z $(notdir $(ISO_PATH))
+	rm -f $(ISO_DIR)/TrueOS.7z
+	cd $(ISO_DIR) && 7z a -t7z -mx=0 -m0=Copy -ms=off TrueOS.7z $(notdir $(ISO_PATH))
 	gio mount smb://t4ce@pdjb/home-share || true
 	gio copy $(ISO_DIR)/TrueOS.7z smb://t4ce@pdjb/home-share/TRUEOS_SITE/
 	@count=$$(cat cnt 2>/dev/null || echo 0); count=$${count:-0}; printf '%s\n' $$((count + 1)) | tee cnt
