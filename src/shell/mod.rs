@@ -22,6 +22,8 @@ pub use wizards::*;
 pub(crate) mod output;
 pub(crate) use output::{apply_shell_scroll_region, ReverseOutput};
 
+pub mod aihttps;
+
 mod crlf;
 
 mod interface;
@@ -416,15 +418,24 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 b'\r' | b'\n' => {
                     utf8.clear();
 
-                    let update_wizard_io = matches!(
+                    let wizard_rev_io = matches!(
                         mode,
-                        ShellMode::Wizard(wizards::InstallWizardStage::UpdateSelectDisk)
-                            | ShellMode::Confirm(wizards::PendingAction::UpdateConfirm { .. })
+                        ShellMode::Wizard(
+                            wizards::InstallWizardStage::SelectDisk
+                                | wizards::InstallWizardStage::FormatSelectDisk
+                                | wizards::InstallWizardStage::UpdateSelectDisk
+                                | wizards::InstallWizardStage::BenchSelectDisk
+                        ) | ShellMode::Confirm(
+                            wizards::PendingAction::InstallConfirm { .. }
+                                | wizards::PendingAction::FormatConfirm { .. }
+                                | wizards::PendingAction::UpdateConfirm { .. }
+                        )
                     );
 
-                    // In update wizard mode, route both user submissions and system output into
-                    // the ReverseOutput scrollback (right-aligned), keeping the prompt row clean.
-                    let result = if update_wizard_io {
+                    // In wizard/confirm modes that print status lines, route both user submissions
+                    // and wizard output into the ReverseOutput scrollback (right-aligned), keeping
+                    // the prompt row clean and avoiding cursor-position surprises.
+                    let result = if wizard_rev_io {
                         let submitted = line.trim();
                         if !submitted.is_empty() {
                             ReverseOutput::new(io, term_cols, term_rows, &mut history)

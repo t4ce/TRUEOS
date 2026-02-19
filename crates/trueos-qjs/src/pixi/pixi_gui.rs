@@ -54,6 +54,7 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
 
 unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
     let mut progress = false;
+    progress |= qjs::timers::pump(ctx);
     progress |= qjs::async_ops::pump(ctx);
     progress |= qjs::workers::pump(ctx);
     if !drain_pending_jobs(rt, ctx) {
@@ -101,7 +102,7 @@ pub async fn boot_pixi_ui_task() {
         return;
     }
 
-    log_str("qjs-pixi-gui: starting (20Hz)\n");
+    log_str("qjs-pixi-gui: starting (pixi-owned tick)\n");
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
@@ -136,25 +137,15 @@ pub async fn boot_pixi_ui_task() {
             Timer::after(EmbassyDuration::from_millis(10)).await;
         }
 
-        let tick_filename = b"<pixi-gui-tick>\0";
-        let tick_script = b"var G=(typeof globalThis!=='undefined')?globalThis:this; G.__trueos_pixi_ui_a=(G.__trueos_pixi_ui_a||0)+0.03; if (G.__trueos_pixi_ui_tick) G.__trueos_pixi_ui_tick(G.__trueos_pixi_ui_a);";
-
         loop {
-            if !eval_or_log(
-                ctx,
-                tick_script,
-                tick_filename.as_ptr() as *const c_char,
-                qjs::JS_EVAL_TYPE_GLOBAL,
-                "tick",
-            ) {
-                break;
-            }
             if !pump_runtime_once(rt, ctx) {
                 break;
             }
-            Timer::after(EmbassyDuration::from_millis(50)).await;
+            // Pump frequently enough so JS timers (setInterval) can drive UI at 20Hz.
+            Timer::after(EmbassyDuration::from_millis(10)).await;
         }
 
+        qjs::timers::drain_all_for_context(ctx);
         qjs::workers::terminate_all_for_context(ctx);
         let _ = pump_runtime_once(rt, ctx);
         qjs::async_ops::drain_all_for_context(ctx);

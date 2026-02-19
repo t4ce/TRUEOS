@@ -471,8 +471,10 @@ pub(crate) fn cmd_net_icmp(
         return CommandAction::None;
     }
 
-    // Use global serial backend for async task output since we block anyway
-    let io_static: &'static dyn ShellBackend = &crate::shell::backends::UART1_COM1_BACKEND;
+    // SAFETY: `spawn_and_wait_local()` blocks until the future completes, so `ctx.io`
+    // (which is backed by the active shell backend, typically `ReverseOutput`) stays alive.
+    // We need a `'static` IO to satisfy the executor API.
+    let io_static: &'static dyn ShellBackend = unsafe { core::mem::transmute(ctx.io) };
 
     crate::wait::spawn_and_wait_local(async move {
         // DNS
