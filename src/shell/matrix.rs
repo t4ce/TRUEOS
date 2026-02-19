@@ -983,19 +983,19 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         alloc::format!(
             "update: downloaded payload={} bytes (7z_magic={})",
             payload.len(),
-            crate::sevenz::looks_like_7z(payload.as_slice())
+            crate::z7::looks_like_7z(payload.as_slice())
         )
         .as_str(),
     );
 
-    if !crate::sevenz::looks_like_7z(payload.as_slice()) {
+    if !crate::z7::looks_like_7z(payload.as_slice()) {
         log_line(slot_id, &mut blob, "update: refused (payload is not a 7z archive)");
         set_state(slot_id, SlotState::Failed);
         let _ = set_blob_owned_with_preview(slot_id, blob);
         return;
     }
 
-    let iso_view: &[u8] = match crate::sevenz::packed_streams_slice(payload.as_slice()) {
+    let iso_view: &[u8] = match crate::z7::packed_streams_slice(payload.as_slice()) {
         Ok(v) => v,
         Err(e) => {
             log_line(
