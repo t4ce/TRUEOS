@@ -1,11 +1,13 @@
 mod attach;
+mod non_generic;
 pub mod bot;
 pub mod cdc;
 pub mod cdc_acm;
 mod control;
 mod enumeration;
 pub mod hid;
-pub mod hub;
+pub use hid::descripto as hid_descripto;
+pub mod usb_descripto;
 pub mod input;
 pub mod isoch;
 pub mod leds;
@@ -19,20 +21,64 @@ pub mod truekey;
 pub mod uac;
 pub mod xhci;
 
-pub(crate) use self::control::{control_in, control_out};
+pub(crate) use self::control::control_out;
 pub(crate) use self::enumeration::{
-    disable_slot, enable_slot, enumerate_port, enumerate_with_params,
+    disable_slot, enumerate_port,
 };
 #[allow(unused_imports)]
 pub use scout::{port_snapshot, usb_scout_service, ScoutedPort};
 
-use self::hub::{LOG_PORTS_MAX, MAX_DEVICES};
 use self::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
 use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
+
+pub const LOG_PORTS_MAX: usize = 32;
+pub const MAX_DEVICES: usize = 32;
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct DeviceIdentity {
+    pub vid: u16,
+    pub pid: u16,
+    pub class: u8,
+    pub subclass: u8,
+    pub protocol: u8,
+}
+
+static SLOT_IDENTITIES: [Mutex<[Option<DeviceIdentity>; 256]>; MAX_XHCI_CONTROLLERS] =
+    [const { Mutex::new([None; 256]) }; MAX_XHCI_CONTROLLERS];
+
+pub(crate) fn record_slot_identity(
+    controller_id: usize,
+    slot_id: u32,
+    vid: u16,
+    pid: u16,
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    let idx = (slot_id as usize) & 0xFF;
+    SLOT_IDENTITIES[controller_id].lock()[idx] = Some(DeviceIdentity {
+        vid,
+        pid,
+        class,
+        subclass,
+        protocol,
+    });
+}
+
+pub(crate) fn identity_for_slot(controller_id: usize, slot_id: u32) -> Option<DeviceIdentity> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+    let idx = (slot_id as usize) & 0xFF;
+    SLOT_IDENTITIES[controller_id].lock()[idx]
+}
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
@@ -59,7 +105,6 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
     for d in guard.iter() {
         let kind = match d.kind {
             DeviceKind::Hid => "hid",
-            DeviceKind::Hub => "hub",
             DeviceKind::Mass => "mass",
             DeviceKind::Printer => "printer",
             DeviceKind::Pen => "pen",
@@ -70,7 +115,7 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
             DeviceKind::Unknown => "unknown",
         };
 
-        let ident = hub::identity_for_slot(controller_id, d.slot_id);
+        let ident = identity_for_slot(controller_id, d.slot_id);
         let _ = out.push(UsbDeviceSummary {
             slot_id: d.slot_id,
             port: d.port,
@@ -88,7 +133,6 @@ pub(crate) fn list_device_summaries(controller_id: usize) -> Vec<UsbDeviceSummar
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum DeviceKind {
     Hid,
-    Hub,
     Mass,
     Printer,
     Pen,
@@ -103,7 +147,6 @@ impl DeviceKind {
     fn claimed_log_label(self) -> &'static str {
         match self {
             DeviceKind::Hid => "Hid",
-            DeviceKind::Hub => "Hub",
             DeviceKind::Mass => "Mass",
             DeviceKind::Printer => "Printer",
             DeviceKind::Pen => "Pen",
@@ -250,11 +293,6 @@ pub(crate) fn friendly_name_for_vidpid(vid: u16, pid: u16) -> Option<&'static st
         (0x07CF, 0x6803) => Some("USB MIDI Device"),
         (0x058F, 0x6387) => Some("USB Flash Drive"),
 
-        // Common emulated HID IDs (best effort).
-        (0x0627, 0x0001) => Some("QEMU USB Tablet"),
-        (0x0627, 0x0002) => Some("QEMU USB Mouse"),
-        (0x0627, 0x0005) => Some("QEMU USB Keyboard"),
-
         _ => None,
     }
 }
@@ -291,12 +329,10 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 | Some(DeviceKind::Uac)
                 | Some(DeviceKind::Midi) => true,
                 Some(DeviceKind::Mass) => false,
-                Some(DeviceKind::Hub) => hub::interrupt_runtime_exists(controller_id, evt_slot),
                 Some(_) => false,
                 None => {
                     cdc_acm::runtime_exists(controller_id, evt_slot)
                         || midi::runtime_exists(controller_id, evt_slot)
-                        || hub::interrupt_runtime_exists(controller_id, evt_slot)
                 }
             }
         };
@@ -444,14 +480,6 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                 },
                 Some(DeviceKind::Midi) => {
                     let _ = midi::handle_transfer_event(controller_id, &evt);
-                },
-                Some(DeviceKind::Hub) => {
-                    if !hub::handle_transfer_event(controller_id, &evt) {
-                        usbv!(
-                            "usb: ignoring transfer event slot={} (no HUB runtime)\n",
-                            evt_slot
-                        );
-                    }
                 },
                 Some(DeviceKind::Printer) => {},
                 Some(DeviceKind::Pen) => {},

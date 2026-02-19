@@ -19,7 +19,7 @@
                     "background": {
                         "activeOnStart": true,
                         "beginsPattern": "Waiting for debugger...",
-                        "endsPattern": "Waiting for debugger..."
+                        "endsPattern": "^GDB stub ready on 127\\.0\\.0\\.1:1234$"
                     }
                 }
             ],

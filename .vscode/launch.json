@@ -18,6 +18,11 @@
                     "ignoreFailures": true
                 },
                 {
+                    "text": "set substitute-path /home/t4ce/Repos/TRUEOS ${workspaceFolder}",
+                    "description": "Map DWARF paths to the current workspace",
+                    "ignoreFailures": true
+                },
+                {
                     "text": "set mem inaccessible-by-default off",
                     "description": "Allow accessing unmapped memory (fixes breakpoints in boot)",
                     "ignoreFailures": false
@@ -30,11 +35,6 @@
                 {
                     "text": "thbreak kmain",
                     "description": "Stop at kernel main",
-                    "ignoreFailures": true
-                },
-                {
-                    "text": "continue",
-                    "description": "Continue to kernel main",
                     "ignoreFailures": true
                 }
             ],

@@ -1,4 +1,5 @@
 use super::hid;
+use super::hid_descripto as usbdesc;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
@@ -250,7 +251,6 @@ async fn send_output_report(
 }
 
 fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
-    let mut idx = 0usize;
     let mut config_value = 1u8;
 
     // Track one interface at a time, and keep the best candidate seen.
@@ -309,23 +309,12 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
         }
     }
 
-    while idx + 2 <= cfg.len() {
-        let len = cfg[idx] as usize;
-        let ty = cfg[idx + 1];
-        if len == 0 || idx + len > cfg.len() {
-            break;
-        }
-
-        match ty {
-            0x02 => {
-                // Configuration
-                if len >= 6 {
-                    config_value = cfg[idx + 5];
-                }
+    for raw in usbdesc::DescriptorIter::new(cfg) {
+        match usbdesc::parse_any_descriptor(raw) {
+            usbdesc::ParsedDescriptor::Configuration(cd) => {
+                config_value = cd.configuration_value;
             }
-            0x04 => {
-                // Interface
-                // Finalize previous interface before switching.
+            usbdesc::ParsedDescriptor::Interface(id) => {
                 consider_current(
                     &mut best,
                     config_value,
@@ -337,52 +326,50 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
                     current_ep_in,
                     current_ep_out,
                 );
-                if len >= 9 {
-                    current_iface = Some(cfg[idx + 2]);
-                    current_alt = cfg[idx + 3];
-                    current_class = cfg[idx + 5];
-                    current_proto = cfg[idx + 7];
-                    current_report_len = 0;
-                    current_ep_in = None;
-                    current_ep_out = None;
-                } else {
-                    current_iface = None;
+                current_iface = Some(id.interface_number);
+                current_alt = id.alternate_setting;
+                current_class = id.interface_class;
+                current_proto = id.interface_protocol;
+                current_report_len = 0;
+                current_ep_in = None;
+                current_ep_out = None;
+            }
+            usbdesc::ParsedDescriptor::Hid(hd) => {
+                if current_alt == 0 {
+                    if let Some(len) = hd.report_desc_len {
+                        current_report_len = len;
+                    }
                 }
             }
-            0x21 => {
-                // HID descriptor
-                if len >= 9 {
-                    current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
+            usbdesc::ParsedDescriptor::Endpoint(ed) => {
+                if current_iface.is_none() || current_alt != 0 {
+                    continue;
                 }
-            }
-            0x05 => {
-                if current_iface.is_some() && current_alt == 0 && len >= 7 {
-                    let ep_addr = cfg[idx + 2];
-                    let attrs = cfg[idx + 3];
-                    let mps = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                    let interval = cfg[idx + 6];
-                    // Interrupt or Bulk endpoints.
-                    let xfer = attrs & 0x3;
-                    let xhci_ep_type = match (xfer, (ep_addr & 0x80) != 0) {
-                        (0x3, true) => Some(EP_TYPE_INT_IN),
-                        (0x3, false) => Some(EP_TYPE_INT_OUT),
-                        (0x2, true) => Some(EP_TYPE_BULK_IN),
-                        (0x2, false) => Some(EP_TYPE_BULK_OUT),
-                        _ => None,
-                    };
 
-                    if let Some(ep_type) = xhci_ep_type {
-                        if (ep_addr & 0x80) != 0 {
-                            current_ep_in.get_or_insert((ep_addr, mps, interval, ep_type));
-                        } else {
-                            current_ep_out.get_or_insert((ep_addr, mps, interval, ep_type));
-                        }
+                let ep_addr = ed.endpoint_address;
+                let attrs = ed.attributes;
+                let interval = ed.interval;
+                let mps = ed.max_packet_size;
+
+                let xfer = attrs & 0x3;
+                let xhci_ep_type = match (xfer, (ep_addr & 0x80) != 0) {
+                    (0x3, true) => Some(EP_TYPE_INT_IN),
+                    (0x3, false) => Some(EP_TYPE_INT_OUT),
+                    (0x2, true) => Some(EP_TYPE_BULK_IN),
+                    (0x2, false) => Some(EP_TYPE_BULK_OUT),
+                    _ => None,
+                };
+
+                if let Some(ep_type) = xhci_ep_type {
+                    if (ep_addr & 0x80) != 0 {
+                        current_ep_in.get_or_insert((ep_addr, mps, interval, ep_type));
+                    } else {
+                        current_ep_out.get_or_insert((ep_addr, mps, interval, ep_type));
                     }
                 }
             }
             _ => {}
         }
-        idx += len;
     }
 
     // Consider the last interface in the descriptor.
@@ -628,7 +615,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             Ok(desc) => {
                 hid::log_report_descriptor(slot_id, info.interface, &desc);
 
-                if let Some(fmt) = hid::parse_output_report_format(&desc) {
+                if let Some(fmt) = usbdesc::parse_output_report_format(&desc) {
                     preferred_out_report_id = fmt.report_id;
                     preferred_out_total_len = fmt.total_len_bytes;
                     crate::log!(
@@ -640,120 +627,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
                     );
                 }
             }
-            Err(_err) => {
-                // crate::log!(
-                //     "usb: leds: report-desc fetch failed iface={} len={} err={:?}\n",
-                //     info.interface,
-                //     info.report_desc_len,
-                //     err
-                // );
-
-                let mut recovered = false;
-                let short_len = core::cmp::min(full_len, 64);
-                if short_len < full_len {
-                    match hid::fetch_report_descriptor(
-                        ctx,
-                        ep0_ring,
-                        slot_id,
-                        info.interface,
-                        short_len,
-                    )
-                    .await
-                    {
-                        Ok(desc) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback short len={} iface={}\n",
-                                short_len,
-                                info.interface
-                            );
-                            hid::log_report_descriptor(slot_id, info.interface, &desc);
-                            recovered = true;
-                        }
-                        Err(_err2) => {
-                            // crate::log!(
-                            //     "usb: leds: report-desc fallback short failed iface={} len={} err={:?}\n",
-                            //     info.interface,
-                            //     short_len,
-                            //     err2
-                            // );
-                        }
-                    }
-                }
-
-                if !recovered && info.interface != 0 {
-                    match hid::fetch_report_descriptor(ctx, ep0_ring, slot_id, 0, full_len).await {
-                        Ok(desc) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback iface=0 len={}\n",
-                                full_len
-                            );
-                            hid::log_report_descriptor(slot_id, 0, &desc);
-                            recovered = true;
-                        }
-                        Err(_err2) => {
-                            // crate::log!(
-                            //     "usb: leds: report-desc fallback iface=0 failed len={} err={:?}\n",
-                            //     full_len,
-                            //     err2
-                            // );
-                        }
-                    }
-                }
-
-                if !recovered {
-                    match hid::fetch_report_descriptor_device(ctx, ep0_ring, slot_id, full_len)
-                        .await
-                    {
-                        Ok(desc) => {
-                            crate::log!(
-                                "usb: leds: report-desc fallback device len={}\n",
-                                full_len
-                            );
-                            hid::log_report_descriptor(slot_id, 0, &desc);
-                            recovered = true;
-                        }
-                        Err(_err2) => {
-                            // crate::log!(
-                            //     "usb: leds: report-desc fallback device failed len={} err={:?}\n",
-                            //     full_len,
-                            //     err2
-                            // );
-                        }
-                    }
-                }
-
-                if !recovered {
-                    let get_report_len = core::cmp::min(full_len, 64);
-                    match hid::fetch_hid_get_report(
-                        ctx,
-                        ep0_ring,
-                        slot_id,
-                        info.interface,
-                        3,
-                        0,
-                        get_report_len,
-                    )
-                    .await
-                    {
-                        Ok(desc) => {
-                            crate::log!(
-                                "usb: leds: get-report feature iface={} len={}\n",
-                                info.interface,
-                                get_report_len
-                            );
-                            hid::log_report_descriptor(slot_id, info.interface, &desc);
-                        }
-                        Err(_err2) => {
-                            // crate::log!(
-                            //     "usb: leds: get-report feature failed iface={} len={} err={:?}\n",
-                            //     info.interface,
-                            //     get_report_len,
-                            //     err2
-                            // );
-                        }
-                    }
-                }
-            }
+            Err(_err) => {}
         }
     } else {
         crate::log!("usb: leds: report-desc len=0 iface={}\n", info.interface);

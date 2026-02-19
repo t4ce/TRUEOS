@@ -38,22 +38,27 @@ CARGO_BUILD_FLAGS ?=
 # Override with `QEMU_ISO_FLAGS=...` if you need a different display device.
 QEMU_ISO_FLAGS = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -enable-kvm -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu host,host-phys-bits=true -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
 
+# für den debugger brauchen wir separate flags was natürlich komletter scheiß ist
+QEMU_ISO_FLAGS_DBG = -display sdl,gl=on -vga none -device virtio-vga-gl,disable-modern=off -machine q35 -bios $(QEMU_UEFI_FIRMWARE) -cdrom $(ISO_PATH) -debugcon stdio -D bld/qemu.log -d int,guest_errors,cpu_reset,unimp -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait $(QEMU_NET_FLAGS) $(QEMU_RNG_FLAGS)
+
 QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
-	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds \
 	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
-	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms 
+	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms \
+	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse
 
+#-device usb-tablet,bus=xhci.0,port=4,id=usbtablet 
+# -device usb-kbd,bus=xhci.0,port=1,id=usbkbd 
+# 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds
 # -device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=4,id=usbhost
 # -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
 # -device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx
-# -device usb-tablet,bus=xhci.0,port=4,id=usbtablet \
-# -device usb-kbd,bus=xhci.0,port=2,id=usbkbd \
 # -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
 
 QEMU_ISO = $(QEMU_BIN) $(QEMU_ISO_FLAGS) $(QEMU_USB_FLAGS)
+QEMU_ISO_DBG = $(QEMU_BIN) $(QEMU_ISO_FLAGS_DBG) $(QEMU_USB_FLAGS)
 
 IMG_SIZE ?= 1G
 
@@ -134,10 +139,22 @@ snipe:
 run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-# dbg: snipe iso-debug
-#	@$(SERIAL_CONSOLE_CMD) &
-#	@echo "Waiting for debugger..."
-#	@$(QEMU_ISO) -S -s
+dbg: snipe iso-debug
+	@$(SERIAL_CONSOLE_CMD) &
+	@echo "Waiting for debugger..."
+	@set -e; \
+		$(QEMU_ISO_DBG) -S -s & qemu_pid=$$!; \
+		i=0; \
+		while ! nc -z 127.0.0.1 1234 >/dev/null 2>&1; do \
+			i=$$((i + 1)); \
+			if [ $$i -gt 200 ]; then \
+				echo "GDB stub not reachable on 127.0.0.1:1234 (timeout)" >&2; \
+				break; \
+			fi; \
+			sleep 0.05; \
+		done; \
+		echo "GDB stub ready on 127.0.0.1:1234"; \
+		wait $$qemu_pid
 
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
