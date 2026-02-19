@@ -11,7 +11,7 @@ use crate::shell::interface::ShellIo;
 use crate::shell::output::ReverseOutput;
 use crate::shell::statusbar;
 use crate::shell::{CommandAction, ShellBackend, ShellMode};
-use crate::v::net::https::{post_https_json_async, post_https_sse_async, SseHandler};
+use crate::shell::aihttps::{post_json_async, post_sse_async, SseHandler};
 
 fn log_utf8_chunks(prefix: &str, s: &str) {
     // Avoid log-line truncation by splitting into multiple lines.
@@ -474,8 +474,7 @@ async fn process_input(
             pulse: 0,
         };
 
-        let result =
-            post_https_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
+        let result = post_sse_async(url, body, Some(key), 120_000, 256 * 1024, &mut sink).await;
 
         // Clear status
         statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
@@ -498,7 +497,7 @@ async fn process_input(
         return;
     }
 
-    let result = post_https_json_async(url, body, Some(key), 120_000, 256 * 1024).await;
+    let result = post_json_async(url, body, Some(key), 120_000, 256 * 1024).await;
 
     // Clear status
     statusbar::set_right_active(if result.is_ok() { "done" } else { "" });
@@ -563,8 +562,7 @@ async fn process_input(
                     crate::log!("ai: followup_request_json_end\n");
 
                     let follow =
-                        post_https_json_async(url, followup_body, Some(key), 120_000, 256 * 1024)
-                            .await;
+                        post_json_async(url, followup_body, Some(key), 120_000, 256 * 1024).await;
 
                     match follow {
                         Ok(bytes) => {

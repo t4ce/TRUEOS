@@ -30,6 +30,9 @@ pub mod trueos_module_loader;
 pub mod browser;
 
 #[cfg(feature = "trueos")]
+pub mod timers;
+
+#[cfg(feature = "trueos")]
 pub mod node;
 
 #[cfg(feature = "trueos")]

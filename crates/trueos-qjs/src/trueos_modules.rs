@@ -1257,8 +1257,12 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
             _argc: c_int,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            // TODO: wire to a monotonic clock source.
-            qjs::JS_NewFloat64(ctx, 0.0)
+            // Monotonic milliseconds since boot. Many JS libs (including Pixi)
+            // assume `performance.now()` advances.
+            let ticks = embassy_time_driver::now();
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let ms = if hz == 0 { 0 } else { (ticks.saturating_mul(1000)) / hz };
+            qjs::JS_NewFloat64(ctx, ms as f64)
         }
 
         let perf_key = b"performance\0";
@@ -1291,6 +1295,9 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
     ensure_global_intl(ctx, global);
     ensure_global_console(ctx, global);
     qjs::browser::ensure_global_event_target_stubs(ctx, global);
+
+    // Minimal timers used by many browser-style libs and for self-driven UI loops.
+    qjs::timers::install_globals(ctx, global);
 
     // __trueos_poll_mouse_raw(): bridge to kernel mouse queue.
     {

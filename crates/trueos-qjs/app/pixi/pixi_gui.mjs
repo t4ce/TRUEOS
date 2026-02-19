@@ -362,3 +362,23 @@ G.__trueos_pixi_ui_tick = function(angleRad) {
 	}
 	renderer.render(stage);
 };
+
+// Self-driven 20Hz loop (preferred). If timers are unavailable, Rust can still
+// drive `__trueos_pixi_ui_tick` externally.
+if (!G.__trueos_pixi_ui_running && typeof setInterval === 'function') {
+	G.__trueos_pixi_ui_running = true;
+	G.__trueos_pixi_ui_a = G.__trueos_pixi_ui_a || 0;
+	G.__trueos_pixi_ui_timer = setInterval(function() {
+		G.__trueos_pixi_ui_a = (G.__trueos_pixi_ui_a || 0) + 0.03;
+		if (G.__trueos_pixi_ui_tick) G.__trueos_pixi_ui_tick(G.__trueos_pixi_ui_a);
+	}, 50);
+	G.__trueos_pixi_ui_stop = function() {
+		try {
+			if (G.__trueos_pixi_ui_timer && typeof clearInterval === 'function') {
+				clearInterval(G.__trueos_pixi_ui_timer);
+			}
+		} catch (e) {}
+		G.__trueos_pixi_ui_timer = null;
+		G.__trueos_pixi_ui_running = false;
+	};
+}
