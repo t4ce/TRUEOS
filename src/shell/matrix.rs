@@ -16,6 +16,27 @@ pub const STATUS_TEXT_LEN: usize = 10;
 pub const STATUS_CENTER_LEN: usize = 32;
 pub const STATUS_INDICATORS: usize = 5;
 
+fn format_speed_bps(bps: u64) -> alloc::string::String {
+    use alloc::format;
+    if bps < 100 {
+        return format!("{} B/s", bps);
+    }
+    let kb = bps as f64 / 1024.0;
+    if kb < 100.0 {
+        return format!("{:.1} KB/s", kb);
+    }
+    let mb = kb / 1024.0;
+    if mb < 100.0 {
+        return format!("{:.1} MB/s", mb);
+    }
+    let gb = mb / 1024.0;
+    if gb < 100.0 {
+        return format!("{:.1} GB/s", gb);
+    }
+    let tb = gb / 1024.0;
+    format!("{:.1} TB/s", tb)
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SlotState {
     Running,
@@ -790,11 +811,9 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     log_line(slot_id, &mut blob, "update: waiting for net");
     crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
-    // These URLs are expected to be hosted alongside the published installer artifacts.
-    // The server should serve the raw files (not inside a .7z) so the kernel doesn't need
-    // archive/ISO parsing just to update.
-    const BOOTX64_URL: &str = "https://trueos.eu/EFI/BOOT/BOOTX64.EFI";
-    const KERNEL_URL: &str = "https://trueos.eu/TRUEOS.elf";
+    // Update fetches a single installer ISO (small ops surface) and extracts
+    // /EFI/BOOT/BOOTX64.EFI and /TRUEOS.elf from ISO9660.
+    const ISO_URL: &str = "https://trueos.eu/trueos.iso";
 
     let info = disk.info();
     log_line(slot_id, &mut blob, "update: starting");
@@ -864,14 +883,76 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         }
     }
 
-    log_line(slot_id, &mut blob, "update: fetching BOOTX64.EFI + TRUEOS.elf over HTTPS");
-    log_line(slot_id, &mut blob, alloc::format!("update: BOOTX64 url={}", BOOTX64_URL).as_str());
-    log_line(slot_id, &mut blob, alloc::format!("update: kernel url={}", KERNEL_URL).as_str());
+    log_line(slot_id, &mut blob, "update: fetching installer ISO over HTTPS");
+    log_line(slot_id, &mut blob, alloc::format!("update: iso url={}", ISO_URL).as_str());
 
-    let bootx64 = match crate::v::net::https::fetch_https_body_async(
-        BOOTX64_URL,
-        60_000,
-        8 * 1024 * 1024,
+    // Show progress in the status bar (bottom right).
+    let _ = crate::shell::statusbar::set_active_slot(slot_id);
+    let _ = crate::shell::statusbar::set_left(slot_id, "update");
+    let _ = crate::shell::statusbar::set_center(slot_id, "download");
+    let _ = crate::shell::statusbar::set_right(slot_id, "0 B/s");
+
+    struct DlProgress {
+        slot: u8,
+        start_tick: u64,
+        last_tick: u64,
+        last_bytes: usize,
+    }
+
+    impl crate::v::net::https::FetchProgress for DlProgress {
+        fn on_progress(&mut self, received: usize, total: Option<usize>) {
+            let now_tick = embassy_time_driver::now();
+            let hz = embassy_time_driver::TICK_HZ as u64;
+            let elapsed_ticks = now_tick.saturating_sub(self.start_tick);
+            let elapsed_ms = if hz == 0 {
+                0
+            } else {
+                elapsed_ticks.saturating_mul(1000) / hz
+            };
+
+            // Speed: average since start (same as bench.net).
+            let bps = if elapsed_ms == 0 {
+                0
+            } else {
+                (received as u64).saturating_mul(1000) / elapsed_ms
+            };
+
+            // Avoid updating too often if the transport emits many tiny chunks.
+            let dt_ticks = now_tick.saturating_sub(self.last_tick);
+            let dt_ms = if hz == 0 { 0 } else { dt_ticks.saturating_mul(1000) / hz };
+            let db = received.saturating_sub(self.last_bytes);
+            self.last_tick = now_tick;
+            self.last_bytes = received;
+
+            if dt_ms < 80 && db < 16 * 1024 {
+                return;
+            }
+
+            let spd = crate::shell::matrix::format_speed_bps(bps);
+            let right = if let Some(t) = total {
+                let pct = if t == 0 { 0 } else { (received.saturating_mul(100)) / t };
+                alloc::format!("{} {}%", spd, pct)
+            } else {
+                spd
+            };
+
+            let _ = crate::shell::statusbar::set_right(self.slot, right.as_str());
+        }
+    }
+
+
+    let mut prog = DlProgress {
+        slot: slot_id,
+        start_tick: embassy_time_driver::now(),
+        last_tick: embassy_time_driver::now(),
+        last_bytes: 0,
+    };
+
+    let iso = match crate::v::net::https::fetch_https_body_progress_async(
+        ISO_URL,
+        120_000,
+        128 * 1024 * 1024,
+        &mut prog,
     )
     .await
     {
@@ -880,27 +961,36 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!("update: BOOTX64 download failed ({:?})", e).as_str(),
+                alloc::format!("update: iso download failed ({:?})", e).as_str(),
             );
+            let _ = crate::shell::statusbar::set_center(slot_id, "dl failed");
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);
             return;
         }
     };
 
-    let kernel = match crate::v::net::https::fetch_https_body_async(
-        KERNEL_URL,
-        60_000,
-        64 * 1024 * 1024,
-    )
-    .await
-    {
-        Ok(b) => b,
+    let _ = crate::shell::statusbar::set_center(slot_id, "extract");
+    let bootx64 = match crate::iso9660::file_slice(iso.as_slice(), "/EFI/BOOT/BOOTX64.EFI") {
+        Ok(v) => v,
         Err(e) => {
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!("update: kernel download failed ({:?})", e).as_str(),
+                alloc::format!("update: ISO missing BOOTX64.EFI ({:?})", e).as_str(),
+            );
+            set_state(slot_id, SlotState::Failed);
+            let _ = set_blob_owned_with_preview(slot_id, blob);
+            return;
+        }
+    };
+    let kernel = match crate::iso9660::file_slice(iso.as_slice(), "/TRUEOS.elf") {
+        Ok(v) => v,
+        Err(e) => {
+            log_line(
+                slot_id,
+                &mut blob,
+                alloc::format!("update: ISO missing TRUEOS.elf ({:?})", e).as_str(),
             );
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);
@@ -935,8 +1025,8 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
 
     let result = crate::disc::install::install_bootable_uefi_gpt_with_log(
         disk,
-        &bootx64,
-        &kernel,
+        bootx64,
+        kernel,
         &mut |line| {
             log_line(slot_id, &mut blob, line);
         },

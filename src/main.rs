@@ -13,6 +13,7 @@ mod exceptions;
 mod gfx;
 mod globalog;
 mod hv;
+mod iso9660;
 mod limine;
 mod net;
 mod pci;

@@ -46,6 +46,7 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
+static VGA_MOUSEVIZ_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_EVENT_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_SONG_STARTED: AtomicBool = AtomicBool::new(false);
@@ -149,21 +150,18 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
-    // Keep the VGA mouse visualization on the same executor as USB tasks.
-    // This makes the drawing cadence track input cadence without cross-core coordination.
-    static MOUSEVIZ_SPAWNED: core::sync::atomic::AtomicBool =
-        core::sync::atomic::AtomicBool::new(false);
-    if !MOUSEVIZ_SPAWNED.swap(true, core::sync::atomic::Ordering::AcqRel) {
-        // Prefer running on AP1 so BSP stays focused on boot/bring-up.
-        if let Some(ap1) = crate::runtime::first_ap_spawner() {
-            let _ = ap1.spawn(crate::vga::mouseviz_task());
-        } else {
-            // Fallback: AP1 not online yet.
-            let _ = spawner.spawn(crate::vga::mouseviz_task());
-        }
+fn spawn_vga_mouseviz_ap1(_spawner: Spawner) -> SpawnAttempt {
+    let Some(ap1_spawner) = crate::runtime::first_ap_spawner() else {
+        // Only spawn on AP1. If APs are disabled/unavailable, this task will never start.
+        return SpawnAttempt::Skipped;
+    };
+    match ap1_spawner.spawn(crate::vga::mouseviz_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
     }
+}
 
+fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
         let _ = spawner.spawn(crate::usb::xhci::poll_task(info));
@@ -364,6 +362,13 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &TGA_TASK_STARTED,
         spawn: spawn_tga_task,
+    },
+    TaskSpec {
+        name: "vga-mouseviz-ap1",
+        disabled: false,
+        required: 0,
+        started: &VGA_MOUSEVIZ_STARTED,
+        spawn: spawn_vga_mouseviz_ap1,
     },
     TaskSpec {
         name: "usb-controller-tasks",

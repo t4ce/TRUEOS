@@ -188,6 +188,7 @@ pub fn framebuffer_dimensions() -> Option<(u32, u32)> {
     with_framebuffer(|fb| (fb.width as u32, fb.height as u32))
 }
 
+#[allow(dead_code)] // used by some UI paths; not always referenced
 pub fn header_height() -> usize {
     TOP_MARGIN.load(Ordering::Relaxed)
 }
@@ -291,6 +292,37 @@ pub fn overlay_mouse_dots() {
                         color: under,
                     });
                     fb.plot(px, py, 0x00_00_FF_00);
+                }
+            }
+        });
+
+        // Tablets: same cursor circle, different color.
+        crate::usb::hid::for_each_tablet_cursor(|mx, my| {
+            let x = roundf((mx as f32) * w) as i32;
+            let y = roundf((my as f32) * h) as i32;
+
+            const R: i32 = 3;
+            const R2: i32 = R * R;
+            for oy in -R..=R {
+                for ox in -R..=R {
+                    let d2 = ox * ox + oy * oy;
+                    if (d2 - R2).abs() > 2 {
+                        continue;
+                    }
+                    let px = x + ox;
+                    let py = y + oy;
+                    if saved.iter().any(|p| p.x == px && p.y == py) {
+                        continue;
+                    }
+                    let Some(under) = fb.read_if_visible(px, py) else {
+                        continue;
+                    };
+                    let _ = saved.push(SavedPixel {
+                        x: px,
+                        y: py,
+                        color: under,
+                    });
+                    fb.plot(px, py, 0x00_FF_00_FF);
                 }
             }
         });
@@ -1066,10 +1098,12 @@ fn build_font_cache_large() -> FontCacheLarge {
     FontCacheLarge { glyphs, index }
 }
 
+#[allow(dead_code)]
 pub fn draw_line(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
     let _ = with_framebuffer(|fb| fb.draw_line(x0, y0, x1, y1, color));
 }
 
+#[allow(dead_code)]
 pub fn clear_rect(origin_x: usize, origin_y: usize, width: usize, height: usize, color: u32) {
     let _ = with_framebuffer(|fb| fb.clear_rect(origin_x, origin_y, width, height, color));
 }

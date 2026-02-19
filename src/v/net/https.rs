@@ -169,6 +169,14 @@ pub enum FetchError {
     ResponseTooLarge,
 }
 
+/// Progress callback for HTTPS body fetches.
+///
+/// `received` counts body bytes received so far (not including headers).
+/// `total` is the Content-Length when known.
+pub trait FetchProgress {
+    fn on_progress(&mut self, received: usize, total: Option<usize>);
+}
+
 /// Callback sink for Server-Sent Events (SSE) streaming.
 ///
 /// The handler receives the raw `data:` payload (already concatenated across
@@ -552,6 +560,7 @@ async fn fetch_on_device(
     max_bytes: usize,
     body_json: Option<&str>,
     auth_token: Option<&str>,
+    mut progress: Option<&mut dyn FetchProgress>,
 ) -> Result<Vec<u8>, FetchError> {
     let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
         .await
@@ -615,6 +624,10 @@ async fn fetch_on_device(
     // Once we've seen complete headers, try to finish early (without waiting for TCP/TLS close)
     // when the response body is complete (Content-Length or chunked terminator).
     let mut hdr_end_cached: Option<usize> = None;
+    let mut content_len_cached: Option<Option<usize>> = None;
+
+    // Rate-limit progress callbacks.
+    let mut last_progress: Instant = Instant::now();
 
     let mut last_activity = Instant::now();
 
@@ -694,6 +707,28 @@ async fn fetch_on_device(
                                 v.unwrap_or(0)
                             }
                         };
+
+                        // Progress reporting: once headers are known, report body byte count.
+                        if let Some(hdr_end) = hdr_end_cached {
+                            if hdr_end != 0 {
+                                if content_len_cached.is_none() {
+                                    let headers = &plaintext[..hdr_end];
+                                    content_len_cached = Some(header_parse_content_length(headers));
+                                }
+
+                                if let Some(ref mut p) = progress {
+                                    // Avoid spamming UI: update at most ~10Hz.
+                                    let now = Instant::now();
+                                    if now.saturating_duration_since(last_progress)
+                                        >= EmbassyDuration::from_millis(100)
+                                    {
+                                        let body_len = plaintext.len().saturating_sub(hdr_end);
+                                        p.on_progress(body_len, content_len_cached.unwrap_or(None));
+                                        last_progress = now;
+                                    }
+                                }
+                            }
+                        }
                         if hdr_end != 0 {
                             let headers = &plaintext[..hdr_end];
                             // Debug logging for headers
@@ -766,6 +801,9 @@ async fn fetch_on_device(
                                     if let Some(h) = tls_handle {
                                         let _ = cmds.push(TlsCommand::Close { handle: h });
                                     }
+                                    if let Some(ref mut p) = progress {
+                                        p.on_progress(decoded.len(), Some(decoded.len()));
+                                    }
                                     return Ok(decoded);
                                 } else {
                                     crate::log!(
@@ -784,6 +822,9 @@ async fn fetch_on_device(
                                     }
                                     if let Some(h) = tls_handle {
                                         let _ = cmds.push(TlsCommand::Close { handle: h });
+                                    }
+                                    if let Some(ref mut p) = progress {
+                                        p.on_progress(out.len(), Some(out.len()));
                                     }
                                     return Ok(out);
                                 }
@@ -849,6 +890,10 @@ async fn fetch_on_device(
 
                     if decoded_body.len() > max_bytes {
                         return Err(FetchError::ResponseTooLarge);
+                    }
+
+                    if let Some(ref mut p) = progress {
+                        p.on_progress(decoded_body.len(), Some(decoded_body.len()));
                     }
 
                     // Trim any accidental leading/trailing whitespace? No: callers want exact bytes.
@@ -2541,7 +2586,66 @@ pub async fn fetch_https_body_async(
         let mut redirect: Option<(u16, String)> = None;
 
         for dev_idx in 0..dev_count {
-            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None).await {
+            match fetch_on_device(&parsed, dev_idx, timeout_ms, max_bytes, None, None, None).await {
+                Ok(v) => return Ok(v),
+                Err(FetchError::Redirect { status, url }) => {
+                    redirect = Some((status, url));
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        if let Some((status, next_url)) = redirect {
+            if hop >= MAX_REDIRECTS {
+                return Err(FetchError::Http(status));
+            }
+            current_url = next_url;
+            continue;
+        }
+
+        return Err(last_err.unwrap_or(FetchError::DnsFailed));
+    }
+
+    Err(FetchError::Http(0))
+}
+
+/// Fetch an HTTPS URL and return the response body, with progress updates.
+///
+/// Progress is based on received body bytes (after headers). If Content-Length
+/// is present, `total` will be provided.
+pub async fn fetch_https_body_progress_async(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+    progress: &mut dyn FetchProgress,
+) -> Result<Vec<u8>, FetchError> {
+    let dev_count = crate::net::device_count();
+    if dev_count == 0 {
+        return Err(FetchError::NoNic);
+    }
+
+    const MAX_REDIRECTS: usize = 3;
+    let mut current_url = String::from(url);
+
+    for hop in 0..=MAX_REDIRECTS {
+        let parsed = parse_https_url(current_url.as_str()).ok_or(FetchError::BadUrl)?;
+
+        let mut last_err: Option<FetchError> = None;
+        let mut redirect: Option<(u16, String)> = None;
+
+        for dev_idx in 0..dev_count {
+            match fetch_on_device(
+                &parsed,
+                dev_idx,
+                timeout_ms,
+                max_bytes,
+                None,
+                None,
+                Some(progress),
+            )
+            .await
+            {
                 Ok(v) => return Ok(v),
                 Err(FetchError::Redirect { status, url }) => {
                     redirect = Some((status, url));
@@ -2594,6 +2698,7 @@ pub async fn post_https_json_async(
                 max_bytes,
                 Some(body_json.as_str()),
                 auth_token,
+                None,
             )
             .await
             {
