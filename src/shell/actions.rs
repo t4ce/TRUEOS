@@ -19,15 +19,25 @@ pub(super) async fn handle_command_action(
 ) {
     match action {
         CommandAction::Pending(pending) => handle_pending(mode, pending),
-        CommandAction::ShowInstallDiskTable => super::print_install_disk_table(io).await,
-        CommandAction::ShowFormatDiskTable => super::print_format_disk_table(io).await,
-        CommandAction::ShowUpdateDiskTable => super::print_update_disk_table(io).await,
+        CommandAction::ShowInstallDiskTable => {
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            super::print_install_disk_table(&rev).await;
+        }
+        CommandAction::ShowFormatDiskTable => {
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            super::print_format_disk_table(&rev).await;
+        }
+        CommandAction::ShowUpdateDiskTable => {
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            super::print_update_disk_table(&rev).await;
+        }
         CommandAction::ShowFileMountTable => {
             super::print_trueosfs_mount_table(io).await;
             io.write_str("file: enter mount index or disk id (blank/q cancels)\r\n");
         }
         CommandAction::ShowBenchDiskTable => {
-            super::print_bench_disk_table(io).await;
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            super::print_bench_disk_table(&rev).await;
             io.write_str("bench: enter TRUEOSFS disk id (blank/q cancels)\r\n");
         }
         CommandAction::ShowNetbenchNicTable => {

@@ -78,7 +78,9 @@ fn pvd(iso: &[u8]) -> Result<&[u8], IsoError> {
     let start = PVD_SECTOR
         .checked_mul(ISO_SECTOR_BYTES)
         .ok_or(IsoError::Truncated)?;
-    let end = start.checked_add(ISO_SECTOR_BYTES).ok_or(IsoError::Truncated)?;
+    let end = start
+        .checked_add(ISO_SECTOR_BYTES)
+        .ok_or(IsoError::Truncated)?;
     let pvd = iso.get(start..end).ok_or(IsoError::Truncated)?;
 
     // Type 1, magic "CD001", version 1.
@@ -139,7 +141,55 @@ fn read_dir_bytes<'a>(iso: &'a [u8], extent_lba: u32, data_len: u32) -> Result<&
     iso.get(start..end).ok_or(IsoError::Truncated)
 }
 
-fn find_in_dir<'a>(iso: &'a [u8], dir: &'a [u8], want_upper: &str) -> Option<DirRec<'a>> {
+pub fn looks_like_iso9660(iso: &[u8]) -> bool {
+    // Primary Volume Descriptor magic: type=1, "CD001", version=1 at sector 16.
+    let off = PVD_SECTOR * ISO_SECTOR_BYTES;
+    let pvd = match iso.get(off..off + ISO_SECTOR_BYTES) {
+        Some(v) => v,
+        None => return false,
+    };
+    pvd.get(0) == Some(&1u8) && pvd.get(1..6) == Some(b"CD001") && pvd.get(6) == Some(&1u8)
+}
+
+/// Locate an ISO9660 image embedded inside a larger blob.
+///
+/// This is used for the update payload: `TrueOS.7z` is generated in *store*
+/// mode (Copy, non-solid), so it contains the raw ISO bytes verbatim.
+/// We avoid implementing full 7z decompression by scanning for the Primary
+/// Volume Descriptor signature and validating it.
+pub fn find_embedded_iso9660_start(blob: &[u8]) -> Option<usize> {
+    // PVD signature is at ISO offset 16*2048 and begins with: 0x01 "CD001" 0x01
+    const SIG: &[u8; 7] = b"\x01CD001\x01";
+    let pvd_off = PVD_SECTOR * ISO_SECTOR_BYTES;
+
+    if blob.len() < pvd_off + SIG.len() {
+        return None;
+    }
+
+    // Naive scan is fine at ~40MB.
+    let mut i = 0usize;
+    while i + SIG.len() <= blob.len() {
+        if &blob[i..i + SIG.len()] == SIG {
+            // Candidate ISO start.
+            if i >= pvd_off {
+                let start = i - pvd_off;
+                // Prefer sector alignment.
+                if start % ISO_SECTOR_BYTES == 0 && looks_like_iso9660(&blob[start..]) {
+                    return Some(start);
+                }
+                // Fallback: accept unaligned starts if validation passes.
+                if looks_like_iso9660(&blob[start..]) {
+                    return Some(start);
+                }
+            }
+            // Continue searching; false positives are possible.
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_in_dir<'a>(dir: &'a [u8], want_upper: &str) -> Option<DirRec<'a>> {
     let mut off = 0usize;
     while off < dir.len() {
         let len = *dir.get(off).unwrap_or(&0) as usize;
@@ -216,7 +266,7 @@ pub fn file_slice<'a>(iso: &'a [u8], path: &str) -> Result<&'a [u8], IsoError> {
         let is_last = i + 1 == comps.len();
 
         let dir_bytes = read_dir_bytes(iso, cur.extent_lba, cur.data_len)?;
-        let Some(found) = find_in_dir(iso, dir_bytes, comp.as_str()) else {
+        let Some(found) = find_in_dir(dir_bytes, comp.as_str()) else {
             return Err(IsoError::NotFound);
         };
 

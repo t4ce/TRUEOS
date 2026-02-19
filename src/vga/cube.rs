@@ -118,7 +118,6 @@ pub fn tick() {
         // Clear the cube tile so it stands out cleanly.
         fb.clear_rect(origin_x, origin_y, size, size, super::DEFAULT_BG_COLOR);
         draw_wire_cube(fb, origin_x as i32, origin_y as i32, size as i32, q);
-
     });
 
     // Keep the boot logo visible even if overlays draw after it.
