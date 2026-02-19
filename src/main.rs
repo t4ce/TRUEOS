@@ -23,6 +23,7 @@ mod portio;
 mod power;
 mod rng;
 mod runtime;
+mod z7;
 mod shell;
 mod smp;
 mod surface;

@@ -814,7 +814,11 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
         ok = true;
     });
 
-    if ok { 0 } else { -3 }
+    if ok {
+        0
+    } else {
+        -3
+    }
 }
 
 // C-ABI: drain up to N decimated tablet samples from a specific HID runtime.
@@ -882,7 +886,11 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
         ok = true;
     });
 
-    if ok { 0 } else { -3 }
+    if ok {
+        0
+    } else {
+        -3
+    }
 }
 
 #[embassy_executor::task]

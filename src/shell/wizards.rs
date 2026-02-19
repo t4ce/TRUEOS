@@ -3,6 +3,7 @@ use embassy_time::Instant;
 
 use crate::ecma48;
 use crate::shell::{CommandAction, ShellBackend, ShellIo, PROMPT_RGB};
+use crate::shell::table::{Table, TableColumn};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallWizardStage {
@@ -380,100 +381,78 @@ fn write_inserted_line(io: &dyn ShellIo, args: core::fmt::Arguments) {
 }
 
 pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, filter_trueos: bool) {
-    // Start at top of scroll region
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+    io.write_fmt(format_args!(
+        "{} {}\r\n",
+        crate::ecma48::style(header).bold().fg(PROMPT_RGB),
+        crate::ecma48::dim("disk selection")
+    ));
+    io.write_fmt(format_args!(
+        "{}\r\n\r\n",
+        crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")
+    ));
 
-    let title = crate::ecma48::style(header)
-        .bold()
-        .fg(crate::shell::PROMPT_RGB);
-    write_inserted_line(
-        io,
-        format_args!("{} {}", title, crate::ecma48::dim("disk detection stage")),
-    );
-    write_inserted_line(
-        io,
-        format_args!(
-            "\r\n{}",
-            crate::ecma48::dim("choose a disk id to continue (blank/q cancels)")
-        ),
-    );
+    // Keep table cells ASCII-only (no ANSI sequences) so width/truncation stays predictable.
+    // Alignment is handled by the output backend (ReverseOutput).
+    let cols = [
+        TableColumn { header: "ID", width: 6 },
+        TableColumn { header: "Name", width: 10 },
+        TableColumn { header: "Size", width: 10 },
+        TableColumn { header: "Mode", width: 4 },
+        TableColumn { header: "Status", width: 12 },
+        TableColumn { header: "Label", width: 24 },
+    ];
 
     let mut found = false;
+    {
+        let t = Table::new(&cols);
+        t.print_header(io);
 
-    // Header
-    write_inserted_line(
-        io,
-        format_args!(
-            "  {:<3} {:<8} {:<10} {:<6} {:<12} {}",
-            "ID", "Name", "Size", "Mode", "Status", "Label"
-        ),
-    );
-    write_inserted_line(
-        io,
-        format_args!(
-            "  {}",
-            crate::ecma48::dim("---------------------------------------------------------")
-        ),
-    );
+        for h in crate::disc::block::device_handles().into_iter() {
+            if h.parent().is_some() {
+                continue;
+            }
 
-    for h in crate::disc::block::device_handles().into_iter() {
-        if h.parent().is_some() {
-            continue;
-        }
-        let info = h.info();
-        let (status, err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
+            let info = h.info();
+            let (status, _err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
 
-        if filter_trueos && !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
-            continue;
-        }
-        found = true;
+            if filter_trueos && !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+                continue;
+            }
+            found = true;
 
-        let total = info.block_count.saturating_mul(info.block_size as u64);
-        let (size_val, size_suffix) = if total >= 1024 * 1024 * 1024 {
-            (total / (1024 * 1024 * 1024), "GB")
-        } else if total >= 1024 * 1024 {
-            (total / (1024 * 1024), "MB")
-        } else {
-            (total / 1024, "KB")
-        };
+            let total = info.block_count.saturating_mul(info.block_size as u64);
+            let size = if total >= 1024 * 1024 * 1024 {
+                alloc::format!("{}GB", total / (1024 * 1024 * 1024))
+            } else if total >= 1024 * 1024 {
+                alloc::format!("{}MB", total / (1024 * 1024))
+            } else {
+                alloc::format!("{}KB", total / 1024)
+            };
 
-        let status_color = match status {
-            crate::v::disc::detect::DiscStatus::Trueos { .. } => (100, 255, 100),
-            crate::v::disc::detect::DiscStatus::Unknown => (255, 100, 100),
-            _ => (255, 200, 100),
-        };
+            let mode = if info.writable { "RW" } else { "RO" };
+            let label = info.label.as_deref().unwrap_or("-");
 
-        write_inserted_line(
-            io,
-            format_args!(
-                "  {:<3} {:<8} {:>4} {:<5} {:<6} {:<12} {}",
-                crate::ecma48::bold(&alloc::format!("{}", info.id.raw())),
-                info.id,
-                size_val,
-                size_suffix,
-                if info.writable { "RW" } else { "RO" },
-                crate::ecma48::color(status.short(), status_color),
-                crate::ecma48::dim(info.label.as_deref().unwrap_or("-"))
-            ),
-        );
-
-        if let Some(e) = err {
-            write_inserted_line(
+            t.print_row(
                 io,
-                format_args!(
-                    "       {}",
-                    crate::ecma48::color(&alloc::format!("Error: {:?}", e), (255, 80, 80))
-                ),
+                [
+                    alloc::format!("{}", info.id.raw()),
+                    alloc::format!("{}", info.id),
+                    size,
+                    alloc::string::String::from(mode),
+                    alloc::string::String::from(status.short()),
+                    alloc::string::String::from(label),
+                ],
             );
         }
     }
 
     if !found {
-        write_inserted_line(io, format_args!("  (no suitable disks found)"));
+        io.write_str("(no suitable disks found)\r\n");
     }
 
-    write_inserted_line(io, format_args!(""));
+    io.write_str("\r\n");
 }
+
 
 pub(crate) async fn print_install_disk_table(io: &dyn ShellIo) {
     print_generic_disk_table(io, "install", false).await;

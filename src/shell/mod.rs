@@ -416,7 +416,25 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 b'\r' | b'\n' => {
                     utf8.clear();
 
-                    let result = mode.process_input(io, &line, &spawner).await;
+                    let update_wizard_io = matches!(
+                        mode,
+                        ShellMode::Wizard(wizards::InstallWizardStage::UpdateSelectDisk)
+                            | ShellMode::Confirm(wizards::PendingAction::UpdateConfirm { .. })
+                    );
+
+                    // In update wizard mode, route both user submissions and system output into
+                    // the ReverseOutput scrollback (right-aligned), keeping the prompt row clean.
+                    let result = if update_wizard_io {
+                        let submitted = line.trim();
+                        if !submitted.is_empty() {
+                            ReverseOutput::new(io, term_cols, term_rows, &mut history)
+                                .echo_command(submitted);
+                        }
+                        let wiz_io = ReverseOutput::new(io, term_cols, term_rows, &mut history);
+                        mode.process_input(&wiz_io, &line, &spawner).await
+                    } else {
+                        mode.process_input(io, &line, &spawner).await
+                    };
                     match result {
                         InputResult::Handled => {
                             line.clear();

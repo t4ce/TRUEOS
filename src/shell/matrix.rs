@@ -811,9 +811,7 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     log_line(slot_id, &mut blob, "update: waiting for net");
     crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
 
-    // Update fetches a single installer ISO (small ops surface) and extracts
-    // /EFI/BOOT/BOOTX64.EFI and /TRUEOS.elf from ISO9660.
-    const ISO_URL: &str = "https://trueos.eu/trueos.iso";
+    const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
 
     let info = disk.info();
     log_line(slot_id, &mut blob, "update: starting");
@@ -883,8 +881,7 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         }
     }
 
-    log_line(slot_id, &mut blob, "update: fetching installer ISO over HTTPS");
-    log_line(slot_id, &mut blob, alloc::format!("update: iso url={}", ISO_URL).as_str());
+    log_line(slot_id, &mut blob, "update: fetching installer payload over HTTPS");
 
     // Show progress in the status bar (bottom right).
     let _ = crate::shell::statusbar::set_active_slot(slot_id);
@@ -948,7 +945,10 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         last_bytes: 0,
     };
 
-    let iso = match crate::v::net::https::fetch_https_body_progress_async(
+    log_line(slot_id, &mut blob, alloc::format!("update: iso url={}", ISO_URL).as_str());
+    let _ = crate::shell::statusbar::set_center(slot_id, "download");
+
+    let payload = match crate::v::net::https::fetch_https_body_progress_async(
         ISO_URL,
         120_000,
         128 * 1024 * 1024,
@@ -958,20 +958,80 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     {
         Ok(b) => b,
         Err(e) => {
+        log_line(
+            slot_id,
+            &mut blob,
+            alloc::format!("update: iso download failed ({:?})", e).as_str(),
+        );
+        log_line(slot_id, &mut blob, "update: expected TrueOS.7z");
+        let _ = crate::shell::statusbar::set_center(slot_id, "dl failed");
+        set_state(slot_id, SlotState::Failed);
+        let _ = set_blob_owned_with_preview(slot_id, blob);
+        return;
+        }
+    };
+
+    // Stage 2: unzip
+    // We publish exactly one payload shape:
+    // - https://trueos.eu/TrueOS.7z
+    // - 7z store-mode (Copy, non-solid)
+    // - contains exactly one file: trueos.iso
+    let _ = crate::shell::statusbar::set_center(slot_id, "unzip");
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "update: downloaded payload={} bytes (7z_magic={})",
+            payload.len(),
+            crate::sevenz::looks_like_7z(payload.as_slice())
+        )
+        .as_str(),
+    );
+
+    if !crate::sevenz::looks_like_7z(payload.as_slice()) {
+        log_line(slot_id, &mut blob, "update: refused (payload is not a 7z archive)");
+        set_state(slot_id, SlotState::Failed);
+        let _ = set_blob_owned_with_preview(slot_id, blob);
+        return;
+    }
+
+    let iso_view: &[u8] = match crate::sevenz::packed_streams_slice(payload.as_slice()) {
+        Ok(v) => v,
+        Err(e) => {
             log_line(
                 slot_id,
                 &mut blob,
-                alloc::format!("update: iso download failed ({:?})", e).as_str(),
+                alloc::format!("update: unzip failed ({:?})", e).as_str(),
             );
-            let _ = crate::shell::statusbar::set_center(slot_id, "dl failed");
+            log_line(slot_id, &mut blob, "update: ensure TrueOS.7z is store-mode (7z a -t7z -mx=0 -m0=Copy -ms=off TrueOS.7z trueos.iso)");
             set_state(slot_id, SlotState::Failed);
             let _ = set_blob_owned_with_preview(slot_id, blob);
             return;
         }
     };
 
+    log_line(
+        slot_id,
+        &mut blob,
+        alloc::format!(
+            "update: unzipped trueos.iso bytes={} (iso9660_magic={})",
+            iso_view.len(),
+            crate::iso9660::looks_like_iso9660(iso_view)
+        )
+        .as_str(),
+    );
+    if !crate::iso9660::looks_like_iso9660(iso_view) {
+        log_line(slot_id, &mut blob, "update: refused (unzipped data is not an ISO9660 image)");
+        log_line(slot_id, &mut blob, "update: ensure TrueOS.7z contains trueos.iso (store-mode, non-solid)");
+        set_state(slot_id, SlotState::Failed);
+        let _ = set_blob_owned_with_preview(slot_id, blob);
+        return;
+    }
+
+    // Stage 3: extract boot files from ISO.
     let _ = crate::shell::statusbar::set_center(slot_id, "extract");
-    let bootx64 = match crate::iso9660::file_slice(iso.as_slice(), "/EFI/BOOT/BOOTX64.EFI") {
+
+    let bootx64 = match crate::iso9660::file_slice(iso_view, "/EFI/BOOT/BOOTX64.EFI") {
         Ok(v) => v,
         Err(e) => {
             log_line(
@@ -984,7 +1044,7 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
             return;
         }
     };
-    let kernel = match crate::iso9660::file_slice(iso.as_slice(), "/TRUEOS.elf") {
+    let kernel = match crate::iso9660::file_slice(iso_view, "/TRUEOS.elf") {
         Ok(v) => v,
         Err(e) => {
             log_line(
@@ -1019,6 +1079,9 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
         let _ = set_blob_owned_with_preview(slot_id, blob);
         return;
     }
+
+    // Stage 4: install.
+    let _ = crate::shell::statusbar::set_center(slot_id, "install");
 
     log_line(slot_id, &mut blob, "update: updating GPT + ESP + TRUEOSFS boot files");
     log_line(slot_id, &mut blob, "update: existing TRUEOSFS will be preserved if detected");

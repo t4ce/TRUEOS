@@ -69,8 +69,7 @@ impl<'a> ReverseOutput<'a> {
 
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
-        self.inner
-            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2)));
+            crate::ecma48::write_pos(self.inner, 3, 2); // Col 2 (skip scrollbar)
         self.inner.write_str("\x1b[K");
 
         let content_len = crate::shell::ecma48::visible_width(s);
@@ -118,8 +117,7 @@ impl<'a> ReverseOutput<'a> {
         }
         if !*self.live_line_inserted.borrow() {
             let bottom = output_bottom_row(self.term_rows);
-            self.inner
-                .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+                crate::ecma48::write_pos(self.inner, 3, 1);
             self.inner.write_str("\x1b[L");
             let _ = draw_scrollbar(
                 self.inner,
@@ -225,13 +223,12 @@ impl<'a> ReverseOutput<'a> {
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
 
         // 1. Insert Line at Row 3
-        self.inner
-            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
+            crate::ecma48::write_pos(self.inner, 3, 1);
         self.inner.write_str("\x1b[L");
 
         // 2. Write content
         self.inner
-            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Skip scrollbar col
+                .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Col 2 (skip scrollbar)
 
         // Clip/Pad content
         let content_len = crate::shell::ecma48::visible_width(s);
@@ -410,17 +407,6 @@ impl ShellIo for ReverseOutput<'_> {
         self.do_write(s);
     }
 
-    fn write_fmt(&self, args: core::fmt::Arguments<'_>) {
-        struct Adapter<'a, 'b>(&'a ReverseOutput<'b>);
-        impl<'a, 'b> Write for Adapter<'a, 'b> {
-            fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                self.0.write_str(s);
-                Ok(())
-            }
-        }
-        let _ = Adapter(self).write_fmt(args);
-    }
-
     fn write_char(&self, ch: char) {
         let mut b = [0u8; 4];
         self.write_str(ch.encode_utf8(&mut b));
@@ -454,13 +440,13 @@ pub(crate) fn apply_shell_scroll_region(io: &dyn ShellIo, term_rows: usize) {
     let top = 3usize;
     let bottom = output_bottom_row(term_rows);
     io.write_str(crate::ecma48::HIDE_CURSOR);
-    io.write_fmt(format_args!("\x1b[{};{}r", top, bottom));
+    crate::ecma48::write_scroll_region(io, top, bottom);
 
     // Initial draw (total=0, offset=0)
     draw_scrollbar(io, 0, bottom.saturating_sub(top), 0, top, bottom);
 
     // Immediately force cursor to (3, 3)
-    io.write_fmt(format_args!("{}", crate::ecma48::pos(3, 3)));
+    crate::ecma48::write_pos(io, 3, 3);
 
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
