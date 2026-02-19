@@ -5,6 +5,7 @@ use super::xhci::{
 };
 use crate::pci::dma;
 use crate::usb::input;
+use core::fmt::Write as _;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -15,8 +16,193 @@ use spin::Mutex;
 
 const MAX_REPORT_DESC: usize = 512;
 
+// Keep high-rate mouse samples in memory for future consumers (e.g. direct GPU path),
+// but do not emit them into the normal input/QJS/log pipelines.
+const HID_MOUSE_RING_CAP: usize = 2048; // ~2s at 1kHz
+
+// Tuning knob: how much a HID boot-mouse delta of 1 moves the normalized cursor.
+// This is intentionally simple for now; we can revisit acceleration, DPI, and
+// time-based scaling once we have a direct GPU cursor consumer.
+const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
+
+const MOUSE_POS_LOG_PERIOD_MS: u64 = 100;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidMouseSample {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub slot_id: u32,
+    pub buttons: u8,
+    pub dx: i8,
+    pub dy: i8,
+    pub wheel: i8,
+    pub flags: u8, // bit0=has_wheel
+}
+
+const ZERO_MOUSE_SAMPLE: TrueosHidMouseSample = TrueosHidMouseSample {
+    t_ms: 0,
+    seq: 0,
+    slot_id: 0,
+    buttons: 0,
+    dx: 0,
+    dy: 0,
+    wheel: 0,
+    flags: 0,
+};
+
+#[derive(Copy, Clone, Debug)]
+struct MouseRing {
+    buf: [TrueosHidMouseSample; HID_MOUSE_RING_CAP],
+    r: u32,
+    w: u32,
+    len: u32,
+    dropped: u32,
+}
+
+impl MouseRing {
+    fn new() -> Self {
+        Self {
+            buf: [ZERO_MOUSE_SAMPLE; HID_MOUSE_RING_CAP],
+            r: 0,
+            w: 0,
+            len: 0,
+            dropped: 0,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, s: TrueosHidMouseSample) {
+        let cap = HID_MOUSE_RING_CAP as u32;
+        if cap == 0 {
+            return;
+        }
+
+        if self.len == cap {
+            // Overwrite oldest.
+            self.r = (self.r + 1) % cap;
+            self.dropped = self.dropped.wrapping_add(1);
+        } else {
+            self.len += 1;
+        }
+
+        self.buf[self.w as usize] = s;
+        self.w = (self.w + 1) % cap;
+    }
+
+    #[inline]
+    fn pop(&mut self) -> Option<TrueosHidMouseSample> {
+        if self.len == 0 {
+            return None;
+        }
+        let cap = HID_MOUSE_RING_CAP as u32;
+        let s = self.buf[self.r as usize];
+        self.r = (self.r + 1) % cap;
+        self.len -= 1;
+        Some(s)
+    }
+}
+
+#[inline]
+fn clamp01(v: f64) -> f64 {
+    if v < 0.0 {
+        0.0
+    } else if v > 1.0 {
+        1.0
+    } else {
+        v
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+struct MousePosSnap {
+    controller_id: usize,
+    slot_id: u32,
+    ep_target: u32,
+    x: f64,
+    y: f64,
+}
+
+fn mouse_snapshots_sorted() -> Vec<MousePosSnap, MAX_HID_DEVICES> {
+    let guard = HID_RUNTIMES.lock();
+    let mut out: Vec<MousePosSnap, MAX_HID_DEVICES> = Vec::new();
+
+    for rt in guard.iter() {
+        if rt.hid_kind != 2 {
+            continue;
+        }
+        let _ = out.push(MousePosSnap {
+            controller_id: rt.controller_id,
+            slot_id: rt.slot_id,
+            ep_target: rt.ep_target,
+            x: rt.mouse_x,
+            y: rt.mouse_y,
+        });
+    }
+
+    // Stable ordering for logs: (controller_id, slot_id, ep_target).
+    // N is small (<= MAX_HID_DEVICES), so O(n^2) is fine.
+    let n = out.len();
+    let mut i = 0usize;
+    while i < n {
+        let mut j = i + 1;
+        while j < n {
+            let a = out[i];
+            let b = out[j];
+            let swap = (b.controller_id, b.slot_id, b.ep_target)
+                < (a.controller_id, a.slot_id, a.ep_target);
+            if swap {
+                out[i] = b;
+                out[j] = a;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+
+    out
+}
+
+fn log_mouse_positions_if_changed(prev: &mut Vec<MousePosSnap, MAX_HID_DEVICES>) {
+    let cur = mouse_snapshots_sorted();
+    if &cur == prev {
+        return;
+    }
+
+    // Format: [mouses] 1 (0.0000,0.0000) 2 (0.0000,0.0000)
+    let mut line: HString<512> = HString::new();
+    let _ = write!(&mut line, "[mouses]");
+    for (idx, s) in cur.iter().enumerate() {
+        // x/y are clamped to [0,1], so they naturally have one digit before the dot.
+        let _ = write!(&mut line, " {} ({:.4},{:.4})", idx + 1, s.x, s.y);
+    }
+    line.push('\n').ok();
+    crate::log!("{}", line.as_str());
+
+    *prev = cur;
+}
+
+/// Call `f(x, y)` for each currently-registered HID mouse runtime.
+///
+/// `x`/`y` are normalized to [0,1].
+pub fn for_each_mouse_cursor(mut f: impl FnMut(f64, f64)) {
+    let guard = HID_RUNTIMES.lock();
+    for rt in guard.iter() {
+        if rt.hid_kind != 2 {
+            continue;
+        }
+        f(rt.mouse_x, rt.mouse_y);
+    }
+}
+
+impl Default for MouseRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // Local switch to silence noisy HID debug output.
-pub(crate) const HID_LOGS: bool = true;
+pub(crate) const HID_LOGS: bool = false;
 
 // When HID_LOGS is enabled, do not log every interrupt-IN packet: many HID
 // devices report at 125-1000Hz even when idle. Sample once per 256 packets.
@@ -174,6 +360,12 @@ pub struct HidRuntime {
     pub ep_ring: TrbRing,
     pub seq: u64,
     pub last_nonzero_seq: u64,
+
+    mouse_ring: MouseRing,
+
+    // Normalized cursor position in [0,1]. Stored per HID mouse runtime.
+    mouse_x: f64,
+    mouse_y: f64,
 }
 
 unsafe impl Send for HidRuntime {}
@@ -188,7 +380,7 @@ pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
     // Mouse support was intentionally removed from the xHCI/HID stack.
     match protocol {
         1 => 1,
-        2 => 0,
+        2 => 2,
         _ => protocol,
     }
 }
@@ -312,8 +504,39 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 ascii,
             }));
         }
+    } else if runtime.hid_kind == 2 {
+        // Boot Mouse: store into per-device ring for future consumers.
+        // Do not emit InputEvent::Mouse or log here.
+        let _ = completion;
+        let _ = residual;
+
+        // Clean path: 4-byte boot mouse only: [Buttons, dx, dy, wheel].
+        if data.len() >= 4 {
+            let buttons = data[0];
+            let dx = i8::from_le_bytes([data[1]]);
+            let dy = i8::from_le_bytes([data[2]]);
+            let wheel = i8::from_le_bytes([data[3]]);
+
+            // Update per-device normalized cursor position (clamped to [0,1]).
+            if dx != 0 || dy != 0 {
+                runtime.mouse_x = clamp01(runtime.mouse_x + (dx as f64) * HID_MOUSE_NORM_PER_DELTA);
+                runtime.mouse_y = clamp01(runtime.mouse_y + (dy as f64) * HID_MOUSE_NORM_PER_DELTA);
+            }
+
+            // Store raw samples at device rate.
+            runtime.mouse_ring.push(TrueosHidMouseSample {
+                t_ms: hid_uptime_ms() as u32,
+                seq: runtime.seq as u32,
+                slot_id: runtime.slot_id,
+                buttons,
+                dx,
+                dy,
+                wheel,
+                flags: 1 << 0, // has_wheel
+            });
+        }
     } else {
-        // Mouse support was intentionally removed from the xHCI/HID stack.
+        // Unknown protocols.
         // Keep optional debug visibility for unexpected protocols.
         if HID_LOGS && sample {
             hidlog!(
@@ -331,9 +554,81 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
     }
 }
 
+// C-ABI: drain up to N high-rate mouse samples from a specific HID runtime.
+// This is intentionally separate from the normal input queue.
+#[no_mangle]
+pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out: *mut TrueosHidMouseSample,
+    out_cap: u32,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out.is_null() {
+        return 0;
+    }
+
+    let mut wrote = 0u32;
+    let mut dropped = 0u32;
+
+    let controller_id = controller_id as usize;
+    if controller_id >= super::xhci::MAX_XHCI_CONTROLLERS {
+        return 0;
+    }
+
+    let _ = with_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        dropped = rt.mouse_ring.dropped;
+        rt.mouse_ring.dropped = 0;
+
+        while wrote < out_cap {
+            let Some(s) = rt.mouse_ring.pop() else {
+                break;
+            };
+            core::ptr::write(out.add(wrote as usize), s);
+            wrote += 1;
+        }
+    });
+
+    if !out_dropped.is_null() {
+        *out_dropped = dropped;
+    }
+    wrote
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    out_x: *mut f64,
+    out_y: *mut f64,
+) -> i32 {
+    if out_x.is_null() || out_y.is_null() {
+        return -1;
+    }
+
+    let controller_id = controller_id as usize;
+    if controller_id >= super::xhci::MAX_XHCI_CONTROLLERS {
+        return -2;
+    }
+
+    let mut ok = false;
+    let _ = with_runtime_mut_by_slot_and_target(controller_id, slot_id, ep_target, |rt| {
+        *out_x = rt.mouse_x;
+        *out_y = rt.mouse_y;
+        ok = true;
+    });
+
+    if ok { 0 } else { -3 }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
     async move {
+        let mut prev_mouse: Vec<MousePosSnap, MAX_HID_DEVICES> = Vec::new();
+        let mut last_mouse_log = hid_uptime_ms();
+
         loop {
             if let Some(evt) = input::pop_event() {
                 match evt {
@@ -361,12 +656,18 @@ pub(crate) async fn input_logger() {
                             );
                         }
                     }
-                    // Mouse support is intentionally not implemented at the xHCI/HID layer.
-                    // Other subsystems may still enqueue mouse events; they are ignored here.
-                    input::InputEvent::Mouse(_mouse) => {}
+                    input::InputEvent::Mouse(_mouse) => {
+                        // Mouse is intentionally ignored; keep the queue draining so it can't grow.
+                    }
                 }
             } else {
                 Timer::after(EmbassyDuration::from_millis(5)).await;
+            }
+
+            let now = hid_uptime_ms();
+            if now.saturating_sub(last_mouse_log) >= MOUSE_POS_LOG_PERIOD_MS {
+                log_mouse_positions_if_changed(&mut prev_mouse);
+                last_mouse_log = now;
             }
         }
     }
@@ -657,14 +958,14 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     let mut attached = 0usize;
     for ep in endpoints.into_iter() {
         // Do not claim boot-mouse protocol interfaces at this layer.
-        if ep.protocol == 2 {
-            hidlog!(
-                "usb: hid(generic) skipping mouse iface={} ep=0x{:02X}\n",
-                ep.interface,
-                ep.address
-            );
-            continue;
-        }
+        // if ep.protocol == 2 {
+        //     hidlog!(
+        //         "usb: hid(generic) skipping mouse iface={} ep=0x{:02X}\n",
+        //         ep.interface,
+        //         ep.address
+        //     );
+        //     continue;
+        // }
         hidlog!(
             "usb: hid(generic) ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
             ep.address,
@@ -722,10 +1023,12 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             write_volatile(slot_ctx.add(1), dw1);
 
             let mps = (ep.max_packet as u32) & 0x7FF;
+            // Force 2kHz polling (0.5ms) for High Speed to satisfy Nyquist for 1kHz devices.
+            // For Full Speed, we cap at the hardware limit of 1kHz (1ms).
             let interval = if speed_code == 3 {
-                core::cmp::min(15u32, ep.interval.saturating_sub(1) as u32)
+                3 // 2^(3-1)*125us = 4*125us = 500us (2kHz)
             } else {
-                ep.interval as u32
+                1 // 1ms (1kHz) - Limit for FS/LS
             };
 
             write_volatile(
@@ -813,6 +1116,9 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
+            mouse_ring: MouseRing::new(),
+            mouse_x: 0.5,
+            mouse_y: 0.5,
         });
 
         attached += 1;
@@ -1277,14 +1583,14 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
 
     for ep in endpoints.into_iter() {
         // parse_boot_endpoints already filters to boot keyboard, but keep a guardrail.
-        if ep.protocol == 2 {
-            hidlog!(
-                "usb: hid(boot) skipping mouse iface={} ep=0x{:02X}\n",
-                ep.interface,
-                ep.address
-            );
-            continue;
-        }
+        // if ep.protocol == 2 {
+        //     hidlog!(
+        //         "usb: hid(boot) skipping mouse iface={} ep=0x{:02X}\n",
+        //         ep.interface,
+        //         ep.address
+        //     );
+        //     continue;
+        // }
         hidlog!(
             "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
             ep.address,
@@ -1345,10 +1651,12 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             write_volatile(slot_ctx.add(1), dw1);
 
             let mps = (ep.max_packet as u32) & 0x7FF;
+            // Force 2kHz polling (0.5ms) for High Speed to satisfy Nyquist for 1kHz devices.
+            // For Full Speed, we cap at the hardware limit of 1kHz (1ms).
             let interval = if speed_code == 3 {
-                core::cmp::min(15u32, ep.interval.saturating_sub(1) as u32)
+                3 // 2^(3-1)*125us = 4*125us = 500us (2kHz)
             } else {
-                ep.interval as u32
+                1 // 1ms (1kHz) - Limit for FS/LS
             };
 
             write_volatile(
@@ -1472,6 +1780,9 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
+            mouse_ring: MouseRing::new(),
+            mouse_x: 0.5,
+            mouse_y: 0.5,
         });
 
         attached += 1;

@@ -3,6 +3,8 @@ use fontdue::{Font, FontSettings};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
+use embassy_time::{Duration as EmbassyDuration, Timer};
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::PI;
@@ -50,6 +52,17 @@ static FONT_READY_LARGE: AtomicBool = AtomicBool::new(false);
 static TOP_MARGIN: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_NEXT_Y: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Copy, Clone, Debug)]
+struct SavedPixel {
+    x: i32,
+    y: i32,
+    color: u32,
+}
+
+// Saved pixels for the previous cursor overlay so we can restore exactly what was under it.
+static MOUSEVIZ_SAVED: spin::Mutex<heapless::Vec<SavedPixel, 768>> =
+    spin::Mutex::new(heapless::Vec::new());
 
 fn log_advance_line(fb_height: usize, current_y: usize) -> usize {
     let start_y = TOP_MARGIN.load(Ordering::Relaxed);
@@ -232,6 +245,69 @@ fn with_framebuffer<R>(f: impl FnOnce(&FramebufferSurface) -> R) -> Option<R> {
     FRAMEBUFFER.get().and_then(|fb| fb.as_ref()).map(f)
 }
 
+pub fn overlay_mouse_dots() {
+    let _ = with_framebuffer(|fb| {
+        // Restore pixels from the previous overlay (non-destructive).
+        {
+            let mut saved = MOUSEVIZ_SAVED.lock();
+            for p in saved.iter().copied() {
+                fb.plot(p.x, p.y, p.color);
+            }
+            saved.clear();
+        }
+
+        // Draw new cursor circles and save what was underneath.
+        let w = fb.width.saturating_sub(1) as f32;
+        let h = fb.height.saturating_sub(1) as f32;
+        let mut saved = MOUSEVIZ_SAVED.lock();
+        crate::usb::hid::for_each_mouse_cursor(|mx, my| {
+            let x = roundf((mx as f32) * w) as i32;
+            let y = roundf((my as f32) * h) as i32;
+
+            // Non-filled circle, radius 3px, centered at (x,y).
+            const R: i32 = 3;
+            const R2: i32 = R * R;
+            for oy in -R..=R {
+                for ox in -R..=R {
+                    let d2 = ox * ox + oy * oy;
+                    // 1px-thick ring approximation.
+                    if (d2 - R2).abs() > 2 {
+                        continue;
+                    }
+
+                    let px = x + ox;
+                    let py = y + oy;
+
+                    // Save underlying pixel once per frame so we can restore it later.
+                    if saved.iter().any(|p| p.x == px && p.y == py) {
+                        continue;
+                    }
+                    let Some(under) = fb.read_if_visible(px, py) else {
+                        continue;
+                    };
+                    let _ = saved.push(SavedPixel {
+                        x: px,
+                        y: py,
+                        color: under,
+                    });
+                    fb.plot(px, py, 0x00_00_FF_00);
+                }
+            }
+        });
+    });
+}
+
+#[embassy_executor::task]
+pub(crate) async fn mouseviz_task() {
+    async move {
+        loop {
+            overlay_mouse_dots();
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+        }
+    }
+    .await;
+}
+
 fn update_layout(fb: &FramebufferSurface) {
     let top_margin = (1 + BANNER_CELL_H + 6).min(fb.height.saturating_sub(1));
     TOP_MARGIN.store(top_margin.max(1), Ordering::Relaxed);
@@ -412,6 +488,13 @@ impl FramebufferSurface {
         }
     }
 
+    fn read_pixel(&self, x: usize, y: usize) -> u32 {
+        let offset = y
+            .saturating_mul(self.pitch)
+            .saturating_add(x.saturating_mul(self.bytes_per_pixel));
+        unsafe { core::ptr::read_volatile(self.addr.add(offset) as *const u32) }
+    }
+
     fn plot_if_visible(&self, x: i32, y: i32, color: u32) {
         if x < 0 || y < 0 {
             return;
@@ -421,6 +504,21 @@ impl FramebufferSurface {
             return;
         }
         self.write_pixel(xu, yu, color);
+    }
+
+    fn read_if_visible(&self, x: i32, y: i32) -> Option<u32> {
+        if x < 0 || y < 0 {
+            return None;
+        }
+        let (xu, yu) = (x as usize, y as usize);
+        if xu >= self.width || yu >= self.height {
+            return None;
+        }
+        Some(self.read_pixel(xu, yu))
+    }
+
+    pub(super) fn plot(&self, x: i32, y: i32, color: u32) {
+        self.plot_if_visible(x, y, color);
     }
 
     #[inline]

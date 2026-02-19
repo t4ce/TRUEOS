@@ -11,6 +11,11 @@ ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
 
+# Size of the EFI System Partition image that gets embedded into the ISO.
+# Keep this small: the kernel and Limine config live on the ISO9660 filesystem,
+# while the ESP only needs to contain the EFI loader.
+EFI_IMG_SIZE_KIB ?= 512
+
 LIMINE_CFG := limine.conf
 LIMINE_PREFIX := bld/limine-prefix
 LIMINE_SHARE := $(LIMINE_PREFIX)/share/limine
@@ -90,16 +95,17 @@ iso: artifacts images
 	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/limine.conf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_CFG) $(ISO_DIR)/EFI/BOOT/limine.conf
 	cp $(ISO_BOOT_DIR)/TRUEOS.elf $(ISO_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_BOOT_DIR)/EFI/BOOT
 	cp $(LIMINE_SHARE)/BOOTX64.EFI $(ISO_BOOT_DIR)/EFI/BOOT/BOOTX64.EFI
-	cp $(LIMINE_CFG) $(ISO_BOOT_DIR)/EFI/BOOT/limine.conf
 	rm -f $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
-	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=512
+	dd if=/dev/zero of=$(ISO_BOOT_DIR)/$(ISO_EFI_IMG) bs=1k count=$(EFI_IMG_SIZE_KIB)
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_SHARE)/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+	# Important: do NOT place limine.conf next to BOOTX64.EFI.
+	# Limine prioritizes <EFI app path>/limine.conf; many ISO-to-USB tools copy only
+	# /EFI/BOOT into a FAT ESP, which would shadow the intended /limine.conf on ISO.
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
 		-R \
@@ -128,10 +134,10 @@ snipe:
 run: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-dbg: snipe iso-debug
-	@$(SERIAL_CONSOLE_CMD) &
-	@echo "Waiting for debugger..."
-	@$(QEMU_ISO) -S -s
+# dbg: snipe iso-debug
+#	@$(SERIAL_CONSOLE_CMD) &
+#	@echo "Waiting for debugger..."
+#	@$(QEMU_ISO) -S -s
 
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait
