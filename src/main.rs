@@ -23,7 +23,6 @@ mod portio;
 mod power;
 mod rng;
 mod runtime;
-mod z7;
 mod shell;
 mod smp;
 mod surface;
@@ -36,6 +35,7 @@ mod v;
 mod vga;
 mod wait;
 mod x2apic;
+mod z7;
 
 use embassy_executor::{raw::Executor, Spawner};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};

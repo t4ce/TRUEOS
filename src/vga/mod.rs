@@ -257,14 +257,23 @@ pub fn overlay_mouse_dots() {
             saved.clear();
         }
 
+        // Snapshot cursor positions up-front so we don't hold the HID runtime lock while drawing.
+        let mice = crate::usb::hid::mouse_cursor_snapshot();
+        let tablets = crate::usb::hid::tablet_cursor_snapshot();
+
         // Draw new cursor circles and save what was underneath.
         let w = fb.width.saturating_sub(1) as f32;
         let h = fb.height.saturating_sub(1) as f32;
         let mut saved = MOUSEVIZ_SAVED.lock();
-        crate::usb::hid::for_each_mouse_cursor(|mx, my| {
-            let x = roundf((mx as f32) * w) as i32;
-            let y = roundf((my as f32) * h) as i32;
 
+        #[inline]
+        fn draw_ring(
+            fb: &FramebufferSurface,
+            saved: &mut heapless::Vec<SavedPixel, 768>,
+            x: i32,
+            y: i32,
+            color: u32,
+        ) {
             // Non-filled circle, radius 3px, centered at (x,y).
             const R: i32 = 3;
             const R2: i32 = R * R;
@@ -291,41 +300,23 @@ pub fn overlay_mouse_dots() {
                         y: py,
                         color: under,
                     });
-                    fb.plot(px, py, 0x00_00_FF_00);
+                    fb.plot(px, py, color);
                 }
             }
-        });
+        }
 
-        // Tablets: same cursor circle, different color.
-        crate::usb::hid::for_each_tablet_cursor(|mx, my| {
+        for (mx, my) in mice {
             let x = roundf((mx as f32) * w) as i32;
             let y = roundf((my as f32) * h) as i32;
+            draw_ring(fb, &mut *saved, x, y, 0x00_00_FF_00);
+        }
 
-            const R: i32 = 3;
-            const R2: i32 = R * R;
-            for oy in -R..=R {
-                for ox in -R..=R {
-                    let d2 = ox * ox + oy * oy;
-                    if (d2 - R2).abs() > 2 {
-                        continue;
-                    }
-                    let px = x + ox;
-                    let py = y + oy;
-                    if saved.iter().any(|p| p.x == px && p.y == py) {
-                        continue;
-                    }
-                    let Some(under) = fb.read_if_visible(px, py) else {
-                        continue;
-                    };
-                    let _ = saved.push(SavedPixel {
-                        x: px,
-                        y: py,
-                        color: under,
-                    });
-                    fb.plot(px, py, 0x00_FF_00_FF);
-                }
-            }
-        });
+        // Tablets: same cursor circle, different color.
+        for (mx, my) in tablets {
+            let x = roundf((mx as f32) * w) as i32;
+            let y = roundf((my as f32) * h) as i32;
+            draw_ring(fb, &mut *saved, x, y, 0x00_FF_00_FF);
+        }
     });
 }
 

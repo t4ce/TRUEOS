@@ -235,7 +235,7 @@ impl<'a> ReverseOutput<'a> {
 
         // 2. Write content
         self.inner
-                .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Col 2 (skip scrollbar)
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Col 2 (skip scrollbar)
 
         // Clip/Pad content
         let content_len = crate::shell::ecma48::visible_width(s);

@@ -2,8 +2,8 @@ use embassy_executor::Spawner;
 use embassy_time::Instant;
 
 use crate::ecma48;
-use crate::shell::{CommandAction, ShellBackend, ShellIo, PROMPT_RGB};
 use crate::shell::table::{Table, TableColumn};
+use crate::shell::{CommandAction, ShellBackend, ShellIo, PROMPT_RGB};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallWizardStage {
@@ -184,9 +184,7 @@ async fn handle_wizard_input_internal(
                 return InputResult::Handled;
             }
 
-            io.write_str(
-                "update: downloads TrueOS.7z over HTTPS, unpacks trueos.iso\r\n",
-            );
+            io.write_str("update: downloads TrueOS.7z over HTTPS, unpacks trueos.iso\r\n");
             io.write_str(
                 "update: extracts /EFI/BOOT/BOOTX64.EFI + /TRUEOS.elf, rewrites ESP boot files\r\n",
             );
@@ -397,12 +395,30 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
     // Keep table cells ASCII-only (no ANSI sequences) so width/truncation stays predictable.
     // Alignment is handled by the output backend (ReverseOutput).
     let cols = [
-        TableColumn { header: "ID", width: 6 },
-        TableColumn { header: "Name", width: 10 },
-        TableColumn { header: "Size", width: 10 },
-        TableColumn { header: "Mode", width: 4 },
-        TableColumn { header: "Status", width: 12 },
-        TableColumn { header: "Label", width: 24 },
+        TableColumn {
+            header: "ID",
+            width: 6,
+        },
+        TableColumn {
+            header: "Name",
+            width: 10,
+        },
+        TableColumn {
+            header: "Size",
+            width: 10,
+        },
+        TableColumn {
+            header: "Mode",
+            width: 4,
+        },
+        TableColumn {
+            header: "Status",
+            width: 12,
+        },
+        TableColumn {
+            header: "Label",
+            width: 24,
+        },
     ];
 
     let mut found = false;
@@ -418,7 +434,8 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
             let info = h.info();
             let (status, _err) = crate::v::disc::detect::detect_physical_disk_detail(h).await;
 
-            if filter_trueos && !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. }) {
+            if filter_trueos && !matches!(status, crate::v::disc::detect::DiscStatus::Trueos { .. })
+            {
                 continue;
             }
             found = true;
@@ -455,7 +472,6 @@ pub(crate) async fn print_generic_disk_table(io: &dyn ShellIo, header: &str, fil
 
     io.write_str("\r\n");
 }
-
 
 pub(crate) async fn print_install_disk_table(io: &dyn ShellIo) {
     print_generic_disk_table(io, "install", false).await;
