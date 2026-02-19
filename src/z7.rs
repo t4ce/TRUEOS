@@ -15,7 +15,11 @@ pub fn looks_like_7z(b: &[u8]) -> bool {
 }
 
 fn le_u64_at(b: &[u8], off: usize) -> Result<u64, SevenZError> {
-    let bytes: [u8; 8] = b.get(off..off + 8).ok_or(SevenZError::Truncated)?.try_into().map_err(|_| SevenZError::Truncated)?;
+    let bytes: [u8; 8] = b
+        .get(off..off + 8)
+        .ok_or(SevenZError::Truncated)?
+        .try_into()
+        .map_err(|_| SevenZError::Truncated)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
@@ -29,7 +33,9 @@ pub fn packed_streams_slice<'a>(payload: &'a [u8]) -> Result<&'a [u8], SevenZErr
     let next_header_offset = le_u64_at(payload, 12)? as usize;
     let _next_header_size = le_u64_at(payload, 20)? as usize;
     let start = SIG_LEN;
-    let end = start.checked_add(next_header_offset).ok_or(SevenZError::BadOffset)?;
+    let end = start
+        .checked_add(next_header_offset)
+        .ok_or(SevenZError::BadOffset)?;
     if end > payload.len() {
         return Err(SevenZError::BadOffset);
     }
