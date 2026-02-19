@@ -123,6 +123,7 @@ pub struct MouseEvent {
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
+    pub has_wheel: bool, // true=4-byte, false=3-byte
 }
 
 #[derive(Copy, Clone, Debug)]

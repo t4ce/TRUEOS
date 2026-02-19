@@ -150,6 +150,20 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
+    // Keep the VGA mouse visualization on the same executor as USB tasks.
+    // This makes the drawing cadence track input cadence without cross-core coordination.
+    static MOUSEVIZ_SPAWNED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    if !MOUSEVIZ_SPAWNED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+        // Prefer running on AP1 so BSP stays focused on boot/bring-up.
+        if let Some(ap1) = crate::runtime::first_ap_spawner() {
+            let _ = ap1.spawn(crate::vga::mouseviz_task());
+        } else {
+            // Fallback: AP1 not online yet.
+            let _ = spawner.spawn(crate::vga::mouseviz_task());
+        }
+    }
+
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
         let _ = spawner.spawn(crate::usb::xhci::poll_task(info));
