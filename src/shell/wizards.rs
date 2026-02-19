@@ -185,10 +185,13 @@ async fn handle_wizard_input_internal(
             }
 
             io.write_str(
-                "update: downloads BOOTX64.EFI + TRUEOS.elf and refreshes ESP boot files\r\n",
+                "update: downloads TrueOS.7z over HTTPS, unpacks trueos.iso\r\n",
             );
             io.write_str(
-                "update: will NOT repartition/format (refuses if TRUEOSFS is not detected)\r\n",
+                "update: extracts /EFI/BOOT/BOOTX64.EFI + /TRUEOS.elf, rewrites ESP boot files\r\n",
+            );
+            io.write_str(
+                "update: preserves TRUEOSFS data; refuses if TRUEOSFS is not detected\r\n",
             );
             io.write_str("update: press Enter to confirm (any other key cancels)\r\n");
 
