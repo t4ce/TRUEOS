@@ -69,7 +69,11 @@ impl<'a> ReverseOutput<'a> {
 
         self.inner.write_str(crate::ecma48::SAVE_CURSOR);
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
-        //   crate::ecma48::write_pos(self.inner, 3, 2); // Col 2 (skip scrollbar)
+        // Render previews into the scrollback area (row 3), not on the prompt row.
+        // If we render on the prompt row, the next prompt redraw will erase it, which
+        // looks like "no output" for commands that stream progress (notably `update`).
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 2))); // Col 2 (skip scrollbar)
         self.inner.write_str("\x1b[K");
 
         let content_len = crate::shell::ecma48::visible_width(s);
@@ -117,7 +121,9 @@ impl<'a> ReverseOutput<'a> {
         }
         if !*self.live_line_inserted.borrow() {
             let bottom = output_bottom_row(self.term_rows);
-           //     crate::ecma48::write_pos(self.inner, 3, 1);
+            // Ensure the insert-line happens in the scrollback area.
+            self.inner
+                .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
             self.inner.write_str("\x1b[L");
             let _ = draw_scrollbar(
                 self.inner,
@@ -223,7 +229,8 @@ impl<'a> ReverseOutput<'a> {
         self.inner.write_str(crate::ecma48::HIDE_CURSOR);
 
         // 1. Insert Line at Row 3
-       //     crate::ecma48::write_pos(self.inner, 3, 1);
+        self.inner
+            .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
         self.inner.write_str("\x1b[L");
 
         // 2. Write content
