@@ -263,25 +263,12 @@ pub(crate) async fn try_attach_device(
         }
     }
 
-    let hid_count = hid::attach_boot_devices(hid::BootAttachParams {
-        ctx,
-        cmd_ring: &mut state.cmd_ring,
-        ep0_ring,
-        slot_id,
-        cfg: cfg_slice,
-        dev_ctx_virt,
-        ctx_stride_bytes,
-        ctx_stride_words,
-        speed_code,
-        target_port,
-    })
-    .await
-    .unwrap_or(0);
+    // QEMU's USB tablet (0627:0001) is not a boot device; attaching it through the
+    // boot-HID path can accidentally bind the wrong interface/endpoint and yield
+    // non-moving cursor behavior. Force it through generic HID.
+    let is_qemu_tablet = dev_vid == 0x0627 && dev_pid == 0x0001;
 
-    let hid_count = if hid_count > 0 {
-        hid_count
-    } else {
-        // Fall back to generic HID (non-boot) so we can claim devices like LED controllers.
+    let hid_count = if is_qemu_tablet {
         hid::attach_hid_devices(hid::BootAttachParams {
             ctx,
             cmd_ring: &mut state.cmd_ring,
@@ -296,6 +283,41 @@ pub(crate) async fn try_attach_device(
         })
         .await
         .unwrap_or(0)
+    } else {
+        let boot = hid::attach_boot_devices(hid::BootAttachParams {
+            ctx,
+            cmd_ring: &mut state.cmd_ring,
+            ep0_ring,
+            slot_id,
+            cfg: cfg_slice,
+            dev_ctx_virt,
+            ctx_stride_bytes,
+            ctx_stride_words,
+            speed_code,
+            target_port,
+        })
+        .await
+        .unwrap_or(0);
+
+        if boot > 0 {
+            boot
+        } else {
+            // Fall back to generic HID (non-boot) so we can claim devices like LED controllers.
+            hid::attach_hid_devices(hid::BootAttachParams {
+                ctx,
+                cmd_ring: &mut state.cmd_ring,
+                ep0_ring,
+                slot_id,
+                cfg: cfg_slice,
+                dev_ctx_virt,
+                ctx_stride_bytes,
+                ctx_stride_words,
+                speed_code,
+                target_port,
+            })
+            .await
+            .unwrap_or(0)
+        }
     };
 
     if hid_count > 0 {

@@ -5,33 +5,20 @@ use super::xhci::{
 };
 use crate::pci::dma;
 use crate::usb::input;
-use core::fmt::Write as _;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_time_driver::TICK_HZ;
-use heapless::{String as HString, Vec};
+use heapless::Vec;
 use spin::Mutex;
 
 const MAX_REPORT_DESC: usize = 512;
-
-// Keep high-rate mouse samples in memory for future consumers (e.g. direct GPU path),
-// but do not emit them into the normal input/QJS/log pipelines.
-const HID_MOUSE_RING_CAP: usize = 2048; // ~2s at 1kHz
-
-// Tablet samples are intentionally decimated (10ms cadence), so a smaller ring is fine.
-const HID_TABLET_RING_CAP: usize = 512; // ~5s at 10ms
+const HID_MOUSE_RING_CAP: usize = 2048;
+const HID_TABLET_RING_CAP: usize = 512;
 const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
-// QEMU usb-tablet reports absolute coordinates in the 0..=0x7FFF range.
 const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
-
-// Tuning knob: how much a HID boot-mouse delta of 1 moves the normalized cursor.
-// This is intentionally simple for now; we can revisit acceleration, DPI, and
-// time-based scaling once we have a direct GPU cursor consumer.
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
-
-const MOUSE_POS_LOG_PERIOD_MS: u64 = 100;
+const HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN: usize = 256;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -43,7 +30,7 @@ pub struct TrueosHidMouseSample {
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
-    pub flags: u8, // bit0=has_wheel
+    pub flags: u8,
 }
 
 #[repr(C)]
@@ -127,7 +114,7 @@ impl TabletRing {
     }
 
     #[inline]
-    #[allow(dead_code)] // kept for future consumers/tests
+    #[allow(dead_code)]
     fn pop(&mut self) -> Option<TrueosHidTabletSample> {
         if self.len == 0 {
             return None;
@@ -159,7 +146,6 @@ impl MouseRing {
         }
 
         if self.len == cap {
-            // Overwrite oldest.
             self.r = (self.r + 1) % cap;
             self.dropped = self.dropped.wrapping_add(1);
         } else {
@@ -194,153 +180,18 @@ fn clamp01(v: f64) -> f64 {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
-struct MousePosSnap {
-    controller_id: usize,
-    slot_id: u32,
-    ep_target: u32,
-    x: f64,
-    y: f64,
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
-struct TabletPosSnap {
-    controller_id: usize,
-    slot_id: u32,
-    ep_target: u32,
-    x: f64,
-    y: f64,
-}
-
-fn mouse_snapshots_sorted() -> Vec<MousePosSnap, MAX_HID_DEVICES> {
+pub fn mouse_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     let guard = HID_RUNTIMES.lock();
-    let mut out: Vec<MousePosSnap, MAX_HID_DEVICES> = Vec::new();
-
+    let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
     for rt in guard.iter() {
         if rt.hid_kind != 2 {
             continue;
         }
-        let _ = out.push(MousePosSnap {
-            controller_id: rt.controller_id,
-            slot_id: rt.slot_id,
-            ep_target: rt.ep_target,
-            x: rt.mouse_x,
-            y: rt.mouse_y,
-        });
-    }
-
-    // Stable ordering for logs: (controller_id, slot_id, ep_target).
-    // N is small (<= MAX_HID_DEVICES), so O(n^2) is fine.
-    let n = out.len();
-    let mut i = 0usize;
-    while i < n {
-        let mut j = i + 1;
-        while j < n {
-            let a = out[i];
-            let b = out[j];
-            let swap = (b.controller_id, b.slot_id, b.ep_target)
-                < (a.controller_id, a.slot_id, a.ep_target);
-            if swap {
-                out[i] = b;
-                out[j] = a;
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-
-    out
-}
-
-fn log_mouse_positions_if_changed(prev: &mut Vec<MousePosSnap, MAX_HID_DEVICES>) {
-    let cur = mouse_snapshots_sorted();
-    if &cur == prev {
-        return;
-    }
-
-    // Format: [mouses] 1 (0.0000,0.0000) 2 (0.0000,0.0000)
-    let mut line: HString<512> = HString::new();
-    let _ = write!(&mut line, "[mouses]");
-    for (idx, s) in cur.iter().enumerate() {
-        // x/y are clamped to [0,1], so they naturally have one digit before the dot.
-        let _ = write!(&mut line, " {} ({:.4},{:.4})", idx + 1, s.x, s.y);
-    }
-    line.push('\n').ok();
-    crate::log!("{}", line.as_str());
-
-    *prev = cur;
-}
-
-fn tablet_snapshots_sorted() -> Vec<TabletPosSnap, MAX_HID_DEVICES> {
-    let guard = HID_RUNTIMES.lock();
-    let mut out: Vec<TabletPosSnap, MAX_HID_DEVICES> = Vec::new();
-
-    for rt in guard.iter() {
-        if rt.hid_kind != 3 {
-            continue;
-        }
-        let _ = out.push(TabletPosSnap {
-            controller_id: rt.controller_id,
-            slot_id: rt.slot_id,
-            ep_target: rt.ep_target,
-            x: rt.tablet_x,
-            y: rt.tablet_y,
-        });
-    }
-
-    let n = out.len();
-    let mut i = 0usize;
-    while i < n {
-        let mut j = i + 1;
-        while j < n {
-            let a = out[i];
-            let b = out[j];
-            let swap = (b.controller_id, b.slot_id, b.ep_target)
-                < (a.controller_id, a.slot_id, a.ep_target);
-            if swap {
-                out[i] = b;
-                out[j] = a;
-            }
-            j += 1;
-        }
-        i += 1;
+        let _ = out.push((rt.mouse_x, rt.mouse_y));
     }
     out
 }
 
-fn log_tablet_positions_if_changed(prev: &mut Vec<TabletPosSnap, MAX_HID_DEVICES>) {
-    let cur = tablet_snapshots_sorted();
-    if &cur == prev {
-        return;
-    }
-
-    let mut line: HString<512> = HString::new();
-    let _ = write!(&mut line, "[tablets]");
-    for (idx, s) in cur.iter().enumerate() {
-        let _ = write!(&mut line, " {} ({:.4},{:.4})", idx + 1, s.x, s.y);
-    }
-    line.push('\n').ok();
-    crate::log!("{}", line.as_str());
-
-    *prev = cur;
-}
-
-/// Call `f(x, y)` for each currently-registered HID mouse runtime.
-///
-/// `x`/`y` are normalized to [0,1].
-pub fn for_each_mouse_cursor(mut f: impl FnMut(f64, f64)) {
-    let guard = HID_RUNTIMES.lock();
-    for rt in guard.iter() {
-        if rt.hid_kind != 2 {
-            continue;
-        }
-        f(rt.mouse_x, rt.mouse_y);
-    }
-}
-
-/// Call `f(x, y)` for each currently-registered HID tablet runtime.
-///
-/// `x`/`y` are normalized to [0,1].
 pub fn for_each_tablet_cursor(mut f: impl FnMut(f64, f64)) {
     let guard = HID_RUNTIMES.lock();
     for rt in guard.iter() {
@@ -351,32 +202,26 @@ pub fn for_each_tablet_cursor(mut f: impl FnMut(f64, f64)) {
     }
 }
 
+pub fn tablet_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
+    let guard = HID_RUNTIMES.lock();
+    let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
+    for rt in guard.iter() {
+        if rt.hid_kind != 3 {
+            continue;
+        }
+        let _ = out.push((rt.tablet_x, rt.tablet_y));
+    }
+    out
+}
+
 impl Default for MouseRing {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// Local switch to silence noisy HID debug output.
-pub(crate) const HID_LOGS: bool = false;
-
-// When HID_LOGS is enabled, do not log every interrupt-IN packet: many HID
-// devices report at 125-1000Hz even when idle. Sample once per 256 packets.
-pub(crate) const HID_LOG_SAMPLE_MASK: u64 = 0xFF;
-
-// Additional guardrail: even sampled logs can be too chatty when multiple HID
-// endpoints are present. Limit "chatter" logs (raw packet dumps, requeue/doorbell)
-// to at most one line per period globally.
-pub(crate) const HID_LOG_CHATTER_PERIOD_MS: u64 = 250;
-
-#[inline]
-pub(crate) fn hid_log_sample(seq: u64) -> bool {
-    (seq & HID_LOG_SAMPLE_MASK) == 0
-}
-
 #[inline]
 fn hid_uptime_ms() -> u64 {
-    // Convert driver ticks to ms, like other subsystems (net) do.
     let ticks = embassy_time_driver::now() as u128;
     let hz = TICK_HZ as u128;
     if hz == 0 {
@@ -386,66 +231,20 @@ fn hid_uptime_ms() -> u64 {
     }
 }
 
-static HID_CHATTER_LAST_MS: AtomicU64 = AtomicU64::new(0);
-static HID_CHATTER_SUPPRESSED: AtomicU32 = AtomicU32::new(0);
-
-/// Returns true when it's OK to emit very-noisy, high-rate HID debug logs.
-///
-/// This is intentionally global (not per-device) to keep overall console output
-/// usable even when multiple endpoints are active.
-#[inline]
-pub(crate) fn hid_log_allow_chatter(seq: u64) -> bool {
-    if !HID_LOGS {
-        return false;
-    }
-    if !hid_log_sample(seq) {
-        return false;
-    }
-
-    let now_ms = hid_uptime_ms();
-    let last = HID_CHATTER_LAST_MS.load(Ordering::Relaxed);
-    if now_ms.saturating_sub(last) < HID_LOG_CHATTER_PERIOD_MS {
-        HID_CHATTER_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-        return false;
-    }
-    HID_CHATTER_LAST_MS.store(now_ms, Ordering::Relaxed);
-
-    // Best-effort: occasionally surface suppression count to indicate rate limiting.
-    let suppressed = HID_CHATTER_SUPPRESSED.swap(0, Ordering::Relaxed);
-    if suppressed != 0 {
-        crate::log!("[hid] (chatter) suppressed {} logs\n", suppressed);
-    }
-    true
-}
-
-macro_rules! hidlog {
-    ($($arg:tt)*) => {{
-        if HID_LOGS {
-            crate::log!($($arg)*);
-        }
-    }};
-}
-
 #[inline]
 fn hid_kbd_shift(modifiers: u8) -> bool {
-    // HID boot keyboard modifier bits:
-    // 0 LCtrl, 1 LShift, 2 LAlt, 3 LGUI, 4 RCtrl, 5 RShift, 6 RAlt, 7 RGUI
     (modifiers & ((1 << 1) | (1 << 5))) != 0
 }
 
 #[inline]
 fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
-    // Minimal US layout mapping for HID Usage Page 0x07 (Keyboard/Keypad).
-    // This is *not* a Unicode keyboard decoder; it just produces ASCII for common keys.
     match key {
-        // a-z
         0x04..=0x1D => {
             let base = (key - 0x04) + b'a';
             let ch = base as char;
             Some(if shift { ch.to_ascii_uppercase() } else { ch })
         }
 
-        // 1-0
         0x1E => Some(if shift { '!' } else { '1' }),
         0x1F => Some(if shift { '@' } else { '2' }),
         0x20 => Some(if shift { '#' } else { '3' }),
@@ -457,10 +256,8 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
         0x26 => Some(if shift { '(' } else { '9' }),
         0x27 => Some(if shift { ')' } else { '0' }),
 
-        // space
         0x2C => Some(' '),
 
-        // punctuation
         0x2D => Some(if shift { '_' } else { '-' }),
         0x2E => Some(if shift { '+' } else { '=' }),
         0x2F => Some(if shift { '{' } else { '[' }),
@@ -477,23 +274,6 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
     }
 }
 
-fn kbd_debug_ascii(keys: &[u8; 6], modifiers: u8) -> HString<16> {
-    let shift = hid_kbd_shift(modifiers);
-    let mut out: HString<16> = HString::new();
-    for &k in keys.iter() {
-        if k == 0 {
-            continue;
-        }
-        if let Some(ch) = hid_boot_keycode_to_ascii(k, shift) {
-            // Keep logs one-line: don't emit control characters.
-            if ch.is_ascii_graphic() || ch == ' ' {
-                let _ = out.push(ch);
-            }
-        }
-    }
-    out
-}
-
 pub struct HidEpInfo {
     pub configuration: u8,
     pub interface: u8,
@@ -507,6 +287,8 @@ pub struct HidEpInfo {
 pub struct HidRuntime {
     pub controller_id: usize,
     pub ep: HidEpInfo,
+
+    pub report_desc: Vec<u8, MAX_REPORT_DESC>,
     pub report_phys: u64,
     pub report_virt: *mut u8,
     pub report_len: u32,
@@ -519,7 +301,6 @@ pub struct HidRuntime {
 
     mouse_ring: MouseRing,
 
-    // Normalized cursor position in [0,1]. Stored per HID mouse runtime.
     mouse_x: f64,
     mouse_y: f64,
 
@@ -537,8 +318,6 @@ const MAX_BOOT_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
 
 pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
-    // Boot protocols: 1=keyboard, 2=mouse.
-    // Tablets are detected separately (currently via VID:PID) and assigned kind=3.
     match protocol {
         1 => 1,
         2 => 2,
@@ -547,8 +326,6 @@ pub fn hid_kind_from_protocol(protocol: u8) -> u8 {
 }
 
 pub fn register_runtime(runtime: HidRuntime) {
-    // Signal v-layer readiness once we have a boot keyboard runtime.
-    // These flags are monotonic (set-only) by design.
     let claimed_flags = match runtime.hid_kind {
         1 => crate::v::readiness::HID_KEYBOARD_CLAIMED,
         _ => 0,
@@ -605,32 +382,11 @@ where
 pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], residual: u32) {
     runtime.seq = runtime.seq.wrapping_add(1);
 
-    // Log only when something is interesting (movement, buttons, keys) or when
-    // we hit a sampling point. This keeps HID_LOGS usable in practice.
-    let sample = hid_log_allow_chatter(runtime.seq);
-
     if runtime.hid_kind == 1 {
-        // Boot keyboard: modifiers + 6 keycodes
         if data.len() >= 8 {
             let modifiers = data[0];
             let mut keys = [0u8; 6];
             keys.copy_from_slice(&data[2..8]);
-
-            let interesting = modifiers != 0 || keys.iter().any(|&k| k != 0);
-            if HID_LOGS && (interesting || sample) {
-                hidlog!(
-                    "[hid] interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X} data={:02X?}\n",
-                    runtime.slot_id,
-                    completion,
-                    residual,
-                    data.len(),
-                    runtime.ep.address,
-                    runtime.hid_kind,
-                    runtime.seq,
-                    lo(runtime.report_phys),
-                    data
-                );
-            }
 
             let shift = hid_kbd_shift(modifiers);
             let mut ascii = [0u8; 6];
@@ -645,18 +401,6 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             }
             if keys.iter().any(|&k| k != 0) || modifiers != 0 {
                 runtime.last_nonzero_seq = runtime.seq;
-                let chars = kbd_debug_ascii(&keys, modifiers);
-                hidlog!(
-                    "[kbd] mods=0x{:02X} keys={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} chars='{}'\n",
-                    modifiers,
-                    keys[0],
-                    keys[1],
-                    keys[2],
-                    keys[3],
-                    keys[4],
-                    keys[5],
-                    chars
-                );
             }
             input::push_event(input::InputEvent::Keyboard(input::KeyboardEvent {
                 slot_id: runtime.slot_id,
@@ -666,25 +410,19 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             }));
         }
     } else if runtime.hid_kind == 2 {
-        // Boot Mouse: store into per-device ring for future consumers.
-        // Do not emit InputEvent::Mouse or log here.
         let _ = completion;
         let _ = residual;
-
-        // Clean path: 4-byte boot mouse only: [Buttons, dx, dy, wheel].
         if data.len() >= 4 {
             let buttons = data[0];
             let dx = i8::from_le_bytes([data[1]]);
             let dy = i8::from_le_bytes([data[2]]);
             let wheel = i8::from_le_bytes([data[3]]);
 
-            // Update per-device normalized cursor position (clamped to [0,1]).
             if dx != 0 || dy != 0 {
                 runtime.mouse_x = clamp01(runtime.mouse_x + (dx as f64) * HID_MOUSE_NORM_PER_DELTA);
                 runtime.mouse_y = clamp01(runtime.mouse_y + (dy as f64) * HID_MOUSE_NORM_PER_DELTA);
             }
 
-            // Store raw samples at device rate.
             runtime.mouse_ring.push(TrueosHidMouseSample {
                 t_ms: hid_uptime_ms() as u32,
                 seq: runtime.seq as u32,
@@ -693,11 +431,10 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 dx,
                 dy,
                 wheel,
-                flags: 1 << 0, // has_wheel
+                flags: 1 << 0,
             });
         }
     } else if runtime.hid_kind == 3 {
-        // HID tablet (absolute): decimate to avoid high-rate spam.
         let _ = completion;
         let _ = residual;
 
@@ -707,15 +444,83 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
         }
         runtime.tablet_last_sample_ms = now_ms;
 
-        // QEMU usb-tablet commonly reports: [buttons, x_lo, x_hi, y_lo, y_hi, ...]
         if data.len() >= 5 {
-            let buttons = data[0];
-            let x = u16::from_le_bytes([data[1], data[2]]);
-            let y = u16::from_le_bytes([data[3], data[4]]);
+            #[derive(Copy, Clone)]
+            struct Cand {
+                buttons: u8,
+                x: u16,
+                y: u16,
+            }
 
-            // Map to [0,1] using the known QEMU tablet range.
-            let xf = (x as f64) / (HID_TABLET_ABS_MAX as f64);
-            let yf = (y as f64) / (HID_TABLET_ABS_MAX as f64);
+            let mk = |buttons: u8, x: u16, y: u16| Cand { buttons, x, y };
+
+            let mut best: Option<(Cand, u8)> = None;
+
+            let score = |c: Cand| -> u8 {
+                let mut s = 0u8;
+                if (c.buttons & 0xE0) == 0 {
+                    s = s.saturating_add(2);
+                }
+                if c.x != 0 || c.y != 0 {
+                    s = s.saturating_add(3);
+                }
+                if (c.x as u32) <= HID_TABLET_ABS_MAX && (c.y as u32) <= HID_TABLET_ABS_MAX {
+                    s = s.saturating_add(1);
+                }
+                s
+            };
+
+            let mut consider = |c: Cand| {
+                let s = score(c);
+                if best.map(|(_, bs)| s > bs).unwrap_or(true) {
+                    best = Some((c, s));
+                }
+            };
+
+            let c1 = mk(
+                data[0],
+                u16::from_le_bytes([data[1], data[2]]),
+                u16::from_le_bytes([data[3], data[4]]),
+            );
+            consider(c1);
+
+            if data.len() >= 6 {
+                let c2 = mk(
+                    data[1],
+                    u16::from_le_bytes([data[2], data[3]]),
+                    u16::from_le_bytes([data[4], data[5]]),
+                );
+                consider(c2);
+
+                let c3 = mk(
+                    data[5],
+                    u16::from_le_bytes([data[1], data[2]]),
+                    u16::from_le_bytes([data[3], data[4]]),
+                );
+                consider(c3);
+            }
+
+            let (cand, _cand_score) = best.unwrap_or((c1, 0));
+            let buttons = cand.buttons;
+            let x = cand.x;
+            let y = cand.y;
+
+            if x == 0
+                && y == 0
+                && runtime.seq <= 4
+                && (runtime.tablet_x - 0.5).abs() < 0.0001
+                && (runtime.tablet_y - 0.5).abs() < 0.0001
+            {
+                return;
+            }
+
+            let denom = if (x as u32) > HID_TABLET_ABS_MAX || (y as u32) > HID_TABLET_ABS_MAX {
+                0xFFFFu32
+            } else {
+                HID_TABLET_ABS_MAX
+            };
+            let xf = (x as f64) / (denom as f64);
+            let yf = (y as f64) / (denom as f64);
             runtime.tablet_x = clamp01(xf);
             runtime.tablet_y = clamp01(yf);
 
@@ -730,26 +535,11 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             });
         }
     } else {
-        // Unknown protocols.
-        // Keep optional debug visibility for unexpected protocols.
-        if HID_LOGS && sample {
-            hidlog!(
-                "[hid] ignoring interrupt IN slot={} cc={} rem={} len={} ep=0x{:02X} proto={} seq={} phys=0x{:08X}\n",
-                runtime.slot_id,
-                completion,
-                residual,
-                data.len(),
-                runtime.ep.address,
-                runtime.hid_kind,
-                runtime.seq,
-                lo(runtime.report_phys)
-            );
-        }
+        let _ = completion;
+        let _ = residual;
     }
 }
 
-// C-ABI: drain up to N high-rate mouse samples from a specific HID runtime.
-// This is intentionally separate from the normal input queue.
 #[no_mangle]
 pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
     controller_id: u32,
@@ -821,7 +611,6 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
     }
 }
 
-// C-ABI: drain up to N decimated tablet samples from a specific HID runtime.
 #[no_mangle]
 pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
     controller_id: u32,
@@ -895,58 +684,11 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
 
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
-    async move {
-        let mut prev_mouse: Vec<MousePosSnap, MAX_HID_DEVICES> = Vec::new();
-        let mut prev_tablet: Vec<TabletPosSnap, MAX_HID_DEVICES> = Vec::new();
-        let mut last_mouse_log = hid_uptime_ms();
-
-        loop {
-            if let Some(evt) = input::pop_event() {
-                match evt {
-                    input::InputEvent::Keyboard(kbd) => {
-                        if kbd.modifiers != 0 || kbd.keys.iter().any(|&c| c != 0) {
-                            let show = |b: u8| -> char {
-                                if b == 0 {
-                                    '.'
-                                } else if (b as char).is_ascii_graphic() || b == b' ' {
-                                    b as char
-                                } else {
-                                    '?'
-                                }
-                            };
-                            crate::log!(
-                                "[keybd] [{}] mods=0x{:02X} [{}][{}][{}][{}][{}][{}]\n",
-                                kbd.slot_id,
-                                kbd.modifiers,
-                                show(kbd.ascii[0]),
-                                show(kbd.ascii[1]),
-                                show(kbd.ascii[2]),
-                                show(kbd.ascii[3]),
-                                show(kbd.ascii[4]),
-                                show(kbd.ascii[5])
-                            );
-                        }
-                    }
-                    input::InputEvent::Mouse(_mouse) => {
-                        // Mouse is intentionally ignored; keep the queue draining so it can't grow.
-                    }
-                }
-            } else {
-                Timer::after(EmbassyDuration::from_millis(5)).await;
-            }
-
-            let now = hid_uptime_ms();
-            if now.saturating_sub(last_mouse_log) >= MOUSE_POS_LOG_PERIOD_MS {
-                log_mouse_positions_if_changed(&mut prev_mouse);
-                log_tablet_positions_if_changed(&mut prev_tablet);
-                last_mouse_log = now;
-            }
-        }
+    loop {
+        while input::pop_event().is_some() {}
+        Timer::after(EmbassyDuration::from_millis(5)).await;
     }
-    .await;
 }
-
-// NOTE: No synthetic HID injections; reports now only reflect real device data.
 
 pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
     let mut idx = 0usize;
@@ -982,7 +724,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                 }
             }
             0x21 => {
-                // HID descriptor: extract report descriptor length for the current interface.
                 if len >= 9 {
                     current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
                 }
@@ -1002,11 +743,6 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                                     .iter()
                                     .any(|e| e.interface == iface && e.address == ep_addr)
                                 {
-                                    hidlog!(
-                                        "[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n",
-                                        iface,
-                                        ep_addr
-                                    );
                                 } else if endpoints
                                     .push(HidEpInfo {
                                         configuration: config_value,
@@ -1019,22 +755,7 @@ pub fn parse_boot_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_INTERFACES> {
                                     })
                                     .is_err()
                                 {
-                                    hidlog!(
-                                        "[hid] HID endpoint list full, dropping iface={} addr=0x{:02X}\n",
-                                        iface,
-                                        ep_addr
-                                    );
                                 } else {
-                                    hidlog!(
-                                        "[hid] parse ep iface={} addr=0x{:02X} mps={} interval={} cfg={} subclass={} proto={}\n",
-                                        iface,
-                                        ep_addr,
-                                        max_packet,
-                                        interval,
-                                        config_value,
-                                        subclass,
-                                        proto
-                                    );
                                 }
                             }
                         }
@@ -1083,31 +804,24 @@ pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_I
                 }
             }
             0x21 => {
-                // HID descriptor: extract report descriptor length for the current interface.
                 if len >= 9 {
                     current_report_len = u16::from_le_bytes([cfg[idx + 7], cfg[idx + 8]]);
                 }
             }
             5 => {
                 if let Some(iface) = current_iface {
-                    // Only claim HID interfaces.
                     if current_alt == 0 && current_class == 0x03 {
                         if len >= 7 {
                             let ep_addr = cfg[idx + 2];
                             let attrs = cfg[idx + 3];
                             let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
                             let interval = cfg[idx + 6];
-                            // Interrupt IN
+
                             if (attrs & 0x3) == 0x3 && (ep_addr & 0x80) != 0 {
                                 if endpoints
                                     .iter()
                                     .any(|e| e.interface == iface && e.address == ep_addr)
                                 {
-                                    hidlog!(
-                                        "[hid] skipping duplicate HID ep iface={} addr=0x{:02X}\n",
-                                        iface,
-                                        ep_addr
-                                    );
                                 } else if endpoints
                                     .push(HidEpInfo {
                                         configuration: config_value,
@@ -1120,22 +834,7 @@ pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_BOOT_I
                                     })
                                     .is_err()
                                 {
-                                    hidlog!(
-                                        "[hid] HID endpoint list full, dropping iface={} addr=0x{:02X}\n",
-                                        iface,
-                                        ep_addr
-                                    );
                                 } else {
-                                    hidlog!(
-                                        "[hid] parse hid ep iface={} addr=0x{:02X} mps={} interval={} cfg={} proto={} rep_len={}\n",
-                                        iface,
-                                        ep_addr,
-                                        max_packet,
-                                        interval,
-                                        config_value,
-                                        current_proto,
-                                        current_report_len
-                                    );
                                 }
                             }
                         }
@@ -1165,19 +864,16 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     } = params;
 
     if cfg.is_empty() {
-        hidlog!("[hid] empty configuration descriptor\n");
         return Err(());
     }
 
     let endpoints = parse_hid_interrupt_in_endpoints(cfg);
     if endpoints.is_empty() {
-        hidlog!("[hid] no HID interrupt IN endpoints found\n");
         return Err(());
     }
 
     let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
 
-    // SET_CONFIGURATION
     let setup_cfg = Trb {
         d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
         d1: 0,
@@ -1191,7 +887,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        hidlog!("usb: ep0 ring overflow for set_configuration\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -1210,7 +905,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     )
     .await
     else {
-        hidlog!("usb: timeout waiting for set-configuration\n");
         return Err(());
     };
 
@@ -1223,44 +917,41 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         .map(|(vid, pid)| vid == 0x0627 && pid == 0x0001)
         .unwrap_or(false);
 
-    // Best-effort: idle/protocol setup (works for many HID devices; errors ignored)
-    for ep in endpoints.iter() {
-        let _ =
-            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0B, 0, ep.interface as u16).await;
-        let _ =
-            class_request_nodata(ctx, &mut *ep0_ring, slot_id, 0x0A, 0, ep.interface as u16).await;
-    }
-
     let mut attached = 0usize;
     for ep in endpoints.into_iter() {
-        // Do not claim boot-mouse protocol interfaces at this layer.
-        // if ep.protocol == 2 {
-        //     hidlog!(
-        //         "usb: hid(generic) skipping mouse iface={} ep=0x{:02X}\n",
-        //         ep.interface,
-        //         ep.address
-        //     );
-        //     continue;
-        // }
-        hidlog!(
-            "usb: hid(generic) ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
-            ep.address,
-            ep.max_packet,
-            ep.interval,
-            ep.interface,
-            ep.configuration,
-            ep.protocol
-        );
-
         let mut hid_kind = hid_kind_from_protocol(ep.protocol);
         if is_qemu_tablet {
-            hid_kind = 3;
+            hid_kind = if ep.protocol == 1 { 1 } else { 3 };
         }
+
+        let want_desc_len = if ep.report_desc_len != 0 {
+            ep.report_desc_len as usize
+        } else {
+            HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN
+        };
+        let report_desc = match fetch_report_descriptor(
+            ctx,
+            &mut *ep0_ring,
+            slot_id,
+            ep.interface,
+            want_desc_len,
+        )
+        .await
+        {
+            Ok(desc) => {
+                if desc.is_empty() {
+                    continue;
+                }
+                desc
+            }
+            Err(_err) => {
+                continue;
+            }
+        };
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc ep ring\n");
                 continue;
             }
         };
@@ -1270,7 +961,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc input ctx for cfg-ep\n");
                 continue;
             }
         };
@@ -1302,13 +992,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             write_volatile(slot_ctx.add(1), dw1);
 
             let mps = (ep.max_packet as u32) & 0x7FF;
-            // Force 2kHz polling (0.5ms) for High Speed to satisfy Nyquist for 1kHz devices.
-            // For Full Speed, we cap at the hardware limit of 1kHz (1ms).
-            let interval = if speed_code == 3 {
-                3 // 2^(3-1)*125us = 4*125us = 500us (2kHz)
-            } else {
-                1 // 1ms (1kHz) - Limit for FS/LS
-            };
+            let interval = if speed_code == 3 { 3 } else { 1 };
 
             write_volatile(
                 ep_ctx.add(0),
@@ -1352,24 +1036,12 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc report buffer\n");
                 continue;
             }
         };
         unsafe { write_bytes(rep_virt, 0, report_bytes) };
 
         let report_len = ep.max_packet as u32;
-
-        if ep.report_desc_len > 0 {
-            let _ = fetch_report_descriptor(
-                ctx,
-                &mut *ep0_ring,
-                slot_id,
-                ep.interface,
-                ep.report_desc_len as usize,
-            )
-            .await;
-        }
 
         let normal = Trb {
             d0: lo(rep_phys),
@@ -1378,7 +1050,6 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             d3: trb_type(1) | (1 << 5),
         };
         if !ep_ring.push(normal) {
-            hidlog!("usb: ep ring full before interrupt IN\n");
             continue;
         }
         unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
@@ -1386,6 +1057,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
             ep,
+            report_desc,
             report_phys: rep_phys,
             report_virt: rep_virt,
             report_len,
@@ -1395,9 +1067,11 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
+
             mouse_ring: MouseRing::new(),
             mouse_x: 0.5,
             mouse_y: 0.5,
+
             tablet_ring: TabletRing::new(),
             tablet_x: 0.5,
             tablet_y: 0.5,
@@ -1434,17 +1108,13 @@ async fn fetch_control_in(
     let (phys, virt) = dma::alloc(want_len, 64).ok_or(FetchReportError::Alloc)?;
     unsafe { write_bytes(virt, 0, want_len) };
 
-    // xHCI Setup Stage TRB encodes an 8-byte USB setup packet in d0/d1.
-    // d0: bmRequestType | (bRequest<<8) | (wValue<<16)
-    // d1: wIndex | (wLength<<16)
-    // d2: transfer length (8) and TRT bits (IN=2)
     let w_length = want_len as u16;
     let setup_d1 = (setup_d1 & 0xFFFF) | ((w_length as u32) << 16);
 
     let setup = Trb {
         d0: setup_d0,
         d1: setup_d1,
-        d2: 8 | (2 << 16), // 8-byte setup, TRT=IN
+        d2: 8 | (2 << 16),
         d3: trb_type(2) | (1 << 6),
     };
 
@@ -1452,14 +1122,14 @@ async fn fetch_control_in(
         d0: lo(phys),
         d1: hi(phys),
         d2: want_len as u32,
-        d3: trb_type(3) | (1 << 16), // IN data stage
+        d3: trb_type(3) | (1 << 16),
     };
 
     let status = Trb {
         d0: 0,
         d1: 0,
         d2: 0,
-        // Status stage for IN data is OUT (DIR=0)
+
         d3: trb_type(4) | (1 << 5),
     };
 
@@ -1490,8 +1160,6 @@ async fn fetch_control_in(
                 return false;
             }
 
-            // EP0 completions may show up on endpoint ID 1 (EP0 OUT) or 2 (EP0 IN)
-            // depending on controller behavior.
             let evt_target = (evt.d3 >> 16) & 0x1F;
             if evt_target != 1 && evt_target != 2 {
                 return false;
@@ -1503,7 +1171,7 @@ async fn fetch_control_in(
                 || evt_ptr == (data_trb_phys & !0xFu64)
                 || evt_ptr == (status_trb_phys & !0xFu64)
         },
-        400,
+        1,
         EmbassyDuration::from_millis(5),
     )
     .await
@@ -1513,7 +1181,7 @@ async fn fetch_control_in(
     };
 
     let completion = ((evt.d2 >> 24) & 0xFF) as u8;
-    // CC=13 is normal Short Packet (common for descriptor reads).
+
     if completion != 1 && completion != 13 {
         dma::dealloc(virt, want_len);
         return Err(FetchReportError::Completion(completion));
@@ -1537,8 +1205,6 @@ pub(crate) async fn fetch_report_descriptor(
     iface: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    // bmRequestType=IN|Standard|Interface, bRequest=GET_DESCRIPTOR,
-    // wValue=(REPORT<<8)|0, wIndex=interface.
     let setup_d0 = (0x81u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
     let setup_d1 = iface as u32;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
@@ -1550,8 +1216,6 @@ pub(crate) async fn fetch_report_descriptor_device(
     slot_id: u32,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    // bmRequestType=IN|Standard|Device, bRequest=GET_DESCRIPTOR,
-    // wValue=(REPORT<<8)|0, wIndex=0.
     let setup_d0 = (0x80u32) | ((0x06u32) << 8) | ((0x22u32) << 16);
     let setup_d1 = 0;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await
@@ -1566,8 +1230,6 @@ pub(crate) async fn fetch_hid_get_report(
     report_id: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    // bmRequestType=IN|Class|Interface, bRequest=GET_REPORT (0x01),
-    // wValue=(report_type<<8)|report_id, wIndex=interface.
     let setup_d0 =
         (0xA1u32) | ((0x01u32) << 8) | (((report_type as u32) << 8) | (report_id as u32)) << 16;
     let setup_d1 = iface as u32;
@@ -1575,24 +1237,14 @@ pub(crate) async fn fetch_hid_get_report(
 }
 
 pub(crate) fn log_report_descriptor(slot_id: u32, iface: u8, desc: &[u8]) {
-    crate::log!(
-        "usb: hid report descriptor slot={} iface={} len={}\n",
-        slot_id,
-        iface,
-        desc.len()
-    );
+    let _ = slot_id;
+    let _ = iface;
+    let _ = desc;
+}
 
-    let mut idx: usize = 0;
-    while idx < desc.len() {
-        let end = core::cmp::min(idx + 16, desc.len());
-        crate::log!(
-            "usb: hid report desc {:03}..{:03} {:02X?}\n",
-            idx,
-            end.saturating_sub(1),
-            &desc[idx..end]
-        );
-        idx = end;
-    }
+pub(crate) fn hid_log_allow_chatter(seq: u64) -> bool {
+    let _ = seq;
+    false
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -1608,10 +1260,6 @@ struct HidGlobalState {
     report_id: u8,
 }
 
-/// Best-effort parse of a HID report descriptor to find an Output report format.
-///
-/// This intentionally handles only the subset needed for simple vendor LED devices:
-/// Report Size, Report Count, Report ID, and Main Output items.
 pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportFormat> {
     let mut idx: usize = 0;
     let mut state = HidGlobalState {
@@ -1622,7 +1270,6 @@ pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportF
     let mut stack: [HidGlobalState; 4] = [HidGlobalState::default(); 4];
     let mut sp: usize = 0;
 
-    // Track the largest Output report payload size per report ID.
     let mut best_id: u8 = 0;
     let mut best_payload_bytes: u16 = 0;
 
@@ -1631,12 +1278,11 @@ pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportF
         idx += 1;
 
         if b == 0xFE {
-            // Long item: [0xFE, data_size, long_tag, data...]
             if idx + 2 > desc.len() {
                 break;
             }
             let data_size = desc[idx] as usize;
-            idx += 2; // skip size + long_tag
+            idx += 2;
             idx = idx.saturating_add(data_size);
             continue;
         }
@@ -1663,37 +1309,29 @@ pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportF
         idx += data_size;
 
         match (item_type, tag) {
-            // Global items.
             (1, 7) => {
-                // Report Size (bits)
                 state.report_size_bits = value_u32;
             }
             (1, 9) => {
-                // Report Count
                 state.report_count = value_u32;
             }
             (1, 8) => {
-                // Report ID
                 state.report_id = (value_u32 & 0xFF) as u8;
             }
             (1, 10) => {
-                // Push
                 if sp < stack.len() {
                     stack[sp] = state;
                     sp += 1;
                 }
             }
             (1, 11) => {
-                // Pop
                 if sp > 0 {
                     sp -= 1;
                     state = stack[sp];
                 }
             }
 
-            // Main items.
             (0, 9) => {
-                // Output
                 let bits = state.report_size_bits.saturating_mul(state.report_count);
                 if bits == 0 {
                     continue;
@@ -1718,58 +1356,6 @@ pub(crate) fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportF
         report_id: best_id,
         total_len_bytes,
     })
-}
-
-fn analyze_keyboard_report_descriptor(desc: &[u8]) -> Option<(Option<u8>, u16)> {
-    // Heuristic: look for Input items on Usage Page 0x07 with report_size=1 and report_count>=8.
-    let mut idx = 0usize;
-    let mut usage_page: u16 = 0;
-    let mut report_size: u16 = 0;
-    let mut report_count: u16 = 0;
-    let mut report_id: Option<u8> = None;
-    let mut best_bits: u16 = 0;
-
-    while idx < desc.len() {
-        let b = desc[idx];
-        let size = (b & 0x03) as usize;
-        let kind = (b >> 2) & 0x03;
-        let tag = b & 0xFC;
-        let mut val: u32 = 0;
-        for i in 0..size {
-            if idx + 1 + i < desc.len() {
-                val |= (desc[idx + 1 + i] as u32) << (8 * i);
-            }
-        }
-
-        if kind == 1 {
-            // Global items
-            match tag {
-                0x04 => usage_page = val as u16,
-                0x07 => report_size = val as u16,
-                0x09 => report_count = val as u16,
-                0x08 => report_id = Some(val as u8),
-                _ => {}
-            }
-        } else if kind == 0 {
-            // Main items
-            if tag == 0x80 {
-                if usage_page == 0x07 && report_size == 1 && report_count >= 8 {
-                    let bits = report_size.saturating_mul(report_count);
-                    if bits > best_bits {
-                        best_bits = bits;
-                    }
-                }
-            }
-        }
-
-        idx += 1 + size;
-    }
-
-    if best_bits > 0 {
-        Some((report_id, best_bits))
-    } else {
-        None
-    }
 }
 
 pub struct BootAttachParams<'a> {
@@ -1800,13 +1386,11 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     } = params;
 
     if cfg.is_empty() {
-        hidlog!("[hid] empty configuration descriptor\n");
         return Err(());
     }
 
     let endpoints = parse_boot_endpoints(cfg);
     if endpoints.is_empty() {
-        hidlog!("[hid] no HID boot interrupt IN endpoints found\n");
         return Err(());
     }
 
@@ -1815,7 +1399,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     let setup_cfg = Trb {
         d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
         d1: 0,
-        // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
+
         d2: 8,
         d3: trb_type(2) | (1 << 6),
     };
@@ -1823,11 +1407,10 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         d0: 0,
         d1: 0,
         d2: 0,
-        // Status Stage TRB: DIR=1 (IN) for no-data control transfers
+
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup_cfg) || !ep0_ring.push(status_cfg) {
-        hidlog!("usb: ep0 ring overflow for set_configuration\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -1846,7 +1429,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     )
     .await
     else {
-        hidlog!("usb: timeout waiting for set-configuration\n");
         return Err(());
     };
 
@@ -1869,33 +1451,39 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
     let mut attached = 0usize;
 
     for ep in endpoints.into_iter() {
-        // parse_boot_endpoints already filters to boot keyboard, but keep a guardrail.
-        // if ep.protocol == 2 {
-        //     hidlog!(
-        //         "usb: hid(boot) skipping mouse iface={} ep=0x{:02X}\n",
-        //         ep.interface,
-        //         ep.address
-        //     );
-        //     continue;
-        // }
-        hidlog!(
-            "usb: hid ep addr=0x{:02X} maxpkt={} interval={} iface={} cfg={} proto={}\n",
-            ep.address,
-            ep.max_packet,
-            ep.interval,
-            ep.interface,
-            ep.configuration,
-            ep.protocol
-        );
         let mut hid_kind = hid_kind_from_protocol(ep.protocol);
         if is_qemu_tablet {
-            hid_kind = 3;
+            hid_kind = if ep.protocol == 1 { 1 } else { 3 };
         }
+
+        let want_desc_len = if ep.report_desc_len != 0 {
+            ep.report_desc_len as usize
+        } else {
+            HID_QEMU_TABLET_REPORT_DESC_FALLBACK_LEN
+        };
+        let report_desc = match fetch_report_descriptor(
+            ctx,
+            &mut *ep0_ring,
+            slot_id,
+            ep.interface,
+            want_desc_len,
+        )
+        .await
+        {
+            Ok(desc) => {
+                if desc.is_empty() {
+                    continue;
+                }
+                desc
+            }
+            Err(_err) => {
+                continue;
+            }
+        };
 
         let (ep_ring_phys, ep_ring_virt) = match dma::alloc(32 * size_of::<Trb>(), 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc ep ring\n");
                 continue;
             }
         };
@@ -1905,16 +1493,15 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         let (input_cfg_phys, input_cfg_virt) = match dma::alloc(4096, 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc input ctx for cfg-ep\n");
                 continue;
             }
         };
         unsafe { write_bytes(input_cfg_virt, 0, 4096) };
 
         let ep_target = endpoint_target(ep.address);
-        // Input context array index (slot=1, ep0=2, ep1out=3, ep1in=4, ...)
+
         let ep_ctx_index = context_index(ep.address);
-        // Add Context Flags bit index (slot=0, ep0=1, ep1out=2, ep1in=3, ...)
+
         let ep_add_bit = ep_ctx_index - 1;
 
         unsafe {
@@ -1931,8 +1518,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             }
 
             let mut dw0 = read_volatile(slot_ctx.add(0));
-            // Context Entries = highest valid endpoint context index in *device* context
-            // (slot=0, ep0=1, ep1out=2, ep1in=3, ...), which corresponds to (ep_ctx_index - 1).
+
             dw0 = (dw0 & !(0x1F << 27)) | (ep_add_bit << 27);
             write_volatile(slot_ctx.add(0), dw0);
 
@@ -1941,13 +1527,8 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             write_volatile(slot_ctx.add(1), dw1);
 
             let mps = (ep.max_packet as u32) & 0x7FF;
-            // Force 2kHz polling (0.5ms) for High Speed to satisfy Nyquist for 1kHz devices.
-            // For Full Speed, we cap at the hardware limit of 1kHz (1ms).
-            let interval = if speed_code == 3 {
-                3 // 2^(3-1)*125us = 4*125us = 500us (2kHz)
-            } else {
-                1 // 1ms (1kHz) - Limit for FS/LS
-            };
+
+            let interval = if speed_code == 3 { 3 } else { 1 };
 
             write_volatile(
                 ep_ctx.add(0),
@@ -1957,14 +1538,11 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             ep_cfg |= ep_type_bits(EP_TYPE_INT_IN);
             ep_cfg |= ep_max_packet_bits(mps);
             write_volatile(ep_ctx.add(1), ep_cfg);
-            // Set dequeue pointer with the current ring cycle bit (DCS) set.
-            // Using the raw phys address would leave DCS cleared and the host would
-            // ignore our queued transfer ring.
+
             let dq = ep_ring.dequeue_ptr();
             write_volatile(ep_ctx.add(2), lo(dq));
             write_volatile(ep_ctx.add(3), hi(dq));
 
-            // Use the endpoint's packet size consistently for scheduling hints.
             let avg_trb_len = mps;
             let max_esit_payload = mps;
             write_volatile(
@@ -1998,7 +1576,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         let (rep_phys, rep_virt) = match dma::alloc(report_bytes, 64) {
             Some(pair) => pair,
             None => {
-                hidlog!("usb: failed to alloc report buffer\n");
                 continue;
             }
         };
@@ -2006,45 +1583,8 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
 
         let report_len = ep.max_packet as u32;
 
-        if hid_kind == 1 && ep.report_desc_len > 0 {
-            match fetch_report_descriptor(
-                ctx,
-                &mut *ep0_ring,
-                slot_id,
-                ep.interface,
-                ep.report_desc_len as usize,
-            )
-            .await
-            {
-                Ok(desc) => {
-                    if let Some((rid, bits)) = analyze_keyboard_report_descriptor(&desc) {
-                        hidlog!(
-                            "[hid] iface={} slot={} keyboard report descriptor len={} nkro_bits={} report_id={:?}\n",
-                            ep.interface,
-                            slot_id,
-                            desc.len(),
-                            bits,
-                            rid
-                        );
-                    } else {
-                        hidlog!(
-                            "[hid] iface={} slot={} keyboard report descriptor len={} no bitmap nkro found\n",
-                            ep.interface,
-                            slot_id,
-                            desc.len()
-                        );
-                    }
-                }
-                Err(err) => {
-                    hidlog!(
-                        "[hid] report descriptor fetch failed iface={} slot={} err={:?}\n",
-                        ep.interface,
-                        slot_id,
-                        err
-                    );
-                }
-            }
-        }
+        let _ = is_qemu_tablet;
+        let _ = hid_kind;
 
         let normal = Trb {
             d0: lo(rep_phys),
@@ -2053,7 +1593,6 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
             d3: trb_type(1) | (1 << 5),
         };
         if !ep_ring.push(normal) {
-            hidlog!("usb: ep ring full before interrupt IN\n");
             continue;
         }
         unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
@@ -2061,6 +1600,7 @@ pub async fn attach_boot_devices(params: BootAttachParams<'_>) -> Result<usize, 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
             ep,
+            report_desc,
             report_phys: rep_phys,
             report_virt: rep_virt,
             report_len,
@@ -2100,7 +1640,7 @@ pub async fn class_request_nodata(
     let setup = Trb {
         d0: (0x21u32) | ((request as u32) << 8) | ((value as u32) << 16),
         d1: index as u32,
-        // Setup Stage TRB: TRB Transfer Length=8, TRT=0 (no data stage)
+
         d2: 8,
         d3: trb_type(2) | (1 << 6),
     };
@@ -2108,11 +1648,10 @@ pub async fn class_request_nodata(
         d0: 0,
         d1: 0,
         d2: 0,
-        // Status Stage TRB: DIR=1 (IN) for no-data control transfers
+
         d3: trb_type(4) | (1 << 5) | (1 << 16),
     };
     if !ep0_ring.push(setup) || !ep0_ring.push(status) {
-        hidlog!("[hid] ep0 ring overflow for class request\n");
         return Err(());
     }
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
@@ -2132,17 +1671,10 @@ pub async fn class_request_nodata(
     )
     .await
     else {
-        hidlog!("[hid] timeout waiting for class request {}\n", request);
         return Err(());
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
-    hidlog!(
-        "[hid] class req {} cc={} value=0x{:04X}\n",
-        request,
-        completion,
-        value
-    );
     if completion == 1 {
         Ok(())
     } else {

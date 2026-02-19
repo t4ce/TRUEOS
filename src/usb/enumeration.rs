@@ -1582,6 +1582,12 @@ pub(crate) async fn enumerate_with_params(
         if count == 1 && super::leds::is_supported_led_controller(dev_vid, dev_pid) {
             dump_cfg_descriptors(target_port, dev_vid, dev_pid, cfg_slice);
         }
+
+        // Targeted debug aid: dump QEMU USB tablet descriptors (0627:0001).
+        // This helps verify which interfaces/endpoints exist when tablet input behaves oddly.
+        if count == 1 && dev_vid == 0x0627 && dev_pid == 0x0001 {
+            dump_cfg_descriptors(target_port, dev_vid, dev_pid, cfg_slice);
+        }
     }
 
     // Keep the slot assigned for unclaimed devices.
