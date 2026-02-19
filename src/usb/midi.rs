@@ -509,7 +509,6 @@ async fn configure_bulk_endpoint(
         dw0 = (dw0 & !(0x1F << 27)) | ((highest_ep_ctx - 1) << 27);
         write_volatile(slot_ctx.add(0), dw0);
 
-        // Root hub port.
         let mut dw1 = read_volatile(slot_ctx.add(1));
         dw1 = (dw1 & !(0xFF << 16)) | ((target_port as u32) << 16);
         write_volatile(slot_ctx.add(1), dw1);

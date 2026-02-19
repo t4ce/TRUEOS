@@ -610,9 +610,10 @@ pub(crate) fn cmd_tlb_usb(
     }
 
     let term_width = (*ctx.term_cols).saturating_sub(2);
-    // Overhead: Ctrl(4)+Port(4)+State(10)+Speed(8)+Device(12)+VID:PID(11) + 6*2 padding = 49 + 12 = 61
-    let overhead = 4 + 4 + 10 + 8 + 12 + 11 + 12;
-    let details_width = term_width.saturating_sub(overhead).max(16);
+    let raw_width = 10;
+    let fixed_width = 4 + 4 + 10 + 8 + 11 + raw_width;
+    let padding = 7 * 2;
+    let device_width = term_width.saturating_sub(fixed_width + padding).max(12);
 
     let cols = [
         TableColumn {
@@ -633,7 +634,7 @@ pub(crate) fn cmd_tlb_usb(
         },
         TableColumn {
             header: "Device",
-            width: 12,
+            width: device_width,
         },
         TableColumn {
             header: "VID:PID",
@@ -641,7 +642,7 @@ pub(crate) fn cmd_tlb_usb(
         },
         TableColumn {
             header: "Raw",
-            width: details_width,
+            width: raw_width,
         },
     ];
     let t = Table::new(&cols);

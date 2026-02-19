@@ -13,9 +13,12 @@ pub struct XhcInfo {
     pub bus: u8,
     pub slot: u8,
     pub function: u8,
+    #[allow(dead_code)]
     pub bar_phys: u64,
+    #[allow(dead_code)]
     pub bar_size: u64,
     pub mmio_base: NonNull<u8>,
+    #[allow(dead_code)]
     pub supports_64bit: bool,
     pub controller_id: usize,
 }
@@ -979,6 +982,34 @@ where
     F: FnMut(&Trb) -> bool,
 {
     try_take_matching_event(controller_id, predicate)
+}
+
+pub fn drain_transfer_events_for_slot(ctx: &XhciContext, slot_id: u32, ep_mask: u32) -> usize {
+    let mut drained = 0usize;
+    loop {
+        let mut pred = |evt: &Trb| {
+            let evt_type = (evt.d3 >> 10) & 0x3F;
+            if evt_type != 32 {
+                return false;
+            }
+            let evt_slot = (evt.d3 >> 24) & 0xFF;
+            if evt_slot as u32 != slot_id {
+                return false;
+            }
+            let evt_ep_target = (evt.d3 >> 16) & 0x1F;
+            if evt_ep_target == 0 {
+                return false;
+            }
+            (ep_mask & (1u32 << evt_ep_target)) != 0
+        };
+
+        if try_take_matching_event(ctx.controller_id, &mut pred).is_some() {
+            drained += 1;
+            continue;
+        }
+        break;
+    }
+    drained
 }
 
 pub fn debug_peek_transfer_events(controller_id: usize, slot_id: u32, ep_target: u32, max: usize) {

@@ -1,11 +1,10 @@
-use super::hub::{HubChild, HubWork, MAX_DEVICES};
 use super::xhci::{
     self, decode_port_status, hi, lo, write_reg64, ErstEntry, EventRing, Trb, TrbRing, XhciContext,
     MAX_XHCI_CONTROLLERS,
 };
 use super::{
-    cdc_acm, disable_slot, enable_slot, enumerate_port, enumerate_with_params, hid, hub, mass,
-    midi, uac, DeviceKind, UsbControllerState, DEVICES, ENUM_READY, USB_LOG_VERBOSE,
+    cdc_acm, disable_slot, enumerate_port, hid, mass, midi, uac, DeviceKind, UsbControllerState,
+    DEVICES, ENUM_READY, MAX_DEVICES, USB_LOG_VERBOSE,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -95,8 +94,6 @@ async fn cleanup_disconnected<const N: usize>(
             let _ = uac::unregister_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Midi {
             let _ = midi::unregister_runtime(controller_id, slot_id);
-        } else if kind == DeviceKind::Hub {
-            let _ = hub::unregister_interrupt_runtime(controller_id, slot_id);
         } else if kind == DeviceKind::Leds {
             let _ = super::leds::unregister_runtime(controller_id, slot_id);
         }
@@ -105,87 +102,6 @@ async fn cleanup_disconnected<const N: usize>(
             controller_id,
             slot_id
         );
-    }
-}
-
-async fn enumerate_port_recursive(
-    state: &mut UsbControllerState,
-    target_port: u8,
-    hub_queue: &mut heapless::Vec<HubWork, 16>,
-) {
-    enumerate_port(state, target_port, hub_queue).await;
-}
-
-async fn enumerate_hub_ports(
-    state: &mut UsbControllerState,
-    work: &HubWork,
-    hub_queue: &mut heapless::Vec<HubWork, 16>,
-) {
-    let controller_id = state.info.controller_id;
-    let children = hub::collect_children(
-        &state.ctx,
-        work.hub_slot_id,
-        work.route_string,
-        work.depth,
-        work.hub_speed_code,
-        work.multi_tt,
-        work.port_count,
-        work.power_on_good_ms,
-        work.tt_think_time,
-    )
-    .await;
-
-    for HubChild {
-        port,
-        route,
-        depth,
-        speed_code,
-        tt_info,
-        tt_think_time,
-    } in children.iter().copied()
-    {
-        crate::log!(
-            "usb[xHCI {}]: hub child enumerate hub_slot={} port={} route=0x{:X} depth={} speed_code={}\n",
-            controller_id,
-            work.hub_slot_id,
-            port,
-            route,
-            depth,
-            speed_code,
-        );
-        let Some(slot_id) = enable_slot(state, port).await else {
-            crate::log!(
-                "usb[xHCI {}]: hub child enable-slot failed hub_slot={} port={}\n",
-                controller_id,
-                work.hub_slot_id,
-                port
-            );
-            continue;
-        };
-        crate::log!(
-            "usb[xHCI {}]: hub child enable-slot ok hub_slot={} port={} slot={}\n",
-            controller_id,
-            work.hub_slot_id,
-            port,
-            slot_id
-        );
-
-        enumerate_with_params(
-            state,
-            port,
-            slot_id,
-            work.root_port,
-            route,
-            depth,
-            speed_code,
-            None,
-            Some((work.hub_slot_id, port)),
-            Some((work.hub_speed_code, work.power_on_good_ms)),
-            tt_info,
-            tt_think_time,
-            hub_queue,
-        )
-        .await;
     }
 }
 
@@ -213,8 +129,6 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
         csz_64,
         ctx_stride_bytes
     );
-
-    hub::init_topology(&ctx);
 
     let max_slots = (ctx.hcsparams1 & 0xFF) as usize;
     let supports_64bit = (ctx.hccparams1 & 0x1) != 0;
@@ -437,21 +351,12 @@ async fn scout_pass(info: xhci::XhcInfo) {
         cleanup_disconnected(&connected, &mut state).await;
     }
 
-    let mut hub_queue: heapless::Vec<HubWork, 16> = heapless::Vec::new();
-
     for (target_port, _port_status) in connected.iter().copied() {
         if has_device_on_port(controller_id, target_port) {
             continue;
         }
 
-        enumerate_port_recursive(&mut state, target_port, &mut hub_queue).await;
-    }
-
-    let mut idx = 0usize;
-    while idx < hub_queue.len() {
-        let work = hub_queue[idx];
-        idx += 1;
-        enumerate_hub_ports(&mut state, &work, &mut hub_queue).await;
+        enumerate_port(&mut state, target_port).await;
     }
 
     // Publish a stable snapshot for shell/table commands.
@@ -509,29 +414,6 @@ pub async fn usb_scout_service(info: xhci::XhcInfo) {
         Timer::after(EmbassyDuration::from_millis(POLL_MS)).await;
         elapsed_ms = elapsed_ms.saturating_add(POLL_MS);
 
-        // If any hub interrupt indicates port-change activity, rescan sooner than the
-        // fixed period. This keeps behavior close to the existing polling model while
-        // cutting latency on real hardware.
-        if hub::take_hub_change_pending(controller_id) {
-            if SCOUT_RUNNING[controller_id]
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                struct ScoutRunGuard {
-                    controller_id: usize,
-                }
-                impl Drop for ScoutRunGuard {
-                    fn drop(&mut self) {
-                        SCOUT_RUNNING[self.controller_id].store(false, Ordering::Release);
-                    }
-                }
-                let _scout_guard = ScoutRunGuard { controller_id };
-                scout_pass(info).await;
-                elapsed_ms = 0;
-                continue;
-            }
-        }
-
         if elapsed_ms >= RESCAN_PERIOD_MS {
             if SCOUT_RUNNING[controller_id]
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -583,7 +465,6 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
             if let Some(dev) = devs.iter().find(|d| d.port == (port + 1) as u8) {
                 kind_str = Some(match dev.kind {
                     DeviceKind::Hid => "hid",
-                    DeviceKind::Hub => "hub",
                     DeviceKind::Mass => "mass",
                     DeviceKind::Printer => "printer",
                     DeviceKind::Pen => "pen",
@@ -595,7 +476,7 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
                 });
 
                 // Try to get VID/PID from identity cache
-                if let Some(ident) = super::hub::identity_for_slot(controller_id, dev.slot_id) {
+                if let Some(ident) = super::identity_for_slot(controller_id, dev.slot_id) {
                     vid = Some(ident.vid);
                     pid = Some(ident.pid);
                     if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid) {
