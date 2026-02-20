@@ -209,21 +209,23 @@ pub fn device_index_from_owner(owner: &str) -> Option<usize> {
     // BDF: bb:dd.f
     if let Some((bus_s, rest)) = suffix.split_once(':')
         && let Some((slot_s, func_s)) = rest.split_once('.')
-            && let (Some(bus), Some(slot), Some(function)) = (
-                parse_hex_u8(bus_s),
-                parse_hex_u8(slot_s),
-                parse_u8_dec_or_hex(func_s),
-            )
-                && let Some(idx) = find_device_by_bdf(bus, slot, function) {
-                    return Some(idx);
-                }
+        && let (Some(bus), Some(slot), Some(function)) = (
+            parse_hex_u8(bus_s),
+            parse_hex_u8(slot_s),
+            parse_u8_dec_or_hex(func_s),
+        )
+        && let Some(idx) = find_device_by_bdf(bus, slot, function)
+    {
+        return Some(idx);
+    }
 
     // VID:PID: vvvv:pppp
     if let Some((vid_s, pid_s)) = suffix.split_once(':')
         && let (Some(vid), Some(pid)) = (parse_hex_u16(vid_s), parse_hex_u16(pid_s))
-            && let Some(idx) = find_device_by_vidpid(vid, pid) {
-                return Some(idx);
-            }
+        && let Some(idx) = find_device_by_vidpid(vid, pid)
+    {
+        return Some(idx);
+    }
 
     None
 }

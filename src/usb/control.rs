@@ -237,9 +237,10 @@ pub(crate) async fn control_out(
                     return true;
                 }
                 if let Some(data_phys) = data_trb_phys
-                    && evt_ptr == (data_phys & !0xFu64) {
-                        return true;
-                    }
+                    && evt_ptr == (data_phys & !0xFu64)
+                {
+                    return true;
+                }
                 evt_ptr == (status_trb_phys & !0xFu64)
             },
             timeout_iters,
@@ -350,9 +351,10 @@ pub(crate) async fn control_out_cc(
                 return true;
             }
             if let Some(data_phys) = data_trb_phys
-                && evt_ptr == (data_phys & !0xFu64) {
-                    return true;
-                }
+                && evt_ptr == (data_phys & !0xFu64)
+            {
+                return true;
+            }
             evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,

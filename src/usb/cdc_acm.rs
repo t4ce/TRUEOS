@@ -219,13 +219,12 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
         w.wake();
     }
 
-    if removed
-        && let Some(evt) = detached {
-            let guard = DETACH_CALLBACKS.lock();
-            for cb in guard.iter() {
-                cb(evt);
-            }
+    if removed && let Some(evt) = detached {
+        let guard = DETACH_CALLBACKS.lock();
+        for cb in guard.iter() {
+            cb(evt);
         }
+    }
     removed
 }
 
@@ -339,7 +338,7 @@ pub(crate) async fn write_all(controller_id: usize, slot_id: u32, mut data: &[u8
 }
 
 pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
-    let slot_id = (evt.d3 >> 24) & 0xFF ;
+    let slot_id = (evt.d3 >> 24) & 0xFF;
     let ep_target = (evt.d3 >> 16) & 0x1F;
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;

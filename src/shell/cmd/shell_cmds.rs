@@ -78,17 +78,18 @@ pub(crate) fn cmd_section(
     ctx.io.write_fmt(format_args!("status: active §{}\r\n", id));
 
     if let Some(blob) = crate::matrix::clone_blob(slot_id)
-        && !blob.is_empty() {
-            if let Ok(s) = core::str::from_utf8(blob.as_slice()) {
-                let upgraded = crate::shell::ecma48::json_upgrade(s);
-                write_crlf_lines(ctx.io, upgraded.as_str());
-            } else {
-                let lossy = alloc::string::String::from_utf8_lossy(blob.as_slice());
-                let upgraded = crate::shell::ecma48::json_upgrade(lossy.as_ref());
-                write_crlf_lines(ctx.io, upgraded.as_str());
-            }
-            return CommandAction::None;
+        && !blob.is_empty()
+    {
+        if let Ok(s) = core::str::from_utf8(blob.as_slice()) {
+            let upgraded = crate::shell::ecma48::json_upgrade(s);
+            write_crlf_lines(ctx.io, upgraded.as_str());
+        } else {
+            let lossy = alloc::string::String::from_utf8_lossy(blob.as_slice());
+            let upgraded = crate::shell::ecma48::json_upgrade(lossy.as_ref());
+            write_crlf_lines(ctx.io, upgraded.as_str());
         }
+        return CommandAction::None;
+    }
 
     let mut buf: heapless::String<1024> = heapless::String::new();
     if crate::matrix::dump_slot(&mut buf, slot_id) {
@@ -222,10 +223,11 @@ pub(crate) fn cmd_insane(
     for cp in 0u32..=0x10FFFF {
         if (cp & 0x3FF) == 0
             && let Some(b) = ctx.io.read_byte()
-                && b == 0x03 {
-                    ctx.io.write_str("\r\ninsane: aborted\r\n");
-                    return CommandAction::None;
-                }
+            && b == 0x03
+        {
+            ctx.io.write_str("\r\ninsane: aborted\r\n");
+            return CommandAction::None;
+        }
 
         let ch = match core::char::from_u32(cp) {
             Some(ch) if !ch.is_control() => ch,

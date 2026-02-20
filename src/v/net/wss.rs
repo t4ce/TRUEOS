@@ -324,13 +324,13 @@ impl WssConnection {
                             true,
                             &buf,
                             &mut payload,
-                        )
-                            && let Some(h) = self.handle {
-                                let _ = self.cmds.push(TlsCommand::Send {
-                                    handle: h,
-                                    data: Vec::from(&buf[..len]),
-                                });
-                            }
+                        ) && let Some(h) = self.handle
+                        {
+                            let _ = self.cmds.push(TlsCommand::Send {
+                                handle: h,
+                                data: Vec::from(&buf[..len]),
+                            });
+                        }
                         None
                     }
                     WebSocketReceiveMessageType::Pong => None,
@@ -342,13 +342,13 @@ impl WssConnection {
                             true,
                             &buf,
                             &mut payload,
-                        )
-                            && let Some(h) = self.handle {
-                                let _ = self.cmds.push(TlsCommand::Send {
-                                    handle: h,
-                                    data: Vec::from(&buf[..len]),
-                                });
-                            }
+                        ) && let Some(h) = self.handle
+                        {
+                            let _ = self.cmds.push(TlsCommand::Send {
+                                handle: h,
+                                data: Vec::from(&buf[..len]),
+                            });
+                        }
                         None
                     }
                     WebSocketReceiveMessageType::CloseCompleted => {

@@ -395,10 +395,11 @@ impl VirtioNetAdapter {
         const TX_NOTIFY_THRESHOLD: u16 = 8;
         let pending = self.txq.avail_idx.wrapping_sub(self.tx_last_notify_avail);
         if (force || pending >= TX_NOTIFY_THRESHOLD)
-            && self.tx_last_notify_avail != self.txq.avail_idx {
-                notify_queue(self.io_base, QUEUE_TX);
-                self.tx_last_notify_avail = self.txq.avail_idx;
-            }
+            && self.tx_last_notify_avail != self.txq.avail_idx
+        {
+            notify_queue(self.io_base, QUEUE_TX);
+            self.tx_last_notify_avail = self.txq.avail_idx;
+        }
     }
 
     fn poll_rx_queue(&mut self) {

@@ -332,9 +332,10 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
             }
             usbdesc::ParsedDescriptor::Hid(hd) => {
                 if current_alt == 0
-                    && let Some(len) = hd.report_desc_len {
-                        current_report_len = len;
-                    }
+                    && let Some(len) = hd.report_desc_len
+                {
+                    current_report_len = len;
+                }
             }
             usbdesc::ParsedDescriptor::Endpoint(ed) => {
                 if current_iface.is_none() || current_alt != 0 {

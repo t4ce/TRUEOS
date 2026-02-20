@@ -360,9 +360,7 @@ pub async fn task() {
             }
 
             if online {
-                let effect_ok = last_effect_owner
-                    .and_then(scope_range)
-                    .is_some();
+                let effect_ok = last_effect_owner.and_then(scope_range).is_some();
                 if !effect_ok {
                     last_effect = None;
                     last_effect_owner = None;

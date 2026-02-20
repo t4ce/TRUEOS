@@ -268,32 +268,27 @@ async fn handle_do_format(mode: &mut ShellMode, io: &dyn ShellBackend, disc_id: 
             Ok(_) => {
                 if let Ok(reg) = crate::v::disc::partition::register_gpt_partitions(handle).await
                     && let Some(first) = reg.first()
-                        && let Some(part_handle) = crate::disc::block::device_handle(first.id) {
-                            match crate::v::fs::trueosfs::format_blank_partition_async(part_handle)
-                                .await
-                            {
-                                Ok(()) => {
-                                    let (status, err) =
-                                        crate::v::disc::detect::detect_physical_disk_detail(handle)
-                                            .await;
-                                    io.write_fmt(format_args!(
-                                        "format: ok (status now: {}{})\r\n",
-                                        status.short(),
-                                        match (&status, err) {
-                                            (
-                                                crate::v::disc::detect::DiscStatus::Unknown,
-                                                Some(e),
-                                            ) => alloc::format!("; err={:?}", e),
-                                            _ => alloc::string::String::new(),
-                                        }
-                                    ));
+                    && let Some(part_handle) = crate::disc::block::device_handle(first.id)
+                {
+                    match crate::v::fs::trueosfs::format_blank_partition_async(part_handle).await {
+                        Ok(()) => {
+                            let (status, err) =
+                                crate::v::disc::detect::detect_physical_disk_detail(handle).await;
+                            io.write_fmt(format_args!(
+                                "format: ok (status now: {}{})\r\n",
+                                status.short(),
+                                match (&status, err) {
+                                    (crate::v::disc::detect::DiscStatus::Unknown, Some(e)) =>
+                                        alloc::format!("; err={:?}", e),
+                                    _ => alloc::string::String::new(),
                                 }
-                                Err(e) => io.write_fmt(format_args!(
-                                    "format: TRUEOSFS failed ({:?})\r\n",
-                                    e
-                                )),
-                            }
+                            ));
                         }
+                        Err(e) => {
+                            io.write_fmt(format_args!("format: TRUEOSFS failed ({:?})\r\n", e))
+                        }
+                    }
+                }
             }
             Err(e) => io.write_fmt(format_args!("format: GPT write failed ({:?})\r\n", e)),
         }

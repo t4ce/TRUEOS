@@ -331,18 +331,20 @@ impl PmmState {
             start = align_up_u64(start, align);
 
             if let Some(max_addr) = max_phys
-                && start >= max_addr {
-                    continue;
-                }
+                && start >= max_addr
+            {
+                continue;
+            }
 
             let end = start.checked_add(size)?;
             if end > region.end {
                 continue;
             }
             if let Some(max_addr) = max_phys
-                && end > max_addr {
-                    continue;
-                }
+                && end > max_addr
+            {
+                continue;
+            }
 
             self.regions.remove(idx);
             let mut insert_pos = idx;

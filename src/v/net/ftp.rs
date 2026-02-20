@@ -588,9 +588,11 @@ pub async fn ftp_server_task() {
                             continue;
                         }
                         if let Some(sess) = session.as_mut()
-                            && sess.pasv_port.is_some() && sess.pasv_listener.is_none() {
-                                sess.pasv_listener = Some(handle);
-                            }
+                            && sess.pasv_port.is_some()
+                            && sess.pasv_listener.is_none()
+                        {
+                            sess.pasv_listener = Some(handle);
+                        }
                     }
                     Event::TcpEstablished { handle } => {
                         if Some(handle) == listener {
@@ -605,23 +607,25 @@ pub async fn ftp_server_task() {
                         }
 
                         if let Some(sess) = session.as_mut()
-                            && Some(handle) == sess.pasv_listener {
-                                sess.pasv_data = Some(handle);
-                            }
+                            && Some(handle) == sess.pasv_listener
+                        {
+                            sess.pasv_data = Some(handle);
+                        }
                     }
                     Event::TcpData { handle, data } => {
                         if let Some(sess) = session.as_mut()
-                            && handle == sess.ctrl {
-                                sess.rx.extend_from_slice(data.as_slice());
-                                while let Some(line) = ftp_take_line(&mut sess.rx) {
-                                    if ftp_handle_command(&mut vnet, sess, line.as_str()).await {
-                                        let _ = vnet.submit(Command::Close { handle: sess.ctrl });
-                                        ftp_close_passive(&vnet, sess);
-                                        session = None;
-                                        break;
-                                    }
+                            && handle == sess.ctrl
+                        {
+                            sess.rx.extend_from_slice(data.as_slice());
+                            while let Some(line) = ftp_take_line(&mut sess.rx) {
+                                if ftp_handle_command(&mut vnet, sess, line.as_str()).await {
+                                    let _ = vnet.submit(Command::Close { handle: sess.ctrl });
+                                    ftp_close_passive(&vnet, sess);
+                                    session = None;
+                                    break;
                                 }
                             }
+                        }
                     }
                     Event::Closed { handle } => {
                         if Some(handle) == listener {

@@ -493,36 +493,37 @@ pub(crate) fn redraw_view(
         io.write_str("\x1b[K");
 
         if let Some(hist_idx) = hist_idx_opt
-            && let Some(line) = history.get(hist_idx) {
-                // Determine color based on content?
-                // For now, let's keep it simple.
+            && let Some(line) = history.get(hist_idx)
+        {
+            // Determine color based on content?
+            // For now, let's keep it simple.
 
-                // Apply padding if needed (Right Align in Redraw too)
-                let content_len = crate::shell::ecma48::visible_width(line);
-                let padding = max_width.saturating_sub(content_len);
-                for _ in 0..padding {
-                    io.write_str(" ");
-                }
-
-                let final_line = if content_len > max_width {
-                    let mut clipped = String::new();
-                    let mut w = 0;
-                    for ch in line.chars() {
-                        w += 1;
-                        if w > max_width {
-                            break;
-                        }
-                        clipped.push(ch);
-                    }
-                    clipped
-                } else {
-                    String::from(line)
-                };
-
-                io.write_str("\x1b[38;2;120;210;255m"); // Blue
-                io.write_str(&final_line);
-                io.write_str("\x1b[0m");
+            // Apply padding if needed (Right Align in Redraw too)
+            let content_len = crate::shell::ecma48::visible_width(line);
+            let padding = max_width.saturating_sub(content_len);
+            for _ in 0..padding {
+                io.write_str(" ");
             }
+
+            let final_line = if content_len > max_width {
+                let mut clipped = String::new();
+                let mut w = 0;
+                for ch in line.chars() {
+                    w += 1;
+                    if w > max_width {
+                        break;
+                    }
+                    clipped.push(ch);
+                }
+                clipped
+            } else {
+                String::from(line)
+            };
+
+            io.write_str("\x1b[38;2;120;210;255m"); // Blue
+            io.write_str(&final_line);
+            io.write_str("\x1b[0m");
+        }
     }
 
     draw_scrollbar(io, history.len(), height, offset, top, bottom);

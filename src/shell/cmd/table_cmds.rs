@@ -507,18 +507,18 @@ pub(crate) fn cmd_tlb_uefi(
     if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
         && let Ok((cfg_ptr, _)) =
             crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
-        {
-            let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-            for (i, entry) in slice.iter().enumerate() {
-                let idx = alloc::format!("{}", i);
-                let guid = entry.vendor_guid;
-                let name = crate::efi::cfg_guid_name(&guid).unwrap_or("Unknown");
-                let fmt_guid = guid.fmt_canonical();
-                let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
+    {
+        let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+        for (i, entry) in slice.iter().enumerate() {
+            let idx = alloc::format!("{}", i);
+            let guid = entry.vendor_guid;
+            let name = crate::efi::cfg_guid_name(&guid).unwrap_or("Unknown");
+            let fmt_guid = guid.fmt_canonical();
+            let ptr = alloc::format!("0x{:016X}", entry.vendor_table as u64);
 
-                t_cfg.print_row(ctx.io, &[idx, fmt_guid, name.to_string(), ptr]);
-            }
+            t_cfg.print_row(ctx.io, &[idx, fmt_guid, name.to_string(), ptr]);
         }
+    }
 
     CommandAction::None
 }
@@ -925,20 +925,20 @@ pub(crate) fn cmd_tlb_dump(
             && let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
                 crate::efi::EfiConfigurationTable,
             >(phys, entries)
-            {
-                let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
-                for (i, entry) in slice.iter().enumerate() {
-                    let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
-                    let _ = writeln!(
-                        out,
-                        "{:6}  {}  {:24}  0x{:016X}",
-                        i,
-                        entry.vendor_guid.fmt_canonical(),
-                        name,
-                        entry.vendor_table as u64
-                    );
-                }
+        {
+            let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
+            for (i, entry) in slice.iter().enumerate() {
+                let name = crate::efi::cfg_guid_name(&entry.vendor_guid).unwrap_or("Unknown");
+                let _ = writeln!(
+                    out,
+                    "{:6}  {}  {:24}  0x{:016X}",
+                    i,
+                    entry.vendor_guid.fmt_canonical(),
+                    name,
+                    entry.vendor_table as u64
+                );
             }
+        }
     } else {
         writeln!(out, "No UEFI system table found").unwrap();
     }

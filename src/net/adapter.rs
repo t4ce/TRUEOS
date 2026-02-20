@@ -1542,12 +1542,15 @@ impl NetService {
         let sock = self.sockets.get_mut::<tcp::Socket>(st.socket);
 
         // Send request once we can send.
-        if !st.request_sent && sock.can_send() && sock.may_send()
-            && sock.send_slice(&st.request[..]).is_ok() {
-                st.request_sent = true;
-                crate::log!("netbench-internal: request sent\n");
-                did_work = true;
-            }
+        if !st.request_sent
+            && sock.can_send()
+            && sock.may_send()
+            && sock.send_slice(&st.request[..]).is_ok()
+        {
+            st.request_sent = true;
+            crate::log!("netbench-internal: request sent\n");
+            did_work = true;
+        }
 
         // Drain receive data without allocating/copying into events.
         if sock.can_recv() && sock.may_recv() {
@@ -2025,9 +2028,10 @@ impl NetService {
         }
 
         if let Some(last) = self.rs_last_sent
-            && timestamp < last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64) {
-                return;
-            }
+            && timestamp < last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64)
+        {
+            return;
+        }
 
         // NDP requires IPv6 Hop Limit = 255. If we send RS via the ICMP socket,
         // the interface default hop limit (typically 64) may be used, and many
@@ -2608,15 +2612,16 @@ impl NetService {
             }
             // If a ClientID is present, require it matches our DUID.
             if let Some(cid) = p.client_id
-                && cid != &self.dhcp6_duid[..] {
-                    if self.dhcp6_rx_samples_left != 0 {
-                        crate::log!(
-                            "net: dhcp6 rx dev={} ignored reason=clientid-mismatch\n",
-                            self.device_index
-                        );
-                    }
-                    continue;
+                && cid != &self.dhcp6_duid[..]
+            {
+                if self.dhcp6_rx_samples_left != 0 {
+                    crate::log!(
+                        "net: dhcp6 rx dev={} ignored reason=clientid-mismatch\n",
+                        self.device_index
+                    );
                 }
+                continue;
+            }
 
             if p.dns_count != 0 {
                 self.dhcp6_dns6 = dns;
@@ -3237,9 +3242,10 @@ impl NetService {
 
         // Re-send at most once per second until we get a reply.
         if let Some(last) = self.icmp_ping_last_sent
-            && timestamp < last + SmolDuration::from_millis(1000) {
-                return;
-            }
+            && timestamp < last + SmolDuration::from_millis(1000)
+        {
+            return;
+        }
 
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
@@ -3301,9 +3307,10 @@ impl NetService {
 
         // Re-send at most once per second until we get a reply.
         if let Some(last) = self.icmp6_ping_last_sent
-            && timestamp < last + SmolDuration::from_millis(1000) {
-                return;
-            }
+            && timestamp < last + SmolDuration::from_millis(1000)
+        {
+            return;
+        }
 
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
@@ -3411,29 +3418,30 @@ impl NetService {
                             }
 
                             if let Some((inflight_seq, sent_at)) = self.icmp_ping_inflight
-                                && inflight_seq == seq_no {
-                                    let rtt = now() - sent_at;
-                                    crate::log!(
-                                        "net: icmp pong dev={} seq={} rtt={}ms\n",
-                                        self.device_index,
-                                        seq_no,
-                                        rtt.total_millis()
-                                    );
-                                    self.icmp_ping_inflight = None;
+                                && inflight_seq == seq_no
+                            {
+                                let rtt = now() - sent_at;
+                                crate::log!(
+                                    "net: icmp pong dev={} seq={} rtt={}ms\n",
+                                    self.device_index,
+                                    seq_no,
+                                    rtt.total_millis()
+                                );
+                                self.icmp_ping_inflight = None;
 
-                                    // Consider the network reachable on the first successful pong.
-                                    if self.icmp_ping_pongs == 0 {
-                                        self.icmp_ping_pongs = 1;
-                                        crate::log!(
-                                            "net: icmp ok dev={} (gateway reachable)\n",
-                                            self.device_index
-                                        );
-                                        crate::v::readiness::set(
-                                            crate::v::readiness::NET_GATEWAY_REACHABLE
-                                                | crate::v::readiness::NET_V4_GATEWAY_REACHABLE,
-                                        );
-                                    }
+                                // Consider the network reachable on the first successful pong.
+                                if self.icmp_ping_pongs == 0 {
+                                    self.icmp_ping_pongs = 1;
+                                    crate::log!(
+                                        "net: icmp ok dev={} (gateway reachable)\n",
+                                        self.device_index
+                                    );
+                                    crate::v::readiness::set(
+                                        crate::v::readiness::NET_GATEWAY_REACHABLE
+                                            | crate::v::readiness::NET_V4_GATEWAY_REACHABLE,
+                                    );
                                 }
+                            }
                         }
                         _ => {}
                     }

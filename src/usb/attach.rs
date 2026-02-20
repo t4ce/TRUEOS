@@ -87,22 +87,22 @@ pub(crate) async fn try_attach_device(
         })
         .await
         .is_ok()
-        {
-            usbv!(
-                "usb: enum port {} claimed UAC slot={} vid=0x{:04X} pid=0x{:04X}\n",
-                target_port,
-                slot_id,
-                dev_vid,
-                dev_pid
-            );
-            super::register_device(
-                state.info.controller_id,
-                slot_id,
-                registry_port,
-                DeviceKind::Uac,
-            );
-            return Some(DeviceKind::Uac);
-        }
+    {
+        usbv!(
+            "usb: enum port {} claimed UAC slot={} vid=0x{:04X} pid=0x{:04X}\n",
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid
+        );
+        super::register_device(
+            state.info.controller_id,
+            slot_id,
+            registry_port,
+            DeviceKind::Uac,
+        );
+        return Some(DeviceKind::Uac);
+    }
 
     let has_midi = midi::has_midi_streaming_interface(cfg_slice);
     if has_midi
@@ -121,22 +121,22 @@ pub(crate) async fn try_attach_device(
         })
         .await
         .is_ok()
-        {
-            usbv!(
-                "usb: enum port {} claimed MIDI slot={} vid=0x{:04X} pid=0x{:04X}\n",
-                target_port,
-                slot_id,
-                dev_vid,
-                dev_pid
-            );
-            super::register_device(
-                state.info.controller_id,
-                slot_id,
-                registry_port,
-                DeviceKind::Midi,
-            );
-            return Some(DeviceKind::Midi);
-        }
+    {
+        usbv!(
+            "usb: enum port {} claimed MIDI slot={} vid=0x{:04X} pid=0x{:04X}\n",
+            target_port,
+            slot_id,
+            dev_vid,
+            dev_pid
+        );
+        super::register_device(
+            state.info.controller_id,
+            slot_id,
+            registry_port,
+            DeviceKind::Midi,
+        );
+        return Some(DeviceKind::Midi);
+    }
 
     let _ = dev_cls;
     let _ = dev_sub;
