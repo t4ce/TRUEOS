@@ -12,6 +12,9 @@ use crate::shell::CommandAction;
 const FROG_LATITUDE: f64 = 51.832427;
 const FROG_LONGITUDE: f64 = 9.456766;
 
+/*ApiKey "9715912a7d8748d65bc3985b4a4274a0"
+Longitude  9.456766
+Latitude  51.832427 */
 pub(crate) fn cmd_frog(
     ctx: &mut ShellCommandCtx<'_>,
     args: Option<&ParsedArgs<'_>>,

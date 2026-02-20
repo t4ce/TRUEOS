@@ -57,6 +57,11 @@ if (!__Renderer) {
 
 var stage = new PIXI.Container();
 
+// Debug marker sprite that uses the same simple textured-sprite pipeline as the
+// background (no Graphics). This should remain visible even if Graphics paths
+// are flaky.
+var __dbg_mark = null;
+
 // --- Desktop background: left -> right white -> black gradient.
 // Use a 2x1 texture stretched fullscreen so we don't depend on vertex color attributes.
 var bg = new PIXI.Container();
@@ -93,6 +98,14 @@ try {
 	spr.width = W;
 	spr.height = H;
 	bg.addChild(spr);
+
+	// A smaller sprite using the same texture as an always-on marker.
+	__dbg_mark = new PIXI.Sprite(tex);
+	__dbg_mark.width = 64;
+	__dbg_mark.height = 64;
+	__dbg_mark.alpha = 1;
+	__dbg_mark.x = Math.floor(W / 2) - 32;
+	__dbg_mark.y = 16;
 } catch (e) {
 	if (G && G.console && typeof G.console.log === 'function') {
 		try { G.console.log('pixi_gui: bg texture failed ' + String(e)); } catch (e2) {}
@@ -277,8 +290,15 @@ var UI = {
 		// Cursor triangle (single triangle). Tip is exactly at cursor position.
 		this._cursorX = Math.floor(W / 2);
 		this._cursorY = Math.floor(H / 2);
+		this._cursorAngle = 0;
 		this._cursor = new PIXI.Graphics();
 		stage.addChild(this._cursor);
+
+		// Add the debug marker last so it stays on top of windows.
+		if (__dbg_mark && !__dbg_mark.__trueos_added) {
+			__dbg_mark.__trueos_added = 1;
+			stage.addChild(__dbg_mark);
+		}
 
 		if (G && G.addEventListener) {
 			var self = this;
@@ -314,9 +334,31 @@ var UI = {
 		win.inst = inst;
 		drawPixelText(win.nameGfx, spec.name, win.frameX, Math.max(2, win.frameY - 28), 2, 0x202020);
 	},
-	tick: function(dt) {
+	tick: function(dt, angleRad) {
+		this._cursorAngle = Number(angleRad);
+
+		// Debug marker follows the cursor position (uses Sprite pipeline).
+		if (__dbg_mark) {
+			var mx = this._cursorX|0;
+			var my = this._cursorY|0;
+			__dbg_mark.x = (mx - 32) | 0;
+			__dbg_mark.y = (my - 32) | 0;
+			__dbg_mark.rotation = 0;
+		}
+
+		// Visual heartbeat: gently wobble the center window left/right.
+		var wobble = 0;
+		if (isFinite(this._cursorAngle)) {
+			wobble = (Math.sin(this._cursorAngle) * 16) | 0;
+		}
 		for (var i = 0; i < this.windows.length; i++) {
 			var win = this.windows[i];
+			// Only the middle window wobbles.
+			if (win && win.host && win.chrome) {
+				var dx = (i === 1) ? wobble : 0;
+				win.host.x = dx;
+				win.chrome.x = dx;
+			}
 			this._ensureWindowInst(win);
 			if (win && win.inst && win.inst.tick) {
 				try { win.inst.tick(dt); } catch (e) {}
@@ -336,7 +378,9 @@ var UI = {
 			this._cursor.clear();
 			this._cursor.lineStyle(1, 0xFFFFFF, 1);
 			this._cursor.beginFill(0x202020, 1);
-			// Simple arrow-like triangle; tip is exactly at (x,y).
+			// Simple arrow-like triangle.
+			// Outline: white (0xFFFFFF). Fill: dark gray (0x202020).
+			// Tip is exactly at (x,y).
 			this._cursor.moveTo(x, y);
 			this._cursor.lineTo(x + 14, y + 7);
 			this._cursor.lineTo(x + 6, y + 20);
@@ -358,10 +402,12 @@ G.__trueos_pixi_ui_tick = function(angleRad) {
 	}
 	if (G.__trueos_ui) {
 		if (!G.__trueos_ui.started) G.__trueos_ui.start();
-		G.__trueos_ui.tick(dt);
+		G.__trueos_ui.tick(dt, angleRad);
 	}
 	renderer.render(stage);
 };
+
+// Cursor mode toggling was removed; cursor always follows mouse coordinates.
 
 // Self-driven 20Hz loop (preferred). If timers are unavailable, Rust can still
 // drive `__trueos_pixi_ui_tick` externally.

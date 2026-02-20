@@ -317,6 +317,12 @@ async fn handle_wizard_input_internal(
             if let Some(rest) = s.strip_prefix("bench") {
                 s = rest.trim();
             }
+            if s.eq_ignore_ascii_case("ls") || s.eq_ignore_ascii_case("list") {
+                io.write_str("\r\n");
+                print_bench_disk_table(io).await;
+                io.write_str("bench: enter TRUEOSFS disk id (e.g. 1 or disc001), 'ls', or 'q' (blank cancels)\r\n");
+                return InputResult::Handled;
+            }
             if should_cancel(s) {
                 io.write_str("\r\nbench: cancelled\r\n");
                 return InputResult::Transition(ShellMode::Idle);
@@ -324,7 +330,8 @@ async fn handle_wizard_input_internal(
             let raw_id = parse_disc_id_raw(s).unwrap_or(0);
             if raw_id == 0 {
                 io.write_str("\r\nbench: invalid id\r\n");
-                io.write_str("bench: enter a TRUEOSFS disk id or 'q'\r\n");
+                io.write_str("bench: enter TRUEOSFS disk id (e.g. 1 or disc001), 'ls', or 'q' (blank cancels)\r\n");
+                print_bench_disk_table(io).await;
                 return InputResult::Handled;
             }
 
@@ -333,6 +340,8 @@ async fn handle_wizard_input_internal(
                 .find(|h| h.parent().is_none() && h.id().raw() == raw_id);
             let Some(handle) = target else {
                 io.write_str("\r\nbench: no such disk\r\n");
+                io.write_str("bench: enter TRUEOSFS disk id (e.g. 1 or disc001), 'ls', or 'q' (blank cancels)\r\n");
+                print_bench_disk_table(io).await;
                 return InputResult::Handled;
             };
 
@@ -348,6 +357,8 @@ async fn handle_wizard_input_internal(
                         _ => alloc::string::String::new(),
                     }
                 ));
+                io.write_str("bench: enter TRUEOSFS disk id (e.g. 1 or disc001), 'ls', or 'q' (blank cancels)\r\n");
+                print_bench_disk_table(io).await;
                 return InputResult::Handled;
             }
 

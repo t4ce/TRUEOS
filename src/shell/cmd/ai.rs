@@ -146,7 +146,7 @@ pub async fn run_ai_wizard(
     history: &mut Vec<String>,
     initial_prompt: &str,
 ) {
-    const API_KEY: &str = "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";
+    const API_KEY: &str = "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";
     const URL: &str = "https://api.openai.com/v1/responses";
 
     // Ensure correct scroll region (Row 3..Bottom)
