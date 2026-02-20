@@ -3,7 +3,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::shell::{ShellBackend, ShellIo};
 
-pub(crate) const NETBENCH_URL: &str = "http://ipv6.download.thinkbroadband.com/5GB.zip";
+pub(crate) const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
 
 fn format_speed(bps: u64) -> alloc::string::String {
     if bps < 100 {
