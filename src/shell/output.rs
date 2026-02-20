@@ -101,7 +101,7 @@ impl<'a> ReverseOutput<'a> {
         self.inner.write_str(final_s.as_str());
         self.inner.write_str("\x1b[0m");
 
-        let _ = draw_scrollbar(
+        draw_scrollbar(
             self.inner,
             self.history.borrow().len(),
             bottom.saturating_sub(3),
@@ -125,7 +125,7 @@ impl<'a> ReverseOutput<'a> {
             self.inner
                 .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
             self.inner.write_str("\x1b[L");
-            let _ = draw_scrollbar(
+            draw_scrollbar(
                 self.inner,
                 self.history.borrow().len(),
                 bottom.saturating_sub(3),
@@ -268,7 +268,7 @@ impl<'a> ReverseOutput<'a> {
         self.inner.write_str("\x1b[0m");
 
         // 3. Redraw ENTIRE scrollbar to fix the shift (offset 0 presumed)
-        let _ = draw_scrollbar(
+        draw_scrollbar(
             self.inner,
             self.history.borrow().len(),
             bottom.saturating_sub(3),
@@ -492,8 +492,8 @@ pub(crate) fn redraw_view(
         // Clear To EOL
         io.write_str("\x1b[K");
 
-        if let Some(hist_idx) = hist_idx_opt {
-            if let Some(line) = history.get(hist_idx) {
+        if let Some(hist_idx) = hist_idx_opt
+            && let Some(line) = history.get(hist_idx) {
                 // Determine color based on content?
                 // For now, let's keep it simple.
 
@@ -523,7 +523,6 @@ pub(crate) fn redraw_view(
                 io.write_str(&final_line);
                 io.write_str("\x1b[0m");
             }
-        }
     }
 
     draw_scrollbar(io, history.len(), height, offset, top, bottom);

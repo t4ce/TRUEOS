@@ -148,7 +148,7 @@ fn align_up(value: usize, align: usize) -> usize {
     if align == 0 {
         return value;
     }
-    (value + align - 1) / align * align
+    value.div_ceil(align) * align
 }
 
 fn read_io_base(dev: &crate::pci::PciDevice) -> Result<u16, ()> {

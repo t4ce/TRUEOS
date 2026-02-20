@@ -12,13 +12,13 @@ pub trait Pattern<'a> {
     }
 }
 
-impl<'a, 'b> Pattern<'a> for &'b str {
+impl<'a> Pattern<'a> for &str {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
         if self.is_empty() {
             return Some(0);
         }
 
-        if let Some(idx) = find_str(haystack, *self) {
+        if let Some(idx) = find_str(haystack, self) {
             return Some(idx);
         }
 
@@ -28,17 +28,16 @@ impl<'a, 'b> Pattern<'a> for &'b str {
 
 impl<'a> Pattern<'a> for char {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
-        if (*self as u32) < 0x80 {
-            if let Some(idx) = memchr(*self as u8, haystack.as_bytes()) {
+        if (*self as u32) < 0x80
+            && let Some(idx) = memchr(*self as u8, haystack.as_bytes()) {
                 return Some(idx);
             }
-        }
 
         haystack.find(*self)
     }
 }
 
-impl<'a, 'b> Pattern<'a> for &'b [char] {
+impl<'a> Pattern<'a> for &[char] {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
         let pat = *self;
         if pat.is_empty() {

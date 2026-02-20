@@ -471,11 +471,10 @@ pub fn find_hid_report_desc_len(cfg: &[u8], iface: u8, alt: u8) -> Option<u16> {
                 cur_iface = Some((id.interface_number, id.alternate_setting));
             }
             ParsedDescriptor::Hid(h) => {
-                if cur_iface == Some((iface, alt)) {
-                    if let Some(len) = h.report_desc_len {
+                if cur_iface == Some((iface, alt))
+                    && let Some(len) = h.report_desc_len {
                         return Some(len);
                     }
-                }
             }
             _ => {}
         }
@@ -571,7 +570,7 @@ pub fn parse_output_report_format(desc: &[u8]) -> Option<HidOutputReportFormat> 
                 if bits == 0 {
                     continue;
                 }
-                let payload_bytes = ((bits + 7) / 8) as u16;
+                let payload_bytes = bits.div_ceil(8) as u16;
                 if payload_bytes >= best_payload_bytes {
                     best_payload_bytes = payload_bytes;
                     best_id = state.report_id;

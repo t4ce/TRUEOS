@@ -219,14 +219,13 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
         w.wake();
     }
 
-    if removed {
-        if let Some(evt) = detached {
+    if removed
+        && let Some(evt) = detached {
             let guard = DETACH_CALLBACKS.lock();
             for cb in guard.iter() {
                 cb(evt);
             }
         }
-    }
     removed
 }
 
@@ -340,7 +339,7 @@ pub(crate) async fn write_all(controller_id: usize, slot_id: u32, mut data: &[u8
 }
 
 pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
-    let slot_id = ((evt.d3 >> 24) & 0xFF) as u32;
+    let slot_id = (evt.d3 >> 24) & 0xFF ;
     let ep_target = (evt.d3 >> 16) & 0x1F;
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;
@@ -406,7 +405,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     // Set configuration similar to the mass driver path.
     let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((interface.configuration as u32) << 16),
+        d0: ((9u32) << 8) | ((interface.configuration as u32) << 16),
         d1: 0,
         d2: 8,
         d3: trb_type(2) | (1 << 6),
@@ -424,7 +423,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), 1) };
     let Some(evt) = xhci::wait_for_event(
         ctx,
-        |evt| ((evt.d3 >> 10) & 0x3F) == 32 && ((evt.d3 >> 24) & 0xFF) as u32 == slot_id,
+        |evt| ((evt.d3 >> 10) & 0x3F) == 32 && ((evt.d3 >> 24) & 0xFF) == slot_id,
         400,
         embassy_time::Duration::from_millis(5),
     )

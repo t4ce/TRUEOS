@@ -187,8 +187,8 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                 // Interface descriptor
                 if len >= 9 {
                     // Before switching interfaces, consider committing the previous one.
-                    if let Some(iface) = current_iface {
-                        if current_class == USB_CLASS_AUDIO
+                    if let Some(iface) = current_iface
+                        && current_class == USB_CLASS_AUDIO
                             && current_sub == USB_SUBCLASS_MIDISTREAMING
                             && (ep_in.is_some() || ep_out.is_some())
                         {
@@ -203,7 +203,6 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                             // We could early-return, but continue scanning in case a later altsetting
                             // has a better endpoint pair.
                         }
-                    }
 
                     current_iface = Some(cfg[idx + 2]);
                     current_alt = cfg[idx + 3];
@@ -220,8 +219,7 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                 if let Some(iface) = current_iface {
                     let _ = iface;
                     if current_class == USB_CLASS_AUDIO && current_sub == USB_SUBCLASS_MIDISTREAMING
-                    {
-                        if len >= 7 {
+                        && len >= 7 {
                             let ep_addr = cfg[idx + 2];
                             let attrs = cfg[idx + 3];
                             let transfer_ty = attrs & 0x3;
@@ -242,7 +240,6 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                                 }
                             }
                         }
-                    }
                 }
             }
             _ => {}
@@ -252,8 +249,8 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
     }
 
     // Commit last interface.
-    if let Some(iface) = current_iface {
-        if current_class == USB_CLASS_AUDIO
+    if let Some(iface) = current_iface
+        && current_class == USB_CLASS_AUDIO
             && current_sub == USB_SUBCLASS_MIDISTREAMING
             && (ep_in.is_some() || ep_out.is_some())
         {
@@ -265,7 +262,6 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                 ep_out,
             });
         }
-    }
 
     best
 }
@@ -405,7 +401,7 @@ impl MidiRuntime {
                     let pkt = [chunk[0], chunk[1], chunk[2], chunk[3]];
                     if is_active_sensing_heartbeat(&pkt) {
                         let now = crate::time::unix_time_seconds()
-                            .unwrap_or_else(|| crate::time::uptime_seconds());
+                            .unwrap_or_else(crate::time::uptime_seconds);
                         PIANO_LAST_HEARTBEAT_SECS.store(now, Ordering::Release);
                         continue;
                     }
@@ -447,7 +443,7 @@ impl MidiRuntime {
 }
 
 pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
-    let slot_id = ((evt.d3 >> 24) & 0xFF) as u32;
+    let slot_id = (evt.d3 >> 24) & 0xFF ;
     let ep_target = (evt.d3 >> 16) & 0x1F;
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;

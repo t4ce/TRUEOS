@@ -230,7 +230,7 @@ pub async fn read_gpt_partitions(device: DeviceHandle) -> Result<Vec<PartitionIn
     let entries_lba = u64::from_le_bytes(header_buf[72..80].try_into().unwrap());
     let entry_count = u32::from_le_bytes(header_buf[80..84].try_into().unwrap());
     let entry_size = u32::from_le_bytes(header_buf[84..88].try_into().unwrap());
-    if entry_size < GPT_MIN_ENTRY_SIZE || entry_size > GPT_MAX_ENTRY_SIZE || (entry_size % 8) != 0 {
+    if !(GPT_MIN_ENTRY_SIZE..=GPT_MAX_ENTRY_SIZE).contains(&entry_size) || (entry_size % 8) != 0 {
         return Err(Error::Corrupted);
     }
     if entry_count == 0 {
@@ -358,7 +358,7 @@ fn blocks_from_len(len: usize, block_size: u32) -> Result<u64> {
     if len == 0 {
         return Ok(0);
     }
-    if len % block_size as usize != 0 {
+    if !len.is_multiple_of(block_size as usize) {
         return Err(Error::InvalidParam);
     }
     Ok((len / block_size as usize) as u64)
@@ -368,5 +368,5 @@ fn align_up(value: usize, align: usize) -> usize {
     if value == 0 {
         return 0;
     }
-    ((value + align - 1) / align) * align
+    value.div_ceil(align) * align
 }

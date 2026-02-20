@@ -75,7 +75,7 @@ impl Hpet {
 }
 
 pub fn ensure() -> Option<&'static Hpet> {
-    HPET_INSTANCE.call_once(|| init_hpet());
+    HPET_INSTANCE.call_once(init_hpet);
     HPET_INSTANCE.get().and_then(|hpet| hpet.as_ref())
 }
 

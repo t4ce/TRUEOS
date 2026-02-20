@@ -67,9 +67,9 @@ impl<'a, 'io> Table<'a, 'io> {
         let mut sep: String = String::new();
         for col in self.cols {
             for _ in 0..col.width {
-                let _ = sep.push('-');
+                sep.push('-');
             }
-            let _ = sep.push_str("  ");
+            sep.push_str("  ");
         }
         let sep_str = alloc::format!("{}\r\n", crate::ecma48::dim(&sep));
         self.lines.borrow_mut().push(sep_str);
@@ -95,7 +95,7 @@ impl<'a, 'io> Table<'a, 'io> {
                 // Truncate
                 let keep = width.saturating_sub(1);
                 cell.truncate(keep);
-                let _ = cell.push('…');
+                cell.push('…');
             }
 
             let _ = write!(line, "{:width$}  ", cell, width = width);
@@ -105,7 +105,7 @@ impl<'a, 'io> Table<'a, 'io> {
         let mut slot = self.lines.borrow_mut();
         slot.push(line);
         if let Some(last) = slot.last_mut() {
-            let _ = last.push_str("\r\n");
+            last.push_str("\r\n");
         }
     }
 }

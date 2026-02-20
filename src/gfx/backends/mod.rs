@@ -116,7 +116,7 @@ impl Backend {
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         ensure_pci_enumerated_if_empty();
-        virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(|b| Backend::Virgl(b))
+        virtio_gpu_3d::VirglGfxBackend::init(framebuffers).map(Backend::Virgl)
     }
 
     pub fn context_mut(&mut self) -> &mut dyn GfxContext {

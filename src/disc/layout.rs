@@ -97,8 +97,7 @@ fn looks_like_fat_boot_sector(bs: &[u8; 512]) -> Option<u32> {
     }
 
     // Basic sanity: compute first data sector like in the FAT spec.
-    let root_dir_sectors = ((root_entry_count as u32 * 32) + (bytes_per_sector as u32 - 1))
-        / (bytes_per_sector as u32);
+    let root_dir_sectors = (root_entry_count as u32 * 32).div_ceil(bytes_per_sector as u32);
     let first_data_sector =
         (reserved_sectors as u32) + (fats as u32) * sectors_per_fat + root_dir_sectors;
     if first_data_sector >= total_sectors {
@@ -162,8 +161,7 @@ pub async fn probe_fat_volume(handle: block::DeviceHandle) -> Result<FatVolumeLa
 
             if entries_lba != 0
                 && num_entries != 0
-                && entry_size >= 56
-                && entry_size <= 512
+                && (56..=512).contains(&entry_size)
                 && entries_lba < info.block_count
             {
                 let scan_count = core::cmp::min(num_entries, 256);

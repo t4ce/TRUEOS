@@ -994,7 +994,7 @@ pub fn drain_transfer_events_for_slot(ctx: &XhciContext, slot_id: u32, ep_mask: 
                 return false;
             }
             let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_slot as u32 != slot_id {
+            if evt_slot != slot_id {
                 return false;
             }
             let evt_ep_target = (evt.d3 >> 16) & 0x1F;
@@ -1192,7 +1192,7 @@ where
     F: FnMut(&Trb) -> bool,
 {
     let start = embassy_time_driver::now();
-    let hz = embassy_time_driver::TICK_HZ as u64;
+    let hz = embassy_time_driver::TICK_HZ;
     let max_ticks = if hz == 0 {
         0
     } else {
@@ -1397,11 +1397,10 @@ pub fn log_ports_table(ctx: &XhciContext) {
             cec as u8,
         );
 
-        if ccs {
-            if let Some((vid, pid)) = get_port_vidpid(ctx.controller_id, (port + 1) as u8) {
+        if ccs
+            && let Some((vid, pid)) = get_port_vidpid(ctx.controller_id, port + 1 ) {
                 crate::log!("xhci:      port {} id={:04X}:{:04X}\n", port + 1, vid, pid);
             }
-        }
     }
 }
 

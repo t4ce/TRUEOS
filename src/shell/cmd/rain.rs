@@ -15,7 +15,7 @@ fn braille_sliding_run(n: u8) -> Vec<char> {
             let mut mask = 0u8;
             for i in 0..n {
                 let bit = start + i;
-                if bit >= 0 && bit < 8 {
+                if (0..8).contains(&bit) {
                     mask |= 1 << bit;
                 }
             }
@@ -257,8 +257,8 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 drop.row += 1;
 
                 // Collision Detection
-                if drop.row > offset_y && drop.row <= offset_y + logo_h {
-                    if drop.col > offset_x && drop.col <= offset_x + logo_w {
+                if drop.row > offset_y && drop.row <= offset_y + logo_h
+                    && drop.col > offset_x && drop.col <= offset_x + logo_w {
                         let ly = drop.row - 1 - offset_y;
                         let lx = drop.col - 1 - offset_x;
                         let idx = ly * logo_w + lx;
@@ -293,7 +293,6 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                             }
                         }
                     }
-                }
 
                 // Determine if we remove or update sequence
                 let max_row = rows.saturating_sub(10);

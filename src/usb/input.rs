@@ -103,11 +103,11 @@ static QJS_MOUSE_PIPE: Mutex<QjsMousePipe> = Mutex::new(QjsMousePipe::new());
 #[inline]
 fn now_ms() -> u64 {
     let ticks = now();
-    let hz = TICK_HZ as u64;
+    let hz = TICK_HZ;
     if hz == 0 {
         return 0;
     }
-    (ticks as u64).saturating_mul(1000) / hz
+    ticks.saturating_mul(1000) / hz
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -331,11 +331,10 @@ fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
                 current_ep_out = None;
             }
             usbdesc::ParsedDescriptor::Hid(hd) => {
-                if current_alt == 0 {
-                    if let Some(len) = hd.report_desc_len {
+                if current_alt == 0
+                    && let Some(len) = hd.report_desc_len {
                         current_report_len = len;
                     }
-                }
             }
             usbdesc::ParsedDescriptor::Endpoint(ed) => {
                 if current_iface.is_none() || current_alt != 0 {
@@ -391,7 +390,7 @@ async fn set_configuration(
 ) -> Result<(), ()> {
     // SET_CONFIGURATION (bRequest=9)
     let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
+        d0: ((9u32) << 8) | ((config_value as u32) << 16),
         d1: 0,
         d2: 8,
         d3: trb_type(2) | (1 << 6),
@@ -682,7 +681,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             slot_id,
             out_report_id: preferred_out_report_id,
             out_report_total_len: preferred_out_total_len,
-            ep_out_target: ep_out_target as u32,
+            ep_out_target,
             ep_out_ring,
             out_ring_virt,
             out_ring_bytes,

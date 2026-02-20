@@ -200,11 +200,10 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
 
     match conn.tls.take_ciphertext_to_send() {
         Ok(data) => {
-            if !data.is_empty() {
-                if let Some(handle) = conn.handle {
+            if !data.is_empty()
+                && let Some(handle) = conn.handle {
                     send_tcp_all(&conn.net, handle, &data);
                 }
-            }
         }
         Err(e) => {
             conn.closed = true;
@@ -220,8 +219,8 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
     if conn.connected_notified {
         return;
     }
-    if conn.tls.is_connected() {
-        if let Some(handle) = conn.handle {
+    if conn.tls.is_connected()
+        && let Some(handle) = conn.handle {
             crate::log!(
                 "tls-socket: tls connected owner={} handle={}\n",
                 conn.user_owner,
@@ -233,7 +232,6 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
                 conn.connected_notified = true;
             }
         }
-    }
 }
 
 fn tls_socket_tick_once() {
@@ -348,7 +346,7 @@ fn tls_socket_tick_once() {
         if conns[idx].handle.is_none() && t.connect_ms != 0 {
             let elapsed = now
                 .saturating_duration_since(conns[idx].created_at)
-                .as_millis() as u64;
+                .as_millis();
             if elapsed >= t.connect_ms as u64 {
                 let msg = leak_str(alloc::format!(
                     "tls-socket: connect timeout owner={}",
@@ -364,7 +362,7 @@ fn tls_socket_tick_once() {
         {
             let elapsed = now
                 .saturating_duration_since(conns[idx].last_activity)
-                .as_millis() as u64;
+                .as_millis();
             if elapsed >= t.tls_ms as u64 {
                 if let Some(handle) = conns[idx].handle {
                     let _ = conns[idx].net.submit(vnet::Command::Close { handle });
@@ -382,7 +380,7 @@ fn tls_socket_tick_once() {
         if !remove && conns[idx].tls.is_connected() && t.idle_ms != 0 {
             let elapsed = now
                 .saturating_duration_since(conns[idx].last_activity)
-                .as_millis() as u64;
+                .as_millis();
             if elapsed >= t.idle_ms as u64 {
                 if let Some(handle) = conns[idx].handle {
                     let _ = conns[idx].net.submit(vnet::Command::Close { handle });

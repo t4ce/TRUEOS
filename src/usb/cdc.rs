@@ -68,9 +68,9 @@ pub fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
                 }
             }
             5 => {
-                if let (Some(iface), Some(data_if)) = (current_iface, data_iface) {
-                    if iface == data_if && data_alt == 0 && current_class == USB_CLASS_DATA {
-                        if len >= 7 {
+                if let (Some(iface), Some(data_if)) = (current_iface, data_iface)
+                    && iface == data_if && data_alt == 0 && current_class == USB_CLASS_DATA
+                        && len >= 7 {
                             let attrs = cfg[idx + 3];
                             if (attrs & 0x3) == 0x2 {
                                 let ep_addr = cfg[idx + 2];
@@ -101,8 +101,6 @@ pub fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
                                 }
                             }
                         }
-                    }
-                }
             }
             _ => {}
         }

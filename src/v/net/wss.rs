@@ -317,40 +317,38 @@ impl WssConnection {
                     WebSocketReceiveMessageType::Binary => None,
                     WebSocketReceiveMessageType::Ping => {
                         // RFC6455: reply to Ping with Pong including identical payload.
-                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let buf = [0u8; RX_BUF_SIZE];
                         let mut payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::Pong,
                             true,
-                            &mut buf,
+                            &buf,
                             &mut payload,
-                        ) {
-                            if let Some(h) = self.handle {
+                        )
+                            && let Some(h) = self.handle {
                                 let _ = self.cmds.push(TlsCommand::Send {
                                     handle: h,
                                     data: Vec::from(&buf[..len]),
                                 });
                             }
-                        }
                         None
                     }
                     WebSocketReceiveMessageType::Pong => None,
                     WebSocketReceiveMessageType::CloseMustReply => {
-                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let buf = [0u8; RX_BUF_SIZE];
                         let mut payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::CloseReply,
                             true,
-                            &mut buf,
+                            &buf,
                             &mut payload,
-                        ) {
-                            if let Some(h) = self.handle {
+                        )
+                            && let Some(h) = self.handle {
                                 let _ = self.cmds.push(TlsCommand::Send {
                                     handle: h,
                                     data: Vec::from(&buf[..len]),
                                 });
                             }
-                        }
                         None
                     }
                     WebSocketReceiveMessageType::CloseCompleted => {

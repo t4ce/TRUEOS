@@ -25,16 +25,16 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         let t = Table::new(&cols);
         t.print_header(ctx.io);
 
-        t.print_row(ctx.io, &["tlb.pci", "List PCI devices"]);
-        t.print_row(ctx.io, &["tlb.mem", "List memory map"]);
-        t.print_row(ctx.io, &["tlb.cpu", "List CPU cores"]);
-        t.print_row(ctx.io, &["tlb.acpi", "List ACPI tables"]);
-        t.print_row(ctx.io, &["tlb.uefi", "List UEFI tables"]);
-        t.print_row(ctx.io, &["tlb.x2apic", "List x2APIC topology"]);
-        t.print_row(ctx.io, &["tlb.usb", "List USB controllers and ports"]);
+        t.print_row(ctx.io, ["tlb.pci", "List PCI devices"]);
+        t.print_row(ctx.io, ["tlb.mem", "List memory map"]);
+        t.print_row(ctx.io, ["tlb.cpu", "List CPU cores"]);
+        t.print_row(ctx.io, ["tlb.acpi", "List ACPI tables"]);
+        t.print_row(ctx.io, ["tlb.uefi", "List UEFI tables"]);
+        t.print_row(ctx.io, ["tlb.x2apic", "List x2APIC topology"]);
+        t.print_row(ctx.io, ["tlb.usb", "List USB controllers and ports"]);
         t.print_row(
             ctx.io,
-            &["tlb.dump", "Write all tables to trueos/pci/tlb.txt"],
+            ["tlb.dump", "Write all tables to trueos/pci/tlb.txt"],
         );
     }
 
@@ -152,7 +152,7 @@ pub(crate) fn cmd_tlb_mem(
     for entry in memmap {
         let base = alloc::format!("0x{:016X}", entry.base);
         let len = alloc::format!("0x{:016X}", entry.length);
-        let ty = alloc::format!("{}", crate::limine::memmap_type_name(entry.entry_type));
+        let ty = crate::limine::memmap_type_name(entry.entry_type).to_string();
         t.print_row(ctx.io, &[base, len, ty]);
     }
 
@@ -443,32 +443,32 @@ pub(crate) fn cmd_tlb_uefi(
     let t = Table::new(&cols);
     t.print_header(ctx.io);
 
-    t.print_row(ctx.io, &["Signature", "EFI SYSTEM TABLE"]);
+    t.print_row(ctx.io, ["Signature", "EFI SYSTEM TABLE"]);
     t.print_row(
         ctx.io,
-        &["Revision", &alloc::format!("0x{:08X}", st.hdr.revision)],
+        ["Revision", &alloc::format!("0x{:08X}", st.hdr.revision)],
     );
     t.print_row(
         ctx.io,
-        &["Header Size", &alloc::format!("0x{:X}", st.hdr.header_size)],
+        ["Header Size", &alloc::format!("0x{:X}", st.hdr.header_size)],
     );
     t.print_row(
         ctx.io,
-        &[
+        [
             "Runtime Services",
             &alloc::format!("0x{:016X}", st.runtime_services as u64),
         ],
     );
     t.print_row(
         ctx.io,
-        &[
+        [
             "Boot Services",
             &alloc::format!("0x{:016X}", st.boot_services as u64),
         ],
     );
     t.print_row(
         ctx.io,
-        &[
+        [
             "Config Tables",
             &alloc::format!("{}", st.number_of_table_entries),
         ],
@@ -504,8 +504,8 @@ pub(crate) fn cmd_tlb_uefi(
     let entries = st.number_of_table_entries;
     let cfg_addr = st.configuration_table as u64;
 
-    if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) {
-        if let Ok((cfg_ptr, _)) =
+    if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
+        && let Ok((cfg_ptr, _)) =
             crate::pci::mmio::map_limine_slice::<crate::efi::EfiConfigurationTable>(phys, entries)
         {
             let slice = unsafe { core::slice::from_raw_parts(cfg_ptr.as_ptr(), entries) };
@@ -519,7 +519,6 @@ pub(crate) fn cmd_tlb_uefi(
                 t_cfg.print_row(ctx.io, &[idx, fmt_guid, name.to_string(), ptr]);
             }
         }
-    }
 
     CommandAction::None
 }
@@ -922,8 +921,8 @@ pub(crate) fn cmd_tlb_dump(
         .unwrap();
         writeln!(out, "{:-<6}  {:-<40}  {:-<24}  {:-<18}", "", "", "", "").unwrap();
 
-        if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr) {
-            if let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
+        if let Some(phys) = crate::limine::try_as_phys_addr(cfg_addr)
+            && let Ok((cfg_ptr, _)) = crate::pci::mmio::map_limine_slice::<
                 crate::efi::EfiConfigurationTable,
             >(phys, entries)
             {
@@ -940,7 +939,6 @@ pub(crate) fn cmd_tlb_dump(
                     );
                 }
             }
-        }
     } else {
         writeln!(out, "No UEFI system table found").unwrap();
     }

@@ -77,8 +77,8 @@ pub(crate) fn cmd_section(
 
     ctx.io.write_fmt(format_args!("status: active §{}\r\n", id));
 
-    if let Some(blob) = crate::matrix::clone_blob(slot_id) {
-        if !blob.is_empty() {
+    if let Some(blob) = crate::matrix::clone_blob(slot_id)
+        && !blob.is_empty() {
             if let Ok(s) = core::str::from_utf8(blob.as_slice()) {
                 let upgraded = crate::shell::ecma48::json_upgrade(s);
                 write_crlf_lines(ctx.io, upgraded.as_str());
@@ -89,7 +89,6 @@ pub(crate) fn cmd_section(
             }
             return CommandAction::None;
         }
-    }
 
     let mut buf: heapless::String<1024> = heapless::String::new();
     if crate::matrix::dump_slot(&mut buf, slot_id) {
@@ -221,14 +220,12 @@ pub(crate) fn cmd_insane(
 
     let mut col: usize = 0;
     for cp in 0u32..=0x10FFFF {
-        if (cp & 0x3FF) == 0 {
-            if let Some(b) = ctx.io.read_byte() {
-                if b == 0x03 {
+        if (cp & 0x3FF) == 0
+            && let Some(b) = ctx.io.read_byte()
+                && b == 0x03 {
                     ctx.io.write_str("\r\ninsane: aborted\r\n");
                     return CommandAction::None;
                 }
-            }
-        }
 
         let ch = match core::char::from_u32(cp) {
             Some(ch) if !ch.is_control() => ch,

@@ -170,7 +170,7 @@ async fn fetch_cfg_total_len(
             cfg_total_len = u16::from_le_bytes([hdr[2], hdr[3]]);
         }
 
-        let req_len = cfg_total_len.min(256) as u16;
+        let req_len = cfg_total_len.min(256);
         if req_len > 9 {
             let _ = control::control_in(
                 ctx,
@@ -772,7 +772,7 @@ pub(crate) async fn enumerate_with_params(
         NOT_CLAIMED_COUNT[controller_id][port_log_idx].store(0, Ordering::Relaxed);
     }
     let count = NOT_CLAIMED_COUNT[controller_id][port_log_idx].fetch_add(1, Ordering::Relaxed) + 1;
-    let should_log = count == 1 || (count % 50 == 0);
+    let should_log = count == 1 || count.is_multiple_of(50);
 
     if should_log {
         if dev_i_mfr != 0 || dev_i_prod != 0 {
@@ -815,9 +815,8 @@ pub(crate) async fn enumerate_with_params(
 
             if count == 1
                 && (super::USB_LOG_VERBOSE || (if_cls == 0x03 && first_if_hid_report_len.is_some()))
-            {
-                if if_cls == 0x03 {
-                    if let Some(rep_len) = first_if_hid_report_len {
+                && if_cls == 0x03
+                    && let Some(rep_len) = first_if_hid_report_len {
                         let rep_len = rep_len as usize;
                         match hid::fetch_report_descriptor(
                             &ctx,
@@ -857,8 +856,6 @@ pub(crate) async fn enumerate_with_params(
                             }
                         }
                     }
-                }
-            }
         } else {
             crate::log!(
                 "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if=none portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",
@@ -903,7 +900,6 @@ pub(crate) async fn enumerate_with_params(
         target_port,
         slot_id
     );
-    return;
 }
 
 fn hex16(bytes: &[u8]) -> heapless::String<64> {
