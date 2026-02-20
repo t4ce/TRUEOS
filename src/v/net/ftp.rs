@@ -57,9 +57,13 @@ impl FtpSocket {
     pub async fn connect(url: &str, timeout_ms: u32) -> Result<Self, FtpError> {
         let parsed = parse_ftp_url(url).ok_or(FtpError::InvalidUrl)?;
         let dev_idx = crate::net::primary_device_index();
-        let ip = dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-            .await
-            .map_err(|_| FtpError::DnsFailed)?;
+        let ip = dns::resolve_ipv4_for_device(
+            dev_idx,
+            parsed.host.as_str(),
+            DnsConfig::for_device(dev_idx),
+        )
+        .await
+        .map_err(|_| FtpError::DnsFailed)?;
 
         let net = VNet::open(dev_idx).ok_or(FtpError::ConnectFailed)?;
         net.submit(Command::OpenTcpConnect {

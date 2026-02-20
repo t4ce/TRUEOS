@@ -1,4 +1,5 @@
 use alloc::{format, string::String as AString};
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -26,6 +27,27 @@ fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
         return None;
     }
 
+    // IPv6 literals require bracket form in URLs.
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let (inside, after) = rest.split_once(']')?;
+        if inside.is_empty() {
+            return None;
+        }
+        let _ip6: Ipv6Addr = inside.parse().ok()?;
+        let port = if after.is_empty() {
+            80
+        } else if let Some(p) = after.strip_prefix(':') {
+            if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+                p.parse::<u16>().ok()?
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        return Some((format!("[{}]", inside), port, path));
+    }
+
     let (host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
         if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
             (h, p.parse::<u16>().ok()?)
@@ -38,6 +60,11 @@ fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
 
     if host.is_empty() {
         return None;
+    }
+
+    // Keep Host header format stable for IPv4 literals.
+    if host.parse::<Ipv4Addr>().is_ok() {
+        return Some((AString::from(host), port, path));
     }
 
     Some((AString::from(host), port, path))
@@ -82,18 +109,35 @@ pub async fn boot_netbench_task() {
             return;
         };
 
-        let ip4 = crate::v::net::dns::resolve_ipv4_for_device(
-            nic_index,
-            host.as_str(),
-            crate::v::net::dns::DnsConfig::default(),
-        )
-        .await;
+        let mut literal_v4: Option<[u8; 4]> = None;
+        let mut literal_v6: Option<[u8; 16]> = None;
 
-        let ip6 = if ip4.is_err() {
+        if let Some(inner) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            if let Ok(ip6) = inner.parse::<Ipv6Addr>() {
+                literal_v6 = Some(ip6.octets());
+            }
+        } else if let Ok(ip4) = host.parse::<Ipv4Addr>() {
+            literal_v4 = Some(ip4.octets());
+        }
+
+        let ip4 = if let Some(ip) = literal_v4 {
+            Ok(ip)
+        } else {
+            crate::v::net::dns::resolve_ipv4_for_device(
+                nic_index,
+                host.as_str(),
+                crate::v::net::dns::DnsConfig::for_device(nic_index),
+            )
+            .await
+        };
+
+        let ip6 = if literal_v6.is_some() {
+            literal_v6
+        } else if ip4.is_err() {
             crate::v::net::dns::resolve_ipv6_for_device(
                 nic_index,
                 host.as_str(),
-                crate::v::net::dns::DnsConfig::default(),
+                crate::v::net::dns::DnsConfig::for_device(nic_index),
             )
             .await
             .ok()

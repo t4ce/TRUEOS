@@ -303,8 +303,12 @@ async fn post_on_device_json(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, AiHttpsError> {
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-        .await
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(AiHttpsError::DnsTimeout),
@@ -565,8 +569,12 @@ async fn post_on_device_sse(
     max_bytes: usize,
     handler: &mut dyn SseHandler,
 ) -> Result<(), AiHttpsError> {
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-        .await
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(AiHttpsError::DnsTimeout),
