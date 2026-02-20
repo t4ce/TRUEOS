@@ -11,7 +11,7 @@ use crate as qjs;
 mod compiled;
 mod embedded;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_poll_once();
     fn trueos_cabi_fs_read_file(

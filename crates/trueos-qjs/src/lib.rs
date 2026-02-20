@@ -1,4 +1,7 @@
 #![no_std]
+// Rust 2024: `unsafe fn` bodies are safe-by-default, so unsafe ops need explicit
+// `unsafe { ... }` blocks. Allowing this lint keeps the older style for now.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 
@@ -220,7 +223,7 @@ pub type JSHostPromiseRejectionTracker = unsafe extern "C" fn(
     opaque: *mut c_void,
 );
 
-extern "C" {
+unsafe extern "C" {
     pub fn JS_NewRuntime() -> *mut JSRuntime;
     pub fn JS_FreeRuntime(rt: *mut JSRuntime);
     pub fn JS_NewContext(rt: *mut JSRuntime) -> *mut JSContext;
