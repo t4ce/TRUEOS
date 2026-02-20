@@ -202,6 +202,7 @@ pub(crate) async fn run_netbench(
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
     use alloc::{string::String as AString, vec::Vec};
+    use core::net::{Ipv4Addr, Ipv6Addr};
     use trueos_v::vnet as api;
 
     const OPEN_TIMEOUT_MS: u64 = 4000;
@@ -211,7 +212,20 @@ pub(crate) async fn run_netbench(
 
     let rev_io = crate::shell::output::ReverseOutput::new(io, cols, rows, history);
 
-    fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
+    enum HostTarget {
+        Name(AString),
+        V4([u8; 4]),
+        V6([u8; 16]),
+    }
+
+    struct ParsedHttpUrl {
+        host_header: AString,
+        port: u16,
+        path: AString,
+        target: HostTarget,
+    }
+
+    fn parse_http_url(url: &str) -> Option<ParsedHttpUrl> {
         let mut u = url.trim();
         if let Some(rest) = u.strip_prefix("http://") {
             u = rest;
@@ -225,6 +239,39 @@ pub(crate) async fn run_netbench(
         if hostport.is_empty() {
             return None;
         }
+
+        // Support IPv6 literals in RFC 3986 bracket form: http://[2001:db8::1]:80/path
+        // For literals, we skip DNS and connect directly.
+        if let Some(rest) = hostport.strip_prefix('[') {
+            let (inside, after) = rest.split_once(']')?;
+            if inside.is_empty() {
+                return None;
+            }
+            let ip6: Ipv6Addr = inside.parse().ok()?;
+            let port = if after.is_empty() {
+                80
+            } else if let Some(p) = after.strip_prefix(':') {
+                if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+                    p.parse::<u16>().ok()?
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            };
+            let host_header = if port == 80 {
+                format!("[{}]", inside)
+            } else {
+                format!("[{}]:{}", inside, port)
+            };
+            return Some(ParsedHttpUrl {
+                host_header,
+                port,
+                path,
+                target: HostTarget::V6(ip6.octets()),
+            });
+        }
+
         let (host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
             if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
                 (h, p.parse::<u16>().ok()?)
@@ -237,7 +284,31 @@ pub(crate) async fn run_netbench(
         if host.is_empty() {
             return None;
         }
-        Some((AString::from(host), port, path))
+
+        // If the host portion is a literal IPv4 address, skip DNS.
+        if let Ok(ip4) = host.parse::<Ipv4Addr>() {
+            return Some(ParsedHttpUrl {
+                host_header: if port == 80 {
+                    AString::from(host)
+                } else {
+                    format!("{}:{}", host, port)
+                },
+                port,
+                path,
+                target: HostTarget::V4(ip4.octets()),
+            });
+        }
+
+        Some(ParsedHttpUrl {
+            host_header: if port == 80 {
+                AString::from(host)
+            } else {
+                format!("{}:{}", host, port)
+            },
+            port,
+            path,
+            target: HostTarget::Name(AString::from(host)),
+        })
     }
 
     fn find_http_header_end(buf: &[u8]) -> Option<usize> {
@@ -306,35 +377,45 @@ pub(crate) async fn run_netbench(
     }
     crate::shell::statusbar::refresh(io, cols, rows);
 
-    let Some((host, port, path)) = parse_http_url(NETBENCH_URL) else {
+    let Some(parsed) = parse_http_url(NETBENCH_URL) else {
         let _ = rev_io.write_str("netbench: bad url\n");
         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
         let _ = crate::matrix::free_slot(slot);
         return;
     };
 
-    let _ = rev_io.write_fmt(format_args!("netbench: resolving {}\n", host));
-    let ip4 = crate::v::net::dns::resolve_ipv4_for_device(
-        nic_index,
-        host.as_str(),
-        crate::v::net::dns::DnsConfig::default(),
-    )
-    .await;
+    let (host_header, port, path) = (parsed.host_header, parsed.port, parsed.path);
 
-    let ip6 = if ip4.is_err() {
-        crate::v::net::dns::resolve_ipv6_for_device(
-            nic_index,
-            host.as_str(),
-            crate::v::net::dns::DnsConfig::default(),
-        )
-        .await
-        .ok()
-    } else {
-        None
+    let (ip4, ip6) = match parsed.target {
+        HostTarget::V4(ip) => (Ok(ip), None),
+        HostTarget::V6(ip) => (Err(crate::v::net::dns::DnsError::NoAnswer), Some(ip)),
+        HostTarget::Name(host) => {
+            let _ = rev_io.write_fmt(format_args!("netbench: resolving {}\n", host));
+            let ip4 = crate::v::net::dns::resolve_ipv4_for_device(
+                nic_index,
+                host.as_str(),
+                crate::v::net::dns::DnsConfig::for_device(nic_index),
+            )
+            .await;
+
+            let ip6 = if ip4.is_err() {
+                crate::v::net::dns::resolve_ipv6_for_device(
+                    nic_index,
+                    host.as_str(),
+                    crate::v::net::dns::DnsConfig::for_device(nic_index),
+                )
+                .await
+                .ok()
+            } else {
+                None
+            };
+
+            (ip4, ip6)
+        }
     };
 
     if ip4.is_err() && ip6.is_none() {
-        let _ = rev_io.write_str("netbench: dns failed\n");
+        let _ = rev_io.write_str("netbench: resolve failed\n");
         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
         let _ = crate::matrix::free_slot(slot);
         return;
@@ -419,7 +500,7 @@ pub(crate) async fn run_netbench(
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS netbench\r\nAccept: */*\r\nConnection: close\r\n\r\n",
         path.as_str(),
-        host.as_str()
+        host_header.as_str()
     );
     if vnet
         .submit(api::Command::SendTcp {

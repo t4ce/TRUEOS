@@ -482,7 +482,9 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
     'redirects: loop {
         crate::matrix::push_line(slot_id, "https: opening tls/tcp");
 
-        let Ok(ip) = dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::default()).await
+        let Ok(ip) =
+            dns::resolve_ipv4_for_device(dev_idx, target.host, DnsConfig::for_device(dev_idx))
+                .await
         else {
             crate::log!("tls_demo: dns failed (device={})\n", dev_idx);
             break 'redirects;

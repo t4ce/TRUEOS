@@ -36,8 +36,16 @@ pub enum DnsServer {
 
 impl Default for DnsConfig {
     fn default() -> Self {
-        let (ra6, ra6_count) = crate::net::adapter::primary_ra_dns6_snapshot();
-        let (dhcp4, dhcp4_count) = crate::net::adapter::primary_dhcp_dns_snapshot();
+        Self::for_device(crate::net::primary_device_index())
+    }
+}
+
+impl DnsConfig {
+    pub fn for_device(dev_idx: usize) -> Self {
+        let (ra6, ra6_count) = crate::net::adapter::ra_dns6_snapshot_at(dev_idx)
+            .unwrap_or_else(|| crate::net::adapter::primary_ra_dns6_snapshot());
+        let (dhcp4, dhcp4_count) = crate::net::adapter::dhcp_dns_snapshot_at(dev_idx)
+            .unwrap_or_else(|| crate::net::adapter::primary_dhcp_dns_snapshot());
 
         // Prefer network-provided DNS (RA RDNSS for v6, then DHCPv4), then fall back
         // to public resolvers. Keep both v6 and v4 fallbacks so we work on:
@@ -76,10 +84,9 @@ impl Default for DnsConfig {
             n = n.saturating_add(1);
         }
 
-        let server_count = n;
         Self {
             servers,
-            server_count,
+            server_count: n,
             // Loader/CDN imports are sensitive to resolver jitter; use a less aggressive
             // default than 1.5s to avoid spurious NET_ERR_TIMEOUT_DNS.
             timeout_ms: 4000,

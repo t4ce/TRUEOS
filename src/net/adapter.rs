@@ -165,6 +165,20 @@ pub fn primary_ra_dns6_snapshot() -> ([[u8; 16]; RA_DNS6_MAX], u8) {
     *PRIMARY_RA_DNS6.lock()
 }
 
+pub fn dhcp_dns_snapshot_at(index: usize) -> Option<([[u8; 4]; DHCP_DNS_MAX], u8)> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    let svc = services.get(index)?;
+    Some((svc.dhcp_dns, svc.dhcp_dns_count))
+}
+
+pub fn ra_dns6_snapshot_at(index: usize) -> Option<([[u8; 16]; RA_DNS6_MAX], u8)> {
+    let guard = NET_SERVICES.lock();
+    let services = guard.as_ref()?;
+    let svc = services.get(index)?;
+    Some((svc.ra_dns6, svc.ra_dns6_count))
+}
+
 pub fn ipv4_at(index: usize) -> Option<[u8; 4]> {
     let guard = NET_SERVICES.lock();
     let services = guard.as_ref()?;
