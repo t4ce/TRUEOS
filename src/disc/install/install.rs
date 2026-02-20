@@ -25,9 +25,9 @@ pub async fn install_bootable_uefi_gpt_with_log(
         .saturating_add(64 * 1024) // limine.conf + dir entries
         .saturating_add(16 * 1024 * 1024); // slack for FAT tables/rounding
 
-    let mut esp_mib = (esp_bytes_needed + (1024 * 1024 - 1)) / (1024 * 1024);
+    let mut esp_mib = esp_bytes_needed.div_ceil(1024 * 1024);
     // Round up to 32MiB increments for nicer alignment.
-    esp_mib = ((esp_mib + 31) / 32) * 32;
+    esp_mib = esp_mib.div_ceil(32) * 32;
     esp_mib = core::cmp::max(64, esp_mib);
 
     log(alloc::format!("install: esp size target={} MiB", esp_mib).as_str());
@@ -149,7 +149,7 @@ resolution: 1920x1080x32\n\n";
         "install: esp range lba={} blocks={} (~{} MiB)",
         esp_range.first_lba(),
         esp_range.block_count(),
-        (esp_range.block_count().saturating_mul(512) + (1024 * 1024 - 1)) / (1024 * 1024)
+        esp_range.block_count().saturating_mul(512).div_ceil(1024 * 1024)
     )
     .as_str());
     if let Err(e) = fat32::format_and_populate_esp_with_log(

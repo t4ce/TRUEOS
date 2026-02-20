@@ -50,7 +50,7 @@ fn parse_http_status(buf: &[u8]) -> Option<u16> {
 }
 
 fn ascii_lower(b: u8) -> u8 {
-    if (b'A'..=b'Z').contains(&b) {
+    if b.is_ascii_uppercase() {
         b + 32
     } else {
         b
@@ -330,7 +330,7 @@ fn header_parse_content_length(headers: &[u8]) -> Option<usize> {
         let mut any = false;
         while k < line.len() {
             let b = line[k];
-            if !(b'0'..=b'9').contains(&b) {
+            if !b.is_ascii_digit() {
                 break;
             }
             any = true;
@@ -447,11 +447,10 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     let preferred =
         (preferred != u32::MAX && (preferred as usize) < dev_count).then_some(preferred as usize);
 
-    if let Some(dev_idx) = preferred {
-        if tls_demo_attempt_device(slot_id, initial_host, dev_idx).await {
+    if let Some(dev_idx) = preferred
+        && tls_demo_attempt_device(slot_id, initial_host, dev_idx).await {
             return;
         }
-    }
 
     // Try each NIC index. This is important when multiple devices exist but only
     // one is wired to slirp/user-net in QEMU.
@@ -658,11 +657,10 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                     if let Some(code) = status_code {
                                         let is_redirect =
                                             matches!(code, 301 | 302 | 303 | 307 | 308);
-                                        if is_redirect {
-                                            if let Some(loc) =
+                                        if is_redirect
+                                            && let Some(loc) =
                                                 header_get_value(headers, b"location")
-                                            {
-                                                if let Some(next) =
+                                                && let Some(next) =
                                                     parse_redirect_target(&target, loc)
                                                 {
                                                     redirects += 1;
@@ -684,8 +682,6 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                                     // Start the next request on the same device.
                                                     continue 'redirects;
                                                 }
-                                            }
-                                        }
                                     }
                                 } else {
                                     crate::matrix::push_line(

@@ -274,8 +274,8 @@ pub(crate) fn dispatch_line(ctx: &mut ShellCommandCtx<'_>) -> Option<CommandActi
 }
 
 fn split_verb_rest(line: &str) -> (&str, &str) {
-    let mut iter = line.char_indices();
-    while let Some((idx, ch)) = iter.next() {
+    let iter = line.char_indices();
+    for (idx, ch) in iter {
         if ch.is_whitespace() {
             let a = &line[..idx];
             let b = line[idx..].trim();
@@ -325,13 +325,11 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
         .iter()
         .enumerate()
         .find(|(_, a)| a.ty == ArgType::Rest)
-    {
-        if idx + 1 != cmd.args.len() {
+        && idx + 1 != cmd.args.len() {
             return Err(ArgError {
                 kind: ArgErrorKind::RestNotLast,
             });
         }
-    }
 
     if cmd.args.len() == 1 && cmd.args[0].ty == ArgType::Rest {
         let arg0 = cmd.args[0];

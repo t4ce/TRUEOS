@@ -250,13 +250,12 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                 }
             }
             5 => {
-                if let Some(iface) = current_iface {
-                    if current_alt == 0
+                if let Some(_iface) = current_iface
+                    && current_alt == 0
                         && current_class == USB_CLASS_MASS_STORAGE
                         && current_subclass == USB_SUBCLASS_SCSI
                         && current_proto == USB_PROTO_BULK_ONLY
-                    {
-                        if len >= 7 {
+                        && len >= 7 {
                             let ep_addr = cfg[idx + 2];
                             let attrs = cfg[idx + 3];
                             if (attrs & 0x3) == 0x2 {
@@ -271,13 +270,11 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                                 }
                             }
                         }
-                    }
-                }
             }
             0x30 => {
                 // SuperSpeed Endpoint Companion
-                if len >= 6 {
-                    if let Some(ep) = last_ep_addr {
+                if len >= 6
+                    && let Some(ep) = last_ep_addr {
                         let max_burst = cfg[idx + 2];
                         if ep == ep_in.map(|(a, _)| a).unwrap_or(0xFF) {
                             ss_burst_in = max_burst;
@@ -285,7 +282,6 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
                             ss_burst_out = max_burst;
                         }
                     }
-                }
             }
             _ => {}
         }
@@ -349,7 +345,7 @@ pub async fn attach_mass_device(params: AttachParams<'_>) -> Result<(), ()> {
 
     // Set configuration once.
     let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((pair.configuration as u32) << 16),
+        d0: ((9u32) << 8) | ((pair.configuration as u32) << 16),
         d1: 0,
         d2: 8,
         d3: trb_type(2) | (1 << 6),
@@ -796,7 +792,7 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
     ) -> disc_block::BoxFuture<'a, disc_block::Result<()>> {
         Box::pin(async move {
             let block_size = self.block_size_bytes() as usize;
-            if block_size == 0 || buf.len() % block_size != 0 {
+            if block_size == 0 || !buf.len().is_multiple_of(block_size) {
                 return Err(disc_block::Error::InvalidParam);
             }
 

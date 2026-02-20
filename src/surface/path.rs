@@ -166,6 +166,12 @@ impl Path {
     }
 }
 
+impl Default for PathBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PathBuf {
     pub fn new() -> Self {
         Self {
@@ -340,7 +346,7 @@ pub fn normalize_rel_no_parent(input: &str) -> Option<String> {
     if s.is_empty() {
         return Some(String::new());
     }
-    if s.as_bytes().iter().any(|&b| b == 0) {
+    if s.as_bytes().contains(&0) {
         return None;
     }
 

@@ -34,7 +34,7 @@ pub fn load_sanitized_from_root_blocking()
 }
 
 fn is_hex(b: u8) -> bool {
-    matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
+    b.is_ascii_hexdigit()
 }
 
 fn hex4_lower(bytes: &[u8]) -> Option<[u8; 4]> {

@@ -335,11 +335,10 @@ async fn scout_pass(info: xhci::XhcInfo) {
     for port in 0..state.ctx.port_count {
         let status = unsafe { state.ctx.portsc(port as usize) };
         let (connected_flag, _, _) = decode_port_status(status);
-        if connected_flag {
-            if connected.push(((port + 1) as u8, status)).is_err() {
+        if connected_flag
+            && connected.push(((port + 1), status)).is_err() {
                 connected_overflowed = true;
             }
-        }
     }
 
     // If we couldn't record all connected ports, don't treat missing entries as disconnects.
@@ -463,7 +462,7 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
         // Check registered devices
         {
             let devs = super::DEVICES[controller_id].lock();
-            if let Some(dev) = devs.iter().find(|d| d.port == (port + 1) as u8) {
+            if let Some(dev) = devs.iter().find(|d| d.port == (port + 1)) {
                 kind_str = Some(match dev.kind {
                     DeviceKind::Hid => "hid",
                     DeviceKind::Mass => "mass",
@@ -480,18 +479,17 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
                 if let Some(ident) = super::identity_for_slot(controller_id, dev.slot_id) {
                     vid = Some(ident.vid);
                     pid = Some(ident.pid);
-                    if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid) {
-                        if matches!(dev.kind, DeviceKind::Unknown) {
+                    if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid)
+                        && matches!(dev.kind, DeviceKind::Unknown) {
                             kind_str = Some(name);
                         }
-                    }
                 }
             }
         }
 
         // Fallback or detecting state
         if kind_str.is_none() && connected {
-            if let Some((v, p)) = xhci::get_port_vidpid(controller_id, (port + 1) as u8) {
+            if let Some((v, p)) = xhci::get_port_vidpid(controller_id, port + 1 ) {
                 vid = Some(v);
                 pid = Some(p);
                 if let Some(name) = super::friendly_name_for_vidpid(v, p) {
@@ -505,7 +503,7 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
         }
 
         let _ = results.push(ScoutedPort {
-            port_id: (port + 1) as u8,
+            port_id: (port + 1),
             status,
             connected,
             enabled,

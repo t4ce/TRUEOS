@@ -163,8 +163,8 @@ fn first_active_controller() -> Option<usize> {
 
 pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let mut guard = UAC_RUNTIME[controller_id].lock();
-    if let Some(rt) = guard.as_ref() {
-        if rt.slot_id == slot_id {
+    if let Some(rt) = guard.as_ref()
+        && rt.slot_id == slot_id {
             if let Some(w) = rt.fill_waker.as_ref() {
                 w.wake_by_ref();
             }
@@ -176,7 +176,6 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
             UAC_EVENT_QUEUE[controller_id].lock().clear();
             return true;
         }
-    }
     false
 }
 
@@ -446,13 +445,13 @@ fn parse_as_sample_rates(cfg: &[u8], ifnum: u8, alt: u8, uac2: bool) -> UacRateI
 fn select_sample_rate(info: &UacRateInfo) -> u32 {
     let preferred = crate::audio::DEFAULT_RATE_HZ;
     if !info.rates.is_empty() {
-        if info.rates.iter().any(|r| *r == preferred) {
+        if info.rates.contains(&preferred) {
             return preferred;
         }
-        if preferred != 44_100 && info.rates.iter().any(|r| *r == 44_100) {
+        if preferred != 44_100 && info.rates.contains(&44_100) {
             return 44_100;
         }
-        if preferred != 48_000 && info.rates.iter().any(|r| *r == 48_000) {
+        if preferred != 48_000 && info.rates.contains(&48_000) {
             return 48_000;
         }
         return info.rates[0];
@@ -562,8 +561,7 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
 
         if let (Some((ifnum, alt, _)), Some((ep_addr, max_packet, interval, sync_type))) =
             (current_if, pending_ep)
-        {
-            if current_cls == USB_CLASS_AUDIO
+            && current_cls == USB_CLASS_AUDIO
                 && current_sub == USB_SUBCLASS_AUDIOSTREAMING
                 && alt != 0
                 && candidate.is_none()
@@ -586,7 +584,6 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
                     ss_mult,
                 });
             }
-        }
 
         idx += len;
     }

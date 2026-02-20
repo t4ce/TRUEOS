@@ -15,7 +15,7 @@ fn tsc_now() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
         // Best-effort cycle counter for perf measurements.
-        unsafe { core::arch::x86_64::_rdtsc() as u64 }
+        unsafe { core::arch::x86_64::_rdtsc() }
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -96,11 +96,10 @@ fn http_parse_target(req: &[u8]) -> Option<&str> {
 fn http_query_param<'a>(target: &'a str, key: &str) -> Option<&'a str> {
     let (_, q) = target.split_once('?')?;
     for part in q.split('&') {
-        if let Some((k, v)) = part.split_once('=') {
-            if k == key {
+        if let Some((k, v)) = part.split_once('=')
+            && k == key {
                 return Some(v);
             }
-        }
     }
     None
 }
@@ -205,11 +204,10 @@ fn http_find_header<'a>(req: &'a [u8], key: &str) -> Option<&'a str> {
         if line.is_empty() {
             break;
         }
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case(key) {
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim().eq_ignore_ascii_case(key) {
                 return Some(v.trim());
             }
-        }
     }
     None
 }
@@ -305,8 +303,8 @@ async fn http_prepare_file_response(
     extra_headers.push_str("Accept-Ranges: bytes\r\n");
     extra_headers.push_str(format!("ETag: {}\r\n", etag).as_str());
 
-    if let Some(value) = http_find_header(req, "If-None-Match") {
-        if http_etag_matches(value, etag.as_str()) {
+    if let Some(value) = http_find_header(req, "If-None-Match")
+        && http_etag_matches(value, etag.as_str()) {
             return HttpResponsePlan {
                 status: "HTTP/1.1 304 Not Modified\r\n",
                 content_type: "text/plain; charset=utf-8",
@@ -315,18 +313,16 @@ async fn http_prepare_file_response(
                 body: HttpBodyPlan::None,
             };
         }
-    }
 
     let mut allow_ranges = true;
-    if let Some(value) = http_find_header(req, "If-Range") {
-        if !http_etag_matches(value, etag.as_str()) {
+    if let Some(value) = http_find_header(req, "If-Range")
+        && !http_etag_matches(value, etag.as_str()) {
             allow_ranges = false;
         }
-    }
 
     let mut ranges: Option<Vec<(u64, u64)>> = None;
-    if allow_ranges {
-        if let Some(value) = http_find_header(req, "Range") {
+    if allow_ranges
+        && let Some(value) = http_find_header(req, "Range") {
             ranges = http_parse_range_header(value, total_len);
             if ranges.is_none() {
                 let mut headers = extra_headers.clone();
@@ -340,7 +336,6 @@ async fn http_prepare_file_response(
                 };
             }
         }
-    }
 
     if let Some(ranges) = ranges {
         if ranges.len() == 1 {
@@ -372,13 +367,13 @@ async fn http_prepare_file_response(
                 HTTP_MULTIPART_BOUNDARY, HTTP_OCTET_STREAM, start, end, total_len
             );
             let len = end.saturating_sub(start).saturating_add(1);
-            total_len_out = total_len_out.saturating_add(header.as_bytes().len() as u64);
+            total_len_out = total_len_out.saturating_add(header.len() as u64);
             total_len_out = total_len_out.saturating_add(len);
             total_len_out = total_len_out.saturating_add(2); // trailing CRLF
             parts.push(MultipartPart { start, end, header });
         }
         let closing = format!("--{}--\r\n", HTTP_MULTIPART_BOUNDARY);
-        total_len_out = total_len_out.saturating_add(closing.as_bytes().len() as u64);
+        total_len_out = total_len_out.saturating_add(closing.len() as u64);
 
         return HttpResponsePlan {
             status: "HTTP/1.1 206 Partial Content\r\n",
@@ -661,7 +656,7 @@ pub async fn http_trueosfs_task() {
                     header.push_str("\r\nConnection: close\r\n\r\n");
 
                     let body_len_usize = body_len.min(usize::MAX as u64) as usize;
-                    active_pending = header.as_bytes().len().saturating_add(body_len_usize);
+                    active_pending = header.len().saturating_add(body_len_usize);
                     active_sent = 0;
                     active_close = true;
 

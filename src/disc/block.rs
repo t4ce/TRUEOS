@@ -358,7 +358,7 @@ impl DeviceHandle {
 
         self.validate_lba_range(lba, blocks_u64)?;
         let mut guard = self.node.driver.lock().await;
-        (&mut **guard).read_blocks(lba, blocks).await
+        (**guard).read_blocks(lba, blocks).await
     }
 
     pub async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<()> {
@@ -370,7 +370,7 @@ impl DeviceHandle {
         if bs == 0 {
             return Err(Error::InvalidParam);
         }
-        if buf.len() % bs != 0 {
+        if !buf.len().is_multiple_of(bs) {
             return Err(Error::InvalidParam);
         }
 
@@ -384,12 +384,12 @@ impl DeviceHandle {
         self.validate_lba_range(lba, blocks)?;
 
         let mut guard = self.node.driver.lock().await;
-        (&mut **guard).write_blocks(lba, buf).await
+        (**guard).write_blocks(lba, buf).await
     }
 
     pub async fn flush(&self) -> Result<()> {
         let mut guard = self.node.driver.lock().await;
-        (&mut **guard).flush().await
+        (**guard).flush().await
     }
 
     fn validate_lba_range(&self, lba: u64, blocks: u64) -> Result<()> {
@@ -449,7 +449,7 @@ fn blocks_in_buffer(len: usize, block_size: u32) -> Result<u64> {
         return Ok(0);
     }
 
-    if len % block_size as usize != 0 {
+    if !len.is_multiple_of(block_size as usize) {
         return Err(Error::InvalidParam);
     }
 

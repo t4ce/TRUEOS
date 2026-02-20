@@ -9,8 +9,8 @@ const AP_HEARTBEAT_TASK_POOL: usize = 256;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
-    let slot = percpu::slot_for_lapic_id(cpu.lapic_id as u32);
-    percpu::init_ap(cpu.lapic_id as u32, slot as u32);
+    let slot = percpu::slot_for_lapic_id(cpu.lapic_id);
+    percpu::init_ap(cpu.lapic_id, slot as u32);
     let ex = percpu::init_executor();
     let spawner = ex.spawner();
 

@@ -551,6 +551,6 @@ pub(crate) async fn tga_task() {
             next_tick = now + period;
         }
         Timer::at(next_tick).await;
-        next_tick = next_tick + period;
+        next_tick += period;
     }
 }

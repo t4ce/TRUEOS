@@ -266,9 +266,9 @@ async fn handle_do_format(mode: &mut ShellMode, io: &dyn ShellBackend, disc_id: 
 
         match crate::disc::install::gpt::write_gpt_layout_with_log(handle, &parts, &mut log).await {
             Ok(_) => {
-                if let Ok(reg) = crate::v::disc::partition::register_gpt_partitions(handle).await {
-                    if let Some(first) = reg.first() {
-                        if let Some(part_handle) = crate::disc::block::device_handle(first.id) {
+                if let Ok(reg) = crate::v::disc::partition::register_gpt_partitions(handle).await
+                    && let Some(first) = reg.first()
+                        && let Some(part_handle) = crate::disc::block::device_handle(first.id) {
                             match crate::v::fs::trueosfs::format_blank_partition_async(part_handle)
                                 .await
                             {
@@ -294,8 +294,6 @@ async fn handle_do_format(mode: &mut ShellMode, io: &dyn ShellBackend, disc_id: 
                                 )),
                             }
                         }
-                    }
-                }
             }
             Err(e) => io.write_fmt(format_args!("format: GPT write failed ({:?})\r\n", e)),
         }

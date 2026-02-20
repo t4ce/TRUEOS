@@ -295,7 +295,7 @@ impl PmmState {
 
     fn finalize(&mut self) {
         let slice = self.regions.as_mut_slice();
-        slice.sort_by(|a, b| a.start.cmp(&b.start));
+        slice.sort_by_key(|a| a.start);
         self.merge_regions();
     }
 
@@ -330,21 +330,19 @@ impl PmmState {
             let mut start = region.start.max(min_phys);
             start = align_up_u64(start, align);
 
-            if let Some(max_addr) = max_phys {
-                if start >= max_addr {
+            if let Some(max_addr) = max_phys
+                && start >= max_addr {
                     continue;
                 }
-            }
 
             let end = start.checked_add(size)?;
             if end > region.end {
                 continue;
             }
-            if let Some(max_addr) = max_phys {
-                if end > max_addr {
+            if let Some(max_addr) = max_phys
+                && end > max_addr {
                     continue;
                 }
-            }
 
             self.regions.remove(idx);
             let mut insert_pos = idx;

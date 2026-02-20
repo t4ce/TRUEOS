@@ -160,13 +160,7 @@ pub async fn run_ai_wizard(
         crate::ecma48::color("§ ", crate::shell::PROMPT_RGB)
     ));
 
-    let slot = match crate::matrix::alloc_slot("ai") {
-        Some(s) => s,
-        None => {
-            // Best-effort: still run without statusbar.
-            255
-        }
-    };
+    let slot = crate::matrix::alloc_slot("ai").unwrap_or(255);
     if slot != 255 {
         let _ = statusbar::set_active_slot(slot);
         let _ = statusbar::set_left(slot, "ai");
@@ -226,13 +220,11 @@ pub async fn run_ai_wizard(
                 // Many serial/bridge backends deliver CRLF. We already consumed the first
                 // byte (CR or LF) to submit the prompt; if it was CR, discard a following LF
                 // so the cancel-future doesn't immediately see it and abort the request.
-                if b == b'\r' {
-                    if let Some(next) = io.read_byte() {
-                        if next != b'\n' {
+                if b == b'\r'
+                    && let Some(next) = io.read_byte()
+                        && next != b'\n' {
                             // Unexpected: we can't un-read. Best-effort: ignore.
                         }
-                    }
-                }
                 let input = line.trim().to_owned();
                 line.clear();
 
@@ -800,10 +792,10 @@ fn build_openai_request_body(
         json_escape_into(&mut esc_prev, prev);
         body.push_str(",\"previous_response_id\":\"");
         body.push_str(&esc_prev);
-        body.push_str("\"");
+        body.push('"');
     }
 
-    body.push_str("}");
+    body.push('}');
     body
 }
 
@@ -881,7 +873,7 @@ fn clip_visible(s: &str, max_chars: usize) -> String {
     let mut n = 0usize;
     for ch in s.chars() {
         if n >= max_chars {
-            out.push_str("…");
+            out.push('…');
             break;
         }
         out.push(ch);
@@ -913,7 +905,7 @@ fn shell_call_output_item_json(item: &ShellCallOutput) -> String {
     let mut combined = String::new();
     for (idx, entry) in item.output.iter().enumerate() {
         if idx != 0 {
-            combined.push_str("\n");
+            combined.push('\n');
         }
         if !entry.stdout.is_empty() {
             combined.push_str("[stdout]\n");
@@ -1020,7 +1012,7 @@ fn extract_json_u64_field_from(json: &str, start: usize, needle: &str) -> Option
 
     while i < sub.len() {
         let b = sub.as_bytes()[i];
-        if (b'0'..=b'9').contains(&b) {
+        if b.is_ascii_digit() {
             break;
         }
         i += 1;
@@ -1028,7 +1020,7 @@ fn extract_json_u64_field_from(json: &str, start: usize, needle: &str) -> Option
     let mut j = i;
     while j < sub.len() {
         let b = sub.as_bytes()[j];
-        if !(b'0'..=b'9').contains(&b) {
+        if !b.is_ascii_digit() {
             break;
         }
         j += 1;
@@ -1210,7 +1202,7 @@ async fn run_shell_call(
 }
 
 fn is_live_tetris_command(line: &str) -> bool {
-    let verb = line.trim().split_whitespace().next().unwrap_or("");
+    let verb = line.split_whitespace().next().unwrap_or("");
     matches_ignore_ascii(verb, "tetris")
 }
 
@@ -1443,16 +1435,13 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
                 b't' => out.push('\t'),
                 b'u' => {
                     // Primitive \uXXXX support
-                    if j + 4 < bytes.len() {
-                        if let Ok(hex_str) = core::str::from_utf8(&bytes[j + 1..j + 5]) {
-                            if let Ok(cp) = u32::from_str_radix(hex_str, 16) {
-                                if let Some(ch) = core::char::from_u32(cp) {
+                    if j + 4 < bytes.len()
+                        && let Ok(hex_str) = core::str::from_utf8(&bytes[j + 1..j + 5])
+                            && let Ok(cp) = u32::from_str_radix(hex_str, 16)
+                                && let Some(ch) = core::char::from_u32(cp) {
                                     out.push(ch);
                                     j += 4;
                                 }
-                            }
-                        }
-                    }
                 }
                 _ => {}
             }

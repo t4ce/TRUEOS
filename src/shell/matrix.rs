@@ -899,7 +899,7 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
     impl crate::v::net::https::FetchProgress for DlProgress {
         fn on_progress(&mut self, received: usize, total: Option<usize>) {
             let now_tick = embassy_time_driver::now();
-            let hz = embassy_time_driver::TICK_HZ as u64;
+            let hz = embassy_time_driver::TICK_HZ;
             let elapsed_ticks = now_tick.saturating_sub(self.start_tick);
             let elapsed_ms = if hz == 0 {
                 0

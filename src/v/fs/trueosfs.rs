@@ -223,7 +223,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         }
         let info = self.handle.info();
         let bs = info.block_size as usize;
-        if bs == 0 || buf.len() % bs != 0 {
+        if bs == 0 || !buf.len().is_multiple_of(bs) {
             return Err(block::Error::InvalidParam);
         }
 
@@ -383,15 +383,14 @@ fn file_record_cache_insert(disk_id: block::DiscId, path: &str, record: trueos_f
         cache.remove(pos);
     }
 
-    if cache.len() >= FILE_RECORD_CACHE_CAP {
-        if let Some((evict_idx, _)) = cache
+    if cache.len() >= FILE_RECORD_CACHE_CAP
+        && let Some((evict_idx, _)) = cache
             .iter()
             .enumerate()
             .min_by_key(|(_, entry)| entry.last_use)
         {
             cache.remove(evict_idx);
         }
-    }
 
     cache.push(FileRecordCacheEntry {
         disk_id,
@@ -1034,12 +1033,12 @@ pub async fn html_tree_async(
         return Ok(None);
     };
 
-    let params = trueos_fs::FsParams {
+    let _params = trueos_fs::FsParams {
         super_lba: placement.super_lba,
         data_lba: placement.data_lba,
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let io = KernelBlockIo::new(disk);
+    let _io = KernelBlockIo::new(disk);
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum FsKind {
@@ -1119,7 +1118,7 @@ pub async fn html_tree_async(
     }
 
     Ok(Some(tree.html_tree_string(root, |e, out| match e.kind {
-        FsKind::Root => out.push_str("/"),
+        FsKind::Root => out.push('/'),
         FsKind::Dir => {
             out.push_str(e.name.as_str());
             out.push('/');
@@ -1248,7 +1247,7 @@ impl Drop for AlignedBuf {
 }
 
 fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
-    block0.len() >= 8 && &block0[0..8] == &trueos_fs::MAGIC
+    block0.len() >= 8 && block0[0..8] == trueos_fs::MAGIC
 }
 
 fn is_transient_io(e: block::Error) -> bool {
@@ -1342,8 +1341,7 @@ pub async fn locate_async(
                         // Our superblock is at the start of the TRUEOS data partition.
                         if let Ok(p0) =
                             read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await
-                        {
-                            if looks_like_trueos_superblock(&p0) {
+                            && looks_like_trueos_superblock(&p0) {
                                 let super_lba = p.range.first_lba();
                                 let end_lba_exclusive = p.range.last_lba().saturating_add(1);
                                 return Ok(Some(TrueosFsPlacement {
@@ -1353,7 +1351,6 @@ pub async fn locate_async(
                                     data_end_lba_exclusive: Some(end_lba_exclusive),
                                 }));
                             }
-                        }
                     }
                     break;
                 }

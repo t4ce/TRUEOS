@@ -1,4 +1,3 @@
-use crate::time;
 use embassy_executor::{SendSpawner, Spawner};
 use spin::Mutex;
 
@@ -60,11 +59,11 @@ pub fn run_ap_forever() -> ! {
         crate::wait::spin_step();
 
         // Low-rate maintenance / indicator.
-        if counter % 100_000 == 0 {
+        if counter.is_multiple_of(100_000) {
             crate::smp::poll();
         }
 
-        if counter % 250_000 == 0 {
+        if counter.is_multiple_of(250_000) {
             let slot = crate::percpu::this_cpu().cpu_index() as usize;
             let total = crate::smp::cpu_count().max(1);
             let outline = match crate::cpu::intel_core_kind_hint() {

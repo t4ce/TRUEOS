@@ -146,11 +146,11 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
             crate::log!("gfx: waiting for SYSTEM lock...\n");
 
             let timeout_ms: u64 = 2000;
-            let hz = TICK_HZ as u64;
+            let hz = TICK_HZ;
             let ticks = if hz == 0 {
                 0
             } else {
-                ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+                timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
             };
             let deadline = now().saturating_add(ticks);
 
@@ -167,7 +167,7 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
         }
     };
 
-    Some(f(&mut *guard))
+    Some(f(&mut guard))
 }
 
 pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {

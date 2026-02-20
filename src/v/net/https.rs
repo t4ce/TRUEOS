@@ -71,7 +71,7 @@ fn ensure_keepalive_conn(dev_idx: usize, host: &str, port: u16) -> &'static Keep
     let key = keepalive_pool_key(dev_idx, host, port);
     let mut pool = VHTTPS_KEEPALIVE_POOL.lock();
     if let Some(c) = pool.get(&key) {
-        return *c;
+        return c;
     }
 
     let seq = VHTTPS_KEEPALIVE_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -136,14 +136,13 @@ static CABI_NET_FETCH_INFLIGHT: Mutex<BTreeMap<String, InflightFetch>> =
 async fn net_fetch_acquire_slot() {
     loop {
         let cur = NET_FETCH_ACTIVE.load(Ordering::Relaxed);
-        if cur < NET_FETCH_MAX_CONCURRENCY {
-            if NET_FETCH_ACTIVE
+        if cur < NET_FETCH_MAX_CONCURRENCY
+            && NET_FETCH_ACTIVE
                 .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 return;
             }
-        }
         // Cooperative backoff.
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
@@ -382,7 +381,7 @@ fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         if !k
             .iter()
             .zip(name.iter())
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
         {
             continue;
         }
@@ -705,8 +704,8 @@ async fn fetch_on_device(
                         };
 
                         // Progress reporting: once headers are known, report body byte count.
-                        if let Some(hdr_end) = hdr_end_cached {
-                            if hdr_end != 0 {
+                        if let Some(hdr_end) = hdr_end_cached
+                            && hdr_end != 0 {
                                 if content_len_cached.is_none() {
                                     let headers = &plaintext[..hdr_end];
                                     content_len_cached = Some(header_parse_content_length(headers));
@@ -724,22 +723,20 @@ async fn fetch_on_device(
                                     }
                                 }
                             }
-                        }
                         if hdr_end != 0 {
                             let headers = &plaintext[..hdr_end];
                             let body = &plaintext[hdr_end..];
 
                             let status = parse_http_status(&plaintext).unwrap_or(0);
                             if status != 200 {
-                                if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                if is_redirect_status(status)
+                                    && let Some(next) = redirect_url_from_location(parsed, headers)
                                     {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
                                         }
                                         return Err(FetchError::Redirect { status, url: next });
                                     }
-                                }
 
                                 // Log error bodies (often JSON) to aid debugging.
                                 let is_chunked = header_contains_token(
@@ -851,11 +848,10 @@ async fn fetch_on_device(
 
                     let status = parse_http_status(&plaintext).unwrap_or(0);
                     if status != 200 {
-                        if is_redirect_status(status) {
-                            if let Some(next) = redirect_url_from_location(parsed, headers) {
+                        if is_redirect_status(status)
+                            && let Some(next) = redirect_url_from_location(parsed, headers) {
                                 return Err(FetchError::Redirect { status, url: next });
                             }
-                        }
 
                         // Log error bodies (often JSON) to aid debugging.
                         let is_chunked =
@@ -1254,11 +1250,7 @@ async fn fetch_on_device_sse(
                     loop {
                         let delim = if let Some(p) = sse_buf.windows(2).position(|w| w == b"\n\n") {
                             Some((p, 2))
-                        } else if let Some(p) = sse_buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                            Some((p, 4))
-                        } else {
-                            None
-                        };
+                        } else { sse_buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (p, 4)) };
                         let Some((pos, dlen)) = delim else { break };
                         let block = sse_buf.drain(..pos + dlen).collect::<Vec<u8>>();
                         // Strip delimiter
@@ -1657,8 +1649,8 @@ async fn fetch_on_device_to_file_keepalive(
                             let headers = &header_buf[..hdr_end];
                             let status = parse_http_status(headers).unwrap_or(0);
                             if status != 200 {
-                                if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                if is_redirect_status(status)
+                                    && let Some(next) = redirect_url_from_location(parsed, headers)
                                     {
                                         keepalive_release(conn);
                                         return Err(FetchToFileError::Redirect {
@@ -1666,7 +1658,6 @@ async fn fetch_on_device_to_file_keepalive(
                                             url: next,
                                         });
                                     }
-                                }
                                 keepalive_release(conn);
                                 return Err(FetchToFileError::Code(fetch_error_to_code(
                                     FetchError::Http(status),
@@ -1918,7 +1909,7 @@ async fn fetch_on_device_to_file(
 
     #[inline]
     fn ms_since(a: Instant, b: Instant) -> u64 {
-        b.saturating_duration_since(a).as_millis() as u64
+        b.saturating_duration_since(a).as_millis()
     }
 
     #[inline]
@@ -2027,8 +2018,8 @@ async fn fetch_on_device_to_file(
                             let status = parse_http_status(headers).unwrap_or(0);
                             last_http_status = status;
                             if status != 200 {
-                                if is_redirect_status(status) {
-                                    if let Some(next) = redirect_url_from_location(parsed, headers)
+                                if is_redirect_status(status)
+                                    && let Some(next) = redirect_url_from_location(parsed, headers)
                                     {
                                         if let Some(h) = tls_handle {
                                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -2057,7 +2048,6 @@ async fn fetch_on_device_to_file(
                                             url: next,
                                         });
                                     }
-                                }
 
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -2931,10 +2921,10 @@ pub async fn fetch_https_to_file_async(
         crate::v::fs::trueosfs::file_rename_async(disk, tmp.as_str(), key.as_str()).await;
     let t_ren = Instant::now();
 
-    let total_ms = t_ren.saturating_duration_since(t0).as_millis() as u64;
-    let exists_ms = t_exists.saturating_duration_since(t0).as_millis() as u64;
-    let dl_ms = t_dl.saturating_duration_since(t_exists).as_millis() as u64;
-    let ren_ms = t_ren.saturating_duration_since(t_dl).as_millis() as u64;
+    let total_ms = t_ren.saturating_duration_since(t0).as_millis();
+    let exists_ms = t_exists.saturating_duration_since(t0).as_millis();
+    let dl_ms = t_dl.saturating_duration_since(t_exists).as_millis();
+    let ren_ms = t_ren.saturating_duration_since(t_dl).as_millis();
     crate::log!(
         "vhttps-cache: done key={} ms_total={} exists={} dl={} rename={}\n",
         key,
@@ -3022,7 +3012,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
             Err(code) => code,
         };
         net_fetch_release_slot();
-        let elapsed_ms = t0.elapsed().as_millis() as u64;
+        let elapsed_ms = t0.elapsed().as_millis();
 
         // Complete leader + all followers.
         let followers = {

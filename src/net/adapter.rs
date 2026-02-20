@@ -722,7 +722,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                                     let mut chaddr = [0u8; 6];
                                     let mut chaddr_match: u8 = 0;
                                     if udp_len >= 8 + 240 && packet.len() >= udp_off + udp_len {
-                                        op = packet[dhcp_off + 0];
+                                        op = packet[dhcp_off];
                                         let hlen = packet[dhcp_off + 2];
                                         xid = u32::from_be_bytes([
                                             packet[dhcp_off + 4],
@@ -1038,7 +1038,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                 // DHCP/BOOTP minimal parse (RFC2131): UDP payload starts after 8 bytes.
                                 let dhcp_off = udp_off + 8;
                                 if buf.len() >= dhcp_off + 240 {
-                                    let op = buf[dhcp_off + 0];
+                                    let op = buf[dhcp_off];
                                     let htype = buf[dhcp_off + 1];
                                     let hlen = buf[dhcp_off + 2];
                                     let flags = u16::from_be_bytes([
@@ -1417,7 +1417,7 @@ impl NetService {
             if !k
                 .iter()
                 .zip(b"content-length".iter())
-                .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
             {
                 continue;
             }
@@ -1542,13 +1542,12 @@ impl NetService {
         let sock = self.sockets.get_mut::<tcp::Socket>(st.socket);
 
         // Send request once we can send.
-        if !st.request_sent && sock.can_send() && sock.may_send() {
-            if sock.send_slice(&st.request[..]).is_ok() {
+        if !st.request_sent && sock.can_send() && sock.may_send()
+            && sock.send_slice(&st.request[..]).is_ok() {
                 st.request_sent = true;
                 crate::log!("netbench-internal: request sent\n");
                 did_work = true;
             }
-        }
 
         // Drain receive data without allocating/copying into events.
         if sock.can_recv() && sock.may_recv() {
@@ -1600,7 +1599,7 @@ impl NetService {
 
         // Periodic log (average since start). Keep it low-frequency.
         let now_tick = embassy_time_driver::now();
-        let hz = embassy_time_driver::TICK_HZ as u64;
+        let hz = embassy_time_driver::TICK_HZ;
         let elapsed_ticks = now_tick.saturating_sub(st.start_tick);
         let elapsed_ms = if hz == 0 {
             0
@@ -2025,11 +2024,10 @@ impl NetService {
             return;
         }
 
-        if let Some(last) = self.rs_last_sent {
-            if timestamp < last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64) {
+        if let Some(last) = self.rs_last_sent
+            && timestamp < last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64) {
                 return;
             }
-        }
 
         // NDP requires IPv6 Hop Limit = 255. If we send RS via the ICMP socket,
         // the interface default hop limit (typically 64) may be used, and many
@@ -2609,8 +2607,8 @@ impl NetService {
                 continue;
             }
             // If a ClientID is present, require it matches our DUID.
-            if let Some(cid) = p.client_id {
-                if cid != &self.dhcp6_duid[..] {
+            if let Some(cid) = p.client_id
+                && cid != &self.dhcp6_duid[..] {
                     if self.dhcp6_rx_samples_left != 0 {
                         crate::log!(
                             "net: dhcp6 rx dev={} ignored reason=clientid-mismatch\n",
@@ -2619,7 +2617,6 @@ impl NetService {
                     }
                     continue;
                 }
-            }
 
             if p.dns_count != 0 {
                 self.dhcp6_dns6 = dns;
@@ -3239,11 +3236,10 @@ impl NetService {
         }
 
         // Re-send at most once per second until we get a reply.
-        if let Some(last) = self.icmp_ping_last_sent {
-            if timestamp < last + SmolDuration::from_millis(1000) {
+        if let Some(last) = self.icmp_ping_last_sent
+            && timestamp < last + SmolDuration::from_millis(1000) {
                 return;
             }
-        }
 
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
@@ -3304,11 +3300,10 @@ impl NetService {
         }
 
         // Re-send at most once per second until we get a reply.
-        if let Some(last) = self.icmp6_ping_last_sent {
-            if timestamp < last + SmolDuration::from_millis(1000) {
+        if let Some(last) = self.icmp6_ping_last_sent
+            && timestamp < last + SmolDuration::from_millis(1000) {
                 return;
             }
-        }
 
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         if !socket.can_send() {
@@ -3415,8 +3410,8 @@ impl NetService {
                                 continue;
                             }
 
-                            if let Some((inflight_seq, sent_at)) = self.icmp_ping_inflight {
-                                if inflight_seq == seq_no {
+                            if let Some((inflight_seq, sent_at)) = self.icmp_ping_inflight
+                                && inflight_seq == seq_no {
                                     let rtt = now() - sent_at;
                                     crate::log!(
                                         "net: icmp pong dev={} seq={} rtt={}ms\n",
@@ -3439,7 +3434,6 @@ impl NetService {
                                         );
                                     }
                                 }
-                            }
                         }
                         _ => {}
                     }

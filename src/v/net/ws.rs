@@ -251,41 +251,39 @@ impl WsConnection {
                     WebSocketReceiveMessageType::Binary => None,
                     WebSocketReceiveMessageType::Ping => {
                         // RFC6455: reply to Ping with Pong including identical payload.
-                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let buf = [0u8; RX_BUF_SIZE];
                         let mut payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::Pong,
                             true,
-                            &mut buf,
+                            &buf,
                             &mut payload,
-                        ) {
-                            if let Some(h) = self.handle {
+                        )
+                            && let Some(h) = self.handle {
                                 let _ = self.net.submit(Command::SendTcp {
                                     handle: h,
                                     data: ByteBuf::from_slice_trunc(&buf[..len]),
                                 });
                             }
-                        }
                         None
                     }
                     WebSocketReceiveMessageType::Pong => None,
                     WebSocketReceiveMessageType::CloseMustReply => {
                         // Reply to Close with CloseReply (same payload).
-                        let mut buf = [0u8; RX_BUF_SIZE];
+                        let buf = [0u8; RX_BUF_SIZE];
                         let mut payload = Vec::from(&out_buf[..read_result.len_to]);
                         if let Ok(len) = self.client.write(
                             WebSocketSendMessageType::CloseReply,
                             true,
-                            &mut buf,
+                            &buf,
                             &mut payload,
-                        ) {
-                            if let Some(h) = self.handle {
+                        )
+                            && let Some(h) = self.handle {
                                 let _ = self.net.submit(Command::SendTcp {
                                     handle: h,
                                     data: ByteBuf::from_slice_trunc(&buf[..len]),
                                 });
                             }
-                        }
                         None
                     }
                     WebSocketReceiveMessageType::CloseCompleted => {

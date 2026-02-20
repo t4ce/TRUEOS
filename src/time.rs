@@ -22,7 +22,7 @@ static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 #[inline]
 pub fn uptime_seconds() -> u64 {
     let ticks = embassy_time_driver::now();
-    let hz = TICK_HZ as u64;
+    let hz = TICK_HZ;
     if hz == 0 { 0 } else { ticks / hz }
 }
 
@@ -41,7 +41,7 @@ pub fn unix_time_seconds() -> Option<u64> {
 
 fn init_once() {
     INIT.call_once(|| {
-        let start = unsafe { _rdtsc() as u64 };
+        let start = unsafe { _rdtsc() };
         START_TSC.store(start, Ordering::Relaxed);
         let hz = detect_tsc_hz().max(1);
         crate::log!("time: tsc_hz={}\n", hz);
@@ -50,12 +50,11 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
-    if let Some(hpet) = crate::efi::acpi::hpet::ensure() {
-        if let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet) {
+    if let Some(hpet) = crate::efi::acpi::hpet::ensure()
+        && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet) {
             crate::log!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
             return calibrated_hz;
         }
-    }
 
     detect_tsc_hz_from_cpuid()
 }
@@ -111,13 +110,13 @@ fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64
     }
 
     let hpet_start = hpet.main_counter();
-    let tsc_start = unsafe { _rdtsc() as u64 };
+    let tsc_start = unsafe { _rdtsc() };
 
     loop {
         let hpet_now = hpet.main_counter();
         let elapsed = hpet.counter_delta(hpet_start, hpet_now);
         if elapsed >= target_hpet_ticks {
-            let tsc_end = unsafe { _rdtsc() as u64 };
+            let tsc_end = unsafe { _rdtsc() };
             let tsc_delta = tsc_end.wrapping_sub(tsc_start);
             let hz = ((tsc_delta as u128) * 1000u128 / (SAMPLE_MS as u128)) as u64;
             if hz >= 1_000_000 {
@@ -163,7 +162,7 @@ impl Driver for TimeDriver {
 
         let start = START_TSC.load(Ordering::Relaxed);
         let tsc_hz = TSC_HZ.load(Ordering::Relaxed).max(1);
-        let tsc = unsafe { _rdtsc() as u64 };
+        let tsc = unsafe { _rdtsc() };
         let delta = tsc.wrapping_sub(start);
         ticks_from_tsc_delta(delta, tsc_hz)
     }
@@ -190,9 +189,9 @@ impl Driver for TimeDriver {
             waker: waker.clone(),
         };
 
-        if queue.insert(idx, entry).is_err() {
-            if let Some(last) = queue.last() {
-                if at < last.at {
+        if queue.insert(idx, entry).is_err()
+            && let Some(last) = queue.last()
+                && at < last.at {
                     let _ = queue.pop();
                     let insert_idx = idx.min(queue.len());
                     let _ = queue.insert(
@@ -203,8 +202,6 @@ impl Driver for TimeDriver {
                         },
                     );
                 }
-            }
-        }
     }
 }
 

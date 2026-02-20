@@ -10,7 +10,7 @@ pub(crate) fn init() {
     unsafe {
         crate::portio::outb(COM1 + 1, 0x00); // disable IRQs
         crate::portio::outb(COM1 + 3, 0x80); // DLAB on
-        crate::portio::outb(COM1 + 0, 0x01); // divisor low (115200)
+        crate::portio::outb(COM1, 0x01); // divisor low (115200)
         crate::portio::outb(COM1 + 1, 0x00); // divisor high
         crate::portio::outb(COM1 + 3, 0x03); // 8N1
         crate::portio::outb(COM1 + 2, 0xC7); // FIFO enable

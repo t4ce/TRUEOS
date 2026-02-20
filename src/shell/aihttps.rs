@@ -119,7 +119,7 @@ fn eq_ascii_case_insensitive(a: &[u8], b: &[u8]) -> bool {
     }
     a.iter()
         .zip(b.iter())
-        .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+        .all(|(x, y)| x.eq_ignore_ascii_case(y))
 }
 
 fn find_ascii_case_insensitive(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -132,7 +132,7 @@ fn find_ascii_case_insensitive(hay: &[u8], needle: &[u8]) -> Option<usize> {
     for i in 0..=(hay.len() - needle.len()) {
         let mut ok = true;
         for j in 0..needle.len() {
-            if hay[i + j].to_ascii_lowercase() != needle[j].to_ascii_lowercase() {
+            if !hay[i + j].eq_ignore_ascii_case(&needle[j]) {
                 ok = false;
                 break;
             }
@@ -475,15 +475,14 @@ async fn post_on_device_json(
                         }
                     }
 
-                    if let Some(n) = expected_len {
-                        if !body_is_chunked && decoded.len() >= n {
+                    if let Some(n) = expected_len
+                        && !body_is_chunked && decoded.len() >= n {
                             if let Some(h) = tls_handle {
                                 let _ = cmds.push(TlsCommand::Close { handle: h });
                             }
                             decoded.truncate(n);
                             return Ok(decoded);
                         }
-                    }
                     if body_is_chunked && chunked_done {
                         if let Some(h) = tls_handle {
                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -748,11 +747,7 @@ async fn post_on_device_sse(
                     loop {
                         let delim = if let Some(p) = sse_buf.windows(2).position(|w| w == b"\n\n") {
                             Some((p, 2))
-                        } else if let Some(p) = sse_buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                            Some((p, 4))
-                        } else {
-                            None
-                        };
+                        } else { sse_buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (p, 4)) };
                         let Some((pos, dlen)) = delim else { break };
 
                         let mut block = sse_buf.drain(..pos + dlen).collect::<Vec<u8>>();

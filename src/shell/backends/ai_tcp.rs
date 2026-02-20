@@ -73,7 +73,7 @@ pub async fn ai_tcp_bridge_task() {
         // Always route the bridge over the primary NIC. If another adapter exists and is broken
         // (e.g. RTL8125 TX wedge), routing bridge output over it can make the bridge look dead.
         // Pin routing to dev0 so bridge I/O stays isolated from secondary NIC failures.
-        const OWNER: &'static str = "ai-qjs@0";
+        const OWNER: &str = "ai-qjs@0";
         let cmds = NetQueue::new_leaked("ai-qjs-cmd", 256);
         let events = NetQueue::new_leaked("ai-qjs-evt", 256);
         register_app_queues(OWNER, cmds, events);
@@ -203,8 +203,8 @@ pub async fn ai_tcp_bridge_task() {
                     }
                 };
 
-                if let Some(handle) = handle {
-                    if !chunk.is_empty() {
+                if let Some(handle) = handle
+                    && !chunk.is_empty() {
                         pending_handle = Some(handle);
                         pending = Some(chunk.clone());
                         pending_ticks = 0;
@@ -232,7 +232,6 @@ pub async fn ai_tcp_bridge_task() {
                             crate::log!("ai-qjs: tx queue full (dropping pending)\n");
                         }
                     }
-                }
             }
 
             if pending.is_some() {

@@ -754,13 +754,11 @@ pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_HID_IN
                 current_proto = id.interface_protocol;
             }
             usbdesc::ParsedDescriptor::Hid(hd) => {
-                if let Some(iface) = current_iface {
-                    if current_alt == 0 {
-                        if let Some(len) = hd.report_desc_len {
+                if let Some(iface) = current_iface
+                    && current_alt == 0
+                        && let Some(len) = hd.report_desc_len {
                             report_len_by_iface[iface as usize] = len;
                         }
-                    }
-                }
             }
             usbdesc::ParsedDescriptor::Endpoint(ed) => {
                 let Some(iface) = current_iface else {
@@ -824,7 +822,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
     let config_value = endpoints.first().map(|e| e.configuration).unwrap_or(1);
 
     let setup_cfg = Trb {
-        d0: 0x0000 | ((9u32) << 8) | ((config_value as u32) << 16),
+        d0: ((9u32) << 8) | ((config_value as u32) << 16),
         d1: 0,
         d2: 8,
         d3: trb_type(2) | (1 << 6),
@@ -1000,7 +998,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         if !ep_ring.push(normal) {
             continue;
         }
-        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target as u32) };
+        unsafe { write_volatile(ctx.doorbell.add(slot_id as usize), ep_target) };
 
         register_runtime(HidRuntime {
             controller_id: ctx.controller_id,
@@ -1012,7 +1010,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             hid_kind,
             slot_id,
             ep0_state: ep0_ring.snapshot(),
-            ep_target: ep_target as u32,
+            ep_target,
             ep_ring,
             seq: 0,
             last_nonzero_seq: 0,
@@ -1109,7 +1107,7 @@ pub(crate) async fn fetch_hid_descriptor(
     desc_type: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    let w_value = ((desc_type as u32) << 8) | 0u32;
+    let w_value = (desc_type as u32) << 8 ;
     let setup_d0 = (0x81u32) | ((0x06u32) << 8) | (w_value << 16);
     let setup_d1 = iface as u32;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await

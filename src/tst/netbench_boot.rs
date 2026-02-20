@@ -111,11 +111,10 @@ pub async fn boot_netbench_task() {
 
         let mut literal_v6: Option<[u8; 16]> = None;
 
-        if let Some(inner) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            if let Ok(ip6) = inner.parse::<Ipv6Addr>() {
+        if let Some(inner) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+            && let Ok(ip6) = inner.parse::<Ipv6Addr>() {
                 literal_v6 = Some(ip6.octets());
             }
-        }
 
         // Boot netbench is intentionally IPv6-only.
         let ip6 = if let Some(ip) = literal_v6 {

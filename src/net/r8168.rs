@@ -482,7 +482,7 @@ impl R8168Adapter {
             let desc_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(desc.opts1)) };
             if (desc_opts1 & DESC_OWN) != 0 {
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
-                if self.dbg_tx_submitted != 0 && (self.dbg_tx_stall_checks % 10_000) == 0 {
+                if self.dbg_tx_submitted != 0 && self.dbg_tx_stall_checks.is_multiple_of(10_000) {
                     let (cmd, tcr, tn_lo, tn_hi, isr) = unsafe {
                         (
                             self.mmio.read_u8(REG_CMD),
@@ -541,7 +541,7 @@ impl R8168Adapter {
             );
         }
 
-        if ENABLE_PERIODIC_STATE_LOG && (self.dbg_poll_ticks % POLL_STATE_LOG_EVERY) == 0 {
+        if ENABLE_PERIODIC_STATE_LOG && self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY) {
             self.log_hw_state("periodic");
         }
 
@@ -623,11 +623,11 @@ impl R8168Adapter {
                 let should_log = if ACCEPT_RX_ERR_SUM_FRAMES {
                     self.dbg_rx_errsum == 1
                         || (RX_ERR_SUM_LOG_ACCEPTED_EVERY != 0
-                            && (self.dbg_rx_errsum % RX_ERR_SUM_LOG_ACCEPTED_EVERY) == 0)
+                            && self.dbg_rx_errsum.is_multiple_of(RX_ERR_SUM_LOG_ACCEPTED_EVERY))
                 } else {
                     self.dbg_rx_errsum == 1
                         || (RX_ERR_SUM_LOG_DROPPED_EVERY != 0
-                            && (self.dbg_rx_errsum % RX_ERR_SUM_LOG_DROPPED_EVERY) == 0)
+                            && self.dbg_rx_errsum.is_multiple_of(RX_ERR_SUM_LOG_DROPPED_EVERY))
                 };
 
                 if should_log {

@@ -47,13 +47,13 @@ pub(crate) fn cmd_acpi(
         ];
         let t = Table::new(&cols);
         t.print_header(io);
-        t.print_row(io, &["reboot", "ACPI reset"]);
-        t.print_row(io, &["S0", "Running"]);
-        t.print_row(io, &["S1", "Light sleep"]);
-        t.print_row(io, &["S2", "Deeper sleep (rare)"]);
-        t.print_row(io, &["S3", "Suspend to RAM"]);
-        t.print_row(io, &["S4", "Hibernate (suspend to disk)"]);
-        t.print_row(io, &["S5", "Soft off (shutdown)"]);
+        t.print_row(io, ["reboot", "ACPI reset"]);
+        t.print_row(io, ["S0", "Running"]);
+        t.print_row(io, ["S1", "Light sleep"]);
+        t.print_row(io, ["S2", "Deeper sleep (rare)"]);
+        t.print_row(io, ["S3", "Suspend to RAM"]);
+        t.print_row(io, ["S4", "Hibernate (suspend to disk)"]);
+        t.print_row(io, ["S5", "Soft off (shutdown)"]);
     };
 
     let Some(state) = args.and_then(|a| a.get_str(0)) else {
@@ -417,11 +417,11 @@ pub(crate) fn cmd_net(
     let t = Table::new(&cols);
     t.print_header(ctx.io);
 
-    t.print_row(ctx.io, &["net.icmp", "<target> [index|vid:pid|bb:dd.f]"]);
-    t.print_row(ctx.io, &["net.nic", "[index|vid:pid|bb:dd.f]"]);
-    t.print_row(ctx.io, &["net.hostname", "[name]"]);
-    t.print_row(ctx.io, &["net.http", "<url>"]);
-    t.print_row(ctx.io, &["net.https", "<host>"]);
+    t.print_row(ctx.io, ["net.icmp", "<target> [index|vid:pid|bb:dd.f]"]);
+    t.print_row(ctx.io, ["net.nic", "[index|vid:pid|bb:dd.f]"]);
+    t.print_row(ctx.io, ["net.hostname", "[name]"]);
+    t.print_row(ctx.io, ["net.http", "<url>"]);
+    t.print_row(ctx.io, ["net.https", "<host>"]);
 
     CommandAction::None
 }
@@ -540,15 +540,14 @@ pub(crate) fn cmd_net_icmp(
             let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(2);
             let mut got = false;
             while embassy_time::Instant::now() < deadline {
-                if let Some(ev) = vnet.pop_event() {
-                    if let api::Event::IcmpReply {
+                if let Some(ev) = vnet.pop_event()
+                    && let api::Event::IcmpReply {
                         from,
                         seq: rseq,
                         rtt_ms,
                         ..
                     } = ev
-                    {
-                        if from == ip && rseq == seq {
+                        && from == ip && rseq == seq {
                             io_static.write_fmt(format_args!(
                                 "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n",
                                 from[0], from[1], from[2], from[3], seq, rtt_ms
@@ -556,8 +555,6 @@ pub(crate) fn cmd_net_icmp(
                             got = true;
                             break;
                         }
-                    }
-                }
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
             }
             if !got {
@@ -676,11 +673,10 @@ pub(crate) fn cmd_net_nic(
     t.print_header(ctx.io);
 
     for index in 0..count {
-        if let Some(target_idx) = specific_index {
-            if index != target_idx {
+        if let Some(target_idx) = specific_index
+            && index != target_idx {
                 continue;
             }
-        }
 
         let name = crate::net::device_name_at(index).unwrap_or("Unknown");
 

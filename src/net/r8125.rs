@@ -769,7 +769,7 @@ impl R8125Adapter {
                 // stall if it persists across many polls.
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
                 if self.dbg_tx_submitted != 0
-                    && (self.dbg_tx_stall_checks % TX_STALL_KICK_THRESHOLD) == 0
+                    && self.dbg_tx_stall_checks.is_multiple_of(TX_STALL_KICK_THRESHOLD)
                 {
                     crate::log!(
                         "net/r8125: tx stall checks={} head={} tail={} desc_opts1=0x{:08x} kicks={} resets={}\n",
@@ -806,7 +806,7 @@ impl R8125Adapter {
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
 
-        if (self.dbg_poll_ticks % POLL_STATE_LOG_EVERY) == 0 {
+        if self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY) {
             self.log_hw_state("periodic");
         }
 
@@ -887,7 +887,7 @@ impl R8125Adapter {
             if (opts1 & (RX_FS | RX_LS)) != (RX_FS | RX_LS) {
                 self.dbg_rx_bad_flags = self.dbg_rx_bad_flags.saturating_add(1);
                 if self.dbg_rx_bad_flags == 1
-                    || (self.dbg_rx_bad_flags % RX_BAD_FLAGS_LOG_EVERY) == 0
+                    || self.dbg_rx_bad_flags.is_multiple_of(RX_BAD_FLAGS_LOG_EVERY)
                 {
                     crate::log!(
                         "net/r8125: rx flags missing fs/ls count={} opts1=0x{:08x} (continuing)\n",
@@ -1013,7 +1013,7 @@ impl R8125Adapter {
             self.reclaim_tx();
             if (self.tx_tail + 1) % TX_DESC_COUNT == self.tx_head {
                 if self.dbg_tx_ring_full == 1
-                    || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0
+                    || self.dbg_tx_ring_full.is_multiple_of(TX_RING_FULL_LOG_EVERY)
                 {
                     let (cmd, tcr, tn_lo, tn_hi, isr, phy) = unsafe {
                         (
@@ -1057,7 +1057,7 @@ impl R8125Adapter {
             let cur2_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(cur2.opts1)) };
             if (cur2_opts1 & DESC_OWN) != 0 {
                 if self.dbg_tx_ring_full == 1
-                    || (self.dbg_tx_ring_full % TX_RING_FULL_LOG_EVERY) == 0
+                    || self.dbg_tx_ring_full.is_multiple_of(TX_RING_FULL_LOG_EVERY)
                 {
                     crate::log!(
                         "net/r8125: tx desc busy count={} idx={} head={} tail={} opts1=0x{:08x} kicks={}\n",

@@ -320,7 +320,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             if ep_target == 0 {
                 return false;
             }
-            let evt_slot = (evt.d3 >> 24) as u32;
+            let evt_slot = evt.d3 >> 24 ;
             match device_kind_for_slot(controller_id, evt_slot) {
                 Some(DeviceKind::Hid)
                 | Some(DeviceKind::Cdc)
@@ -366,7 +366,7 @@ pub async fn poll_task(info: xhci::XhcInfo) {
             }
 
             for evt in to_process.into_iter() {
-                let evt_slot = (evt.d3 >> 24) as u32;
+                let evt_slot = evt.d3 >> 24 ;
 
                 match device_kind_for_slot(controller_id, evt_slot) {
                 Some(DeviceKind::Hid) => {

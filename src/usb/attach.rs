@@ -64,7 +64,7 @@ pub(crate) async fn try_attach_device(
         );
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Leds,
         );
@@ -72,8 +72,8 @@ pub(crate) async fn try_attach_device(
     }
 
     let has_uac_out = uac::has_as_out_endpoint(cfg_slice);
-    if has_uac_out {
-        if uac::attach_device(uac::AttachParams {
+    if has_uac_out
+        && uac::attach_device(uac::AttachParams {
             ctx,
             cmd_ring: &mut state.cmd_ring,
             ep0_ring,
@@ -97,17 +97,16 @@ pub(crate) async fn try_attach_device(
             );
             super::register_device(
                 state.info.controller_id,
-                slot_id as u32,
+                slot_id,
                 registry_port,
                 DeviceKind::Uac,
             );
             return Some(DeviceKind::Uac);
         }
-    }
 
     let has_midi = midi::has_midi_streaming_interface(cfg_slice);
-    if has_midi {
-        if midi::attach_device(midi::AttachParams {
+    if has_midi
+        && midi::attach_device(midi::AttachParams {
             ctx,
             cmd_ring: &mut state.cmd_ring,
             ep0_ring,
@@ -132,13 +131,12 @@ pub(crate) async fn try_attach_device(
             );
             super::register_device(
                 state.info.controller_id,
-                slot_id as u32,
+                slot_id,
                 registry_port,
                 DeviceKind::Midi,
             );
             return Some(DeviceKind::Midi);
         }
-    }
 
     let _ = dev_cls;
     let _ = dev_sub;
@@ -180,7 +178,7 @@ pub(crate) async fn try_attach_device(
 
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Hid,
         );
@@ -209,7 +207,7 @@ pub(crate) async fn try_attach_device(
         );
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Mass,
         );
@@ -224,7 +222,7 @@ pub(crate) async fn try_attach_device(
         );
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Pen,
         );
@@ -238,7 +236,7 @@ pub(crate) async fn try_attach_device(
         );
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Printer,
         );
@@ -269,7 +267,7 @@ pub(crate) async fn try_attach_device(
         );
         super::register_device(
             state.info.controller_id,
-            slot_id as u32,
+            slot_id,
             registry_port,
             DeviceKind::Cdc,
         );

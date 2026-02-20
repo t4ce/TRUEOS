@@ -43,11 +43,11 @@ impl Default for DnsConfig {
 impl DnsConfig {
     pub fn for_device(dev_idx: usize) -> Self {
         let (ra6, ra6_count) = crate::net::adapter::ra_dns6_snapshot_at(dev_idx)
-            .unwrap_or_else(|| crate::net::adapter::primary_ra_dns6_snapshot());
+            .unwrap_or_else(crate::net::adapter::primary_ra_dns6_snapshot);
         let (dhcp6, dhcp6_count) = crate::net::adapter::dhcp6_dns6_snapshot_at(dev_idx)
-            .unwrap_or_else(|| crate::net::adapter::primary_dhcp6_dns6_snapshot());
+            .unwrap_or_else(crate::net::adapter::primary_dhcp6_dns6_snapshot);
         let (dhcp4, dhcp4_count) = crate::net::adapter::dhcp_dns_snapshot_at(dev_idx)
-            .unwrap_or_else(|| crate::net::adapter::primary_dhcp_dns_snapshot());
+            .unwrap_or_else(crate::net::adapter::primary_dhcp_dns_snapshot);
 
         // Prefer network-provided DNS (RA RDNSS for v6, then DHCPv6, then DHCPv4), then fall back
         // to public resolvers. Keep both v6 and v4 fallbacks so we work on:
@@ -138,7 +138,7 @@ const DNS_PORT: u16 = 53;
 
 const DNS_CACHE_CAP: usize = 8;
 // Keep this short; it's mainly to avoid repeated lookups during module loading.
-const DNS_CACHE_TTL_TICKS: u64 = 15 * embassy_time_driver::TICK_HZ as u64;
+const DNS_CACHE_TTL_TICKS: u64 = 15 * embassy_time_driver::TICK_HZ;
 
 #[derive(Clone, Debug)]
 struct DnsCacheEntry {
@@ -375,13 +375,11 @@ fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
                     pkt[idx + 3],
                 ]));
             }
-            if typ == 5 && cname.is_none() {
-                if let Some((name, _next)) = dns_read_name(pkt, idx) {
-                    if !name.is_empty() {
+            if typ == 5 && cname.is_none()
+                && let Some((name, _next)) = dns_read_name(pkt, idx)
+                    && !name.is_empty() {
                         cname = Some(name);
                     }
-                }
-            }
         }
 
         idx += rdlen;
@@ -446,13 +444,11 @@ fn dns_parse_aaaa_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer6> {
                 ip.copy_from_slice(&pkt[idx..idx + 16]);
                 return Some(DnsAnswer6::Aaaa(ip));
             }
-            if typ == 5 && cname.is_none() {
-                if let Some((name, _next)) = dns_read_name(pkt, idx) {
-                    if !name.is_empty() {
+            if typ == 5 && cname.is_none()
+                && let Some((name, _next)) = dns_read_name(pkt, idx)
+                    && !name.is_empty() {
                         cname = Some(name);
                     }
-                }
-            }
         }
 
         idx += rdlen;
@@ -474,11 +470,10 @@ async fn open_udp(net: &VNet, local_port: u16, timeout_ms: u64) -> Option<vnet::
             let Some(ev) = net.pop_event() else {
                 break;
             };
-            if let vnet::Event::Opened { handle, kind } = ev {
-                if kind == vnet::SocketKind::Udp {
+            if let vnet::Event::Opened { handle, kind } = ev
+                && kind == vnet::SocketKind::Udp {
                     return Some(handle);
                 }
-            }
         }
         if Instant::now() >= deadline {
             return None;

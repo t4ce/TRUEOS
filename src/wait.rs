@@ -70,11 +70,11 @@ pub fn park_step() {
 /// Spin until `condition` is true or the timeout expires.
 #[inline]
 pub fn spin_until_timeout<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F) -> bool {
-    let hz = TICK_HZ as u64;
+    let hz = TICK_HZ;
     let ticks = if hz == 0 {
         0
     } else {
-        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
     };
     let deadline = now().saturating_add(ticks);
 
@@ -92,11 +92,11 @@ pub fn spin_until_timeout<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F)
 /// Spin until `condition` is true or the timeout expires, without polling the executor.
 #[inline]
 pub fn spin_until_timeout_no_exec<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F) -> bool {
-    let hz = TICK_HZ as u64;
+    let hz = TICK_HZ;
     let ticks = if hz == 0 {
         0
     } else {
-        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
     };
     let deadline = now().saturating_add(ticks);
 
@@ -174,11 +174,11 @@ impl WaitQueue {
 
     #[inline]
     pub async fn wait_for_event_timeout(&self, timeout_ms: u64) -> bool {
-        let hz = TICK_HZ as u64;
+        let hz = TICK_HZ;
         let ticks = if hz == 0 || timeout_ms == 0 {
             0
         } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = if ticks == 0 {
             0
@@ -200,7 +200,7 @@ impl WaitQueue {
 
             {
                 let mut wakers = self.wakers.lock();
-                register_waker_list(&mut *wakers, cx.waker());
+                register_waker_list(&mut wakers, cx.waker());
             }
 
             let current = self.seq.load(Ordering::Acquire);
@@ -216,11 +216,11 @@ impl WaitQueue {
 
     #[inline]
     pub fn wait_for_event_blocking(&self, timeout_ms: u64) -> bool {
-        let hz = TICK_HZ as u64;
+        let hz = TICK_HZ;
         let ticks = if hz == 0 || timeout_ms == 0 {
             0
         } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = if ticks == 0 {
             0

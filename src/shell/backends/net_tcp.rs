@@ -61,7 +61,7 @@ pub async fn net_shell_task() {
         // Always route the shell over the primary NIC. If another adapter exists and is broken
         // (e.g. RTL8125 TX wedge), routing shell output over it can make the shell appear dead.
         // Pin routing to dev0 so the shell never depends on secondary NIC health.
-        const OWNER: &'static str = "net-shell@0";
+        const OWNER: &str = "net-shell@0";
         let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
         let events = NetQueue::new_leaked("net-shell-evt", 256);
         register_app_queues(OWNER, cmds, events);
@@ -129,7 +129,7 @@ pub async fn net_shell_task() {
                                 crate::log!(
                                     "net-shell: first rx {} bytes (including {:?})\n",
                                     data.len(),
-                                    data.get(0).copied()
+                                    data.first().copied()
                                 );
                             }
 
@@ -188,7 +188,7 @@ pub async fn net_shell_task() {
                     }
                     NetEvent::Error { msg } => {
                         // These are useful during bring-up; keep them visible but not too spammy.
-                        if (ticks % 100) == 0 {
+                        if ticks.is_multiple_of(100) {
                             crate::log!("net-shell: error {}\n", msg);
                         }
                     }
@@ -220,8 +220,8 @@ pub async fn net_shell_task() {
                     }
                 };
 
-                if let Some(handle) = handle {
-                    if !chunk.is_empty() {
+                if let Some(handle) = handle
+                    && !chunk.is_empty() {
                         pending_handle = Some(handle);
                         pending = Some(chunk.clone());
                         pending_ticks = 0;
@@ -250,7 +250,6 @@ pub async fn net_shell_task() {
                             crate::log!("net-shell: tx queue full (dropping pending)\n");
                         }
                     }
-                }
             }
 
             // Safety: if we somehow miss the `TcpSent` event (or the socket is briefly not-ready),

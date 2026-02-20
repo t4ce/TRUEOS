@@ -53,11 +53,10 @@ pub fn enter_named_sleep_state(state: u8) -> FacpResult<()> {
     }
 
     // Try ACPI
-    if let Some(st) = sleep::sleep_type_for_state(state) {
-        if enter_s_state(st.pm1a, st.pm1b).is_ok() {
+    if let Some(st) = sleep::sleep_type_for_state(state)
+        && enter_s_state(st.pm1a, st.pm1b).is_ok() {
             return Ok(());
         }
-    }
 
     // Fallback for S5 (Shutdown) -> UEFI Shutdown
     if state == 5 {
@@ -73,13 +72,11 @@ pub fn reset_system() -> FacpResult<()> {
     // Try FADT mechanisms first
     let _ = with_fadt(|fadt| {
         let flags: FixedFeatureFlags = unsafe { read_unaligned(addr_of!(fadt.flags)) };
-        if flags.supports_system_reset_via_fadt() {
-            if let Ok(reg) = fadt.reset_register() {
-                if reg.address != 0 {
+        if flags.supports_system_reset_via_fadt()
+            && let Ok(reg) = fadt.reset_register()
+                && reg.address != 0 {
                     let _ = write_gas_u64(&reg, u64::from(fadt.reset_value));
                 }
-            }
-        }
         Ok(())
     });
 

@@ -109,7 +109,7 @@ const VIRGL_OBJ_RS_SIZE: u32 = 9;
 const VIRGL_OBJ_SURFACE_SIZE: u32 = 5;
 
 fn virgl_cmd0(cmd: u8, obj: u8, len_dwords: u32) -> u32 {
-    (cmd as u32) | ((obj as u32) << 8) | ((len_dwords as u32) << 16)
+    (cmd as u32) | ((obj as u32) << 8) | (len_dwords << 16)
 }
 
 fn fui(v: f32) -> u32 {
@@ -401,7 +401,7 @@ fn read_virtio_pci_cap(dev: &pci::PciDevice, cap_ptr: u8) -> Option<VirtioPciCap
 
     let base = cap_ptr as u16;
     Some(VirtioPciCap {
-        cap_vndr: pci::config_read_u8(dev.bus, dev.slot, dev.function, base + 0),
+        cap_vndr: pci::config_read_u8(dev.bus, dev.slot, dev.function, base),
         cap_next: pci::config_read_u8(dev.bus, dev.slot, dev.function, base + 1),
         cap_len,
         cfg_type: pci::config_read_u8(dev.bus, dev.slot, dev.function, base + 3),
@@ -460,8 +460,8 @@ fn parse_modern_caps(dev: &pci::PciDevice) -> Option<VirtioModernCaps> {
         if cap_id == 0xFF || cap_id == 0 {
             break;
         }
-        if cap_id == PCI_CAP_ID_VENDOR_SPECIFIC {
-            if let Some(vcap) = read_virtio_pci_cap(dev, ptr) {
+        if cap_id == PCI_CAP_ID_VENDOR_SPECIFIC
+            && let Some(vcap) = read_virtio_pci_cap(dev, ptr) {
                 match vcap.cfg_type {
                     VIRTIO_PCI_CAP_COMMON_CFG => common = Some(vcap),
                     VIRTIO_PCI_CAP_ISR_CFG => isr = Some(vcap),
@@ -474,7 +474,6 @@ fn parse_modern_caps(dev: &pci::PciDevice) -> Option<VirtioModernCaps> {
                     _ => {}
                 }
             }
-        }
 
         if next == 0 {
             break;
@@ -764,7 +763,7 @@ pub struct VirtioGpu3d {
     resp: DmaRegion,
 }
 
-use spin::{Mutex, Once};
+use spin::Mutex;
 
 // -------------------------------------------------------------------------------------------------
 // Serialized virtio-gpu access ("GPU actor")
@@ -861,7 +860,7 @@ fn gpu_service_step() {
     let maybe_cmd = GPU_ACTOR_QUEUE.lock().pop_front();
     if let Some((id, cmd)) = maybe_cmd {
         let mut gpu_guard = GPU_ACTOR_GPU.lock();
-        if !gpu_ensure_inited_locked(&mut *gpu_guard) {
+        if !gpu_ensure_inited_locked(&mut gpu_guard) {
             GPU_ACTOR_RESP.lock().insert(
                 id,
                 match cmd {
@@ -913,11 +912,11 @@ fn gpu_service_step() {
 }
 
 fn gpu_wait_resp(id: u32, timeout_ms: u64) -> Option<GpuResp> {
-    let hz = TICK_HZ as u64;
+    let hz = TICK_HZ;
     let ticks = if hz == 0 {
         0
     } else {
-        ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+        timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
     };
     let deadline = now().saturating_add(ticks);
 
@@ -1885,7 +1884,7 @@ impl VirglGfxBackend {
             return None;
         };
 
-        if (pitch % 4) != 0 {
+        if !pitch.is_multiple_of(4) {
             crate::log!(
                 "virgl-backend: borrow-limine: pitch not multiple of 4 (pitch={})\n",
                 pitch
@@ -2328,8 +2327,7 @@ impl GfxDevice for VirglGfxBackend {
         if bytes_len == 0 {
             return Err(Error::Invalid);
         }
-        let mut bytes = Vec::new();
-        bytes.resize(bytes_len, 0);
+        let mut bytes = vec![0; bytes_len];
         let slot = Self::alloc_slot(
             &mut self.images,
             HostImage {
@@ -2704,7 +2702,7 @@ fn encode_shader(buf: &mut VirglCmdBuf, handle: u32, shader_type: u32, text: &st
     let offlen = shader_len & 0x7fff_ffff;
 
     // Base header size=5 dwords: handle, type, offlen, num_tokens, num_outputs.
-    let len_dwords = 5 + ((bytes.len() as u32 + 3) / 4);
+    let len_dwords = 5 + (bytes.len() as u32).div_ceil(4);
     buf.push(virgl_cmd0(
         VIRGL_CCMD_CREATE_OBJECT,
         VIRGL_OBJECT_SHADER,
@@ -2815,7 +2813,7 @@ fn encode_set_vertex_buffer(buf: &mut VirglCmdBuf, stride: u32, offset: u32, res
 fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8]) {
     // Matches virgl_encoder_inline_send_box for a PIPE_BUFFER upload.
     // cmd length is data_dwords + 11
-    let data_dwords = ((data.len() as u32) + 3) / 4;
+    let data_dwords = (data.len() as u32).div_ceil(4);
     buf.push(virgl_cmd0(
         VIRGL_CCMD_RESOURCE_INLINE_WRITE,
         0,

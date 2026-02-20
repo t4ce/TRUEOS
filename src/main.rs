@@ -102,7 +102,7 @@ pub extern "C" fn kmain() -> ! {
     }
     let smp_resp = limine::smp_response().unwrap();
     let lapic_ids: alloc::vec::Vec<u32> =
-        smp_resp.cpus().iter().map(|c| c.lapic_id as u32).collect();
+        smp_resp.cpus().iter().map(|c| c.lapic_id).collect();
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     percpu::init_bsp();
     pci::dma::init_from_limine();
@@ -167,7 +167,7 @@ fn _loop(
 ) -> ! {
     resp.cpus()
         .iter()
-        .filter(|c| c.lapic_id as u32 != percpu::this_cpu().lapic_id())
+        .filter(|c| c.lapic_id != percpu::this_cpu().lapic_id())
         .for_each(|c| c.goto_address.write(cpu::ap_start));
 
     if let Err(e) = _spawner.spawn(crate::v::spawn_service::spawn_service_task(_spawner)) {
@@ -176,14 +176,14 @@ fn _loop(
 
     let mut counter: u64 = 0;
     loop {
-        if counter % 10_000 == 0 {
+        if counter.is_multiple_of(10_000) {
             time::poll();
             unsafe { executor.poll() };
         }
-        if counter % 250_000 == 0 {
+        if counter.is_multiple_of(250_000) {
             vga::cube::tick();
         }
-        if counter % 10_000_000 == 0 {
+        if counter.is_multiple_of(10_000_000) {
             globalog::debugcon_write_byte_raw(b'0');
         }
         counter = counter.wrapping_add(1);

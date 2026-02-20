@@ -67,7 +67,7 @@ pub fn map_limine_struct<T>(addr: u64) -> Result<NonNull<T>, MapError> {
         return Err(MapError::InvalidArgs);
     }
     let align = core::mem::align_of::<T>();
-    if align != 0 && (addr as usize) % align != 0 {
+    if align != 0 && !(addr as usize).is_multiple_of(align) {
         return Err(MapError::InvalidArgs);
     }
     let mapped = map_limine_addr_exact(addr, size)?;
@@ -83,7 +83,7 @@ pub fn map_limine_slice<T>(addr: u64, count: usize) -> Result<(NonNull<T>, usize
         return Err(MapError::InvalidArgs);
     }
     let align = core::mem::align_of::<T>();
-    if align != 0 && (addr as usize) % align != 0 {
+    if align != 0 && !(addr as usize).is_multiple_of(align) {
         return Err(MapError::InvalidArgs);
     }
     let byte_len = elem_size.checked_mul(count).ok_or(MapError::InvalidArgs)?;
@@ -159,7 +159,7 @@ fn align_up(value: u64, align: u64) -> u64 {
     if align == 0 {
         return value;
     }
-    ((value + align - 1) / align) * align
+    value.div_ceil(align) * align
 }
 
 unsafe fn active_mapper(offset: VirtAddr) -> Result<OffsetPageTable<'static>, MapError> {

@@ -404,7 +404,7 @@ fn blit_bmp_indexed(
     let width = bmp.width as usize;
     let height = bmp.height as usize;
     let row_bits = width.saturating_mul(bpp as usize);
-    let row_stride = ((row_bits + 31) / 32) * 4; // padded to 4-byte boundary
+    let row_stride = row_bits.div_ceil(32) * 4; // padded to 4-byte boundary
     let pixel_bytes = row_stride.saturating_mul(height);
     let Some(data_phys) = phys_addr.checked_add(bmp.data_offset as u64) else {
         return false;

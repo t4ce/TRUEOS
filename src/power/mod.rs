@@ -64,7 +64,7 @@ pub fn init() {
     // a triple-fault and immediate reboot.
     //
     // Therefore init() is CPUID-only: it will never touch MSRs.
-    CAPS.call_once(|| detect_caps_cpuid_only());
+    CAPS.call_once(detect_caps_cpuid_only);
 
     if let Some(caps) = caps() {
         crate::log!(
@@ -114,7 +114,7 @@ pub unsafe fn probe_msr_details() -> Option<&'static PowerMsrDetails> {
         return None;
     }
 
-    MSR_DETAILS.call_once(|| detect_msr_details());
+    MSR_DETAILS.call_once(detect_msr_details);
     msr_details()
 }
 

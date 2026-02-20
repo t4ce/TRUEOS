@@ -345,7 +345,7 @@ fn normalize_offset(offset: u16) -> u8 {
 
 pub fn config_read_u8(bus: u8, slot: u8, function: u8, offset: u16) -> u8 {
     if offset < 0x1000 {
-        let aligned_off = (offset & !0x3) as u16;
+        let aligned_off = offset & !0x3 ;
         if let Some(aligned) = ecam_read_u32(bus, slot, function, aligned_off) {
             let shift = ((offset & 0x03) as u32) * 8;
             return ((aligned >> shift) & 0xFF) as u8;
@@ -356,7 +356,7 @@ pub fn config_read_u8(bus: u8, slot: u8, function: u8, offset: u16) -> u8 {
 
 pub fn config_read_u16(bus: u8, slot: u8, function: u8, offset: u16) -> u16 {
     if offset < 0x1000 {
-        let aligned_off = (offset & !0x3) as u16;
+        let aligned_off = offset & !0x3 ;
         if let Some(aligned) = ecam_read_u32(bus, slot, function, aligned_off) {
             let shift = ((offset & 0x03) as u32) * 8;
             return ((aligned >> shift) & 0xFFFF) as u16;
@@ -370,11 +370,10 @@ pub fn config_read_u32(bus: u8, slot: u8, function: u8, offset: u16) -> u32 {
         panic!("Unaligned PCI config dword read at offset 0x{:X}", offset);
     }
 
-    if offset < 0x1000 {
-        if let Some(value) = ecam_read_u32(bus, slot, function, offset) {
+    if offset < 0x1000
+        && let Some(value) = ecam_read_u32(bus, slot, function, offset) {
             return value;
         }
-    }
 
     let off = normalize_offset(offset);
     read_u32(bus, slot, function, off)
@@ -382,7 +381,7 @@ pub fn config_read_u32(bus: u8, slot: u8, function: u8, offset: u16) -> u32 {
 
 pub fn config_write_u8(bus: u8, slot: u8, function: u8, offset: u16, value: u8) {
     if offset < 0x1000 {
-        let aligned_off = (offset & !0x3) as u16;
+        let aligned_off = offset & !0x3 ;
         if let Some(current) = ecam_read_u32(bus, slot, function, aligned_off) {
             let shift = ((offset & 0x03) as u32) * 8;
             let mask = !(0xFFu32 << shift);
@@ -397,7 +396,7 @@ pub fn config_write_u8(bus: u8, slot: u8, function: u8, offset: u16, value: u8) 
 
 pub fn config_write_u16(bus: u8, slot: u8, function: u8, offset: u16, value: u16) {
     if offset < 0x1000 {
-        let aligned_off = (offset & !0x3) as u16;
+        let aligned_off = offset & !0x3 ;
         if let Some(current) = ecam_read_u32(bus, slot, function, aligned_off) {
             let shift = ((offset & 0x03) as u32) * 8;
             let mask = !(0xFFFFu32 << shift);
@@ -415,11 +414,10 @@ pub fn config_write_u32(bus: u8, slot: u8, function: u8, offset: u16, value: u32
         panic!("Unaligned PCI config dword write at offset 0x{:X}", offset);
     }
 
-    if offset < 0x1000 {
-        if ecam_write_u32(bus, slot, function, offset, value).is_some() {
+    if offset < 0x1000
+        && ecam_write_u32(bus, slot, function, offset, value).is_some() {
             return;
         }
-    }
 
     let off = normalize_offset(offset);
     write_u32(bus, slot, function, off, value);
@@ -638,15 +636,13 @@ fn alloc_from_bridge_window(
 ///
 /// This is intentionally simple and is currently intended for our own endpoint(s).
 pub fn alloc_hotplug_mmio_base(target_bus: u8, size: u64, align: u64) -> Option<u64> {
-    if let Some((b_bus, b_slot, b_fun)) = parent_bridge_for_bus(target_bus) {
-        if let Some((base, limit_excl)) = bridge_mem_window(b_bus, b_slot, b_fun) {
-            if let Some(addr) =
+    if let Some((b_bus, b_slot, b_fun)) = parent_bridge_for_bus(target_bus)
+        && let Some((base, limit_excl)) = bridge_mem_window(b_bus, b_slot, b_fun)
+            && let Some(addr) =
                 alloc_from_bridge_window(b_bus, b_slot, b_fun, base, limit_excl, size, align)
             {
                 return Some(addr);
             }
-        }
-    }
 
     // Fallback: fixed allocator (below 4GiB).
     crate::pci::bar_alloc::alloc_mmio32(size, align).map(|x| x as u64)

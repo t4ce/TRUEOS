@@ -107,7 +107,7 @@ pub fn init_font_cache() {
     let _ = font_cache_large();
     FONT_READY_SMALL.store(true, Ordering::Release);
     FONT_READY_LARGE.store(true, Ordering::Release);
-    let _ = with_framebuffer(|fb| update_layout(fb));
+    let _ = with_framebuffer(update_layout);
     render_framebuffer_banner(BANNER_TEXT);
 }
 
@@ -308,14 +308,14 @@ pub fn overlay_mouse_dots() {
         for (mx, my) in mice {
             let x = roundf((mx as f32) * w) as i32;
             let y = roundf((my as f32) * h) as i32;
-            draw_ring(fb, &mut *saved, x, y, 0x00_00_FF_00);
+            draw_ring(fb, &mut saved, x, y, 0x00_00_FF_00);
         }
 
         // Tablets: same cursor circle, different color.
         for (mx, my) in tablets {
             let x = roundf((mx as f32) * w) as i32;
             let y = roundf((my as f32) * h) as i32;
-            draw_ring(fb, &mut *saved, x, y, 0x00_FF_00_FF);
+            draw_ring(fb, &mut saved, x, y, 0x00_FF_00_FF);
         }
     });
 }
@@ -803,9 +803,7 @@ pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
             total_width += w + 1;
         }
     }
-    if total_width > 0 {
-        total_width -= 1;
-    }
+    total_width = total_width.saturating_sub(1);
 
     let mut buffer = alloc::vec![0_u32; total_width * height];
     let mut current_x = 0;
@@ -1104,16 +1102,14 @@ pub fn blit_image(origin_x: usize, origin_y: usize, image: &Image<'_>) -> bool {
         // Clamp origin so the image fits inside the framebuffer when possible.
         let mut ox = origin_x;
         let mut oy = origin_y;
-        if image.width <= fb.width {
-            if ox > fb.width - image.width {
+        if image.width <= fb.width
+            && ox > fb.width - image.width {
                 ox = fb.width - image.width;
             }
-        }
-        if image.height <= fb.height {
-            if oy > fb.height - image.height {
+        if image.height <= fb.height
+            && oy > fb.height - image.height {
                 oy = fb.height - image.height;
             }
-        }
         fb.blit_image(ox, oy, image);
         true
     })

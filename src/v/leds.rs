@@ -321,7 +321,7 @@ pub async fn task() {
         let raw_probe = alloc(1);
 
         let mut last_offline: bool = true;
-        let mut last_sent_rgb: Option<Rgb8> = None;
+        let _last_sent_rgb: Option<Rgb8> = None;
         let mut last_effect: Option<Effect> = None;
         let mut last_effect_owner: Option<u32> = None;
 
@@ -361,7 +361,7 @@ pub async fn task() {
 
             if online {
                 let effect_ok = last_effect_owner
-                    .and_then(|owner| scope_range(owner))
+                    .and_then(scope_range)
                     .is_some();
                 if !effect_ok {
                     last_effect = None;

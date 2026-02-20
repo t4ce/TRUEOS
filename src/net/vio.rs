@@ -323,7 +323,7 @@ fn align_up(value: usize, align: usize) -> usize {
     if align == 0 {
         return value;
     }
-    (value + align - 1) / align * align
+    value.div_ceil(align) * align
 }
 
 fn setup_queue(io_base: u16, queue_index: u16) -> Result<VirtQueue, ()> {
@@ -394,12 +394,11 @@ impl VirtioNetAdapter {
         // Notify if we've queued a burst of descriptors, or if forced (e.g. end of poll).
         const TX_NOTIFY_THRESHOLD: u16 = 8;
         let pending = self.txq.avail_idx.wrapping_sub(self.tx_last_notify_avail);
-        if force || pending >= TX_NOTIFY_THRESHOLD {
-            if self.tx_last_notify_avail != self.txq.avail_idx {
+        if (force || pending >= TX_NOTIFY_THRESHOLD)
+            && self.tx_last_notify_avail != self.txq.avail_idx {
                 notify_queue(self.io_base, QUEUE_TX);
                 self.tx_last_notify_avail = self.txq.avail_idx;
             }
-        }
     }
 
     fn poll_rx_queue(&mut self) {
