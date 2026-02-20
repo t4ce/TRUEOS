@@ -209,11 +209,10 @@ fn handle_tab_completion(
                 io.write_char(ch);
             }
         }
-        if !line.as_str().ends_with(' ') {
-            if line.push(' ').is_ok() {
+        if !line.as_str().ends_with(' ')
+            && line.push(' ').is_ok() {
                 io.write_char(' ');
             }
-        }
         let mut usage: String<192> = String::new();
         if crate::shell::cmd::registry::usage_text_for_name(target, &mut usage) {
             ReverseOutput::new(io, term_cols, term_rows, history)
@@ -567,13 +566,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     handle_tab_completion(io, &mut line, term_cols, term_rows, &mode, &mut history);
                 }
                 _ => {
-                    if b >= 0x20 {
-                        if let Some(ch) = utf8.push(b) {
-                            if line.push(ch).is_ok() {
+                    if b >= 0x20
+                        && let Some(ch) = utf8.push(b)
+                            && line.push(ch).is_ok() {
                                 io.write_char(ch);
                             }
-                        }
-                    }
                 }
             }
         } else {
@@ -583,8 +580,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 continue;
             }
 
-            if let ShellMode::Wait { deadline, action } = &mode {
-                if Instant::now() >= *deadline {
+            if let ShellMode::Wait { deadline, action } = &mode
+                && Instant::now() >= *deadline {
                     // Check specific actions on timeout
                     match action {
                         PendingAction::AcpiReset => {
@@ -606,7 +603,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                     mode = ShellMode::Idle;
                     wizards::write_prompt_for_state(io, &mode);
                 }
-            }
 
             Timer::after(EmbassyDuration::from_millis(2)).await;
         }
@@ -699,7 +695,7 @@ fn month_lengths(year: u32) -> [u8; 12] {
 }
 
 fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 pub(crate) fn draw_corners(io: &dyn ShellIo, cols: usize, rows: usize) {

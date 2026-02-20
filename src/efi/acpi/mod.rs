@@ -35,9 +35,9 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
             Ok(tables) => {
                 let mut count = 0usize;
                 let mut ssdt_count = 0usize;
-                for (phys, header) in tables.table_headers() {
+                for (_phys, header) in tables.table_headers() {
                     count += 1;
-                    let table_len =
+                    let _table_len =
                         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(header.length)) };
                     if header.signature.as_str() == "SSDT" {
                         ssdt_count += 1;

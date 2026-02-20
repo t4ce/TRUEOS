@@ -104,7 +104,7 @@ impl DmaWriter {
         mut data: &[u8],
         log: &mut dyn FnMut(&str),
     ) -> Result<(), block::Error> {
-        if total_bytes % 512 != 0 {
+        if !total_bytes.is_multiple_of(512) {
             return Err(block::Error::InvalidParam);
         }
 
@@ -189,7 +189,7 @@ fn clusters_for_bytes(bytes: usize, sectors_per_cluster: u32) -> u32 {
     if bytes == 0 {
         return 0;
     }
-    let c = (bytes + bytes_per_cluster - 1) / bytes_per_cluster;
+    let c = bytes.div_ceil(bytes_per_cluster);
     core::cmp::max(1, c as u32)
 }
 
@@ -221,7 +221,7 @@ fn compute_fat32_layout(total_sectors: u32, sectors_per_cluster: u32) -> Option<
         }
 
         let fat_bytes_needed = (clusters as u64 + 2).saturating_mul(4);
-        let fat_sectors_needed = ((fat_bytes_needed + 511) / 512) as u32;
+        let fat_sectors_needed = fat_bytes_needed.div_ceil(512) as u32;
         if fat_sectors_needed <= fat_sectors {
             // Current FAT is large enough; accept.
             return Some((reserved, fat_sectors, first_data_sector));
@@ -317,7 +317,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     log(alloc::format!(
         "install: esp: total_sectors={} (~{} MiB)",
         total_sectors,
-        (total_sectors as u64 * 512 + (1024 * 1024 - 1)) / (1024 * 1024)
+        (total_sectors as u64 * 512).div_ceil(1024 * 1024)
     )
     .as_str());
 

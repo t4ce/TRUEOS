@@ -171,11 +171,10 @@ fn validate_partition_specs(parts: &[GptPartitionSpec<'_>]) -> Result<()> {
             remaining_idx = Some(i);
         }
     }
-    if let Some(i) = remaining_idx {
-        if i + 1 != parts.len() {
+    if let Some(i) = remaining_idx
+        && i + 1 != parts.len() {
             return Err(Error::InvalidParam);
         }
-    }
 
     Ok(())
 }
@@ -217,7 +216,7 @@ pub async fn write_gpt_layout_with_log(
     let entry_count = GPT_DEFAULT_ENTRY_COUNT;
     let entry_size = GPT_DEFAULT_ENTRY_SIZE;
     let table_bytes = (entry_count as usize) * (entry_size as usize);
-    let table_lbas = (table_bytes as u64 + 511) / 512;
+    let table_lbas = (table_bytes as u64).div_ceil(512);
 
     let first_usable = GPT_DEFAULT_TABLE_LBA + table_lbas;
     let last_usable = last_lba.saturating_sub(table_lbas).saturating_sub(1);
@@ -286,7 +285,7 @@ pub async fn write_gpt_layout_with_log(
     // first LBA
     pmbr[454..458].copy_from_slice(&1u32.to_le_bytes());
     // sectors (clamp to u32::MAX)
-    let mbr_sectors = core::cmp::min((info.block_count - 1) as u64, u32::MAX as u64) as u32;
+    let mbr_sectors = core::cmp::min(info.block_count - 1 , u32::MAX as u64) as u32;
     pmbr[458..462].copy_from_slice(&mbr_sectors.to_le_bytes());
     pmbr[510..512].copy_from_slice(&GPT_PROTECTIVE_MBR_SIGNATURE.to_le_bytes());
 
@@ -326,7 +325,7 @@ pub async fn write_gpt_layout_with_log(
     let mut header = [0u8; 512];
     header[..8].copy_from_slice(GPT_SIGNATURE);
     header[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
-    header[12..16].copy_from_slice(&(GPT_MIN_HEADER_SIZE as u32).to_le_bytes());
+    header[12..16].copy_from_slice(&GPT_MIN_HEADER_SIZE.to_le_bytes());
     // header[16..20] crc filled later
     // header[20..24] reserved
     header[24..32].copy_from_slice(&GPT_HEADER_LBA.to_le_bytes());

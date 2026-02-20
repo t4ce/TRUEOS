@@ -25,7 +25,9 @@ pub enum PendingAction {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 pub enum ShellMode {
+    #[default]
     Idle,
     Wizard(InstallWizardStage),
     Confirm(PendingAction),
@@ -35,11 +37,6 @@ pub enum ShellMode {
     },
 }
 
-impl Default for ShellMode {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
 
 pub enum InputResult {
     Handled,
@@ -637,7 +634,7 @@ pub(crate) async fn print_trueosfs_tree_25(
                     write_inserted_line(self.io, format_args!("{}", self.buf));
                     self.buf.clear();
                 } else if ch != '\r' {
-                    let _ = self.buf.push(ch);
+                    self.buf.push(ch);
                 }
             }
             Ok(())

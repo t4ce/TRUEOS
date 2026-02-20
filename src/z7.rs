@@ -23,7 +23,7 @@ fn le_u64_at(b: &[u8], off: usize) -> Result<u64, SevenZError> {
     Ok(u64::from_le_bytes(bytes))
 }
 
-pub fn packed_streams_slice<'a>(payload: &'a [u8]) -> Result<&'a [u8], SevenZError> {
+pub fn packed_streams_slice(payload: &[u8]) -> Result<&[u8], SevenZError> {
     if payload.len() < SIG_LEN {
         return Err(SevenZError::Truncated);
     }

@@ -82,7 +82,7 @@ impl block::BlockDevice for RamdiskDevice {
     ) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
             let bs = self.block_size as usize;
-            if bs == 0 || (buf.len() % bs) != 0 {
+            if bs == 0 || !buf.len().is_multiple_of(bs) {
                 return Err(block::Error::InvalidParam);
             }
             let blocks = (buf.len() / bs) as u64;

@@ -33,7 +33,7 @@ pub(crate) fn setup_clear_endpoint_halt(ep_addr: u8) -> Trb {
     // bmRequestType=0x02 (OUT|Standard|Endpoint), bRequest=0x01 (CLEAR_FEATURE)
     // wValue=0 (ENDPOINT_HALT), wIndex=endpoint address
     Trb {
-        d0: (0x02u32) | (0x01u32 << 8) | ((0u32) << 16),
+        d0: (0x02u32) | (0x01u32 << 8),
         d1: (ep_addr as u32),
         d2: 8,
         d3: trb_type(2) | (1 << 6),
@@ -236,11 +236,10 @@ pub(crate) async fn control_out(
                 if evt_ptr == (setup_trb_phys & !0xFu64) {
                     return true;
                 }
-                if let Some(data_phys) = data_trb_phys {
-                    if evt_ptr == (data_phys & !0xFu64) {
+                if let Some(data_phys) = data_trb_phys
+                    && evt_ptr == (data_phys & !0xFu64) {
                         return true;
                     }
-                }
                 evt_ptr == (status_trb_phys & !0xFu64)
             },
             timeout_iters,
@@ -350,11 +349,10 @@ pub(crate) async fn control_out_cc(
             if evt_ptr == (setup_trb_phys & !0xFu64) {
                 return true;
             }
-            if let Some(data_phys) = data_trb_phys {
-                if evt_ptr == (data_phys & !0xFu64) {
+            if let Some(data_phys) = data_trb_phys
+                && evt_ptr == (data_phys & !0xFu64) {
                     return true;
                 }
-            }
             evt_ptr == (status_trb_phys & !0xFu64)
         },
         timeout_iters,

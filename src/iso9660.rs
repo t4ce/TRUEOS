@@ -84,7 +84,7 @@ fn pvd(iso: &[u8]) -> Result<&[u8], IsoError> {
     let pvd = iso.get(start..end).ok_or(IsoError::Truncated)?;
 
     // Type 1, magic "CD001", version 1.
-    if pvd.get(0) != Some(&1u8) {
+    if pvd.first() != Some(&1u8) {
         return Err(IsoError::BadMagic);
     }
     if pvd.get(1..6) != Some(b"CD001") {
@@ -131,7 +131,7 @@ fn parse_dir_rec<'a>(buf: &'a [u8], off: usize) -> Option<(DirRec<'a>, usize)> {
     ))
 }
 
-fn read_dir_bytes<'a>(iso: &'a [u8], extent_lba: u32, data_len: u32) -> Result<&'a [u8], IsoError> {
+fn read_dir_bytes(iso: &[u8], extent_lba: u32, data_len: u32) -> Result<&[u8], IsoError> {
     let start = (extent_lba as usize)
         .checked_mul(ISO_SECTOR_BYTES)
         .ok_or(IsoError::Truncated)?;
@@ -148,7 +148,7 @@ pub fn looks_like_iso9660(iso: &[u8]) -> bool {
         Some(v) => v,
         None => return false,
     };
-    pvd.get(0) == Some(&1u8) && pvd.get(1..6) == Some(b"CD001") && pvd.get(6) == Some(&1u8)
+    pvd.first() == Some(&1u8) && pvd.get(1..6) == Some(b"CD001") && pvd.get(6) == Some(&1u8)
 }
 
 /// Locate an ISO9660 image embedded inside a larger blob.
@@ -174,7 +174,7 @@ pub fn find_embedded_iso9660_start(blob: &[u8]) -> Option<usize> {
             if i >= pvd_off {
                 let start = i - pvd_off;
                 // Prefer sector alignment.
-                if start % ISO_SECTOR_BYTES == 0 && looks_like_iso9660(&blob[start..]) {
+                if start.is_multiple_of(ISO_SECTOR_BYTES) && looks_like_iso9660(&blob[start..]) {
                     return Some(start);
                 }
                 // Fallback: accept unaligned starts if validation passes.

@@ -134,10 +134,10 @@ impl NvmeQueue {
         // Be conservative: allocate whole pages for queues. Some controllers/emulators
         // assume queue memory is backed by full pages even when the effective queue
         // size is smaller (e.g. CQ at 64*16=1024 bytes).
-        let sq_alloc_bytes = ((sq_bytes + align - 1) / align)
+        let sq_alloc_bytes = sq_bytes.div_ceil(align)
             .checked_mul(align)
             .ok_or(block::Error::InvalidParam)?;
-        let cq_alloc_bytes = ((cq_bytes + align - 1) / align)
+        let cq_alloc_bytes = cq_bytes.div_ceil(align)
             .checked_mul(align)
             .ok_or(block::Error::InvalidParam)?;
 
@@ -188,7 +188,7 @@ impl NvmeQueue {
 
     fn cq_pop(&mut self) {
         let next = self.cq_head.wrapping_add(1);
-        if (next as usize) % (self.depth as usize) == 0 {
+        if (next as usize).is_multiple_of(self.depth as usize) {
             self.cq_phase = !self.cq_phase;
         }
         self.cq_head = next;
@@ -251,13 +251,12 @@ impl NvmeController {
 
     fn io_pending_take(&mut self, cid: u16) -> Option<Completion> {
         for slot in &mut self.io_pending {
-            if let Some(p) = slot {
-                if p.cid == cid {
+            if let Some(p) = slot
+                && p.cid == cid {
                     let cpl = p.cpl;
                     *slot = None;
                     return Some(cpl);
                 }
-            }
         }
         None
     }
@@ -265,12 +264,11 @@ impl NvmeController {
     fn io_pending_put(&mut self, cpl: Completion) {
         // Update existing slot first.
         for slot in &mut self.io_pending {
-            if let Some(p) = slot {
-                if p.cid == cpl.cid {
+            if let Some(p) = slot
+                && p.cid == cpl.cid {
                     *slot = Some(PendingCompletion { cid: cpl.cid, cpl });
                     return;
                 }
-            }
         }
 
         // Insert into a free slot.
@@ -459,11 +457,10 @@ impl NvmeController {
     }
 
     fn poll_queue_cq_for_cid_step(&mut self, qid: u16, cid: u16) -> Option<Completion> {
-        if qid == NVME_IO_QID {
-            if let Some(cpl) = self.io_pending_take(cid) {
+        if qid == NVME_IO_QID
+            && let Some(cpl) = self.io_pending_take(cid) {
                 return Some(cpl);
             }
-        }
 
         let (maybe_cpl, new_head, depth) = {
             let q = if qid == NVME_ADMIN_QID {
@@ -550,12 +547,12 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        let hz = embassy_time_driver::TICK_HZ as u64;
+        let hz = embassy_time_driver::TICK_HZ;
         let start = embassy_time_driver::now();
         let ticks = if hz == 0 {
             0
         } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = start.saturating_add(ticks);
 
@@ -588,12 +585,12 @@ impl NvmeController {
         cid: u16,
         timeout_ms: u64,
     ) -> core::result::Result<Completion, block::Error> {
-        let hz = embassy_time_driver::TICK_HZ as u64;
+        let hz = embassy_time_driver::TICK_HZ;
         let start = embassy_time_driver::now();
         let ticks = if hz == 0 {
             0
         } else {
-            ((timeout_ms.saturating_mul(hz) + 999) / 1000).max(1)
+            timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
         };
         let deadline = start.saturating_add(ticks);
 
@@ -858,7 +855,7 @@ impl NvmeController {
         let first_page = buf_phys & !(page_size as u64 - 1);
         let first_off = (buf_phys - first_page) as usize;
         let span = first_off.saturating_add(buf_len);
-        let pages = (span + page_size - 1) / page_size;
+        let pages = span.div_ceil(page_size);
 
         let prp1 = buf_phys;
         if pages <= 1 {
@@ -1438,7 +1435,7 @@ impl block::BlockDevice for NvmeBlockDevice {
     ) -> block::BoxFuture<'a, block::Result<()>> {
         Box::pin(async move {
             let bs = self.block_size as usize;
-            if bs == 0 || (buf.len() % bs) != 0 {
+            if bs == 0 || !buf.len().is_multiple_of(bs) {
                 return Err(block::Error::InvalidParam);
             }
             let blocks_total = (buf.len() / bs) as u64;
@@ -1914,7 +1911,7 @@ pub fn probe_once() {
                 admin_fallback_mode,
             };
             let handle = block::register_device(desc, dev);
-            crate::v::fs::trueosfs::request_mount_root(handle.clone());
+            crate::v::fs::trueosfs::request_mount_root(handle);
             crate::log!(
                 "nvme: registered {} nsid={} id={} blocks={} bs={} max_io={}\n",
                 pci_addr,

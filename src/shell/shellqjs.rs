@@ -124,7 +124,7 @@ unsafe extern "C" fn qjs_trueos_acpi(
                 }
                 b'1'..=b'5' => {
                     handled = true;
-                    let state = (arg.as_bytes()[1] - b'0') as u8;
+                    let state = arg.as_bytes()[1] - b'0' ;
                     ok = crate::efi::acpi::facp::enter_named_sleep_state(state).is_ok();
                 }
                 _ => {}
@@ -160,11 +160,10 @@ unsafe extern "C" fn qjs_trueos_logs(
         let cstr = unsafe { trueos_qjs::js_to_cstring(ctx, arg0) };
         if !cstr.is_null() {
             let bytes = unsafe { CStr::from_ptr(cstr).to_bytes() };
-            if let Ok(s) = core::str::from_utf8(bytes) {
-                if let Ok(v) = s.trim().parse::<usize>() {
+            if let Ok(s) = core::str::from_utf8(bytes)
+                && let Ok(v) = s.trim().parse::<usize>() {
                     max_bytes = core::cmp::min(v, ABS_MAX_BYTES);
                 }
-            }
             unsafe { trueos_qjs::JS_FreeCString(ctx, cstr) };
         }
     }
@@ -404,25 +403,23 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
         if b.len() == 6 {
             return true;
         }
-        if let Some(&next) = b.get(6) {
-            if matches!(
+        if let Some(&next) = b.get(6)
+            && matches!(
                 next,
                 b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"'
             ) {
                 return true;
             }
-        }
     }
     if s.starts_with("export") {
         let b = s.as_bytes();
         if b.len() == 6 {
             return true;
         }
-        if let Some(&next) = b.get(6) {
-            if matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*') {
+        if let Some(&next) = b.get(6)
+            && matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*') {
                 return true;
             }
-        }
     }
 
     // Heuristic scan for `import`/`export` outside comments and strings.
@@ -472,8 +469,8 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
         match mode {
             Mode::Code => {
                 // Start of comment?
-                if b == b'/' {
-                    if i + 1 < bytes.len() {
+                if b == b'/'
+                    && i + 1 < bytes.len() {
                         match bytes[i + 1] {
                             b'/' => {
                                 mode = Mode::LineComment;
@@ -488,7 +485,6 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
                             _ => {}
                         }
                     }
-                }
 
                 // Start of string?
                 if b == b'\'' {
@@ -613,11 +609,11 @@ async fn drain_jobs_and_promises(
     }
 
     let start = embassy_time_driver::now();
-    let hz = embassy_time_driver::TICK_HZ as u64;
+    let hz = embassy_time_driver::TICK_HZ;
     let max_ticks = if hz == 0 {
         0
     } else {
-        (max_wait_ms.saturating_mul(hz) + 999) / 1000
+        max_wait_ms.saturating_mul(hz).div_ceil(1000)
     };
     let deadline = start.saturating_add(max_ticks);
 
@@ -1025,38 +1021,38 @@ pub(crate) fn help_with_term_cols(io: &dyn ShellIo, term_cols: usize) {
         let t = Table::new(&cols);
         t.print_header(io);
 
-        t.print_row(io, &["qjs", "Start REPL (default)"]);
-        t.print_row(io, &["qjs -h", "Show this help"]);
+        t.print_row(io, ["qjs", "Start REPL (default)"]);
+        t.print_row(io, ["qjs -h", "Show this help"]);
 
-        t.print_row(io, &[".help / ?", "Show help (REPL)"]);
-        t.print_row(io, &[".exit / .quit", "Leave REPL (Ctrl-D also works)"]);
+        t.print_row(io, [".help / ?", "Show help (REPL)"]);
+        t.print_row(io, [".exit / .quit", "Leave REPL (Ctrl-D also works)"]);
 
-        t.print_row(io, &["print(1+2);", "Arithmetic"]);
-        t.print_row(io, &["let x=3; print(x*7);", "Variables"]);
-        t.print_row(io, &["function add(a,b){...}", "Define + call a function"]);
-        t.print_row(io, &["for (let i=0;i<3;i++)", "Loop"]);
-        t.print_row(io, &["const a=[1,2,3]; ...", "Arrays"]);
-        t.print_row(io, &["const m=new Map(...);", "Map"]);
-        t.print_row(io, &["const s=new Set(...);", "Set"]);
-        t.print_row(io, &["JSON.stringify(...)", "JSON"]);
-        t.print_row(io, &["/a+b*/.test(\"aaab\")", "RegExp"]);
-        t.print_row(io, &["try/catch", "Exceptions"]);
-        t.print_row(io, &["Promise.resolve(...)", "Microtasks"]);
-        t.print_row(io, &["TRUEOS.logs(256)", "Kernel log tail"]);
-        t.print_row(io, &["TRUEOS.acpi(\"s0\")", "ACPI helper"]);
-        t.print_row(io, &["import * as path from ...", "Builtin module"]);
-        t.print_row(io, &["import leftPad from ...", "3rd-party module"]);
+        t.print_row(io, ["print(1+2);", "Arithmetic"]);
+        t.print_row(io, ["let x=3; print(x*7);", "Variables"]);
+        t.print_row(io, ["function add(a,b){...}", "Define + call a function"]);
+        t.print_row(io, ["for (let i=0;i<3;i++)", "Loop"]);
+        t.print_row(io, ["const a=[1,2,3]; ...", "Arrays"]);
+        t.print_row(io, ["const m=new Map(...);", "Map"]);
+        t.print_row(io, ["const s=new Set(...);", "Set"]);
+        t.print_row(io, ["JSON.stringify(...)", "JSON"]);
+        t.print_row(io, ["/a+b*/.test(\"aaab\")", "RegExp"]);
+        t.print_row(io, ["try/catch", "Exceptions"]);
+        t.print_row(io, ["Promise.resolve(...)", "Microtasks"]);
+        t.print_row(io, ["TRUEOS.logs(256)", "Kernel log tail"]);
+        t.print_row(io, ["TRUEOS.acpi(\"s0\")", "ACPI helper"]);
+        t.print_row(io, ["import * as path from ...", "Builtin module"]);
+        t.print_row(io, ["import leftPad from ...", "3rd-party module"]);
         t.print_row(
             io,
-            &[
+            [
                 "import(\"node:worker_threads\")",
                 "Worker demo: load module",
             ],
         );
-        t.print_row(io, &["new Worker('...')", "Worker demo: spawn"]);
+        t.print_row(io, ["new Worker('...')", "Worker demo: spawn"]);
         t.print_row(
             io,
-            &[
+            [
                 "w.onMessage(...); w.postMessage(...)",
                 "Worker demo: ping/pong",
             ],
@@ -1160,14 +1156,13 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
                 || remaining.starts_with("../")
                 || remaining.ends_with(".js")
                 || remaining.ends_with(".mjs");
-            if single && looks_like_path {
-                if matches!(
+            if single && looks_like_path
+                && matches!(
                     crate::surface::io::kfs::exists_async(remaining).await,
                     Ok(true)
                 ) {
                     file = Some(remaining);
                 }
-            }
 
             if file.is_none() {
                 code = Some(remaining);

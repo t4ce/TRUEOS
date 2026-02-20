@@ -1203,12 +1203,11 @@ pub mod cabi {
             }
             let mut image_id = ImageId::invalid();
             let mut recreate = true;
-            if let Some(Some(entry)) = images.get(idx) {
-                if entry.width == width && entry.height == height {
+            if let Some(Some(entry)) = images.get(idx)
+                && entry.width == width && entry.height == height {
                     image_id = entry.image;
                     recreate = false;
                 }
-            }
             if recreate {
                 if image_id.is_valid() {
                     ctx.destroy_image(image_id);
@@ -1251,7 +1250,7 @@ pub mod cabi {
         st.frame_draw_bytes = 0;
         st.frame_draws.clear();
         let seq = st.frame_seq;
-        if seq <= 10 || (seq % 20) == 0 {
+        if seq <= 10 || seq.is_multiple_of(20) {
             crate::globalog::log(format_args!(
                 "gfx-cabi: begin seq={} clear=0x{:06X}\n",
                 seq,
