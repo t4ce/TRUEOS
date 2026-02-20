@@ -183,11 +183,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
     #[inline]
     fn max_transfer_bytes(&self) -> usize {
         let v = self.handle.info().max_transfer_bytes as usize;
-        if v == 0 {
-            256 * 1024
-        } else {
-            v
-        }
+        if v == 0 { 256 * 1024 } else { v }
     }
 
     async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {

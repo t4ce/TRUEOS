@@ -8,8 +8,8 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use embassy_time::{Duration, Instant, Timer};
 use trueos_v::vnet::{self, ByteBuf, Command, EndpointV4, Event, NetHandle, SocketKind};
 
-use super::dns::{self, DnsConfig};
 use super::VNet;
+use super::dns::{self, DnsConfig};
 
 const FTP_SERVER_PORT: u16 = 2121;
 const FTP_SERVER_PASV_MIN: u16 = 40000;

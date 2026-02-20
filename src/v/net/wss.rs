@@ -13,7 +13,7 @@ use rand_core::SeedableRng;
 use trueos_v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
-use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::time::unix_time_seconds;
 use crate::v::net::Queue;
 

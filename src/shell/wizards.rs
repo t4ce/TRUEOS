@@ -3,7 +3,7 @@ use embassy_time::Instant;
 
 use crate::ecma48;
 use crate::shell::table::{Table, TableColumn};
-use crate::shell::{CommandAction, ShellBackend, ShellIo, PROMPT_RGB};
+use crate::shell::{CommandAction, PROMPT_RGB, ShellBackend, ShellIo};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallWizardStage {

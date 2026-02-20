@@ -2,7 +2,7 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
 
-use crate::shell::cube::{CubeState, WireShape, CUBE_COLS, CUBE_ROWS};
+use crate::shell::cube::{CUBE_COLS, CUBE_ROWS, CubeState, WireShape};
 
 pub(crate) mod ecma48;
 
@@ -20,7 +20,7 @@ pub(crate) mod statusbar;
 pub(crate) mod wizards;
 pub use wizards::*;
 pub(crate) mod output;
-pub(crate) use output::{apply_shell_scroll_region, ReverseOutput};
+pub(crate) use output::{ReverseOutput, apply_shell_scroll_region};
 
 pub mod aihttps;
 

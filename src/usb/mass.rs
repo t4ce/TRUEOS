@@ -1,9 +1,9 @@
 use super::bot;
 use super::scsi;
 use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_burst_bits,
-    ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type, Trb, TrbRing, TrbRingState,
-    XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    self, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT, Trb, TrbRing, TrbRingState,
+    XhciContext, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
+    ep_max_burst_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
 };
 use crate::disc::block as disc_block;
 use crate::pci::dma;
@@ -983,12 +983,12 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             tag = tag.wrapping_add(1);
                             if sense.sense_key == scsi::SenseKey::IllegalRequest {
                                 crate::log!(
-                                "usb: mass: SYNCHRONIZE CACHE unsupported; disabling flush (slot={} csw={:?} asc={:#x} ascq={:#x})\n",
-                                self.slot_id,
-                                csw.status,
-                                sense.asc,
-                                sense.ascq
-                            );
+                                    "usb: mass: SYNCHRONIZE CACHE unsupported; disabling flush (slot={} csw={:?} asc={:#x} ascq={:#x})\n",
+                                    self.slot_id,
+                                    csw.status,
+                                    sense.asc,
+                                    sense.ascq
+                                );
                                 rt.sync_cache_unsupported = true;
                                 rt.bot_tag = tag;
                                 register_runtime(rt);
@@ -996,13 +996,13 @@ impl disc_block::BlockDevice for UsbMassBlockDevice {
                             }
 
                             crate::log!(
-                            "usb: mass flush csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
-                            csw.status,
-                            sense.response_code,
-                            sense.sense_key,
-                            sense.asc,
-                            sense.ascq
-                        );
+                                "usb: mass flush csw={:?} sense rc={:#x} key={:?} asc={:#x} ascq={:#x}\n",
+                                csw.status,
+                                sense.response_code,
+                                sense.sense_key,
+                                sense.asc,
+                                sense.ascq
+                            );
                             if sense_is_transient(sense.sense_key) {
                                 attempts = attempts.wrapping_add(1);
                                 embassy_time::Timer::after(EmbassyDuration::from_millis(25)).await;

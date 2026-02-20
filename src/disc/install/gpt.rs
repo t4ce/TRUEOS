@@ -2,8 +2,8 @@ use alloc::{vec, vec::Vec};
 
 use crate::disc::block::{DeviceHandle, Error, Result};
 use crate::v::disc::partition::{
-    BlockRange, TrueosBootLayout, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES,
-    GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+    BlockRange, GPT_TYPE_EFI_SYSTEM_PARTITION_BYTES, GPT_TYPE_LINUX_FILESYSTEM_BYTES,
+    TrueosBootLayout,
 };
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";

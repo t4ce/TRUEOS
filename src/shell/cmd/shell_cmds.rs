@@ -1,5 +1,5 @@
-use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::CommandAction;
+use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use core::fmt::Write;
 
 pub(crate) fn cmd_cmd(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {

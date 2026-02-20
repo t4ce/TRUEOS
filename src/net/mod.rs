@@ -1,7 +1,7 @@
 pub mod adapter;
 pub mod core;
-pub mod dhcpv6;
 pub mod device;
+pub mod dhcpv6;
 pub mod e1000;
 pub mod r8125;
 pub mod r8168;
@@ -335,7 +335,9 @@ pub fn init() {
         crate::log!("net: detected {} NIC(s); primary=0 (initial)\n", added);
     }
 
-    crate::log!("net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n");
+    crate::log!(
+        "net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n"
+    );
 }
 
 pub fn poll_at(index: usize) -> bool {

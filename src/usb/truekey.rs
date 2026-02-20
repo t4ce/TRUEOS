@@ -78,11 +78,7 @@ pub fn push_fmt(args: fmt::Arguments<'_>) {
 
 pub fn slot_id() -> Option<u32> {
     let slot = TRUEKEY_SLOT.load(Ordering::Acquire);
-    if slot == 0 {
-        None
-    } else {
-        Some(slot)
-    }
+    if slot == 0 { None } else { Some(slot) }
 }
 
 fn on_cdc_attach(evt: CdcAttachEvent) {

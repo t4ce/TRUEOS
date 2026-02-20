@@ -23,11 +23,7 @@ static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 pub fn uptime_seconds() -> u64 {
     let ticks = embassy_time_driver::now();
     let hz = TICK_HZ as u64;
-    if hz == 0 {
-        0
-    } else {
-        ticks / hz
-    }
+    if hz == 0 { 0 } else { ticks / hz }
 }
 
 /// Best-effort Unix time (seconds since epoch).

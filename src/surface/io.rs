@@ -313,11 +313,7 @@ pub mod kfs {
         let name = normalize_rel(path, false)?;
         crate::wait::spawn_and_wait_local(async move {
             let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
-            if ok {
-                Ok(())
-            } else {
-                Err(FsError::NotFound)
-            }
+            if ok { Ok(()) } else { Err(FsError::NotFound) }
         })
     }
 
@@ -326,11 +322,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         let ok = crate::v::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
-        if ok {
-            Ok(())
-        } else {
-            Err(FsError::NotFound)
-        }
+        if ok { Ok(()) } else { Err(FsError::NotFound) }
     }
 
     #[inline]
@@ -371,11 +363,7 @@ pub mod kfs {
         crate::wait::spawn_and_wait_local(async move {
             let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src.as_slice())
                 .await?;
-            if ok {
-                Ok(())
-            } else {
-                Err(FsError::NoSpace)
-            }
+            if ok { Ok(()) } else { Err(FsError::NoSpace) }
         })
     }
 
@@ -384,11 +372,7 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(dst_path, false)?;
         let ok = crate::v::fs::trueosfs::file_append_async(disk, name.as_str(), src).await?;
-        if ok {
-            Ok(())
-        } else {
-            Err(FsError::NoSpace)
-        }
+        if ok { Ok(()) } else { Err(FsError::NoSpace) }
     }
 }
 
@@ -1569,11 +1553,7 @@ pub mod cabi {
                 let mut st = GFX_CABI_STATE.lock();
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
             }
-            if submit_res.is_ok() {
-                0
-            } else {
-                -11
-            }
+            if submit_res.is_ok() { 0 } else { -11 }
         }) else {
             return -12;
         };

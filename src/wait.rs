@@ -8,7 +8,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
 use embassy_executor::task;
-use embassy_time_driver::{now, TICK_HZ};
+use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
 
 /// Update a stored waker if it differs from the current one.

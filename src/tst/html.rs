@@ -6,8 +6,8 @@ use heapless::String as HString;
 
 use trueos_v::vnet as api;
 
-use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::VNet;
+use crate::v::net::dns::{self, DnsConfig};
 
 fn parse_http_status(buf: &[u8]) -> Option<u16> {
     // Expect: HTTP/1.1 200 ...\r\n

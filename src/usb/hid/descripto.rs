@@ -759,16 +759,16 @@ pub fn log_all_descriptor_types(cfg: &[u8], port: u8, slot_id: u32) {
                 let if_hint = cur_if.map(|(n, a, c, s, p)| (n, a, c, s, p));
                 if let Some((ifn, alt, cls, sub, prot)) = if_hint {
                     crate::log!(
-						"usb:   hid if{} alt={} cls={:02X}/{:02X}/{:02X} bcd=0x{:04X} country={} numDesc={}\n",
-						ifn,
-						alt,
-						cls,
-						sub,
-						prot,
-						hid_bcd,
-						country,
-						num_desc
-					);
+                        "usb:   hid if{} alt={} cls={:02X}/{:02X}/{:02X} bcd=0x{:04X} country={} numDesc={}\n",
+                        ifn,
+                        alt,
+                        cls,
+                        sub,
+                        prot,
+                        hid_bcd,
+                        country,
+                        num_desc
+                    );
                 } else {
                     crate::log!(
                         "usb:   hid bcd=0x{:04X} country={} numDesc={}\n",

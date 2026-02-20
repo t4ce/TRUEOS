@@ -1,6 +1,6 @@
 use super::xhci::{TrbRing, XhciContext};
 use super::{
-    cdc_acm, hid, leds, mass, midi, non_generic, pen, print, uac, DeviceKind, UsbControllerState,
+    DeviceKind, UsbControllerState, cdc_acm, hid, leds, mass, midi, non_generic, pen, print, uac,
 };
 
 macro_rules! usbv {

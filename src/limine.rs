@@ -1,5 +1,5 @@
 use core::ptr;
-use limine::{memory_map, request, response, BaseRevision};
+use limine::{BaseRevision, memory_map, request, response};
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]

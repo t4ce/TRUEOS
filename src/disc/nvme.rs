@@ -1,8 +1,8 @@
 use alloc::{boxed::Box, string::String};
 use core::{
     mem,
-    ptr::{read_volatile, write_bytes, write_volatile, NonNull},
-    sync::atomic::{fence, Ordering},
+    ptr::{NonNull, read_volatile, write_bytes, write_volatile},
+    sync::atomic::{Ordering, fence},
 };
 
 use crate::wait;
@@ -1515,13 +1515,13 @@ impl block::BlockDevice for NvmeBlockDevice {
                             if Self::is_small_probe_write(cur_lba, blocks_here) =>
                         {
                             crate::log!(
-                            "nvme: {} probe-write fallback sync opcode=0x{:02X} nsid={} slba={} nlb={}\n",
-                            self.ctrl.pci,
-                            NVME_NVM_WRITE,
-                            self.nsid,
-                            cur_lba,
-                            blocks_here
-                        );
+                                "nvme: {} probe-write fallback sync opcode=0x{:02X} nsid={} slba={} nlb={}\n",
+                                self.ctrl.pci,
+                                NVME_NVM_WRITE,
+                                self.nsid,
+                                cur_lba,
+                                blocks_here
+                            );
                             match self.ctrl.io_rw_sync(
                                 NVME_NVM_WRITE,
                                 self.nsid,
@@ -1535,12 +1535,12 @@ impl block::BlockDevice for NvmeBlockDevice {
                                 Ok(cpl) => {
                                     dma::dealloc(dma_virt, max_io_bytes);
                                     crate::log!(
-                                    "nvme: {} probe-write fallback failed status=0x{:04X} (sct={} sc={})\n",
-                                    self.ctrl.pci,
-                                    cpl.status,
-                                    cpl.status_type(),
-                                    cpl.status_code(),
-                                );
+                                        "nvme: {} probe-write fallback failed status=0x{:04X} (sct={} sc={})\n",
+                                        self.ctrl.pci,
+                                        cpl.status,
+                                        cpl.status_type(),
+                                        cpl.status_code(),
+                                    );
                                     return Err(block::Error::Io);
                                 }
                                 Err(e) => {

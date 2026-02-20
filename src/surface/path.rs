@@ -68,21 +68,13 @@ impl Path {
     pub fn file_name(&self) -> Option<&str> {
         let s = self.trim_trailing_slash();
         let name = s.rsplit_once('/').map(|(_, tail)| tail).unwrap_or(s);
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
-        }
+        if name.is_empty() { None } else { Some(name) }
     }
 
     pub fn file_stem(&self) -> Option<&str> {
         let name = self.file_name()?;
         if let Some((stem, _)) = name.rsplit_once('.') {
-            if stem.is_empty() {
-                None
-            } else {
-                Some(stem)
-            }
+            if stem.is_empty() { None } else { Some(stem) }
         } else {
             Some(name)
         }
@@ -91,11 +83,7 @@ impl Path {
     pub fn extension(&self) -> Option<&str> {
         let name = self.file_name()?;
         let (_stem, ext) = name.rsplit_once('.')?;
-        if ext.is_empty() {
-            None
-        } else {
-            Some(ext)
-        }
+        if ext.is_empty() { None } else { Some(ext) }
     }
 
     pub fn with_extension(&self, ext: &str) -> PathBuf {

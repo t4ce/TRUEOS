@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use core::cmp::min;
 use core::mem::size_of;
-use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::ptr::{NonNull, read_volatile, write_volatile};
 
 use crate::net::core::VendorAdapter;
 use crate::net::ring::{DmaRegion, NetRing};

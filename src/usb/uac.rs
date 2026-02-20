@@ -9,7 +9,7 @@
 use crate::audio::PcmFormat;
 use crate::pci::dma;
 use crate::usb::isoch::{IsochOutConfig, IsochOutPipe};
-use crate::usb::xhci::{self, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
+use crate::usb::xhci::{self, MAX_XHCI_CONTROLLERS, Trb, TrbRing, XhciContext};
 use crate::wait;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, Vec};

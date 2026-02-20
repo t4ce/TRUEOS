@@ -135,6 +135,14 @@ const NET_LOG_RX_TAP: bool = false;
 const NET_LOG_TX_TAP: bool = false;
 const NET_LOG_DHCP_VERBOSE: bool = false;
 const NET_LOG_IPV6_RA: bool = false;
+// DHCPv6 bring-up is easy to misdiagnose because failures often look like
+// "nothing happens". Keep a tiny amount of always-on logging on state changes
+// and a small RX sample to make it obvious whether we transmit/receive.
+const NET_LOG_DHCP6_SAMPLES: usize = 8;
+// Some networks provide DHCPv6 DNS without setting RA O=1, and some RAs omit
+// RDNSS. When enabled, we will send an Information-Request if we don't have
+// any IPv6 DNS yet (from either RA or DHCPv6).
+const DHCP6_EAGER_DNS: bool = true;
 
 const DHCP_DNS_MAX: usize = 4;
 const RA_DNS6_MAX: usize = 4;
@@ -1168,18 +1176,24 @@ struct NetService {
     dhcp6_udp: SocketHandle,
     dhcp6_stage: Dhcp6Stage,
     dhcp6_last_sent: Option<Instant>,
+    dhcp6_cooldown_until: Option<Instant>,
     dhcp6_xid: [u8; 3],
     dhcp6_retries: u8,
     dhcp6_server_id: Option<Vec<u8>>,
+    dhcp6_server_addr: Option<Ipv6Address>,
     dhcp6_candidate_addr: Option<Ipv6Address>,
     dhcp6_duid: [u8; 10],
     dhcp6_iaid: u32,
     dhcp6_dns6: [[u8; 16]; DHCP6_DNS6_MAX],
     dhcp6_dns6_count: u8,
 
+    // First few DHCPv6 RX packets are logged to help diagnose interop issues.
+    dhcp6_rx_samples_left: u8,
+
     ra_seen: bool,
     ra_managed: bool,
     ra_other: bool,
+    ra_logged_flags: bool,
     ipv6_global_is_dhcp: bool,
 
     // Minimal ICMP reachability probe (ping gateway).
@@ -1274,6 +1288,9 @@ impl NetService {
         let dhcp6_tx = udp::PacketBuffer::new(dhcp6_tx_meta, dhcp6_tx_buf);
         let mut dhcp6_udp_socket = udp::Socket::new(dhcp6_rx, dhcp6_tx);
         let _ = dhcp6_udp_socket.bind(crate::net::dhcpv6::CLIENT_PORT);
+        // DHCPv6 packets are link-local and should not be forwarded.
+        // Some servers enforce IPv6 Hop Limit = 1.
+        dhcp6_udp_socket.set_hop_limit(Some(1));
 
         let mut sockets = SocketSet::new(Vec::new());
         let icmp = sockets.add(icmp_socket);
@@ -1294,8 +1311,8 @@ impl NetService {
         );
 
         let dhcp6_duid = crate::net::dhcpv6::duid_ll_from_mac(mac);
-        let dhcp6_iaid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]])
-            ^ ((device_index as u32) << 24);
+        let dhcp6_iaid =
+            u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]) ^ ((device_index as u32) << 24);
 
         Self {
             device_index,
@@ -1326,18 +1343,22 @@ impl NetService {
             dhcp6_udp,
             dhcp6_stage: Dhcp6Stage::Idle,
             dhcp6_last_sent: None,
+            dhcp6_cooldown_until: None,
             dhcp6_xid: [0, 0, 0],
             dhcp6_retries: 0,
             dhcp6_server_id: None,
+            dhcp6_server_addr: None,
             dhcp6_candidate_addr: None,
             dhcp6_duid,
             dhcp6_iaid,
             dhcp6_dns6: [[0u8; 16]; DHCP6_DNS6_MAX],
             dhcp6_dns6_count: 0,
+            dhcp6_rx_samples_left: NET_LOG_DHCP6_SAMPLES as u8,
 
             ra_seen: false,
             ra_managed: false,
             ra_other: false,
+            ra_logged_flags: false,
             ipv6_global_is_dhcp: false,
 
             icmp_ping_seq: 0,
@@ -2191,6 +2212,16 @@ impl NetService {
         let flags = icmpv6_bytes[ICMPV6_HDR + 1];
         self.ra_managed = (flags & 0x80) != 0;
         self.ra_other = (flags & 0x40) != 0;
+
+        if !self.ra_logged_flags {
+            self.ra_logged_flags = true;
+            crate::log!(
+                "net: ipv6 ra-flags dev={} M={} O={}\n",
+                self.device_index,
+                self.ra_managed as u8,
+                self.ra_other as u8
+            );
+        }
     }
 
     fn maybe_update_ra_dns6_from_icmpv6(&mut self, icmpv6_bytes: &[u8]) {
@@ -2299,9 +2330,15 @@ impl NetService {
     fn dhcp6_tick(&mut self, timestamp: Instant) {
         self.dhcp6_poll_rx();
 
-        let want_stateful_addr = self.ra_managed && self.local_ipv6_global.is_none();
-        let want_dns = (self.ra_other || (self.ra_seen && self.ra_dns6_count == 0))
-            && self.dhcp6_dns6_count == 0;
+        // If the network indicates M=1 (managed), prefer a DHCPv6-leased address.
+        // Don't let a best-effort SLAAC address suppress DHCPv6.
+        let want_stateful_addr = self.ra_managed && !self.ipv6_global_is_dhcp;
+        let have_any_v6_dns = self.ra_dns6_count != 0 || self.dhcp6_dns6_count != 0;
+        let want_dns = if DHCP6_EAGER_DNS {
+            !have_any_v6_dns
+        } else {
+            self.ra_other && self.dhcp6_dns6_count == 0
+        };
 
         // If we only did an info-request earlier and later learn we need a lease,
         // allow the state machine to start again.
@@ -2310,9 +2347,26 @@ impl NetService {
         }
 
         if self.dhcp6_stage == Dhcp6Stage::Idle {
+            if let Some(until) = self.dhcp6_cooldown_until {
+                if timestamp < until {
+                    return;
+                }
+                self.dhcp6_cooldown_until = None;
+            }
             if want_stateful_addr {
+                crate::log!(
+                    "net: dhcp6 start dev={} reason=ra-managed (M=1)\n",
+                    self.device_index
+                );
                 self.dhcp6_start_solicit(timestamp);
             } else if want_dns {
+                crate::log!(
+                    "net: dhcp6 start dev={} reason=dns-needed ra_other={} ra_dns6={} dhcp6_dns6={}\n",
+                    self.device_index,
+                    self.ra_other as u8,
+                    self.ra_dns6_count,
+                    self.dhcp6_dns6_count
+                );
                 self.dhcp6_start_info(timestamp);
             }
             return;
@@ -2332,6 +2386,16 @@ impl NetService {
         }
 
         if self.dhcp6_retries >= 6 {
+            // If the network sets O/M but doesn't actually provide DHCPv6,
+            // don't spam forever.
+            crate::log!(
+                "net: dhcp6 cooldown dev={} stage={:?} ra_managed={} ra_other={}\n",
+                self.device_index,
+                self.dhcp6_stage,
+                self.ra_managed as u8,
+                self.ra_other as u8
+            );
+            self.dhcp6_cooldown_until = Some(timestamp + SmolDuration::from_secs(60));
             self.dhcp6_stage = Dhcp6Stage::Idle;
             self.dhcp6_last_sent = None;
             self.dhcp6_retries = 0;
@@ -2354,7 +2418,11 @@ impl NetService {
 
     fn dhcp6_new_xid(&self) -> [u8; 3] {
         let r = crate::rng::rdrand_u64().unwrap_or(0x6a09e667_f3bcc909);
-        let mut xid = [(r & 0xFF) as u8, ((r >> 8) & 0xFF) as u8, ((r >> 16) & 0xFF) as u8];
+        let mut xid = [
+            (r & 0xFF) as u8,
+            ((r >> 8) & 0xFF) as u8,
+            ((r >> 16) & 0xFF) as u8,
+        ];
         if xid == [0, 0, 0] {
             xid = [0x12, 0x34, 0x56];
         }
@@ -2365,17 +2433,24 @@ impl NetService {
         self.dhcp6_stage = Dhcp6Stage::Solicit;
         self.dhcp6_retries = 0;
         self.dhcp6_server_id = None;
+        self.dhcp6_server_addr = None;
         self.dhcp6_candidate_addr = None;
+        self.dhcp6_xid = self.dhcp6_new_xid();
         self.dhcp6_send_solicit(timestamp);
     }
 
     fn dhcp6_send_solicit(&mut self, timestamp: Instant) {
-        self.dhcp6_xid = self.dhcp6_new_xid();
         let duid = &self.dhcp6_duid;
         let msg = crate::net::dhcpv6::build_solicit(self.dhcp6_xid, duid, self.dhcp6_iaid, true);
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log!("net: dhcp6 solicit dev={}\n", self.device_index);
+                crate::log!(
+                    "net: dhcp6 solicit dev={} xid={:02x}{:02x}{:02x}\n",
+                    self.device_index,
+                    self.dhcp6_xid[0],
+                    self.dhcp6_xid[1],
+                    self.dhcp6_xid[2]
+                );
             }
             self.dhcp6_last_sent = Some(timestamp);
             self.dhcp6_retries = self.dhcp6_retries.saturating_add(1);
@@ -2385,16 +2460,22 @@ impl NetService {
     fn dhcp6_start_info(&mut self, timestamp: Instant) {
         self.dhcp6_stage = Dhcp6Stage::Info;
         self.dhcp6_retries = 0;
+        self.dhcp6_xid = self.dhcp6_new_xid();
         self.dhcp6_send_info(timestamp);
     }
 
     fn dhcp6_send_info(&mut self, timestamp: Instant) {
-        self.dhcp6_xid = self.dhcp6_new_xid();
         let duid = &self.dhcp6_duid;
         let msg = crate::net::dhcpv6::build_info_request(self.dhcp6_xid, duid);
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log!("net: dhcp6 info-request dev={}\n", self.device_index);
+                crate::log!(
+                    "net: dhcp6 info-request dev={} xid={:02x}{:02x}{:02x}\n",
+                    self.device_index,
+                    self.dhcp6_xid[0],
+                    self.dhcp6_xid[1],
+                    self.dhcp6_xid[2]
+                );
             }
             self.dhcp6_last_sent = Some(timestamp);
             self.dhcp6_retries = self.dhcp6_retries.saturating_add(1);
@@ -2407,7 +2488,9 @@ impl NetService {
             return;
         };
 
-        self.dhcp6_xid = self.dhcp6_new_xid();
+        if self.dhcp6_retries == 0 {
+            self.dhcp6_xid = self.dhcp6_new_xid();
+        }
         let duid = &self.dhcp6_duid;
         let requested = self.dhcp6_candidate_addr.map(|a| a.octets());
         let msg = crate::net::dhcpv6::build_request(
@@ -2420,7 +2503,14 @@ impl NetService {
         );
         if self.dhcp6_send_udp(&msg) {
             if self.dhcp6_retries == 0 {
-                crate::log!("net: dhcp6 request dev={}\n", self.device_index);
+                crate::log!(
+                    "net: dhcp6 request dev={} xid={:02x}{:02x}{:02x} unicast={}\n",
+                    self.device_index,
+                    self.dhcp6_xid[0],
+                    self.dhcp6_xid[1],
+                    self.dhcp6_xid[2],
+                    self.dhcp6_server_addr.is_some() as u8
+                );
             }
             self.dhcp6_last_sent = Some(timestamp);
             self.dhcp6_retries = self.dhcp6_retries.saturating_add(1);
@@ -2433,11 +2523,17 @@ impl NetService {
             return false;
         }
 
-        let m = Ipv6Address::from_octets(crate::net::dhcpv6::ALL_SERVERS_MCAST);
-        let ep = IpEndpoint::new(
-            IpAddress::Ipv6(m),
-            crate::net::dhcpv6::SERVER_PORT,
-        );
+        // Solicit is multicast. Request is often accepted via multicast too, but
+        // some servers are stricter and expect unicast to the server that sent
+        // Advertise/Reply.
+        let dst = if self.dhcp6_stage == Dhcp6Stage::Request {
+            self.dhcp6_server_addr
+                .unwrap_or_else(|| Ipv6Address::from_octets(crate::net::dhcpv6::ALL_SERVERS_MCAST))
+        } else {
+            Ipv6Address::from_octets(crate::net::dhcpv6::ALL_SERVERS_MCAST)
+        };
+
+        let ep = IpEndpoint::new(IpAddress::Ipv6(dst), crate::net::dhcpv6::SERVER_PORT);
         socket.send_slice(payload, ep).is_ok()
     }
 
@@ -2460,7 +2556,7 @@ impl NetService {
             if meta.endpoint.port != crate::net::dhcpv6::SERVER_PORT {
                 continue;
             }
-            let IpAddress::Ipv6(_src) = meta.endpoint.addr else {
+            let IpAddress::Ipv6(src) = meta.endpoint.addr else {
                 continue;
             };
 
@@ -2469,13 +2565,47 @@ impl NetService {
                 continue;
             };
 
+            if self.dhcp6_rx_samples_left != 0 {
+                self.dhcp6_rx_samples_left = self.dhcp6_rx_samples_left.saturating_sub(1);
+                crate::log!(
+                    "net: dhcp6 rx dev={} stage={:?} src=[{}]:{} kind={:?} xid={:02x}{:02x}{:02x} sid_len={} cid_len={} ia={} dns={}\n",
+                    self.device_index,
+                    self.dhcp6_stage,
+                    src,
+                    meta.endpoint.port,
+                    p.kind,
+                    p.xid[0],
+                    p.xid[1],
+                    p.xid[2],
+                    p.server_id.map(|s| s.len()).unwrap_or(0),
+                    p.client_id.map(|s| s.len()).unwrap_or(0),
+                    p.ia_addr.is_some() as u8,
+                    p.dns_count
+                );
+            }
+
             // When we have an active exchange, only accept matching XID.
             if self.dhcp6_stage != Dhcp6Stage::Idle && p.xid != self.dhcp6_xid {
+                if self.dhcp6_rx_samples_left != 0 {
+                    crate::log!(
+                        "net: dhcp6 rx dev={} ignored reason=xid-mismatch expected={:02x}{:02x}{:02x}\n",
+                        self.device_index,
+                        self.dhcp6_xid[0],
+                        self.dhcp6_xid[1],
+                        self.dhcp6_xid[2]
+                    );
+                }
                 continue;
             }
             // If a ClientID is present, require it matches our DUID.
             if let Some(cid) = p.client_id {
                 if cid != &self.dhcp6_duid[..] {
+                    if self.dhcp6_rx_samples_left != 0 {
+                        crate::log!(
+                            "net: dhcp6 rx dev={} ignored reason=clientid-mismatch\n",
+                            self.device_index
+                        );
+                    }
                     continue;
                 }
             }
@@ -2496,6 +2626,7 @@ impl NetService {
 
             match (self.dhcp6_stage, p.kind) {
                 (Dhcp6Stage::Solicit, crate::net::dhcpv6::ParsedKind::Advertise) => {
+                    self.dhcp6_server_addr = Some(src);
                     if let Some(sid) = p.server_id {
                         self.dhcp6_server_id = Some(sid.to_vec());
                     }
@@ -2507,11 +2638,17 @@ impl NetService {
                         self.dhcp6_retries = 0;
                         let ts = now();
                         self.dhcp6_send_request(ts);
+                    } else {
+                        crate::log!(
+                            "net: dhcp6 advertise dev={} missing server-id (ignoring)\n",
+                            self.device_index
+                        );
                     }
                 }
 
                 (Dhcp6Stage::Solicit, crate::net::dhcpv6::ParsedKind::Reply)
                 | (Dhcp6Stage::Request, crate::net::dhcpv6::ParsedKind::Reply) => {
+                    self.dhcp6_server_addr = Some(src);
                     if let Some(sid) = p.server_id {
                         self.dhcp6_server_id = Some(sid.to_vec());
                     }
@@ -2525,6 +2662,7 @@ impl NetService {
                 }
 
                 (Dhcp6Stage::Info, crate::net::dhcpv6::ParsedKind::Reply) => {
+                    self.dhcp6_server_addr = Some(src);
                     self.dhcp6_stage = Dhcp6Stage::Idle;
                     self.dhcp6_last_sent = None;
                     self.dhcp6_retries = 0;
@@ -2561,7 +2699,11 @@ impl NetService {
             }
         });
 
-        crate::log!("net: dhcp6 acquired dev={} addr6={}\n", self.device_index, addr);
+        crate::log!(
+            "net: dhcp6 acquired dev={} addr6={}\n",
+            self.device_index,
+            addr
+        );
     }
 
     fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {

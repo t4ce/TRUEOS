@@ -6,7 +6,7 @@ use embassy_executor::task;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::net::adapter::{
-    register_app_queues, NetCommand, NetEvent, NetHandle, NetQueue, SocketKind,
+    NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell::{ShellBackend, ShellIo};
 

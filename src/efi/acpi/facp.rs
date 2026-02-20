@@ -1,9 +1,9 @@
+use acpi::AcpiError;
 use acpi::address::{GenericAddress, MappedGas};
 use acpi::sdt::fadt::{Fadt, FixedFeatureFlags};
-use acpi::AcpiError;
 use core::ptr::{addr_of, read_unaligned};
 
-use super::{ensure_tables, sleep, AcpiIdentityHandler};
+use super::{AcpiIdentityHandler, ensure_tables, sleep};
 
 const PM1_SLEEP_TYP_SHIFT: u64 = 10;
 const PM1_SLEEP_TYP_MASK: u64 = 0b111 << PM1_SLEEP_TYP_SHIFT;

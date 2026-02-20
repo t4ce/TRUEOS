@@ -4,10 +4,10 @@
 
 use crate::pci::dma;
 use crate::usb::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
-    ep_max_burst_bits, ep_max_esit_payload_hi_bits, ep_max_esit_payload_lo_bits,
-    ep_max_packet_bits, ep_mult_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type, Trb, TrbRing,
-    XhciContext, EP_STATE_DISABLED, EP_TYPE_ISOCH_OUT,
+    self, EP_STATE_DISABLED, EP_TYPE_ISOCH_OUT, Trb, TrbRing, XhciContext, context_index,
+    endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits, ep_max_burst_bits,
+    ep_max_esit_payload_hi_bits, ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_mult_bits,
+    ep_state_bits, ep_type_bits, hi, lo, trb_type,
 };
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};

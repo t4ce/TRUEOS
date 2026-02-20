@@ -2,7 +2,7 @@ use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_executor::{task, Spawner};
+use embassy_executor::{Spawner, task};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String};
 use spin::Mutex;
@@ -10,7 +10,7 @@ use x86_64::instructions::tables::{sgdt, sidt};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
 use x86_64::registers::model_specific::Msr;
 use x86_64::registers::rflags;
-use x86_64::registers::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
+use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell::{ShellBackend, ShellIo};
 
@@ -357,11 +357,7 @@ async fn vm1_task(_io: &'static dyn ShellBackend) {
         Ok(lr) => {
             hvlogf(format_args!(
                 "hv: vm1 reporting: vmlaunch entered={} launch_failed={} exit_reason=0x{:X} exit_qual=0x{:X} guest_rip=0x{:016X}",
-                lr.entered,
-                lr.launch_failed,
-                lr.exit_reason,
-                lr.exit_qualification,
-                lr.guest_rip
+                lr.entered, lr.launch_failed, lr.exit_reason, lr.exit_qualification, lr.guest_rip
             ));
         }
         Err(e) => hvlogf(format_args!(
@@ -535,9 +531,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
                     } else if lr2.entered != 0 {
                         hvlogf(format_args!(
                             "hv: vm1 reporting: second vmexit reason=0x{:X} qual=0x{:X} guest_rip=0x{:016X}",
-                            lr2.exit_reason,
-                            lr2.exit_qualification,
-                            lr2.guest_rip
+                            lr2.exit_reason, lr2.exit_qualification, lr2.guest_rip
                         ));
                     }
                     lr = lr2;
@@ -589,11 +583,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     let entry = adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
     hvlogf(format_args!(
         "hv: vm1 reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
-        pin as u32,
-        proc as u32,
-        proc2 as u32,
-        exit as u32,
-        entry as u32
+        pin as u32, proc as u32, proc2 as u32, exit as u32, entry as u32
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
@@ -668,8 +658,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             tr_base = synth.tr_base;
             hvlogf(format_args!(
                 "hv: vm1 reporting: host-state recovered: using synthetic hv gdt+tss tr=0x{:04X} tr_base=0x{:016X}",
-                synth.tr_sel,
-                synth.tr_base
+                synth.tr_sel, synth.tr_base
             ));
             // Continue with synthesized host state.
             let fs_base = unsafe { Msr::new(IA32_FS_BASE).read() };
@@ -698,9 +687,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             if host_cs == 0 || host_ss == 0 || host_tr == 0 {
                 hvlogf(format_args!(
                     "hv: vm1 reporting: host-state invalid selectors cs=0x{:04X} ss=0x{:04X} tr=0x{:04X}",
-                    host_cs as u16,
-                    host_ss as u16,
-                    host_tr as u16
+                    host_cs as u16, host_ss as u16, host_tr as u16
                 ));
                 return Err("host selectors");
             }
@@ -722,10 +709,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             }
             hvlogf(format_args!(
                 "hv: vm1 reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-                host_cs as u16,
-                host_ss as u16,
-                host_tr as u16,
-                tr_base
+                host_cs as u16, host_ss as u16, host_tr as u16, tr_base
             ));
 
             vmwrite(VMCS_HOST_CR0, host_cr0)?;
@@ -1071,11 +1055,7 @@ fn vmread(field: u64) -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 {
-            Some(out)
-        } else {
-            None
-        }
+        if fail == 0 { Some(out) } else { None }
     }
 }
 
@@ -1506,11 +1486,7 @@ fn vmptrst() -> Option<u64> {
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
         );
-        if fail == 0 {
-            Some(out)
-        } else {
-            None
-        }
+        if fail == 0 { Some(out) } else { None }
     }
 }
 

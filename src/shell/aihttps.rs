@@ -12,9 +12,9 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use trueos_v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};
-use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent, TlsTimeouts};
-use crate::v::net::dns::{self, DnsConfig};
+use crate::net::tls_socket::{TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues};
 use crate::v::net::Queue;
+use crate::v::net::dns::{self, DnsConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiHttpsError {

@@ -157,11 +157,7 @@ fn alloc_dns_id() -> u16 {
     // Avoid 0; keep reasonably unique.
     let s = DNS_SEQ.fetch_add(1, Ordering::Relaxed);
     let id = (s as u16) ^ ((s >> 16) as u16) ^ 0xBEEF;
-    if id == 0 {
-        1
-    } else {
-        id
-    }
+    if id == 0 { 1 } else { id }
 }
 
 #[inline]
