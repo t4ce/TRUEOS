@@ -43,7 +43,7 @@ webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
 embedded-websocket = { version = "0.9.3", default-features = false }
-smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
+smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-v = { path = "crates/trueos-v" }

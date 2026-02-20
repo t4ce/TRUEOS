@@ -17,28 +17,56 @@ fn alloc_uninit_buf(len: usize) -> Vec<u8> {
     v
 }
 
-pub fn alloc_rx_buf() -> Vec<u8> {
-    if let Some(buf) = PACKET_POOL.lock().pop() {
+#[inline]
+fn alloc_uninit_buf_with_capacity(capacity: usize, len: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(capacity.max(len));
+    // Safety: callers must ensure the buffer is fully overwritten before any read.
+    unsafe { v.set_len(len) };
+    v
+}
+
+/// Allocate a packet buffer of exactly `len` bytes.
+///
+/// This reuses the shared packet pool to avoid per-packet heap allocations in
+/// the smoltcp device adapter and other higher layers.
+pub fn alloc_packet_buf(len: usize) -> Vec<u8> {
+    let len = len.max(1);
+
+    if let Some(mut buf) = PACKET_POOL.lock().pop() {
+        if buf.capacity() < len {
+            // Too small: fall back to a fresh allocation sized for typical MTU.
+            return alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len);
+        }
+
+        // Safety: caller will overwrite the bytes before reading.
+        unsafe { buf.set_len(len) };
         buf
     } else {
-        alloc_uninit_buf(RX_BUF_SIZE)
+        alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len)
     }
 }
 
-pub fn recycle_rx_buf(mut buf: Vec<u8>) {
+/// Recycle a packet buffer back into the shared pool.
+pub fn recycle_packet_buf(mut buf: Vec<u8>) {
     if buf.capacity() < RX_BUF_SIZE {
         return;
     }
-    // Safety: we are about to put this into the ring for DMA overwrite.
-    // The previous contents don't matter, and we don't need to zero-fill (costly).
-    unsafe {
-        buf.set_len(RX_BUF_SIZE);
-    }
+
+    // Safety: the buffer will be overwritten on next use.
+    unsafe { buf.set_len(RX_BUF_SIZE) };
 
     let mut pool = PACKET_POOL.lock();
     if pool.len() < POOL_MAX {
         pool.push(buf);
     }
+}
+
+pub fn alloc_rx_buf() -> Vec<u8> {
+    alloc_packet_buf(RX_BUF_SIZE)
+}
+
+pub fn recycle_rx_buf(buf: Vec<u8>) {
+    recycle_packet_buf(buf)
 }
 
 pub struct DmaRegion {

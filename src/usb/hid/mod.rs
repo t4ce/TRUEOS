@@ -1,11 +1,11 @@
+use super::control;
 use super::xhci::{
     self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
     Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
-use super::control;
-pub mod descripto;
 pub mod classreq;
+pub mod descripto;
 
 use self::descripto as usbdesc;
 use crate::pci::dma;
@@ -331,8 +331,6 @@ pub(crate) fn set_ep0_state_for_slot(controller_id: usize, slot_id: u32, st: Trb
         }
     }
 }
-
- 
 
 pub fn register_runtime(runtime: HidRuntime) {
     let claimed_flags = match runtime.hid_kind {

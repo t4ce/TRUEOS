@@ -113,6 +113,10 @@ pub struct VirtioNetAdapter {
     rx_bufs: Vec<DmaRegion>,
     tx_bufs: Vec<DmaRegion>,
     tx_free: Vec<u16>,
+
+    // Coalesce port-IO notifies during bursts. We still guarantee an eventual kick
+    // from the RX poll path.
+    tx_last_notify_avail: u16,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
@@ -205,6 +209,8 @@ impl VirtioNetAdapter {
             rx_bufs,
             tx_bufs,
             tx_free,
+
+            tx_last_notify_avail: 0,
         })
     }
 }
@@ -383,6 +389,19 @@ fn init_tx_buffers(txq: &mut VirtQueue) -> Result<(Vec<DmaRegion>, Vec<u16>), ()
 }
 
 impl VirtioNetAdapter {
+    #[inline]
+    fn maybe_kick_tx(&mut self, force: bool) {
+        // Notify if we've queued a burst of descriptors, or if forced (e.g. end of poll).
+        const TX_NOTIFY_THRESHOLD: u16 = 8;
+        let pending = self.txq.avail_idx.wrapping_sub(self.tx_last_notify_avail);
+        if force || pending >= TX_NOTIFY_THRESHOLD {
+            if self.tx_last_notify_avail != self.txq.avail_idx {
+                notify_queue(self.io_base, QUEUE_TX);
+                self.tx_last_notify_avail = self.txq.avail_idx;
+            }
+        }
+    }
+
     fn poll_rx_queue(&mut self) {
         let used_idx = self.rxq.used_idx();
         let mut processed = 0u16;
@@ -446,6 +465,9 @@ impl VirtioNetAdapter {
         if processed != 0 {
             notify_queue(self.io_base, QUEUE_RX);
         }
+
+        // Ensure any coalesced TX submissions are kicked regularly.
+        self.maybe_kick_tx(true);
     }
 
     fn reclaim_tx(&mut self) {
@@ -491,7 +513,9 @@ impl VirtioNetAdapter {
         desc.next = 0;
 
         self.txq.push_avail(desc_id);
-        notify_queue(self.io_base, QUEUE_TX);
+
+        // Coalesce notifies across bursts; poll_rx_queue will also force a kick.
+        self.maybe_kick_tx(false);
         Ok(())
     }
 }

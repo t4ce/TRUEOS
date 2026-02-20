@@ -46,13 +46,12 @@ QEMU_USB_FLAGS = \
 	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
-	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms \
-	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse \
-	-device usb-kbd,bus=xhci.0,port=1,id=usbkbd \
-	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=4,id=usbleds
-	
+	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms 
+
+#	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse 
+#	-device usb-kbd,bus=xhci.0,port=1,id=usbkbd 
+#	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=4,id=usbleds
 # -device usb-tablet,bus=xhci.0,port=4,id=usbtablet 
-# 
 # -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
 # -device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx
 # -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
@@ -136,25 +135,20 @@ SERIAL_CONSOLE_CMD = konsole -e sh -c 'stty -echo -icanon cols 100 rows 30; nc 1
 snipe:
 	@killall -9 qemu-system-x86_64 || true
 
-run: snipe iso-debug
+dbg: snipe iso-debug
 	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
-dbg: snipe iso-debug
+dbg-vscode: snipe iso-debug
 	@$(SERIAL_CONSOLE_CMD) &
-	@echo "Waiting for debugger..."
 	@set -e; \
 		$(QEMU_ISO_DBG) -S -s & qemu_pid=$$!; \
-		i=0; \
-		while ! nc -z 127.0.0.1 1234 >/dev/null 2>&1; do \
-			i=$$((i + 1)); \
-			if [ $$i -gt 200 ]; then \
-				echo "GDB stub not reachable on 127.0.0.1:1234 (timeout)" >&2; \
-				break; \
-			fi; \
-			sleep 0.05; \
-		done; \
+		sleep 0.15; \
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
+
+# Default quick boot (used by CI-style smoke checks and repo instructions).
+run: snipe iso-debug
+	@($(QEMU_ISO) & $(SERIAL_CONSOLE_CMD))
 
 # Useful for validating GPT+ESP+Limine stage installation.
 QEMU_DISK_COMMON_FLAGS = -debugcon stdio -m 2000M -smp cores=4 -cpu qemu64,phys-bits=39 -serial tcp:127.0.0.1:5555,server,nowait

@@ -3,7 +3,7 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::shell::{ShellBackend, ShellIo};
 
-pub(crate) const NETBENCH_URL: &str = "http://ipv4.download.thinkbroadband.com/1GB.zip";
+pub(crate) const NETBENCH_URL: &str = "http://ipv6.download.thinkbroadband.com/5GB.zip";
 
 fn format_speed(bps: u64) -> alloc::string::String {
     if bps < 100 {
@@ -314,26 +314,43 @@ pub(crate) async fn run_netbench(
     };
 
     let _ = rev_io.write_fmt(format_args!("netbench: resolving {}\n", host));
-    let ip = match crate::v::net::dns::resolve_ipv4_for_device(
+    let ip4 = crate::v::net::dns::resolve_ipv4_for_device(
         nic_index,
         host.as_str(),
         crate::v::net::dns::DnsConfig::default(),
     )
-    .await
-    {
-        Ok(v) => v,
-        Err(_e) => {
-            let _ = rev_io.write_str("netbench: dns failed\n");
-            let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
-            let _ = crate::matrix::free_slot(slot);
-            return;
-        }
+    .await;
+
+    let ip6 = if ip4.is_err() {
+        crate::v::net::dns::resolve_ipv6_for_device(
+            nic_index,
+            host.as_str(),
+            crate::v::net::dns::DnsConfig::default(),
+        )
+        .await
+        .ok()
+    } else {
+        None
     };
 
-    let _ = rev_io.write_fmt(format_args!(
-        "netbench: connecting to {}.{}.{}.{}\n",
-        ip[0], ip[1], ip[2], ip[3]
-    ));
+    if ip4.is_err() && ip6.is_none() {
+        let _ = rev_io.write_str("netbench: dns failed\n");
+        let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
+        let _ = crate::matrix::free_slot(slot);
+        return;
+    }
+
+    if let Ok(ip) = ip4 {
+        let _ = rev_io.write_fmt(format_args!(
+            "netbench: connecting to {}.{}.{}.{}\n",
+            ip[0], ip[1], ip[2], ip[3]
+        ));
+    } else if let Some(ip) = ip6 {
+        let _ = rev_io.write_fmt(format_args!(
+            "netbench: connecting to ipv6 {:02x}{:02x}:{:02x}{:02x}:...\n",
+            ip[0], ip[1], ip[2], ip[3]
+        ));
+    }
     let _ = crate::shell::statusbar::set_right(slot, "connecting");
     crate::shell::statusbar::refresh(io, cols, rows);
 
@@ -344,12 +361,19 @@ pub(crate) async fn run_netbench(
         return;
     };
 
-    if vnet
-        .submit(api::Command::OpenTcpConnect {
+    let connect_ok = if let Ok(ip) = ip4 {
+        vnet.submit(api::Command::OpenTcpConnect {
             remote: api::EndpointV4 { addr: ip, port },
         })
-        .is_err()
-    {
+    } else if let Some(ip) = ip6 {
+        vnet.submit(api::Command::OpenTcpConnectV6 {
+            remote: api::EndpointV6 { addr: ip, port },
+        })
+    } else {
+        Err(())
+    };
+
+    if connect_ok.is_err() {
         let _ = rev_io.write_str("netbench: tcp connect submit failed\n");
         let _ = crate::shell::statusbar::set_active_slot(u8::MAX);
         let _ = crate::matrix::free_slot(slot);

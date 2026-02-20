@@ -1,13 +1,12 @@
 mod attach;
-mod non_generic;
 pub mod bot;
 pub mod cdc;
 pub mod cdc_acm;
 mod control;
 mod enumeration;
 pub mod hid;
+mod non_generic;
 pub use hid::descripto as hid_descripto;
-pub mod usb_descripto;
 pub mod input;
 pub mod isoch;
 pub mod leds;
@@ -19,12 +18,11 @@ mod scout;
 pub mod scsi;
 pub mod truekey;
 pub mod uac;
+pub mod usb_descripto;
 pub mod xhci;
 
 pub(crate) use self::control::control_out;
-pub(crate) use self::enumeration::{
-    disable_slot, enumerate_port,
-};
+pub(crate) use self::enumeration::{disable_slot, enumerate_port};
 #[allow(unused_imports)]
 pub use scout::{port_snapshot, usb_scout_service, ScoutedPort};
 

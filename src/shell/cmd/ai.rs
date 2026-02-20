@@ -7,11 +7,11 @@ use spin::Mutex;
 
 use crate::wait::{select2, Either};
 
+use crate::shell::aihttps::{post_json_async, post_sse_async, SseHandler};
 use crate::shell::interface::ShellIo;
 use crate::shell::output::ReverseOutput;
 use crate::shell::statusbar;
 use crate::shell::{CommandAction, ShellBackend, ShellMode};
-use crate::shell::aihttps::{post_json_async, post_sse_async, SseHandler};
 
 fn log_utf8_chunks(prefix: &str, s: &str) {
     // Avoid log-line truncation by splitting into multiple lines.
