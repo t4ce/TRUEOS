@@ -41,7 +41,7 @@ pub(super) async fn handle_command_action(
         CommandAction::ShowBenchDiskTable => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
             super::print_bench_disk_table(&rev).await;
-            io.write_str("bench: enter TRUEOSFS disk id (blank/q cancels)\r\n");
+            io.write_str("bench: enter TRUEOSFS disk id (e.g. 1 or disc001), 'ls', or 'q' (blank cancels)\r\n");
         }
         CommandAction::ShowNetbenchNicTable => {
             super::print_netbench_nic_table(io).await;
