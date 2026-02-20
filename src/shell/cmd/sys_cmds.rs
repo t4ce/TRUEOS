@@ -478,12 +478,25 @@ pub(crate) fn cmd_net_icmp(
 
     crate::wait::spawn_and_wait_local(async move {
         // DNS
-        let ip = match crate::v::net::dns::resolve_ipv4_primary(
-            target.as_str(),
-            crate::v::net::dns::DnsConfig::default(),
-        )
-        .await
-        {
+        let ip_res = match device_index {
+            Some(dev_idx) => {
+                crate::v::net::dns::resolve_ipv4_for_device(
+                    dev_idx,
+                    target.as_str(),
+                    crate::v::net::dns::DnsConfig::for_device(dev_idx),
+                )
+                .await
+            }
+            None => {
+                crate::v::net::dns::resolve_ipv4_primary(
+                    target.as_str(),
+                    crate::v::net::dns::DnsConfig::default(),
+                )
+                .await
+            }
+        };
+
+        let ip = match ip_res {
             Ok(addr) => addr,
             Err(e) => {
                 io_static.write_fmt(format_args!("net.icmp: resolve failed {:?}\r\n", e));

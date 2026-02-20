@@ -570,8 +570,12 @@ async fn fetch_on_device(
     // Avoid per-chunk logging (which floods globalog); emit a single completion line instead.
     let want_done_log = progress.is_some();
 
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-        .await
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
@@ -1013,8 +1017,12 @@ async fn fetch_on_device_sse(
         }
     }
 
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-        .await
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => return Err(FetchError::DnsTimeout),
@@ -1480,8 +1488,12 @@ async fn fetch_on_device_to_file_keepalive(
         let st = conn.state.lock();
         if st.handle.is_none() || !st.connected {
             drop(st);
-            match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-                .await
+            match dns::resolve_ipv4_for_device(
+                dev_idx,
+                parsed.host.as_str(),
+                DnsConfig::for_device(dev_idx),
+            )
+            .await
             {
                 Ok(v) => ip = Some(v),
                 Err(dns::DnsError::Timeout) => {
@@ -1826,8 +1838,12 @@ async fn fetch_on_device_to_file(
 ) -> Result<(), FetchToFileError> {
     let t0 = Instant::now();
 
-    let ip = match dns::resolve_ipv4_for_device(dev_idx, parsed.host.as_str(), DnsConfig::default())
-        .await
+    let ip = match dns::resolve_ipv4_for_device(
+        dev_idx,
+        parsed.host.as_str(),
+        DnsConfig::for_device(dev_idx),
+    )
+    .await
     {
         Ok(ip) => ip,
         Err(dns::DnsError::Timeout) => {

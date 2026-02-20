@@ -63,7 +63,7 @@ impl WssConnection {
         let api_ip = match super::dns::resolve_ipv4_for_device(
             dev_idx,
             &host,
-            super::dns::DnsConfig::default(),
+            super::dns::DnsConfig::for_device(dev_idx),
         )
         .await
         {
