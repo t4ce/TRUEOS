@@ -76,11 +76,7 @@ fn halt_loop() -> ! {
 fn is_canonical_addr(v: usize) -> bool {
     let sign = (v >> 47) & 1;
     let high = v >> 48;
-    if sign == 0 {
-        high == 0
-    } else {
-        high == 0xFFFF
-    }
+    if sign == 0 { high == 0 } else { high == 0xFFFF }
 }
 
 fn dump_stack_words(sp: usize, words: usize) {

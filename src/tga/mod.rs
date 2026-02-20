@@ -1,4 +1,4 @@
-use core::ptr::{write_volatile, NonNull};
+use core::ptr::{NonNull, write_volatile};
 use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::{Mutex, Once};
@@ -217,8 +217,16 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         now.bar_size,
         if prev.bar_is_64 { "64b" } else { "32b" },
         if now.bar_is_64 { "64b" } else { "32b" },
-        if prev.bar_assigned_by_os { "assigned" } else { "fw" },
-        if now.bar_assigned_by_os { "assigned" } else { "fw" },
+        if prev.bar_assigned_by_os {
+            "assigned"
+        } else {
+            "fw"
+        },
+        if now.bar_assigned_by_os {
+            "assigned"
+        } else {
+            "fw"
+        },
         prev.mmio_base,
         now.mmio_base
     );

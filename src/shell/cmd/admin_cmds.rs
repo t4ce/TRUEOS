@@ -1,5 +1,5 @@
-use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::CommandAction;
+use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 
 pub(crate) fn cmd_update(
     ctx: &mut ShellCommandCtx<'_>,

@@ -24,9 +24,9 @@ pub mod xhci;
 pub(crate) use self::control::control_out;
 pub(crate) use self::enumeration::{disable_slot, enumerate_port};
 #[allow(unused_imports)]
-pub use scout::{port_snapshot, usb_scout_service, ScoutedPort};
+pub use scout::{ScoutedPort, port_snapshot, usb_scout_service};
 
-use self::xhci::{hi, lo, trb_type, Trb, TrbRing, XhciContext, MAX_XHCI_CONTROLLERS};
+use self::xhci::{MAX_XHCI_CONTROLLERS, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};

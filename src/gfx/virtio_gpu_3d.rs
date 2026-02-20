@@ -2,11 +2,11 @@ extern crate alloc;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
-use core::sync::atomic::{fence, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering, fence};
 use libm::{floorf, roundf};
 
 use crate::{pci, wait};
-use embassy_time_driver::{now, TICK_HZ};
+use embassy_time_driver::{TICK_HZ, now};
 // a Rectangle is just two triangles
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Virtio 1.0 GPU device id (0x1040 + virtio device id 16).
@@ -1650,16 +1650,16 @@ impl VirglGfxBackend {
             let pw = b.fb_width.min(disp_w).max(1);
             let ph = b.fb_height.min(disp_h).max(1);
             crate::log!(
-                    "virgl-backend: scanout backing=limine-fb fb={}x{} pitch={} present={}x{} res={}x{} bytes={}\n",
-                    b.fb_width,
-                    b.fb_height,
-                    b.fb_pitch,
-                    pw,
-                    ph,
-                    b.res_width,
-                    b.res_height,
-                    b.res_bytes
-                );
+                "virgl-backend: scanout backing=limine-fb fb={}x{} pitch={} present={}x{} res={}x{} bytes={}\n",
+                b.fb_width,
+                b.fb_height,
+                b.fb_pitch,
+                pw,
+                ph,
+                b.res_width,
+                b.res_height,
+                b.res_bytes
+            );
             (b.backing, b.res_width, b.res_height, b.res_bytes, pw, ph)
         } else {
             let bytes = (disp_w as usize)
@@ -2082,11 +2082,7 @@ impl VirglGfxBackend {
                             if f < 0.0 {
                                 f += 1.0;
                             }
-                            if f >= 1.0 {
-                                0.0
-                            } else {
-                                f
-                            }
+                            if f >= 1.0 { 0.0 } else { f }
                         }
                     }
                 };
@@ -2962,11 +2958,7 @@ static VIRGL_NEXT_RES_ID: AtomicU32 = AtomicU32::new(1);
 fn alloc_ctx_id() -> u32 {
     // ctx_id 0 is reserved.
     let id = VIRGL_NEXT_CTX_ID.fetch_add(1, Ordering::Relaxed);
-    if id == 0 {
-        1
-    } else {
-        id
-    }
+    if id == 0 { 1 } else { id }
 }
 
 fn alloc_res_pair() -> (u32, u32) {

@@ -4,8 +4,8 @@ pub mod virtio_gpu_3d;
 
 use spin::{Mutex, Once};
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use embassy_time_driver::{now, TICK_HZ};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
@@ -68,11 +68,7 @@ pub extern "C" fn trueos_cabi_gfx_frame_done_signal(bits: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_frame_done_is_ready() -> u32 {
-    if frame_done_is_ready() {
-        1
-    } else {
-        0
-    }
+    if frame_done_is_ready() { 1 } else { 0 }
 }
 
 /// Returns a monotonically increasing sequence when a ready frame boundary is consumed, or 0.

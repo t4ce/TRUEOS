@@ -1,5 +1,5 @@
 use super::super::control;
-use super::super::xhci::{trb_type, xhc_list, Trb, TrbRing, XhciContext};
+use super::super::xhci::{Trb, TrbRing, XhciContext, trb_type, xhc_list};
 use crate::pci::dma;
 use core::ptr::write_bytes;
 

@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use core::ptr::read_unaligned;
 
 use acpi::sdt::fadt::Fadt;
-use aml::{value::Args, AmlContext, AmlName, AmlValue, DebugVerbosity};
+use aml::{AmlContext, AmlName, AmlValue, DebugVerbosity, value::Args};
 use spin::Once;
 
 use crate::{

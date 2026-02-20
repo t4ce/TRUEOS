@@ -1,7 +1,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::mem::{align_of, size_of};
-use core::ptr::{addr_of_mut, null_mut, NonNull};
+use core::ptr::{NonNull, addr_of_mut, null_mut};
 use spin::Mutex;
 
 use crate::phys::{self, HeapArena};

@@ -5,9 +5,9 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
-use crate::wait::{select2, Either};
+use crate::wait::{Either, select2};
 
-use crate::shell::aihttps::{post_json_async, post_sse_async, SseHandler};
+use crate::shell::aihttps::{SseHandler, post_json_async, post_sse_async};
 use crate::shell::interface::ShellIo;
 use crate::shell::output::ReverseOutput;
 use crate::shell::statusbar;

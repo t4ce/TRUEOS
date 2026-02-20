@@ -1,5 +1,5 @@
 use super::scsi;
-use super::xhci::{self, hi, lo, trb_type, Trb, TrbRing, XhciContext};
+use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use crate::pci::dma;
 use core::ptr::{write_bytes, write_volatile};
 use embassy_time::Duration as EmbassyDuration;

@@ -1,4 +1,4 @@
-use embassy_time_driver::{now, TICK_HZ};
+use embassy_time_driver::{TICK_HZ, now};
 use heapless::Vec;
 use spin::Mutex;
 

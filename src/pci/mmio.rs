@@ -6,13 +6,13 @@ use core::{
 
 use spin::Mutex;
 use x86_64::{
+    PhysAddr, VirtAddr,
     registers::control::Cr3,
     structures::paging::{
-        mapper::{MapToError, Mapper},
         FrameAllocator, OffsetPageTable, Page, PageSize, PageTable, PageTableFlags, PhysFrame,
         Size4KiB,
+        mapper::{MapToError, Mapper},
     },
-    PhysAddr, VirtAddr,
 };
 
 use crate::limine;

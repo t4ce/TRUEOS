@@ -7,12 +7,12 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use trueos_v::vnet;
 
-use super::dns::{self, DnsConfig};
 use super::Queue;
+use super::dns::{self, DnsConfig};
 use crate::net::tls::{TlsClientConfig, TlsRoots};
-use crate::net::tls_socket::{register_tls_app_queues, TlsCommand, TlsEvent};
+use crate::net::tls_socket::{TlsCommand, TlsEvent, register_tls_app_queues};
 use crate::surface::io::cabi::{
-    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NOT_FOUND, FS_ERR_NO_SPACE,
+    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_IO, FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND,
     FS_ERR_TIMEOUT, FS_ERR_TOO_LARGE, FS_ERR_USBMS_NOT_FOUND, NET_ERR_BAD_URL, NET_ERR_HTTP,
     NET_ERR_TIMEOUT, NET_ERR_TIMEOUT_BODY, NET_ERR_TIMEOUT_CONNECT, NET_ERR_TIMEOUT_DNS,
     NET_ERR_TIMEOUT_TLS, NET_ERR_TLS,
@@ -655,18 +655,12 @@ async fn fetch_on_device(
                             let len = body.len();
                             format!(
                                 "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nAccept: */*\r\n\r\n{}",
-                                parsed.path,
-                                parsed.host,
-                                auth,
-                                len,
-                                body
+                                parsed.path, parsed.host, auth, len, body
                             )
                         } else {
                             format!(
                                 "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\n{}Accept: */*\r\nConnection: close\r\n\r\n",
-                                parsed.path,
-                                parsed.host,
-                                auth
+                                parsed.path, parsed.host, auth
                             )
                         };
                         let _ = cmds.push(TlsCommand::Send {
@@ -1102,11 +1096,7 @@ async fn fetch_on_device_sse(
                         let len = body_json.len();
                         let req = format!(
                             "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nConnection: close\r\nContent-Type: application/json\r\nAccept: text/event-stream\r\nAccept-Encoding: identity\r\n{}Content-Length: {}\r\n\r\n{}",
-                            parsed.path,
-                            parsed.host,
-                            auth,
-                            len,
-                            body_json
+                            parsed.path, parsed.host, auth, len, body_json
                         );
                         let _ = cmds.push(TlsCommand::Send {
                             handle,
@@ -1352,8 +1342,16 @@ async fn fetch_on_device_sse(
                         sse_buf.len(),
                         sse_event_count,
                         saw_done_event,
-                        if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
-                        if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                        if last_sse_type.is_empty() {
+                            "-"
+                        } else {
+                            last_sse_type.as_str()
+                        },
+                        if last_sse_preview.is_empty() {
+                            "-"
+                        } else {
+                            last_sse_preview.as_str()
+                        },
                     );
                     // Connection closed; treat as end of stream.
                     return Ok(());
@@ -1409,8 +1407,16 @@ async fn fetch_on_device_sse(
                     sse_event_count,
                     saw_done_event,
                     timeout_ms,
-                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
-                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                    if last_sse_type.is_empty() {
+                        "-"
+                    } else {
+                        last_sse_type.as_str()
+                    },
+                    if last_sse_preview.is_empty() {
+                        "-"
+                    } else {
+                        last_sse_preview.as_str()
+                    },
                 );
                 return Err(FetchError::BodyTimeout);
             }
@@ -1437,8 +1443,16 @@ async fn fetch_on_device_sse(
                     sse_event_count,
                     saw_done_event,
                     timeout_ms,
-                    if last_sse_type.is_empty() { "-" } else { last_sse_type.as_str() },
-                    if last_sse_preview.is_empty() { "-" } else { last_sse_preview.as_str() },
+                    if last_sse_type.is_empty() {
+                        "-"
+                    } else {
+                        last_sse_type.as_str()
+                    },
+                    if last_sse_preview.is_empty() {
+                        "-"
+                    } else {
+                        last_sse_preview.as_str()
+                    },
                 );
             }
             return Err(err);
@@ -1602,8 +1616,7 @@ async fn fetch_on_device_to_file_keepalive(
     // Send HTTP GET request. Use keep-alive; we will stop reading once body complete.
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n",
-        parsed.path,
-        parsed.host
+        parsed.path, parsed.host
     );
     let _ = conn.cmds.push(TlsCommand::Send {
         handle,
@@ -1849,12 +1862,12 @@ async fn fetch_on_device_to_file(
         Err(dns::DnsError::Timeout) => {
             return Err(FetchToFileError::Code(fetch_error_to_code(
                 FetchError::DnsTimeout,
-            )))
+            )));
         }
         Err(_) => {
             return Err(FetchToFileError::Code(fetch_error_to_code(
                 FetchError::DnsFailed,
-            )))
+            )));
         }
     };
 
@@ -1981,8 +1994,7 @@ async fn fetch_on_device_to_file(
                     if !http_sent {
                         let req = format!(
                             "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS vhttps\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                            parsed.path,
-                            parsed.host
+                            parsed.path, parsed.host
                         );
                         let _ = cmds.push(TlsCommand::Send {
                             handle,

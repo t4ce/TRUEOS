@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use core::cmp::min;
-use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, fence, Ordering};
+use core::ptr::{NonNull, read_volatile, write_volatile};
+use core::sync::atomic::{Ordering, compiler_fence, fence};
 
 use crate::net::core::VendorAdapter;
 use crate::net::ring::{DmaRegion, NetRing};
@@ -205,11 +205,7 @@ impl R8125Adapter {
 
     #[inline]
     fn tx_start_index() -> usize {
-        if EXP_R8125_SKIP_DESC0 {
-            1
-        } else {
-            0
-        }
+        if EXP_R8125_SKIP_DESC0 { 1 } else { 0 }
     }
 
     fn cplus_programmed(current: u16) -> u16 {

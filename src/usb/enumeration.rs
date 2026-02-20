@@ -1,11 +1,12 @@
 use super::xhci;
 use super::xhci::{
-    decode_port_status, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits,
-    ep_type_bits, hi, lo, trb_type, Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_CONTROL,
+    EP_STATE_DISABLED, EP_TYPE_CONTROL, Trb, TrbRing, XhciContext, decode_port_status,
+    ep_avg_trb_len_bits, ep_cerr_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo,
+    trb_type,
 };
 use super::{
-    attach, control, hid, hid_descripto as usbdesc, mass, uac, UsbControllerState,
-    NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY,
+    NOT_CLAIMED_COUNT, NOT_CLAIMED_KEY, UsbControllerState, attach, control, hid,
+    hid_descripto as usbdesc, mass, uac,
 };
 use crate::pci::dma;
 use core::mem::size_of;

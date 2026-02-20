@@ -127,7 +127,7 @@ pub async fn detect_physical_disk_detail(
                     bootable: loc.bootable,
                 },
                 None,
-            )
+            );
         }
         Ok(None) => {}
         Err(e) => {

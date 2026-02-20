@@ -2,7 +2,7 @@
 use crate::wait;
 use alloc::vec::Vec;
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 pub type CpuCallFn = fn(u64) -> u64;
 

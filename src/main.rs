@@ -39,7 +39,7 @@ mod wait;
 mod x2apic;
 mod z7;
 
-use embassy_executor::{raw::Executor, Spawner};
+use embassy_executor::{Spawner, raw::Executor};
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 pub(crate) use shell::ecma48;
 pub(crate) use shell::matrix;

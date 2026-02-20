@@ -351,11 +351,7 @@ fn decode_name(bytes: &[u8]) -> Option<String> {
         }
     }
 
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 fn blocks_from_len(len: usize, block_size: u32) -> Result<u64> {

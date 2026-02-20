@@ -11,9 +11,8 @@ pub const CLIENT_PORT: u16 = 546;
 pub const SERVER_PORT: u16 = 547;
 
 // ff02::1:2 (All_DHCP_Relay_Agents_and_Servers)
-pub const ALL_SERVERS_MCAST: [u8; 16] = [
-    0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x02,
-];
+pub const ALL_SERVERS_MCAST: [u8; 16] =
+    [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x02];
 
 // Message types (subset).
 const MSG_SOLICIT: u8 = 1;

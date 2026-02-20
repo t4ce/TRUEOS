@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::{format, string::String, vec::Vec};
 
-use super::https::{fetch_https_body_async, post_https_json_async, FetchError};
+use super::https::{FetchError, fetch_https_body_async, post_https_json_async};
 
 #[derive(Clone, Debug)]
 pub enum JsonError {

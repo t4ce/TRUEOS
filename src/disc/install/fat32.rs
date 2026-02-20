@@ -431,7 +431,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     boot[44..48].copy_from_slice(&cl_root.to_le_bytes());
     boot[48..50].copy_from_slice(&1u16.to_le_bytes()); // FSInfo sector
     boot[50..52].copy_from_slice(&6u16.to_le_bytes()); // backup boot sector
-                                                       // boot[52..64] reserved zeros
+    // boot[52..64] reserved zeros
 
     boot[64] = 0x80;
     boot[66] = 0x29;
