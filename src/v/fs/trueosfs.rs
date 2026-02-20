@@ -388,9 +388,9 @@ fn file_record_cache_insert(disk_id: block::DiscId, path: &str, record: trueos_f
             .iter()
             .enumerate()
             .min_by_key(|(_, entry)| entry.last_use)
-        {
-            cache.remove(evict_idx);
-        }
+    {
+        cache.remove(evict_idx);
+    }
 
     cache.push(FileRecordCacheEntry {
         disk_id,
@@ -1341,16 +1341,17 @@ pub async fn locate_async(
                         // Our superblock is at the start of the TRUEOS data partition.
                         if let Ok(p0) =
                             read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await
-                            && looks_like_trueos_superblock(&p0) {
-                                let super_lba = p.range.first_lba();
-                                let end_lba_exclusive = p.range.last_lba().saturating_add(1);
-                                return Ok(Some(TrueosFsPlacement {
-                                    bootable: has_esp,
-                                    super_lba,
-                                    data_lba: trueos_fs::data_lba_from_super(super_lba),
-                                    data_end_lba_exclusive: Some(end_lba_exclusive),
-                                }));
-                            }
+                            && looks_like_trueos_superblock(&p0)
+                        {
+                            let super_lba = p.range.first_lba();
+                            let end_lba_exclusive = p.range.last_lba().saturating_add(1);
+                            return Ok(Some(TrueosFsPlacement {
+                                bootable: has_esp,
+                                super_lba,
+                                data_lba: trueos_fs::data_lba_from_super(super_lba),
+                                data_end_lba_exclusive: Some(end_lba_exclusive),
+                            }));
+                        }
                     }
                     break;
                 }

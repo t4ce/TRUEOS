@@ -476,13 +476,15 @@ async fn post_on_device_json(
                     }
 
                     if let Some(n) = expected_len
-                        && !body_is_chunked && decoded.len() >= n {
-                            if let Some(h) = tls_handle {
-                                let _ = cmds.push(TlsCommand::Close { handle: h });
-                            }
-                            decoded.truncate(n);
-                            return Ok(decoded);
+                        && !body_is_chunked
+                        && decoded.len() >= n
+                    {
+                        if let Some(h) = tls_handle {
+                            let _ = cmds.push(TlsCommand::Close { handle: h });
                         }
+                        decoded.truncate(n);
+                        return Ok(decoded);
+                    }
                     if body_is_chunked && chunked_done {
                         if let Some(h) = tls_handle {
                             let _ = cmds.push(TlsCommand::Close { handle: h });
@@ -747,7 +749,12 @@ async fn post_on_device_sse(
                     loop {
                         let delim = if let Some(p) = sse_buf.windows(2).position(|w| w == b"\n\n") {
                             Some((p, 2))
-                        } else { sse_buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (p, 4)) };
+                        } else {
+                            sse_buf
+                                .windows(4)
+                                .position(|w| w == b"\r\n\r\n")
+                                .map(|p| (p, 4))
+                        };
                         let Some((pos, dlen)) = delim else { break };
 
                         let mut block = sse_buf.drain(..pos + dlen).collect::<Vec<u8>>();

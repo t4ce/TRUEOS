@@ -164,18 +164,19 @@ fn first_active_controller() -> Option<usize> {
 pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
     let mut guard = UAC_RUNTIME[controller_id].lock();
     if let Some(rt) = guard.as_ref()
-        && rt.slot_id == slot_id {
-            if let Some(w) = rt.fill_waker.as_ref() {
-                w.wake_by_ref();
-            }
-            *guard = None;
-            UAC_SLOT[controller_id].store(0, Ordering::Release);
-            UAC_XFER_OK[controller_id].store(0, Ordering::Release);
-            UAC_XFER_ERR[controller_id].store(0, Ordering::Release);
-            UAC_XFER_LAST_CC[controller_id].store(0, Ordering::Release);
-            UAC_EVENT_QUEUE[controller_id].lock().clear();
-            return true;
+        && rt.slot_id == slot_id
+    {
+        if let Some(w) = rt.fill_waker.as_ref() {
+            w.wake_by_ref();
         }
+        *guard = None;
+        UAC_SLOT[controller_id].store(0, Ordering::Release);
+        UAC_XFER_OK[controller_id].store(0, Ordering::Release);
+        UAC_XFER_ERR[controller_id].store(0, Ordering::Release);
+        UAC_XFER_LAST_CC[controller_id].store(0, Ordering::Release);
+        UAC_EVENT_QUEUE[controller_id].lock().clear();
+        return true;
+    }
     false
 }
 
@@ -562,28 +563,28 @@ fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
         if let (Some((ifnum, alt, _)), Some((ep_addr, max_packet, interval, sync_type))) =
             (current_if, pending_ep)
             && current_cls == USB_CLASS_AUDIO
-                && current_sub == USB_SUBCLASS_AUDIOSTREAMING
-                && alt != 0
-                && candidate.is_none()
-            {
-                let (ss_max_burst, ss_mult, max_esit_payload) = match pending_ss {
-                    Some((b, m, bytes_per_interval)) => (b, m, bytes_per_interval),
-                    None => (0, 0, max_packet),
-                };
-                candidate = Some(AsOutEndpoint {
-                    configuration_value,
-                    interface: ifnum,
-                    alt_setting: alt,
-                    ep_addr,
-                    max_packet,
-                    interval,
-                    sync_type,
-                    has_feedback_ep,
-                    max_esit_payload,
-                    ss_max_burst,
-                    ss_mult,
-                });
-            }
+            && current_sub == USB_SUBCLASS_AUDIOSTREAMING
+            && alt != 0
+            && candidate.is_none()
+        {
+            let (ss_max_burst, ss_mult, max_esit_payload) = match pending_ss {
+                Some((b, m, bytes_per_interval)) => (b, m, bytes_per_interval),
+                None => (0, 0, max_packet),
+            };
+            candidate = Some(AsOutEndpoint {
+                configuration_value,
+                interface: ifnum,
+                alt_setting: alt,
+                ep_addr,
+                max_packet,
+                interval,
+                sync_type,
+                has_feedback_ep,
+                max_esit_payload,
+                ss_max_burst,
+                ss_mult,
+            });
+        }
 
         idx += len;
     }

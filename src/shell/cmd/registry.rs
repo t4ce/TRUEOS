@@ -325,11 +325,12 @@ fn parse_args<'a>(cmd: &ShellCommand, rest: &'a str) -> Result<ParsedArgs<'a>, A
         .iter()
         .enumerate()
         .find(|(_, a)| a.ty == ArgType::Rest)
-        && idx + 1 != cmd.args.len() {
-            return Err(ArgError {
-                kind: ArgErrorKind::RestNotLast,
-            });
-        }
+        && idx + 1 != cmd.args.len()
+    {
+        return Err(ArgError {
+            kind: ArgErrorKind::RestNotLast,
+        });
+    }
 
     if cmd.args.len() == 1 && cmd.args[0].ty == ArgType::Rest {
         let arg0 = cmd.args[0];

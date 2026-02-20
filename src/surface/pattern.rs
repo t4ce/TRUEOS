@@ -29,9 +29,10 @@ impl<'a> Pattern<'a> for &str {
 impl<'a> Pattern<'a> for char {
     fn find_in(&mut self, haystack: &'a str) -> Option<usize> {
         if (*self as u32) < 0x80
-            && let Some(idx) = memchr(*self as u8, haystack.as_bytes()) {
-                return Some(idx);
-            }
+            && let Some(idx) = memchr(*self as u8, haystack.as_bytes())
+        {
+            return Some(idx);
+        }
 
         haystack.find(*self)
     }

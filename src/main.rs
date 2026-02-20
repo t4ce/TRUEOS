@@ -4,6 +4,7 @@
 // Rust 2024: `unsafe fn` bodies are safe-by-default; allow legacy style for now.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+#[macro_use]
 pub extern crate alloc;
 
 mod allocators;
@@ -101,8 +102,7 @@ pub extern "C" fn kmain() -> ! {
         );
     }
     let smp_resp = limine::smp_response().unwrap();
-    let lapic_ids: alloc::vec::Vec<u32> =
-        smp_resp.cpus().iter().map(|c| c.lapic_id).collect();
+    let lapic_ids: alloc::vec::Vec<u32> = smp_resp.cpus().iter().map(|c| c.lapic_id).collect();
     percpu::install_cpu_slot_lapic_order_owned(lapic_ids);
     percpu::init_bsp();
     pci::dma::init_from_limine();

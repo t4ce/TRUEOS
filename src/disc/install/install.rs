@@ -149,7 +149,10 @@ resolution: 1920x1080x32\n\n";
         "install: esp range lba={} blocks={} (~{} MiB)",
         esp_range.first_lba(),
         esp_range.block_count(),
-        esp_range.block_count().saturating_mul(512).div_ceil(1024 * 1024)
+        esp_range
+            .block_count()
+            .saturating_mul(512)
+            .div_ceil(1024 * 1024)
     )
     .as_str());
     if let Err(e) = fat32::format_and_populate_esp_with_log(

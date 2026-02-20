@@ -492,13 +492,14 @@ pub fn visible_width(text: &str) -> usize {
         // If invalid, consume one byte to avoid infinite loop.
         let s = core::str::from_utf8(&bytes[i..]).ok();
         if let Some(s) = s
-            && let Some(ch) = s.chars().next() {
-                i += ch.len_utf8();
-                if !ch.is_control() {
-                    width += 1;
-                }
-                continue;
+            && let Some(ch) = s.chars().next()
+        {
+            i += ch.len_utf8();
+            if !ch.is_control() {
+                width += 1;
             }
+            continue;
+        }
         i += 1;
     }
 

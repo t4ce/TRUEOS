@@ -816,46 +816,41 @@ pub(crate) async fn enumerate_with_params(
             if count == 1
                 && (super::USB_LOG_VERBOSE || (if_cls == 0x03 && first_if_hid_report_len.is_some()))
                 && if_cls == 0x03
-                    && let Some(rep_len) = first_if_hid_report_len {
-                        let rep_len = rep_len as usize;
-                        match hid::fetch_report_descriptor(
-                            &ctx,
-                            &mut ep0_ring,
+                && let Some(rep_len) = first_if_hid_report_len
+            {
+                let rep_len = rep_len as usize;
+                match hid::fetch_report_descriptor(&ctx, &mut ep0_ring, slot_id, if_num, rep_len)
+                    .await
+                {
+                    Ok(desc) => {
+                        crate::log!(
+                            "usb: hid report-desc slot={} port={} iface={} len={} ok bytes={}\n",
                             slot_id,
+                            target_port,
                             if_num,
                             rep_len,
-                        )
-                        .await
-                        {
-                            Ok(desc) => {
-                                crate::log!(
-                                    "usb: hid report-desc slot={} port={} iface={} len={} ok bytes={}\n",
-                                    slot_id,
-                                    target_port,
-                                    if_num,
-                                    rep_len,
-                                    desc.len()
-                                );
-                                let show = core::cmp::min(desc.len(), 128);
-                                let mut i = 0usize;
-                                while i < show {
-                                    let end = core::cmp::min(i + 16, show);
-                                    crate::log!("usb:  rep{:03X}: {}\n", i, hex16(&desc[i..end]));
-                                    i = end;
-                                }
-                            }
-                            Err(err) => {
-                                crate::log!(
-                                    "usb: hid report-desc slot={} port={} iface={} len={} err={:?}\n",
-                                    slot_id,
-                                    target_port,
-                                    if_num,
-                                    rep_len,
-                                    err
-                                );
-                            }
+                            desc.len()
+                        );
+                        let show = core::cmp::min(desc.len(), 128);
+                        let mut i = 0usize;
+                        while i < show {
+                            let end = core::cmp::min(i + 16, show);
+                            crate::log!("usb:  rep{:03X}: {}\n", i, hex16(&desc[i..end]));
+                            i = end;
                         }
                     }
+                    Err(err) => {
+                        crate::log!(
+                            "usb: hid report-desc slot={} port={} iface={} len={} err={:?}\n",
+                            slot_id,
+                            target_port,
+                            if_num,
+                            rep_len,
+                            err
+                        );
+                    }
+                }
+            }
         } else {
             crate::log!(
                 "usb: device on port {} not claimed vid=0x{:04X} pid=0x{:04X} devcls={:02X}/{:02X}/{:02X} mps0={} cfgs={} if=none portsc=0x{:08X} ccs={} ped={} speed={} pls=0x{:X} (attempt {})\n",

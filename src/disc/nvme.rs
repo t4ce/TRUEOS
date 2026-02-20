@@ -134,10 +134,12 @@ impl NvmeQueue {
         // Be conservative: allocate whole pages for queues. Some controllers/emulators
         // assume queue memory is backed by full pages even when the effective queue
         // size is smaller (e.g. CQ at 64*16=1024 bytes).
-        let sq_alloc_bytes = sq_bytes.div_ceil(align)
+        let sq_alloc_bytes = sq_bytes
+            .div_ceil(align)
             .checked_mul(align)
             .ok_or(block::Error::InvalidParam)?;
-        let cq_alloc_bytes = cq_bytes.div_ceil(align)
+        let cq_alloc_bytes = cq_bytes
+            .div_ceil(align)
             .checked_mul(align)
             .ok_or(block::Error::InvalidParam)?;
 
@@ -252,11 +254,12 @@ impl NvmeController {
     fn io_pending_take(&mut self, cid: u16) -> Option<Completion> {
         for slot in &mut self.io_pending {
             if let Some(p) = slot
-                && p.cid == cid {
-                    let cpl = p.cpl;
-                    *slot = None;
-                    return Some(cpl);
-                }
+                && p.cid == cid
+            {
+                let cpl = p.cpl;
+                *slot = None;
+                return Some(cpl);
+            }
         }
         None
     }
@@ -265,10 +268,11 @@ impl NvmeController {
         // Update existing slot first.
         for slot in &mut self.io_pending {
             if let Some(p) = slot
-                && p.cid == cpl.cid {
-                    *slot = Some(PendingCompletion { cid: cpl.cid, cpl });
-                    return;
-                }
+                && p.cid == cpl.cid
+            {
+                *slot = Some(PendingCompletion { cid: cpl.cid, cpl });
+                return;
+            }
         }
 
         // Insert into a free slot.
@@ -458,9 +462,10 @@ impl NvmeController {
 
     fn poll_queue_cq_for_cid_step(&mut self, qid: u16, cid: u16) -> Option<Completion> {
         if qid == NVME_IO_QID
-            && let Some(cpl) = self.io_pending_take(cid) {
-                return Some(cpl);
-            }
+            && let Some(cpl) = self.io_pending_take(cid)
+        {
+            return Some(cpl);
+        }
 
         let (maybe_cpl, new_head, depth) = {
             let q = if qid == NVME_ADMIN_QID {
