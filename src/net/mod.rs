@@ -361,6 +361,9 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
     with_device_at(index, |dev| {
         for pkt in packets {
             let _ = dev.transmit(&pkt);
+            // TX path copies into device DMA buffers for all current NICs, so we can
+            // immediately recycle the Vec backing storage.
+            crate::net::ring::recycle_packet_buf(pkt);
         }
     });
 }

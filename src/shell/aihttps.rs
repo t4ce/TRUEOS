@@ -245,8 +245,10 @@ pub async fn post_json_async(
 
     let mut last_err = AiHttpsError::DnsFailed;
     for dev_idx in order {
-        match post_on_device_json(&parsed, dev_idx, &body_json, auth_token, timeout_ms, max_bytes)
-            .await
+        match post_on_device_json(
+            &parsed, dev_idx, &body_json, auth_token, timeout_ms, max_bytes,
+        )
+        .await
         {
             Ok(v) => return Ok(v),
             Err(e) => last_err = e,
@@ -282,13 +284,7 @@ pub async fn post_sse_async(
     let mut last_err = AiHttpsError::DnsFailed;
     for dev_idx in order {
         match post_on_device_sse(
-            &parsed,
-            dev_idx,
-            &body_json,
-            auth_token,
-            timeout_ms,
-            max_bytes,
-            handler,
+            &parsed, dev_idx, &body_json, auth_token, timeout_ms, max_bytes, handler,
         )
         .await
         {

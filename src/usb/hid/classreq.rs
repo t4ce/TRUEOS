@@ -182,8 +182,17 @@ pub async fn set_report(
 
     if data.is_empty() {
         let setup = setup_class_out_data(0x09, value, iface as u16, 0);
-        return control::control_out(ctx, ep0_ring, slot_id, setup, None, 0, "hid-set-report", 1200)
-            .await;
+        return control::control_out(
+            ctx,
+            ep0_ring,
+            slot_id,
+            setup,
+            None,
+            0,
+            "hid-set-report",
+            1200,
+        )
+        .await;
     }
 
     let want_len = data.len();
@@ -282,8 +291,16 @@ pub async fn get_report_into_slot(
     let ctx = ctx_for_controller(controller_id)?;
     let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = get_report_into(&ctx, &mut ep0_ring, slot_id, iface, report_type, report_id, out)
-        .await;
+    let res = get_report_into(
+        &ctx,
+        &mut ep0_ring,
+        slot_id,
+        iface,
+        report_type,
+        report_id,
+        out,
+    )
+    .await;
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     res
 }
@@ -299,7 +316,16 @@ pub async fn set_report_slot(
     let ctx = ctx_for_controller(controller_id)?;
     let st = super::ep0_state_for_slot(controller_id, slot_id).ok_or(())?;
     let mut ep0_ring = unsafe { TrbRing::from_state(st) };
-    let res = set_report(&ctx, &mut ep0_ring, slot_id, iface, report_type, report_id, data).await;
+    let res = set_report(
+        &ctx,
+        &mut ep0_ring,
+        slot_id,
+        iface,
+        report_type,
+        report_id,
+        data,
+    )
+    .await;
     super::set_ep0_state_for_slot(controller_id, slot_id, ep0_ring.snapshot());
     res
 }
