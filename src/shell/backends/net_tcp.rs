@@ -221,35 +221,36 @@ pub async fn net_shell_task() {
                 };
 
                 if let Some(handle) = handle
-                    && !chunk.is_empty() {
-                        pending_handle = Some(handle);
-                        pending = Some(chunk.clone());
-                        pending_ticks = 0;
-                        pending_len = chunk.len();
+                    && !chunk.is_empty()
+                {
+                    pending_handle = Some(handle);
+                    pending = Some(chunk.clone());
+                    pending_ticks = 0;
+                    pending_len = chunk.len();
 
-                        if tx_log_budget > 0 {
-                            tx_log_budget -= 1;
-                            crate::log!(
-                                "net-shell: tx queue handle={} len={}\n",
-                                handle.0,
-                                pending_len
-                            );
-                        }
-
-                        if cmds
-                            .push(NetCommand::SendTcp {
-                                handle,
-                                data: chunk,
-                            })
-                            .is_err()
-                        {
-                            // If the command queue is full, don't stall forever waiting for an event.
-                            pending = None;
-                            pending_ticks = 0;
-                            pending_len = 0;
-                            crate::log!("net-shell: tx queue full (dropping pending)\n");
-                        }
+                    if tx_log_budget > 0 {
+                        tx_log_budget -= 1;
+                        crate::log!(
+                            "net-shell: tx queue handle={} len={}\n",
+                            handle.0,
+                            pending_len
+                        );
                     }
+
+                    if cmds
+                        .push(NetCommand::SendTcp {
+                            handle,
+                            data: chunk,
+                        })
+                        .is_err()
+                    {
+                        // If the command queue is full, don't stall forever waiting for an event.
+                        pending = None;
+                        pending_ticks = 0;
+                        pending_len = 0;
+                        crate::log!("net-shell: tx queue full (dropping pending)\n");
+                    }
+                }
             }
 
             // Safety: if we somehow miss the `TcpSent` event (or the socket is briefly not-ready),

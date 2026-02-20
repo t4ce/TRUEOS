@@ -24,8 +24,7 @@ pub enum PendingAction {
     UpdateConfirm { disc_id: u32 },
 }
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub enum ShellMode {
     #[default]
     Idle,
@@ -36,7 +35,6 @@ pub enum ShellMode {
         deadline: Instant,
     },
 }
-
 
 pub enum InputResult {
     Handled,

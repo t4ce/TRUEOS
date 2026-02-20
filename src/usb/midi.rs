@@ -189,20 +189,20 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                     // Before switching interfaces, consider committing the previous one.
                     if let Some(iface) = current_iface
                         && current_class == USB_CLASS_AUDIO
-                            && current_sub == USB_SUBCLASS_MIDISTREAMING
-                            && (ep_in.is_some() || ep_out.is_some())
-                        {
-                            let candidate = MidiInterface {
-                                configuration_value: config_value,
-                                interface: iface,
-                                alt_setting: current_alt,
-                                ep_in,
-                                ep_out,
-                            };
-                            best = Some(candidate);
-                            // We could early-return, but continue scanning in case a later altsetting
-                            // has a better endpoint pair.
-                        }
+                        && current_sub == USB_SUBCLASS_MIDISTREAMING
+                        && (ep_in.is_some() || ep_out.is_some())
+                    {
+                        let candidate = MidiInterface {
+                            configuration_value: config_value,
+                            interface: iface,
+                            alt_setting: current_alt,
+                            ep_in,
+                            ep_out,
+                        };
+                        best = Some(candidate);
+                        // We could early-return, but continue scanning in case a later altsetting
+                        // has a better endpoint pair.
+                    }
 
                     current_iface = Some(cfg[idx + 2]);
                     current_alt = cfg[idx + 3];
@@ -218,28 +218,30 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
                 // Endpoint descriptor
                 if let Some(iface) = current_iface {
                     let _ = iface;
-                    if current_class == USB_CLASS_AUDIO && current_sub == USB_SUBCLASS_MIDISTREAMING
-                        && len >= 7 {
-                            let ep_addr = cfg[idx + 2];
-                            let attrs = cfg[idx + 3];
-                            let transfer_ty = attrs & 0x3;
-                            if transfer_ty == 0x2 {
-                                let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                                if (ep_addr & 0x80) != 0 {
-                                    if ep_in.is_none() {
-                                        ep_in = Some(MidiEp {
-                                            addr: ep_addr,
-                                            max_packet,
-                                        });
-                                    }
-                                } else if ep_out.is_none() {
-                                    ep_out = Some(MidiEp {
+                    if current_class == USB_CLASS_AUDIO
+                        && current_sub == USB_SUBCLASS_MIDISTREAMING
+                        && len >= 7
+                    {
+                        let ep_addr = cfg[idx + 2];
+                        let attrs = cfg[idx + 3];
+                        let transfer_ty = attrs & 0x3;
+                        if transfer_ty == 0x2 {
+                            let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                            if (ep_addr & 0x80) != 0 {
+                                if ep_in.is_none() {
+                                    ep_in = Some(MidiEp {
                                         addr: ep_addr,
                                         max_packet,
                                     });
                                 }
+                            } else if ep_out.is_none() {
+                                ep_out = Some(MidiEp {
+                                    addr: ep_addr,
+                                    max_packet,
+                                });
                             }
                         }
+                    }
                 }
             }
             _ => {}
@@ -251,17 +253,17 @@ fn parse_midi_interface(cfg: &[u8]) -> Option<MidiInterface> {
     // Commit last interface.
     if let Some(iface) = current_iface
         && current_class == USB_CLASS_AUDIO
-            && current_sub == USB_SUBCLASS_MIDISTREAMING
-            && (ep_in.is_some() || ep_out.is_some())
-        {
-            best = Some(MidiInterface {
-                configuration_value: config_value,
-                interface: iface,
-                alt_setting: current_alt,
-                ep_in,
-                ep_out,
-            });
-        }
+        && current_sub == USB_SUBCLASS_MIDISTREAMING
+        && (ep_in.is_some() || ep_out.is_some())
+    {
+        best = Some(MidiInterface {
+            configuration_value: config_value,
+            interface: iface,
+            alt_setting: current_alt,
+            ep_in,
+            ep_out,
+        });
+    }
 
     best
 }
@@ -443,7 +445,7 @@ impl MidiRuntime {
 }
 
 pub fn handle_transfer_event(controller_id: usize, evt: &Trb) -> bool {
-    let slot_id = (evt.d3 >> 24) & 0xFF ;
+    let slot_id = (evt.d3 >> 24) & 0xFF;
     let ep_target = (evt.d3 >> 16) & 0x1F;
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = evt.d2 & 0x00FF_FFFF;

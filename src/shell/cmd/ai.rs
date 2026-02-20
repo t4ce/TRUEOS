@@ -222,9 +222,10 @@ pub async fn run_ai_wizard(
                 // so the cancel-future doesn't immediately see it and abort the request.
                 if b == b'\r'
                     && let Some(next) = io.read_byte()
-                        && next != b'\n' {
-                            // Unexpected: we can't un-read. Best-effort: ignore.
-                        }
+                    && next != b'\n'
+                {
+                    // Unexpected: we can't un-read. Best-effort: ignore.
+                }
                 let input = line.trim().to_owned();
                 line.clear();
 
@@ -1437,11 +1438,12 @@ fn extract_json_string_field(json: &str, needle: &str) -> Option<String> {
                     // Primitive \uXXXX support
                     if j + 4 < bytes.len()
                         && let Ok(hex_str) = core::str::from_utf8(&bytes[j + 1..j + 5])
-                            && let Ok(cp) = u32::from_str_radix(hex_str, 16)
-                                && let Some(ch) = core::char::from_u32(cp) {
-                                    out.push(ch);
-                                    j += 4;
-                                }
+                        && let Ok(cp) = u32::from_str_radix(hex_str, 16)
+                        && let Some(ch) = core::char::from_u32(cp)
+                    {
+                        out.push(ch);
+                        j += 4;
+                    }
                 }
                 _ => {}
             }

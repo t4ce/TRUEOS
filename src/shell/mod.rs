@@ -209,10 +209,9 @@ fn handle_tab_completion(
                 io.write_char(ch);
             }
         }
-        if !line.as_str().ends_with(' ')
-            && line.push(' ').is_ok() {
-                io.write_char(' ');
-            }
+        if !line.as_str().ends_with(' ') && line.push(' ').is_ok() {
+            io.write_char(' ');
+        }
         let mut usage: String<192> = String::new();
         if crate::shell::cmd::registry::usage_text_for_name(target, &mut usage) {
             ReverseOutput::new(io, term_cols, term_rows, history)
@@ -568,9 +567,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                 _ => {
                     if b >= 0x20
                         && let Some(ch) = utf8.push(b)
-                            && line.push(ch).is_ok() {
-                                io.write_char(ch);
-                            }
+                        && line.push(ch).is_ok()
+                    {
+                        io.write_char(ch);
+                    }
                 }
             }
         } else {
@@ -581,28 +581,25 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
             }
 
             if let ShellMode::Wait { deadline, action } = &mode
-                && Instant::now() >= *deadline {
-                    // Check specific actions on timeout
-                    match action {
-                        PendingAction::AcpiReset => {
-                            if let Err(e) = crate::efi::acpi::facp::reset_system() {
-                                io.write_fmt(format_args!("\r\nacpi reset failed: {:?}\r\n", e));
-                            }
+                && Instant::now() >= *deadline
+            {
+                // Check specific actions on timeout
+                match action {
+                    PendingAction::AcpiReset => {
+                        if let Err(e) = crate::efi::acpi::facp::reset_system() {
+                            io.write_fmt(format_args!("\r\nacpi reset failed: {:?}\r\n", e));
                         }
-                        PendingAction::AcpiState(level) => {
-                            if let Err(e) = crate::efi::acpi::facp::enter_named_sleep_state(*level)
-                            {
-                                io.write_fmt(format_args!(
-                                    "\r\nacpi s{} failed: {:?}\r\n",
-                                    level, e
-                                ));
-                            }
-                        }
-                        _ => {}
                     }
-                    mode = ShellMode::Idle;
-                    wizards::write_prompt_for_state(io, &mode);
+                    PendingAction::AcpiState(level) => {
+                        if let Err(e) = crate::efi::acpi::facp::enter_named_sleep_state(*level) {
+                            io.write_fmt(format_args!("\r\nacpi s{} failed: {:?}\r\n", level, e));
+                        }
+                    }
+                    _ => {}
                 }
+                mode = ShellMode::Idle;
+                wizards::write_prompt_for_state(io, &mode);
+            }
 
             Timer::after(EmbassyDuration::from_millis(2)).await;
         }

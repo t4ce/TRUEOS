@@ -172,9 +172,10 @@ fn validate_partition_specs(parts: &[GptPartitionSpec<'_>]) -> Result<()> {
         }
     }
     if let Some(i) = remaining_idx
-        && i + 1 != parts.len() {
-            return Err(Error::InvalidParam);
-        }
+        && i + 1 != parts.len()
+    {
+        return Err(Error::InvalidParam);
+    }
 
     Ok(())
 }
@@ -285,7 +286,7 @@ pub async fn write_gpt_layout_with_log(
     // first LBA
     pmbr[454..458].copy_from_slice(&1u32.to_le_bytes());
     // sectors (clamp to u32::MAX)
-    let mbr_sectors = core::cmp::min(info.block_count - 1 , u32::MAX as u64) as u32;
+    let mbr_sectors = core::cmp::min(info.block_count - 1, u32::MAX as u64) as u32;
     pmbr[458..462].copy_from_slice(&mbr_sectors.to_le_bytes());
     pmbr[510..512].copy_from_slice(&GPT_PROTECTIVE_MBR_SIGNATURE.to_le_bytes());
 

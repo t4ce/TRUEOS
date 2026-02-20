@@ -623,11 +623,15 @@ impl R8168Adapter {
                 let should_log = if ACCEPT_RX_ERR_SUM_FRAMES {
                     self.dbg_rx_errsum == 1
                         || (RX_ERR_SUM_LOG_ACCEPTED_EVERY != 0
-                            && self.dbg_rx_errsum.is_multiple_of(RX_ERR_SUM_LOG_ACCEPTED_EVERY))
+                            && self
+                                .dbg_rx_errsum
+                                .is_multiple_of(RX_ERR_SUM_LOG_ACCEPTED_EVERY))
                 } else {
                     self.dbg_rx_errsum == 1
                         || (RX_ERR_SUM_LOG_DROPPED_EVERY != 0
-                            && self.dbg_rx_errsum.is_multiple_of(RX_ERR_SUM_LOG_DROPPED_EVERY))
+                            && self
+                                .dbg_rx_errsum
+                                .is_multiple_of(RX_ERR_SUM_LOG_DROPPED_EVERY))
                 };
 
                 if should_log {

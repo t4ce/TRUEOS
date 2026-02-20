@@ -201,9 +201,10 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
     match conn.tls.take_ciphertext_to_send() {
         Ok(data) => {
             if !data.is_empty()
-                && let Some(handle) = conn.handle {
-                    send_tcp_all(&conn.net, handle, &data);
-                }
+                && let Some(handle) = conn.handle
+            {
+                send_tcp_all(&conn.net, handle, &data);
+            }
         }
         Err(e) => {
             conn.closed = true;
@@ -220,18 +221,19 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
         return;
     }
     if conn.tls.is_connected()
-        && let Some(handle) = conn.handle {
-            crate::log!(
-                "tls-socket: tls connected owner={} handle={}\n",
-                conn.user_owner,
-                handle.0
-            );
-            // Only mark as notified once the event is successfully queued.
-            // Otherwise the app may never observe `Connected` and will stall.
-            if push_tls_event(conn.user_owner, TlsEvent::Connected { handle }) {
-                conn.connected_notified = true;
-            }
+        && let Some(handle) = conn.handle
+    {
+        crate::log!(
+            "tls-socket: tls connected owner={} handle={}\n",
+            conn.user_owner,
+            handle.0
+        );
+        // Only mark as notified once the event is successfully queued.
+        // Otherwise the app may never observe `Connected` and will stall.
+        if push_tls_event(conn.user_owner, TlsEvent::Connected { handle }) {
+            conn.connected_notified = true;
         }
+    }
 }
 
 fn tls_socket_tick_once() {

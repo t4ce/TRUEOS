@@ -375,11 +375,13 @@ fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
                     pkt[idx + 3],
                 ]));
             }
-            if typ == 5 && cname.is_none()
+            if typ == 5
+                && cname.is_none()
                 && let Some((name, _next)) = dns_read_name(pkt, idx)
-                    && !name.is_empty() {
-                        cname = Some(name);
-                    }
+                && !name.is_empty()
+            {
+                cname = Some(name);
+            }
         }
 
         idx += rdlen;
@@ -444,11 +446,13 @@ fn dns_parse_aaaa_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer6> {
                 ip.copy_from_slice(&pkt[idx..idx + 16]);
                 return Some(DnsAnswer6::Aaaa(ip));
             }
-            if typ == 5 && cname.is_none()
+            if typ == 5
+                && cname.is_none()
                 && let Some((name, _next)) = dns_read_name(pkt, idx)
-                    && !name.is_empty() {
-                        cname = Some(name);
-                    }
+                && !name.is_empty()
+            {
+                cname = Some(name);
+            }
         }
 
         idx += rdlen;
@@ -471,9 +475,10 @@ async fn open_udp(net: &VNet, local_port: u16, timeout_ms: u64) -> Option<vnet::
                 break;
             };
             if let vnet::Event::Opened { handle, kind } = ev
-                && kind == vnet::SocketKind::Udp {
-                    return Some(handle);
-                }
+                && kind == vnet::SocketKind::Udp
+            {
+                return Some(handle);
+            }
         }
         if Instant::now() >= deadline {
             return None;

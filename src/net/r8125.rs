@@ -769,7 +769,9 @@ impl R8125Adapter {
                 // stall if it persists across many polls.
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
                 if self.dbg_tx_submitted != 0
-                    && self.dbg_tx_stall_checks.is_multiple_of(TX_STALL_KICK_THRESHOLD)
+                    && self
+                        .dbg_tx_stall_checks
+                        .is_multiple_of(TX_STALL_KICK_THRESHOLD)
                 {
                     crate::log!(
                         "net/r8125: tx stall checks={} head={} tail={} desc_opts1=0x{:08x} kicks={} resets={}\n",

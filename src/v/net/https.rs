@@ -140,9 +140,9 @@ async fn net_fetch_acquire_slot() {
             && NET_FETCH_ACTIVE
                 .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
-            {
-                return;
-            }
+        {
+            return;
+        }
         // Cooperative backoff.
         Timer::after(EmbassyDuration::from_millis(1)).await;
     }
@@ -705,24 +705,25 @@ async fn fetch_on_device(
 
                         // Progress reporting: once headers are known, report body byte count.
                         if let Some(hdr_end) = hdr_end_cached
-                            && hdr_end != 0 {
-                                if content_len_cached.is_none() {
-                                    let headers = &plaintext[..hdr_end];
-                                    content_len_cached = Some(header_parse_content_length(headers));
-                                }
+                            && hdr_end != 0
+                        {
+                            if content_len_cached.is_none() {
+                                let headers = &plaintext[..hdr_end];
+                                content_len_cached = Some(header_parse_content_length(headers));
+                            }
 
-                                if let Some(ref mut p) = progress {
-                                    // Avoid spamming UI: update at most ~10Hz.
-                                    let now = Instant::now();
-                                    if now.saturating_duration_since(last_progress)
-                                        >= EmbassyDuration::from_millis(100)
-                                    {
-                                        let body_len = plaintext.len().saturating_sub(hdr_end);
-                                        p.on_progress(body_len, content_len_cached.unwrap_or(None));
-                                        last_progress = now;
-                                    }
+                            if let Some(ref mut p) = progress {
+                                // Avoid spamming UI: update at most ~10Hz.
+                                let now = Instant::now();
+                                if now.saturating_duration_since(last_progress)
+                                    >= EmbassyDuration::from_millis(100)
+                                {
+                                    let body_len = plaintext.len().saturating_sub(hdr_end);
+                                    p.on_progress(body_len, content_len_cached.unwrap_or(None));
+                                    last_progress = now;
                                 }
                             }
+                        }
                         if hdr_end != 0 {
                             let headers = &plaintext[..hdr_end];
                             let body = &plaintext[hdr_end..];
@@ -731,12 +732,12 @@ async fn fetch_on_device(
                             if status != 200 {
                                 if is_redirect_status(status)
                                     && let Some(next) = redirect_url_from_location(parsed, headers)
-                                    {
-                                        if let Some(h) = tls_handle {
-                                            let _ = cmds.push(TlsCommand::Close { handle: h });
-                                        }
-                                        return Err(FetchError::Redirect { status, url: next });
+                                {
+                                    if let Some(h) = tls_handle {
+                                        let _ = cmds.push(TlsCommand::Close { handle: h });
                                     }
+                                    return Err(FetchError::Redirect { status, url: next });
+                                }
 
                                 // Log error bodies (often JSON) to aid debugging.
                                 let is_chunked = header_contains_token(
@@ -849,9 +850,10 @@ async fn fetch_on_device(
                     let status = parse_http_status(&plaintext).unwrap_or(0);
                     if status != 200 {
                         if is_redirect_status(status)
-                            && let Some(next) = redirect_url_from_location(parsed, headers) {
-                                return Err(FetchError::Redirect { status, url: next });
-                            }
+                            && let Some(next) = redirect_url_from_location(parsed, headers)
+                        {
+                            return Err(FetchError::Redirect { status, url: next });
+                        }
 
                         // Log error bodies (often JSON) to aid debugging.
                         let is_chunked =
@@ -1250,7 +1252,12 @@ async fn fetch_on_device_sse(
                     loop {
                         let delim = if let Some(p) = sse_buf.windows(2).position(|w| w == b"\n\n") {
                             Some((p, 2))
-                        } else { sse_buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| (p, 4)) };
+                        } else {
+                            sse_buf
+                                .windows(4)
+                                .position(|w| w == b"\r\n\r\n")
+                                .map(|p| (p, 4))
+                        };
                         let Some((pos, dlen)) = delim else { break };
                         let block = sse_buf.drain(..pos + dlen).collect::<Vec<u8>>();
                         // Strip delimiter
@@ -1651,13 +1658,10 @@ async fn fetch_on_device_to_file_keepalive(
                             if status != 200 {
                                 if is_redirect_status(status)
                                     && let Some(next) = redirect_url_from_location(parsed, headers)
-                                    {
-                                        keepalive_release(conn);
-                                        return Err(FetchToFileError::Redirect {
-                                            status,
-                                            url: next,
-                                        });
-                                    }
+                                {
+                                    keepalive_release(conn);
+                                    return Err(FetchToFileError::Redirect { status, url: next });
+                                }
                                 keepalive_release(conn);
                                 return Err(FetchToFileError::Code(fetch_error_to_code(
                                     FetchError::Http(status),
@@ -2020,34 +2024,30 @@ async fn fetch_on_device_to_file(
                             if status != 200 {
                                 if is_redirect_status(status)
                                     && let Some(next) = redirect_url_from_location(parsed, headers)
-                                    {
-                                        if let Some(h) = tls_handle {
-                                            let _ = cmds.push(TlsCommand::Close { handle: h });
-                                        }
-                                        if let Some(sh) = stream_handle.take() {
-                                            let _ =
-                                                crate::v::fs::trueosfs::file_write_abort_async(sh)
-                                                    .await;
-                                        }
-                                        log_vhttps_file_timing(
-                                            parsed.host.as_str(),
-                                            dev_idx,
-                                            last_http_status,
-                                            t0,
-                                            t_dns,
-                                            t_open_sent,
-                                            t_tcp_opened,
-                                            t_tls_connected,
-                                            t_header_done,
-                                            t_write_begin,
-                                            t_write_done,
-                                            fetch_error_to_code(FetchError::Http(status)),
-                                        );
-                                        return Err(FetchToFileError::Redirect {
-                                            status,
-                                            url: next,
-                                        });
+                                {
+                                    if let Some(h) = tls_handle {
+                                        let _ = cmds.push(TlsCommand::Close { handle: h });
                                     }
+                                    if let Some(sh) = stream_handle.take() {
+                                        let _ = crate::v::fs::trueosfs::file_write_abort_async(sh)
+                                            .await;
+                                    }
+                                    log_vhttps_file_timing(
+                                        parsed.host.as_str(),
+                                        dev_idx,
+                                        last_http_status,
+                                        t0,
+                                        t_dns,
+                                        t_open_sent,
+                                        t_tcp_opened,
+                                        t_tls_connected,
+                                        t_header_done,
+                                        t_write_begin,
+                                        t_write_done,
+                                        fetch_error_to_code(FetchError::Http(status)),
+                                    );
+                                    return Err(FetchToFileError::Redirect { status, url: next });
+                                }
 
                                 if let Some(h) = tls_handle {
                                     let _ = cmds.push(TlsCommand::Close { handle: h });

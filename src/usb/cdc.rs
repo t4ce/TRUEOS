@@ -69,38 +69,41 @@ pub fn parse_cdc_interface(cfg: &[u8]) -> Option<CdcInterface> {
             }
             5 => {
                 if let (Some(iface), Some(data_if)) = (current_iface, data_iface)
-                    && iface == data_if && data_alt == 0 && current_class == USB_CLASS_DATA
-                        && len >= 7 {
-                            let attrs = cfg[idx + 3];
-                            if (attrs & 0x3) == 0x2 {
-                                let ep_addr = cfg[idx + 2];
-                                let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                                if (ep_addr & 0x80) != 0 {
-                                    if ep_in.is_none() {
-                                        ep_in = Some(EndpointInfo {
-                                            address: ep_addr,
-                                            max_packet,
-                                        });
-                                    }
-                                } else if ep_out.is_none() {
-                                    ep_out = Some(EndpointInfo {
-                                        address: ep_addr,
-                                        max_packet,
-                                    });
-                                }
-                                if let (Some(ctrl), Some(in_ep), Some(out_ep)) =
-                                    (control_iface, ep_in, ep_out)
-                                {
-                                    return Some(CdcInterface {
-                                        configuration: config_value,
-                                        control_interface: ctrl,
-                                        data_interface: data_if,
-                                        ep_in: in_ep,
-                                        ep_out: out_ep,
-                                    });
-                                }
+                    && iface == data_if
+                    && data_alt == 0
+                    && current_class == USB_CLASS_DATA
+                    && len >= 7
+                {
+                    let attrs = cfg[idx + 3];
+                    if (attrs & 0x3) == 0x2 {
+                        let ep_addr = cfg[idx + 2];
+                        let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                        if (ep_addr & 0x80) != 0 {
+                            if ep_in.is_none() {
+                                ep_in = Some(EndpointInfo {
+                                    address: ep_addr,
+                                    max_packet,
+                                });
                             }
+                        } else if ep_out.is_none() {
+                            ep_out = Some(EndpointInfo {
+                                address: ep_addr,
+                                max_packet,
+                            });
                         }
+                        if let (Some(ctrl), Some(in_ep), Some(out_ep)) =
+                            (control_iface, ep_in, ep_out)
+                        {
+                            return Some(CdcInterface {
+                                configuration: config_value,
+                                control_interface: ctrl,
+                                data_interface: data_if,
+                                ep_in: in_ep,
+                                ep_out: out_ep,
+                            });
+                        }
+                    }
+                }
             }
             _ => {}
         }

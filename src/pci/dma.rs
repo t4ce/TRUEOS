@@ -356,12 +356,13 @@ fn alloc_from_pools(
     max_phys_exclusive: Option<u64>,
 ) -> Option<(u64, *mut u8)> {
     if let Some(max_phys) = max_phys_exclusive
-        && max_phys <= DMA_MAX_PHYS {
-            return DMA_LOW_POOL
-                .lock()
-                .as_mut()
-                .and_then(|pool| pool.alloc(size, align));
-        }
+        && max_phys <= DMA_MAX_PHYS
+    {
+        return DMA_LOW_POOL
+            .lock()
+            .as_mut()
+            .and_then(|pool| pool.alloc(size, align));
+    }
 
     if let Some((phys, virt)) = DMA_ANY_POOL
         .lock()
@@ -381,23 +382,25 @@ fn dealloc_to_pools(ptr: *mut u8) -> bool {
     {
         let mut guard = DMA_ANY_POOL.lock();
         if let Some(pool) = guard.as_mut()
-            && pool.contains(ptr) {
-                if !pool.dealloc(ptr) {
-                    crate::log!("dma: any pool dealloc failed ptr=0x{:X}\n", ptr as usize);
-                }
-                return true;
+            && pool.contains(ptr)
+        {
+            if !pool.dealloc(ptr) {
+                crate::log!("dma: any pool dealloc failed ptr=0x{:X}\n", ptr as usize);
             }
+            return true;
+        }
     }
 
     {
         let mut guard = DMA_LOW_POOL.lock();
         if let Some(pool) = guard.as_mut()
-            && pool.contains(ptr) {
-                if !pool.dealloc(ptr) {
-                    crate::log!("dma: low pool dealloc failed ptr=0x{:X}\n", ptr as usize);
-                }
-                return true;
+            && pool.contains(ptr)
+        {
+            if !pool.dealloc(ptr) {
+                crate::log!("dma: low pool dealloc failed ptr=0x{:X}\n", ptr as usize);
             }
+            return true;
+        }
     }
 
     false

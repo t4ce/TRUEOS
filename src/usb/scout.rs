@@ -335,10 +335,9 @@ async fn scout_pass(info: xhci::XhcInfo) {
     for port in 0..state.ctx.port_count {
         let status = unsafe { state.ctx.portsc(port as usize) };
         let (connected_flag, _, _) = decode_port_status(status);
-        if connected_flag
-            && connected.push(((port + 1), status)).is_err() {
-                connected_overflowed = true;
-            }
+        if connected_flag && connected.push(((port + 1), status)).is_err() {
+            connected_overflowed = true;
+        }
     }
 
     // If we couldn't record all connected ports, don't treat missing entries as disconnects.
@@ -480,16 +479,17 @@ fn collect_ports(controller_id: usize, state: &UsbControllerState) -> Vec<Scoute
                     vid = Some(ident.vid);
                     pid = Some(ident.pid);
                     if let Some(name) = super::friendly_name_for_vidpid(ident.vid, ident.pid)
-                        && matches!(dev.kind, DeviceKind::Unknown) {
-                            kind_str = Some(name);
-                        }
+                        && matches!(dev.kind, DeviceKind::Unknown)
+                    {
+                        kind_str = Some(name);
+                    }
                 }
             }
         }
 
         // Fallback or detecting state
         if kind_str.is_none() && connected {
-            if let Some((v, p)) = xhci::get_port_vidpid(controller_id, port + 1 ) {
+            if let Some((v, p)) = xhci::get_port_vidpid(controller_id, port + 1) {
                 vid = Some(v);
                 pid = Some(p);
                 if let Some(name) = super::friendly_name_for_vidpid(v, p) {

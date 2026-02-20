@@ -461,19 +461,20 @@ fn parse_modern_caps(dev: &pci::PciDevice) -> Option<VirtioModernCaps> {
             break;
         }
         if cap_id == PCI_CAP_ID_VENDOR_SPECIFIC
-            && let Some(vcap) = read_virtio_pci_cap(dev, ptr) {
-                match vcap.cfg_type {
-                    VIRTIO_PCI_CAP_COMMON_CFG => common = Some(vcap),
-                    VIRTIO_PCI_CAP_ISR_CFG => isr = Some(vcap),
-                    VIRTIO_PCI_CAP_DEVICE_CFG => device_cfg = Some(vcap),
-                    VIRTIO_PCI_CAP_NOTIFY_CFG => {
-                        if let Some(ncap) = read_virtio_notify_cap(dev, ptr) {
-                            notify = Some(ncap);
-                        }
+            && let Some(vcap) = read_virtio_pci_cap(dev, ptr)
+        {
+            match vcap.cfg_type {
+                VIRTIO_PCI_CAP_COMMON_CFG => common = Some(vcap),
+                VIRTIO_PCI_CAP_ISR_CFG => isr = Some(vcap),
+                VIRTIO_PCI_CAP_DEVICE_CFG => device_cfg = Some(vcap),
+                VIRTIO_PCI_CAP_NOTIFY_CFG => {
+                    if let Some(ncap) = read_virtio_notify_cap(dev, ptr) {
+                        notify = Some(ncap);
                     }
-                    _ => {}
                 }
+                _ => {}
             }
+        }
 
         if next == 0 {
             break;

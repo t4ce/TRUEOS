@@ -258,13 +258,13 @@ impl WsConnection {
                             true,
                             &buf,
                             &mut payload,
-                        )
-                            && let Some(h) = self.handle {
-                                let _ = self.net.submit(Command::SendTcp {
-                                    handle: h,
-                                    data: ByteBuf::from_slice_trunc(&buf[..len]),
-                                });
-                            }
+                        ) && let Some(h) = self.handle
+                        {
+                            let _ = self.net.submit(Command::SendTcp {
+                                handle: h,
+                                data: ByteBuf::from_slice_trunc(&buf[..len]),
+                            });
+                        }
                         None
                     }
                     WebSocketReceiveMessageType::Pong => None,
@@ -277,13 +277,13 @@ impl WsConnection {
                             true,
                             &buf,
                             &mut payload,
-                        )
-                            && let Some(h) = self.handle {
-                                let _ = self.net.submit(Command::SendTcp {
-                                    handle: h,
-                                    data: ByteBuf::from_slice_trunc(&buf[..len]),
-                                });
-                            }
+                        ) && let Some(h) = self.handle
+                        {
+                            let _ = self.net.submit(Command::SendTcp {
+                                handle: h,
+                                data: ByteBuf::from_slice_trunc(&buf[..len]),
+                            });
+                        }
                         None
                     }
                     WebSocketReceiveMessageType::CloseCompleted => {

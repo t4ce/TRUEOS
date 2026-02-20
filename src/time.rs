@@ -51,10 +51,11 @@ fn init_once() {
 
 fn detect_tsc_hz() -> u64 {
     if let Some(hpet) = crate::efi::acpi::hpet::ensure()
-        && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet) {
-            crate::log!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
-            return calibrated_hz;
-        }
+        && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet)
+    {
+        crate::log!("time: tsc_hz calibrated via HPET: {}\n", calibrated_hz);
+        return calibrated_hz;
+    }
 
     detect_tsc_hz_from_cpuid()
 }
@@ -191,17 +192,18 @@ impl Driver for TimeDriver {
 
         if queue.insert(idx, entry).is_err()
             && let Some(last) = queue.last()
-                && at < last.at {
-                    let _ = queue.pop();
-                    let insert_idx = idx.min(queue.len());
-                    let _ = queue.insert(
-                        insert_idx,
-                        WakeEntry {
-                            at,
-                            waker: waker.clone(),
-                        },
-                    );
-                }
+            && at < last.at
+        {
+            let _ = queue.pop();
+            let insert_idx = idx.min(queue.len());
+            let _ = queue.insert(
+                insert_idx,
+                WakeEntry {
+                    at,
+                    waker: waker.clone(),
+                },
+            );
+        }
     }
 }
 

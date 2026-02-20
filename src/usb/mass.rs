@@ -252,36 +252,38 @@ pub fn parse_mass_interface(cfg: &[u8]) -> Option<BulkPair> {
             5 => {
                 if let Some(_iface) = current_iface
                     && current_alt == 0
-                        && current_class == USB_CLASS_MASS_STORAGE
-                        && current_subclass == USB_SUBCLASS_SCSI
-                        && current_proto == USB_PROTO_BULK_ONLY
-                        && len >= 7 {
-                            let ep_addr = cfg[idx + 2];
-                            let attrs = cfg[idx + 3];
-                            if (attrs & 0x3) == 0x2 {
-                                let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
-                                last_ep_addr = Some(ep_addr);
-                                if (ep_addr & 0x80) != 0 {
-                                    if ep_in.is_none() {
-                                        ep_in = Some((ep_addr, max_packet));
-                                    }
-                                } else if ep_out.is_none() {
-                                    ep_out = Some((ep_addr, max_packet));
-                                }
+                    && current_class == USB_CLASS_MASS_STORAGE
+                    && current_subclass == USB_SUBCLASS_SCSI
+                    && current_proto == USB_PROTO_BULK_ONLY
+                    && len >= 7
+                {
+                    let ep_addr = cfg[idx + 2];
+                    let attrs = cfg[idx + 3];
+                    if (attrs & 0x3) == 0x2 {
+                        let max_packet = u16::from_le_bytes([cfg[idx + 4], cfg[idx + 5]]);
+                        last_ep_addr = Some(ep_addr);
+                        if (ep_addr & 0x80) != 0 {
+                            if ep_in.is_none() {
+                                ep_in = Some((ep_addr, max_packet));
                             }
+                        } else if ep_out.is_none() {
+                            ep_out = Some((ep_addr, max_packet));
                         }
+                    }
+                }
             }
             0x30 => {
                 // SuperSpeed Endpoint Companion
                 if len >= 6
-                    && let Some(ep) = last_ep_addr {
-                        let max_burst = cfg[idx + 2];
-                        if ep == ep_in.map(|(a, _)| a).unwrap_or(0xFF) {
-                            ss_burst_in = max_burst;
-                        } else if ep == ep_out.map(|(a, _)| a).unwrap_or(0xFF) {
-                            ss_burst_out = max_burst;
-                        }
+                    && let Some(ep) = last_ep_addr
+                {
+                    let max_burst = cfg[idx + 2];
+                    if ep == ep_in.map(|(a, _)| a).unwrap_or(0xFF) {
+                        ss_burst_in = max_burst;
+                    } else if ep == ep_out.map(|(a, _)| a).unwrap_or(0xFF) {
+                        ss_burst_out = max_burst;
                     }
+                }
             }
             _ => {}
         }

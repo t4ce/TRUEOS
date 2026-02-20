@@ -257,42 +257,45 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                 drop.row += 1;
 
                 // Collision Detection
-                if drop.row > offset_y && drop.row <= offset_y + logo_h
-                    && drop.col > offset_x && drop.col <= offset_x + logo_w {
-                        let ly = drop.row - 1 - offset_y;
-                        let lx = drop.col - 1 - offset_x;
-                        let idx = ly * logo_w + lx;
+                if drop.row > offset_y
+                    && drop.row <= offset_y + logo_h
+                    && drop.col > offset_x
+                    && drop.col <= offset_x + logo_w
+                {
+                    let ly = drop.row - 1 - offset_y;
+                    let lx = drop.col - 1 - offset_x;
+                    let idx = ly * logo_w + lx;
 
-                        let val = logo[idx];
-                        let intensity = ((val >> 24) & 0xFF) as u8;
+                    let val = logo[idx];
+                    let intensity = ((val >> 24) & 0xFF) as u8;
 
-                        if intensity > 0 && !revealed[idx] {
-                            // HIT!
-                            revealed[idx] = true;
-                            drop.revealed_count += 1;
+                    if intensity > 0 && !revealed[idx] {
+                        // HIT!
+                        revealed[idx] = true;
+                        drop.revealed_count += 1;
 
-                            // Draw revealed pixel
-                            let r = ((val >> 16) & 0xFF) as u8;
-                            let g = ((val >> 8) & 0xFF) as u8;
-                            let b = (val & 0xFF) as u8;
-                            let r = ((r as u16 * intensity as u16) / 255) as u8;
-                            let g = ((g as u16 * intensity as u16) / 255) as u8;
-                            let b = ((b as u16 * intensity as u16) / 255) as u8;
+                        // Draw revealed pixel
+                        let r = ((val >> 16) & 0xFF) as u8;
+                        let g = ((val >> 8) & 0xFF) as u8;
+                        let b = (val & 0xFF) as u8;
+                        let r = ((r as u16 * intensity as u16) / 255) as u8;
+                        let g = ((g as u16 * intensity as u16) / 255) as u8;
+                        let b = ((b as u16 * intensity as u16) / 255) as u8;
 
-                            io.write_fmt(format_args!(
-                                "{}\x1b[38;2;{};{};{}m█",
-                                crate::ecma48::pos(drop.row, drop.col),
-                                r,
-                                g,
-                                b
-                            ));
+                        io.write_fmt(format_args!(
+                            "{}\x1b[38;2;{};{};{}m█",
+                            crate::ecma48::pos(drop.row, drop.col),
+                            r,
+                            g,
+                            b
+                        ));
 
-                            if drop.revealed_count >= 2 {
-                                hit_detected = true;
-                                // Trail clearing is handled in the removal block below
-                            }
+                        if drop.revealed_count >= 2 {
+                            hit_detected = true;
+                            // Trail clearing is handled in the removal block below
                         }
                     }
+                }
 
                 // Determine if we remove or update sequence
                 let max_row = rows.saturating_sub(10);

@@ -50,11 +50,7 @@ fn parse_http_status(buf: &[u8]) -> Option<u16> {
 }
 
 fn ascii_lower(b: u8) -> u8 {
-    if b.is_ascii_uppercase() {
-        b + 32
-    } else {
-        b
-    }
+    if b.is_ascii_uppercase() { b + 32 } else { b }
 }
 
 fn header_get_value<'a>(headers: &'a [u8], header_name: &[u8]) -> Option<&'a [u8]> {
@@ -448,9 +444,10 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
         (preferred != u32::MAX && (preferred as usize) < dev_count).then_some(preferred as usize);
 
     if let Some(dev_idx) = preferred
-        && tls_demo_attempt_device(slot_id, initial_host, dev_idx).await {
-            return;
-        }
+        && tls_demo_attempt_device(slot_id, initial_host, dev_idx).await
+    {
+        return;
+    }
 
     // Try each NIC index. This is important when multiple devices exist but only
     // one is wired to slirp/user-net in QEMU.
@@ -660,28 +657,27 @@ async fn tls_demo_attempt_device(slot_id: u8, initial_host: &'static str, dev_id
                                         if is_redirect
                                             && let Some(loc) =
                                                 header_get_value(headers, b"location")
-                                                && let Some(next) =
-                                                    parse_redirect_target(&target, loc)
-                                                {
-                                                    redirects += 1;
-                                                    let msg = alloc::format!(
-                                                        "https: redirect {}/3 -> {}{}",
-                                                        redirects,
-                                                        next.host,
-                                                        next.path
-                                                    );
-                                                    crate::matrix::push_line(slot_id, msg.as_str());
-                                                    crate::log!(
-                                                        "tls_demo: redirect {}/3 -> host={} port={} path={}\n",
-                                                        redirects,
-                                                        next.host,
-                                                        next.port,
-                                                        next.path
-                                                    );
-                                                    target = next;
-                                                    // Start the next request on the same device.
-                                                    continue 'redirects;
-                                                }
+                                            && let Some(next) = parse_redirect_target(&target, loc)
+                                        {
+                                            redirects += 1;
+                                            let msg = alloc::format!(
+                                                "https: redirect {}/3 -> {}{}",
+                                                redirects,
+                                                next.host,
+                                                next.path
+                                            );
+                                            crate::matrix::push_line(slot_id, msg.as_str());
+                                            crate::log!(
+                                                "tls_demo: redirect {}/3 -> host={} port={} path={}\n",
+                                                redirects,
+                                                next.host,
+                                                next.port,
+                                                next.path
+                                            );
+                                            target = next;
+                                            // Start the next request on the same device.
+                                            continue 'redirects;
+                                        }
                                     }
                                 } else {
                                     crate::matrix::push_line(

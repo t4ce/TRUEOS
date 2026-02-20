@@ -204,34 +204,31 @@ pub async fn ai_tcp_bridge_task() {
                 };
 
                 if let Some(handle) = handle
-                    && !chunk.is_empty() {
-                        pending_handle = Some(handle);
-                        pending = Some(chunk.clone());
-                        pending_ticks = 0;
-                        pending_len = chunk.len();
+                    && !chunk.is_empty()
+                {
+                    pending_handle = Some(handle);
+                    pending = Some(chunk.clone());
+                    pending_ticks = 0;
+                    pending_len = chunk.len();
 
-                        if tx_log_budget > 0 {
-                            tx_log_budget -= 1;
-                            crate::log!(
-                                "ai-qjs: tx queue handle={} len={}\n",
-                                handle.0,
-                                pending_len
-                            );
-                        }
-
-                        if cmds
-                            .push(NetCommand::SendTcp {
-                                handle,
-                                data: chunk,
-                            })
-                            .is_err()
-                        {
-                            pending = None;
-                            pending_ticks = 0;
-                            pending_len = 0;
-                            crate::log!("ai-qjs: tx queue full (dropping pending)\n");
-                        }
+                    if tx_log_budget > 0 {
+                        tx_log_budget -= 1;
+                        crate::log!("ai-qjs: tx queue handle={} len={}\n", handle.0, pending_len);
                     }
+
+                    if cmds
+                        .push(NetCommand::SendTcp {
+                            handle,
+                            data: chunk,
+                        })
+                        .is_err()
+                    {
+                        pending = None;
+                        pending_ticks = 0;
+                        pending_len = 0;
+                        crate::log!("ai-qjs: tx queue full (dropping pending)\n");
+                    }
+                }
             }
 
             if pending.is_some() {

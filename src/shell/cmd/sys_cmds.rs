@@ -547,14 +547,16 @@ pub(crate) fn cmd_net_icmp(
                         rtt_ms,
                         ..
                     } = ev
-                        && from == ip && rseq == seq {
-                            io_static.write_fmt(format_args!(
-                                "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n",
-                                from[0], from[1], from[2], from[3], seq, rtt_ms
-                            ));
-                            got = true;
-                            break;
-                        }
+                    && from == ip
+                    && rseq == seq
+                {
+                    io_static.write_fmt(format_args!(
+                        "64 bytes from {}.{}.{}.{}: icmp_seq={} time={}ms\r\n",
+                        from[0], from[1], from[2], from[3], seq, rtt_ms
+                    ));
+                    got = true;
+                    break;
+                }
                 embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
             }
             if !got {
@@ -674,9 +676,10 @@ pub(crate) fn cmd_net_nic(
 
     for index in 0..count {
         if let Some(target_idx) = specific_index
-            && index != target_idx {
-                continue;
-            }
+            && index != target_idx
+        {
+            continue;
+        }
 
         let name = crate::net::device_name_at(index).unwrap_or("Unknown");
 

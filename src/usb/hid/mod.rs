@@ -756,9 +756,10 @@ pub fn parse_hid_interrupt_in_endpoints(cfg: &[u8]) -> Vec<HidEpInfo, MAX_HID_IN
             usbdesc::ParsedDescriptor::Hid(hd) => {
                 if let Some(iface) = current_iface
                     && current_alt == 0
-                        && let Some(len) = hd.report_desc_len {
-                            report_len_by_iface[iface as usize] = len;
-                        }
+                    && let Some(len) = hd.report_desc_len
+                {
+                    report_len_by_iface[iface as usize] = len;
+                }
             }
             usbdesc::ParsedDescriptor::Endpoint(ed) => {
                 let Some(iface) = current_iface else {
@@ -1107,7 +1108,7 @@ pub(crate) async fn fetch_hid_descriptor(
     desc_type: u8,
     len: usize,
 ) -> Result<Vec<u8, MAX_REPORT_DESC>, FetchReportError> {
-    let w_value = (desc_type as u32) << 8 ;
+    let w_value = (desc_type as u32) << 8;
     let setup_d0 = (0x81u32) | ((0x06u32) << 8) | (w_value << 16);
     let setup_d1 = iface as u32;
     fetch_control_in(ctx, ep0_ring, slot_id, setup_d0, setup_d1, len).await

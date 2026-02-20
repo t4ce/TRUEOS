@@ -1102,14 +1102,12 @@ pub fn blit_image(origin_x: usize, origin_y: usize, image: &Image<'_>) -> bool {
         // Clamp origin so the image fits inside the framebuffer when possible.
         let mut ox = origin_x;
         let mut oy = origin_y;
-        if image.width <= fb.width
-            && ox > fb.width - image.width {
-                ox = fb.width - image.width;
-            }
-        if image.height <= fb.height
-            && oy > fb.height - image.height {
-                oy = fb.height - image.height;
-            }
+        if image.width <= fb.width && ox > fb.width - image.width {
+            ox = fb.width - image.width;
+        }
+        if image.height <= fb.height && oy > fb.height - image.height {
+            oy = fb.height - image.height;
+        }
         fb.blit_image(ox, oy, image);
         true
     })

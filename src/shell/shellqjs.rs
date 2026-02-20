@@ -124,7 +124,7 @@ unsafe extern "C" fn qjs_trueos_acpi(
                 }
                 b'1'..=b'5' => {
                     handled = true;
-                    let state = arg.as_bytes()[1] - b'0' ;
+                    let state = arg.as_bytes()[1] - b'0';
                     ok = crate::efi::acpi::facp::enter_named_sleep_state(state).is_ok();
                 }
                 _ => {}
@@ -161,9 +161,10 @@ unsafe extern "C" fn qjs_trueos_logs(
         if !cstr.is_null() {
             let bytes = unsafe { CStr::from_ptr(cstr).to_bytes() };
             if let Ok(s) = core::str::from_utf8(bytes)
-                && let Ok(v) = s.trim().parse::<usize>() {
-                    max_bytes = core::cmp::min(v, ABS_MAX_BYTES);
-                }
+                && let Ok(v) = s.trim().parse::<usize>()
+            {
+                max_bytes = core::cmp::min(v, ABS_MAX_BYTES);
+            }
             unsafe { trueos_qjs::JS_FreeCString(ctx, cstr) };
         }
     }
@@ -407,9 +408,10 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
             && matches!(
                 next,
                 b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'(' | b'\'' | b'"'
-            ) {
-                return true;
-            }
+            )
+        {
+            return true;
+        }
     }
     if s.starts_with("export") {
         let b = s.as_bytes();
@@ -417,9 +419,10 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
             return true;
         }
         if let Some(&next) = b.get(6)
-            && matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*') {
-                return true;
-            }
+            && matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*')
+        {
+            return true;
+        }
     }
 
     // Heuristic scan for `import`/`export` outside comments and strings.
@@ -469,22 +472,21 @@ pub(crate) fn looks_like_module_src(src: &str) -> bool {
         match mode {
             Mode::Code => {
                 // Start of comment?
-                if b == b'/'
-                    && i + 1 < bytes.len() {
-                        match bytes[i + 1] {
-                            b'/' => {
-                                mode = Mode::LineComment;
-                                i += 2;
-                                continue;
-                            }
-                            b'*' => {
-                                mode = Mode::BlockComment;
-                                i += 2;
-                                continue;
-                            }
-                            _ => {}
+                if b == b'/' && i + 1 < bytes.len() {
+                    match bytes[i + 1] {
+                        b'/' => {
+                            mode = Mode::LineComment;
+                            i += 2;
+                            continue;
                         }
+                        b'*' => {
+                            mode = Mode::BlockComment;
+                            i += 2;
+                            continue;
+                        }
+                        _ => {}
                     }
+                }
 
                 // Start of string?
                 if b == b'\'' {
@@ -1156,13 +1158,15 @@ pub(crate) async fn run(io: &'static dyn ShellBackend, src: &str) {
                 || remaining.starts_with("../")
                 || remaining.ends_with(".js")
                 || remaining.ends_with(".mjs");
-            if single && looks_like_path
+            if single
+                && looks_like_path
                 && matches!(
                     crate::surface::io::kfs::exists_async(remaining).await,
                     Ok(true)
-                ) {
-                    file = Some(remaining);
-                }
+                )
+            {
+                file = Some(remaining);
+            }
 
             if file.is_none() {
                 code = Some(remaining);

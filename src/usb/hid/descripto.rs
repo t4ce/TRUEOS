@@ -472,9 +472,10 @@ pub fn find_hid_report_desc_len(cfg: &[u8], iface: u8, alt: u8) -> Option<u16> {
             }
             ParsedDescriptor::Hid(h) => {
                 if cur_iface == Some((iface, alt))
-                    && let Some(len) = h.report_desc_len {
-                        return Some(len);
-                    }
+                    && let Some(len) = h.report_desc_len
+                {
+                    return Some(len);
+                }
             }
             _ => {}
         }

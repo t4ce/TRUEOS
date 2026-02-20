@@ -557,18 +557,20 @@ pub(crate) async fn run_netbench(
                             expected_len = parse_content_length(&header_bytes[..hend]);
                             received_bytes += header_bytes.len() - hend;
                             if let Some(cl) = expected_len
-                                && received_bytes >= cl {
-                                    closed = true;
-                                    break;
-                                }
+                                && received_bytes >= cl
+                            {
+                                closed = true;
+                                break;
+                            }
                         }
                     } else {
                         received_bytes += bytes.len();
                         if let Some(cl) = expected_len
-                            && received_bytes >= cl {
-                                closed = true;
-                                break;
-                            }
+                            && received_bytes >= cl
+                        {
+                            closed = true;
+                            break;
+                        }
                     }
                     overall_deadline =
                         Instant::now() + EmbassyDuration::from_millis(OVERALL_TIMEOUT_MS);

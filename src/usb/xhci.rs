@@ -1397,10 +1397,9 @@ pub fn log_ports_table(ctx: &XhciContext) {
             cec as u8,
         );
 
-        if ccs
-            && let Some((vid, pid)) = get_port_vidpid(ctx.controller_id, port + 1 ) {
-                crate::log!("xhci:      port {} id={:04X}:{:04X}\n", port + 1, vid, pid);
-            }
+        if ccs && let Some((vid, pid)) = get_port_vidpid(ctx.controller_id, port + 1) {
+            crate::log!("xhci:      port {} id={:04X}:{:04X}\n", port + 1, vid, pid);
+        }
     }
 }
 
