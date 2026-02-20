@@ -956,7 +956,7 @@ fn font_atlas_large() -> &'static FontAtlasBuffers {
     FONT_ATLAS_LARGE.call_once(build_font_atlas_large)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool {
     if info.is_null() {
         return false;
@@ -979,7 +979,7 @@ pub extern "C" fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool
     true
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_font_atlas_large(info: *mut FontAtlasInfo) -> bool {
     if info.is_null() {
         return false;
@@ -1125,7 +1125,7 @@ static RENDER_MANDELBROT_ONCE: Once<()> = Once::new();
 const MANDELBROT_W: usize = 256;
 const MANDELBROT_H: usize = 256;
 
-#[link_section = ".bss"]
+#[unsafe(link_section = ".bss")]
 static mut MANDELBROT_PIXELS: [u32; MANDELBROT_W * MANDELBROT_H] = [0; MANDELBROT_W * MANDELBROT_H];
 
 pub(crate) fn draw_mandelbrot() {

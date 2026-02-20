@@ -8,7 +8,7 @@ use spin::Mutex;
 use crate as qjs;
 use crate::cmd_stream;
 
-extern "C" {}
+unsafe extern "C" {}
 
 const MAX_ATTRS: usize = 16;
 

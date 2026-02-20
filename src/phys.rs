@@ -6,7 +6,7 @@ use heapless::Vec;
 use limine::memory_map::EntryType;
 use spin::Mutex;
 
-extern "C" {
+unsafe extern "C" {
     static kernel_end: u8;
 }
 

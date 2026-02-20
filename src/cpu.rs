@@ -6,7 +6,7 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enable_sse();
     let slot = percpu::slot_for_lapic_id(cpu.lapic_id as u32);

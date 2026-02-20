@@ -447,7 +447,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize) {
         if bytes.is_null() || len == 0 {
             return;
@@ -462,7 +462,7 @@ pub mod cabi {
         write_bytes(stream, slice);
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
         // This function is used by QuickJS smokes (and other C-ABI callers) as a
         // cooperative yield point while polling for async completions.
@@ -473,7 +473,7 @@ pub mod cabi {
         crate::wait::spin_step();
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
         if cstr.is_null() {
             return;
@@ -489,7 +489,7 @@ pub mod cabi {
         trueos_cabi_write(stream, cstr, len);
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_copy_cstr_into(
         dst: *mut u8,
         cap: usize,
@@ -516,7 +516,7 @@ pub mod cabi {
         src_len as i32
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
         crate::limine::boot_timestamp_secs().unwrap_or(0)
     }
@@ -543,7 +543,7 @@ pub mod cabi {
         alloc::alloc::Layout::from_size_align(size, align).ok()
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_alloc(size: usize) -> *mut u8 {
         let align = cabi_malloc_align();
         let Some(layout) = cabi_layout_for(size, align) else {
@@ -559,7 +559,7 @@ pub mod cabi {
         p
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8 {
         let Some(total) = nmemb.checked_mul(size) else {
             return core::ptr::null_mut();
@@ -574,7 +574,7 @@ pub mod cabi {
         p
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_free(ptr: *mut u8) {
         if ptr.is_null() {
             return;
@@ -589,7 +589,7 @@ pub mod cabi {
         alloc::alloc::dealloc(ptr, layout);
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8 {
         if ptr.is_null() {
             return trueos_cabi_alloc(size);
@@ -618,7 +618,7 @@ pub mod cabi {
         new_ptr
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize {
         if ptr.is_null() {
             return 0;
@@ -630,7 +630,7 @@ pub mod cabi {
             .unwrap_or(0)
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,
         path_len: usize,
@@ -667,7 +667,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
         path_ptr: *const u8,
         path_len: usize,
@@ -696,7 +696,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_write_chunk(
         handle: u32,
         data_ptr: *const u8,
@@ -716,7 +716,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_write_finish(handle: u32) -> i32 {
         match super::kfs::write_file_finish(handle) {
             Ok(()) => 0,
@@ -724,7 +724,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_write_abort(handle: u32) -> i32 {
         match super::kfs::write_file_abort(handle) {
             Ok(()) => 0,
@@ -732,7 +732,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_rename(
         src_ptr: *const u8,
         src_len: usize,
@@ -759,7 +759,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
         path_ptr: *const u8,
         path_len: usize,
@@ -793,7 +793,7 @@ pub mod cabi {
         }
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32 {
         if path_ptr.is_null() && path_len != 0 {
             return FS_ERR_BAD_PARAM;
@@ -1072,7 +1072,7 @@ pub mod cabi {
     /// Draw a list of RGB triangles and present.
     ///
     /// Vertex ABI (bytes): repeating struct { f32 x, f32 y, u8 r, u8 g, u8 b, u8 pad }
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles(
         clear_rgb: u32,
         vtx_ptr: *const u8,
@@ -1163,7 +1163,7 @@ pub mod cabi {
         ret
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_rgba(
         tex_id: u32,
         width: u32,
@@ -1254,7 +1254,7 @@ pub mod cabi {
         ret
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
@@ -1277,7 +1277,7 @@ pub mod cabi {
         0
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_draw_rgb_triangles_no_present(
         vtx_ptr: *const u8,
         vtx_len: usize,
@@ -1312,7 +1312,7 @@ pub mod cabi {
         0
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_draw_tex_triangles_no_present(
         tex_id: u32,
         vtx_ptr: *const u8,
@@ -1354,7 +1354,7 @@ pub mod cabi {
         0
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
@@ -1589,7 +1589,7 @@ pub mod cabi {
 
     // --- Input C-ABI ---
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_input_pop_mouse(
         out_buttons: *mut u8,
         out_dx: *mut i8,

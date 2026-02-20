@@ -13,7 +13,7 @@ use spin::Mutex;
 
 use crate as qjs;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 

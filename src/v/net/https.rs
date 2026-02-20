@@ -2946,7 +2946,7 @@ pub async fn fetch_https_to_file_async(
 }
 
 /// TRUEOS C ABI: start async HTTPS fetch to cache file.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     url_ptr: *const u8,
     url_len: usize,
@@ -3050,7 +3050,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
 /// - `FS_ERR_NOT_FOUND` while operation is pending/unknown
 /// - `0` on success
 /// - negative error code on completion failure
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_result(op_id: u32) -> i32 {
     let map = CABI_NET_FETCH_RESULTS.lock();
     match map.get(&op_id) {
@@ -3061,7 +3061,7 @@ pub extern "C" fn trueos_cabi_net_fetch_result(op_id: u32) -> i32 {
 }
 
 /// TRUEOS C ABI: discard async HTTPS fetch state.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
     let mut map = CABI_NET_FETCH_RESULTS.lock();
     map.remove(&op_id);
@@ -3084,7 +3084,7 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
 /// - `FS_ERR_TIMEOUT` when deadline expires
 /// - `0` on success
 /// - negative error code on completion failure
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32 {
     if op_id == 0 {
         return FS_ERR_BAD_PARAM;

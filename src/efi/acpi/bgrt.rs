@@ -16,7 +16,7 @@ const MAX_H: usize = 256;
 const MAX_PIXELS: usize = MAX_W * MAX_H;
 const MAX_PALETTE: usize = 256;
 
-#[link_section = ".bss"]
+#[unsafe(link_section = ".bss")]
 static mut BGRT_PIXELS: [u32; MAX_PIXELS] = [0; MAX_PIXELS];
 static mut PALETTE: [u32; MAX_PALETTE] = [0; MAX_PALETTE];
 

@@ -44,10 +44,12 @@ impl DnsConfig {
     pub fn for_device(dev_idx: usize) -> Self {
         let (ra6, ra6_count) = crate::net::adapter::ra_dns6_snapshot_at(dev_idx)
             .unwrap_or_else(|| crate::net::adapter::primary_ra_dns6_snapshot());
+        let (dhcp6, dhcp6_count) = crate::net::adapter::dhcp6_dns6_snapshot_at(dev_idx)
+            .unwrap_or_else(|| crate::net::adapter::primary_dhcp6_dns6_snapshot());
         let (dhcp4, dhcp4_count) = crate::net::adapter::dhcp_dns_snapshot_at(dev_idx)
             .unwrap_or_else(|| crate::net::adapter::primary_dhcp_dns_snapshot());
 
-        // Prefer network-provided DNS (RA RDNSS for v6, then DHCPv4), then fall back
+        // Prefer network-provided DNS (RA RDNSS for v6, then DHCPv6, then DHCPv4), then fall back
         // to public resolvers. Keep both v6 and v4 fallbacks so we work on:
         // - v6-only networks (need v6 resolvers)
         // - v4-only networks (need v4 resolvers)
@@ -60,6 +62,13 @@ impl DnsConfig {
                 break;
             }
             servers[n as usize] = DnsServer::V6(ra6[i]);
+            n = n.saturating_add(1);
+        }
+        for i in 0..(dhcp6_count as usize).min(dhcp6.len()) {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V6(dhcp6[i]);
             n = n.saturating_add(1);
         }
         for i in 0..(dhcp4_count as usize).min(dhcp4.len()) {

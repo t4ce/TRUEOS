@@ -547,7 +547,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
     controller_id: u32,
     slot_id: u32,
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_read(
     wrote
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
     controller_id: u32,
     slot_id: u32,
@@ -618,7 +618,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
     controller_id: u32,
     slot_id: u32,
@@ -658,7 +658,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_read(
     wrote
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
     controller_id: u32,
     slot_id: u32,

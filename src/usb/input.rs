@@ -203,7 +203,7 @@ pub fn mouse_poll() -> TrueosMouseState {
     out
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32 {
     if out.is_null() {
         return -1;
@@ -326,7 +326,7 @@ fn qjs_mouse_try_pop() -> Option<TrueosMouseState> {
     Some(out)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32 {
     if out.is_null() {
         return -1;

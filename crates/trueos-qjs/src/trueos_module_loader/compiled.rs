@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate as qjs;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,
         path_len: usize,

@@ -4,7 +4,7 @@ use core::ffi::{c_char, c_int, CStr};
 
 use crate as qjs;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_poll_once();
 }

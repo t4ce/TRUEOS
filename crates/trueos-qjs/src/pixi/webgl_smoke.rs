@@ -6,7 +6,7 @@ use crate::cmd_stream::{self, CmdStreamCommand};
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
 }
 

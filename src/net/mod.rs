@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod core;
+pub mod dhcpv6;
 pub mod device;
 pub mod e1000;
 pub mod r8125;

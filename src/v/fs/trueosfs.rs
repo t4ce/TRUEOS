@@ -24,7 +24,7 @@ struct FileRecordCacheEntry {
     disk_id: block::DiscId,
     path: String,
     record: trueos_fs::FileRecordRef,
-    gen: u32,
+    cache_gen: u32,
     last_use: u64,
 }
 
@@ -351,7 +351,7 @@ fn file_record_cache_lookup(
     disk_id: block::DiscId,
     path: &str,
 ) -> Option<trueos_fs::FileRecordRef> {
-    let gen = root_cache_gen(disk_id);
+    let cache_gen = root_cache_gen(disk_id);
     let mut cache = FILE_RECORD_CACHE.lock();
     let mut idx = None;
     for (i, entry) in cache.iter().enumerate() {
@@ -365,7 +365,7 @@ fn file_record_cache_lookup(
         return None;
     };
 
-    if cache[i].gen != gen {
+    if cache[i].cache_gen != cache_gen {
         cache.remove(i);
         return None;
     }
@@ -376,7 +376,7 @@ fn file_record_cache_lookup(
 }
 
 fn file_record_cache_insert(disk_id: block::DiscId, path: &str, record: trueos_fs::FileRecordRef) {
-    let gen = root_cache_gen(disk_id);
+    let cache_gen = root_cache_gen(disk_id);
     let seq = FILE_RECORD_CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut cache = FILE_RECORD_CACHE.lock();
 
@@ -401,7 +401,7 @@ fn file_record_cache_insert(disk_id: block::DiscId, path: &str, record: trueos_f
         disk_id,
         path: path.into(),
         record,
-        gen,
+        cache_gen,
         last_use: seq,
     });
 }
