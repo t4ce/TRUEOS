@@ -694,8 +694,18 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
 #[embassy_executor::task]
 pub(crate) async fn input_logger() {
     loop {
-        while input::pop_event().is_some() {}
-        Timer::after(EmbassyDuration::from_millis(5)).await;
+        while let Some(ev) = input::pop_event() {
+            if let input::InputEvent::Keyboard(k) = ev {
+                // Log exactly the ASCII bytes we derived from the HID boot keycodes.
+                // No prefixes/suffixes/newlines so the stream reflects raw input.
+                for &b in k.ascii.iter() {
+                    if b != 0 {
+                        crate::log!("{}", b as char);
+                    }
+                }
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(10)).await;
     }
 }
 

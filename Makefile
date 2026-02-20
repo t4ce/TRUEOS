@@ -47,12 +47,12 @@ QEMU_USB_FLAGS = \
 	-device nvme,drive=nvme0,serial=t4ce \
 	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms \
-	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse
-
-#-device usb-tablet,bus=xhci.0,port=4,id=usbtablet 
-# -device usb-kbd,bus=xhci.0,port=1,id=usbkbd 
-# 	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=5,id=usbleds
-# -device usb-host,vendorid=0x303a,productid=0x1001,bus=xhci.0,port=4,id=usbhost
+	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse \
+	-device usb-kbd,bus=xhci.0,port=1,id=usbkbd \
+	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=4,id=usbleds
+	
+# -device usb-tablet,bus=xhci.0,port=4,id=usbtablet 
+# 
 # -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
 # -device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx
 # -device usb-host,vendorid=0x058f,productid=0x6387,bus=xhci.0,port=6,id=usbpendrive
