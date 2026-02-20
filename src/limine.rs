@@ -2,59 +2,59 @@ use core::ptr;
 use limine::{memory_map, request, response, BaseRevision};
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static BASE_REVISION: BaseRevision = BaseRevision::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static SMP_REQUEST: request::MpRequest = request::MpRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static HHDM_REQUEST: request::HhdmRequest = request::HhdmRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static MEMMAP_REQUEST: request::MemoryMapRequest = request::MemoryMapRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static FRAMEBUFFER_REQUEST: request::FramebufferRequest = request::FramebufferRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static EXECUTABLE_ADDRESS_REQUEST: request::ExecutableAddressRequest =
     request::ExecutableAddressRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static EXECUTABLE_FILE_REQUEST: request::ExecutableFileRequest =
     request::ExecutableFileRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static MODULE_REQUEST: request::ModuleRequest = request::ModuleRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static STACK_SIZE_REQUEST: request::StackSizeRequest =
     request::StackSizeRequest::new().with_size(16 * 1024 * 1024);
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static DATE_AT_BOOT_REQUEST: request::DateAtBootRequest = request::DateAtBootRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static BOOTLOADER_PERFORMANCE_REQUEST: BootloaderPerformanceRequest =
     BootloaderPerformanceRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static RSDP_REQUEST: request::RsdpRequest = request::RsdpRequest::new();
 
 #[used]
-#[link_section = ".limine_requests"]
+#[unsafe(link_section = ".limine_requests")]
 pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {

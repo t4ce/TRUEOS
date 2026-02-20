@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use spin::Mutex;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_gfx_draw_rgb_triangles(
         clear_rgb: u32,
         vtx_ptr: *const u8,

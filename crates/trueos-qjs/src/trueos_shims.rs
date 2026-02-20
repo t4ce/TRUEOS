@@ -4,7 +4,7 @@ use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     pub fn trueos_cabi_poll_once();
     fn trueos_cabi_boot_timestamp_secs() -> u64;
@@ -120,7 +120,7 @@ fn log_i32_dec(v: c_int) {
 
 // --- Abort/assert shims ---
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn abort() -> ! {
     log_str("abort()\n");
     core::arch::asm!("cli", options(nomem, nostack));
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn abort() -> ! {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __assert_fail(
     assertion: *const c_char,
     file: *const c_char,
@@ -150,7 +150,7 @@ pub unsafe extern "C" fn __assert_fail(
 
 // --- Small math shims QuickJS expects from libm/libc ---
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn abs(x: c_int) -> c_int {
     if x < 0 {
         -x
@@ -159,13 +159,13 @@ pub unsafe extern "C" fn abs(x: c_int) -> c_int {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lrint(x: f64) -> c_long {
     let v = libm::rint(x);
     v as c_long
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn modf(x: f64, iptr: *mut f64) -> f64 {
     let int_part = libm::trunc(x);
     if !iptr.is_null() {
@@ -174,17 +174,17 @@ pub unsafe extern "C" fn modf(x: f64, iptr: *mut f64) -> f64 {
     x - int_part
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn acosh(x: f64) -> f64 {
     libm::acosh(x)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn asinh(x: f64) -> f64 {
     libm::asinh(x)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn atanh(x: f64) -> f64 {
     libm::atanh(x)
 }
@@ -330,32 +330,32 @@ fn ymdhms_to_unix_timestamp(
     Some(secs)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
     trueos_cabi_alloc(size) as *mut c_void
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
     trueos_cabi_calloc(nmemb, size) as *mut c_void
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn free(ptr: *mut c_void) {
     trueos_cabi_free(ptr as *mut u8)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
     trueos_cabi_realloc(ptr as *mut u8, size) as *mut c_void
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn malloc_usable_size(ptr: *const c_void) -> usize {
     trueos_cabi_malloc_usable_size(ptr as *const u8)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     if n == 0 || dest == src as *mut c_void {
         return dest;
@@ -373,7 +373,7 @@ pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize)
     dest
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     if n == 0 || dest == src as *mut c_void {
         return dest;
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
     dest
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_void {
     if n == 0 {
         return s;
@@ -426,7 +426,7 @@ pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_vo
     s
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
     let a = a as *const u8;
     let b = b as *const u8;
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) ->
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_void {
     let s = s as *const u8;
     let needle = c as u8;
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_
     ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
     if s.is_null() {
         return 0;
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn strlen(s: *const c_char) -> usize {
     len
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
     let mut i = 0usize;
     loop {
@@ -480,7 +480,7 @@ pub unsafe extern "C" fn strcmp(a: *const c_char, b: *const c_char) -> c_int {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strncmp(a: *const c_char, b: *const c_char, n: usize) -> c_int {
     let mut i = 0usize;
     while i < n {
@@ -497,7 +497,7 @@ pub unsafe extern "C" fn strncmp(a: *const c_char, b: *const c_char, n: usize) -
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     let mut i = 0usize;
     let needle = c as u8;
@@ -513,7 +513,7 @@ pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
     let mut last: *mut c_char = ptr::null_mut();
     let mut i = 0usize;
@@ -530,7 +530,7 @@ pub unsafe extern "C" fn strrchr(s: *const c_char, c: c_int) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn gettimeofday(tv: *mut TimeVal, _tz: *mut c_void) -> c_int {
     if tv.is_null() {
         return -1;
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn gettimeofday(tv: *mut TimeVal, _tz: *mut c_void) -> c_i
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn clock_gettime(clk_id: c_int, tp: *mut TimeSpec) -> c_int {
     if tp.is_null() {
         return -1;
@@ -563,7 +563,7 @@ pub unsafe extern "C" fn clock_gettime(clk_id: c_int, tp: *mut TimeSpec) -> c_in
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn time(tloc: *mut i64) -> i64 {
     let (secs, _) = realtime_secs_and_subsec_micros();
     if !tloc.is_null() {
@@ -584,7 +584,7 @@ static mut TM_BUF: Tm = Tm {
     tm_isdst: 0,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn gmtime(timep: *const i64) -> *mut Tm {
     if timep.is_null() {
         return ptr::null_mut();
@@ -605,7 +605,7 @@ pub unsafe extern "C" fn gmtime(timep: *const i64) -> *mut Tm {
     &raw mut TM_BUF as *mut Tm
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn gmtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm {
     if timep.is_null() || result.is_null() {
         return ptr::null_mut();
@@ -626,17 +626,17 @@ pub unsafe extern "C" fn gmtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm
     result
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn localtime(timep: *const i64) -> *mut Tm {
     gmtime(timep)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm {
     gmtime_r(timep, result)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mktime(tm: *mut Tm) -> i64 {
     if tm.is_null() {
         return -1;

@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt, alloc_error_handler, f16, f128)]
+// Rust 2024: `unsafe fn` bodies are safe-by-default; allow legacy style for now.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 pub extern crate alloc;
 
@@ -52,13 +54,13 @@ struct BootStack {
     _bytes: [u8; BSP_BOOT_STACK_BYTES],
 }
 
-#[link_section = ".bss"]
+#[unsafe(link_section = ".bss")]
 static mut BSP_BOOT_STACK: BootStack = BootStack {
     _bytes: [0; BSP_BOOT_STACK_BYTES],
 };
 
 // only the person that deeply understands the root complex, is allowed to touch this fn
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub unsafe extern "C" fn _start() -> ! {
     core::arch::naked_asm!(
@@ -76,7 +78,7 @@ pub unsafe extern "C" fn _start() -> ! {
     );
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();

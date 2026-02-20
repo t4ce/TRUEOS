@@ -56,17 +56,17 @@ pub fn frame_done_consume_if_ready() -> Option<u32> {
     Some(seq)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_frame_done_set_required(mask: u32) {
     frame_done_set_required(mask);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_frame_done_signal(bits: u32) {
     frame_done_signal(bits);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_frame_done_is_ready() -> u32 {
     if frame_done_is_ready() {
         1
@@ -76,7 +76,7 @@ pub extern "C" fn trueos_cabi_gfx_frame_done_is_ready() -> u32 {
 }
 
 /// Returns a monotonically increasing sequence when a ready frame boundary is consumed, or 0.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gfx_frame_done_consume_if_ready() -> u32 {
     frame_done_consume_if_ready().unwrap_or(0)
 }

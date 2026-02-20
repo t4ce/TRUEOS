@@ -10,7 +10,7 @@ use crate as qjs;
 use crate::cmd_stream;
 use crate::webgl;
 
-extern "C" {
+unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool;
     fn trueos_cabi_font_atlas_large(info: *mut FontAtlasInfo) -> bool;
