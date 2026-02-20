@@ -14,7 +14,7 @@ use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use embassy_time_driver::TICK_HZ;
-use heapless::Vec;
+use heapless::{String, Vec};
 use spin::Mutex;
 
 const MAX_REPORT_DESC: usize = 512;
@@ -696,13 +696,43 @@ pub(crate) async fn input_logger() {
     loop {
         while let Some(ev) = input::pop_event() {
             if let input::InputEvent::Keyboard(k) = ev {
-                // Log exactly the ASCII bytes we derived from the HID boot keycodes.
-                // No prefixes/suffixes/newlines so the stream reflects raw input.
-                for &b in k.ascii.iter() {
-                    if b != 0 {
-                        crate::log!("{}", b as char);
+                // Single-line structured event dump to avoid interleaving with other logs.
+                // Includes raw keycodes + derived ASCII bytes + a lossy printable view.
+                let mut line: String<192> = String::new();
+                let _ = core::fmt::write(
+                    &mut line,
+                    format_args!(
+                        "hid.kbd slot={} mod=0x{:02X} keys=[",
+                        k.slot_id, k.modifiers
+                    ),
+                );
+                for (i, b) in k.keys.iter().copied().enumerate() {
+                    if i != 0 {
+                        let _ = core::fmt::write(&mut line, format_args!(" "));
                     }
+                    let _ = core::fmt::write(&mut line, format_args!("{:02X}", b));
                 }
+                let _ = core::fmt::write(&mut line, format_args!("] ascii=["));
+                for (i, b) in k.ascii.iter().copied().enumerate() {
+                    if i != 0 {
+                        let _ = core::fmt::write(&mut line, format_args!(" "));
+                    }
+                    let _ = core::fmt::write(&mut line, format_args!("{:02X}", b));
+                }
+                let _ = core::fmt::write(&mut line, format_args!("] text=\""));
+                for b in k.ascii.iter().copied() {
+                    if b == 0 {
+                        continue;
+                    }
+                    let ch = if b == b' ' || (b.is_ascii_graphic()) {
+                        b as char
+                    } else {
+                        '.'
+                    };
+                    let _ = core::fmt::write(&mut line, format_args!("{}", ch));
+                }
+                let _ = core::fmt::write(&mut line, format_args!("\"\n"));
+                crate::log!("{}", line);
             }
         }
         Timer::after(EmbassyDuration::from_millis(10)).await;
