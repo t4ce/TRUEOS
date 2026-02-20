@@ -9,19 +9,17 @@ const RX_BUF_SIZE: usize = 2048;
 
 #[inline]
 fn alloc_uninit_buf(len: usize) -> Vec<u8> {
+    // Clippy forbids exposing uninitialized bytes as `Vec<u8>` (and it is UB per
+    // `Vec::set_len` safety contract). For now we pay the initialization cost.
     let mut v = Vec::with_capacity(len);
-    // Safety: callers must ensure the buffer is fully overwritten before any read.
-    // This is used for DMA RX/TX staging where the device (or an explicit copy)
-    // writes the bytes before the buffer is observed.
-    unsafe { v.set_len(len) };
+    v.resize(len, 0);
     v
 }
 
 #[inline]
 fn alloc_uninit_buf_with_capacity(capacity: usize, len: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(capacity.max(len));
-    // Safety: callers must ensure the buffer is fully overwritten before any read.
-    unsafe { v.set_len(len) };
+    v.resize(len, 0);
     v
 }
 
@@ -38,8 +36,7 @@ pub fn alloc_packet_buf(len: usize) -> Vec<u8> {
             return alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len);
         }
 
-        // Safety: caller will overwrite the bytes before reading.
-        unsafe { buf.set_len(len) };
+        buf.resize(len, 0);
         buf
     } else {
         alloc_uninit_buf_with_capacity(RX_BUF_SIZE.max(len), len)
@@ -52,8 +49,8 @@ pub fn recycle_packet_buf(mut buf: Vec<u8>) {
         return;
     }
 
-    // Safety: the buffer will be overwritten on next use.
-    unsafe { buf.set_len(RX_BUF_SIZE) };
+    // Keep a stable size for pooled buffers.
+    buf.resize(RX_BUF_SIZE, 0);
 
     let mut pool = PACKET_POOL.lock();
     if pool.len() < POOL_MAX {

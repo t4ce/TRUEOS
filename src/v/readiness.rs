@@ -10,8 +10,15 @@ pub const HID_KEYBOARD_CLAIMED: u32 = 1 << 2;
 pub const PIANO_CLAIMED: u32 = 1 << 3;
 pub const UAC_ATTACHED: u32 = 1 << 5;
 
+// Network readiness.
+//
+// `NET_GATEWAY_REACHABLE` is kept for backward compatibility ("any network").
+// Prefer the per-protocol bits for new code.
 pub const NET_GATEWAY_REACHABLE: u32 = 1 << 8;
 pub const TLS_SOCKET_SERVICE_READY: u32 = 1 << 9;
+
+pub const NET_V4_GATEWAY_REACHABLE: u32 = 1 << 10;
+pub const NET_V6_GATEWAY_REACHABLE: u32 = 1 << 11;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;

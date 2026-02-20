@@ -257,8 +257,9 @@ fn init_controller(info: xhci::XhcInfo) -> Result<UsbControllerState, ()> {
 
         write_reg64(ctx.op_base, 0x18, cmd_ring.crcr_value());
 
-        const USBCMD: usize = 0x00 / 4;
-        const USBSTS: usize = 0x04 / 4;
+        // DWORD indices into the operational registers.
+        const USBCMD: usize = 0;
+        const USBSTS: usize = 1;
         const USBCMD_RS: u32 = 1 << 0;
         const USBSTS_HCH: u32 = 1 << 0;
 

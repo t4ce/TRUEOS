@@ -255,8 +255,9 @@ pub fn init_once() {
 
                 register_xhc(info);
 
-                const USBCMD: usize = 0x00 / 4;
-                const USBSTS: usize = 0x04 / 4;
+                // DWORD indices into the operational registers.
+                const USBCMD: usize = 0;
+                const USBSTS: usize = 1;
 
                 const USBCMD_RS: u32 = 1 << 0;
                 const USBCMD_HCRST: u32 = 1 << 1;

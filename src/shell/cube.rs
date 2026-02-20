@@ -251,9 +251,6 @@ fn plot(
     }
     let x = x as usize;
     let y = y as usize;
-    if x < BORDER_INSET || y < BORDER_INSET {
-        return;
-    }
     if x >= CUBE_COLS - BORDER_INSET || y >= CUBE_ROWS - BORDER_INSET {
         return;
     }

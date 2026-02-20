@@ -1048,7 +1048,7 @@ impl NvmeController {
         buf_len: usize,
     ) -> core::result::Result<(), block::Error> {
         let (prp1, prp2, prp_list) = self.make_prps(buf_phys, buf_len)?;
-        let cpl_res = 'submit: loop {
+        let cpl_res = {
             let cid = self.alloc_cid();
             let mut sqe = NvmeSqe { d: [0; 16] };
             sqe.d[0] = (opcode as u32) | ((cid as u32) << 16);
@@ -1065,7 +1065,7 @@ impl NvmeController {
                 .io_submit_and_wait_async(sqe, cid, NVME_IO_TIMEOUT_FAST_MS)
                 .await
             {
-                Ok(cpl) => break 'submit Ok(cpl),
+                Ok(cpl) => Ok(cpl),
                 Err(block::Error::Timeout) => {
                     // Silencing retry logs
                     /*
@@ -1110,9 +1110,10 @@ impl NvmeController {
                         );
                         self.dump_regs("io_rw_async_timeout");
                     }
-                    break 'submit retry_res;
+
+                    retry_res
                 }
-                Err(e) => break 'submit Err(e),
+                Err(e) => Err(e),
             }
         };
 
