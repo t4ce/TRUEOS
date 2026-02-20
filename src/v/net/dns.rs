@@ -21,27 +21,62 @@ pub enum DnsError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DnsConfig {
-    pub servers: [[u8; 4]; 4],
+    pub servers: [DnsServer; 8],
     pub server_count: u8,
     pub timeout_ms: u64,
     pub resend_ms: u64,
     pub cname_depth: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DnsServer {
+    V4([u8; 4]),
+    V6([u8; 16]),
+}
+
 impl Default for DnsConfig {
     fn default() -> Self {
-        let (dhcp_servers, dhcp_count) = crate::net::adapter::primary_dhcp_dns_snapshot();
-        let (servers, server_count) = if dhcp_count > 0 {
-            (dhcp_servers, dhcp_count)
-        } else {
-            let mut out = [[0u8; 4]; 4];
-            let mut n: u8 = 0;
-            for (i, s) in PUBLIC_DNS_SERVERS.iter().take(4).enumerate() {
-                out[i] = *s;
-                n = (i as u8) + 1;
+        let (ra6, ra6_count) = crate::net::adapter::primary_ra_dns6_snapshot();
+        let (dhcp4, dhcp4_count) = crate::net::adapter::primary_dhcp_dns_snapshot();
+
+        // Prefer network-provided DNS (RA RDNSS for v6, then DHCPv4), then fall back
+        // to public resolvers. Keep both v6 and v4 fallbacks so we work on:
+        // - v6-only networks (need v6 resolvers)
+        // - v4-only networks (need v4 resolvers)
+        // - dual-stack (either)
+        let mut servers = [DnsServer::V4([0u8; 4]); 8];
+        let mut n: u8 = 0;
+
+        for i in 0..(ra6_count as usize).min(ra6.len()) {
+            if (n as usize) >= servers.len() {
+                break;
             }
-            (out, n)
-        };
+            servers[n as usize] = DnsServer::V6(ra6[i]);
+            n = n.saturating_add(1);
+        }
+        for i in 0..(dhcp4_count as usize).min(dhcp4.len()) {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V4(dhcp4[i]);
+            n = n.saturating_add(1);
+        }
+        for s in PUBLIC_DNS_SERVERS_V6.iter() {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V6(*s);
+            n = n.saturating_add(1);
+        }
+        for s in PUBLIC_DNS_SERVERS_V4.iter() {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V4(*s);
+            n = n.saturating_add(1);
+        }
+
+        let server_count = n;
         Self {
             servers,
             server_count,
@@ -61,6 +96,26 @@ pub const PUBLIC_DNS_SERVERS: [[u8; 4]; 3] = [
     [8, 8, 8, 8],
     // Quad9
     [9, 9, 9, 9],
+];
+
+pub const PUBLIC_DNS_SERVERS_V4: [[u8; 4]; 3] = PUBLIC_DNS_SERVERS;
+
+pub const PUBLIC_DNS_SERVERS_V6: [[u8; 16]; 3] = [
+    // Cloudflare: 2606:4700:4700::1111
+    [
+        0x26, 0x06, 0x47, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11,
+        0x11,
+    ],
+    // Google: 2001:4860:4860::8888
+    [
+        0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88,
+        0x88,
+    ],
+    // Quad9: 2620:fe::fe
+    [
+        0x26, 0x20, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xfe,
+    ],
 ];
 
 const DNS_PORT: u16 = 53;
@@ -247,6 +302,12 @@ enum DnsAnswer {
     None,
 }
 
+enum DnsAnswer6 {
+    Aaaa([u8; 16]),
+    Cname(String),
+    None,
+}
+
 fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
     if pkt.len() < 12 {
         return None;
@@ -318,6 +379,77 @@ fn dns_parse_a_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer> {
         Some(DnsAnswer::Cname(c))
     } else {
         Some(DnsAnswer::None)
+    }
+}
+
+fn dns_parse_aaaa_or_cname(pkt: &[u8], want_id: u16) -> Option<DnsAnswer6> {
+    if pkt.len() < 12 {
+        return None;
+    }
+    let id = u16::from_be_bytes([pkt[0], pkt[1]]);
+    if id != want_id {
+        return None;
+    }
+    let flags = u16::from_be_bytes([pkt[2], pkt[3]]);
+    let rcode = (flags & 0x000F) as u8;
+    if rcode != 0 {
+        return None;
+    }
+
+    let qd = u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+    let an = u16::from_be_bytes([pkt[6], pkt[7]]) as usize;
+    let mut idx = 12usize;
+
+    for _ in 0..qd {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 4 > pkt.len() {
+            return None;
+        }
+        idx += 4;
+    }
+
+    let mut cname: Option<String> = None;
+
+    for _ in 0..an {
+        if !dns_skip_name(pkt, &mut idx) {
+            return None;
+        }
+        if idx + 10 > pkt.len() {
+            return None;
+        }
+        let typ = u16::from_be_bytes([pkt[idx], pkt[idx + 1]]);
+        let class = u16::from_be_bytes([pkt[idx + 2], pkt[idx + 3]]);
+        let rdlen = u16::from_be_bytes([pkt[idx + 8], pkt[idx + 9]]) as usize;
+        idx += 10;
+
+        if idx + rdlen > pkt.len() {
+            return None;
+        }
+
+        if class == 1 {
+            if typ == 28 && rdlen == 16 {
+                let mut ip = [0u8; 16];
+                ip.copy_from_slice(&pkt[idx..idx + 16]);
+                return Some(DnsAnswer6::Aaaa(ip));
+            }
+            if typ == 5 && cname.is_none() {
+                if let Some((name, _next)) = dns_read_name(pkt, idx) {
+                    if !name.is_empty() {
+                        cname = Some(name);
+                    }
+                }
+            }
+        }
+
+        idx += rdlen;
+    }
+
+    if let Some(c) = cname {
+        Some(DnsAnswer6::Cname(c))
+    } else {
+        Some(DnsAnswer6::None)
     }
 }
 
@@ -407,14 +539,28 @@ pub async fn resolve_ipv4_for_device(
             let server = cfg.servers[idx];
             let mut attempt = 0u8;
             while attempt < 3 {
-                let _ = net.submit(vnet::Command::SendUdp {
-                    handle: udp,
-                    remote: vnet::EndpointV4 {
-                        addr: server,
-                        port: DNS_PORT,
-                    },
-                    data: vnet::ByteBuf::from_slice_trunc(&q),
-                });
+                match server {
+                    DnsServer::V4(addr) => {
+                        let _ = net.submit(vnet::Command::SendUdp {
+                            handle: udp,
+                            remote: vnet::EndpointV4 {
+                                addr,
+                                port: DNS_PORT,
+                            },
+                            data: vnet::ByteBuf::from_slice_trunc(&q),
+                        });
+                    }
+                    DnsServer::V6(addr) => {
+                        let _ = net.submit(vnet::Command::SendUdpV6 {
+                            handle: udp,
+                            remote: vnet::EndpointV6 {
+                                addr,
+                                port: DNS_PORT,
+                            },
+                            data: vnet::ByteBuf::from_slice_trunc(&q),
+                        });
+                    }
+                }
 
                 let per_try_deadline = Instant::now() + EmbassyDuration::from_millis(cfg.resend_ms);
                 loop {
@@ -427,6 +573,24 @@ pub async fn resolve_ipv4_for_device(
                                 if handle != udp {
                                     continue;
                                 }
+                                let DnsServer::V4(server) = server else {
+                                    continue;
+                                };
+                                if from.port != DNS_PORT || from.addr != server {
+                                    continue;
+                                }
+                                if let Some(ans) = dns_parse_a_or_cname(data.as_slice(), dns_id) {
+                                    answered = Some(ans);
+                                    break;
+                                }
+                            }
+                            vnet::Event::UdpPacketV6 { handle, from, data } => {
+                                if handle != udp {
+                                    continue;
+                                }
+                                let DnsServer::V6(server) = server else {
+                                    continue;
+                                };
                                 if from.port != DNS_PORT || from.addr != server {
                                     continue;
                                 }
@@ -513,6 +677,164 @@ pub async fn resolve_ipv4_for_device(
                 continue;
             }
             DnsAnswer::None => {
+                let _ = net.submit(vnet::Command::Close { handle: udp });
+                return Err(DnsError::NoAnswer);
+            }
+        }
+    }
+}
+
+/// Resolve a hostname to an IPv6 address (AAAA record) using UDP DNS over vnet.
+///
+/// Uses the same resolver flow as IPv4 but queries qtype AAAA (28).
+pub async fn resolve_ipv6_for_device(
+    dev_idx: usize,
+    host: &str,
+    cfg: DnsConfig,
+) -> Result<[u8; 16], DnsError> {
+    let host_trimmed = host.trim().trim_end_matches('.');
+    if host_trimmed.is_empty() {
+        return Err(DnsError::BadName);
+    }
+
+    let net = VNet::open(dev_idx).ok_or(DnsError::NoNic)?;
+
+    let local_port = alloc_local_port();
+    let Some(udp) = open_udp(&net, local_port, cfg.timeout_ms).await else {
+        return Err(DnsError::Timeout);
+    };
+
+    let mut current: String = host_trimmed.into();
+    let total_deadline = Instant::now() + EmbassyDuration::from_millis(cfg.timeout_ms);
+
+    let mut depth: u8 = 0;
+    loop {
+        if depth > cfg.cname_depth {
+            let _ = net.submit(vnet::Command::Close { handle: udp });
+            return Err(DnsError::NoAnswer);
+        }
+
+        let dns_id = alloc_dns_id();
+        let q = dns_make_query(dns_id, current.as_str(), 28)?; // AAAA
+
+        let mut answered: Option<DnsAnswer6> = None;
+
+        for idx in 0..(cfg.server_count as usize).min(cfg.servers.len()) {
+            let server = cfg.servers[idx];
+            let mut attempt = 0u8;
+            while attempt < 3 {
+                match server {
+                    DnsServer::V4(addr) => {
+                        let _ = net.submit(vnet::Command::SendUdp {
+                            handle: udp,
+                            remote: vnet::EndpointV4 {
+                                addr,
+                                port: DNS_PORT,
+                            },
+                            data: vnet::ByteBuf::from_slice_trunc(&q),
+                        });
+                    }
+                    DnsServer::V6(addr) => {
+                        let _ = net.submit(vnet::Command::SendUdpV6 {
+                            handle: udp,
+                            remote: vnet::EndpointV6 {
+                                addr,
+                                port: DNS_PORT,
+                            },
+                            data: vnet::ByteBuf::from_slice_trunc(&q),
+                        });
+                    }
+                }
+
+                let per_try_deadline = Instant::now() + EmbassyDuration::from_millis(cfg.resend_ms);
+                loop {
+                    for _ in 0..64 {
+                        let Some(ev) = net.pop_event() else {
+                            break;
+                        };
+                        match ev {
+                            vnet::Event::UdpPacket { handle, from, data } => {
+                                if handle != udp {
+                                    continue;
+                                }
+                                let DnsServer::V4(server) = server else {
+                                    continue;
+                                };
+                                if from.port != DNS_PORT || from.addr != server {
+                                    continue;
+                                }
+                                if let Some(ans) = dns_parse_aaaa_or_cname(data.as_slice(), dns_id)
+                                {
+                                    answered = Some(ans);
+                                    break;
+                                }
+                            }
+                            vnet::Event::UdpPacketV6 { handle, from, data } => {
+                                if handle != udp {
+                                    continue;
+                                }
+                                let DnsServer::V6(server) = server else {
+                                    continue;
+                                };
+                                if from.port != DNS_PORT || from.addr != server {
+                                    continue;
+                                }
+                                if let Some(ans) = dns_parse_aaaa_or_cname(data.as_slice(), dns_id)
+                                {
+                                    answered = Some(ans);
+                                    break;
+                                }
+                            }
+                            vnet::Event::Error { .. } => {}
+                            _ => {}
+                        }
+                    }
+
+                    if answered.is_some() {
+                        break;
+                    }
+                    if Instant::now() >= per_try_deadline {
+                        break;
+                    }
+                    if Instant::now() >= total_deadline {
+                        let _ = net.submit(vnet::Command::Close { handle: udp });
+                        return Err(DnsError::Timeout);
+                    }
+                    Timer::after(EmbassyDuration::from_millis(10)).await;
+                }
+
+                if answered.is_some() {
+                    break;
+                }
+
+                attempt = attempt.wrapping_add(1);
+            }
+
+            if answered.is_some() {
+                break;
+            }
+        }
+
+        match answered.unwrap_or(DnsAnswer6::None) {
+            DnsAnswer6::Aaaa(ip) => {
+                crate::log!(
+                    "dns: resolved6 host={} dev={} ip={:02x}{:02x}:{:02x}{:02x}:...\n",
+                    host_trimmed,
+                    dev_idx,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3]
+                );
+                let _ = net.submit(vnet::Command::Close { handle: udp });
+                return Ok(ip);
+            }
+            DnsAnswer6::Cname(next) => {
+                current = next;
+                depth = depth.wrapping_add(1);
+                continue;
+            }
+            DnsAnswer6::None => {
                 let _ = net.submit(vnet::Command::Close { handle: udp });
                 return Err(DnsError::NoAnswer);
             }

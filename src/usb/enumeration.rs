@@ -199,10 +199,7 @@ async fn fetch_device_strings_pair(
     (mfr, prod)
 }
 
-pub(crate) async fn enumerate_port(
-    state: &mut UsbControllerState,
-    target_port: u8,
-) {
+pub(crate) async fn enumerate_port(state: &mut UsbControllerState, target_port: u8) {
     let ctx = state.ctx;
     let port_idx = (target_port - 1) as usize;
     const PORTSC_PED: u32 = 1 << 1;
@@ -265,14 +262,7 @@ pub(crate) async fn enumerate_port(
     // From here on: always disable the slot on failure.
     let speed_code = (port_status >> 10) & 0xF;
 
-    enumerate_with_params(
-        state,
-        target_port,
-        slot_id,
-        speed_code,
-        Some(port_status),
-    )
-    .await;
+    enumerate_with_params(state, target_port, slot_id, speed_code, Some(port_status)).await;
 }
 
 fn speed_code_to_str(speed_code: u32) -> &'static str {
@@ -823,8 +813,7 @@ pub(crate) async fn enumerate_with_params(
             );
 
             if count == 1
-                && (super::USB_LOG_VERBOSE
-                    || (if_cls == 0x03 && first_if_hid_report_len.is_some()))
+                && (super::USB_LOG_VERBOSE || (if_cls == 0x03 && first_if_hid_report_len.is_some()))
             {
                 if if_cls == 0x03 {
                     if let Some(rep_len) = first_if_hid_report_len {
@@ -851,11 +840,7 @@ pub(crate) async fn enumerate_with_params(
                                 let mut i = 0usize;
                                 while i < show {
                                     let end = core::cmp::min(i + 16, show);
-                                    crate::log!(
-                                        "usb:  rep{:03X}: {}\n",
-                                        i,
-                                        hex16(&desc[i..end])
-                                    );
+                                    crate::log!("usb:  rep{:03X}: {}\n", i, hex16(&desc[i..end]));
                                     i = end;
                                 }
                             }
@@ -891,7 +876,6 @@ pub(crate) async fn enumerate_with_params(
                 pls,
                 count
             );
-
         }
     }
 

@@ -1,9 +1,9 @@
 use super::bot;
 use super::scsi;
 use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
-    ep_max_burst_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
-    Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_burst_bits,
+    ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type, Trb, TrbRing, TrbRingState,
+    XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
 };
 use crate::disc::block as disc_block;
 use crate::pci::dma;

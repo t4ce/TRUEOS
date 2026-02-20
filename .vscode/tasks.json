@@ -4,7 +4,7 @@
         {
             "label": "make dbg",
             "type": "shell",
-            "command": "make dbg",
+            "command": "make dbg-vscode",
             "isBackground": true,
             "problemMatcher": [
                 {
@@ -18,7 +18,7 @@
                     ],
                     "background": {
                         "activeOnStart": true,
-                        "beginsPattern": "Waiting for debugger...",
+                        "beginsPattern": "^GDB stub ready on 127\\.0\\.0\\.1:1234$",
                         "endsPattern": "^GDB stub ready on 127\\.0\\.0\\.1:1234$"
                     }
                 }
