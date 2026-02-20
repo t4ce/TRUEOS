@@ -26,6 +26,7 @@ sudo apt install -y rustup
 sudo apt install autoconf automake mtools nasm xorriso
 sudo apt-get install qemu-system
 sudo apt install gdb
+cargo install fmt
 cargo install cargo-outdated 
 cargo install cargo-edit --locked
 cargo outdated -R
@@ -46,6 +47,7 @@ sudo apt-get install -y \
   gdb \
   qemu-system-x86 \
 
+rustup component add clippy
 sudo apt-get install -y qemu-system
 
 rustup toolchain install nightly --profile minimal \

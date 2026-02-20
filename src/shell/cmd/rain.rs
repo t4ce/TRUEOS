@@ -195,7 +195,7 @@ pub(crate) async fn run(io: &dyn ShellBackend, cols: usize, rows: usize) {
                         drop.pulse += 2;
                     }
                 } else {
-                    if drop.pulse <= 0 {
+                    if drop.pulse == 0 {
                         drop.pulse_up = true;
                         drop.pulse = 2;
                     } else {

@@ -1201,6 +1201,12 @@ struct NetService {
     icmp_ping_inflight: Option<(u16, Instant)>,
     icmp_ping_last_sent: Option<Instant>,
     icmp_ping_pongs: u8,
+
+    // IPv6 reachability probe (ping router).
+    icmp6_ping_seq: u16,
+    icmp6_ping_inflight: Option<(u16, Instant)>,
+    icmp6_ping_last_sent: Option<Instant>,
+    icmp6_ping_pongs: u8,
     icmp_vnet_inflight: Vec<IcmpInflight>,
 
     tcp_next_ephemeral: u16,
@@ -1365,6 +1371,11 @@ impl NetService {
             icmp_ping_inflight: None,
             icmp_ping_last_sent: None,
             icmp_ping_pongs: 0,
+
+            icmp6_ping_seq: 0,
+            icmp6_ping_inflight: None,
+            icmp6_ping_last_sent: None,
+            icmp6_ping_pongs: 0,
             icmp_vnet_inflight: Vec::new(),
 
             tcp_next_ephemeral: 49152,
@@ -3205,6 +3216,7 @@ impl NetService {
 
         // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
         self.maybe_send_icmp_ping(timestamp);
+        self.maybe_send_icmp_ping_v6(timestamp);
 
         work_done
     }
@@ -3268,6 +3280,77 @@ impl NetService {
             );
             self.icmp_ping_last_sent = Some(timestamp);
             self.icmp_ping_inflight = Some((seq_no, timestamp));
+        }
+    }
+
+    fn maybe_send_icmp_ping_v6(&mut self, timestamp: Instant) {
+        if self.icmp6_ping_pongs >= 1 {
+            return;
+        }
+
+        // Need a router to test.
+        let Some(target) = self.router_ipv6 else {
+            return;
+        };
+
+        // Router is link-local; use link-local source for correct scope.
+
+        if let Some((_seq_no, sent_at)) = self.icmp6_ping_inflight {
+            if timestamp >= sent_at + SmolDuration::from_millis(2500) {
+                self.icmp6_ping_inflight = None;
+            } else {
+                return;
+            }
+        }
+
+        // Re-send at most once per second until we get a reply.
+        if let Some(last) = self.icmp6_ping_last_sent {
+            if timestamp < last + SmolDuration::from_millis(1000) {
+                return;
+            }
+        }
+
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        if !socket.can_send() {
+            return;
+        }
+
+        self.icmp6_ping_seq = self.icmp6_ping_seq.wrapping_add(1) & 0x7FFF;
+        if self.icmp6_ping_seq == 0 {
+            self.icmp6_ping_seq = 1;
+        }
+        let seq_no = self.icmp6_ping_seq;
+
+        let payload: &[u8] = b"TRUEOS-ping6";
+        let req = Icmpv6Repr::EchoRequest {
+            ident: ICMP_IDENT,
+            seq_no,
+            data: payload,
+        };
+
+        let src = self.local_ipv6_ll;
+        let dst = target;
+        let mut out = vec![0u8; req.buffer_len()];
+        req.emit(
+            &src,
+            &dst,
+            &mut Icmpv6Packet::new_unchecked(&mut out),
+            &ChecksumCapabilities::default(),
+        );
+
+        if socket.send_slice(&out, IpAddress::Ipv6(dst)).is_ok() {
+            let o = dst.octets();
+            crate::log!(
+                "net: icmp6 ping dev={} seq={} -> {:02x}{:02x}:{:02x}{:02x}:...\n",
+                self.device_index,
+                seq_no,
+                o[0],
+                o[1],
+                o[2],
+                o[3]
+            );
+            self.icmp6_ping_last_sent = Some(timestamp);
+            self.icmp6_ping_inflight = Some((seq_no, timestamp));
         }
     }
 
@@ -3351,7 +3434,8 @@ impl NetService {
                                             self.device_index
                                         );
                                         crate::v::readiness::set(
-                                            crate::v::readiness::NET_GATEWAY_REACHABLE,
+                                            crate::v::readiness::NET_GATEWAY_REACHABLE
+                                                | crate::v::readiness::NET_V4_GATEWAY_REACHABLE,
                                         );
                                     }
                                 }
@@ -3375,6 +3459,39 @@ impl NetService {
                         continue;
                     }
                     let seq_no = u16::from_be_bytes([buf[6], buf[7]]);
+
+                    // Gateway reachability probe (icmp6 ping).
+                    if let Some((inflight_seq, sent_at)) = self.icmp6_ping_inflight {
+                        let payload = buf.get(8..len).unwrap_or(&[]);
+                        if inflight_seq == seq_no && payload.starts_with(b"TRUEOS-ping6") {
+                            let rtt = now() - sent_at;
+                            let o = src_v6.octets();
+                            crate::log!(
+                                "net: icmp6 pong dev={} seq={} rtt={}ms from={:02x}{:02x}:{:02x}{:02x}:...\n",
+                                self.device_index,
+                                seq_no,
+                                rtt.total_millis(),
+                                o[0],
+                                o[1],
+                                o[2],
+                                o[3]
+                            );
+                            self.icmp6_ping_inflight = None;
+
+                            if self.icmp6_ping_pongs == 0 {
+                                self.icmp6_ping_pongs = 1;
+                                crate::log!(
+                                    "net: icmp6 ok dev={} (v6 gateway reachable)\n",
+                                    self.device_index
+                                );
+                                crate::v::readiness::set(
+                                    crate::v::readiness::NET_GATEWAY_REACHABLE
+                                        | crate::v::readiness::NET_V6_GATEWAY_REACHABLE,
+                                );
+                            }
+                            continue;
+                        }
+                    }
 
                     if let Some(pos) = self.icmp_vnet_inflight.iter().position(|p| p.seq == seq_no)
                     {
