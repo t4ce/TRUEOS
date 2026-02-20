@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{Ordering, fence};
 
 use heapless::Vec;
 use spin::Mutex;

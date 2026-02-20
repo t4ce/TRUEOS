@@ -475,7 +475,7 @@ pub(crate) async fn run_netbench(
         if let Some(ev) = vnet.pop_event() {
             match ev {
                 api::Event::Opened { handle, kind } if kind == api::SocketKind::Tcp => {
-                    break Some(handle)
+                    break Some(handle);
                 }
                 api::Event::Error { msg } => {
                     let _ = rev_io.write_fmt(format_args!("netbench: connect error: {:?}\n", msg));

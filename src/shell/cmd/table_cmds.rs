@@ -1,6 +1,6 @@
+use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::table::{Table, TableColumn};
-use crate::shell::CommandAction;
 use acpi::sdt::fadt::Fadt;
 use acpi::sdt::madt::Madt;
 use alloc::string::{String, ToString};
@@ -656,11 +656,7 @@ pub(crate) fn cmd_tlb_usb(
             let port = alloc::format!("{}", p.port_id);
 
             let state_str = if p.connected {
-                if p.enabled {
-                    "Active"
-                } else {
-                    "Connected"
-                }
+                if p.enabled { "Active" } else { "Connected" }
             } else {
                 "Empty"
             };
@@ -1021,11 +1017,7 @@ pub(crate) fn cmd_tlb_dump(
             let ports = crate::usb::port_snapshot(info.controller_id);
             for p in ports.iter() {
                 let state_str = if p.connected {
-                    if p.enabled {
-                        "Active"
-                    } else {
-                        "Connected"
-                    }
+                    if p.enabled { "Active" } else { "Connected" }
                 } else {
                     "Empty"
                 };

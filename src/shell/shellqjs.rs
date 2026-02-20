@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::ffi::{c_char, c_int, CStr};
+use core::ffi::{CStr, c_char, c_int};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 

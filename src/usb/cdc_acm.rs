@@ -1,8 +1,8 @@
 use super::cdc;
 use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
-    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
+    self, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT, Trb, TrbRing, XhciContext,
+    context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_max_esit_payload_lo_bits,
+    ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
 };
 use crate::pci::dma;
 use crate::wait;

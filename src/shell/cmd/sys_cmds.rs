@@ -714,11 +714,7 @@ pub(crate) fn cmd_net_nic(
             alloc::string::String::from(" - ")
         };
         let mode = if let Some(has_lease) = crate::net::adapter::dhcp_has_lease_at(index) {
-            if has_lease {
-                "dhcp"
-            } else {
-                "fallback"
-            }
+            if has_lease { "dhcp" } else { "fallback" }
         } else {
             "-"
         };
@@ -726,14 +722,42 @@ pub(crate) fn cmd_net_nic(
         let ipv6 = if let Some(ip) = crate::net::adapter::ipv6_global_at(index) {
             alloc::format!(
                 "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
-                ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
-                ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3],
+                ip[4],
+                ip[5],
+                ip[6],
+                ip[7],
+                ip[8],
+                ip[9],
+                ip[10],
+                ip[11],
+                ip[12],
+                ip[13],
+                ip[14],
+                ip[15]
             )
         } else if let Some(ip) = crate::net::adapter::ipv6_link_local_at(index) {
             alloc::format!(
                 "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
-                ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
-                ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15]
+                ip[0],
+                ip[1],
+                ip[2],
+                ip[3],
+                ip[4],
+                ip[5],
+                ip[6],
+                ip[7],
+                ip[8],
+                ip[9],
+                ip[10],
+                ip[11],
+                ip[12],
+                ip[13],
+                ip[14],
+                ip[15]
             )
         } else {
             alloc::string::String::from("::")

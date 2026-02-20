@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 use embassy_executor::task;
 use heapless::String as HString;
 
-use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use crate::shell::CommandAction;
+use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 
 const FROG_LATITUDE: f64 = 51.832427;
 const FROG_LONGITUDE: f64 = 9.456766;

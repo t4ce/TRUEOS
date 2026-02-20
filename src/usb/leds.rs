@@ -1,10 +1,10 @@
 use super::hid;
 use super::hid_descripto as usbdesc;
 use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
-    ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
-    Trb, TrbRing, XhciContext, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT,
-    EP_TYPE_INT_IN, EP_TYPE_INT_OUT,
+    self, EP_STATE_DISABLED, EP_TYPE_BULK_IN, EP_TYPE_BULK_OUT, EP_TYPE_INT_IN, EP_TYPE_INT_OUT,
+    Trb, TrbRing, XhciContext, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits,
+    ep_interval_bits, ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits,
+    hi, lo, trb_type,
 };
 use crate::pci::dma;
 use core::mem::size_of;
@@ -243,11 +243,7 @@ async fn send_output_report(
 
     let cc = (evt.d2 >> 24) & 0xFF;
     dma::dealloc(buf_virt, report.len().max(1));
-    if cc == 1 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if cc == 1 { Ok(()) } else { Err(()) }
 }
 
 fn parse_led_hid_iface(cfg: &[u8]) -> Option<LedIfaceInfo> {
@@ -429,11 +425,7 @@ async fn set_configuration(
     };
 
     let completion = (evt.d2 >> 24) & 0xFF;
-    if completion == 1 {
-        Ok(())
-    } else {
-        Err(())
-    }
+    if completion == 1 { Ok(()) } else { Err(()) }
 }
 
 async fn configure_endpoint(

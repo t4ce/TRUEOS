@@ -1,8 +1,8 @@
 use crate::pci::mmio;
 use crate::wait;
 use core::mem::size_of;
-use core::ptr::{null_mut, read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
+use core::ptr::{NonNull, null_mut, read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -851,7 +851,7 @@ pub unsafe fn clear_port_change_bits(ctx: &XhciContext, port_id: u8) {
     // RW1S bits: writing 1 would *trigger* an action. Don't mirror these back.
     const PORTSC_PR: u32 = 1 << 4; // Port Reset (RW1S)
     const PORTSC_LWS: u32 = 1 << 16; // Link Write Strobe (RW1S)
-                                     // PED is RW1C: writing 1 would disable the port.
+    // PED is RW1C: writing 1 would disable the port.
     const PORTSC_PED: u32 = 1 << 1;
 
     const PORT_BLOCK_OFFSET: usize = 0x400;

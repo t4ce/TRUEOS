@@ -8,8 +8,8 @@ extern crate alloc;
 use trueos_v::vnet;
 
 #[allow(unused_imports)]
-use super::dns::{self, DnsConfig, DnsError};
-#[allow(unused_imports)]
 use super::VNet;
+#[allow(unused_imports)]
+use super::dns::{self, DnsConfig, DnsError};
 
 // Ping functionality removed as per request

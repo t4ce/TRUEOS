@@ -283,11 +283,7 @@ fn http_parse_range_header(value: &str, total_len: u64) -> Option<Vec<(u64, u64)
             out.push((start, end));
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 async fn http_prepare_file_response(
@@ -299,7 +295,7 @@ async fn http_prepare_file_response(
         Ok(Some(v)) => v,
         Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
         Err(_) => {
-            return http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "read error\n")
+            return http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "read error\n");
         }
     };
 

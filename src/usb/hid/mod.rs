@@ -1,8 +1,8 @@
 use super::control;
 use super::xhci::{
-    self, context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
+    self, EP_STATE_DISABLED, EP_TYPE_INT_IN, Trb, TrbRing, TrbRingState, XhciContext,
+    context_index, endpoint_target, ep_avg_trb_len_bits, ep_cerr_bits, ep_interval_bits,
     ep_max_esit_payload_lo_bits, ep_max_packet_bits, ep_state_bits, ep_type_bits, hi, lo, trb_type,
-    Trb, TrbRing, TrbRingState, XhciContext, EP_STATE_DISABLED, EP_TYPE_INT_IN,
 };
 pub mod classreq;
 pub mod descripto;
@@ -611,11 +611,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_mouse_pos(
         ok = true;
     });
 
-    if ok {
-        0
-    } else {
-        -3
-    }
+    if ok { 0 } else { -3 }
 }
 
 #[unsafe(no_mangle)]
@@ -682,11 +678,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_tablet_pos(
         ok = true;
     });
 
-    if ok {
-        0
-    } else {
-        -3
-    }
+    if ok { 0 } else { -3 }
 }
 
 #[embassy_executor::task]
@@ -1038,11 +1030,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
         attached += 1;
     }
 
-    if attached > 0 {
-        Ok(attached)
-    } else {
-        Err(())
-    }
+    if attached > 0 { Ok(attached) } else { Err(()) }
 }
 
 #[derive(Copy, Clone, Debug)]

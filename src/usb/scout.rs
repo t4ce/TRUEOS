@@ -1,10 +1,10 @@
 use super::xhci::{
-    self, decode_port_status, hi, lo, write_reg64, ErstEntry, EventRing, Trb, TrbRing, XhciContext,
-    MAX_XHCI_CONTROLLERS,
+    self, ErstEntry, EventRing, MAX_XHCI_CONTROLLERS, Trb, TrbRing, XhciContext,
+    decode_port_status, hi, lo, write_reg64,
 };
 use super::{
-    cdc_acm, disable_slot, enumerate_port, hid, mass, midi, uac, DeviceKind, UsbControllerState,
-    DEVICES, ENUM_READY, MAX_DEVICES, USB_LOG_VERBOSE,
+    DEVICES, DeviceKind, ENUM_READY, MAX_DEVICES, USB_LOG_VERBOSE, UsbControllerState, cdc_acm,
+    disable_slot, enumerate_port, hid, mass, midi, uac,
 };
 use crate::pci::dma;
 use core::mem::size_of;

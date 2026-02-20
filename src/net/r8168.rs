@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use core::cmp::min;
-use core::ptr::{read_volatile, write_volatile, NonNull};
-use core::sync::atomic::{compiler_fence, fence, Ordering};
+use core::ptr::{NonNull, read_volatile, write_volatile};
+use core::sync::atomic::{Ordering, compiler_fence, fence};
 
 use crate::net::core::VendorAdapter;
 use crate::net::ring::{DmaRegion, NetRing};
