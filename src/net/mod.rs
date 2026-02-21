@@ -359,11 +359,31 @@ pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
 
 pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec::Vec<u8>>) {
     with_device_at(index, |dev| {
+        let mut ok_count: u32 = 0;
+        let mut err_count: u32 = 0;
         for pkt in packets {
-            let _ = dev.transmit(&pkt);
+            match dev.transmit(&pkt) {
+                Ok(()) => {
+                    ok_count = ok_count.saturating_add(1);
+                }
+                Err(()) => {
+                    err_count = err_count.saturating_add(1);
+                }
+            }
             // TX path copies into device DMA buffers for all current NICs, so we can
             // immediately recycle the Vec backing storage.
             crate::net::ring::recycle_packet_buf(pkt);
+        }
+
+        // If this ever triggers, the stack is producing frames but the NIC backend is
+        // rejecting them (most commonly: TX ring full due to missing reclaim/poll).
+        if err_count != 0 {
+            crate::log!(
+                "net: tx-batch dev={} ok={} err={}\n",
+                index,
+                ok_count,
+                err_count
+            );
         }
     });
 }

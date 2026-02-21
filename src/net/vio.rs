@@ -1,5 +1,7 @@
 use alloc::vec::Vec;
 
+use core::sync::atomic::{Ordering, fence};
+
 use crate::net::core::VendorAdapter;
 use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
@@ -98,6 +100,11 @@ impl VirtQueue {
             core::ptr::write_volatile(self.avail_ring_ptr(self.avail_idx % self.size), desc_index);
             let idx_ptr = self.avail.add(2) as *mut u16;
             self.avail_idx = self.avail_idx.wrapping_add(1);
+
+            // Ensure descriptor and ring entry stores are visible to the device
+            // before we publish the new avail index.
+            fence(Ordering::Release);
+
             core::ptr::write_volatile(idx_ptr, self.avail_idx);
         }
     }
@@ -308,6 +315,9 @@ fn write_queue_addr(io_base: u16, pfn: u32) {
 }
 
 fn notify_queue(io_base: u16, queue: u16) {
+    // Ensure all queue memory writes (descriptors, avail ring) are visible
+    // before the MMIO/PIO notify.
+    fence(Ordering::SeqCst);
     unsafe { crate::portio::outw(io_base + VIRTIO_PCI_REG_QUEUE_NOTIFY, queue) };
 }
 
@@ -493,22 +503,40 @@ impl VirtioNetAdapter {
     fn tx_submit_hw(&mut self, frame: &[u8]) -> Result<(), ()> {
         let desc_id = match self.tx_free.pop() {
             Some(id) => id,
-            None => return Err(()),
+            None => {
+                // If this happens, TX will silently stall without additional visibility.
+                // Provide a lightweight breadcrumb for bring-up.
+                crate::log!(
+                    "net/vio: tx ring full (free=0) avail_idx={} used_idx={} last_used_idx={}\n",
+                    self.txq.avail_idx,
+                    self.txq.used_idx(),
+                    self.txq.last_used_idx
+                );
+                return Err(());
+            }
         };
 
         let buf = &self.tx_bufs[desc_id as usize];
+        let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
+        if copy_len != frame.len() {
+            crate::log!(
+                "net/vio: tx trunc frame_len={} copy_len={}\n",
+                frame.len(),
+                copy_len
+            );
+        }
+
         unsafe {
             // Zero the virtio-net header directly in the DMA buffer.
             core::ptr::write_bytes(buf.virt(), 0, VIRTIO_NET_HDR_SIZE);
             let dst = core::slice::from_raw_parts_mut(buf.virt(), TX_BUF_SIZE);
-            let copy_len = frame.len().min(TX_BUF_SIZE - VIRTIO_NET_HDR_SIZE);
             dst[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + copy_len]
                 .copy_from_slice(&frame[..copy_len]);
         }
 
         let desc = unsafe { &mut *self.txq.desc.add(desc_id as usize) };
         desc.addr = buf.phys();
-        desc.len = (frame.len() + VIRTIO_NET_HDR_SIZE) as u32;
+        desc.len = (copy_len + VIRTIO_NET_HDR_SIZE) as u32;
         desc.flags = 0;
         desc.next = 0;
 
