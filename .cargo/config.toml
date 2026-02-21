@@ -11,3 +11,8 @@ rustflags = [
 	"-C", "force-frame-pointers=yes"
 ]
 
+[env]
+# smoltcp generates config.rs at build time. The non-test default for
+# IFACE_MAX_ADDR_COUNT is 2, which is not enough for (v6 ll + v6 global + v4).
+SMOLTCP_IFACE_MAX_ADDR_COUNT = "4"
+

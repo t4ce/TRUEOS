@@ -33,6 +33,8 @@ cargo outdated -R
 cargo upgrade
 cargo update
 
+cargo clippy --fix --broken-code --bin "TRUEOS" -p TRUEOS
+
 
 sudo apt-get update
 # mkfs.vfat is provided by dosfstools (required by Makefile ISO build).
