@@ -456,7 +456,7 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "boot-netbench",
         disabled: !BOOT_NETBENCH_ENABLED,
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: 0,
         started: &BOOT_NETBENCH_STARTED,
         spawn: spawn_boot_netbench,
     },

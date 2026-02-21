@@ -117,6 +117,8 @@ struct InternalNetbenchState {
     start_tick: u64,
     last_log_tick: u64,
     last_log_received: u64,
+
+    last_tcp_state: Option<tcp::State>,
 }
 
 // Boot can involve several concurrent TCP/TLS connections (DoH/DoT, fetches,
@@ -279,6 +281,17 @@ static NET_TX_FRAMES_AT: [AtomicU64; MAX_NET_DEVICES] = [
     AtomicU64::new(0),
 ];
 static NET_DHCP_OFFERS_RX_AT: [AtomicU64; MAX_NET_DEVICES] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+static NET_ARP_RX_AT: [AtomicU64; MAX_NET_DEVICES] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -672,9 +685,95 @@ impl<'a> Device for AdapterDeviceAt<'a> {
             if packet.len() >= 14 {
                 let mut et = u16::from_be_bytes([packet[12], packet[13]]);
                 let mut l2_off = 14usize;
+                let mut vlan_tci: Option<u16> = None;
                 if et == 0x8100 && packet.len() >= 18 {
+                    vlan_tci = Some(u16::from_be_bytes([packet[14], packet[15]]));
                     et = u16::from_be_bytes([packet[16], packet[17]]);
                     l2_off = 18;
+                }
+
+                // ARP tap: log a few ARP frames so we can confirm whether we ever
+                // receive a reply for the gateway (required for IPv4 egress).
+                if et == 0x0806 && packet.len() >= l2_off + 28 {
+                    let arp_count = NET_ARP_RX_AT
+                        .get(self.index)
+                        .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
+                        .unwrap_or(1);
+                    let opcode =
+                        u16::from_be_bytes([packet[l2_off + 6], packet[l2_off + 7]]);
+                    // Always log replies; sample requests.
+                    if opcode == 2 || arp_count <= 32 {
+                        let sha = &packet[l2_off + 8..l2_off + 14];
+                        let spa = [
+                            packet[l2_off + 14],
+                            packet[l2_off + 15],
+                            packet[l2_off + 16],
+                            packet[l2_off + 17],
+                        ];
+                        let tha = &packet[l2_off + 18..l2_off + 24];
+                        let tpa = [
+                            packet[l2_off + 24],
+                            packet[l2_off + 25],
+                            packet[l2_off + 26],
+                            packet[l2_off + 27],
+                        ];
+                        if let Some(tci) = vlan_tci {
+                            crate::log!(
+                                "net: arp-rx dev={} vlan=0x{:04x} n={} op={} sha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} spa={}.{}.{}.{} tha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} tpa={}.{}.{}.{}\n",
+                                self.index,
+                                tci,
+                                arp_count,
+                                opcode,
+                                sha[0],
+                                sha[1],
+                                sha[2],
+                                sha[3],
+                                sha[4],
+                                sha[5],
+                                spa[0],
+                                spa[1],
+                                spa[2],
+                                spa[3],
+                                tha[0],
+                                tha[1],
+                                tha[2],
+                                tha[3],
+                                tha[4],
+                                tha[5],
+                                tpa[0],
+                                tpa[1],
+                                tpa[2],
+                                tpa[3]
+                            );
+                        } else {
+                            crate::log!(
+                                "net: arp-rx dev={} n={} op={} sha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} spa={}.{}.{}.{} tha={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} tpa={}.{}.{}.{}\n",
+                                self.index,
+                                arp_count,
+                                opcode,
+                                sha[0],
+                                sha[1],
+                                sha[2],
+                                sha[3],
+                                sha[4],
+                                sha[5],
+                                spa[0],
+                                spa[1],
+                                spa[2],
+                                spa[3],
+                                tha[0],
+                                tha[1],
+                                tha[2],
+                                tha[3],
+                                tha[4],
+                                tha[5],
+                                tpa[0],
+                                tpa[1],
+                                tpa[2],
+                                tpa[3]
+                            );
+                        }
+                    }
                 }
 
                 if et == 0x0800 && packet.len() >= l2_off + 20 {
@@ -927,12 +1026,10 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
             .map(|c| c.fetch_add(1, Ordering::Relaxed) + 1)
             .unwrap_or(new_total);
 
-        // TX tap: log only the first few frames per NIC so we can verify
-        // DHCP is actually being emitted on the wire.
-        if NET_LOG_TX_TAP && new_dev_total <= 8 {
+        // TX tap: only log IPv4/TCP frames for bring-up. This avoids drowning in
+        // NDP/ARP chatter while still letting us confirm SYN emission.
+        if NET_LOG_TX_TAP && new_dev_total <= 8192 {
             if buf.len() >= 14 {
-                let dst = &buf[0..6];
-                let src = &buf[6..12];
                 let mut et = u16::from_be_bytes([buf[12], buf[13]]);
                 let mut l2_off = 14usize;
                 if et == 0x8100 && buf.len() >= 18 {
@@ -940,24 +1037,148 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                     l2_off = 18;
                 }
 
-                crate::log!(
-                    "net: tx-tap dev={} len={} et=0x{:04x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                    self.index,
-                    buf.len(),
-                    et,
-                    dst[0],
-                    dst[1],
-                    dst[2],
-                    dst[3],
-                    dst[4],
-                    dst[5],
-                    src[0],
-                    src[1],
-                    src[2],
-                    src[3],
-                    src[4],
-                    src[5]
-                );
+                // Minimal ARP tap (helps diagnose missing gateway MAC resolution).
+                if et == 0x0806 && buf.len() >= l2_off + 28 {
+                    let opcode = u16::from_be_bytes([buf[l2_off + 6], buf[l2_off + 7]]);
+                    let spa = [
+                        buf[l2_off + 14],
+                        buf[l2_off + 15],
+                        buf[l2_off + 16],
+                        buf[l2_off + 17],
+                    ];
+                    let tpa = [
+                        buf[l2_off + 24],
+                        buf[l2_off + 25],
+                        buf[l2_off + 26],
+                        buf[l2_off + 27],
+                    ];
+                    crate::log!(
+                        "net: tx-tap dev={} arp op={} spa={}.{}.{}.{} tpa={}.{}.{}.{}\n",
+                        self.index,
+                        opcode,
+                        spa[0],
+                        spa[1],
+                        spa[2],
+                        spa[3],
+                        tpa[0],
+                        tpa[1],
+                        tpa[2],
+                        tpa[3]
+                    );
+                }
+
+                if et == 0x0800 && buf.len() >= l2_off + 20 {
+                    let ver_ihl = buf[l2_off];
+                    if (ver_ihl >> 4) == 4 {
+                        let ihl = ((ver_ihl & 0x0f) as usize) * 4;
+                        if ihl >= 20 && buf.len() >= l2_off + ihl {
+                            let proto = buf[l2_off + 9];
+
+                            // Lightweight IPv4 TX summary (rate-limited): lets us see
+                            // the actual source IP used after DHCP reconfiguration.
+                            if new_dev_total <= 256 {
+                                let src_ip = [
+                                    buf[l2_off + 12],
+                                    buf[l2_off + 13],
+                                    buf[l2_off + 14],
+                                    buf[l2_off + 15],
+                                ];
+                                let dst_ip = [
+                                    buf[l2_off + 16],
+                                    buf[l2_off + 17],
+                                    buf[l2_off + 18],
+                                    buf[l2_off + 19],
+                                ];
+                                crate::log!(
+                                    "net: tx4 dev={} {}.{}.{}.{} -> {}.{}.{}.{} proto={} len={}\n",
+                                    self.index,
+                                    src_ip[0],
+                                    src_ip[1],
+                                    src_ip[2],
+                                    src_ip[3],
+                                    dst_ip[0],
+                                    dst_ip[1],
+                                    dst_ip[2],
+                                    dst_ip[3],
+                                    proto,
+                                    buf.len()
+                                );
+                            }
+
+                            if proto == 1 {
+                                // ICMP header is 8 bytes; don't require TCP-sized payload.
+                                if buf.len() >= l2_off + ihl + 8 {
+                                    let src_ip = [
+                                        buf[l2_off + 12],
+                                        buf[l2_off + 13],
+                                        buf[l2_off + 14],
+                                        buf[l2_off + 15],
+                                    ];
+                                    let dst_ip = [
+                                        buf[l2_off + 16],
+                                        buf[l2_off + 17],
+                                        buf[l2_off + 18],
+                                        buf[l2_off + 19],
+                                    ];
+                                    let icmp_off = l2_off + ihl;
+                                    let icmp_type = buf.get(icmp_off).copied().unwrap_or(0);
+                                    let icmp_code = buf.get(icmp_off + 1).copied().unwrap_or(0);
+                                    crate::log!(
+                                        "net: tx-tap dev={} icmp4 {}.{}.{}.{} -> {}.{}.{}.{} type={} code={}\n",
+                                        self.index,
+                                        src_ip[0],
+                                        src_ip[1],
+                                        src_ip[2],
+                                        src_ip[3],
+                                        dst_ip[0],
+                                        dst_ip[1],
+                                        dst_ip[2],
+                                        dst_ip[3],
+                                        icmp_type,
+                                        icmp_code
+                                    );
+                                }
+                            }
+                            if proto == 6 {
+                                if buf.len() >= l2_off + ihl + 20 {
+                                    let src_ip = [
+                                        buf[l2_off + 12],
+                                        buf[l2_off + 13],
+                                        buf[l2_off + 14],
+                                        buf[l2_off + 15],
+                                    ];
+                                    let dst_ip = [
+                                        buf[l2_off + 16],
+                                        buf[l2_off + 17],
+                                        buf[l2_off + 18],
+                                        buf[l2_off + 19],
+                                    ];
+                                    let tcp_off = l2_off + ihl;
+                                    let sport =
+                                        u16::from_be_bytes([buf[tcp_off], buf[tcp_off + 1]]);
+                                    let dport =
+                                        u16::from_be_bytes([buf[tcp_off + 2], buf[tcp_off + 3]]);
+                                    let flags = buf[tcp_off + 13];
+                                    crate::log!(
+                                        "net: tx-tap dev={} tcp {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}\n",
+                                        self.index,
+                                        src_ip[0],
+                                        src_ip[1],
+                                        src_ip[2],
+                                        src_ip[3],
+                                        sport,
+                                        dst_ip[0],
+                                        dst_ip[1],
+                                        dst_ip[2],
+                                        dst_ip[3],
+                                        dport,
+                                        flags
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if et == 0x0800 && buf.len() >= l2_off + 20 {
                     let ver_ihl = buf[l2_off];
@@ -1110,8 +1331,6 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                         }
                     }
                 }
-            } else {
-                crate::log!("net: tx-tap dev={} len={} (short)\n", self.index, buf.len());
             }
         }
 
@@ -1217,6 +1436,16 @@ struct NetService {
 impl NetService {
     fn new(device_index: usize) -> Self {
         let mac = crate::net::mac_address_at(device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
+        crate::log!(
+            "net: dev={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            device_index,
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
+        );
         let hw_addr = HardwareAddress::Ethernet(EthernetAddress(mac));
 
         let mut cfg = IfaceConfig::new(hw_addr);
@@ -1529,6 +1758,7 @@ impl NetService {
                     start_tick: now_tick,
                     last_log_tick: now_tick,
                     last_log_received: 0,
+                    last_tcp_state: None,
                 });
 
                 did_work = true;
@@ -1540,6 +1770,22 @@ impl NetService {
         };
 
         let sock = self.sockets.get_mut::<tcp::Socket>(st.socket);
+
+        // Log TCP state transitions for bring-up debugging.
+        let cur_state = sock.state();
+        if st.last_tcp_state != Some(cur_state) {
+            st.last_tcp_state = Some(cur_state);
+            crate::log!(
+                "netbench-internal: tcp state={:?} open={} active={} can_send={} may_send={} can_recv={} may_recv={}\n",
+                cur_state,
+                sock.is_open() as u8,
+                sock.is_active() as u8,
+                sock.can_send() as u8,
+                sock.may_send() as u8,
+                sock.can_recv() as u8,
+                sock.may_recv() as u8
+            );
+        }
 
         // Send request once we can send.
         if !st.request_sent
@@ -1631,10 +1877,11 @@ impl NetService {
                 };
 
                 crate::log!(
-                    "netbench-internal: rx={} inst={} avg={}\n",
+                    "netbench-internal: rx={} inst={} avg={} state={:?}\n",
                     st.received,
                     internal_netbench_format_speed(inst_bps),
-                    internal_netbench_format_speed(bps)
+                    internal_netbench_format_speed(bps),
+                    cur_state
                 );
             }
         }
@@ -3085,6 +3332,7 @@ impl NetService {
             Some(dhcpv4::Event::Configured(config)) => {
                 let ip = config.address.address();
                 let ip_o = ip.octets();
+                let prefix_len = config.address.prefix_len();
                 let had_lease = self.dhcp_has_lease;
                 self.dhcp_has_lease = true;
 
@@ -3096,6 +3344,7 @@ impl NetService {
 
                 self.local_ipv4 = Some(config.address.address());
                 self.router_ipv4 = config.router;
+
                 if let Some(router) = config.router {
                     let r = router.octets();
                     crate::log!(
@@ -3140,10 +3389,77 @@ impl NetService {
                     let _ = addrs.push(IpCidr::Ipv4(config.address));
                 });
 
+                if NET_LOG_DHCP_VERBOSE {
+                    crate::log!(
+                        "net: dhcp apply dev={} ipv4_cidr={}.{}.{}.{} /{} iface_addrs={}\n",
+                        self.device_index,
+                        ip_o[0],
+                        ip_o[1],
+                        ip_o[2],
+                        ip_o[3],
+                        prefix_len,
+                        self.iface.ip_addrs().len()
+                    );
+                    for (i, cidr) in self.iface.ip_addrs().iter().copied().enumerate() {
+                        match cidr.address() {
+                            IpAddress::Ipv4(v4) => {
+                                let o = v4.octets();
+                                crate::log!(
+                                    "net: dhcp iface_addr dev={} idx={} v4={}.{}.{}.{} /{}\n",
+                                    self.device_index,
+                                    i,
+                                    o[0],
+                                    o[1],
+                                    o[2],
+                                    o[3],
+                                    cidr.prefix_len()
+                                );
+                            }
+                            IpAddress::Ipv6(v6) => {
+                                let o = v6.octets();
+                                crate::log!(
+                                    "net: dhcp iface_addr dev={} idx={} v6={:02x}{:02x}:{:02x}{:02x}:... /{}\n",
+                                    self.device_index,
+                                    i,
+                                    o[0],
+                                    o[1],
+                                    o[2],
+                                    o[3],
+                                    cidr.prefix_len()
+                                );
+                            }
+                        }
+                    }
+                }
+
                 let routes = self.iface.routes_mut();
                 routes.remove_default_ipv4_route();
                 if let Some(router) = config.router {
-                    let _ = routes.add_default_ipv4_route(router);
+                    match routes.add_default_ipv4_route(router) {
+                        Ok(_route) => {
+                            let r = router.octets();
+                            crate::log!(
+                                "net: route v4 default dev={} gw={}.{}.{}.{} ok\n",
+                                self.device_index,
+                                r[0],
+                                r[1],
+                                r[2],
+                                r[3]
+                            );
+                        }
+                        Err(e) => {
+                            let r = router.octets();
+                            crate::log!(
+                                "net: route v4 default dev={} gw={}.{}.{}.{} err={:?}\n",
+                                self.device_index,
+                                r[0],
+                                r[1],
+                                r[2],
+                                r[3],
+                                e
+                            );
+                        }
+                    }
                 }
 
                 self.dhcp_dns = [[0u8; 4]; DHCP_DNS_MAX];

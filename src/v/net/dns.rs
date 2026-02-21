@@ -103,6 +103,42 @@ impl DnsConfig {
             cname_depth: 6,
         }
     }
+
+    /// DNS config that uses IPv4 resolvers only.
+    ///
+    /// This is useful for IPv4-only workflows (like the boot netbench URL),
+    /// where trying IPv6 resolvers first can introduce unnecessary delays or
+    /// confusing logs on networks with partial/broken IPv6.
+    pub fn for_device_v4_only(dev_idx: usize) -> Self {
+        let (dhcp4, dhcp4_count) = crate::net::adapter::dhcp_dns_snapshot_at(dev_idx)
+            .unwrap_or_else(crate::net::adapter::primary_dhcp_dns_snapshot);
+
+        let mut servers = [DnsServer::V4([0u8; 4]); 8];
+        let mut n: u8 = 0;
+
+        for i in 0..(dhcp4_count as usize).min(dhcp4.len()) {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V4(dhcp4[i]);
+            n = n.saturating_add(1);
+        }
+        for s in PUBLIC_DNS_SERVERS_V4.iter() {
+            if (n as usize) >= servers.len() {
+                break;
+            }
+            servers[n as usize] = DnsServer::V4(*s);
+            n = n.saturating_add(1);
+        }
+
+        Self {
+            servers,
+            server_count: n,
+            timeout_ms: 4000,
+            resend_ms: 500,
+            cname_depth: 6,
+        }
+    }
 }
 
 pub const PUBLIC_DNS_SERVERS: [[u8; 4]; 3] = [
