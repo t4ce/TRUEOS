@@ -28,6 +28,14 @@ pub trait NetDevice {
     }
     /// Transmit a raw Ethernet frame.
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
+
+    /// Return current link state (if known).
+    ///
+    /// Default is "down/unknown" so backends that don't support link probing
+    /// don't need to implement it.
+    fn link_state(&self) -> LinkState {
+        LinkState::down()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

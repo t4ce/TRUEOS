@@ -5,6 +5,7 @@ use core::ptr::{NonNull, read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, compiler_fence, fence};
 
 use crate::net::core::VendorAdapter;
+use crate::net::device::LinkState;
 use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
 
@@ -35,6 +36,10 @@ const REG_RDSAR_HI: u16 = 0xE8;
 const REG_CPLUS_CMD: u16 = 0xE0;
 const REG_RX_MAX_SIZE: u16 = 0xDA;
 const REG_PHYSTAT: u16 = 0x6C;
+const REG_CFG9346: u16 = 0x50;
+
+const CFG9346_LOCK: u8 = 0x00;
+const CFG9346_UNLOCK: u8 = 0xC0;
 
 const CMD_RX_EN: u8 = 1 << 3;
 const CMD_TX_EN: u8 = 1 << 2;
@@ -154,12 +159,19 @@ pub struct R8168Adapter {
     dbg_poll_ticks: u64,
     dbg_state_dumps: u64,
     dbg_isr_nonzero: u64,
+
+    dbg_tx_link_down_drops: u64,
 }
 
 // Safety: this adapter is driven by the net task and protected by the global net mutex.
 unsafe impl Send for R8168Adapter {}
 
 impl R8168Adapter {
+    #[inline]
+    fn phy_link_up(phystat: u8) -> bool {
+        (phystat & 0x01) != 0
+    }
+
     fn log_hw_state(&mut self, reason: &str) {
         self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
         let (cmd, isr, imr, rcr, tcr, cplus, rms, phy, rds_lo, rds_hi, tnp_lo, tnp_hi) = unsafe {
@@ -374,6 +386,14 @@ impl R8168Adapter {
 
         // Program descriptor bases + enable C+ mode.
         unsafe {
+            // Stop engines while programming baseline datapath registers.
+            mmio.write_u8(REG_CMD, 0);
+            mmio.write_u16(REG_IMR, 0);
+            mmio.write_u16(REG_ISR, 0xFFFF);
+
+            // Unlock Realtek config writes.
+            mmio.write_u8(REG_CFG9346, CFG9346_UNLOCK);
+
             // C+ mode on (descriptor mode). Keep it minimal.
             let cplus = mmio.read_u16(REG_CPLUS_CMD);
             let mut cplus_new = cplus | CPLUS_ENABLE;
@@ -394,9 +414,26 @@ impl R8168Adapter {
             mmio.write_u32(REG_RCR, 0x0000E70F);
             mmio.write_u32(REG_TCR, 0x03000700);
 
+            // Lock config back down.
+            mmio.write_u8(REG_CFG9346, CFG9346_LOCK);
+
             // Enable Rx/Tx
             mmio.write_u8(REG_CMD, CMD_RX_EN | CMD_TX_EN);
         }
+
+        let (rcr_rb, tcr_rb, cplus_rb) = unsafe {
+            (
+                mmio.read_u32(REG_RCR),
+                mmio.read_u32(REG_TCR),
+                mmio.read_u16(REG_CPLUS_CMD),
+            )
+        };
+        crate::log!(
+            "net/r8168: cfg rb rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x}\n",
+            rcr_rb,
+            tcr_rb,
+            cplus_rb
+        );
 
         crate::log!(
             "net/r8168: mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
@@ -450,6 +487,8 @@ impl R8168Adapter {
             dbg_poll_ticks: 0,
             dbg_state_dumps: 0,
             dbg_isr_nonzero: 0,
+
+            dbg_tx_link_down_drops: 0,
         })
     }
 
@@ -755,6 +794,19 @@ impl R8168Adapter {
             return Ok(());
         }
 
+        let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+        if !Self::phy_link_up(phy) {
+            self.dbg_tx_link_down_drops = self.dbg_tx_link_down_drops.saturating_add(1);
+            if self.dbg_tx_link_down_drops <= 8 || (self.dbg_tx_link_down_drops & 0x3FF) == 0 {
+                crate::log!(
+                    "net/r8168: drop tx (link down) count={} phystat=0x{:02x}\n",
+                    self.dbg_tx_link_down_drops,
+                    phy
+                );
+            }
+            return Err(());
+        }
+
         // Don't rely on RX polling cadence to free TX descriptors.
         self.reclaim_tx();
 
@@ -881,6 +933,15 @@ impl VendorAdapter for R8168Adapter {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.transmit_hw(frame)
+    }
+
+    fn link_state(&self) -> LinkState {
+        let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+        LinkState {
+            up: (phy & 0x01) != 0,
+            speed_mbps: 0,
+            full_duplex: false,
+        }
     }
 
     #[inline]

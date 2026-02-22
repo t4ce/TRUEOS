@@ -11,7 +11,7 @@ use super::{
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use heapless::String;
 macro_rules! usbv {
     ($($tt:tt)*) => {{
@@ -24,6 +24,16 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 static LOG_ROOT_SLOT_CTX_ONCE: AtomicBool = AtomicBool::new(false);
 static LOG_ROOT_ADDRDEV_FAIL_ONCE: AtomicBool = AtomicBool::new(false);
+
+// Enumeration can be triggered repeatedly by the scout loop when a port reports CCS but the
+// device cannot complete the early Address Device step (common with flaky internal headers).
+// Rate-limit these logs to keep streaming console output readable.
+static ADDRDEV_FAIL_COUNT: [[AtomicU32; super::LOG_PORTS_MAX]; xhci::MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; super::LOG_PORTS_MAX] }; xhci::MAX_XHCI_CONTROLLERS];
+
+// Cache which VID:PID we've already printed strings for per controller+port.
+static STR_KEY: [[AtomicU32; super::LOG_PORTS_MAX]; xhci::MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; super::LOG_PORTS_MAX] }; xhci::MAX_XHCI_CONTROLLERS];
 const USB_EVENT_POLL_DELAY_MS: u64 = 1;
 const CMD_TIMEOUT_SHORT_ITERS: usize = 400;
 const CMD_TIMEOUT_DEFAULT_ITERS: usize = 800;
@@ -417,11 +427,23 @@ pub(crate) async fn enumerate_with_params(
                 target_port,
                 slot_id
             );
-            crate::log!(
-                "usb: enum port {} address-device timeout slot={}\n",
-                target_port,
-                slot_id
-            );
+
+            let controller_id = state.info.controller_id;
+            let port_log_idx = (target_port as usize)
+                .saturating_sub(1)
+                .min(super::LOG_PORTS_MAX - 1);
+            let count = ADDRDEV_FAIL_COUNT[controller_id][port_log_idx]
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1);
+            let should_log = count == 1 || (count % 50) == 0;
+            if should_log {
+                crate::log!(
+                    "usb: enum port {} address-device timeout slot={} (attempt {})\n",
+                    target_port,
+                    slot_id,
+                    count
+                );
+            }
             disable_slot_and_free(
                 state,
                 slot_id,
@@ -442,12 +464,24 @@ pub(crate) async fn enumerate_with_params(
             control::trb_cc(&addr_evt),
             slot_id
         );
-        crate::log!(
-            "usb: enum port {} address-device failed cc={} slot={}\n",
-            target_port,
-            control::trb_cc(&addr_evt),
-            slot_id
-        );
+
+        let controller_id = state.info.controller_id;
+        let port_log_idx = (target_port as usize)
+            .saturating_sub(1)
+            .min(super::LOG_PORTS_MAX - 1);
+        let count = ADDRDEV_FAIL_COUNT[controller_id][port_log_idx]
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let should_log = count == 1 || (count % 50) == 0;
+        if should_log {
+            crate::log!(
+                "usb: enum port {} address-device failed cc={} slot={} (attempt {})\n",
+                target_port,
+                control::trb_cc(&addr_evt),
+                slot_id,
+                count
+            );
+        }
         if !LOG_ROOT_ADDRDEV_FAIL_ONCE.swap(true, Ordering::AcqRel) {
             crate::log!(
                 "usb: root addrdev fail evt=[0x{:08X} 0x{:08X} 0x{:08X} 0x{:08X}] slot_dw0=0x{:08X} slot_dw1=0x{:08X} slot_dw2=0x{:08X} ep0_dw0=0x{:08X} ep0_dw1=0x{:08X}\n",
@@ -472,6 +506,15 @@ pub(crate) async fn enumerate_with_params(
         )
         .await;
         return;
+    }
+
+    // Success: reset the failure counter for this port so future transient errors still log.
+    {
+        let controller_id = state.info.controller_id;
+        let port_log_idx = (target_port as usize)
+            .saturating_sub(1)
+            .min(super::LOG_PORTS_MAX - 1);
+        ADDRDEV_FAIL_COUNT[controller_id][port_log_idx].store(0, Ordering::Relaxed);
     }
 
     if !LOG_ROOT_SLOT_CTX_ONCE.swap(true, Ordering::AcqRel) {
@@ -615,6 +658,34 @@ pub(crate) async fn enumerate_with_params(
             vid, pid, dd[4], dd[5], dd[6], dd[7], dd[14], dd[15], dd[16], dd[17],
         )
     };
+
+    // Print device strings once per port+VID:PID so shells/streaming logs can identify devices.
+    {
+        let controller_id = state.info.controller_id;
+        let port_log_idx = (target_port as usize)
+            .saturating_sub(1)
+            .min(super::LOG_PORTS_MAX - 1);
+        let key = ((dev_vid as u32) << 16) | (dev_pid as u32);
+        let prev = STR_KEY[controller_id][port_log_idx].load(Ordering::Relaxed);
+        if prev != key {
+            STR_KEY[controller_id][port_log_idx].store(key, Ordering::Relaxed);
+            if dev_i_mfr != 0 || dev_i_prod != 0 {
+                let (dev_mfr, dev_prod) =
+                    fetch_device_strings_pair(&ctx, &mut ep0_ring, slot_id, dev_i_mfr, dev_i_prod)
+                        .await;
+                if !(dev_mfr.is_empty() && dev_prod.is_empty()) {
+                    crate::log!(
+                        "usb: device strings port={} vid=0x{:04X} pid=0x{:04X} mfr='{}' prod='{}'\n",
+                        target_port,
+                        dev_vid,
+                        dev_pid,
+                        dev_mfr.as_str(),
+                        dev_prod.as_str()
+                    );
+                }
+            }
+        }
+    }
 
     let (cfg_phys, cfg_virt) = match dma::alloc(256, 64) {
         Some(pair) => pair,

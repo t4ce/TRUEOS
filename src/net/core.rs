@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
-use crate::net::device::NetDevice;
+use crate::net::device::{LinkState, NetDevice};
 use crate::net::ring::NetRing;
 
 pub trait VendorAdapter {
@@ -10,6 +10,11 @@ pub trait VendorAdapter {
     fn poll_rx(&mut self);
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
+
+    #[inline]
+    fn link_state(&self) -> LinkState {
+        LinkState::down()
+    }
 
     #[inline]
     fn pci_device(&self) -> Option<crate::pci::PciDevice> {
@@ -78,5 +83,9 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()> {
         self.adapter.transmit(frame)
+    }
+
+    fn link_state(&self) -> LinkState {
+        self.adapter.link_state()
     }
 }

@@ -3,7 +3,7 @@ use fontdue::{Font, FontSettings};
 use libm::{cosf, roundf, sinf};
 use spin::Once;
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+// NOTE: VGA is immediate-mode into the Limine framebuffer.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -53,17 +53,6 @@ static TOP_MARGIN: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_NEXT_Y: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Copy, Clone, Debug)]
-struct SavedPixel {
-    x: i32,
-    y: i32,
-    color: u32,
-}
-
-// Saved pixels for the previous cursor overlay so we can restore exactly what was under it.
-static MOUSEVIZ_SAVED: spin::Mutex<heapless::Vec<SavedPixel, 768>> =
-    spin::Mutex::new(heapless::Vec::new());
-
 fn log_advance_line(fb_height: usize, current_y: usize) -> usize {
     let start_y = TOP_MARGIN.load(Ordering::Relaxed);
     let mut next = current_y.saturating_add(LOG_LINE_HEIGHT);
@@ -81,7 +70,7 @@ struct VgaLogWriter {
 
 impl fmt::Write for VgaLogWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if log(s, self.fg, self.bg, self.shadow) {
+        if log_colored(s, self.fg, self.bg, self.shadow) {
             Ok(())
         } else {
             Err(fmt::Error)
@@ -139,7 +128,7 @@ fn render_framebuffer_banner(text: &str) -> bool {
     .unwrap_or(false)
 }
 
-pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
+fn log_colored(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
     with_framebuffer(|fb| {
         let start_y = TOP_MARGIN.load(Ordering::Relaxed);
 
@@ -177,7 +166,7 @@ pub fn log(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
     .unwrap_or(false)
 }
 
-pub fn log_fmt(args: fmt::Arguments<'_>) -> bool {
+pub fn log(args: fmt::Arguments<'_>) -> bool {
     let (fg, bg, shadow) =
         current_colors().unwrap_or((DEFAULT_FG_COLOR, DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR));
     let mut w = VgaLogWriter { fg, bg, shadow };
@@ -244,91 +233,6 @@ pub fn draw_header_square(
 
 fn with_framebuffer<R>(f: impl FnOnce(&FramebufferSurface) -> R) -> Option<R> {
     FRAMEBUFFER.get().and_then(|fb| fb.as_ref()).map(f)
-}
-
-pub fn overlay_mouse_dots() {
-    let _ = with_framebuffer(|fb| {
-        // Restore pixels from the previous overlay (non-destructive).
-        {
-            let mut saved = MOUSEVIZ_SAVED.lock();
-            for p in saved.iter().copied() {
-                fb.plot(p.x, p.y, p.color);
-            }
-            saved.clear();
-        }
-
-        // Snapshot cursor positions up-front so we don't hold the HID runtime lock while drawing.
-        let mice = crate::usb::hid::mouse_cursor_snapshot();
-        let tablets = crate::usb::hid::tablet_cursor_snapshot();
-
-        // Draw new cursor circles and save what was underneath.
-        let w = fb.width.saturating_sub(1) as f32;
-        let h = fb.height.saturating_sub(1) as f32;
-        let mut saved = MOUSEVIZ_SAVED.lock();
-
-        #[inline]
-        fn draw_ring(
-            fb: &FramebufferSurface,
-            saved: &mut heapless::Vec<SavedPixel, 768>,
-            x: i32,
-            y: i32,
-            color: u32,
-        ) {
-            // Non-filled circle, radius 3px, centered at (x,y).
-            const R: i32 = 3;
-            const R2: i32 = R * R;
-            for oy in -R..=R {
-                for ox in -R..=R {
-                    let d2 = ox * ox + oy * oy;
-                    // 1px-thick ring approximation.
-                    if (d2 - R2).abs() > 2 {
-                        continue;
-                    }
-
-                    let px = x + ox;
-                    let py = y + oy;
-
-                    // Save underlying pixel once per frame so we can restore it later.
-                    if saved.iter().any(|p| p.x == px && p.y == py) {
-                        continue;
-                    }
-                    let Some(under) = fb.read_if_visible(px, py) else {
-                        continue;
-                    };
-                    let _ = saved.push(SavedPixel {
-                        x: px,
-                        y: py,
-                        color: under,
-                    });
-                    fb.plot(px, py, color);
-                }
-            }
-        }
-
-        for (mx, my) in mice {
-            let x = roundf((mx as f32) * w) as i32;
-            let y = roundf((my as f32) * h) as i32;
-            draw_ring(fb, &mut saved, x, y, 0x00_00_FF_00);
-        }
-
-        // Tablets: same cursor circle, different color.
-        for (mx, my) in tablets {
-            let x = roundf((mx as f32) * w) as i32;
-            let y = roundf((my as f32) * h) as i32;
-            draw_ring(fb, &mut saved, x, y, 0x00_FF_00_FF);
-        }
-    });
-}
-
-#[embassy_executor::task]
-pub(crate) async fn mouseviz_task() {
-    async move {
-        loop {
-            overlay_mouse_dots();
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-        }
-    }
-    .await;
 }
 
 fn update_layout(fb: &FramebufferSurface) {
@@ -511,6 +415,7 @@ impl FramebufferSurface {
         }
     }
 
+    #[allow(dead_code)]
     fn read_pixel(&self, x: usize, y: usize) -> u32 {
         let offset = y
             .saturating_mul(self.pitch)
@@ -529,6 +434,7 @@ impl FramebufferSurface {
         self.write_pixel(xu, yu, color);
     }
 
+    #[allow(dead_code)]
     fn read_if_visible(&self, x: i32, y: i32) -> Option<u32> {
         if x < 0 || y < 0 {
             return None;
@@ -1085,16 +991,6 @@ fn build_font_cache_large() -> FontCacheLarge {
     }
 
     FontCacheLarge { glyphs, index }
-}
-
-#[allow(dead_code)]
-pub fn draw_line(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
-    let _ = with_framebuffer(|fb| fb.draw_line(x0, y0, x1, y1, color));
-}
-
-#[allow(dead_code)]
-pub fn clear_rect(origin_x: usize, origin_y: usize, width: usize, height: usize, color: u32) {
-    let _ = with_framebuffer(|fb| fb.clear_rect(origin_x, origin_y, width, height, color));
 }
 
 pub fn blit_image(origin_x: usize, origin_y: usize, image: &Image<'_>) -> bool {

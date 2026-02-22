@@ -158,19 +158,7 @@ pub(crate) fn cmd_set(
         return CommandAction::None;
     }
 
-    *ctx.term_cols = cols;
-    *ctx.term_rows = rows;
-
-    crate::shell::apply_shell_scroll_region(ctx.io, rows);
-    // Restore cursor to safe area (Row 3) because DECSTBM resets to (1,1)
-    ctx.io
-        .write_fmt(format_args!("{}", crate::ecma48::pos(3, 1)));
-
-    let mut buf: heapless::String<64> = heapless::String::new();
-    let _ = write!(&mut buf, "term set: {}x{}\r\n", cols, rows);
-    ctx.io.write_str(buf.as_str());
-    crate::shell::draw_corners(ctx.io, cols, rows);
-    CommandAction::None
+    CommandAction::SetTermSize { cols, rows }
 }
 
 pub(crate) fn cmd_cube(

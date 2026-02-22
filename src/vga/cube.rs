@@ -118,10 +118,70 @@ pub fn tick() {
         // Clear the cube tile so it stands out cleanly.
         fb.clear_rect(origin_x, origin_y, size, size, super::DEFAULT_BG_COLOR);
         draw_wire_cube(fb, origin_x as i32, origin_y as i32, size as i32, q);
+
+        // Cursor visualization (mouse/tablet) is drawn inside this reserved BSP tile.
+        // This preserves the "partitioned immediate-mode" VGA model: no global overlay and
+        // no restore step that could clobber other producers' pixels.
+        draw_cursor_rings_in_tile(fb, origin_x as i32, origin_y as i32, size as i32);
     });
 
     // Keep the boot logo visible even if overlays draw after it.
     crate::efi::acpi::bgrt::log_once();
+}
+
+fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, size: i32) {
+    if size <= 2 {
+        return;
+    }
+
+    // Snapshot cursor positions up-front so we don't hold the HID runtime lock while drawing.
+    let mice = crate::usb::hid::mouse_cursor_snapshot();
+    let tablets = crate::usb::hid::tablet_cursor_snapshot();
+
+    let span = (size - 1).max(1) as f32;
+
+    #[inline]
+    fn draw_ring_clipped(
+        fb: &super::FramebufferSurface,
+        ox: i32,
+        oy: i32,
+        size: i32,
+        x: i32,
+        y: i32,
+        color: u32,
+    ) {
+        const R: i32 = 3;
+        const R2: i32 = R * R;
+        let max_x = ox + size;
+        let max_y = oy + size;
+
+        for dy in -R..=R {
+            for dx in -R..=R {
+                let d2 = dx * dx + dy * dy;
+                if (d2 - R2).abs() > 2 {
+                    continue;
+                }
+                let px = x + dx;
+                let py = y + dy;
+                if px < ox || py < oy || px >= max_x || py >= max_y {
+                    continue;
+                }
+                fb.plot(px, py, color);
+            }
+        }
+    }
+
+    for (mx, my) in mice {
+        let x = ox + roundf((mx as f32) * span) as i32;
+        let y = oy + roundf((my as f32) * span) as i32;
+        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_00_FF_00);
+    }
+
+    for (tx, ty) in tablets {
+        let x = ox + roundf((tx as f32) * span) as i32;
+        let y = oy + roundf((ty as f32) * span) as i32;
+        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_FF_00_FF);
+    }
 }
 
 fn draw_wire_cube(fb: &super::FramebufferSurface, ox: i32, oy: i32, size: i32, q: Quat) {
