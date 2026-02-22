@@ -215,7 +215,23 @@ struct TextureState {
     height: u32,
     rgba: Vec<u8>,
     rev: u32,
+    // Minimal sampler state (WebGL subset).
+    min_filter: u32,
+    mag_filter: u32,
+    wrap_s: u32,
+    wrap_t: u32,
 }
+
+// WebGL constants we care about (subset).
+// NOTE: GL_TEXTURE_2D is already defined above with the other GL constants.
+const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
+const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
+const GL_TEXTURE_WRAP_S: u32 = 0x2802;
+const GL_TEXTURE_WRAP_T: u32 = 0x2803;
+const GL_NEAREST: u32 = 0x2600;
+const GL_LINEAR: u32 = 0x2601;
+const GL_REPEAT: u32 = 0x2901;
+const GL_CLAMP_TO_EDGE: u32 = 0x812F;
 
 #[derive(Clone, Copy)]
 struct VaoState {
@@ -378,6 +394,14 @@ fn js_null() -> qjs::JSValue {
     qjs::JSValue {
         u: qjs::JSValueUnion { int32: 0 },
         tag: qjs::JS_TAG_NULL,
+    }
+}
+
+#[inline]
+fn js_undefined() -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: 0 },
+        tag: qjs::JS_TAG_UNDEFINED,
     }
 }
 
@@ -1125,6 +1149,19 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
     };
     if st.packed_vertex_cache_key == Some(packed_key) && !st.packed_vertex_cache.is_empty() {
         if use_tex {
+            // Propagate sampler state for this texture.
+            if let Some(tex) = texture_slot(&st, tex_id) {
+                let wrap_s = if tex.wrap_s == GL_REPEAT { 1 } else { 0 };
+                let wrap_t = if tex.wrap_t == GL_REPEAT { 1 } else { 0 };
+                let min_filter = if tex.min_filter == GL_NEAREST { 0 } else { 1 };
+                let mag_filter = if tex.mag_filter == GL_NEAREST { 0 } else { 1 };
+                cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetSampler {
+                    wrap_s,
+                    wrap_t,
+                    min_filter,
+                    mag_filter,
+                });
+            }
             cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTrianglesTex {
                 tex_id,
                 vertices: st.packed_vertex_cache.clone(),
@@ -1273,6 +1310,18 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         st.packed_vertex_cache.clear();
         st.packed_vertex_cache.extend_from_slice(out.as_slice());
         if use_tex {
+            if let Some(tex) = texture_slot(&st, tex_id) {
+                let wrap_s = if tex.wrap_s == GL_REPEAT { 1 } else { 0 };
+                let wrap_t = if tex.wrap_t == GL_REPEAT { 1 } else { 0 };
+                let min_filter = if tex.min_filter == GL_NEAREST { 0 } else { 1 };
+                let mag_filter = if tex.mag_filter == GL_NEAREST { 0 } else { 1 };
+                cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetSampler {
+                    wrap_s,
+                    wrap_t,
+                    min_filter,
+                    mag_filter,
+                });
+            }
             cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTrianglesTex {
                 tex_id,
                 vertices: out,
@@ -1351,10 +1400,16 @@ unsafe extern "C" fn gl_create_texture(
         // This matches Pixi’s internal use of a default "white" texture.
         let rgba = vec![255u8, 255u8, 255u8, 255u8];
         st.textures[idx] = Some(TextureState {
-            width: 1,
-            height: 1,
-            rgba: rgba.clone(),
-            rev: 1,
+            width: 0,
+            height: 0,
+            rgba: Vec::new(),
+            rev: 0,
+            // Default to NEAREST so UI/font atlases remain crisp.
+            // Pixi can override per-texture via texParameteri when scaleMode is set.
+            min_filter: GL_NEAREST,
+            mag_filter: GL_NEAREST,
+            wrap_s: GL_CLAMP_TO_EDGE,
+            wrap_t: GL_CLAMP_TO_EDGE,
         });
         st.texture_revs[idx] = 1;
         (id, rgba)
@@ -1367,6 +1422,53 @@ unsafe extern "C" fn gl_create_texture(
         rgba: upload_rgba,
     });
     js_new_handle_obj(ctx, id)
+}
+
+unsafe extern "C" fn gl_tex_parameteri(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 3 {
+        return js_undefined();
+    }
+    let target = unsafe { js_get_f64(ctx, *argv.add(0)) }.unwrap_or(0.0) as u32;
+    let pname = unsafe { js_get_f64(ctx, *argv.add(1)) }.unwrap_or(0.0) as u32;
+    let param = unsafe { js_get_f64(ctx, *argv.add(2)) }.unwrap_or(0.0) as u32;
+    if target != GL_TEXTURE_2D {
+        return js_undefined();
+    }
+
+    let mut st = GL_STATE.lock();
+    let tex_id = st.bound_texture_2d[st.active_texture_unit];
+    if tex_id == 0 {
+        return js_undefined();
+    }
+    let idx = (tex_id - 1) as usize;
+    let Some(Some(tex)) = st.textures.get_mut(idx) else {
+        return js_undefined();
+    };
+
+    match pname {
+        GL_TEXTURE_MIN_FILTER => tex.min_filter = param,
+        GL_TEXTURE_MAG_FILTER => tex.mag_filter = param,
+        GL_TEXTURE_WRAP_S => tex.wrap_s = param,
+        GL_TEXTURE_WRAP_T => tex.wrap_t = param,
+        _ => {}
+    }
+
+    js_undefined()
+}
+
+unsafe extern "C" fn gl_tex_parameterf(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // Many WebGL callers use texParameterf even for integer-valued enums.
+    gl_tex_parameteri(ctx, this_val, argc, argv)
 }
 
 unsafe extern "C" fn gl_bind_texture(
@@ -2824,12 +2926,41 @@ unsafe extern "C" fn gl_draw_arrays(
     let mode = js_get_f64(ctx, args[0]).unwrap_or(0.0).max(0.0) as u32;
     let first = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as u32;
     let count = js_get_f64(ctx, args[2]).unwrap_or(0.0).max(0.0) as u32;
-    if count < 3 || mode != GL_TRIANGLES {
+    if count < 3 {
         return qjs::JSValue::undefined();
     }
-    let mut idx = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        idx.push(first + i);
+    // Expand drawArrays primitives into explicit triangles so the rest of the
+    // pipeline can stay "triangles-only".
+    let mut idx: Vec<u32> = Vec::new();
+    match mode {
+        GL_TRIANGLES => {
+            idx.reserve(count as usize);
+            for i in 0..count {
+                idx.push(first + i);
+            }
+        }
+        GL_TRIANGLE_STRIP => {
+            // N vertices => N-2 triangles.
+            idx.reserve(((count - 2) * 3) as usize);
+            for i in 0..(count - 2) {
+                let a = first + i;
+                let b = first + i + 1;
+                let c = first + i + 2;
+                if (i & 1) == 0 {
+                    idx.extend_from_slice(&[a, b, c]);
+                } else {
+                    idx.extend_from_slice(&[b, a, c]);
+                }
+            }
+        }
+        GL_TRIANGLE_FAN => {
+            idx.reserve(((count - 2) * 3) as usize);
+            let base = first;
+            for i in 1..(count - 1) {
+                idx.extend_from_slice(&[base, first + i, first + i + 1]);
+            }
+        }
+        _ => return qjs::JSValue::undefined(),
     }
     let mut st = GL_STATE.lock();
     begin_frame_if_needed(&mut st);
@@ -3536,8 +3667,8 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("activeTexture", gl_active_texture, 1);
     gl_fn!("generateMipmap", gl_noop, 1);
     gl_fn!("pixelStorei", gl_pixel_storei, 2);
-    gl_fn!("texParameteri", gl_noop, 3);
-    gl_fn!("texParameterf", gl_noop, 3);
+    gl_fn!("texParameteri", gl_tex_parameteri, 3);
+    gl_fn!("texParameterf", gl_tex_parameterf, 3);
     gl_fn!("texImage2D", gl_tex_image_2d, 9);
     gl_fn!("texSubImage2D", gl_tex_sub_image_2d, 9);
     gl_fn!("createFramebuffer", gl_create_buffer, 0);

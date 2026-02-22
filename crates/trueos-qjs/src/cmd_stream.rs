@@ -17,6 +17,8 @@ unsafe extern "C" {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32;
+    fn trueos_cabi_gfx_set_sampler(wrap_s: u32, wrap_t: u32, min_filter: u32, mag_filter: u32)
+        -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
     fn trueos_cabi_gfx_upload_texture_rgba(
         tex_id: u32,
@@ -95,6 +97,14 @@ pub(crate) enum CmdStreamCommand {
         rgb: u32,
         alpha: u32,
     },
+        // Sampler state for subsequent textured draws.
+        // Encoding is intentionally tiny: wrap 0=ClampToEdge, 1=Repeat; filter 0=Nearest, 1=Linear.
+        SetSampler {
+            wrap_s: u32,
+            wrap_t: u32,
+            min_filter: u32,
+            mag_filter: u32,
+        },
     DrawTriangles {
         vertices: Vec<u8>,
     },
@@ -143,6 +153,11 @@ struct PipelineKey {
     blend: BlendState,
     textured: bool,
     tex_id: u32,
+    // Only used when textured=true.
+    sampler_wrap_s: u32,
+    sampler_wrap_t: u32,
+    sampler_min: u32,
+    sampler_mag: u32,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -168,6 +183,10 @@ struct FrameState {
     viewport_w: i32,
     viewport_h: i32,
     blend: BlendState,
+    sampler_wrap_s: u32,
+    sampler_wrap_t: u32,
+    sampler_min: u32,
+    sampler_mag: u32,
     batches: Vec<DrawBatch>,
     merge_scratch: Vec<u8>,
 }
@@ -189,6 +208,12 @@ static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
         eq_rgb: 0x8006,
         eq_alpha: 0x8006,
     },
+    // WebGL defaults: repeat + nearest-mipmap-linear/linear; Pixi typically overrides.
+    // We store only a simplified subset.
+    sampler_wrap_s: 0,
+    sampler_wrap_t: 0,
+    sampler_min: 0,
+    sampler_mag: 0,
     batches: Vec::new(),
     merge_scratch: Vec::new(),
 });
@@ -216,6 +241,10 @@ fn flush_active_frame(st: &mut FrameState) {
         return;
     }
 
+    // Best-effort frame number for debug logs in this function.
+    // `FRAME_SEQ` is incremented at the end of flush; add 1 for the in-progress frame.
+    let dbg_seq = FRAME_SEQ.load(Ordering::Relaxed).wrapping_add(1);
+
     // If we're in cooldown, drop the frame without calling into gfx.
     if SUBMIT_COOLDOWN.load(Ordering::Relaxed) != 0 {
         st.batches.clear();
@@ -242,6 +271,24 @@ fn flush_active_frame(st: &mut FrameState) {
                 trueos_cabi_gfx_draw_rgb_triangles_no_present(batch.vtx.as_ptr(), batch.vtx.len())
             },
             DrawKind::Tex { id } => unsafe {
+                if dbg_seq <= 5 {
+                    log_bytes(b"qjs-webgl-cmd-stream: draw-tex id=");
+                    log_i32_dec(id as i32);
+                    log_bytes(b" bytes=");
+                    log_i32_dec(batch.vtx.len() as i32);
+                    log_bytes(b" min=");
+                    log_i32_dec(batch.key.sampler_min as i32);
+                    log_bytes(b" mag=");
+                    log_i32_dec(batch.key.sampler_mag as i32);
+                    log_bytes(b"\n");
+                }
+                // Apply sampler state captured in the batch key.
+                let _ = trueos_cabi_gfx_set_sampler(
+                    batch.key.sampler_wrap_s,
+                    batch.key.sampler_wrap_t,
+                    batch.key.sampler_min,
+                    batch.key.sampler_mag,
+                );
                 trueos_cabi_gfx_draw_tex_triangles_no_present(
                     id,
                     batch.vtx.as_ptr(),
@@ -320,6 +367,10 @@ fn current_pipeline_key(st: &FrameState, textured: bool, tex_id: u32) -> Pipelin
         blend: st.blend,
         textured,
         tex_id,
+        sampler_wrap_s: st.sampler_wrap_s,
+        sampler_wrap_t: st.sampler_wrap_t,
+        sampler_min: st.sampler_min,
+        sampler_mag: st.sampler_mag,
     }
 }
 
@@ -400,6 +451,17 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
                 st.blend.eq_rgb = rgb;
                 st.blend.eq_alpha = alpha;
             }
+        }
+        CmdStreamCommand::SetSampler {
+            wrap_s,
+            wrap_t,
+            min_filter,
+            mag_filter,
+        } => {
+            st.sampler_wrap_s = wrap_s;
+            st.sampler_wrap_t = wrap_t;
+            st.sampler_min = min_filter;
+            st.sampler_mag = mag_filter;
         }
         CmdStreamCommand::DrawTriangles { vertices } => {
             if vertices.is_empty() {

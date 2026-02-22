@@ -74,6 +74,8 @@ var __smallFontAtlas = {
 	slotQ: 0,
 	slotSpace: 0,
 	_initTried: false,
+	_lastErr: null,
+	_dbgLogged: false,
 	init: function() {
 		if (this.ready || this._initTried) return this.ready;
 		this._initTried = true;
@@ -93,9 +95,23 @@ var __smallFontAtlas = {
 			if (!pixelsU8 || pixelsU8.length < (w * h * 4)) return false;
 			if (!(PIXI.BaseTexture && PIXI.BaseTexture.fromBuffer)) return false;
 			var base = PIXI.BaseTexture.fromBuffer(pixelsU8, w, h);
+			// NOTE: This atlas is typically NPOT (non power-of-two). Be strict about
+			// WebGL1-friendly settings to avoid silent black textures.
+			if (PIXI.MIPMAP_MODES && typeof base.mipmap !== 'undefined') {
+				base.mipmap = PIXI.MIPMAP_MODES.OFF;
+			}
+			if (PIXI.WRAP_MODES && typeof base.wrapMode !== 'undefined') {
+				base.wrapMode = PIXI.WRAP_MODES.CLAMP;
+			}
+			if (PIXI.ALPHA_MODES && typeof base.alphaMode !== 'undefined') {
+				base.alphaMode = PIXI.ALPHA_MODES.NO_PREMULTIPLIED_ALPHA;
+			}
 			// Nearest sampling keeps 6x6 pixel glyphs crisp when scaled.
 			if (typeof base.scaleMode !== 'undefined' && PIXI.SCALE_MODES) {
 				base.scaleMode = PIXI.SCALE_MODES.NEAREST;
+			}
+			if (typeof base.update === 'function') {
+				try { base.update(); } catch (e) {}
 			}
 			this.base = base;
 			// index is provided as little-endian u16 bytes; TRUEOS runs little-endian.
@@ -105,8 +121,19 @@ var __smallFontAtlas = {
 			this.slotQ = this._slotForCharCode(63); // '?'
 			this.slotSpace = this._slotForCharCode(32); // ' '
 			this.ready = true;
+			if (!this._dbgLogged && G && G.console && typeof G.console.log === 'function') {
+				this._dbgLogged = true;
+				try {
+					G.console.log('pixi_gui: small font atlas ok ' + String(w) + 'x' + String(h) + ' cell ' + String(this.cellW) + 'x' + String(this.cellH) + ' grid ' + String(this.gridW) + 'x' + String(this.gridH));
+				} catch (e) {}
+			}
 			return true;
 		} catch (e) {
+			this._lastErr = String(e);
+			if (!this._dbgLogged && G && G.console && typeof G.console.log === 'function') {
+				this._dbgLogged = true;
+				try { G.console.log('pixi_gui: small font atlas failed ' + String(e)); } catch (e2) {}
+			}
 			this.ready = false;
 			return false;
 		}
@@ -140,6 +167,15 @@ var __smallFontAtlas = {
 			? new PIXI.Rectangle(rx, ry, this.cellW, this.cellH)
 			: { x: rx, y: ry, width: this.cellW, height: this.cellH };
 		t = new PIXI.Texture(this.base, rect);
+		// Some WebGL shims/backends can get stuck with stale UVs for sub-rect textures.
+		// Nudging Pixi to recompute avoids "invisible glyph" failures.
+		if (t) {
+			if (typeof t.updateUvs === 'function') {
+				try { t.updateUvs(); } catch (e) {}
+			} else if (typeof t._updateUvs === 'function') {
+				try { t._updateUvs(); } catch (e2) {}
+			}
+		}
 		this.texBySlot[slot] = t;
 		return t;
 	},
@@ -202,8 +238,14 @@ var __smallFontAtlas = {
 };
 
 function createUiText() {
-	var t = __smallFontAtlas.createText();
-	if (t) return t;
+	// Atlas-backed text is the fast path. For debugging/fallback you can force the
+	// old Graphics-based font:
+	// `globalThis.__trueos_force_pixel_text = 1;`
+	var forcePixel = !!(G && G.__trueos_force_pixel_text);
+	if (!forcePixel) {
+		var t = __smallFontAtlas.createText();
+		if (t) return t;
+	}
 	// Fallback: pixel font via Graphics (slow, but keeps UI usable).
 	var g = new PIXI.Graphics();
 	return {
@@ -628,8 +670,52 @@ var UI = {
 		this._cursorX = Math.floor(W / 2);
 		this._cursorY = Math.floor(H / 2);
 		this._cursorAngle = 0;
-		this._cursor = new PIXI.Graphics();
-		stage.addChild(this._cursor);
+		// Prefer a sprite cursor so we don't depend on PIXI.Graphics (which may
+		// rely on stencil/mask paths we don't fully implement).
+		this._cursor = null;
+		try {
+			var cw = 24, ch = 24;
+			var cbuf = new Uint8Array(cw * ch * 4);
+			// Simple filled triangle with a thin 1px outline-ish edge.
+			for (var y = 0; y < ch; y++) {
+				for (var x = 0; x < cw; x++) {
+					// Triangle with tip at (0,0), base towards bottom-right.
+					// Condition: x >= 0, y >= 0, and x <= y*0.75 + 10
+					var inside = (x >= 0 && y >= 0 && x <= ((y * 3) >> 2) + 10);
+					if (!inside) continue;
+					var idx = (y * cw + x) * 4;
+					// Dark fill
+					cbuf[idx + 0] = 0x20;
+					cbuf[idx + 1] = 0x20;
+					cbuf[idx + 2] = 0x20;
+					cbuf[idx + 3] = 0xFF;
+					// Add a light edge at the left/top boundaries
+					if (x === 0 || y === 0) {
+						cbuf[idx + 0] = 0xFF;
+						cbuf[idx + 1] = 0xFF;
+						cbuf[idx + 2] = 0xFF;
+						cbuf[idx + 3] = 0xFF;
+					}
+				}
+			}
+			var cbase = (PIXI.BaseTexture && PIXI.BaseTexture.fromBuffer)
+				? PIXI.BaseTexture.fromBuffer(cbuf, cw, ch)
+				: null;
+			if (!cbase) throw new Error('cursor BaseTexture.fromBuffer missing');
+			if (typeof cbase.scaleMode !== 'undefined' && PIXI.SCALE_MODES) {
+				cbase.scaleMode = PIXI.SCALE_MODES.NEAREST;
+			}
+			var ctex = new PIXI.Texture(cbase);
+			var cspr = new PIXI.Sprite(ctex);
+			cspr.x = this._cursorX | 0;
+			cspr.y = this._cursorY | 0;
+			cspr.alpha = 1;
+			this._cursor = cspr;
+			stage.addChild(this._cursor);
+		} catch (e) {
+			this._cursor = new PIXI.Graphics();
+			stage.addChild(this._cursor);
+		}
 
 		// Add the debug marker last so it stays on top of windows.
 		if (__dbg_mark && !__dbg_mark.__trueos_added) {
@@ -715,17 +801,21 @@ var UI = {
 		if (this._cursor) {
 			var x = this._cursorX|0;
 			var y = this._cursorY|0;
-			this._cursor.clear();
-			this._cursor.lineStyle(1, 0xFFFFFF, 1);
-			this._cursor.beginFill(0x202020, 1);
-			// Simple arrow-like triangle.
-			// Outline: white (0xFFFFFF). Fill: dark gray (0x202020).
-			// Tip is exactly at (x,y).
-			this._cursor.moveTo(x, y);
-			this._cursor.lineTo(x + 14, y + 7);
-			this._cursor.lineTo(x + 6, y + 20);
-			this._cursor.lineTo(x, y);
-			this._cursor.endFill();
+			if (this._cursor.clear) {
+				// Graphics fallback.
+				this._cursor.clear();
+				this._cursor.lineStyle(1, 0xFFFFFF, 1);
+				this._cursor.beginFill(0x202020, 1);
+				this._cursor.moveTo(x, y);
+				this._cursor.lineTo(x + 14, y + 7);
+				this._cursor.lineTo(x + 6, y + 20);
+				this._cursor.lineTo(x, y);
+				this._cursor.endFill();
+			} else {
+				// Sprite cursor.
+				this._cursor.x = x;
+				this._cursor.y = y;
+			}
 		}
 	}
 };
