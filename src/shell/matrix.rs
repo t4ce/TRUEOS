@@ -809,7 +809,7 @@ pub(crate) async fn update_matrix_job(slot_id: u8, disk: crate::disc::block::Dev
 
     let mut blob: AVec<u8> = AVec::new();
     log_line(slot_id, &mut blob, "update: waiting for net");
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+    crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
 
     const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
 

@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 // V-layer readiness flags.
 //
@@ -19,6 +19,14 @@ pub const TLS_SOCKET_SERVICE_READY: u32 = 1 << 9;
 
 pub const NET_V4_GATEWAY_REACHABLE: u32 = 1 << 10;
 pub const NET_V6_GATEWAY_REACHABLE: u32 = 1 << 11;
+
+// Network configuration readiness.
+//
+// These bits are about "we have an address configured" (DHCPv4, SLAAC/DHCPv6), not about
+// being able to ping the router. Some networks drop ICMP echo; TCP/DNS can still work.
+pub const NET_CONFIGURED: u32 = 1 << 12;
+pub const NET_V4_CONFIGURED: u32 = 1 << 13;
+pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
@@ -49,6 +57,22 @@ pub async fn wait_for(required: u32) {
     loop {
         if is_set(required) {
             return;
+        }
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+}
+
+/// Wait until all required flags are set, or until `timeout` elapses.
+///
+/// Returns `true` if the flags became ready, `false` on timeout.
+pub async fn wait_for_timeout(required: u32, timeout: EmbassyDuration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if is_set(required) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
         }
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
