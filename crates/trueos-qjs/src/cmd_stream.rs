@@ -37,6 +37,11 @@ static SUBMIT_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
 static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
 static UPLOAD_OK_COUNT: AtomicU32 = AtomicU32::new(0);
 
+// When the gfx backend rejects submits (surface/io.rs returns -11), back off for a
+// few ticks to avoid spamming submit attempts that keep the screen stuck on the
+// last successful clear.
+static SUBMIT_COOLDOWN: AtomicU32 = AtomicU32::new(0);
+
 const FRAME_DONE_SRC_WEBGL: u32 = 1 << 0;
 
 #[inline]
@@ -155,6 +160,7 @@ struct DrawBatch {
 struct FrameState {
     active: bool,
     end_requested: bool,
+    suppress: bool,
     // GL-style clear color state
     clear_rgb: u32,
     // Captured at BeginFrame and used when submitting that frame.
@@ -169,6 +175,7 @@ struct FrameState {
 static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
     active: false,
     end_requested: false,
+    suppress: false,
     clear_rgb: 0x00_08_18_30,
     frame_clear_rgb: 0x00_08_18_30,
     viewport_w: 0,
@@ -208,6 +215,16 @@ fn flush_active_frame(st: &mut FrameState) {
     if !st.active {
         return;
     }
+
+    // If we're in cooldown, drop the frame without calling into gfx.
+    if SUBMIT_COOLDOWN.load(Ordering::Relaxed) != 0 {
+        st.batches.clear();
+        st.active = false;
+        st.end_requested = false;
+        st.suppress = false;
+        return;
+    }
+
     let rc = unsafe { trueos_cabi_gfx_begin_frame(st.frame_clear_rgb) };
     if rc != 0 && rc != -3 {
         let prev = LAST_SUBMIT_RC.swap(rc, Ordering::Relaxed);
@@ -256,6 +273,11 @@ fn flush_active_frame(st: &mut FrameState) {
             log_bytes(b"\n");
         }
     }
+
+    // Back off briefly on submit failure.
+    if rc == -11 {
+        SUBMIT_COOLDOWN.store(3, Ordering::Relaxed);
+    }
     let seq = FRAME_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     if seq <= 10 || (seq % 20) == 0 {
         let draw_batches = st.batches.len() as u32;
@@ -271,6 +293,7 @@ fn flush_active_frame(st: &mut FrameState) {
     st.batches.clear();
     st.active = false;
     st.end_requested = false;
+    st.suppress = false;
 }
 
 #[inline]
@@ -302,11 +325,41 @@ fn current_pipeline_key(st: &FrameState, textured: bool, tex_id: u32) -> Pipelin
 
 pub(crate) fn enqueue(cmd: CmdStreamCommand) {
     let mut st = FRAME_STATE.lock();
+
+    // Decrement cooldown once per tick-ish (we don't have a clock here, so treat
+    // any cmd stream traffic as a tick). This is intentionally tiny.
+    let cd = SUBMIT_COOLDOWN.load(Ordering::Relaxed);
+    if cd != 0 {
+        let _ = SUBMIT_COOLDOWN.compare_exchange(cd, cd - 1, Ordering::Relaxed, Ordering::Relaxed);
+    }
+
     match cmd {
         CmdStreamCommand::BeginFrame => {
-            flush_active_frame(&mut st);
+            // If backend is currently rejecting submits, suppress this whole frame.
+            if SUBMIT_COOLDOWN.load(Ordering::Relaxed) != 0 {
+                st.suppress = true;
+                st.active = false;
+                st.end_requested = false;
+                st.batches.clear();
+                return;
+            }
+
+            // If the previous frame is waiting on the backend boundary, don't
+            // force-flush here (that can time out and lead to missing presents).
+            // Instead, try to flush only when the frame-done signal is ready.
+            if st.active && st.end_requested {
+                maybe_flush_on_frame_done(&mut st);
+                // Still not ready: drop this BeginFrame (and any following draw
+                // calls should be ignored until the pending frame flushes).
+                if st.active {
+                    return;
+                }
+            }
+
+            // Start capturing a new frame.
             st.active = true;
             st.end_requested = false;
+            st.suppress = false;
             st.frame_clear_rgb = st.clear_rgb;
         }
         CmdStreamCommand::SetClearColor { clear_rgb } => {
@@ -352,6 +405,14 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
             if vertices.is_empty() {
                 return;
             }
+            if st.suppress {
+                return;
+            }
+            // If we've already seen EndFrame but haven't flushed yet, ignore any
+            // new draws so we don't accumulate unbounded batches.
+            if st.end_requested {
+                return;
+            }
             if !st.active {
                 st.active = true;
                 st.frame_clear_rgb = st.clear_rgb;
@@ -371,6 +432,12 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
         }
         CmdStreamCommand::DrawTrianglesTex { tex_id, vertices } => {
             if vertices.is_empty() {
+                return;
+            }
+            if st.suppress {
+                return;
+            }
+            if st.end_requested {
                 return;
             }
             if !st.active {
@@ -431,6 +498,13 @@ pub(crate) fn enqueue(cmd: CmdStreamCommand) {
             }
         }
         CmdStreamCommand::EndFrame => {
+            if st.suppress {
+                st.suppress = false;
+                st.active = false;
+                st.end_requested = false;
+                st.batches.clear();
+                return;
+            }
             st.end_requested = true;
             maybe_flush_on_frame_done(&mut st);
         }

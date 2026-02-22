@@ -417,7 +417,7 @@ pub async fn tls_demo_matrix_job_run(slot_id: u8, host_arg: HString<96>) {
     crate::matrix::push_line(slot_id, "https: rustls demo starting");
 
     // Permanent FSM gating: do not run until the network is actually usable.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+    crate::v::readiness::wait_for(crate::v::readiness::NET_CONFIGURED).await;
 
     let dev_count = loop {
         let c = crate::net::device_count();

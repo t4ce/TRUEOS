@@ -1077,7 +1077,11 @@ impl VirtioGpu3d {
             core::ptr::write_volatile(&mut (*c).device_status, status);
         }
 
-        let req = DmaRegion::alloc(64 * 1024, 16)?;
+        // The control request DMA buffer must hold the entire VIRTIO_GPU_CMD_SUBMIT_3D
+        // payload (header + virgl command stream). Larger UI frames (more draw calls
+        // and inline vertex uploads) can exceed 64KB and make submit_3d fail.
+        // 256KB is still small, but avoids the immediate overflow observed with Pixi.
+        let req = DmaRegion::alloc(256 * 1024, 16)?;
         let resp = DmaRegion::alloc(4 * 1024, 16)?;
 
         Some(Self {
@@ -1399,7 +1403,16 @@ impl VirtioGpu3d {
 
         let header_bytes = as_bytes(&header);
         let total = header_bytes.len().saturating_add(cmd_stream.len());
-        if total == 0 || total > self.req.len() {
+        if total == 0 {
+            crate::log!("virtio-gpu3d: submit_3d empty cmd stream\n");
+            return false;
+        }
+        if total > self.req.len() {
+            crate::log!(
+                "virtio-gpu3d: submit_3d overflow total={} req_cap={}\n",
+                total,
+                self.req.len()
+            );
             return false;
         }
 
@@ -1497,8 +1510,17 @@ impl VirtioGpu3d {
         }
 
         let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
-        resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA
+        let ok = resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA
             || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_DISPLAY_INFO
+            || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_EDID;
+        if !ok {
+            crate::log!(
+                "virtio-gpu3d: ctrlq bad resp type=0x{:08X} req_len={}\n",
+                resp_hdr.type_,
+                req_len
+            );
+        }
+        ok
     }
 }
 

@@ -1,6 +1,4 @@
 #![no_std]
-// Rust 2024: `unsafe fn` bodies are safe-by-default, so unsafe ops need explicit
-// `unsafe { ... }` blocks. Allowing this lint keeps the older style for now.
 #![allow(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
