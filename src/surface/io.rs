@@ -804,7 +804,8 @@ pub mod cabi {
     use trueos_gfx_core::{
         BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, Extent2D,
         GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType, PipelineDesc, PipelineId,
-        SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
+        SamplerDesc, SamplerFilter, SamplerWrap, SwapchainDesc, TexCoordFormat, VertexLayout,
+        Viewport,
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
@@ -829,6 +830,8 @@ pub mod cabi {
         frame_tex_draws: u32,
         frame_draw_bytes: usize,
         frame_draws: Vec<PendingDraw>,
+        // Current sampler state (set by the WebGL shim) that will be captured per textured draw.
+        cur_sampler: SamplerDesc,
         last_missing_tex_id: u32,
         missing_tex_logs: u32,
     }
@@ -840,8 +843,14 @@ pub mod cabi {
     }
 
     enum PendingDraw {
-        Rgb { vertices: Vec<u8> },
-        Tex { tex_id: u32, vertices: Vec<u8> },
+        Rgb {
+            vertices: Vec<u8>,
+        },
+        Tex {
+            tex_id: u32,
+            sampler: SamplerDesc,
+            vertices: Vec<u8>,
+        },
     }
 
     impl GfxCabiState {
@@ -872,10 +881,56 @@ pub mod cabi {
                 frame_tex_draws: 0,
                 frame_draw_bytes: 0,
                 frame_draws: Vec::new(),
+                cur_sampler: SamplerDesc {
+                    wrap_s: SamplerWrap::ClampToEdge,
+                    wrap_t: SamplerWrap::ClampToEdge,
+                    min_filter: SamplerFilter::Linear,
+                    mag_filter: SamplerFilter::Linear,
+                },
                 last_missing_tex_id: 0,
                 missing_tex_logs: 0,
             }
         }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_set_sampler(
+        wrap_s: u32,
+        wrap_t: u32,
+        min_filter: u32,
+        mag_filter: u32,
+    ) -> i32 {
+        // Keep this mapping intentionally tiny: enough for Pixi/WebGL.
+        // wrap: 0=ClampToEdge, 1=Repeat
+        // filter: 0=Nearest, 1=Linear
+        let ws = if wrap_s == 1 {
+            SamplerWrap::Repeat
+        } else {
+            SamplerWrap::ClampToEdge
+        };
+        let wt = if wrap_t == 1 {
+            SamplerWrap::Repeat
+        } else {
+            SamplerWrap::ClampToEdge
+        };
+        let minf = if min_filter == 0 {
+            SamplerFilter::Nearest
+        } else {
+            SamplerFilter::Linear
+        };
+        let magf = if mag_filter == 0 {
+            SamplerFilter::Nearest
+        } else {
+            SamplerFilter::Linear
+        };
+        let mut st = GFX_CABI_STATE.lock();
+        st.cur_sampler = SamplerDesc {
+            wrap_s: ws,
+            wrap_t: wt,
+            min_filter: minf,
+            mag_filter: magf,
+        };
+        0
     }
 
     static GFX_CABI_STATE: spin::Mutex<GfxCabiState> = spin::Mutex::new(GfxCabiState::new());
@@ -1332,8 +1387,10 @@ pub mod cabi {
         }
         st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
+        let sampler = st.cur_sampler;
         st.frame_draws.push(PendingDraw::Tex {
             tex_id,
+            sampler,
             vertices: bytes,
         });
         0
@@ -1382,6 +1439,7 @@ pub mod cabi {
                 },
                 Tex {
                     tex_id: u32,
+                    sampler: SamplerDesc,
                     offset: u64,
                     vcount: u32,
                 },
@@ -1407,7 +1465,11 @@ pub mod cabi {
                             vcount,
                         });
                     }
-                    PendingDraw::Tex { tex_id, vertices } => {
+                    PendingDraw::Tex {
+                        tex_id,
+                        sampler,
+                        vertices,
+                    } => {
                         const VTX_SIZE: usize = 20;
                         let usable = vertices.len() - (vertices.len() % VTX_SIZE);
                         if usable == 0 {
@@ -1418,6 +1480,7 @@ pub mod cabi {
                         tex_blob.extend_from_slice(&vertices[..usable]);
                         plans.push(Plan::Tex {
                             tex_id: *tex_id,
+                            sampler: *sampler,
                             offset: off,
                             vcount,
                         });
@@ -1473,6 +1536,7 @@ pub mod cabi {
                     }
                     Plan::Tex {
                         tex_id,
+                        sampler,
                         offset,
                         vcount,
                     } => {
@@ -1533,6 +1597,7 @@ pub mod cabi {
                             ));
                         }
                         cmds.push(Command::BindPipeline(pipeline));
+                        cmds.push(Command::SetSampler(sampler));
                         cmds.push(Command::BindImage(image_id));
                         cmds.push(Command::BindVertexBuffer {
                             buffer: vbuf,

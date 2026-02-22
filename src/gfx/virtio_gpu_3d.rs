@@ -3,7 +3,6 @@ extern crate alloc;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering, fence};
-use libm::{floorf, roundf};
 
 use crate::{pci, wait};
 use embassy_time_driver::{TICK_HZ, now};
@@ -73,12 +72,17 @@ const PIPE_TEXTURE_2D: u32 = 2;
 
 const PIPE_BIND_RENDER_TARGET: u32 = 1 << 1;
 const PIPE_BIND_BLENDABLE: u32 = 1 << 2;
+// Gallium bind flag used for textures sampled by a shader.
+const PIPE_BIND_SAMPLER_VIEW: u32 = 1 << 3;
 const PIPE_BIND_VERTEX_BUFFER: u32 = 1 << 4;
 const PIPE_BIND_DISPLAY_TARGET: u32 = 1 << 8;
 const PIPE_BIND_SCANOUT: u32 = 1 << 14;
 
 // Virgl format IDs (see virgl_hw.h):
+const VIRGL_FORMAT_B8G8R8A8_UNORM: u32 = 1;
 const VIRGL_FORMAT_B8G8R8X8_UNORM: u32 = 2;
+// virgl_hw.h: VIRGL_FORMAT_R8G8B8A8_UNORM = 67
+const VIRGL_FORMAT_R8G8B8A8_UNORM: u32 = 67;
 const VIRGL_FORMAT_R8_UNORM: u32 = 64;
 const VIRGL_FORMAT_R32G32B32A32_FLOAT: u32 = 31;
 
@@ -88,6 +92,9 @@ const VIRGL_OBJECT_RASTERIZER: u8 = 2;
 const VIRGL_OBJECT_DSA: u8 = 3;
 const VIRGL_OBJECT_SHADER: u8 = 4;
 const VIRGL_OBJECT_VERTEX_ELEMENTS: u8 = 5;
+// From virgl_protocol.h enum virgl_object_type.
+const VIRGL_OBJECT_SAMPLER_VIEW: u8 = 6;
+const VIRGL_OBJECT_SAMPLER_STATE: u8 = 7;
 const VIRGL_OBJECT_SURFACE: u8 = 8;
 
 const VIRGL_CCMD_CREATE_OBJECT: u8 = 1;
@@ -98,7 +105,9 @@ const VIRGL_CCMD_SET_VERTEX_BUFFERS: u8 = 6;
 const VIRGL_CCMD_CLEAR: u8 = 7;
 const VIRGL_CCMD_DRAW_VBO: u8 = 8;
 const VIRGL_CCMD_RESOURCE_INLINE_WRITE: u8 = 9;
+const VIRGL_CCMD_SET_SAMPLER_VIEWS: u8 = 10;
 const VIRGL_CCMD_RESOURCE_COPY_REGION: u8 = 17;
+const VIRGL_CCMD_BIND_SAMPLER_STATES: u8 = 18;
 // NOTE: Values must match virglrenderer `enum virgl_context_cmd`.
 const VIRGL_CCMD_BIND_SHADER: u8 = 31;
 const VIRGL_CCMD_LINK_SHADER: u8 = 52;
@@ -1528,36 +1537,66 @@ impl VirtioGpu3d {
 #[derive(Clone, Copy)]
 struct Vertex {
     pos: [f32; 4],
+    uv: [f32; 4],
     color: [f32; 4],
 }
 
-const VS_TEXT: &str = "VERT\n\
+// Untextured pipeline (pos + color).
+const VS_COLOR: &str = "VERT\n\
 DCL IN[0]\n\
-DCL IN[1]\n\
+DCL IN[2]\n\
 DCL OUT[0], POSITION\n\
 DCL OUT[1], COLOR\n\
-  0: MOV OUT[1], IN[1]\n\
-  1: MOV OUT[0], IN[0]\n\
-  2: END\n";
+    0: MOV OUT[1], IN[2]\n\
+    1: MOV OUT[0], IN[0]\n\
+    2: END\n";
 
-const FS_TEXT: &str = "FRAG\n\
+const FS_COLOR: &str = "FRAG\n\
 DCL IN[0], COLOR, LINEAR\n\
 DCL OUT[0], COLOR\n\
-  0: MOV OUT[0], IN[0]\n\
-  1: END\n";
+    0: MOV OUT[0], IN[0]\n\
+    1: END\n";
+
+// Textured pipeline (pos + uv + color), samples SAMP[0].
+//
+// For now, keep the fragment shader minimal so virglrenderer accepts it.
+// Alpha handling will be done via proper blend state next.
+const VS_TEX: &str = "VERT\n\
+DCL IN[0]\n\
+DCL IN[1]\n\
+DCL IN[2]\n\
+DCL OUT[0], POSITION\n\
+DCL OUT[1], TEXCOORD[0]\n\
+DCL OUT[2], COLOR\n\
+    0: MOV OUT[2], IN[2]\n\
+    1: MOV OUT[1], IN[1]\n\
+    2: MOV OUT[0], IN[0]\n\
+    3: END\n";
+
+const FS_TEX: &str = "FRAG\n\
+DCL IN[0], TEXCOORD[0], LINEAR\n\
+DCL IN[1], COLOR, LINEAR\n\
+DCL SAMP[0]\n\
+DCL OUT[0], COLOR\n\
+DCL TEMP[0]\n\
+    0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
+    1: MUL OUT[0], TEMP[0], IN[1]\n\
+    2: END\n";
 
 // --- gfx-core backend (virgl) ---
 
 use trueos_gfx_core::{
     BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error, FenceId,
     GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange, MemoryType,
-    PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, ShaderDesc, ShaderId,
-    SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
+    PipelineDesc, PipelineId, SamplerDesc, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat,
+    VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
 // This file already uses `Result<T, ()>` in virtio setup code.
 use trueos_gfx_core::Result as GfxResult;
+
+static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone)]
 struct HostBuffer {
@@ -1576,6 +1615,12 @@ struct HostImage {
     desc: ImageDesc,
     bytes: Vec<u8>,
     revision: u32,
+
+    // virgl-side handles for real GPU texturing.
+    virgl_res: u32,
+    virgl_view: u32,
+    virgl_uploaded_rev: u32,
+    virgl_view_created: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1635,7 +1680,14 @@ impl Default for VirglDrawState {
                 offset: 0,
             },
             image: ImageId::invalid(),
-            sampler: SamplerDesc::default_2d(),
+            // WebGL defaults are LINEAR/LINEAR. This also makes stretched
+            // low-res textures (like the 2x1 background gradient) look correct.
+            sampler: SamplerDesc {
+                wrap_s: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                wrap_t: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                min_filter: trueos_gfx_core::SamplerFilter::Linear,
+                mag_filter: trueos_gfx_core::SamplerFilter::Linear,
+            },
             viewport: Viewport {
                 x: 0,
                 y: 0,
@@ -1670,8 +1722,12 @@ pub struct VirglGfxBackend {
     // One-time virgl state handles.
     surf_handle: u32,
     ve_handle: u32,
-    vs_handle: u32,
-    fs_handle: u32,
+    vs_color_handle: u32,
+    fs_color_handle: u32,
+    vs_tex_handle: u32,
+    fs_tex_handle: u32,
+    sampler_state_nearest_handle: u32,
+    sampler_state_linear_handle: u32,
     blend_handle: u32,
     dsa_handle: u32,
     rs_handle: u32,
@@ -1883,8 +1939,12 @@ impl VirglGfxBackend {
         // One-time state/program setup.
         let surf_handle = 10u32;
         let ve_handle = 11u32;
-        let vs_handle = 20u32;
-        let fs_handle = 21u32;
+        let vs_color_handle = 20u32;
+        let fs_color_handle = 21u32;
+        let vs_tex_handle = 22u32;
+        let fs_tex_handle = 23u32;
+        let sampler_state_handle = 24u32;
+        let sampler_state_linear_handle = 25u32;
         let blend_handle = 30u32;
         let dsa_handle = 31u32;
         let rs_handle = 32u32;
@@ -1899,11 +1959,42 @@ impl VirglGfxBackend {
         // Virgl vertex format is fixed for this minimal backend.
         encode_set_vertex_buffer(&mut init, core::mem::size_of::<Vertex>() as u32, 0, vbo_res);
 
-        encode_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX, VS_TEXT);
-        encode_bind_shader(&mut init, vs_handle, PIPE_SHADER_VERTEX);
-        encode_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT, FS_TEXT);
-        encode_bind_shader(&mut init, fs_handle, PIPE_SHADER_FRAGMENT);
-        encode_link_shader(&mut init, vs_handle, fs_handle);
+        // Color pipeline program.
+        encode_shader(&mut init, vs_color_handle, PIPE_SHADER_VERTEX, VS_COLOR);
+        encode_bind_shader(&mut init, vs_color_handle, PIPE_SHADER_VERTEX);
+        encode_shader(&mut init, fs_color_handle, PIPE_SHADER_FRAGMENT, FS_COLOR);
+        encode_bind_shader(&mut init, fs_color_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_color_handle, fs_color_handle);
+
+        // Textured pipeline program.
+        encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, VS_TEX);
+        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, FS_TEX);
+        encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
+        encode_bind_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT);
+        encode_link_shader(&mut init, vs_tex_handle, fs_tex_handle);
+
+        // Shared sampler states for 2D textures (sampler views are per-image).
+        // Pixi uses both nearest (pixel-perfect UI) and linear (e.g. stretched gradients).
+        encode_create_sampler_state(
+            &mut init,
+            sampler_state_handle,
+            trueos_gfx_core::SamplerDesc {
+                wrap_s: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                wrap_t: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                min_filter: trueos_gfx_core::SamplerFilter::Nearest,
+                mag_filter: trueos_gfx_core::SamplerFilter::Nearest,
+            },
+        );
+        encode_create_sampler_state(
+            &mut init,
+            sampler_state_linear_handle,
+            trueos_gfx_core::SamplerDesc {
+                wrap_s: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                wrap_t: trueos_gfx_core::SamplerWrap::ClampToEdge,
+                min_filter: trueos_gfx_core::SamplerFilter::Linear,
+                mag_filter: trueos_gfx_core::SamplerFilter::Linear,
+            },
+        );
 
         encode_create_blend(&mut init, blend_handle);
         encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle);
@@ -1940,8 +2031,12 @@ impl VirglGfxBackend {
             vbo_cap_bytes,
             surf_handle,
             ve_handle,
-            vs_handle,
-            fs_handle,
+            vs_color_handle,
+            fs_color_handle,
+            vs_tex_handle,
+            fs_tex_handle,
+            sampler_state_nearest_handle: sampler_state_handle,
+            sampler_state_linear_handle,
             blend_handle,
             dsa_handle,
             rs_handle,
@@ -2120,12 +2215,12 @@ impl VirglGfxBackend {
     fn build_virgl_vertices(
         &self,
         buf: &[u8],
-        pipe: &HostPipeline,
+        pipe_desc: PipelineDesc,
         binding: VirglBufferBinding,
         draw: (u32, u32),
         image: Option<&HostImage>,
     ) -> Option<Vec<Vertex>> {
-        let PipelineDesc { vertex_layout, .. } = pipe.desc;
+        let PipelineDesc { vertex_layout, .. } = pipe_desc;
         let VertexLayout {
             stride,
             pos_offset,
@@ -2191,125 +2286,19 @@ impl VirglGfxBackend {
                 }
             }
 
-            if texcoord_format == TexCoordFormat::UvF32 {
-                let img = image?;
+            let (mut u_f, mut v_f) = if texcoord_format == TexCoordFormat::UvF32 {
                 let tex_off = off + (texcoord_offset as usize);
                 if tex_off + 8 > buf.len() {
                     break;
                 }
                 let u = f32::from_le_bytes(buf[tex_off..tex_off + 4].try_into().ok()?);
                 let v = f32::from_le_bytes(buf[tex_off + 4..tex_off + 8].try_into().ok()?);
-                let tw = img.desc.width.max(1) as usize;
-                let th = img.desc.height.max(1) as usize;
-                let sampler = self.state.sampler;
+                (u, v)
+            } else {
+                (0.0, 0.0)
+            };
 
-                let wrap_coord = |c: f32, w: SamplerWrap| -> f32 {
-                    match w {
-                        SamplerWrap::ClampToEdge => c.clamp(0.0, 1.0),
-                        SamplerWrap::Repeat => {
-                            let mut f = c - floorf(c);
-                            if f < 0.0 {
-                                f += 1.0;
-                            }
-                            if f >= 1.0 { 0.0 } else { f }
-                        }
-                    }
-                };
-
-                let clamp_idx = |i: isize, len: usize| -> usize {
-                    if len == 0 {
-                        return 0;
-                    }
-                    if i <= 0 {
-                        0
-                    } else if (i as usize) >= len {
-                        len - 1
-                    } else {
-                        i as usize
-                    }
-                };
-
-                let repeat_idx = |i: isize, len: usize| -> usize {
-                    if len == 0 {
-                        return 0;
-                    }
-                    let m = len as isize;
-                    (((i % m) + m) % m) as usize
-                };
-
-                let axis_idx = |i: isize, len: usize, w: SamplerWrap| -> usize {
-                    match w {
-                        SamplerWrap::ClampToEdge => clamp_idx(i, len),
-                        SamplerWrap::Repeat => repeat_idx(i, len),
-                    }
-                };
-
-                let sample = |x: isize, y: isize| -> (u8, u8, u8, u8) {
-                    let xi = axis_idx(x, tw, sampler.wrap_s);
-                    let yi = axis_idx(y, th, sampler.wrap_t);
-                    let t_idx = yi.saturating_mul(tw).saturating_add(xi).saturating_mul(4);
-                    if t_idx + 3 <= img.bytes.len() {
-                        (
-                            img.bytes[t_idx],
-                            img.bytes[t_idx + 1],
-                            img.bytes[t_idx + 2],
-                            img.bytes[t_idx + 3],
-                        )
-                    } else {
-                        (0, 0, 0, 0)
-                    }
-                };
-
-                let u = wrap_coord(u, sampler.wrap_s);
-                let v = wrap_coord(v, sampler.wrap_t);
-
-                let (tr, tg, tb, ta) = if sampler.mag_filter == SamplerFilter::Linear
-                    || sampler.min_filter == SamplerFilter::Linear
-                {
-                    let fx = u * (tw.saturating_sub(1) as f32);
-                    let fy = v * (th.saturating_sub(1) as f32);
-                    let x0 = floorf(fx) as isize;
-                    let y0 = floorf(fy) as isize;
-                    let x1 = x0 + 1;
-                    let y1 = y0 + 1;
-                    let tx = fx - (x0 as f32);
-                    let ty = fy - (y0 as f32);
-
-                    let (c00r, c00g, c00b, c00a) = sample(x0, y0);
-                    let (c10r, c10g, c10b, c10a) = sample(x1, y0);
-                    let (c01r, c01g, c01b, c01a) = sample(x0, y1);
-                    let (c11r, c11g, c11b, c11a) = sample(x1, y1);
-
-                    let lerp = |a: f32, b: f32, t: f32| -> f32 { a + (b - a) * t };
-
-                    let r0 = lerp(c00r as f32, c10r as f32, tx);
-                    let r1 = lerp(c01r as f32, c11r as f32, tx);
-                    let g0 = lerp(c00g as f32, c10g as f32, tx);
-                    let g1 = lerp(c01g as f32, c11g as f32, tx);
-                    let b0 = lerp(c00b as f32, c10b as f32, tx);
-                    let b1 = lerp(c01b as f32, c11b as f32, tx);
-                    let a0 = lerp(c00a as f32, c10a as f32, tx);
-                    let a1 = lerp(c01a as f32, c11a as f32, tx);
-
-                    (
-                        roundf(lerp(r0, r1, ty)).clamp(0.0, 255.0) as u8,
-                        roundf(lerp(g0, g1, ty)).clamp(0.0, 255.0) as u8,
-                        roundf(lerp(b0, b1, ty)).clamp(0.0, 255.0) as u8,
-                        roundf(lerp(a0, a1, ty)).clamp(0.0, 255.0) as u8,
-                    )
-                } else {
-                    let tx = (roundf(u * (tw.saturating_sub(1) as f32)) as isize)
-                        .clamp(0, tw.saturating_sub(1) as isize);
-                    let ty = (roundf(v * (th.saturating_sub(1) as f32)) as isize)
-                        .clamp(0, th.saturating_sub(1) as isize);
-                    sample(tx, ty)
-                };
-
-                r_u8 = ((r_u8 as u16).saturating_mul(tr as u16) / 255) as u8;
-                g_u8 = ((g_u8 as u16).saturating_mul(tg as u16) / 255) as u8;
-                b_u8 = ((b_u8 as u16).saturating_mul(tb as u16) / 255) as u8;
-                a_u8 = ((a_u8 as u16).saturating_mul(ta as u16) / 255) as u8;
-            }
+            let _ = image;
 
             let rf = (r_u8 as f32) / 255.0;
             let gf = (g_u8 as f32) / 255.0;
@@ -2318,6 +2307,7 @@ impl VirglGfxBackend {
 
             out.push(Vertex {
                 pos: [x, y, 0.0, 1.0],
+                uv: [u_f, v_f, 0.0, 1.0],
                 color: [rf, gf, bf, af],
             });
         }
@@ -2457,13 +2447,40 @@ impl GfxDevice for VirglGfxBackend {
         if bytes_len == 0 {
             return Err(Error::Invalid);
         }
-        let mut bytes = vec![0; bytes_len];
+        let bytes = vec![0; bytes_len];
+
+        // Create a virgl texture resource for real GPU sampling.
+        let virgl_res = alloc_res_id();
+        if !self.gpu.resource_create_3d(
+            self.ctx_id,
+            virgl_res,
+            PIPE_TEXTURE_2D,
+            // HostImage bytes are RGBA as produced by the WebGL/Pixi shim.
+            VIRGL_FORMAT_R8G8B8A8_UNORM,
+            PIPE_BIND_SAMPLER_VIEW,
+            desc.width,
+            desc.height,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ) {
+            return Err(Error::Unsupported);
+        }
+        let _ = self.gpu.ctx_attach_resource(self.ctx_id, virgl_res);
+
+        let virgl_view = alloc_obj_handle();
         let slot = Self::alloc_slot(
             &mut self.images,
             HostImage {
                 desc,
                 bytes,
                 revision: 1,
+                virgl_res,
+                virgl_view,
+                virgl_uploaded_rev: 0,
+                virgl_view_created: false,
             },
         );
         Ok(ImageId::from_raw(slot as u32 + 1))
@@ -2476,6 +2493,11 @@ impl GfxDevice for VirglGfxBackend {
         }
         let idx = (raw - 1) as usize;
         if idx < self.images.len() {
+            if let Some(Some(img)) = self.images.get(idx) {
+                if img.virgl_res != 0 {
+                    let _ = self.gpu.ctx_detach_resource(self.ctx_id, img.virgl_res);
+                }
+            }
             self.images[idx] = None;
             self.converted_cache.key = None;
             self.uploaded_cache_key = None;
@@ -2653,6 +2675,10 @@ impl GfxDevice for VirglGfxBackend {
                 return Err(Error::NotFound);
             };
 
+            // PipelineDesc is Copy; take a snapshot so we can drop the immutable borrow
+            // of self.pipelines before any later mutable calls.
+            let pipe_desc = pipe.desc;
+
             let vraw = self.state.vertex.id.raw();
             let vidx = vraw.saturating_sub(1) as usize;
             let Some(vb) = self.buffers.get(vidx).and_then(|b| b.as_ref()) else {
@@ -2666,12 +2692,12 @@ impl GfxDevice for VirglGfxBackend {
                 binding_offset: self.state.vertex.offset,
                 first_vertex,
                 vertex_count,
-                layout_stride: pipe.desc.vertex_layout.stride,
-                layout_pos_offset: pipe.desc.vertex_layout.pos_offset,
-                layout_color_offset: pipe.desc.vertex_layout.color_offset,
-                layout_color_format: pipe.desc.vertex_layout.color_format,
-                layout_texcoord_offset: pipe.desc.vertex_layout.texcoord_offset,
-                layout_texcoord_format: pipe.desc.vertex_layout.texcoord_format,
+                layout_stride: pipe_desc.vertex_layout.stride,
+                layout_pos_offset: pipe_desc.vertex_layout.pos_offset,
+                layout_color_offset: pipe_desc.vertex_layout.color_offset,
+                layout_color_format: pipe_desc.vertex_layout.color_format,
+                layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
+                layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
                 image_id: self.state.image.raw(),
                 image_rev: if self.state.image.is_valid() {
                     self.images
@@ -2686,7 +2712,7 @@ impl GfxDevice for VirglGfxBackend {
 
             if self.converted_cache.key != Some(cache_key) {
                 let bound_image =
-                    if pipe.desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                    if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
                         if !self.state.image.is_valid() {
                             return Err(Error::Invalid);
                         }
@@ -2699,7 +2725,7 @@ impl GfxDevice for VirglGfxBackend {
                 let verts = self
                     .build_virgl_vertices(
                         &vb.bytes,
-                        pipe,
+                        pipe_desc,
                         self.state.vertex,
                         (vertex_count, first_vertex),
                         bound_image,
@@ -2737,6 +2763,97 @@ impl GfxDevice for VirglGfxBackend {
                 self.uploaded_cache_vbo_generation = self.vbo_generation;
                 draw_upload_needed = true;
             }
+
+            // Bind program + texture state for this draw.
+            if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                // Ensure bound ImageId exists.
+                let img_raw = self.state.image.raw();
+                let img_idx = img_raw.saturating_sub(1) as usize;
+                let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
+                    return Err(Error::NotFound);
+                };
+                if img.virgl_res == 0 {
+                    return Err(Error::Invalid);
+                }
+
+                // Upload full image when changed.
+                if img.virgl_uploaded_rev != img.revision {
+                    let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        crate::log!(
+                            "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
+                            img_raw,
+                            img.desc.width,
+                            img.desc.height,
+                            img.virgl_uploaded_rev,
+                            img.revision,
+                            img.virgl_res,
+                            img.virgl_view
+                        );
+                    }
+                    encode_inline_write_texture(
+                        &mut cmd,
+                        img.virgl_res,
+                        img.desc.width,
+                        img.desc.height,
+                        img.bytes.as_slice(),
+                    );
+                    img.virgl_uploaded_rev = img.revision;
+                    draw_upload_needed = true;
+                }
+
+                // Create sampler view once (objects live in the virgl context).
+                if !img.virgl_view_created {
+                    let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        crate::log!(
+                            "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
+                            img_raw,
+                            img.virgl_res,
+                            img.virgl_view,
+                            VIRGL_FORMAT_R8G8B8A8_UNORM
+                        );
+                    }
+                    encode_create_sampler_view(
+                        &mut cmd,
+                        img.virgl_view,
+                        img.virgl_res,
+                        VIRGL_FORMAT_R8G8B8A8_UNORM,
+                    );
+                    img.virgl_view_created = true;
+                    draw_upload_needed = true;
+                }
+
+                let samp_handle = if self.state.sampler.min_filter
+                    == trueos_gfx_core::SamplerFilter::Linear
+                    || self.state.sampler.mag_filter == trueos_gfx_core::SamplerFilter::Linear
+                {
+                    self.sampler_state_linear_handle
+                } else {
+                    self.sampler_state_nearest_handle
+                };
+
+                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                if n < 12 {
+                    crate::log!(
+                        "virgl-backend: tex bind img={} view={} samp_state={} min={:?} mag={:?}\n",
+                        img_raw,
+                        img.virgl_view,
+                        samp_handle,
+                        self.state.sampler.min_filter,
+                        self.state.sampler.mag_filter
+                    );
+                }
+
+                encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[img.virgl_view]);
+                encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[samp_handle]);
+                encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
+                encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
+            } else {
+                encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
+                encode_bind_shader(&mut cmd, self.fs_color_handle, PIPE_SHADER_FRAGMENT);
+            }
+
             submitted_draw = Some((cache_key, self.vbo_generation));
             encode_draw_vbo_count(&mut cmd, self.converted_cache.vertex_count);
         }
@@ -2920,7 +3037,7 @@ fn encode_clear_color(buf: &mut VirglCmdBuf, r: f32, g: f32, b: f32, a: f32) {
 
 fn encode_create_vertex_elements(buf: &mut VirglCmdBuf, ve_handle: u32) {
     // VIRGL_OBJ_VERTEX_ELEMENTS_SIZE(num) = num*4 + 1
-    let num = 2u32;
+    let num = 3u32;
     let len = 1 + num * 4;
     buf.push(virgl_cmd0(
         VIRGL_CCMD_CREATE_OBJECT,
@@ -2935,8 +3052,14 @@ fn encode_create_vertex_elements(buf: &mut VirglCmdBuf, ve_handle: u32) {
     buf.push(0);
     buf.push(VIRGL_FORMAT_R32G32B32A32_FLOAT);
 
-    // element 1: color vec4 at offset 16
+    // element 1: uv vec4 at offset 16
     buf.push(16);
+    buf.push(0);
+    buf.push(0);
+    buf.push(VIRGL_FORMAT_R32G32B32A32_FLOAT);
+
+    // element 2: color vec4 at offset 32
+    buf.push(32);
     buf.push(0);
     buf.push(0);
     buf.push(VIRGL_FORMAT_R32G32B32A32_FLOAT);
@@ -2953,6 +3076,140 @@ fn encode_set_vertex_buffer(buf: &mut VirglCmdBuf, stride: u32, offset: u32, res
     buf.push(stride);
     buf.push(offset);
     buf.push(res_handle);
+}
+
+fn encode_create_sampler_state(buf: &mut VirglCmdBuf, sampler_handle: u32, desc: SamplerDesc) {
+    // virgl_protocol.h:
+    // VIRGL_OBJ_SAMPLER_STATE_SIZE = 9
+    // s0 bitfields:
+    // - wrap_s/t/r: 3 bits each
+    // - min_img_filter/min_mip_filter/mag_img_filter: 2 bits each
+    // We intentionally keep this minimal and WebGL-ish.
+    const VIRGL_OBJ_SAMPLER_STATE_SIZE: u32 = 9;
+    // Enum values from Mesa pipe/p_defines.h:
+    // enum pipe_tex_wrap: REPEAT=0, CLAMP=1, CLAMP_TO_EDGE=2, ...
+    // enum pipe_tex_filter: NEAREST=0, LINEAR=1
+    // enum pipe_tex_mipfilter: NEAREST=0, LINEAR=1, NONE=2
+    const PIPE_TEX_WRAP_REPEAT: u32 = 0;
+    const PIPE_TEX_WRAP_CLAMP_TO_EDGE: u32 = 2;
+    const PIPE_TEX_FILTER_NEAREST: u32 = 0;
+    const PIPE_TEX_FILTER_LINEAR: u32 = 1;
+    const PIPE_TEX_MIPFILTER_NONE: u32 = 2;
+
+    let wrap_s = match desc.wrap_s {
+        trueos_gfx_core::SamplerWrap::ClampToEdge => PIPE_TEX_WRAP_CLAMP_TO_EDGE,
+        trueos_gfx_core::SamplerWrap::Repeat => PIPE_TEX_WRAP_REPEAT,
+    };
+    let wrap_t = match desc.wrap_t {
+        trueos_gfx_core::SamplerWrap::ClampToEdge => PIPE_TEX_WRAP_CLAMP_TO_EDGE,
+        trueos_gfx_core::SamplerWrap::Repeat => PIPE_TEX_WRAP_REPEAT,
+    };
+    let wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+    let min_img = match desc.min_filter {
+        trueos_gfx_core::SamplerFilter::Nearest => PIPE_TEX_FILTER_NEAREST,
+        trueos_gfx_core::SamplerFilter::Linear => PIPE_TEX_FILTER_LINEAR,
+    };
+    let mag_img = match desc.mag_filter {
+        trueos_gfx_core::SamplerFilter::Nearest => PIPE_TEX_FILTER_NEAREST,
+        trueos_gfx_core::SamplerFilter::Linear => PIPE_TEX_FILTER_LINEAR,
+    };
+    let min_mip = PIPE_TEX_MIPFILTER_NONE;
+
+    let mut s0 = 0u32;
+    s0 |= (wrap_s & 0x7) << 0;
+    s0 |= (wrap_t & 0x7) << 3;
+    s0 |= (wrap_r & 0x7) << 6;
+    s0 |= (min_img & 0x3) << 9;
+    s0 |= (min_mip & 0x3) << 11;
+    s0 |= (mag_img & 0x3) << 13;
+
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_SAMPLER_STATE,
+        VIRGL_OBJ_SAMPLER_STATE_SIZE,
+    ));
+    buf.push(sampler_handle);
+    buf.push(s0);
+    buf.push(fui(0.0)); // lod_bias
+    buf.push(fui(0.0)); // min_lod
+    buf.push(fui(1000.0)); // max_lod
+    // border color (rgba) - not used for clamp-to-edge.
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+    buf.push(0);
+
+    let _ = PIPE_TEX_WRAP_REPEAT;
+    let _ = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+    let _ = PIPE_TEX_FILTER_NEAREST;
+    let _ = PIPE_TEX_FILTER_LINEAR;
+    let _ = PIPE_TEX_MIPFILTER_NONE;
+}
+
+fn encode_create_sampler_view(
+    buf: &mut VirglCmdBuf,
+    view_handle: u32,
+    res_handle: u32,
+    format: u32,
+) {
+    // virgl_protocol.h: VIRGL_OBJ_SAMPLER_VIEW_SIZE = 6
+    const VIRGL_OBJ_SAMPLER_VIEW_SIZE: u32 = 6;
+
+    // virgl_protocol.h packs 4 swizzles (3 bits each). Values match Gallium's
+    // enum pipe_swizzle: X=0, Y=1, Z=2, W=3, 0=4, 1=5, NONE=6.
+    // Identity RGBA swizzle is required for correct sampling.
+    const PIPE_SWIZZLE_X: u32 = 0;
+    const PIPE_SWIZZLE_Y: u32 = 1;
+    const PIPE_SWIZZLE_Z: u32 = 2;
+    const PIPE_SWIZZLE_W: u32 = 3;
+    let swizzle = ((PIPE_SWIZZLE_X & 0x7) << 0)
+        | ((PIPE_SWIZZLE_Y & 0x7) << 3)
+        | ((PIPE_SWIZZLE_Z & 0x7) << 6)
+        | ((PIPE_SWIZZLE_W & 0x7) << 9);
+
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_CREATE_OBJECT,
+        VIRGL_OBJECT_SAMPLER_VIEW,
+        VIRGL_OBJ_SAMPLER_VIEW_SIZE,
+    ));
+    buf.push(view_handle);
+    buf.push(res_handle);
+    buf.push(format);
+    buf.push(0); // texture_layer / first element
+    buf.push(0); // texture_level / last element
+    buf.push(swizzle);
+}
+
+fn encode_set_sampler_views(
+    buf: &mut VirglCmdBuf,
+    shader_type: u32,
+    start_slot: u32,
+    views: &[u32],
+) {
+    let num = views.len().min(32) as u32;
+    let len = num + 2;
+    buf.push(virgl_cmd0(VIRGL_CCMD_SET_SAMPLER_VIEWS, 0, len));
+    buf.push(shader_type);
+    buf.push(start_slot);
+    for i in 0..(num as usize) {
+        buf.push(views[i]);
+    }
+}
+
+fn encode_bind_sampler_states(
+    buf: &mut VirglCmdBuf,
+    shader_type: u32,
+    start_slot: u32,
+    states: &[u32],
+) {
+    let num = states.len().min(32) as u32;
+    let len = num + 2;
+    buf.push(virgl_cmd0(VIRGL_CCMD_BIND_SAMPLER_STATES, 0, len));
+    buf.push(shader_type);
+    buf.push(start_slot);
+    for i in 0..(num as usize) {
+        buf.push(states[i]);
+    }
 }
 
 fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8]) {
@@ -2974,6 +3231,42 @@ fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8
     buf.push(0); // box z
     buf.push(data.len() as u32); // box width
     buf.push(1); // box height
+    buf.push(1); // box depth
+    buf.push_bytes_padded(data);
+}
+
+fn encode_inline_write_texture(
+    buf: &mut VirglCmdBuf,
+    res_handle: u32,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) {
+    // Matches virgl_encoder_inline_write() with a provided box for a 2D texture.
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    let data = if rgba.len() >= expected {
+        &rgba[..expected]
+    } else {
+        rgba
+    };
+    let data_dwords = (data.len() as u32).div_ceil(4);
+    buf.push(virgl_cmd0(
+        VIRGL_CCMD_RESOURCE_INLINE_WRITE,
+        0,
+        data_dwords + 11,
+    ));
+    buf.push(res_handle);
+    buf.push(0); // level
+    buf.push(0); // usage
+    buf.push(width.saturating_mul(4)); // stride
+    buf.push(width.saturating_mul(height).saturating_mul(4)); // layer_stride
+    buf.push(0); // box x
+    buf.push(0); // box y
+    buf.push(0); // box z
+    buf.push(width); // box width
+    buf.push(height); // box height
     buf.push(1); // box depth
     buf.push_bytes_padded(data);
 }
@@ -3027,12 +3320,30 @@ fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
         VIRGL_OBJECT_BLEND,
         VIRGL_OBJ_BLEND_SIZE,
     ));
+    // Values from Mesa pipe/p_defines.h
+    const PIPE_BLEND_ADD: u32 = 0;
+    const PIPE_BLENDFACTOR_ONE: u32 = 1;
+    const PIPE_BLENDFACTOR_INV_SRC_ALPHA: u32 = 0x13;
+
     buf.push(blend_handle);
     buf.push(0); // s0
     buf.push(0); // s1
     for i in 0..8u32 {
         let mut rt = 0u32;
         if i == 0 {
+            // Enable blending on RT0.
+            rt |= 1 << 0;
+            // Pixi/WebGL generally uses premultiplied alpha content.
+            // For premultiplied alpha, correct blending is:
+            //   RGB = src*1 + dst*(1-srcA)
+            rt |= (PIPE_BLEND_ADD & 0x7) << 1;
+            rt |= (PIPE_BLENDFACTOR_ONE & 0x1f) << 4;
+            rt |= (PIPE_BLENDFACTOR_INV_SRC_ALPHA & 0x1f) << 9;
+            // Alpha blend: keep alpha reasonable (not currently used by scanout)
+            rt |= (PIPE_BLEND_ADD & 0x7) << 14;
+            rt |= (PIPE_BLENDFACTOR_ONE & 0x1f) << 17;
+            rt |= (PIPE_BLENDFACTOR_INV_SRC_ALPHA & 0x1f) << 22;
+            // Write all color channels.
             rt |= (PIPE_MASK_RGBA & 0xF) << 27;
         }
         buf.push(rt);
@@ -3097,6 +3408,7 @@ fn encode_draw_vbo(buf: &mut VirglCmdBuf) {
 
 static VIRGL_NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static VIRGL_NEXT_RES_ID: AtomicU32 = AtomicU32::new(1);
+static VIRGL_NEXT_OBJ_HANDLE: AtomicU32 = AtomicU32::new(64);
 
 fn alloc_ctx_id() -> u32 {
     // ctx_id 0 is reserved.
@@ -3109,6 +3421,18 @@ fn alloc_res_pair() -> (u32, u32) {
     let base = VIRGL_NEXT_RES_ID.fetch_add(2, Ordering::Relaxed);
     let base = if base == 0 { 1 } else { base };
     (base, base.wrapping_add(1))
+}
+
+fn alloc_res_id() -> u32 {
+    // resource_id 0 is reserved.
+    let id = VIRGL_NEXT_RES_ID.fetch_add(1, Ordering::Relaxed);
+    if id == 0 { 1 } else { id }
+}
+
+fn alloc_obj_handle() -> u32 {
+    // object handle 0 is reserved.
+    let id = VIRGL_NEXT_OBJ_HANDLE.fetch_add(1, Ordering::Relaxed);
+    if id == 0 { 64 } else { id }
 }
 
 fn alloc_res_triple() -> (u32, u32, u32) {
