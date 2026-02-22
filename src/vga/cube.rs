@@ -1,9 +1,19 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use libm::{cosf, roundf, sinf, sqrtf};
-use spin::Mutex;
 
 static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
+
+// Store the current cube orientation without locks.
+//
+// We keep the quaternion components as raw f32 bit patterns so we can use Atomics
+// in no_std without relying on a mutex. Coherent multi-word updates are not required
+// for this visual-only state.
+const F32_ONE_BITS: u32 = 0x3F80_0000;
+static ORIENT_W: AtomicU32 = AtomicU32::new(F32_ONE_BITS);
+static ORIENT_X: AtomicU32 = AtomicU32::new(0);
+static ORIENT_Y: AtomicU32 = AtomicU32::new(0);
+static ORIENT_Z: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Copy, Clone)]
 struct Quat {
@@ -82,8 +92,6 @@ impl Quat {
     }
 }
 
-static ORIENT: Mutex<Quat> = Mutex::new(Quat::identity());
-
 pub fn tick() {
     // BSP-only bring-up indicator drawn directly into the Limine framebuffer.
     // Intentionally synced to *raw calls*: one animation step per `tick()` call.
@@ -102,11 +110,18 @@ pub fn tick() {
     let az = 0.18 * cosf(nf * 0.013);
     let dq = Quat::from_axis_angle(ax, ay, az, angle);
 
-    let q = {
-        let mut q = ORIENT.lock();
-        *q = dq.mul(*q).normalized();
-        *q
+    let q_prev = Quat {
+        w: f32::from_bits(ORIENT_W.load(Ordering::Relaxed)),
+        x: f32::from_bits(ORIENT_X.load(Ordering::Relaxed)),
+        y: f32::from_bits(ORIENT_Y.load(Ordering::Relaxed)),
+        z: f32::from_bits(ORIENT_Z.load(Ordering::Relaxed)),
     };
+
+    let q = dq.mul(q_prev).normalized();
+    ORIENT_W.store(q.w.to_bits(), Ordering::Relaxed);
+    ORIENT_X.store(q.x.to_bits(), Ordering::Relaxed);
+    ORIENT_Y.store(q.y.to_bits(), Ordering::Relaxed);
+    ORIENT_Z.store(q.z.to_bits(), Ordering::Relaxed);
 
     let _ = super::with_framebuffer(|fb| {
         // Place a small cube at the top-right, avoiding the banner text on the left.
