@@ -109,8 +109,18 @@ pub(crate) async fn handle_command_action_for_tools(
     spawner: &Spawner,
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
+    let mut pre_cube_term: Option<(usize, usize)> = None;
     actions::handle_command_action(
-        action, mode, cube_mode, cube, io, term_cols, term_rows, spawner, history,
+        action,
+        mode,
+        cube_mode,
+        cube,
+        io,
+        &mut pre_cube_term,
+        term_cols,
+        term_rows,
+        spawner,
+        history,
     )
     .await;
 }
@@ -290,6 +300,7 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
 pub(crate) enum CommandAction {
     None,
     Pending(PendingAction),
+    SetTermSize { cols: usize, rows: usize },
     ShowInstallDiskTable,
     ShowFormatDiskTable,
     ShowUpdateDiskTable,
@@ -339,6 +350,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
     cube.reset();
     enter_cube_mode(io, &mut term_cols, &mut term_rows);
 
+    // When entering cube/ico modes from the normal shell, we save the previous
+    // terminal size so we can restore it on exit. This matters if the user
+    // previously used `set <cols> <rows>`.
+    let mut pre_cube_term: Option<(usize, usize)> = None;
+
     // Treat CRLF as a single Enter (common on serial/USB bridges).
     let mut saw_cr: bool = false;
     let mut next_status_refresh: Instant = Instant::now() + EmbassyDuration::from_millis(250);
@@ -362,8 +378,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
             if cube_mode {
                 if b == b'\r' || b == b'\n' {
                     cube_mode = false;
-                    term_cols = DEFAULT_TERM_COLS;
-                    term_rows = DEFAULT_TERM_ROWS;
+                    let (cols, rows) = pre_cube_term
+                        .take()
+                        .unwrap_or((DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS));
+                    term_cols = cols;
+                    term_rows = rows;
                     io.write_str(crate::ecma48::CLEAR_SCREEN);
                     io.write_str(crate::ecma48::HOME);
                     write_banner(io, term_cols);
@@ -463,6 +482,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                                 &mut cube_mode,
                                 &mut cube,
                                 io,
+                                &mut pre_cube_term,
                                 &mut term_cols,
                                 &mut term_rows,
                                 &spawner,
@@ -513,6 +533,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend) {
                             &mut cube_mode,
                             &mut cube,
                             io,
+                            &mut pre_cube_term,
                             &mut term_cols,
                             &mut term_rows,
                             &spawner,
@@ -730,13 +751,23 @@ async fn handle_command_action(
     cube_mode: &mut bool,
     cube: &mut CubeState,
     io: &'static dyn ShellBackend,
+    pre_cube_term: &mut Option<(usize, usize)>,
     term_cols: &mut usize,
     term_rows: &mut usize,
     spawner: &Spawner,
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
     actions::handle_command_action(
-        action, mode, cube_mode, cube, io, term_cols, term_rows, spawner, history,
+        action,
+        mode,
+        cube_mode,
+        cube,
+        io,
+        pre_cube_term,
+        term_cols,
+        term_rows,
+        spawner,
+        history,
     )
     .await;
 }
