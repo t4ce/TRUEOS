@@ -45,6 +45,8 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
+static GFX_BOOT_AUTO_STARTED: AtomicBool = AtomicBool::new(false);
+
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_EVENT_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
@@ -145,6 +147,40 @@ fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::tga::tga_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
+    // Always call init first so later backend switches have stored framebuffers.
+    crate::gfx::init(crate::limine::framebuffer_response());
+
+    // Wait for virtio-gpu before attempting to switch to virgl.
+    //
+    // If `gfx_virgl` is not enabled, do not auto-start the Pixi UI here (it would render
+    // through the null backend and appear broken).
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    {
+        if !crate::gfx::virtio_gpu_3d::is_present_cached() {
+            return SpawnAttempt::Skipped;
+        }
+
+        if !crate::gfx::is_virgl_active() {
+            if !crate::gfx::switch_to_virgl() {
+                return SpawnAttempt::Skipped;
+            }
+        }
+    }
+
+    // Match the interactive `gfx` command behavior: boot the Pixi UI once gfx is active.
+    match spawner.spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -360,6 +396,14 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &TGA_TASK_STARTED,
         spawn: spawn_tga_task,
+    },
+    // Boot-time graphics bringup (virtio-gpu/virgl).
+    TaskSpec {
+        name: "gfx-boot-auto",
+        disabled: false,
+        required: 0,
+        started: &GFX_BOOT_AUTO_STARTED,
+        spawn: spawn_gfx_boot_auto,
     },
     TaskSpec {
         name: "usb-controller-tasks",
