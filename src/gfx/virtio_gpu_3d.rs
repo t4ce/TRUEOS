@@ -44,6 +44,7 @@ const VIRTIO_PCI_CAP_DEVICE_CFG: u8 = 4;
 
 // Virtio-gpu command/response ids (subset).
 const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+const VIRTIO_GPU_CMD_GET_EDID: u32 = 0x010A;
 const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
 const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
 const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
@@ -57,6 +58,7 @@ const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0207;
 
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
 // --- Minimal virgl/Gallium constants we need for a triangle ---
 // From virglrenderer 1.0.0 headers (Gallium subset):
 const PIPE_SHADER_VERTEX: u32 = 0;
@@ -623,6 +625,8 @@ struct Rect {
 
 const MAX_SCANOUTS: usize = 16;
 
+const EDID_MAX_BYTES: usize = 1024;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct DisplayOne {
@@ -636,6 +640,23 @@ struct DisplayOne {
 struct RespDisplayInfo {
     hdr: CtrlHdr,
     pmodes: [DisplayOne; MAX_SCANOUTS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CmdGetEdid {
+    hdr: CtrlHdr,
+    scanout_id: u32,
+    padding: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RespEdid {
+    hdr: CtrlHdr,
+    size: u32,
+    padding: u32,
+    edid: [u8; EDID_MAX_BYTES],
 }
 
 #[repr(C)]
@@ -1138,6 +1159,37 @@ impl VirtioGpu3d {
         Some((0, 1024, 768))
     }
 
+    pub fn get_edid(&mut self, scanout_id: u32, out: &mut [u8]) -> Option<usize> {
+        if out.is_empty() {
+            return Some(0);
+        }
+
+        let req = CmdGetEdid {
+            hdr: CtrlHdr {
+                type_: VIRTIO_GPU_CMD_GET_EDID,
+                flags: 0,
+                fence_id: 0,
+                ctx_id: 0,
+                padding: 0,
+            },
+            scanout_id,
+            padding: 0,
+        };
+
+        let resp_type = self.ctrl_submit_bytes_ret_type(as_bytes(&req))?;
+        if resp_type != VIRTIO_GPU_RESP_OK_EDID {
+            return None;
+        }
+
+        let resp = unsafe { &*(self.resp.virt() as *const RespEdid) };
+        let n = (resp.size as usize).min(EDID_MAX_BYTES).min(out.len());
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(resp.edid.as_ptr(), out.as_mut_ptr(), n);
+        }
+        Some(n)
+    }
+
     pub fn set_scanout(
         &mut self,
         scanout_id: u32,
@@ -1604,6 +1656,8 @@ pub struct VirglGfxBackend {
 
     swapchain: SwapchainDesc,
 
+    refresh_millihz: Option<u32>,
+
     buffers: Vec<Option<HostBuffer>>,
     shaders: Vec<Option<Vec<u8>>>,
     pipelines: Vec<Option<HostPipeline>>,
@@ -1620,12 +1674,63 @@ pub struct VirglGfxBackend {
     completed_fence: u64,
 }
 
+fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
+    // EDID base block is 128 bytes. We only parse the first block.
+    if edid.len() < 128 {
+        return None;
+    }
+    const HDR: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    if edid[..8] != HDR {
+        return None;
+    }
+
+    // Preferred timing is typically the first Detailed Timing Descriptor at offset 54.
+    // Each DTD is 18 bytes; skip entries with pixel clock = 0 (monitor descriptor).
+    for i in 0..4usize {
+        let off = 54 + i * 18;
+        let b = &edid[off..off + 18];
+        let pclk_10khz = u16::from_le_bytes([b[0], b[1]]) as u64;
+        if pclk_10khz == 0 {
+            continue;
+        }
+
+        let h_active = (b[2] as u64) | (((b[4] as u64) & 0xF0) << 4);
+        let h_blank = (b[3] as u64) | (((b[4] as u64) & 0x0F) << 8);
+        let v_active = (b[5] as u64) | (((b[7] as u64) & 0xF0) << 4);
+        let v_blank = (b[6] as u64) | (((b[7] as u64) & 0x0F) << 8);
+
+        let h_total = h_active.saturating_add(h_blank);
+        let v_total = v_active.saturating_add(v_blank);
+        if h_total == 0 || v_total == 0 {
+            continue;
+        }
+
+        let pixel_clock_hz = pclk_10khz.saturating_mul(10_000);
+        let denom = h_total.saturating_mul(v_total);
+        if denom == 0 {
+            continue;
+        }
+
+        let mhz = pixel_clock_hz.saturating_mul(1000) / denom;
+        return Some(mhz.min(u32::MAX as u64) as u32);
+    }
+
+    None
+}
+
 impl VirglGfxBackend {
     pub fn init(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
         let (scanout_id, disp_w, disp_h) = gpu.get_display_info()?;
+
+        // Best-effort refresh estimation via EDID.
+        let refresh_millihz = {
+            let mut buf = [0u8; EDID_MAX_BYTES];
+            gpu.get_edid(scanout_id, &mut buf)
+                .and_then(|n| edid_preferred_refresh_millihz(&buf[..n]))
+        };
 
         let ctx_id = alloc_ctx_id();
         if !gpu.ctx_create(ctx_id) {
@@ -1819,6 +1924,8 @@ impl VirglGfxBackend {
             dsa_handle,
             rs_handle,
             swapchain,
+
+            refresh_millihz,
             buffers: Vec::new(),
             shaders: Vec::new(),
             pipelines: Vec::new(),
@@ -2672,6 +2779,21 @@ impl GfxPresent for VirglGfxBackend {
 
     fn swapchain_desc(&self) -> SwapchainDesc {
         self.swapchain
+    }
+
+    fn display_refresh_millihz(&mut self) -> Option<u32> {
+        if self.refresh_millihz.is_some() {
+            return self.refresh_millihz;
+        }
+
+        // Lazy retry: EDID may become available after initial scanout setup.
+        let mut buf = [0u8; EDID_MAX_BYTES];
+        let mhz = self
+            .gpu
+            .get_edid(self.scanout_id, &mut buf)
+            .and_then(|n| edid_preferred_refresh_millihz(&buf[..n]));
+        self.refresh_millihz = mhz;
+        mhz
     }
 }
 
