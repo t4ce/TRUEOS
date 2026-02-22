@@ -27,6 +27,7 @@ use crate::log;
 
 #[derive(Clone)]
 struct InternalNetbenchRequest {
+    id: u32,
     device_index: usize,
     remote: InternalNetbenchRemote,
     remote_port: u16,
@@ -39,7 +40,14 @@ enum InternalNetbenchRemote {
     V6([u8; 16]),
 }
 
-static INTERNAL_NETBENCH_REQ: spin::Mutex<Option<InternalNetbenchRequest>> = spin::Mutex::new(None);
+// Internal netbench is useful for performance tuning; allow a small amount of
+// concurrency to avoid per-flow caps on some networks.
+const INTERNAL_NETBENCH_MAX_PENDING: usize = 8;
+const INTERNAL_NETBENCH_MAX_CONCURRENT_PER_NIC: usize = 4;
+
+static INTERNAL_NETBENCH_NEXT_ID: AtomicU32 = AtomicU32::new(1);
+static INTERNAL_NETBENCH_REQS: spin::Mutex<Vec<InternalNetbenchRequest>> =
+    spin::Mutex::new(Vec::new());
 
 fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
     use alloc::format;
@@ -64,18 +72,19 @@ fn internal_netbench_format_speed(bps: u64) -> alloc::string::String {
 
 /// Submit a one-shot internal netbench run.
 ///
-/// Returns `false` if a request is already pending.
+/// Returns `false` if the internal netbench queue is full.
 pub fn internal_netbench_submit(
     device_index: usize,
     remote_ip: [u8; 4],
     remote_port: u16,
     request: &[u8],
 ) -> bool {
-    let mut guard = INTERNAL_NETBENCH_REQ.lock();
-    if guard.is_some() {
+    let mut guard = INTERNAL_NETBENCH_REQS.lock();
+    if guard.len() >= INTERNAL_NETBENCH_MAX_PENDING {
         return false;
     }
-    *guard = Some(InternalNetbenchRequest {
+    guard.push(InternalNetbenchRequest {
+        id: INTERNAL_NETBENCH_NEXT_ID.fetch_add(1, Ordering::Relaxed),
         device_index,
         remote: InternalNetbenchRemote::V4(remote_ip),
         remote_port,
@@ -90,11 +99,12 @@ pub fn internal_netbench_submit_v6(
     remote_port: u16,
     request: &[u8],
 ) -> bool {
-    let mut guard = INTERNAL_NETBENCH_REQ.lock();
-    if guard.is_some() {
+    let mut guard = INTERNAL_NETBENCH_REQS.lock();
+    if guard.len() >= INTERNAL_NETBENCH_MAX_PENDING {
         return false;
     }
-    *guard = Some(InternalNetbenchRequest {
+    guard.push(InternalNetbenchRequest {
+        id: INTERNAL_NETBENCH_NEXT_ID.fetch_add(1, Ordering::Relaxed),
         device_index,
         remote: InternalNetbenchRemote::V6(remote_ip),
         remote_port,
@@ -104,6 +114,7 @@ pub fn internal_netbench_submit_v6(
 }
 
 struct InternalNetbenchState {
+    id: u32,
     socket: SocketHandle,
     request: Vec<u8>,
     request_sent: bool,
@@ -121,6 +132,12 @@ struct InternalNetbenchState {
     last_tcp_state: Option<tcp::State>,
 }
 
+struct InternalNetbenchCombinedLog {
+    start_tick: u64,
+    last_log_tick: u64,
+    last_log_received: u64,
+}
+
 // Boot can involve several concurrent TCP/TLS connections (DoH/DoT, fetches,
 // net-shell, etc.). 8 was too tight and caused transient "no sockets available"
 // failures under load.
@@ -135,6 +152,7 @@ const NET_POLL_SLEEP_US: u64 = 100;
 const NET_SERVICE_SLEEP_US: u64 = 100;
 const NET_LOG_RX_TAP: bool = false;
 const NET_LOG_TX_TAP: bool = false;
+const NET_LOG_ARP_RX: bool = false;
 const NET_LOG_DHCP_VERBOSE: bool = false;
 const NET_LOG_IPV6_RA: bool = false;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
@@ -702,7 +720,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                     let opcode =
                         u16::from_be_bytes([packet[l2_off + 6], packet[l2_off + 7]]);
                     // Always log replies; sample requests.
-                    if opcode == 2 || arp_count <= 32 {
+                    if NET_LOG_ARP_RX && (opcode == 2 || arp_count <= 32) {
                         let sha = &packet[l2_off + 8..l2_off + 14];
                         let spa = [
                             packet[l2_off + 14],
@@ -1430,7 +1448,8 @@ struct NetService {
 
     tcp_next_ephemeral: u16,
 
-    internal_netbench: Option<InternalNetbenchState>,
+    internal_netbench: Vec<InternalNetbenchState>,
+    internal_netbench_combined: Option<InternalNetbenchCombinedLog>,
 }
 
 impl NetService {
@@ -1609,7 +1628,8 @@ impl NetService {
 
             tcp_next_ephemeral: 49152,
 
-            internal_netbench: None,
+            internal_netbench: Vec::new(),
+            internal_netbench_combined: None,
         }
     }
 
@@ -1661,259 +1681,350 @@ impl NetService {
 
     fn internal_netbench_tick(&mut self, timestamp: Instant) -> bool {
         let mut did_work = false;
-        // Start a run if we have a pending request targeted at this NIC.
-        if self.internal_netbench.is_none() {
+
+        // Start runs if we have pending requests targeted at this NIC.
+        while self.internal_netbench.len() < INTERNAL_NETBENCH_MAX_CONCURRENT_PER_NIC {
             let maybe_req = {
-                let mut g = INTERNAL_NETBENCH_REQ.lock();
-                if g.as_ref().map(|r| r.device_index) == Some(self.device_index) {
-                    g.take()
-                } else {
-                    None
+                let mut g = INTERNAL_NETBENCH_REQS.lock();
+                let pos = g.iter().position(|r| r.device_index == self.device_index);
+                pos.map(|p| g.remove(p))
+            };
+            let Some(req) = maybe_req else {
+                break;
+            };
+
+            let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
+            let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
+            let mut sock = tcp::Socket::new(rx, tx);
+            sock.set_keep_alive(Some(SmolDuration::from_secs(30)));
+
+            let local_port = self.tcp_next_ephemeral;
+            self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+
+            let (local, remote, remote_log_v4, remote_log_v6) = match req.remote {
+                InternalNetbenchRemote::V4(ip) => {
+                    let Some(local_ip) = self.local_ipv4 else {
+                        crate::log!("netbench-internal: no ipv4 configured\n");
+                        return did_work;
+                    };
+                    (
+                        IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port),
+                        IpEndpoint::new(
+                            IpAddress::Ipv4(Ipv4Address::from_octets(ip)),
+                            req.remote_port,
+                        ),
+                        Some(ip),
+                        None,
+                    )
+                }
+                InternalNetbenchRemote::V6(ip) => {
+                    let Some(local_ip) = self.local_ipv6_global else {
+                        crate::log!(
+                            "netbench-internal: no global ipv6 yet (dev={})\n",
+                            self.device_index
+                        );
+                        return did_work;
+                    };
+                    (
+                        IpEndpoint::new(IpAddress::Ipv6(local_ip), local_port),
+                        IpEndpoint::new(
+                            IpAddress::Ipv6(Ipv6Address::from_octets(ip)),
+                            req.remote_port,
+                        ),
+                        None,
+                        Some(ip),
+                    )
                 }
             };
 
-            if let Some(req) = maybe_req {
-                let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
-                let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
-                let mut sock = tcp::Socket::new(rx, tx);
-                sock.set_keep_alive(Some(SmolDuration::from_secs(30)));
+            if sock.connect(self.iface.context(), remote, local).is_err() {
+                crate::log!("netbench-internal: connect failed id={}\n", req.id);
+                return did_work;
+            }
 
-                let local_port = self.tcp_next_ephemeral;
-                self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+            let sh = self.sockets.add(sock);
+            if let Some(ip) = remote_log_v4 {
+                crate::log!(
+                    "netbench-internal: started id={} dev={} remote={}.{}.{}.{}:{}\n",
+                    req.id,
+                    self.device_index,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3],
+                    req.remote_port
+                );
+            } else if let Some(ip) = remote_log_v6 {
+                crate::log!(
+                    "netbench-internal: started id={} dev={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
+                    req.id,
+                    self.device_index,
+                    ip[0],
+                    ip[1],
+                    ip[2],
+                    ip[3],
+                    req.remote_port
+                );
+            }
 
-                let (local, remote, remote_log_v4, remote_log_v6) = match req.remote {
-                    InternalNetbenchRemote::V4(ip) => {
-                        let Some(local_ip) = self.local_ipv4 else {
-                            crate::log!("netbench-internal: no ipv4 configured\n");
-                            return did_work;
-                        };
-                        (
-                            IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port),
-                            IpEndpoint::new(
-                                IpAddress::Ipv4(Ipv4Address::from_octets(ip)),
-                                req.remote_port,
-                            ),
-                            Some(ip),
-                            None,
-                        )
-                    }
-                    InternalNetbenchRemote::V6(ip) => {
-                        let Some(local_ip) = self.local_ipv6_global else {
-                            crate::log!(
-                                "netbench-internal: no global ipv6 yet (dev={})\n",
-                                self.device_index
-                            );
-                            return did_work;
-                        };
-                        (
-                            IpEndpoint::new(IpAddress::Ipv6(local_ip), local_port),
-                            IpEndpoint::new(
-                                IpAddress::Ipv6(Ipv6Address::from_octets(ip)),
-                                req.remote_port,
-                            ),
-                            None,
-                            Some(ip),
-                        )
-                    }
-                };
-
-                if sock.connect(self.iface.context(), remote, local).is_err() {
-                    crate::log!("netbench-internal: connect failed\n");
-                    return did_work;
-                }
-
-                let sh = self.sockets.add(sock);
-                let now_tick = embassy_time_driver::now();
-                if let Some(ip) = remote_log_v4 {
-                    crate::log!(
-                        "netbench-internal: started dev={} remote={}.{}.{}.{}:{}\n",
-                        self.device_index,
-                        ip[0],
-                        ip[1],
-                        ip[2],
-                        ip[3],
-                        req.remote_port
-                    );
-                } else if let Some(ip) = remote_log_v6 {
-                    crate::log!(
-                        "netbench-internal: started dev={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{}\n",
-                        self.device_index,
-                        ip[0],
-                        ip[1],
-                        ip[2],
-                        ip[3],
-                        req.remote_port
-                    );
-                }
-
-                self.internal_netbench = Some(InternalNetbenchState {
-                    socket: sh,
-                    request: req.request,
-                    request_sent: false,
-                    header: [0u8; 16 * 1024],
-                    header_len: 0,
-                    header_done: false,
-                    expected_len: None,
-                    received: 0,
+            let now_tick = embassy_time_driver::now();
+            if self.internal_netbench.is_empty() {
+                // First active run: initialize combined logging window.
+                self.internal_netbench_combined = Some(InternalNetbenchCombinedLog {
                     start_tick: now_tick,
                     last_log_tick: now_tick,
                     last_log_received: 0,
-                    last_tcp_state: None,
                 });
-
-                did_work = true;
             }
-        }
 
-        let Some(st) = self.internal_netbench.as_mut() else {
-            return did_work;
-        };
+            self.internal_netbench.push(InternalNetbenchState {
+                id: req.id,
+                socket: sh,
+                request: req.request,
+                request_sent: false,
+                header: [0u8; 16 * 1024],
+                header_len: 0,
+                header_done: false,
+                expected_len: None,
+                received: 0,
+                start_tick: now_tick,
+                last_log_tick: now_tick,
+                last_log_received: 0,
+                last_tcp_state: None,
+            });
 
-        let sock = self.sockets.get_mut::<tcp::Socket>(st.socket);
-
-        // Log TCP state transitions for bring-up debugging.
-        let cur_state = sock.state();
-        if st.last_tcp_state != Some(cur_state) {
-            st.last_tcp_state = Some(cur_state);
-            crate::log!(
-                "netbench-internal: tcp state={:?} open={} active={} can_send={} may_send={} can_recv={} may_recv={}\n",
-                cur_state,
-                sock.is_open() as u8,
-                sock.is_active() as u8,
-                sock.can_send() as u8,
-                sock.may_send() as u8,
-                sock.can_recv() as u8,
-                sock.may_recv() as u8
-            );
-        }
-
-        // Send request once we can send.
-        if !st.request_sent
-            && sock.can_send()
-            && sock.may_send()
-            && sock.send_slice(&st.request[..]).is_ok()
-        {
-            st.request_sent = true;
-            crate::log!("netbench-internal: request sent\n");
             did_work = true;
         }
 
-        // Drain receive data without allocating/copying into events.
-        if sock.can_recv() && sock.may_recv() {
-            let mut scratch = POLL_SCRATCH_BUF.lock();
-            let buf = &mut *scratch;
-
-            for _ in 0..64 {
-                let Ok(len) = sock.recv_slice(buf) else {
-                    break;
-                };
-                if len == 0 {
-                    break;
-                }
-
-                did_work = true;
-                let bytes = &buf[..len];
-
-                if !st.header_done {
-                    let space = st.header.len().saturating_sub(st.header_len);
-                    let take = space.min(bytes.len());
-                    st.header[st.header_len..st.header_len + take].copy_from_slice(&bytes[..take]);
-                    st.header_len += take;
-
-                    if let Some(hend) =
-                        Self::internal_netbench_find_header_end(&st.header[..st.header_len])
-                    {
-                        st.header_done = true;
-                        st.expected_len =
-                            Self::internal_netbench_parse_content_length(&st.header[..hend]);
-                        if let Some(cl) = st.expected_len {
-                            crate::log!("netbench-internal: content-length={}\n", cl);
-                        }
-
-                        // Any remaining bytes after the header count as body.
-                        let rem = st.header_len.saturating_sub(hend);
-                        st.received = st.received.saturating_add(rem as u64);
-
-                        // Also count any bytes in this recv chunk that didn't fit into header buffer.
-                        let extra = bytes.len().saturating_sub(take);
-                        st.received = st.received.saturating_add(extra as u64);
-                    } else {
-                        // Header not complete yet; any overflow beyond header buffer is ignored.
-                    }
-                } else {
-                    st.received = st.received.saturating_add(bytes.len() as u64);
-                }
-            }
+        if self.internal_netbench.is_empty() {
+            return did_work;
         }
 
-        // Periodic log (average since start). Keep it low-frequency.
-        let now_tick = embassy_time_driver::now();
-        let hz = embassy_time_driver::TICK_HZ;
-        let elapsed_ticks = now_tick.saturating_sub(st.start_tick);
-        let elapsed_ms = if hz == 0 {
-            0
-        } else {
-            elapsed_ticks.saturating_mul(1000) / hz
-        };
-        if hz != 0 {
-            let log_every_ticks = hz; // ~1s
-            if now_tick.saturating_sub(st.last_log_tick) >= log_every_ticks {
-                let window_ticks = now_tick.saturating_sub(st.last_log_tick);
-                let window_ms = window_ticks.saturating_mul(1000) / hz;
-                let delta = st.received.saturating_sub(st.last_log_received);
-                st.last_log_tick = now_tick;
-                st.last_log_received = st.received;
+        // Drive each active run.
+        let mut i = 0usize;
+        while i < self.internal_netbench.len() {
+            let mut remove = false;
 
+            let (cur_state, elapsed_ms, received, id, header_done, expected_len, sock_open) = {
+                let st = &mut self.internal_netbench[i];
+                let sock = self.sockets.get_mut::<tcp::Socket>(st.socket);
+
+                // Log TCP state transitions for bring-up debugging.
+                let cur_state = sock.state();
+                if st.last_tcp_state != Some(cur_state) {
+                    st.last_tcp_state = Some(cur_state);
+                    crate::log!(
+                        "netbench-internal: tcp id={} state={:?} open={} active={} can_send={} may_send={} can_recv={} may_recv={}\n",
+                        st.id,
+                        cur_state,
+                        sock.is_open() as u8,
+                        sock.is_active() as u8,
+                        sock.can_send() as u8,
+                        sock.may_send() as u8,
+                        sock.can_recv() as u8,
+                        sock.may_recv() as u8
+                    );
+                }
+
+                // Send request once we can send.
+                if !st.request_sent
+                    && sock.can_send()
+                    && sock.may_send()
+                    && sock.send_slice(&st.request[..]).is_ok()
+                {
+                    st.request_sent = true;
+                    crate::log!("netbench-internal: request sent id={}\n", st.id);
+                    did_work = true;
+                }
+
+                // Drain receive data without allocating/copying into events.
+                if sock.can_recv() && sock.may_recv() {
+                    let mut scratch = POLL_SCRATCH_BUF.lock();
+                    let buf = &mut *scratch;
+
+                    for _ in 0..64 {
+                        let Ok(len) = sock.recv_slice(buf) else {
+                            break;
+                        };
+                        if len == 0 {
+                            break;
+                        }
+
+                        did_work = true;
+                        let bytes = &buf[..len];
+
+                        if !st.header_done {
+                            let space = st.header.len().saturating_sub(st.header_len);
+                            let take = space.min(bytes.len());
+                            st.header[st.header_len..st.header_len + take]
+                                .copy_from_slice(&bytes[..take]);
+                            st.header_len += take;
+
+                            if let Some(hend) =
+                                Self::internal_netbench_find_header_end(&st.header[..st.header_len])
+                            {
+                                st.header_done = true;
+                                st.expected_len = Self::internal_netbench_parse_content_length(
+                                    &st.header[..hend],
+                                );
+                                if let Some(cl) = st.expected_len {
+                                    crate::log!(
+                                        "netbench-internal: content-length id={} len={}\n",
+                                        st.id,
+                                        cl
+                                    );
+                                }
+
+                                // Any remaining bytes after the header count as body.
+                                let rem = st.header_len.saturating_sub(hend);
+                                st.received = st.received.saturating_add(rem as u64);
+
+                                // Also count any bytes in this recv chunk that didn't fit into header buffer.
+                                let extra = bytes.len().saturating_sub(take);
+                                st.received = st.received.saturating_add(extra as u64);
+                            }
+                        } else {
+                            st.received = st.received.saturating_add(bytes.len() as u64);
+                        }
+                    }
+                }
+
+                // Periodic log (average since start). Keep it low-frequency.
+                let now_tick = embassy_time_driver::now();
+                let hz = embassy_time_driver::TICK_HZ;
+                let elapsed_ticks = now_tick.saturating_sub(st.start_tick);
+                let elapsed_ms = if hz == 0 {
+                    0
+                } else {
+                    elapsed_ticks.saturating_mul(1000) / hz
+                };
+                if hz != 0 {
+                    let log_every_ticks = hz; // ~1s
+                    if now_tick.saturating_sub(st.last_log_tick) >= log_every_ticks {
+                        let window_ticks = now_tick.saturating_sub(st.last_log_tick);
+                        let window_ms = window_ticks.saturating_mul(1000) / hz;
+                        let delta = st.received.saturating_sub(st.last_log_received);
+                        st.last_log_tick = now_tick;
+                        st.last_log_received = st.received;
+
+                        let bps = if elapsed_ms == 0 {
+                            0
+                        } else {
+                            st.received.saturating_mul(1000) / elapsed_ms
+                        };
+
+                        let inst_bps = if window_ms == 0 {
+                            0
+                        } else {
+                            delta.saturating_mul(1000) / window_ms
+                        };
+
+                        crate::log!(
+                            "netbench-internal: rx id={} bytes={} inst={} avg={} state={:?}\n",
+                            st.id,
+                            st.received,
+                            internal_netbench_format_speed(inst_bps),
+                            internal_netbench_format_speed(bps),
+                            cur_state
+                        );
+                    }
+                }
+
+                (
+                    cur_state,
+                    elapsed_ms,
+                    st.received,
+                    st.id,
+                    st.header_done,
+                    st.expected_len,
+                    sock.is_open(),
+                )
+            };
+
+            // Completion checks.
+            let done_by_len = expected_len
+                .map(|cl| received >= cl as u64)
+                .unwrap_or(false);
+            let done_by_close = !sock_open;
+
+            if done_by_len || done_by_close {
                 let bps = if elapsed_ms == 0 {
                     0
                 } else {
-                    st.received.saturating_mul(1000) / elapsed_ms
+                    received.saturating_mul(1000) / elapsed_ms
                 };
-
-                let inst_bps = if window_ms == 0 {
-                    0
-                } else {
-                    delta.saturating_mul(1000) / window_ms
-                };
-
                 crate::log!(
-                    "netbench-internal: rx={} inst={} avg={} state={:?}\n",
-                    st.received,
-                    internal_netbench_format_speed(inst_bps),
+                    "netbench-internal: done id={} dev={} bytes={} elapsed_ms={} avg={} header_done={} state={:?}\n",
+                    id,
+                    self.device_index,
+                    received,
+                    elapsed_ms,
                     internal_netbench_format_speed(bps),
+                    header_done as u8,
                     cur_state
                 );
+
+                // Close and remove socket.
+                let sh = self.internal_netbench[i].socket;
+                {
+                    let sock = self.sockets.get_mut::<tcp::Socket>(sh);
+                    sock.close();
+                }
+                let _ = self.sockets.remove(sh);
+                remove = true;
+                did_work = true;
             }
+
+            if remove {
+                self.internal_netbench.remove(i);
+                continue;
+            }
+
+            i += 1;
         }
 
-        // Completion checks.
-        let done_by_len = st
-            .expected_len
-            .map(|cl| st.received >= cl as u64)
-            .unwrap_or(false);
-        let done_by_close = !sock.is_open();
+        // Combined throughput log: useful when multiple connections are active.
+        if !self.internal_netbench.is_empty() {
+            let total_received: u64 = self.internal_netbench.iter().map(|s| s.received).sum();
+            let now_tick = embassy_time_driver::now();
+            let hz = embassy_time_driver::TICK_HZ;
+            if hz != 0 {
+                let log_every_ticks = hz; // ~1s
+                if let Some(c) = self.internal_netbench_combined.as_mut() {
+                    if now_tick.saturating_sub(c.last_log_tick) >= log_every_ticks {
+                        let elapsed_ticks = now_tick.saturating_sub(c.start_tick);
+                        let elapsed_ms = elapsed_ticks.saturating_mul(1000) / hz;
 
-        if done_by_len || done_by_close {
-            let bps = if elapsed_ms == 0 {
-                0
-            } else {
-                st.received.saturating_mul(1000) / elapsed_ms
-            };
-            crate::log!(
-                "netbench-internal: done dev={} bytes={} elapsed_ms={} avg={} header_done={}\n",
-                self.device_index,
-                st.received,
-                elapsed_ms,
-                internal_netbench_format_speed(bps),
-                st.header_done as u8
-            );
+                        let window_ticks = now_tick.saturating_sub(c.last_log_tick);
+                        let window_ms = window_ticks.saturating_mul(1000) / hz;
+                        let delta = total_received.saturating_sub(c.last_log_received);
+                        c.last_log_tick = now_tick;
+                        c.last_log_received = total_received;
 
-            sock.close();
-            let sh = st.socket;
-            self.internal_netbench = None;
-            let _ = self.sockets.remove(sh);
+                        let bps = if elapsed_ms == 0 {
+                            0
+                        } else {
+                            total_received.saturating_mul(1000) / elapsed_ms
+                        };
+                        let inst_bps = if window_ms == 0 {
+                            0
+                        } else {
+                            delta.saturating_mul(1000) / window_ms
+                        };
 
-            did_work = true;
+                        crate::log!(
+                            "netbench-internal: combined dev={} active={} bytes={} inst={} avg={}\n",
+                            self.device_index,
+                            self.internal_netbench.len(),
+                            total_received,
+                            internal_netbench_format_speed(inst_bps),
+                            internal_netbench_format_speed(bps)
+                        );
+                    }
+                }
+            }
+        } else {
+            self.internal_netbench_combined = None;
         }
 
         let _ = timestamp; // reserved for future timeout logic
@@ -2392,6 +2503,11 @@ impl NetService {
             // resolve names on IPv6-only networks.
             self.maybe_update_ra_dns6_from_icmpv6(ipv6.payload());
 
+            // smoltcp's RA representation only exposes a single Prefix Information option.
+            // Many routers advertise multiple prefixes (e.g. a ULA and a global-unicast).
+            // Prefer global-unicast for Internet connectivity.
+            let raw_slaac_prefix = Self::pick_slaac_prefix_from_ra_icmpv6(ipv6.payload());
+
             if NET_LOG_IPV6_RA {
                 crate::log!(
                     "net: ipv6 ra dev={} from={:02x}{:02x}:{:02x}{:02x}:... lifetime_ms={} prefix_present={}\n",
@@ -2412,25 +2528,51 @@ impl NetService {
                 self.router_ipv6 = Some(ip_repr.src_addr);
             }
 
-            let Some(prefix) = prefix_info else {
+            let mut prefix_octets: Option<[u8; 16]> = raw_slaac_prefix;
+            if prefix_octets.is_none() {
+                let Some(prefix) = prefix_info else {
+                    continue;
+                };
+                if prefix.prefix_len != 64 {
+                    continue;
+                }
+                if !prefix.flags.contains(NdiscPrefixInfoFlags::ADDRCONF) {
+                    continue;
+                }
+                prefix_octets = Some(prefix.prefix.octets());
+            }
+
+            let Some(prefix_octets) = prefix_octets else {
                 continue;
             };
-            if prefix.prefix_len != 64 {
-                continue;
-            }
-            if !prefix.flags.contains(NdiscPrefixInfoFlags::ADDRCONF) {
-                continue;
-            }
 
             let mac = crate::net::mac_address_at(self.device_index).unwrap_or([0, 0, 0, 0, 0, 1]);
             let iid = eui64_interface_id(mac);
-            let mut addr = prefix.prefix.octets();
+            let mut addr = prefix_octets;
             addr[8..16].copy_from_slice(&iid);
-            let global = Ipv6Address::from_octets(addr);
+            let candidate = Ipv6Address::from_octets(addr);
+
+            // Routers may advertise multiple SLAAC prefixes (e.g. one global-unicast
+            // and one ULA). Prefer global-unicast for Internet connectivity.
+            let mut chosen = candidate;
 
             // Don't clobber a DHCPv6-leased address; treat SLAAC as best-effort.
             if !self.ipv6_global_is_dhcp {
-                self.local_ipv6_global = Some(global);
+                if let Some(existing) = self.local_ipv6_global {
+                    if ipv6_is_global_unicast(existing) && ipv6_is_ula(candidate) {
+                        chosen = existing;
+                    } else if ipv6_is_global_unicast(candidate)
+                        && (!ipv6_is_global_unicast(existing) || ipv6_is_ula(existing))
+                    {
+                        self.local_ipv6_global = Some(candidate);
+                        chosen = candidate;
+                    } else {
+                        chosen = existing;
+                    }
+                } else {
+                    self.local_ipv6_global = Some(candidate);
+                    chosen = candidate;
+                }
             }
 
             // Preserve current IPv4 CIDR(s) while updating IPv6.
@@ -2445,7 +2587,7 @@ impl NetService {
                 IpAddress::Ipv6(self.local_ipv6_ll),
                 IPV6_LINK_LOCAL_PREFIX_LEN,
             );
-            let v6_global = IpCidr::new(IpAddress::Ipv6(global), 64);
+            let v6_global = IpCidr::new(IpAddress::Ipv6(chosen), 64);
             self.iface.update_ip_addrs(|addrs| {
                 addrs.clear();
                 let _ = addrs.push(v6_ll);
@@ -2457,6 +2599,68 @@ impl NetService {
                 }
             });
         }
+    }
+
+    fn pick_slaac_prefix_from_ra_icmpv6(icmpv6_bytes: &[u8]) -> Option<[u8; 16]> {
+        // ICMPv6 Router Advertisement layout:
+        // - 4 bytes ICMPv6 header
+        // - 12 bytes RA fixed header
+        // - options...
+        // Options are: type (1), len (1, units of 8 bytes), data...
+        const ICMPV6_HDR: usize = 4;
+        const RA_FIXED: usize = 12;
+        const RA_OPT_PREFIX_INFO: u8 = 3;
+
+        if icmpv6_bytes.len() < ICMPV6_HDR + RA_FIXED {
+            return None;
+        }
+        // Only proceed if this is an RA packet.
+        if icmpv6_bytes[0] != 134 {
+            return None;
+        }
+
+        let mut idx = ICMPV6_HDR + RA_FIXED;
+        let mut fallback: Option<[u8; 16]> = None;
+
+        while idx + 2 <= icmpv6_bytes.len() {
+            let opt_type = icmpv6_bytes[idx];
+            let opt_len_units = icmpv6_bytes[idx + 1];
+            if opt_len_units == 0 {
+                break;
+            }
+            let opt_len = (opt_len_units as usize) * 8;
+            if idx + opt_len > icmpv6_bytes.len() {
+                break;
+            }
+
+            if opt_type == RA_OPT_PREFIX_INFO && opt_len >= 32 {
+                // Prefix Information option (RFC 4861):
+                // 0 type=3
+                // 1 len=4 (32 bytes)
+                // 2 prefix length
+                // 3 flags (A=0x40 autonomous)
+                // 16..32 prefix (16 bytes)
+                let prefix_len = icmpv6_bytes[idx + 2];
+                let flags = icmpv6_bytes[idx + 3];
+                let autonomous = (flags & 0x40) != 0;
+                if prefix_len == 64 && autonomous {
+                    let mut p = [0u8; 16];
+                    p.copy_from_slice(&icmpv6_bytes[idx + 16..idx + 32]);
+
+                    // Prefer global-unicast (2000::/3) over ULA (fc00::/7).
+                    if (p[0] & 0xE0) == 0x20 {
+                        return Some(p);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(p);
+                    }
+                }
+            }
+
+            idx += opt_len;
+        }
+
+        fallback
     }
 
     fn maybe_update_ra_flags_from_icmpv6(&mut self, icmpv6_bytes: &[u8]) {
@@ -3858,6 +4062,18 @@ fn ipv6_link_local_from_mac(mac: [u8; 6]) -> Ipv6Address {
     octets[..8].copy_from_slice(&IPV6_LINK_LOCAL_PREFIX);
     octets[8..16].copy_from_slice(&iid);
     Ipv6Address::from_octets(octets)
+}
+
+#[inline]
+fn ipv6_is_global_unicast(ip: Ipv6Address) -> bool {
+    // 2000::/3
+    (ip.octets()[0] & 0xE0) == 0x20
+}
+
+#[inline]
+fn ipv6_is_ula(ip: Ipv6Address) -> bool {
+    // fc00::/7
+    (ip.octets()[0] & 0xFE) == 0xFC
 }
 
 fn fallback_ipv4_for_device(device_index: usize) -> Ipv4Address {

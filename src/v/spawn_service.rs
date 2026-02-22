@@ -289,9 +289,7 @@ const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::QJS_PARSE5_SMOKE_DONE;
 
-// Temporary performance iteration aid: run the HTTP netbench workload at boot.
-// Flip to false when not actively tuning networking.
-const BOOT_NETBENCH_ENABLED: bool = true;
+const BOOT_NETBENCH_ENABLED: bool = false;
 
 static TASKS: &[TaskSpec] = &[
     // Core background services (always-on / request-driven)
