@@ -63,7 +63,7 @@ UDPPort 50000-50999
 
 sudo systemctl restart nxserver
 
-konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.102 4245; stty sane'
+konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
 
 PXE_IF=br0
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67

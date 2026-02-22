@@ -23,13 +23,11 @@ pub const BANNER_CELL_W: usize = 24;
 pub const BANNER_CELL_H: usize = 12;
 const FONT_W: usize = FONT_CELL_W;
 const FONT_H: usize = FONT_CELL_H;
-const CHAR_SPACING: usize = 1;
 const DEFAULT_FG_COLOR: u32 = 0x00_FF_FF_FF;
 const DEFAULT_BG_COLOR: u32 = 0x00_08_18_30;
 pub const DEFAULT_SHADOW_COLOR: u32 = 0x00_00_00_00;
 const BANNER_TEXT: &str = "TRUE OS §";
 const DEFAULT_TOP_MARGIN: usize = 50;
-const LOG_LINE_HEIGHT: usize = FONT_H + 1;
 
 pub(super) struct FramebufferSurface {
     addr: *mut u8,
@@ -55,8 +53,8 @@ static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
 
 fn log_advance_line(fb_height: usize, current_y: usize) -> usize {
     let start_y = TOP_MARGIN.load(Ordering::Relaxed);
-    let mut next = current_y.saturating_add(LOG_LINE_HEIGHT);
-    if next.saturating_add(LOG_LINE_HEIGHT) > fb_height {
+    let mut next = current_y.saturating_add(FONT_H);
+    if next.saturating_add(FONT_H) > fb_height {
         next = start_y;
     }
     next
@@ -136,7 +134,7 @@ fn log_colored(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
         if y < start_y {
             y = start_y;
         }
-        if y.saturating_add(LOG_LINE_HEIGHT) > fb.height {
+        if y.saturating_add(FONT_H) > fb.height {
             y = start_y;
         }
 
@@ -150,7 +148,7 @@ fn log_colored(text: &str, fg: u32, bg: u32, shadow: u32) -> bool {
                 let x = LOG_CUR_X.load(Ordering::Relaxed).min(fb.width);
                 fb.blit_text(part, x, y, fg, bg, shadow);
 
-                let advance = part.chars().count().saturating_mul(FONT_W + CHAR_SPACING);
+                let advance = part.chars().count().saturating_mul(FONT_W);
                 LOG_CUR_X.store(x.saturating_add(advance).min(fb.width), Ordering::Relaxed);
             }
 
@@ -175,11 +173,6 @@ pub fn log(args: fmt::Arguments<'_>) -> bool {
 
 pub fn framebuffer_dimensions() -> Option<(u32, u32)> {
     with_framebuffer(|fb| (fb.width as u32, fb.height as u32))
-}
-
-#[allow(dead_code)] // used by some UI paths; not always referenced
-pub fn header_height() -> usize {
-    TOP_MARGIN.load(Ordering::Relaxed)
 }
 
 pub fn draw_header_square(
@@ -287,8 +280,8 @@ impl FramebufferSurface {
         let mut cursor_x = origin_x;
         for ch in text.chars() {
             self.blit_glyph(ch, cursor_x, origin_y, fg, bg, shadow);
-            cursor_x = cursor_x.saturating_add(FONT_W + CHAR_SPACING);
-            if cursor_x >= self.width.saturating_sub(FONT_W + CHAR_SPACING) {
+            cursor_x = cursor_x.saturating_add(FONT_W);
+            if cursor_x >= self.width.saturating_sub(FONT_W) {
                 break;
             }
         }
@@ -319,8 +312,8 @@ impl FramebufferSurface {
 
             self.blit_glyph_large_cell(glyph, cursor_x, origin_y, fg, bg, shadow);
             let width = glyph.width as usize;
-            cursor_x = cursor_x.saturating_add(width.saturating_add(CHAR_SPACING));
-            if cursor_x >= self.width.saturating_sub(BANNER_CELL_W + CHAR_SPACING) {
+            cursor_x = cursor_x.saturating_add(width);
+            if cursor_x >= self.width.saturating_sub(BANNER_CELL_W) {
                 break;
             }
         }
@@ -339,6 +332,66 @@ impl FramebufferSurface {
             return;
         }
         let cache = font_cache_small();
+
+        // Fast path: default log palette uses a precolored 6x6 cache.
+        if fg == DEFAULT_FG_COLOR && bg == DEFAULT_BG_COLOR && shadow == DEFAULT_SHADOW_COLOR {
+            let glyph = cache
+                .lookup_colored(ch)
+                .or_else(|| cache.lookup_colored('?'))
+                .or_else(|| cache.lookup_colored(' '));
+            let Some(glyph) = glyph else {
+                return;
+            };
+
+            if origin_x >= self.width || origin_y >= self.height {
+                return;
+            }
+
+            let copy_w = FONT_CELL_W.min(self.width - origin_x);
+            let copy_h = FONT_CELL_H.min(self.height - origin_y);
+            if copy_w == 0 || copy_h == 0 {
+                return;
+            }
+
+            // Shadow is offset by (1,1) and only applies where alpha>0.
+            // IMPORTANT: draw shadow first, then foreground. The old per-pixel implementation
+            // would eventually overwrite any shadow pixels that overlap foreground pixels.
+            for row in 0..copy_h {
+                let sh_y = origin_y + row + 1;
+                if sh_y >= self.height {
+                    break;
+                }
+                let row_ptr = unsafe { self.addr.add(sh_y.saturating_mul(self.pitch)) as *mut u32 };
+                let dst_row = unsafe { core::slice::from_raw_parts_mut(row_ptr, self.width) };
+
+                for col in 0..copy_w {
+                    let idx = row * FONT_CELL_W + col;
+                    if (glyph.mask >> (idx as u64)) & 1 == 0 {
+                        continue;
+                    }
+                    let sh_x = origin_x + col + 1;
+                    if sh_x >= self.width {
+                        break;
+                    }
+                    dst_row[sh_x] = glyph.sh[idx];
+                }
+            }
+
+            // Copy the pre-blended foreground cell (includes background).
+            for row in 0..copy_h {
+                let dst_y = origin_y + row;
+                let row_ptr =
+                    unsafe { self.addr.add(dst_y.saturating_mul(self.pitch)) as *mut u32 };
+                let dst_row = unsafe { core::slice::from_raw_parts_mut(row_ptr, self.width) };
+
+                let src_off = row * FONT_CELL_W;
+                dst_row[origin_x..origin_x + copy_w]
+                    .copy_from_slice(&glyph.fg[src_off..src_off + copy_w]);
+            }
+
+            return;
+        }
+
         let glyph = cache
             .lookup(ch)
             .or_else(|| cache.lookup('?'))
@@ -415,14 +468,6 @@ impl FramebufferSurface {
         }
     }
 
-    #[allow(dead_code)]
-    fn read_pixel(&self, x: usize, y: usize) -> u32 {
-        let offset = y
-            .saturating_mul(self.pitch)
-            .saturating_add(x.saturating_mul(self.bytes_per_pixel));
-        unsafe { core::ptr::read_volatile(self.addr.add(offset) as *const u32) }
-    }
-
     fn plot_if_visible(&self, x: i32, y: i32, color: u32) {
         if x < 0 || y < 0 {
             return;
@@ -432,18 +477,6 @@ impl FramebufferSurface {
             return;
         }
         self.write_pixel(xu, yu, color);
-    }
-
-    #[allow(dead_code)]
-    fn read_if_visible(&self, x: i32, y: i32) -> Option<u32> {
-        if x < 0 || y < 0 {
-            return None;
-        }
-        let (xu, yu) = (x as usize, y as usize);
-        if xu >= self.width || yu >= self.height {
-            return None;
-        }
-        Some(self.read_pixel(xu, yu))
     }
 
     pub(super) fn plot(&self, x: i32, y: i32, color: u32) {
@@ -560,8 +593,22 @@ struct GlyphCell {
     alpha: [u8; FONT_CELL_W * FONT_CELL_H],
 }
 
+// Precolored glyph cells for the small 6x6 font for the default VGA log colors.
+//
+// This avoids per-pixel alpha blending in the hot path. We keep the original alpha
+// cache because it is also used for the font atlas export.
+struct GlyphCellColoredSmall {
+    // Foreground (already blended over DEFAULT_BG_COLOR for each alpha).
+    fg: [u32; FONT_CELL_W * FONT_CELL_H],
+    // Shadow (already blended over DEFAULT_BG_COLOR for each alpha).
+    sh: [u32; FONT_CELL_W * FONT_CELL_H],
+    // Bitmask of pixels with alpha>0 (LSB is cell[0]). Used to draw shadow only where needed.
+    mask: u64,
+}
+
 struct FontCacheSmall {
     glyphs: Vec<GlyphCell>,
+    colored: Vec<GlyphCellColoredSmall>,
     index: [u16; 256],
 }
 
@@ -576,6 +623,18 @@ impl FontCacheSmall {
             return None;
         }
         self.glyphs.get(idx as usize)
+    }
+
+    fn lookup_colored(&self, ch: char) -> Option<&GlyphCellColoredSmall> {
+        let code = ch as u32;
+        if code > 0xFF {
+            return None;
+        }
+        let idx = self.index[code as usize];
+        if idx == u16::MAX {
+            return None;
+        }
+        self.colored.get(idx as usize)
     }
 }
 
@@ -593,9 +652,16 @@ fn build_font_cache_small() -> FontCacheSmall {
     let font = Font::from_bytes(FONT_BYTES, settings).expect("lucida font load");
 
     let mut glyphs = Vec::new();
+    let mut colored = Vec::new();
     let mut index = [u16::MAX; 256];
 
-    fn add_glyph(font: &Font, ch: char, glyphs: &mut Vec<GlyphCell>, index: &mut [u16; 256]) {
+    fn add_glyph(
+        font: &Font,
+        ch: char,
+        glyphs: &mut Vec<GlyphCell>,
+        colored: &mut Vec<GlyphCellColoredSmall>,
+        index: &mut [u16; 256],
+    ) {
         let (metrics, bitmap) = font.rasterize(ch, FONT_CELL_H as f32);
         let mut cell = [0u8; FONT_CELL_W * FONT_CELL_H];
 
@@ -636,6 +702,25 @@ fn build_font_cache_small() -> FontCacheSmall {
 
         let slot = glyphs.len() as u16;
         glyphs.push(GlyphCell { alpha: cell });
+
+        // Build the precolored cell for the default VGA log palette.
+        let mut fg_px = [DEFAULT_BG_COLOR; FONT_CELL_W * FONT_CELL_H];
+        let mut sh_px = [DEFAULT_BG_COLOR; FONT_CELL_W * FONT_CELL_H];
+        let mut mask: u64 = 0;
+        for (i, &a) in cell.iter().enumerate() {
+            let a = a;
+            fg_px[i] = FramebufferSurface::blend_color(DEFAULT_BG_COLOR, DEFAULT_FG_COLOR, a);
+            sh_px[i] = FramebufferSurface::blend_color(DEFAULT_BG_COLOR, DEFAULT_SHADOW_COLOR, a);
+            if a != 0 {
+                mask |= 1u64 << (i as u64);
+            }
+        }
+        colored.push(GlyphCellColoredSmall {
+            fg: fg_px,
+            sh: sh_px,
+            mask,
+        });
+
         if (ch as u32) <= 0xFF {
             index[ch as usize] = slot;
         }
@@ -643,23 +728,27 @@ fn build_font_cache_small() -> FontCacheSmall {
 
     for code in 0x20u32..=0x7Eu32 {
         if let Some(ch) = core::char::from_u32(code) {
-            add_glyph(&font, ch, &mut glyphs, &mut index);
+            add_glyph(&font, ch, &mut glyphs, &mut colored, &mut index);
         }
     }
     for code in 0xA0u32..=0xFFu32 {
         if let Some(ch) = core::char::from_u32(code) {
-            add_glyph(&font, ch, &mut glyphs, &mut index);
+            add_glyph(&font, ch, &mut glyphs, &mut colored, &mut index);
         }
     }
 
     if index[b'?' as usize] == u16::MAX {
-        add_glyph(&font, '?', &mut glyphs, &mut index);
+        add_glyph(&font, '?', &mut glyphs, &mut colored, &mut index);
     }
     if index[b' ' as usize] == u16::MAX {
-        add_glyph(&font, ' ', &mut glyphs, &mut index);
+        add_glyph(&font, ' ', &mut glyphs, &mut colored, &mut index);
     }
 
-    FontCacheSmall { glyphs, index }
+    FontCacheSmall {
+        glyphs,
+        colored,
+        index,
+    }
 }
 
 struct GlyphCellLarge {

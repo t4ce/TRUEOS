@@ -437,6 +437,15 @@ pub trait GfxDevice {
 pub trait GfxPresent {
     fn configure_swapchain(&mut self, desc: SwapchainDesc) -> Result<()>;
     fn swapchain_desc(&self) -> SwapchainDesc;
+
+    /// Best-effort display refresh rate in millihertz.
+    ///
+    /// Backends that cannot query mode timing (or where "refresh" is not a meaningful
+    /// hardware concept) should return `None`.
+    #[inline]
+    fn display_refresh_millihz(&mut self) -> Option<u32> {
+        None
+    }
 }
 
 /// Convenience trait for backends that implement both the device and present sides.
