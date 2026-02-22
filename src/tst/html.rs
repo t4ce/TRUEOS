@@ -114,8 +114,29 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 pub async fn http_get_matrix_job(slot_id: u8, url: HString<256>) {
     crate::matrix::push_line(slot_id, "get: starting");
 
-    // Permanent FSM gating: do not run until the network is actually usable.
-    crate::v::readiness::wait_for(crate::v::readiness::NET_GATEWAY_REACHABLE).await;
+    // Net gating: historically we waited for `NET_GATEWAY_REACHABLE`, which is asserted by an
+    // internal ICMP-to-gateway probe. Some networks/gateways drop ICMP echo, which makes this
+    // wait hang forever even when normal egress (DNS/TCP) works.
+    //
+    // Wait briefly for the bit (best-effort), then continue and let DNS/TCP timeouts handle
+    // broken networking.
+    crate::matrix::push_line(slot_id, "get: waiting for net cfg (up to 3s)");
+    let ready = crate::v::readiness::wait_for_timeout(
+        crate::v::readiness::NET_CONFIGURED,
+        EmbassyDuration::from_secs(3),
+    )
+    .await;
+    if !ready {
+        let mask = crate::v::readiness::mask();
+        let dhcp = crate::net::adapter::dhcp_has_lease_at(crate::net::primary_device_index())
+            .unwrap_or(false);
+        let line = alloc::format!(
+            "get: net not marked ready (mask=0x{:08x} dhcp_lease={}); continuing",
+            mask,
+            if dhcp { 1 } else { 0 }
+        );
+        crate::matrix::push_line(slot_id, line.as_str());
+    }
 
     let parsed = match parse_http_url(url.as_str()) {
         Ok(p) => p,

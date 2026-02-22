@@ -2573,6 +2573,11 @@ impl NetService {
                     self.local_ipv6_global = Some(candidate);
                     chosen = candidate;
                 }
+
+                // SLAAC produced (or maintained) a usable global address.
+                crate::v::readiness::set(
+                    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V6_CONFIGURED,
+                );
             }
 
             // Preserve current IPv4 CIDR(s) while updating IPv6.
@@ -3141,6 +3146,11 @@ impl NetService {
         self.local_ipv6_global = Some(addr);
         self.ipv6_global_is_dhcp = true;
 
+        // Mark IPv6 as configured. This is distinct from NET_V6_GATEWAY_REACHABLE.
+        crate::v::readiness::set(
+            crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V6_CONFIGURED,
+        );
+
         // Preserve current IPv4 CIDR(s) while updating IPv6.
         let mut v4_addrs = Vec::new();
         for cidr in self.iface.ip_addrs().iter().copied() {
@@ -3693,6 +3703,12 @@ impl NetService {
                 if self.device_index == crate::net::primary_device_index() {
                     *PRIMARY_DHCP_DNS.lock() = (self.dhcp_dns, self.dhcp_dns_count);
                 }
+
+                // Network is configured (at least IPv4). This is intentionally weaker than
+                // NET_GATEWAY_REACHABLE, which depends on an ICMP-to-router probe.
+                crate::v::readiness::set(
+                    crate::v::readiness::NET_CONFIGURED | crate::v::readiness::NET_V4_CONFIGURED,
+                );
             }
             Some(dhcpv4::Event::Deconfigured) => {
                 if self.dhcp_has_lease {

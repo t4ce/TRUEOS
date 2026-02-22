@@ -1554,7 +1554,16 @@ pub mod cabi {
                 let mut st = GFX_CABI_STATE.lock();
                 st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
             }
-            if submit_res.is_ok() { 0 } else { -11 }
+            if submit_res.is_ok() {
+                0
+            } else {
+                // This used to be a silent -11, which is confusing because -11 is also used
+                // as NET_ERR_TIMEOUT in other C ABI code paths.
+                if let Err(e) = submit_res {
+                    crate::globalog::log(format_args!("gfx-cabi: submit failed: {:?}\n", e));
+                }
+                -11
+            }
         }) else {
             return -12;
         };

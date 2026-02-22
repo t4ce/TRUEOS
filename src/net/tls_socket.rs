@@ -237,7 +237,7 @@ fn maybe_notify_connected(conn: &mut TlsConn) {
 }
 
 fn tls_socket_tick_once() {
-    if !crate::v::readiness::is_set(crate::v::readiness::NET_GATEWAY_REACHABLE) {
+    if !crate::v::readiness::is_set(crate::v::readiness::NET_CONFIGURED) {
         return;
     }
 

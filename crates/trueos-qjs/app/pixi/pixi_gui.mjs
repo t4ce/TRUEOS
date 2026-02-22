@@ -1,4 +1,7 @@
 import * as PIXI from '/qjs/vendor/pixi.mjs';
+// TRUEOS native module providing prebuilt font atlases (RGBA + alpha).
+// Using this avoids per-frame Graphics geometry explosions from pixel-text.
+import { getFontAtlasSmall } from 'trueos:text';
 var G = (typeof globalThis !== 'undefined') ? globalThis : this;
 var W = Number((G.window && G.window.innerWidth) || 0);
 var H = Number((G.window && G.window.innerHeight) || 0);
@@ -56,6 +59,178 @@ if (!__Renderer) {
 	}
 
 var stage = new PIXI.Container();
+
+// --- Atlas-backed small text renderer (6x6 fixed cell font)
+// Falls back to drawPixelText(Graphics) if atlas upload fails.
+var __smallFontAtlas = {
+	ready: false,
+	base: null,
+	index: null, // Uint16Array char->slot
+	cellW: 0,
+	cellH: 0,
+	gridW: 0,
+	gridH: 0,
+	texBySlot: null,
+	slotQ: 0,
+	slotSpace: 0,
+	_initTried: false,
+	init: function() {
+		if (this.ready || this._initTried) return this.ready;
+		this._initTried = true;
+		try {
+			if (!getFontAtlasSmall) return false;
+			var a = getFontAtlasSmall();
+			if (!a || !a.pixels) return false;
+			var w = Number(a.width) | 0;
+			var h = Number(a.height) | 0;
+			this.cellW = Number(a.cellW) | 0;
+			this.cellH = Number(a.cellH) | 0;
+			this.gridW = Number(a.gridW) | 0;
+			this.gridH = Number(a.gridH) | 0;
+			if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return false;
+			if (this.cellW <= 0 || this.cellH <= 0 || this.gridW <= 0 || this.gridH <= 0) return false;
+			var pixelsU8 = (a.pixels instanceof ArrayBuffer) ? new Uint8Array(a.pixels) : new Uint8Array(a.pixels || []);
+			if (!pixelsU8 || pixelsU8.length < (w * h * 4)) return false;
+			if (!(PIXI.BaseTexture && PIXI.BaseTexture.fromBuffer)) return false;
+			var base = PIXI.BaseTexture.fromBuffer(pixelsU8, w, h);
+			// Nearest sampling keeps 6x6 pixel glyphs crisp when scaled.
+			if (typeof base.scaleMode !== 'undefined' && PIXI.SCALE_MODES) {
+				base.scaleMode = PIXI.SCALE_MODES.NEAREST;
+			}
+			this.base = base;
+			// index is provided as little-endian u16 bytes; TRUEOS runs little-endian.
+			this.index = new Uint16Array(a.index);
+			this.texBySlot = new Array(this.gridW * this.gridH);
+			// Prefer '?' and space as fallbacks if available.
+			this.slotQ = this._slotForCharCode(63); // '?'
+			this.slotSpace = this._slotForCharCode(32); // ' '
+			this.ready = true;
+			return true;
+		} catch (e) {
+			this.ready = false;
+			return false;
+		}
+	},
+	_slotForCharCode: function(code) {
+		code = Number(code) | 0;
+		if (!this.index || code < 0 || code > 255) return 0xFFFF;
+		var slot = this.index[code] | 0;
+		return slot;
+	},
+	_slotForChar: function(ch) {
+		if (ch === ' ') return this.slotSpace;
+		var code = (ch && ch.length) ? (ch.charCodeAt(0) | 0) : 32;
+		if (code < 0 || code > 255) code = 63;
+		var slot = this._slotForCharCode(code);
+		if (slot === 0xFFFF) slot = this.slotQ;
+		if (slot === 0xFFFF) slot = this.slotSpace;
+		return slot;
+	},
+	_texForSlot: function(slot) {
+		slot = Number(slot) | 0;
+		if (!this.base || !this.texBySlot) return null;
+		if (slot < 0 || slot >= this.texBySlot.length) return null;
+		var t = this.texBySlot[slot];
+		if (t) return t;
+		var gx = (slot % this.gridW) | 0;
+		var gy = ((slot / this.gridW) | 0);
+		var rx = gx * this.cellW;
+		var ry = gy * this.cellH;
+		var rect = (PIXI.Rectangle)
+			? new PIXI.Rectangle(rx, ry, this.cellW, this.cellH)
+			: { x: rx, y: ry, width: this.cellW, height: this.cellH };
+		t = new PIXI.Texture(this.base, rect);
+		this.texBySlot[slot] = t;
+		return t;
+	},
+	createText: function() {
+		if (!this.init()) return null;
+		var self = this;
+		var obj = {
+			node: new PIXI.Container(),
+			sprites: [],
+			_lastText: null,
+			_lastX: 0,
+			_lastY: 0,
+			_lastScale: 0,
+			_lastColor: 0,
+			setText: function(text, x, y, scale, color) {
+				text = String(text == null ? '' : text);
+				x = Number(x) | 0;
+				y = Number(y) | 0;
+				scale = Math.max(1, Number(scale) | 0);
+				color = (Number(color) >>> 0);
+				if (this._lastText === text && this._lastX === x && this._lastY === y && this._lastScale === scale && this._lastColor === color) {
+					return;
+				}
+				this._lastText = text;
+				this._lastX = x;
+				this._lastY = y;
+				this._lastScale = scale;
+				this._lastColor = color;
+
+				var cx = x;
+				var cy = y;
+				var want = text.length;
+				for (var i = 0; i < want; i++) {
+					var ch = text[i];
+					var slot = self._slotForChar(ch);
+					var tex = self._texForSlot(slot);
+					var spr = this.sprites[i];
+					if (!spr) {
+						spr = new PIXI.Sprite(tex);
+						this.sprites[i] = spr;
+						this.node.addChild(spr);
+					} else if (tex && spr.texture !== tex) {
+						spr.texture = tex;
+					}
+					spr.visible = true;
+					spr.x = cx;
+					spr.y = cy;
+					spr.width = self.cellW * scale;
+					spr.height = self.cellH * scale;
+					spr.tint = color;
+					cx += (self.cellW + 1) * scale;
+				}
+				for (var j = want; j < this.sprites.length; j++) {
+					if (this.sprites[j]) this.sprites[j].visible = false;
+				}
+			}
+		};
+		return obj;
+	}
+};
+
+function createUiText() {
+	var t = __smallFontAtlas.createText();
+	if (t) return t;
+	// Fallback: pixel font via Graphics (slow, but keeps UI usable).
+	var g = new PIXI.Graphics();
+	return {
+		node: g,
+		_lastText: null,
+		_lastX: 0,
+		_lastY: 0,
+		_lastScale: 0,
+		_lastColor: 0,
+		setText: function(text, x, y, scale, color) {
+			text = String(text == null ? '' : text);
+			x = Number(x) | 0;
+			y = Number(y) | 0;
+			scale = Math.max(1, Number(scale) | 0);
+			color = (Number(color) >>> 0);
+			if (this._lastText === text && this._lastX === x && this._lastY === y && this._lastScale === scale && this._lastColor === color) {
+				return;
+			}
+			this._lastText = text;
+			this._lastX = x;
+			this._lastY = y;
+			this._lastScale = scale;
+			this._lastColor = color;
+			drawPixelText(g, text, x, y, scale, color);
+		}
+	};
+}
 
 // Debug marker sprite that uses the same simple textured-sprite pipeline as the
 // background (no Graphics). This should remain visible even if Graphics paths
@@ -212,8 +387,9 @@ function createWindow(frameX, frameY, frameW, frameH, appIdx) {
 		inst: null,
 		chrome: new PIXI.Container(),
 		host: new PIXI.Container(),
-		nameGfx: new PIXI.Graphics(),
-		countGfx: new PIXI.Graphics(),
+		nameText: createUiText(),
+		countText: createUiText(),
+		_countLast: null,
 	};
 	stage.addChild(win.host);
 	stage.addChild(win.chrome);
@@ -234,8 +410,8 @@ function createWindow(frameX, frameY, frameW, frameH, appIdx) {
 	btn.endFill();
 	win.chrome.addChild(btn);
 
-	win.chrome.addChild(win.nameGfx);
-	win.chrome.addChild(win.countGfx);
+	win.chrome.addChild(win.nameText.node);
+	win.chrome.addChild(win.countText.node);
 	return win;
 }
 
@@ -273,6 +449,166 @@ var UI = {
 				root.addChild(g);
 				return { root: root, tick: function(dt) {} };
 			});
+			// Minimal HTML->pixels demo.
+			// This is the first building block for a real browser UI: prove we can
+			// fetch/import a JS HTML parser (parse5), parse HTML, and paint readable
+			// output via the existing Pixi/WebGL layer.
+			this.registerApp('WEB', function() {
+				var root = new PIXI.Container();
+				var frame = new PIXI.Graphics();
+				var titleText = createUiText();
+				var statusText = createUiText();
+				var lines = [];
+				var lineText = [];
+
+				root.addChild(frame);
+				root.addChild(titleText.node);
+				root.addChild(statusText.node);
+
+				// 12 lines should fit in the default window sizes.
+				for (var i = 0; i < 12; i++) {
+					var lt = createUiText();
+					lineText.push(lt);
+					root.addChild(lt.node);
+				}
+
+				var st = {
+					started: false,
+					done: false,
+					err: null,
+					dirty: true,
+					bytes: 0,
+					phase: 'init',
+					worker: null,
+				};
+
+				function safeStr(s) {
+					s = String(s == null ? '' : s);
+					// avoid excessive redraw cost
+					if (s.length > 120) s = s.slice(0, 120);
+					return s;
+				}
+
+				function splitPreview(text) {
+					text = String(text == null ? '' : text);
+					var out = [];
+					var parts = text.split(/\r?\n/);
+					for (var i = 0; i < parts.length && out.length < 12; i++) {
+						var s = parts[i];
+						if (typeof s !== 'string') continue;
+						s = s.replace(/\s+/g, ' ').trim();
+						if (!s) continue;
+						out.push(s);
+					}
+					if (out.length === 0) out.push('(empty)');
+					return out;
+				}
+
+				function startParse() {
+					if (st.started) return;
+					st.started = true;
+					st.err = null;
+					st.dirty = true;
+
+					var url = 'https://example.de/';
+					st.url = url;
+					st.bytes = 0;
+					st.phase = 'worker';
+
+					// Load in a dedicated worker VM so the UI tick stays responsive.
+					// NOTE: TRUEOS Worker() currently takes a code string (not a module URL).
+					var code = '';
+					code += "import { parentPort } from 'node:worker_threads';\n";
+					code += "function splitPreview(text) {\n";
+					code += "  text = String(text == null ? '' : text);\n";
+					code += "  var out = [];\n";
+					code += "  var parts = text.split(/\\r?\\n/);\n";
+					code += "  for (var i = 0; i < parts.length && out.length < 12; i++) {\n";
+					code += "    var s = parts[i];\n";
+					code += "    if (typeof s !== 'string') continue;\n";
+					code += "    s = s.replace(/\\s+/g, ' ').trim();\n";
+					code += "    if (!s) continue;\n";
+					code += "    if (s.length > 120) s = s.slice(0, 120);\n";
+					code += "    out.push(s);\n";
+					code += "  }\n";
+					code += "  if (out.length === 0) out.push('(empty)');\n";
+					code += "  return out;\n";
+					code += "}\n";
+					code += "(async function(){\n";
+					code += "  try {\n";
+					code += "    if (typeof fetch !== 'function') throw new Error('fetch() missing');\n";
+					code += "    var url = " + JSON.stringify(url) + ";\n";
+					code += "    var body = await fetch(url);\n";
+					code += "    body = String(body == null ? '' : body);\n";
+					code += "    var msg = { kind: 'web-ready', ok: 1, url: url, bytes: (body.length|0), lines: splitPreview(body) };\n";
+					code += "    parentPort.postMessage(JSON.stringify(msg));\n";
+					code += "  } catch (e) {\n";
+					code += "    var msg = { kind: 'web-ready', ok: 0, err: String(e) };\n";
+					code += "    parentPort.postMessage(JSON.stringify(msg));\n";
+					code += "  }\n";
+					code += "})();\n";
+
+					try {
+						st.worker = new Worker(code);
+					} catch (e) {
+						st.err = e;
+						st.phase = 'err';
+						st.dirty = true;
+						return;
+					}
+
+					// Worker callbacks receive a single string argument (not an event object).
+					st.worker.onMessage(function(msgStr) {
+						var obj = null;
+						try { obj = JSON.parse(String(msgStr)); } catch (e) { obj = null; }
+						if (!obj || obj.kind !== 'web-ready') return;
+						if (obj.ok) {
+							st.bytes = Number(obj.bytes || 0) | 0;
+							lines = Array.isArray(obj.lines) ? obj.lines : [];
+							st.done = true;
+							st.phase = 'done';
+						} else {
+							st.err = obj.err || 'worker failed';
+							st.done = false;
+							st.phase = 'err';
+						}
+						st.dirty = true;
+						try { st.worker.terminate(); } catch (e) {}
+						st.worker = null;
+					});
+				}
+
+				function redraw() {
+					st.dirty = false;
+
+					frame.clear();
+					frame.lineStyle(2, 0x202020, 1);
+					frame.beginFill(0xFFFFFF, 0.10);
+					frame.drawRect(6, 6, 188, 388);
+					frame.endFill();
+
+					titleText.setText('WEB', 12, 12, 2, 0x202020);
+
+					var status = 'loading in worker...';
+					if (st.phase === 'done') status = 'ok bytes ' + String(st.bytes|0);
+					if (st.err) status = 'ERR ' + safeStr(st.err);
+					statusText.setText(safeStr(status), 12, 34, 2, 0x202020);
+
+					// Only "present" content once it is ready.
+					for (var i = 0; i < lineText.length; i++) {
+						var t = (st.done && i < lines.length) ? lines[i] : '';
+						lineText[i].setText(safeStr(t), 12, 60 + i * 22, 2, 0x202020);
+					}
+				}
+
+				return {
+					root: root,
+					tick: function(dt) {
+						if (!st.started) startParse();
+						if (st.dirty) redraw();
+					}
+				};
+			});
 		}
 
 		// Smaller default windows, placed left/center/right.
@@ -285,6 +621,7 @@ var UI = {
 
 		this.windows.push(createWindow(xL, y, w, h, 0));
 		this.windows.push(createWindow(xC, y, w, h, 1));
+		// Keep the default desktop lightweight; WEB can be enabled later.
 		this.windows.push(createWindow(xR, y, w, h, 0));
 
 		// Cursor triangle (single triangle). Tip is exactly at cursor position.
@@ -332,7 +669,7 @@ var UI = {
 		inst.root.y = win.frameY;
 		win.host.addChild(inst.root);
 		win.inst = inst;
-		drawPixelText(win.nameGfx, spec.name, win.frameX, Math.max(2, win.frameY - 28), 2, 0x202020);
+		win.nameText.setText(spec.name, win.frameX, Math.max(2, win.frameY - 28), 2, 0x202020);
 	},
 	tick: function(dt, angleRad) {
 		this._cursorAngle = Number(angleRad);
@@ -366,9 +703,12 @@ var UI = {
 			// element count: number only, bottom-right outside frame (per window)
 			var n = (win && win.inst && win.inst.root) ? countNodes(win.inst.root) : 0;
 			var s = String(n|0);
-			var x = win.frameX + win.frameW - (s.length * 12) - 4;
-			var y = Math.min(H - 24, win.frameY + win.frameH + 8);
-			drawPixelText(win.countGfx, s, x, y, 2, 0x202020);
+			if (win._countLast !== s) {
+				win._countLast = s;
+				var x = win.frameX + win.frameW - (s.length * 14) - 4;
+				var y = Math.min(H - 24, win.frameY + win.frameH + 8);
+				win.countText.setText(s, x, y, 2, 0x202020);
+			}
 		}
 
 		// Draw cursor last.

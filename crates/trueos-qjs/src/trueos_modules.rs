@@ -10,6 +10,25 @@ use crate as qjs;
 use crate::cmd_stream;
 use crate::webgl;
 
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn push_hex_u64(out: &mut Vec<u8>, v: u64) {
+    for i in (0..16).rev() {
+        let nibble = ((v >> (i * 4)) & 0xF) as u8;
+        out.push(match nibble {
+            0..=9 => b'0' + nibble,
+            _ => b'a' + (nibble - 10),
+        });
+    }
+}
+
 unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool;
@@ -1299,6 +1318,83 @@ unsafe fn ensure_global_window_document(ctx: *mut qjs::JSContext) -> Result<(), 
     // Minimal timers used by many browser-style libs and for self-driven UI loops.
     qjs::timers::install_globals(ctx, global);
 
+    // Minimal fetch(url) -> Promise<string>.
+    // This intentionally returns only the response body text for now.
+    {
+        unsafe extern "C" fn qjs_fetch_text_async(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: c_int,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = unsafe { core::slice::from_raw_parts(argv, argc as usize) };
+            let Some((url_ptr, url_len, url_cstr)) = (unsafe { js_arg_to_utf8_bytes(ctx, args[0]) }) else {
+                return qjs::JSValue::exception();
+            };
+
+            let (promise, resolve, reject) = unsafe { qjs::async_ops::new_promise(ctx) };
+
+            let url = unsafe { core::slice::from_raw_parts(url_ptr, url_len) };
+            let mut path: Vec<u8> = Vec::new();
+            path.extend_from_slice(b"/qjs/cdn/fetch_");
+            push_hex_u64(&mut path, fnv1a64(url));
+            path.extend_from_slice(b".html");
+
+            let op_id = unsafe { qjs::async_ops::start_net_fetch_to_file(url, path.as_slice()) };
+            unsafe { js_free_cstring(ctx, url_cstr) };
+
+            match op_id {
+                Ok(id) => unsafe {
+                    qjs::async_ops::register_promise(
+                        ctx,
+                        id,
+                        qjs::async_ops::OpKind::NetFetchText,
+                        resolve,
+                        reject,
+                        path,
+                    );
+                },
+                Err(code) => unsafe {
+                    let arg = js_int32(code);
+                    let _ = qjs::JS_Call(
+                        ctx,
+                        reject,
+                        qjs::JSValue::undefined(),
+                        1,
+                        &arg as *const qjs::JSValue,
+                    );
+                },
+            }
+
+            unsafe {
+                qjs::js_free_value(ctx, resolve);
+                qjs::js_free_value(ctx, reject);
+            }
+            promise
+        }
+
+        let key = b"fetch\0";
+        let existing = qjs::JS_GetPropertyStr(ctx, global, key.as_ptr() as *const c_char);
+        let needs_install = existing.is_exception()
+            || existing.tag == qjs::JS_TAG_UNDEFINED
+            || existing.tag == qjs::JS_TAG_NULL;
+        qjs::js_free_value(ctx, existing);
+        if needs_install {
+            let f = qjs::JS_NewCFunction2(
+                ctx,
+                Some(qjs_fetch_text_async),
+                key.as_ptr() as *const c_char,
+                1,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            );
+            let _ = qjs::JS_SetPropertyStr(ctx, global, key.as_ptr() as *const c_char, f);
+        }
+    }
+
     // __trueos_poll_mouse_raw(): bridge to kernel mouse queue.
     {
         unsafe extern "C" fn poll_mouse_raw(
@@ -2216,6 +2312,7 @@ unsafe extern "C" fn qjs_fs_read_file_text_async(
                 qjs::async_ops::OpKind::ReadText,
                 resolve,
                 reject,
+                Vec::new(),
             );
         }
         Err(code) => {
@@ -2263,6 +2360,7 @@ unsafe extern "C" fn qjs_fs_read_file_bytes_async(
                 qjs::async_ops::OpKind::ReadBytes,
                 resolve,
                 reject,
+                Vec::new(),
             );
         }
         Err(code) => {
@@ -2318,6 +2416,7 @@ unsafe extern "C" fn qjs_fs_write_file_text_async(
                 qjs::async_ops::OpKind::WriteText,
                 resolve,
                 reject,
+                Vec::new(),
             );
         }
         Err(code) => {
