@@ -1,5 +1,5 @@
 use alloc::{format, string::String as AString};
-use core::net::Ipv4Addr;
+use core::net::{Ipv4Addr, Ipv6Addr};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
@@ -11,7 +11,23 @@ use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 const WAIT_FOR_NET_READY_MS: u64 = 15_000;
 
-fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
+// Boot-time netbench target. IPv6-only.
+const BOOT_NETBENCH_URL: &str = "http://ipv6.download.thinkbroadband.com/5GB.zip";
+const BOOT_NETBENCH_URL_2: &str = "http://ash-speed.hetzner.com/10GB.bin";
+
+enum Target {
+    V6Literal([u8; 16]),
+    Name(AString),
+}
+
+struct ParsedHttpUrl {
+    host_header: AString,
+    port: u16,
+    path: AString,
+    target: Target,
+}
+
+fn parse_http_url(url: &str) -> Option<ParsedHttpUrl> {
     let mut u = url.trim();
     if let Some(rest) = u.strip_prefix("http://") {
         u = rest;
@@ -27,8 +43,37 @@ fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
         return None;
     }
 
-    // Note: boot-netbench is IPv4-only for consistency and because our test URL
-    // uses the IPv4 host.
+    // Support IPv6 literals in RFC 3986 bracket form: http://[2001:db8::1]:80/path
+    // For literals, we skip DNS and connect directly.
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let (inside, after) = rest.split_once(']')?;
+        if inside.is_empty() {
+            return None;
+        }
+        let ip6: Ipv6Addr = inside.parse().ok()?;
+        let port = if after.is_empty() {
+            80
+        } else if let Some(p) = after.strip_prefix(':') {
+            if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+                p.parse::<u16>().ok()?
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        let host_header = if port == 80 {
+            format!("[{}]", inside)
+        } else {
+            format!("[{}]:{}", inside, port)
+        };
+        return Some(ParsedHttpUrl {
+            host_header,
+            port,
+            path,
+            target: Target::V6Literal(ip6.octets()),
+        });
+    }
 
     let (host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
         if !p.is_empty() && p.as_bytes().iter().all(|b| b.is_ascii_digit()) {
@@ -44,12 +89,34 @@ fn parse_http_url(url: &str) -> Option<(AString, u16, AString)> {
         return None;
     }
 
-    // Keep Host header format stable for IPv4 literals.
+    // If the host portion is a literal IPv4 address, treat it as a name but keep
+    // Host header stable.
     if host.parse::<Ipv4Addr>().is_ok() {
-        return Some((AString::from(host), port, path));
+        let host_header = if port == 80 {
+            AString::from(host)
+        } else {
+            format!("{}:{}", host, port)
+        };
+        return Some(ParsedHttpUrl {
+            host_header,
+            port,
+            path,
+            target: Target::Name(AString::from(host)),
+        });
     }
 
-    Some((AString::from(host), port, path))
+    let host_header = if port == 80 {
+        AString::from(host)
+    } else {
+        format!("{}:{}", host, port)
+    };
+
+    Some(ParsedHttpUrl {
+        host_header,
+        port,
+        path,
+        target: Target::Name(AString::from(host)),
+    })
 }
 
 #[embassy_executor::task]
@@ -60,17 +127,19 @@ pub async fn boot_netbench_task() {
             return;
         }
 
-        // Ensure we start after IPv4 is actually usable (DHCP lease and IPv4 address).
-        // This keeps behavior consistent with the IPv4-only benchmark URL.
+        // Ensure we start after IPv6 is actually usable for Internet egress.
+        // Many routers advertise both a ULA (fd.. / fc..) and a global-unicast
+        // prefix (2xxx..). For the public benchmark URL we require a
+        // global-unicast address.
         let nic_index = crate::net::primary_device_index();
         let deadline = Instant::now() + EmbassyDuration::from_millis(WAIT_FOR_NET_READY_MS);
         loop {
-            let has_lease = crate::net::adapter::dhcp_has_lease_at(nic_index).unwrap_or(false);
-            let ip4 = crate::net::adapter::ipv4_at(nic_index);
-            if has_lease && ip4.is_some() {
-                let ip = ip4.unwrap();
+            let ip6 = crate::net::adapter::ipv6_global_at(nic_index);
+            if let Some(ip) = ip6
+                && (ip[0] & 0xE0) == 0x20
+            {
                 crate::log!(
-                    "boot-netbench: ipv4_ready=1 dev={} ip={}.{}.{}.{}\n",
+                    "boot-netbench: ipv6_ready=1 dev={} ip6={:02x}{:02x}:{:02x}{:02x}:...\n",
                     nic_index,
                     ip[0],
                     ip[1],
@@ -81,10 +150,10 @@ pub async fn boot_netbench_task() {
             }
             if Instant::now() >= deadline {
                 crate::log!(
-                    "boot-netbench: ipv4_ready=0 (timeout) dev={}\n",
+                    "boot-netbench: ipv6_ready=0 (timeout) dev={}\n",
                     nic_index
                 );
-                break;
+                return;
             }
             Timer::after(EmbassyDuration::from_millis(50)).await;
         }
@@ -95,42 +164,58 @@ pub async fn boot_netbench_task() {
             crate::net::device_name_at(nic_index).unwrap_or("Unknown")
         );
 
-        let url = crate::shell::bench::NETBENCH_URL;
-        let Some((host, port, path)) = parse_http_url(url) else {
-            crate::log!("boot-netbench: bad url={}\n", url);
-            return;
-        };
+        // Launch two concurrent downloads to reduce the chance of a per-flow cap.
+        // Combined throughput will be logged by the internal netbench runner.
+        for (idx, url) in [(1u8, BOOT_NETBENCH_URL), (2u8, BOOT_NETBENCH_URL_2)] {
+            let Some(parsed) = parse_http_url(url) else {
+                crate::log!("boot-netbench: bad url{}={}\n", idx, url);
+                continue;
+            };
 
-        // Boot netbench is intentionally IPv4-only.
-        let ip = match crate::v::net::dns::resolve_ipv4_for_device(
-            nic_index,
-            host.as_str(),
-            crate::v::net::dns::DnsConfig::for_device(nic_index),
-        )
-        .await
-        {
-            Ok(ip) => ip,
-            Err(e) => {
-                crate::log!("boot-netbench: dns failed host={} err={:?}\n", host, e);
-                return;
+            let (host_header, port, path) = (parsed.host_header, parsed.port, parsed.path);
+
+            // Boot netbench is intentionally IPv6-only.
+            let ip6: [u8; 16] = match parsed.target {
+                Target::V6Literal(ip) => ip,
+                Target::Name(host) => match crate::v::net::dns::resolve_ipv6_for_device(
+                    nic_index,
+                    host.as_str(),
+                    crate::v::net::dns::DnsConfig::for_device(nic_index),
+                )
+                .await
+                {
+                    Ok(ip) => ip,
+                    Err(e) => {
+                        crate::log!(
+                            "boot-netbench: dns6 failed url{} host={} err={:?}\n",
+                            idx,
+                            host,
+                            e
+                        );
+                        continue;
+                    }
+                },
+            };
+
+            let request = format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS netbench\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                path.as_str(),
+                host_header.as_str()
+            );
+
+            let submitted = crate::net::adapter::internal_netbench_submit_v6(
+                nic_index,
+                ip6,
+                port,
+                request.as_bytes(),
+            );
+
+            if submitted {
+                crate::log!("boot-netbench: submit ok url{}={}\n", idx, url);
+            } else {
+                crate::log!("boot-netbench: submit failed (queue full) url{}={}\n", idx, url);
             }
-        };
-
-        let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS netbench\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-            path.as_str(),
-            host.as_str()
-        );
-
-        let submitted =
-            crate::net::adapter::internal_netbench_submit(nic_index, ip, port, request.as_bytes());
-
-        if !submitted {
-            crate::log!("boot-netbench: internal submit rejected (already pending)\n");
-            return;
         }
-
-        crate::log!("boot-netbench: internal submit ok\n");
     }
     .await;
 }

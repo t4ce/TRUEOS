@@ -95,8 +95,8 @@ impl Utf8Decoder {
 
 pub(crate) const PROMPT_RGB: (u8, u8, u8) = (255, 55, 255);
 const MATRIX_RUNNING_GLYPHS: [char; 9] = ['⢈', '⡈', '⡐', '⡠', '⣀', '⢄', '⢂', '⢁', '⡁'];
-const DEFAULT_TERM_COLS: usize = 200;
-const DEFAULT_TERM_ROWS: usize = 60;
+const DEFAULT_TERM_COLS: usize = 100;
+const DEFAULT_TERM_ROWS: usize = 30;
 
 pub(crate) async fn handle_command_action_for_tools(
     action: CommandAction,

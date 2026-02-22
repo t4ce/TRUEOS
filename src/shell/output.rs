@@ -452,15 +452,24 @@ impl ShellBackend for ReverseOutput<'_> {
 pub(crate) fn apply_shell_scroll_region(io: &dyn ShellIo, term_rows: usize) {
     let top = 3usize;
     let bottom = output_bottom_row(term_rows);
+    // ReverseOutput relies on IL (insert-line, \x1b[L) at row 3 to build a
+    // scrollback-like UI. Without a scroll region, IL pushes the entire screen
+    // down, including the bottom border and status bar, which looks like
+    // duplicated "clean displays".
+    //
+    // We keep the status bar outside the scrolling region by setting the
+    // bottom margin to `term_rows - 1`.
+    io.write_str(crate::ecma48::SAVE_CURSOR);
     io.write_str(crate::ecma48::HIDE_CURSOR);
-    // ccrate::ecma48::write_scroll_region(io, top, bottom);
+
+    // Program scrolling region (DECSTBM). Many terminals move the cursor to
+    // home when this is set, so we wrap it in save/restore.
+    io.write_fmt(format_args!("\x1b[{};{}r", top, bottom));
 
     // Initial draw (total=0, offset=0)
     draw_scrollbar(io, 0, bottom.saturating_sub(top), 0, top, bottom);
 
-    // Immediately force cursor to (3, 3)
-    // crate::ecma48::write_pos(io, 3, 3);
-
+    io.write_str(crate::ecma48::RESTORE_CURSOR);
     io.write_str(crate::ecma48::SHOW_CURSOR);
 }
 
