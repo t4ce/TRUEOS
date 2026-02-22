@@ -6,19 +6,62 @@ use alloc::boxed::Box;
 use super::cube::{CubeState, WireShape};
 use super::{CommandAction, PendingAction, ShellBackend, ShellIo, ShellMode};
 
+fn redraw_prompt(io: &dyn ShellIo) {
+    io.write_fmt(format_args!("{}", crate::ecma48::pos(2, 1)));
+    io.write_str(crate::ecma48::CLEAR_LINE);
+    io.write_str(crate::ecma48::CURSOR_BLINKING_BLOCK);
+    io.write_fmt(format_args!(
+        "{}",
+        crate::ecma48::color("§ ", super::PROMPT_RGB)
+    ));
+}
+
 pub(super) async fn handle_command_action(
     action: CommandAction,
     mode: &mut ShellMode,
     cube_mode: &mut bool,
     cube: &mut CubeState,
     io: &'static dyn ShellBackend,
+    pre_cube_term: &mut Option<(usize, usize)>,
     term_cols: &mut usize,
     term_rows: &mut usize,
     spawner: &Spawner,
     history: &mut alloc::vec::Vec<alloc::string::String>,
 ) {
+    fn apply_term_size(
+        io: &'static dyn ShellBackend,
+        term_cols: &mut usize,
+        term_rows: &mut usize,
+        history: &mut alloc::vec::Vec<alloc::string::String>,
+        cols: usize,
+        rows: usize,
+        announce: bool,
+    ) {
+        *term_cols = cols.max(1);
+        *term_rows = rows.max(1);
+
+        // Scroll region + borders must be applied to the *raw* backend.
+        super::apply_shell_scroll_region(io, *term_rows);
+        super::draw_corners(io, *term_cols, *term_rows);
+
+        if announce {
+            let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
+            let mut buf: heapless::String<64> = heapless::String::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut buf,
+                format_args!("term set: {}x{}\r\n", *term_cols, *term_rows),
+            );
+            rev.write_str(buf.as_str());
+        }
+    }
+
     match action {
         CommandAction::Pending(pending) => handle_pending(mode, pending),
+        CommandAction::SetTermSize { cols, rows } => {
+            *cube_mode = false;
+            apply_term_size(io, term_cols, term_rows, history, cols, rows, true);
+            super::refresh_title_bar(io, *term_cols);
+        }
         CommandAction::ShowInstallDiskTable => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
             super::print_install_disk_table(&rev).await;
@@ -50,8 +93,18 @@ pub(super) async fn handle_command_action(
         CommandAction::Qjs { src } => {
             handle_qjs(io, term_cols, term_rows, spawner, history, src).await
         }
-        CommandAction::EnterCube => handle_enter_cube(cube_mode, cube, io, term_cols, term_rows),
-        CommandAction::EnterIco => handle_enter_ico(cube_mode, cube, io, term_cols, term_rows),
+        CommandAction::EnterCube => {
+            if !*cube_mode {
+                *pre_cube_term = Some((*term_cols, *term_rows));
+            }
+            handle_enter_cube(cube_mode, cube, io, term_cols, term_rows)
+        }
+        CommandAction::EnterIco => {
+            if !*cube_mode {
+                *pre_cube_term = Some((*term_cols, *term_rows));
+            }
+            handle_enter_ico(cube_mode, cube, io, term_cols, term_rows)
+        }
         CommandAction::EnterGo => handle_enter_go(io).await,
         CommandAction::EnterGoTwo => handle_enter_go_two(io).await,
         CommandAction::EnterRain => handle_enter_rain(cube_mode, io, term_cols, term_rows).await,
@@ -59,7 +112,32 @@ pub(super) async fn handle_command_action(
             handle_enter_txt(cube_mode, io, term_cols, term_rows, filename, slot_id).await;
         }
         CommandAction::EnterTetris => {
+            // Tetris needs a minimum height so it doesn't scroll the screen.
+            // Note: this only updates the shell's layout assumptions; the host
+            // terminal must actually be this large as well.
+            const MIN_TETRIS_COLS: usize = 80;
+            const MIN_TETRIS_ROWS: usize = 45;
+
+            *cube_mode = false;
+            let orig_cols = *term_cols;
+            let orig_rows = *term_rows;
+
+            let run_cols = orig_cols.max(MIN_TETRIS_COLS);
+            let run_rows = orig_rows.max(MIN_TETRIS_ROWS);
+            if run_cols != orig_cols || run_rows != orig_rows {
+                apply_term_size(io, term_cols, term_rows, history, run_cols, run_rows, true);
+            }
+
             handle_enter_tetris(cube_mode, io, term_cols, term_rows).await;
+
+            // Restore whatever size the shell had before launching tetris.
+            if *term_cols != orig_cols || *term_rows != orig_rows {
+                apply_term_size(
+                    io, term_cols, term_rows, history, orig_cols, orig_rows, true,
+                );
+            }
+            reset_shell_display(io, *term_cols, *term_rows);
+            redraw_prompt(io);
         }
         CommandAction::DoFormat { disc_id } => {
             let rev = super::output::ReverseOutput::new(io, *term_cols, *term_rows, history);
@@ -241,10 +319,7 @@ async fn handle_enter_tetris(
     term_rows: &mut usize,
 ) {
     *cube_mode = false;
-    let cols = *term_cols;
-    let rows = *term_rows;
-    super::shelltetris::run(io, cols, rows).await;
-    reset_shell_display(io, *term_cols, *term_rows);
+    super::shelltetris::run(io, *term_cols, *term_rows).await;
 }
 
 async fn handle_do_format(mode: &mut ShellMode, io: &dyn ShellBackend, disc_id: u32) {

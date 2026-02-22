@@ -3737,8 +3737,15 @@ impl NetService {
         self.prune_icmp_inflight(timestamp);
 
         // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
-        self.maybe_send_icmp_ping(timestamp);
-        self.maybe_send_icmp_ping_v6(timestamp);
+        // Do this per-NIC, but only when that NIC is link-up to avoid noisy
+        // retries on unplugged interfaces.
+        let link_up = crate::net::link_state_at(self.device_index)
+            .map(|ls| ls.up)
+            .unwrap_or(false);
+        if link_up {
+            self.maybe_send_icmp_ping(timestamp);
+            self.maybe_send_icmp_ping_v6(timestamp);
+        }
 
         work_done
     }
@@ -3791,15 +3798,32 @@ impl NetService {
 
         if socket.send_slice(&out, IpAddress::Ipv4(target)).is_ok() {
             let [a, b, c, d] = target.octets();
-            crate::log!(
-                "net: icmp ping dev={} seq={} -> {}.{}.{}.{}\n",
-                self.device_index,
-                seq_no,
-                a,
-                b,
-                c,
-                d
-            );
+            if let Some(src) = self.local_ipv4 {
+                let [sa, sb, sc, sd] = src.octets();
+                crate::log!(
+                    "net: icmp ping dev={} src={}.{}.{}.{} seq={} -> {}.{}.{}.{}\n",
+                    self.device_index,
+                    sa,
+                    sb,
+                    sc,
+                    sd,
+                    seq_no,
+                    a,
+                    b,
+                    c,
+                    d
+                );
+            } else {
+                crate::log!(
+                    "net: icmp ping dev={} seq={} -> {}.{}.{}.{}\n",
+                    self.device_index,
+                    seq_no,
+                    a,
+                    b,
+                    c,
+                    d
+                );
+            }
             self.icmp_ping_last_sent = Some(timestamp);
             self.icmp_ping_inflight = Some((seq_no, timestamp));
         }
@@ -3941,12 +3965,26 @@ impl NetService {
                                 && inflight_seq == seq_no
                             {
                                 let rtt = now() - sent_at;
-                                crate::log!(
-                                    "net: icmp pong dev={} seq={} rtt={}ms\n",
-                                    self.device_index,
-                                    seq_no,
-                                    rtt.total_millis()
-                                );
+                                if let Some(local) = self.local_ipv4 {
+                                    let [la, lb, lc, ld] = local.octets();
+                                    crate::log!(
+                                        "net: icmp pong dev={} local={}.{}.{}.{} seq={} rtt={}ms\n",
+                                        self.device_index,
+                                        la,
+                                        lb,
+                                        lc,
+                                        ld,
+                                        seq_no,
+                                        rtt.total_millis()
+                                    );
+                                } else {
+                                    crate::log!(
+                                        "net: icmp pong dev={} seq={} rtt={}ms\n",
+                                        self.device_index,
+                                        seq_no,
+                                        rtt.total_millis()
+                                    );
+                                }
                                 self.icmp_ping_inflight = None;
 
                                 // Consider the network reachable on the first successful pong.

@@ -91,6 +91,15 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::R8168(dev) => dev.transmit(frame),
         }
     }
+
+    fn link_state(&self) -> crate::net::device::LinkState {
+        match self {
+            ActiveDevice::Virtio(dev) => dev.link_state(),
+            ActiveDevice::E1000(dev) => dev.link_state(),
+            ActiveDevice::R8125(dev) => dev.link_state(),
+            ActiveDevice::R8168(dev) => dev.link_state(),
+        }
+    }
 }
 
 pub fn device_name_at(index: usize) -> Option<&'static str> {
@@ -326,10 +335,48 @@ pub fn init() {
         }
     }
 
+    // Prefer a link-up device as primary so swapping cables between ports
+    // doesn't strand the stack on a permanently link-down dev0.
+    if added != 0 {
+        let mut chosen: usize = 0;
+        {
+            let guard = DEVICES.lock();
+            for (idx, dev) in guard.iter().enumerate() {
+                if dev.link_state().up {
+                    chosen = idx;
+                    break;
+                }
+            }
+        }
+        PRIMARY_DEVICE_INDEX.store(chosen, Ordering::Relaxed);
+        crate::log!("net: primary={} (link-up preference)\n", chosen);
+    }
+
     if added == 0 {
         crate::log!("net: no supported NIC detected.\n");
     } else {
-        crate::log!("net: detected {} NIC(s); primary=0 (initial)\n", added);
+        crate::log!("net: detected {} NIC(s)\n", added);
+
+        // Device inventory helps interpret logs like "tx-batch dev=0".
+        let count = device_count();
+        for idx in 0..count {
+            let name = device_name_at(idx).unwrap_or("?");
+            let link_up = link_state_at(idx).map(|ls| ls.up as u8).unwrap_or(0);
+            let bdf = bdf_at(idx);
+            if let Some((bus, slot, func)) = bdf {
+                crate::log!(
+                    "net: dev{} {} bdf={:02x}:{:02x}.{} link_up={}\n",
+                    idx,
+                    name,
+                    bus,
+                    slot,
+                    func,
+                    link_up
+                );
+            } else {
+                crate::log!("net: dev{} {} bdf=? link_up={}\n", idx, name, link_up);
+            }
+        }
     }
 
     crate::log!(
@@ -353,12 +400,17 @@ pub fn rx_pending_at(index: usize) -> usize {
     with_device_at(index, |dev| dev.rx_queue_len()).unwrap_or(0)
 }
 
+pub fn link_state_at(index: usize) -> Option<crate::net::device::LinkState> {
+    with_device_at(index, |dev| dev.link_state())
+}
+
 pub fn transmit_packet_at(index: usize, data: &[u8]) -> Result<(), ()> {
     with_device_at(index, |dev| dev.transmit(data)).unwrap_or(Err(()))
 }
 
 pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec::Vec<u8>>) {
     with_device_at(index, |dev| {
+        let link_up = dev.link_state().up;
         let mut ok_count: u32 = 0;
         let mut err_count: u32 = 0;
         for pkt in packets {
@@ -375,9 +427,10 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
             crate::net::ring::recycle_packet_buf(pkt);
         }
 
-        // If this ever triggers, the stack is producing frames but the NIC backend is
-        // rejecting them (most commonly: TX ring full due to missing reclaim/poll).
-        if err_count != 0 {
+        // If this ever triggers (while link is up), the stack is producing frames but
+        // the NIC backend is rejecting them (most commonly: TX ring full / wedged DMA).
+        // When link is down, dropping TX is expected and should not spam logs.
+        if err_count != 0 && link_up {
             crate::log!(
                 "net: tx-batch dev={} ok={} err={}\n",
                 index,
@@ -410,10 +463,13 @@ pub fn primary_device_index() -> usize {
 }
 
 pub fn set_primary_device_index(index: usize) {
-    // Primary NIC selection is pinned to dev0 to keep multi-NIC setups deterministic.
-    // Use explicit device indices (`VNet::open(i)`, `net.icmp <host> [index]`) to test
-    // secondary NICs without impacting the primary network flow.
-    let _ = index;
+    let count = device_count();
+    if count == 0 {
+        return;
+    }
+    let idx = index.min(count - 1);
+    PRIMARY_DEVICE_INDEX.store(idx, Ordering::Relaxed);
+    crate::log!("net: primary set to {}\n", idx);
 }
 
 fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> Option<R> {

@@ -1,4 +1,4 @@
-use alloc::{collections::VecDeque, vec::Vec};
+use alloc::{boxed::Box, collections::VecDeque, format, vec::Vec};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -58,22 +58,72 @@ pub async fn net_shell_task() {
             return;
         }
 
-        // Always route the shell over the primary NIC. If another adapter exists and is broken
-        // (e.g. RTL8125 TX wedge), routing shell output over it can make the shell appear dead.
-        // Pin routing to dev0 so the shell never depends on secondary NIC health.
-        const OWNER: &str = "net-shell@0";
+        // Route the shell over a NIC that is actually usable.
+        // Historically this was pinned to dev0, but on real hardware dev0 is often the
+        // physically-unplugged port. Prefer the current primary, but fall back to any
+        // link-up NIC to keep the shell reachable whenever the network works.
+        let mut dev_idx = crate::net::primary_device_index();
+        let primary_up = crate::net::link_state_at(dev_idx)
+            .map(|ls| ls.up)
+            .unwrap_or(false);
+        if !primary_up {
+            for idx in 0..crate::net::device_count() {
+                if crate::net::link_state_at(idx)
+                    .map(|ls| ls.up)
+                    .unwrap_or(false)
+                {
+                    dev_idx = idx;
+                    break;
+                }
+            }
+        }
+
+        // Use a stable selector so routing keeps working even if device indices change.
+        // (Owner suffix is resolved by `device_index_from_owner`.)
+        let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
+            format!("{:02x}:{:02x}.{}", bus, slot, func)
+        } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+            format!("{:04x}:{:04x}", vid, pid)
+        } else {
+            format!("{}", dev_idx)
+        };
+        let owner: &'static str = {
+            let s = format!("net-shell@{}", selector);
+            Box::leak(s.into_boxed_str())
+        };
+
+        let ip = crate::net::adapter::ipv4_at(dev_idx);
+        let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
+        match ip {
+            Some([a, b, c, d]) => crate::log!(
+                "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{}\n",
+                dev_idx,
+                name,
+                owner,
+                a,
+                b,
+                c,
+                d
+            ),
+            None => crate::log!(
+                "net-shell: routing dev={} {} owner={} ip=none\n",
+                dev_idx,
+                name,
+                owner
+            ),
+        }
+
         let cmds = NetQueue::new_leaked("net-shell-cmd", 256);
         let events = NetQueue::new_leaked("net-shell-evt", 256);
-        register_app_queues(OWNER, cmds, events);
+        register_app_queues(owner, cmds, events);
 
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
         crate::log!(
-            "net-shell: listening on tcp {} owner={} (hostfwd localhost:{} -> guest)\n",
+            "net-shell: listening on tcp {} owner={}\n",
             NET_SHELL_TCP_PORT,
-            OWNER,
-            NET_SHELL_TCP_PORT
+            owner
         );
 
         let mut ticks: u32 = 0;

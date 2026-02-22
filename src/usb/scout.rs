@@ -9,7 +9,7 @@ use super::{
 use crate::pci::dma;
 use core::mem::size_of;
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -22,6 +22,21 @@ static SCOUT_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
 static SCOUT_SERVICE_RUNNING: [AtomicBool; MAX_XHCI_CONTROLLERS] =
     [const { AtomicBool::new(false) }; MAX_XHCI_CONTROLLERS];
+
+// xHCI port count can be up to 255, but typical root hubs are far smaller.
+// We only track the first N ports for enum backoff to keep static storage bounded.
+const PORT_TRACK_MAX: usize = 64;
+
+// Monotonic time (ms) driven by the scout service poll loop.
+static SCOUT_TIME_MS: [AtomicU64; MAX_XHCI_CONTROLLERS] =
+    [const { AtomicU64::new(0) }; MAX_XHCI_CONTROLLERS];
+
+// Per-port enumeration failure tracking and cooldown. Prevents a flakey/phantom internal device
+// from triggering enable-slot/address-device repeatedly and spamming logs.
+static PORT_ENUM_FAILS: [[AtomicU32; PORT_TRACK_MAX]; MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU32::new(0) }; PORT_TRACK_MAX] }; MAX_XHCI_CONTROLLERS];
+static PORT_ENUM_COOLDOWN_UNTIL_MS: [[AtomicU64; PORT_TRACK_MAX]; MAX_XHCI_CONTROLLERS] =
+    [const { [const { AtomicU64::new(0) }; PORT_TRACK_MAX] }; MAX_XHCI_CONTROLLERS];
 
 const SCRATCHPAD_BUF_SIZE: usize = 4096;
 
@@ -47,6 +62,19 @@ fn store_port_snapshot(controller_id: usize, snapshot: Vec<ScoutedPort, 64>) {
         return;
     }
     *snap = snapshot;
+}
+
+fn enum_backoff_ms(consecutive_fails: u32) -> u64 {
+    // Keep first couple of retries snappy (e.g. transient power/reset). Then back off quickly.
+    if consecutive_fails < 3 {
+        0
+    } else if consecutive_fails < 6 {
+        10_000
+    } else if consecutive_fails < 10 {
+        60_000
+    } else {
+        600_000
+    }
 }
 
 async fn cleanup_disconnected<const N: usize>(
@@ -350,12 +378,54 @@ async fn scout_pass(info: xhci::XhcInfo) {
         cleanup_disconnected(&connected, &mut state).await;
     }
 
+    // Reset backoff state for ports that are not connected this pass.
+    // This way, a later real device insertion won't be blocked by an old cooldown.
+    {
+        let max_track = core::cmp::min(state.ctx.port_count as usize, PORT_TRACK_MAX);
+        for p in 1..=max_track {
+            let port_num = p as u8;
+            let is_connected = connected.iter().any(|(cp, _)| *cp == port_num);
+            if !is_connected {
+                PORT_ENUM_FAILS[controller_id][p - 1].store(0, Ordering::Relaxed);
+                PORT_ENUM_COOLDOWN_UNTIL_MS[controller_id][p - 1].store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     for (target_port, _port_status) in connected.iter().copied() {
         if has_device_on_port(controller_id, target_port) {
             continue;
         }
 
+        // Per-port cooldown: skip repeated enumeration attempts for a persistently failing port.
+        let idx = (target_port as usize).saturating_sub(1);
+        let now_ms = SCOUT_TIME_MS[controller_id].load(Ordering::Relaxed);
+        if idx < PORT_TRACK_MAX {
+            let until = PORT_ENUM_COOLDOWN_UNTIL_MS[controller_id][idx].load(Ordering::Relaxed);
+            if until != 0 && now_ms < until {
+                continue;
+            }
+        }
+
         enumerate_port(&mut state, target_port).await;
+
+        // If enumeration didn't register anything for this port, treat as a failure and back off.
+        if !has_device_on_port(controller_id, target_port) {
+            if idx < PORT_TRACK_MAX {
+                let fails = PORT_ENUM_FAILS[controller_id][idx]
+                    .fetch_add(1, Ordering::Relaxed)
+                    .wrapping_add(1);
+                let backoff = enum_backoff_ms(fails);
+                if backoff != 0 {
+                    PORT_ENUM_COOLDOWN_UNTIL_MS[controller_id][idx]
+                        .store(now_ms.saturating_add(backoff), Ordering::Relaxed);
+                }
+            }
+        } else if idx < PORT_TRACK_MAX {
+            // Success: clear failure tracking for this port.
+            PORT_ENUM_FAILS[controller_id][idx].store(0, Ordering::Relaxed);
+            PORT_ENUM_COOLDOWN_UNTIL_MS[controller_id][idx].store(0, Ordering::Relaxed);
+        }
     }
 
     // Publish a stable snapshot for shell/table commands.
@@ -411,6 +481,10 @@ pub async fn usb_scout_service(info: xhci::XhcInfo) {
     let mut elapsed_ms: u64 = 0;
     loop {
         Timer::after(EmbassyDuration::from_millis(POLL_MS)).await;
+
+        // Drive the scout timebase for per-port cooldown.
+        SCOUT_TIME_MS[controller_id].fetch_add(POLL_MS, Ordering::Relaxed);
+
         elapsed_ms = elapsed_ms.saturating_add(POLL_MS);
 
         if elapsed_ms >= RESCAN_PERIOD_MS {
