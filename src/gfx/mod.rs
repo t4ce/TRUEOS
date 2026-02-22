@@ -181,6 +181,11 @@ pub fn with_framebuffers<R>(
 }
 
 #[cfg(feature = "gfx_virgl")]
+pub fn is_virgl_active() -> bool {
+    with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
+}
+
+#[cfg(feature = "gfx_virgl")]
 #[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {
     crate::log!("gfx: switch_to_virgl: begin\n");

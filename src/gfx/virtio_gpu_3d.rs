@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering, fence};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering, fence};
 
 use crate::{pci, wait};
 use embassy_time_driver::{TICK_HZ, now};
@@ -262,51 +262,6 @@ impl Drop for DmaRegion {
         self.virt = core::ptr::null_mut();
         self.phys = 0;
     }
-}
-
-enum ScanoutBacking {
-    Owned(DmaRegion),
-    Borrowed {
-        phys: u64,
-        virt: *mut u8,
-        len: usize,
-    },
-}
-
-unsafe impl Send for ScanoutBacking {}
-
-impl ScanoutBacking {
-    fn phys(&self) -> u64 {
-        match self {
-            ScanoutBacking::Owned(r) => r.phys(),
-            ScanoutBacking::Borrowed { phys, .. } => *phys,
-        }
-    }
-
-    fn virt(&self) -> *mut u8 {
-        match self {
-            ScanoutBacking::Owned(r) => r.virt(),
-            ScanoutBacking::Borrowed { virt, .. } => *virt,
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self {
-            ScanoutBacking::Owned(r) => r.len(),
-            ScanoutBacking::Borrowed { len, .. } => *len,
-        }
-    }
-}
-
-struct BorrowedScanout {
-    backing: ScanoutBacking,
-    res_width: u32,
-    res_height: u32,
-    res_bytes: usize,
-
-    fb_width: u32,
-    fb_height: u32,
-    fb_pitch: usize,
 }
 
 struct VirtQueue {
@@ -1712,7 +1667,7 @@ pub struct VirglGfxBackend {
     width: u32,
     height: u32,
     scanout_res: u32,
-    scanout_backing: ScanoutBacking,
+    scanout_backing: DmaRegion,
     rt_res: u32,
 
     // VBO resource for virgl vertices.
@@ -1798,7 +1753,7 @@ fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
 
 impl VirglGfxBackend {
     pub fn init(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
         let (scanout_id, disp_w, disp_h) = gpu.get_display_info()?;
@@ -1821,49 +1776,21 @@ impl VirglGfxBackend {
         let vbo_res = alloc_res_pair().0;
 
         // 2D scanout + backing.
-        // If we can borrow the Limine framebuffer memory as backing, we create a scanout
-        // resource wide enough to match the framebuffer pitch (pitch/4 pixels).
-        // The scanout rect remains the virtio-gpu display width/height.
-        // Prefer borrowing Limine FB backing (shared memory) so toggling back to LimineFB is visible.
-        // IMPORTANT: Limine's chosen framebuffer size can differ from virtio-gpu display-info size.
-        // If we borrow, we drive the scanout size from the Limine FB (clamped to display size).
-        let (scanout_backing, res_w, res_h, res_bytes, present_w, present_h) = if let Some(b) =
-            Self::try_borrow_limine_scanout(framebuffers)
-        {
-            let pw = b.fb_width.min(disp_w).max(1);
-            let ph = b.fb_height.min(disp_h).max(1);
-            crate::log!(
-                "virgl-backend: scanout backing=limine-fb fb={}x{} pitch={} present={}x{} res={}x{} bytes={}\n",
-                b.fb_width,
-                b.fb_height,
-                b.fb_pitch,
-                pw,
-                ph,
-                b.res_width,
-                b.res_height,
-                b.res_bytes
-            );
-            (b.backing, b.res_width, b.res_height, b.res_bytes, pw, ph)
-        } else {
-            let bytes = (disp_w as usize)
-                .saturating_mul(disp_h as usize)
-                .saturating_mul(4)
-                .max(4096);
-            crate::log!(
-                "virgl-backend: scanout backing=dma display={}x{} bytes={}\n",
-                disp_w,
-                disp_h,
-                bytes
-            );
-            (
-                ScanoutBacking::Owned(DmaRegion::alloc(bytes, 4096)?),
-                disp_w,
-                disp_h,
-                bytes,
-                disp_w,
-                disp_h,
-            )
-        };
+        // Architectural decision: keep scanout backing owned by the gfx backend (DMA memory).
+        // We do not borrow the Limine framebuffer backing.
+        let bytes = (disp_w as usize)
+            .saturating_mul(disp_h as usize)
+            .saturating_mul(4)
+            .max(4096);
+        crate::log!(
+            "virgl-backend: scanout backing=dma display={}x{} bytes={}\n",
+            disp_w,
+            disp_h,
+            bytes
+        );
+        let scanout_backing = DmaRegion::alloc(bytes, 4096)?;
+        let (res_w, res_h, res_bytes, present_w, present_h) =
+            (disp_w, disp_h, bytes, disp_w, disp_h);
 
         if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, res_w, res_h) {
             crate::log!("virgl-backend: resource_create_2d scanout failed\n");
@@ -2067,78 +1994,6 @@ impl VirglGfxBackend {
             last_submitted_frame: None,
             next_fence: 1,
             completed_fence: 0,
-        })
-    }
-
-    fn try_borrow_limine_scanout(
-        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
-    ) -> Option<BorrowedScanout> {
-        let fb_resp = framebuffers?;
-        let fb = fb_resp.framebuffers().next()?;
-
-        if fb.bpp() != 32 {
-            crate::log!(
-                "virgl-backend: borrow-limine: bpp != 32 (bpp={})\n",
-                fb.bpp()
-            );
-            return None;
-        }
-        let pitch = fb.pitch() as usize;
-
-        let fb_h = fb.height() as usize;
-        let len = pitch.saturating_mul(fb_h);
-        if len == 0 {
-            crate::log!(
-                "virgl-backend: borrow-limine: len==0 pitch={} h={}\n",
-                pitch,
-                fb_h
-            );
-            return None;
-        }
-
-        let virt = fb.addr();
-        if virt.is_null() {
-            crate::log!("virgl-backend: borrow-limine: fb.addr is null\n");
-            return None;
-        }
-        let Some(phys) = crate::phys::virt_to_phys_checked(virt as *const u8) else {
-            crate::log!(
-                "virgl-backend: borrow-limine: virt_to_phys failed addr=0x{:X}\n",
-                virt as usize
-            );
-            return None;
-        };
-
-        if !pitch.is_multiple_of(4) {
-            crate::log!(
-                "virgl-backend: borrow-limine: pitch not multiple of 4 (pitch={})\n",
-                pitch
-            );
-            return None;
-        }
-
-        let stride_pixels = (pitch / 4) as u32;
-        let fb_width = fb.width() as u32;
-        let fb_height = fb.height() as u32;
-
-        if stride_pixels == 0 || fb_height == 0 {
-            crate::log!(
-                "virgl-backend: borrow-limine: bad dims stride={} fb={}x{}\n",
-                stride_pixels,
-                fb_width,
-                fb_height
-            );
-            return None;
-        }
-
-        Some(BorrowedScanout {
-            backing: ScanoutBacking::Borrowed { phys, virt, len },
-            res_width: stride_pixels,
-            res_height: fb_h as u32,
-            res_bytes: len,
-            fb_width,
-            fb_height,
-            fb_pitch: pitch,
         })
     }
 
@@ -3503,6 +3358,34 @@ fn find_device() -> Option<pci::PciDevice> {
         }
     });
     found
+}
+
+// Best-effort virtio-gpu presence cache.
+//
+// Boot code may want to wait for virtio-gpu to appear before switching to the virgl backend.
+// We keep this probe cheap and avoid re-enumerating PCI on every poll.
+static VIRTIO_GPU_PRESENT_CACHE: AtomicU8 = AtomicU8::new(0);
+
+/// Returns true if a virtio-gpu device is present.
+///
+/// This performs a single PCI re-enumeration the first time it is called while the device list
+/// is empty or stale, then caches the result.
+pub fn is_present_cached() -> bool {
+    match VIRTIO_GPU_PRESENT_CACHE.load(Ordering::Acquire) {
+        2 => return true,
+        1 => return false,
+        _ => {}
+    }
+
+    let mut present = find_device().is_some();
+    if !present {
+        // The PCI list can be empty early in boot. Re-enumerate once before deciding.
+        pci::enumerate_impl();
+        present = find_device().is_some();
+    }
+
+    VIRTIO_GPU_PRESENT_CACHE.store(if present { 2 } else { 1 }, Ordering::Release);
+    present
 }
 
 fn as_bytes<T: Copy>(value: &T) -> &[u8] {
