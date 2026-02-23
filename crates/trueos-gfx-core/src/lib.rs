@@ -332,12 +332,54 @@ pub enum Command {
     },
     BindImage(ImageId),
     SetSampler(SamplerDesc),
+    SetBlend(BlendDesc),
     SetViewport(Viewport),
     Draw {
         vertex_count: u32,
         first_vertex: u32,
     },
     Present,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlendFactor {
+    Zero,
+    One,
+    SrcAlpha,
+    OneMinusSrcAlpha,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BlendDesc {
+    pub enabled: bool,
+    pub src: BlendFactor,
+    pub dst: BlendFactor,
+}
+
+impl BlendDesc {
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            src: BlendFactor::One,
+            dst: BlendFactor::Zero,
+        }
+    }
+
+    pub const fn straight_alpha() -> Self {
+        Self {
+            enabled: true,
+            src: BlendFactor::SrcAlpha,
+            dst: BlendFactor::OneMinusSrcAlpha,
+        }
+    }
+
+    pub const fn premultiplied_alpha() -> Self {
+        Self {
+            enabled: true,
+            src: BlendFactor::One,
+            dst: BlendFactor::OneMinusSrcAlpha,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

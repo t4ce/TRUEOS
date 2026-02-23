@@ -33,6 +33,13 @@ const MAX_TEXTURE_UNITS: usize = 8;
 const GL_BLEND: u32 = 0x0BE2;
 const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
+// Blend constants (subset).
+const GL_ZERO: u32 = 0;
+const GL_ONE: u32 = 1;
+const GL_SRC_ALPHA: u32 = 0x0302;
+const GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
+const GL_FUNC_ADD: u32 = 0x8006;
+
 const GL_COMPILE_STATUS: u32 = 0x8B81;
 const GL_LINK_STATUS: u32 = 0x8B82;
 const GL_ACTIVE_ATTRIBUTES: u32 = 0x8B89;
@@ -263,11 +270,19 @@ struct GlState {
     viewport_w: i32,
     viewport_h: i32,
     blend_enabled: bool,
+    blend_src_rgb: u32,
+    blend_dst_rgb: u32,
+    blend_src_alpha: u32,
+    blend_dst_alpha: u32,
+    blend_eq_rgb: u32,
+    blend_eq_alpha: u32,
     transform_epoch: u32,
     unpack_alignment: i32,
     viewport_dirty: bool,
     clear_dirty: bool,
     blend_dirty: bool,
+    blend_func_dirty: bool,
+    blend_eq_dirty: bool,
     frame_open: bool,
 }
 
@@ -304,11 +319,19 @@ impl GlState {
             viewport_w: 1280,
             viewport_h: 800,
             blend_enabled: false,
+            blend_src_rgb: GL_ONE,
+            blend_dst_rgb: GL_ZERO,
+            blend_src_alpha: GL_ONE,
+            blend_dst_alpha: GL_ZERO,
+            blend_eq_rgb: GL_FUNC_ADD,
+            blend_eq_alpha: GL_FUNC_ADD,
             transform_epoch: 1,
             unpack_alignment: 4,
             viewport_dirty: true,
             clear_dirty: true,
             blend_dirty: true,
+            blend_func_dirty: true,
+            blend_eq_dirty: true,
             frame_open: false,
         }
     }
@@ -1355,8 +1378,139 @@ fn begin_frame_if_needed(st: &mut GlState) {
         });
         st.blend_dirty = false;
     }
+    if st.blend_func_dirty {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendFunc {
+            src_rgb: st.blend_src_rgb,
+            dst_rgb: st.blend_dst_rgb,
+            src_alpha: st.blend_src_alpha,
+            dst_alpha: st.blend_dst_alpha,
+        });
+        st.blend_func_dirty = false;
+    }
+    if st.blend_eq_dirty {
+        cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEquation {
+            rgb: st.blend_eq_rgb,
+            alpha: st.blend_eq_alpha,
+        });
+        st.blend_eq_dirty = false;
+    }
     cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
     st.frame_open = true;
+}
+
+unsafe extern "C" fn gl_blend_func(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(src) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(dst) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    if st.blend_src_rgb != src
+        || st.blend_dst_rgb != dst
+        || st.blend_src_alpha != src
+        || st.blend_dst_alpha != dst
+    {
+        st.blend_src_rgb = src;
+        st.blend_dst_rgb = dst;
+        st.blend_src_alpha = src;
+        st.blend_dst_alpha = dst;
+        st.blend_func_dirty = true;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_blend_func_separate(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 4 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(src_rgb) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(dst_rgb) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(src_alpha) = js_get_f64(ctx, args[2]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(dst_alpha) = js_get_f64(ctx, args[3]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    if st.blend_src_rgb != src_rgb
+        || st.blend_dst_rgb != dst_rgb
+        || st.blend_src_alpha != src_alpha
+        || st.blend_dst_alpha != dst_alpha
+    {
+        st.blend_src_rgb = src_rgb;
+        st.blend_dst_rgb = dst_rgb;
+        st.blend_src_alpha = src_alpha;
+        st.blend_dst_alpha = dst_alpha;
+        st.blend_func_dirty = true;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_blend_equation(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 1 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(eq) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    if st.blend_eq_rgb != eq || st.blend_eq_alpha != eq {
+        st.blend_eq_rgb = eq;
+        st.blend_eq_alpha = eq;
+        st.blend_eq_dirty = true;
+    }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_blend_equation_separate(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(eq_rgb) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(eq_alpha) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    if st.blend_eq_rgb != eq_rgb || st.blend_eq_alpha != eq_alpha {
+        st.blend_eq_rgb = eq_rgb;
+        st.blend_eq_alpha = eq_alpha;
+        st.blend_eq_dirty = true;
+    }
+    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn gl_create_buffer(
@@ -3647,10 +3801,10 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("viewport", gl_viewport, 4);
     gl_fn!("enable", gl_enable, 1);
     gl_fn!("disable", gl_disable, 1);
-    gl_fn!("blendFunc", gl_noop, 2);
-    gl_fn!("blendFuncSeparate", gl_noop, 4);
-    gl_fn!("blendEquation", gl_noop, 1);
-    gl_fn!("blendEquationSeparate", gl_noop, 2);
+    gl_fn!("blendFunc", gl_blend_func, 2);
+    gl_fn!("blendFuncSeparate", gl_blend_func_separate, 4);
+    gl_fn!("blendEquation", gl_blend_equation, 1);
+    gl_fn!("blendEquationSeparate", gl_blend_equation_separate, 2);
     gl_fn!("blendColor", gl_noop, 4);
     gl_fn!("frontFace", gl_noop, 1);
     gl_fn!("cullFace", gl_noop, 1);
