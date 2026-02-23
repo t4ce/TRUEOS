@@ -4,8 +4,8 @@
 // modules under /qjs/cdn/.
 //
 // Source URL that was seeded (for reference):
-//   https://esm.sh/pixi.js@7.4.3?bundle
+//   https://esm.sh/pixi.js@8.7.2?bundle
 
-export * from '/qjs/cdn/2232fcf00ce9d149.mjs';
-import * as PIXI from '/qjs/cdn/2232fcf00ce9d149.mjs';
+export * from '/qjs/cdn/8d2f5f0bba6a6702.mjs';
+import * as PIXI from '/qjs/cdn/8d2f5f0bba6a6702.mjs';
 export default PIXI;
