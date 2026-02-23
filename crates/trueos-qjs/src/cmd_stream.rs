@@ -19,6 +19,15 @@ unsafe extern "C" {
     ) -> i32;
     fn trueos_cabi_gfx_set_sampler(wrap_s: u32, wrap_t: u32, min_filter: u32, mag_filter: u32)
         -> i32;
+    fn trueos_cabi_gfx_set_blend(
+        enabled: u32,
+        src_rgb: u32,
+        dst_rgb: u32,
+        src_alpha: u32,
+        dst_alpha: u32,
+        eq_rgb: u32,
+        eq_alpha: u32,
+    ) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
     fn trueos_cabi_gfx_upload_texture_rgba(
         tex_id: u32,
@@ -56,62 +65,52 @@ fn log_bytes(bytes: &[u8]) {
 
 #[inline]
 fn log_i32_dec(v: i32) {
-    if v == 0 {
+    // Minimal decimal formatter (no alloc).
+    let mut n = v as i64;
+    if n == 0 {
         log_bytes(b"0");
         return;
     }
-    let mut n = v as i64;
     if n < 0 {
         log_bytes(b"-");
         n = -n;
     }
     let mut buf = [0u8; 20];
     let mut i = buf.len();
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
+    while n != 0 {
+        let d = (n % 10) as u8;
         n /= 10;
+        i = i.saturating_sub(1);
+        buf[i] = b'0' + d;
     }
     log_bytes(&buf[i..]);
 }
 
 pub(crate) enum CmdStreamCommand {
     BeginFrame,
-    SetClearColor {
-        clear_rgb: u32,
-    },
-    SetViewport {
-        w: i32,
-        h: i32,
-    },
-    SetBlendEnabled {
-        enabled: bool,
-    },
+    SetClearColor { clear_rgb: u32 },
+    SetViewport { w: i32, h: i32 },
+
+    // Blend state (tracked for future; not all backends consume it yet).
+    SetBlendEnabled { enabled: bool },
     SetBlendFunc {
         src_rgb: u32,
         dst_rgb: u32,
         src_alpha: u32,
         dst_alpha: u32,
     },
-    SetBlendEquation {
-        rgb: u32,
-        alpha: u32,
+    SetBlendEquation { rgb: u32, alpha: u32 },
+
+    // Sampler state (WebGL subset).
+    SetSampler {
+        wrap_s: u32,
+        wrap_t: u32,
+        min_filter: u32,
+        mag_filter: u32,
     },
-        // Sampler state for subsequent textured draws.
-        // Encoding is intentionally tiny: wrap 0=ClampToEdge, 1=Repeat; filter 0=Nearest, 1=Linear.
-        SetSampler {
-            wrap_s: u32,
-            wrap_t: u32,
-            min_filter: u32,
-            mag_filter: u32,
-        },
-    DrawTriangles {
-        vertices: Vec<u8>,
-    },
-    DrawTrianglesTex {
-        tex_id: u32,
-        vertices: Vec<u8>,
-    },
+
+    DrawTriangles { vertices: Vec<u8> },
+    DrawTrianglesTex { tex_id: u32, vertices: Vec<u8> },
     UploadTexture {
         tex_id: u32,
         width: u32,
@@ -265,7 +264,24 @@ fn flush_active_frame(st: &mut FrameState) {
         }
     }
 
+    let mut last_blend: Option<BlendState> = None;
+
     for batch in st.batches.iter() {
+        if last_blend != Some(batch.key.blend) {
+            let b = batch.key.blend;
+            let _ = unsafe {
+                trueos_cabi_gfx_set_blend(
+                    if b.enabled { 1 } else { 0 },
+                    b.src_rgb,
+                    b.dst_rgb,
+                    b.src_alpha,
+                    b.dst_alpha,
+                    b.eq_rgb,
+                    b.eq_alpha,
+                )
+            };
+            last_blend = Some(b);
+        }
         let rc = match batch.kind {
             DrawKind::Rgb => unsafe {
                 trueos_cabi_gfx_draw_rgb_triangles_no_present(batch.vtx.as_ptr(), batch.vtx.len())
@@ -280,7 +296,56 @@ fn flush_active_frame(st: &mut FrameState) {
                     log_i32_dec(batch.key.sampler_min as i32);
                     log_bytes(b" mag=");
                     log_i32_dec(batch.key.sampler_mag as i32);
+                    log_bytes(b" vp=");
+                    log_i32_dec(st.viewport_w as i32);
+                    log_bytes(b"x");
+                    log_i32_dec(st.viewport_h as i32);
                     log_bytes(b"\n");
+
+                    // Vertex ABI for textured draws (stride 20):
+                    // f32 x, f32 y, f32 u, f32 v, u8 r, u8 g, u8 b, u8 a
+                    // Dump a few vertices to diagnose black screens.
+                    let stride = 20usize;
+                    let count = batch.vtx.len() / stride;
+                    let dump = if count < 4 { count } else { 4 };
+                    for i in 0..dump {
+                        let off = i * stride;
+                        if off + stride > batch.vtx.len() {
+                            break;
+                        }
+                        let xb = [batch.vtx[off + 0], batch.vtx[off + 1], batch.vtx[off + 2], batch.vtx[off + 3]];
+                        let yb = [batch.vtx[off + 4], batch.vtx[off + 5], batch.vtx[off + 6], batch.vtx[off + 7]];
+                        let ub = [batch.vtx[off + 8], batch.vtx[off + 9], batch.vtx[off + 10], batch.vtx[off + 11]];
+                        let vb = [batch.vtx[off + 12], batch.vtx[off + 13], batch.vtx[off + 14], batch.vtx[off + 15]];
+                        let x = f32::from_bits(u32::from_le_bytes(xb));
+                        let y = f32::from_bits(u32::from_le_bytes(yb));
+                        let u = f32::from_bits(u32::from_le_bytes(ub));
+                        let v = f32::from_bits(u32::from_le_bytes(vb));
+                        let r = batch.vtx[off + 16];
+                        let g = batch.vtx[off + 17];
+                        let b = batch.vtx[off + 18];
+                        let a = batch.vtx[off + 19];
+
+                        log_bytes(b"qjs-webgl-cmd-stream:  v");
+                        log_i32_dec(i as i32);
+                        log_bytes(b" xy=");
+                        log_i32_dec((x * 1000.0) as i32);
+                        log_bytes(b",");
+                        log_i32_dec((y * 1000.0) as i32);
+                        log_bytes(b" uv=");
+                        log_i32_dec((u * 1000.0) as i32);
+                        log_bytes(b",");
+                        log_i32_dec((v * 1000.0) as i32);
+                        log_bytes(b" rgba=");
+                        log_i32_dec(r as i32);
+                        log_bytes(b",");
+                        log_i32_dec(g as i32);
+                        log_bytes(b",");
+                        log_i32_dec(b as i32);
+                        log_bytes(b",");
+                        log_i32_dec(a as i32);
+                        log_bytes(b"\n");
+                    }
                 }
                 // Apply sampler state captured in the batch key.
                 let _ = trueos_cabi_gfx_set_sampler(

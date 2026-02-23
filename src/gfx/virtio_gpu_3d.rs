@@ -1541,10 +1541,10 @@ DCL TEMP[0]\n\
 // --- gfx-core backend (virgl) ---
 
 use trueos_gfx_core::{
-    BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error, FenceId,
-    GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange, MemoryType,
-    PipelineDesc, PipelineId, SamplerDesc, ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat,
-    VertexLayout, Viewport,
+    BlendDesc, BlendFactor, BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps,
+    Error, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
+    MemoryType, PipelineDesc, PipelineId, SamplerDesc, ShaderDesc, ShaderId, SwapchainDesc,
+    TexCoordFormat, VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1552,6 +1552,8 @@ use trueos_gfx_core::{
 use trueos_gfx_core::Result as GfxResult;
 
 static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
+static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
+static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone)]
 struct HostBuffer {
@@ -1616,6 +1618,7 @@ struct VirglDrawState {
     vertex: VirglBufferBinding,
     image: ImageId,
     sampler: SamplerDesc,
+    blend: BlendDesc,
     viewport: Viewport,
     clear_rgb: u32,
 }
@@ -1643,6 +1646,7 @@ impl Default for VirglDrawState {
                 min_filter: trueos_gfx_core::SamplerFilter::Linear,
                 mag_filter: trueos_gfx_core::SamplerFilter::Linear,
             },
+            blend: BlendDesc::disabled(),
             viewport: Viewport {
                 x: 0,
                 y: 0,
@@ -1683,7 +1687,9 @@ pub struct VirglGfxBackend {
     fs_tex_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
-    blend_handle: u32,
+    blend_handle_disabled: u32,
+    blend_handle_straight: u32,
+    blend_handle_premult: u32,
     dsa_handle: u32,
     rs_handle: u32,
 
@@ -1872,7 +1878,11 @@ impl VirglGfxBackend {
         let fs_tex_handle = 23u32;
         let sampler_state_handle = 24u32;
         let sampler_state_linear_handle = 25u32;
-        let blend_handle = 30u32;
+        // Blend object handles.
+        // 30.. are reserved for our fixed state objects.
+        let blend_handle_disabled = 30u32;
+        let blend_handle_straight = 33u32;
+        let blend_handle_premult = 34u32;
         let dsa_handle = 31u32;
         let rs_handle = 32u32;
 
@@ -1923,8 +1933,15 @@ impl VirglGfxBackend {
             },
         );
 
-        encode_create_blend(&mut init, blend_handle);
-        encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle);
+        // Disabled blending (opaque path).
+        encode_create_blend(&mut init, blend_handle_disabled, false, 0, 0);
+        // Straight alpha: src*srcA + dst*(1-srcA)
+        encode_create_blend(&mut init, blend_handle_straight, true, 0x12, 0x13);
+        // Premult alpha: src*1 + dst*(1-srcA)
+        encode_create_blend(&mut init, blend_handle_premult, true, 1, 0x13);
+
+        // Bind disabled by default to match WebGL state.
+        encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle_disabled);
         encode_create_dsa(&mut init, dsa_handle);
         encode_bind_object(&mut init, VIRGL_OBJECT_DSA, dsa_handle);
         encode_create_rasterizer(&mut init, rs_handle);
@@ -1964,7 +1981,9 @@ impl VirglGfxBackend {
             fs_tex_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
-            blend_handle,
+            blend_handle_disabled,
+            blend_handle_straight,
+            blend_handle_premult,
             dsa_handle,
             rs_handle,
             swapchain,
@@ -2482,6 +2501,9 @@ impl GfxDevice for VirglGfxBackend {
                 Command::SetSampler(s) => {
                     self.state.sampler = s;
                 }
+                Command::SetBlend(b) => {
+                    self.state.blend = b;
+                }
                 Command::Draw {
                     vertex_count,
                     first_vertex,
@@ -2524,6 +2546,38 @@ impl GfxDevice for VirglGfxBackend {
 
         // Draw.
         if vertex_count != 0 {
+            let blend_handle = if !self.state.blend.enabled {
+                self.blend_handle_disabled
+            } else {
+                match (self.state.blend.src, self.state.blend.dst) {
+                    (BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha) => {
+                        self.blend_handle_straight
+                    }
+                    (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => self.blend_handle_premult,
+                    // Enabled but mathematically equivalent to disabled.
+                    (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
+                    other => {
+                        let n = VIRGL_BLEND_UNSUPPORTED_LOGS.fetch_add(1, Ordering::Relaxed);
+                        if n < 8 {
+                            crate::log!(
+                                "virgl-backend: unsupported blend {:?}; using straight alpha\n",
+                                other
+                            );
+                        }
+                        self.blend_handle_straight
+                    }
+                }
+            };
+            let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n < 8 {
+                crate::log!(
+                    "virgl-backend: bind blend {:?} -> handle={}\n",
+                    self.state.blend,
+                    blend_handle
+                );
+            }
+            encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+
             let pipeline_raw = self.state.pipeline.raw();
             let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
             let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
@@ -3169,16 +3223,22 @@ fn encode_set_viewport(buf: &mut VirglCmdBuf, width: u32, height: u32) {
     buf.push(fui(half_d));
 }
 
-fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
+fn encode_create_blend(
+    buf: &mut VirglCmdBuf,
+    blend_handle: u32,
+    enabled: bool,
+    src_factor: u32,
+    dst_factor: u32,
+) {
     buf.push(virgl_cmd0(
         VIRGL_CCMD_CREATE_OBJECT,
         VIRGL_OBJECT_BLEND,
         VIRGL_OBJ_BLEND_SIZE,
     ));
-    // Values from Mesa pipe/p_defines.h
+    // Values from Mesa pipe/p_defines.h (virgl uses the Gallium enums).
+    // NOTE: We only rely on a tiny subset that we have validated with virglrenderer.
     const PIPE_BLEND_ADD: u32 = 0;
     const PIPE_BLENDFACTOR_ONE: u32 = 1;
-    const PIPE_BLENDFACTOR_INV_SRC_ALPHA: u32 = 0x13;
 
     buf.push(blend_handle);
     buf.push(0); // s0
@@ -3186,18 +3246,17 @@ fn encode_create_blend(buf: &mut VirglCmdBuf, blend_handle: u32) {
     for i in 0..8u32 {
         let mut rt = 0u32;
         if i == 0 {
-            // Enable blending on RT0.
-            rt |= 1 << 0;
-            // Pixi/WebGL generally uses premultiplied alpha content.
-            // For premultiplied alpha, correct blending is:
-            //   RGB = src*1 + dst*(1-srcA)
-            rt |= (PIPE_BLEND_ADD & 0x7) << 1;
-            rt |= (PIPE_BLENDFACTOR_ONE & 0x1f) << 4;
-            rt |= (PIPE_BLENDFACTOR_INV_SRC_ALPHA & 0x1f) << 9;
-            // Alpha blend: keep alpha reasonable (not currently used by scanout)
-            rt |= (PIPE_BLEND_ADD & 0x7) << 14;
-            rt |= (PIPE_BLENDFACTOR_ONE & 0x1f) << 17;
-            rt |= (PIPE_BLENDFACTOR_INV_SRC_ALPHA & 0x1f) << 22;
+            if enabled {
+                // Enable blending on RT0.
+                rt |= 1 << 0;
+                rt |= (PIPE_BLEND_ADD & 0x7) << 1;
+                rt |= (src_factor & 0x1f) << 4;
+                rt |= (dst_factor & 0x1f) << 9;
+                // Alpha blend: mirror RGB factors.
+                rt |= (PIPE_BLEND_ADD & 0x7) << 14;
+                rt |= (src_factor & 0x1f) << 17;
+                rt |= (dst_factor & 0x1f) << 22;
+            }
             // Write all color channels.
             rt |= (PIPE_MASK_RGBA & 0xF) << 27;
         }
