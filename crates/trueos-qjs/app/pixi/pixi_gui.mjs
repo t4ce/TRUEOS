@@ -30,7 +30,7 @@ var renderer = new __Renderer({
 	view: canvas,
 	width: W,
 	height: H,
-	backgroundColor: 0x101215,
+	backgroundColor: 0xFFFFFF,
 	antialias: false,
 });
 

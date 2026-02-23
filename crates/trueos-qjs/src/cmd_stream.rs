@@ -194,8 +194,8 @@ static FRAME_STATE: Mutex<FrameState> = Mutex::new(FrameState {
     active: false,
     end_requested: false,
     suppress: false,
-    clear_rgb: 0x00_08_18_30,
-    frame_clear_rgb: 0x00_08_18_30,
+    clear_rgb: 0x00ff_ffff,
+    frame_clear_rgb: 0x00ff_ffff,
     viewport_w: 0,
     viewport_h: 0,
     blend: BlendState {

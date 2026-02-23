@@ -879,7 +879,7 @@ pub mod cabi {
                 },
                 viewport_configured: false,
                 frame_active: false,
-                frame_clear_rgb: 0x00_08_18_30,
+                frame_clear_rgb: 0x00ff_ffff,
                 frame_seq: 0,
                 frame_rgb_draws: 0,
                 frame_tex_draws: 0,
