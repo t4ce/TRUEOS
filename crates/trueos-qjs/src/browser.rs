@@ -609,6 +609,52 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
         child
     }
 
+    unsafe extern "C" fn dom_contains(
+        ctx: *mut qjs::JSContext,
+        this_val: qjs::JSValueConst,
+        argc: c_int,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        if argv.is_null() || argc < 1 {
+            return js_bool(false);
+        }
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let needle = args[0];
+        if needle.is_exception()
+            || needle.tag == qjs::JS_TAG_UNDEFINED
+            || needle.tag == qjs::JS_TAG_NULL
+        {
+            return js_bool(false);
+        }
+
+        // Fast path: `node.contains(node)` is true.
+        if js_value_strict_eq(this_val, needle) {
+            return js_bool(true);
+        }
+
+        // Walk parentNode chain.
+        let mut cur = qjs::js_dup_value(ctx, needle);
+        for _ in 0..64 {
+            if cur.is_exception()
+                || cur.tag == qjs::JS_TAG_UNDEFINED
+                || cur.tag == qjs::JS_TAG_NULL
+            {
+                qjs::js_free_value(ctx, cur);
+                return js_bool(false);
+            }
+            if js_value_strict_eq(cur, this_val) {
+                qjs::js_free_value(ctx, cur);
+                return js_bool(true);
+            }
+            let next =
+                qjs::JS_GetPropertyStr(ctx, cur, b"parentNode\0".as_ptr() as *const c_char);
+            qjs::js_free_value(ctx, cur);
+            cur = next;
+        }
+        qjs::js_free_value(ctx, cur);
+        js_bool(false)
+    }
+
     unsafe extern "C" fn dom_set_attribute(
         ctx: *mut qjs::JSContext,
         this_val: qjs::JSValueConst,
@@ -778,6 +824,7 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
     ensure_global_event_target_stubs(ctx, node);
     node_fn!("appendChild", dom_append_child, 1);
     node_fn!("removeChild", dom_remove_child, 1);
+    node_fn!("contains", dom_contains, 1);
     node_fn!("setAttribute", dom_set_attribute, 2);
     node_fn!("getAttribute", dom_get_attribute, 1);
     node_fn!("remove", dom_noop, 0);

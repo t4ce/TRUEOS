@@ -54,16 +54,17 @@ pub fn run_ap_forever() -> ! {
     // "frame-locked" to whatever other subsystem happens to call `time::poll()`.
     let mut counter: u64 = 0;
     loop {
-        // Drive async wakeups and progress continuously on APs.
-        // (Embassy timers only advance when `crate::time::poll()` runs.)
-        crate::wait::spin_step();
+ 
 
         // Low-rate maintenance / indicator.
         if counter.is_multiple_of(100_000) {
+            // Drive async wakeups and progress continuously on APs.
+            // (Embassy timers only advance when `crate::time::poll()` runs.)
+            crate::wait::spin_step();
             crate::smp::poll();
         }
 
-        if counter.is_multiple_of(250_000) {
+        if counter.is_multiple_of(500_000) {
             let slot = crate::percpu::this_cpu().cpu_index() as usize;
             let total = crate::smp::cpu_count().max(1);
             let outline = match crate::cpu::intel_core_kind_hint() {
