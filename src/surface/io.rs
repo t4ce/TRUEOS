@@ -802,10 +802,10 @@ pub mod cabi {
     use crate::usb;
     use alloc::vec::Vec;
     use trueos_gfx_core::{
-        BufferDesc, BufferId, BufferUsage, ColorFormat, Command, CommandBuffer, Extent2D,
-        GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType, PipelineDesc, PipelineId,
-        SamplerDesc, SamplerFilter, SamplerWrap, SwapchainDesc, TexCoordFormat, VertexLayout,
-        Viewport,
+        BlendDesc, BlendFactor, BufferDesc, BufferId, BufferUsage, ColorFormat, Command,
+        CommandBuffer, Extent2D, GfxContext, ImageDesc, ImageFormat, ImageId, MemoryType,
+        PipelineDesc, PipelineId, SamplerDesc, SamplerFilter, SamplerWrap, SwapchainDesc,
+        TexCoordFormat, VertexLayout, Viewport,
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
@@ -832,6 +832,8 @@ pub mod cabi {
         frame_draws: Vec<PendingDraw>,
         // Current sampler state (set by the WebGL shim) that will be captured per textured draw.
         cur_sampler: SamplerDesc,
+        // Current blend state (set by the WebGL shim) that will be captured per draw.
+        cur_blend: BlendDesc,
         last_missing_tex_id: u32,
         missing_tex_logs: u32,
     }
@@ -845,11 +847,13 @@ pub mod cabi {
     enum PendingDraw {
         Rgb {
             vertices: Vec<u8>,
+            blend: BlendDesc,
         },
         Tex {
             tex_id: u32,
             sampler: SamplerDesc,
             vertices: Vec<u8>,
+            blend: BlendDesc,
         },
     }
 
@@ -887,10 +891,44 @@ pub mod cabi {
                     min_filter: SamplerFilter::Linear,
                     mag_filter: SamplerFilter::Linear,
                 },
+                cur_blend: BlendDesc::disabled(),
                 last_missing_tex_id: 0,
                 missing_tex_logs: 0,
             }
         }
+    }
+
+    #[inline]
+    fn gl_blend_factor_to_core(v: u32) -> BlendFactor {
+        match v {
+            0 => BlendFactor::Zero,                  // GL_ZERO
+            1 => BlendFactor::One,                   // GL_ONE
+            0x0302 => BlendFactor::SrcAlpha,         // GL_SRC_ALPHA
+            0x0303 => BlendFactor::OneMinusSrcAlpha, // GL_ONE_MINUS_SRC_ALPHA
+            _ => BlendFactor::One,
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_set_blend(
+        enabled: u32,
+        src_rgb: u32,
+        dst_rgb: u32,
+        _src_alpha: u32,
+        _dst_alpha: u32,
+        _eq_rgb: u32,
+        _eq_alpha: u32,
+    ) -> i32 {
+        // Minimal blend subset: support the common WebGL/Pixi cases.
+        // Equation is currently assumed FUNC_ADD.
+        let en = enabled != 0;
+        let mut st = GFX_CABI_STATE.lock();
+        st.cur_blend = BlendDesc {
+            enabled: en,
+            src: gl_blend_factor_to_core(src_rgb),
+            dst: gl_blend_factor_to_core(dst_rgb),
+        };
+        0
     }
 
     #[unsafe(no_mangle)]
@@ -1348,7 +1386,11 @@ pub mod cabi {
         }
         st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
-        st.frame_draws.push(PendingDraw::Rgb { vertices: bytes });
+        let blend = st.cur_blend;
+        st.frame_draws.push(PendingDraw::Rgb {
+            vertices: bytes,
+            blend,
+        });
         0
     }
 
@@ -1388,10 +1430,12 @@ pub mod cabi {
         st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
         let sampler = st.cur_sampler;
+        let blend = st.cur_blend;
         st.frame_draws.push(PendingDraw::Tex {
             tex_id,
             sampler,
             vertices: bytes,
+            blend,
         });
         0
     }
@@ -1436,12 +1480,14 @@ pub mod cabi {
                 Rgb {
                     offset: u64,
                     vcount: u32,
+                    blend: BlendDesc,
                 },
                 Tex {
                     tex_id: u32,
                     sampler: SamplerDesc,
                     offset: u64,
                     vcount: u32,
+                    blend: BlendDesc,
                 },
             }
 
@@ -1451,7 +1497,7 @@ pub mod cabi {
 
             for draw in draws.iter() {
                 match draw {
-                    PendingDraw::Rgb { vertices } => {
+                    PendingDraw::Rgb { vertices, blend } => {
                         const VTX_SIZE: usize = 12;
                         let usable = vertices.len() - (vertices.len() % VTX_SIZE);
                         if usable == 0 {
@@ -1463,12 +1509,14 @@ pub mod cabi {
                         plans.push(Plan::Rgb {
                             offset: off,
                             vcount,
+                            blend: *blend,
                         });
                     }
                     PendingDraw::Tex {
                         tex_id,
                         sampler,
                         vertices,
+                        blend,
                     } => {
                         const VTX_SIZE: usize = 20;
                         let usable = vertices.len() - (vertices.len() % VTX_SIZE);
@@ -1483,6 +1531,7 @@ pub mod cabi {
                             sampler: *sampler,
                             offset: off,
                             vcount,
+                            blend: *blend,
                         });
                     }
                 }
@@ -1518,9 +1567,19 @@ pub mod cabi {
             }
             cmds.push(Command::ClearColor { rgb: clear_rgb });
 
+            let mut last_blend: Option<BlendDesc> = None;
+
             for plan in plans.iter() {
                 match *plan {
-                    Plan::Rgb { offset, vcount } => {
+                    Plan::Rgb {
+                        offset,
+                        vcount,
+                        blend,
+                    } => {
+                        if last_blend != Some(blend) {
+                            cmds.push(Command::SetBlend(blend));
+                            last_blend = Some(blend);
+                        }
                         let Some((pipeline, vbuf)) = rgb_res else {
                             return -8;
                         };
@@ -1539,7 +1598,12 @@ pub mod cabi {
                         sampler,
                         offset,
                         vcount,
+                        blend,
                     } => {
+                        if last_blend != Some(blend) {
+                            cmds.push(Command::SetBlend(blend));
+                            last_blend = Some(blend);
+                        }
                         let Some((pipeline, vbuf)) = tex_res else {
                             return -9;
                         };
