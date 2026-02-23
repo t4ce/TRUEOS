@@ -2,13 +2,32 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::format;
 use core::ffi::{c_char, c_int, CStr};
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate as qjs;
 use crate::cmd_stream;
 
 unsafe extern "C" {}
+
+unsafe extern "C" {
+    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+}
+
+#[inline]
+fn webgl_log(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe { trueos_cabi_write(1, bytes.as_ptr(), bytes.len()) };
+}
+
+static UBO_LOG_MASK: AtomicU32 = AtomicU32::new(0);
+static MAT3_NAME_LOG_MASK: AtomicU32 = AtomicU32::new(0);
+static ATTR_LOG_MASK: AtomicU32 = AtomicU32::new(0);
+static ACTIVE_UNIFORM_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 const MAX_ATTRS: usize = 16;
 
@@ -24,6 +43,7 @@ const GL_TRIANGLE_FAN: u32 = 0x0006;
 
 const GL_ARRAY_BUFFER: u32 = 0x8892;
 const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
+const GL_UNIFORM_BUFFER: u32 = 0x8A11;
 const GL_TEXTURE_2D: u32 = 0x0DE1;
 const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
 
@@ -31,6 +51,7 @@ const GL_TEXTURE0: u32 = 0x84C0;
 const MAX_TEXTURE_UNITS: usize = 8;
 
 const GL_BLEND: u32 = 0x0BE2;
+const GL_SCISSOR_TEST: u32 = 0x0C11;
 const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 
 // Blend constants (subset).
@@ -44,6 +65,8 @@ const GL_COMPILE_STATUS: u32 = 0x8B81;
 const GL_LINK_STATUS: u32 = 0x8B82;
 const GL_ACTIVE_ATTRIBUTES: u32 = 0x8B89;
 const GL_ACTIVE_UNIFORMS: u32 = 0x8B86;
+const GL_ACTIVE_UNIFORM_BLOCKS: u32 = 0x8A36;
+const GL_UNIFORM_BLOCK_DATA_SIZE: u32 = 0x8A40;
 
 const GL_VERSION: u32 = 0x1F02;
 const GL_RENDERER: u32 = 0x1F01;
@@ -51,6 +74,7 @@ const GL_VENDOR: u32 = 0x1F00;
 const GL_MAX_VERTEX_ATTRIBS: u32 = 0x8869;
 const GL_MAX_TEXTURE_IMAGE_UNITS: u32 = 0x8872;
 const GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: u32 = 0x8B4D;
+const GL_MAX_UNIFORM_BUFFER_BINDINGS: u32 = 0x8A2F;
 const GL_STENCIL_BITS: u32 = 0x0D57;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;
 const GL_VERTEX_SHADER: u32 = 0x8B31;
@@ -128,8 +152,12 @@ struct ProgramState {
     attrib_names: Vec<Vec<u8>>,
     uniform_names: Vec<Vec<u8>>,
     uniform_mat3: Vec<Option<[f32; 9]>>,
+    uniform_mat4: Vec<Option<[f32; 16]>>,
+    uniform_vec4: Vec<Option<[f32; 4]>>,
     active_attribs: Vec<(Vec<u8>, u32, i32)>,
     active_uniforms: Vec<(Vec<u8>, u32, i32)>,
+    uniform_block_names: Vec<Vec<u8>>,
+    uniform_block_bindings: Vec<u32>,
     attached_vertex_shader: u32,
     attached_fragment_shader: u32,
     linked: bool,
@@ -141,8 +169,12 @@ impl ProgramState {
             attrib_names: Vec::new(),
             uniform_names: Vec::new(),
             uniform_mat3: Vec::new(),
+            uniform_mat4: Vec::new(),
+            uniform_vec4: Vec::new(),
             active_attribs: Vec::new(),
             active_uniforms: Vec::new(),
+            uniform_block_names: Vec::new(),
+            uniform_block_bindings: Vec::new(),
             attached_vertex_shader: 0,
             attached_fragment_shader: 0,
             linked: false,
@@ -215,6 +247,11 @@ struct PackedVertexCacheKey {
     uv_type_enum: u32,
     texture_id: u32,
     texture_rev: u32,
+    scissor_enabled: bool,
+    scissor_x: i32,
+    scissor_y: i32,
+    scissor_w: i32,
+    scissor_h: i32,
 }
 
 struct TextureState {
@@ -246,6 +283,23 @@ struct VaoState {
     element_array_buffer: u32,
 }
 
+#[derive(Clone, Copy, Default)]
+struct UniformBufferBinding {
+    buffer_id: u32,
+    offset: usize,
+    size: usize,
+}
+
+const fn uniform_buffer_binding_default() -> UniformBufferBinding {
+    UniformBufferBinding {
+        buffer_id: 0,
+        offset: 0,
+        size: 0,
+    }
+}
+
+const MAX_UNIFORM_BUFFER_BINDINGS: usize = 64;
+
 struct GlState {
     next_handle: u32,
     buffers: Vec<Option<Vec<u8>>>,
@@ -256,6 +310,8 @@ struct GlState {
     programs: Vec<Option<ProgramState>>,
     current_array_buffer: u32,
     current_element_array_buffer: u32,
+    current_uniform_buffer: u32,
+    uniform_bindings: [UniformBufferBinding; MAX_UNIFORM_BUFFER_BINDINGS],
     active_texture_unit: usize,
     bound_texture_2d: [u32; MAX_TEXTURE_UNITS],
     current_program: u32,
@@ -276,6 +332,11 @@ struct GlState {
     blend_dst_alpha: u32,
     blend_eq_rgb: u32,
     blend_eq_alpha: u32,
+    scissor_enabled: bool,
+    scissor_x: i32,
+    scissor_y: i32,
+    scissor_w: i32,
+    scissor_h: i32,
     transform_epoch: u32,
     unpack_alignment: i32,
     viewport_dirty: bool,
@@ -298,6 +359,8 @@ impl GlState {
             programs: Vec::new(),
             current_array_buffer: 0,
             current_element_array_buffer: 0,
+            current_uniform_buffer: 0,
+            uniform_bindings: [uniform_buffer_binding_default(); MAX_UNIFORM_BUFFER_BINDINGS],
             active_texture_unit: 0,
             bound_texture_2d: [0; MAX_TEXTURE_UNITS],
             current_program: 0,
@@ -325,6 +388,11 @@ impl GlState {
             blend_dst_alpha: GL_ZERO,
             blend_eq_rgb: GL_FUNC_ADD,
             blend_eq_alpha: GL_FUNC_ADD,
+            scissor_enabled: false,
+            scissor_x: 0,
+            scissor_y: 0,
+            scissor_w: 1280,
+            scissor_h: 800,
             transform_epoch: 1,
             unpack_alignment: 4,
             viewport_dirty: true,
@@ -479,6 +547,41 @@ unsafe fn js_get_arraybuffer_view(
     } else {
         None
     }
+}
+
+unsafe fn js_read_f32_array_like(
+    ctx: *mut qjs::JSContext,
+    val: qjs::JSValueConst,
+    out: &mut [f32],
+) -> bool {
+    if let Some((ptr, len)) = js_get_arraybuffer_view(ctx, val) {
+        let need = out.len().saturating_mul(4);
+        if len >= need {
+            let src = core::slice::from_raw_parts(ptr, need);
+            for (i, dst) in out.iter_mut().enumerate() {
+                let b = &src[i * 4..i * 4 + 4];
+                *dst = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            }
+            return true;
+        }
+    }
+    if val.tag != qjs::JS_TAG_OBJECT {
+        return false;
+    }
+    for (i, dst) in out.iter_mut().enumerate() {
+        let v = qjs::JS_GetPropertyUint32(ctx, val, i as u32);
+        if v.is_exception() || v.tag == qjs::JS_TAG_UNDEFINED {
+            qjs::js_free_value(ctx, v);
+            return false;
+        }
+        let Some(f) = js_get_f64(ctx, v) else {
+            qjs::js_free_value(ctx, v);
+            return false;
+        };
+        *dst = f as f32;
+        qjs::js_free_value(ctx, v);
+    }
+    true
 }
 
 unsafe fn js_get_obj_u32(
@@ -705,12 +808,26 @@ fn scan_glsl_decl(src: &[u8], key: &[u8], out: &mut Vec<(Vec<u8>, u32, i32)>) {
     let Ok(key_s) = core::str::from_utf8(key) else {
         return;
     };
-    for raw in s.lines() {
-        let line = raw.trim();
-        if !line.as_bytes().starts_with(key) {
-            continue;
+    // Parse semicolon-delimited statements so minified single-line shader sources
+    // still expose active attributes/uniforms, but only from declaration starts.
+    for stmt in s.split(';') {
+        let mut line = stmt.trim_start();
+        line = line.trim_start_matches('{').trim_start_matches('}');
+        line = line.trim_start();
+
+        let mut decl_tail: Option<&str> = None;
+        if line.starts_with(key_s) {
+            decl_tail = line.strip_prefix(key_s);
+        } else if key_s == "in " && line.starts_with("layout") {
+            if let Some(pos) = line.find(')') {
+                let tail = line[pos + 1..].trim_start();
+                if let Some(t) = tail.strip_prefix("in ") {
+                    decl_tail = Some(t);
+                }
+            }
         }
-        let Some(mut tail) = line.strip_prefix(key_s) else {
+
+        let Some(mut tail) = decl_tail else {
             continue;
         };
         tail = tail.trim_start();
@@ -722,22 +839,81 @@ fn scan_glsl_decl(src: &[u8], key: &[u8], out: &mut Vec<(Vec<u8>, u32, i32)>) {
                 break;
             }
         }
-        let name_tok = parts.next().unwrap_or("");
-        if type_tok.is_empty() || name_tok.is_empty() {
+        if type_tok.is_empty() {
             continue;
         }
-        if name_tok.is_empty() {
+        let names_str = parts.collect::<Vec<_>>().join(" ");
+        if names_str.is_empty() {
             continue;
         }
-        let n = sanitize_glsl_name(name_tok.as_bytes());
-        if n.is_empty() {
-            continue;
+        let gl_type = glsl_type_to_enum(type_tok.as_bytes());
+        for raw_name in names_str.split(',') {
+            let n = sanitize_glsl_name(raw_name.trim().as_bytes());
+            if n.is_empty() {
+                continue;
+            }
+            if out.iter().any(|(x, _, _)| *x == n) {
+                continue;
+            }
+            out.push((n, gl_type, 1));
         }
-        if out.iter().any(|(x, _, _)| *x == n) {
-            continue;
-        }
-        out.push((n, glsl_type_to_enum(type_tok.as_bytes()), 1));
     }
+}
+
+fn scan_glsl_uniform_blocks(src: &[u8], out: &mut Vec<Vec<u8>>) {
+    let Ok(s) = core::str::from_utf8(src) else {
+        return;
+    };
+    for chunk in s.split("uniform").skip(1) {
+        let tail = chunk.trim_start();
+        if tail.is_empty() {
+            continue;
+        }
+        let brace_pos = tail.find('{');
+        let semi_pos = tail.find(';');
+        let Some(bp) = brace_pos else {
+            continue;
+        };
+        if let Some(sp) = semi_pos {
+            if sp < bp {
+                continue;
+            }
+        }
+        let mut parts = tail[..bp].split_whitespace();
+        let mut tok = parts.next().unwrap_or("");
+        while is_glsl_qualifier(tok) {
+            tok = parts.next().unwrap_or("");
+            if tok.is_empty() {
+                break;
+            }
+        }
+        if tok.is_empty() {
+            continue;
+        }
+        let name = sanitize_glsl_name(tok.as_bytes());
+        if name.is_empty() {
+            continue;
+        }
+        if out.iter().any(|x| *x == name) {
+            continue;
+        }
+        out.push(name);
+    }
+}
+
+fn ensure_active_uniform_if_source_mentions(
+    source: &[u8],
+    out: &mut Vec<(Vec<u8>, u32, i32)>,
+    name: &[u8],
+    gl_type: u32,
+) {
+    if !source.windows(name.len()).any(|w| w == name) {
+        return;
+    }
+    if out.iter().any(|(n, _, _)| n.as_slice() == name) {
+        return;
+    }
+    out.push((name.to_vec(), gl_type, 1));
 }
 
 unsafe fn uniform_loc_index(ctx: *mut qjs::JSContext, loc_obj: qjs::JSValueConst) -> Option<usize> {
@@ -831,14 +1007,115 @@ fn hash_u32_slice(values: &[u32]) -> u32 {
 }
 
 fn mat3_apply(m: &[f32; 9], x: f32, y: f32) -> (f32, f32) {
-    let ox = m[0] * x + m[3] * y + m[6];
-    let oy = m[1] * x + m[4] * y + m[7];
-    let ow = m[2] * x + m[5] * y + m[8];
-    if ow != 0.0 {
-        (ox / ow, oy / ow)
+    // Pixi paths can feed mat3 in either conventional GLSL column-major form
+    // or a row-major-like packed form; choose the variant that actually carries
+    // translation components.
+    let col_ox = m[0] * x + m[3] * y + m[6];
+    let col_oy = m[1] * x + m[4] * y + m[7];
+    let col_ow = m[2] * x + m[5] * y + m[8];
+
+    let row_ox = m[0] * x + m[1] * y + m[2];
+    let row_oy = m[3] * x + m[4] * y + m[5];
+    let row_ow = m[6] * x + m[7] * y + m[8];
+
+    let col_has_t = m[6] != 0.0 || m[7] != 0.0;
+    let row_has_t = m[2] != 0.0 || m[5] != 0.0;
+
+    let (ox, oy, ow) = if row_has_t && !col_has_t {
+        (row_ox, row_oy, row_ow)
     } else {
-        (ox, oy)
+        (col_ox, col_oy, col_ow)
+    };
+    if ow != 0.0 { (ox / ow, oy / ow) } else { (ox, oy) }
+}
+
+fn mat4_apply(m: &[f32; 16], x: f32, y: f32) -> (f32, f32) {
+    let col_ox = m[0] * x + m[4] * y + m[12];
+    let col_oy = m[1] * x + m[5] * y + m[13];
+    let col_ow = m[3] * x + m[7] * y + m[15];
+
+    let row_ox = m[0] * x + m[1] * y + m[3];
+    let row_oy = m[4] * x + m[5] * y + m[7];
+    let row_ow = m[12] * x + m[13] * y + m[15];
+
+    let col_has_t = m[12] != 0.0 || m[13] != 0.0;
+    let row_has_t = m[3] != 0.0 || m[7] != 0.0;
+    let (ox, oy, ow) = if row_has_t && !col_has_t {
+        (row_ox, row_oy, row_ow)
+    } else {
+        (col_ox, col_oy, col_ow)
+    };
+    if ow != 0.0 { (ox / ow, oy / ow) } else { (ox, oy) }
+}
+
+fn mat3_from_mat4_2d(m: &[f32; 16]) -> [f32; 9] {
+    [m[0], m[1], m[3], m[4], m[5], m[7], m[12], m[13], m[15]]
+}
+
+fn mat3_is_identity(m: &[f32; 9]) -> bool {
+    let eps = 1.0e-5f32;
+    (m[0] - 1.0).abs() <= eps
+        && m[1].abs() <= eps
+        && m[2].abs() <= eps
+        && m[3].abs() <= eps
+        && (m[4] - 1.0).abs() <= eps
+        && m[5].abs() <= eps
+        && m[6].abs() <= eps
+        && m[7].abs() <= eps
+        && (m[8] - 1.0).abs() <= eps
+}
+
+fn mat4_is_identity_2d(m: &[f32; 16]) -> bool {
+    let eps = 1.0e-5f32;
+    (m[0] - 1.0).abs() <= eps
+        && m[1].abs() <= eps
+        && m[2].abs() <= eps
+        && m[3].abs() <= eps
+        && m[4].abs() <= eps
+        && (m[5] - 1.0).abs() <= eps
+        && m[6].abs() <= eps
+        && m[7].abs() <= eps
+        && m[8].abs() <= eps
+        && m[9].abs() <= eps
+        && (m[10] - 1.0).abs() <= eps
+        && m[11].abs() <= eps
+        && m[12].abs() <= eps
+        && m[13].abs() <= eps
+        && m[14].abs() <= eps
+        && (m[15] - 1.0).abs() <= eps
+}
+
+fn normalize_uniform_name(name: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(name.len());
+    for b in name {
+        if b.is_ascii_alphanumeric() {
+            out.push(b.to_ascii_lowercase());
+        }
     }
+    out
+}
+
+fn uniform_name_matches_alias(name: &[u8], aliases: &[&[u8]]) -> bool {
+    let norm = normalize_uniform_name(name);
+    if norm.is_empty() {
+        return false;
+    }
+    for alias in aliases {
+        let an = normalize_uniform_name(alias);
+        if an.is_empty() {
+            continue;
+        }
+        if norm == an {
+            return true;
+        }
+        if norm.len() == an.len() + 1 && norm[0] == b'u' && &norm[1..] == an.as_slice() {
+            return true;
+        }
+        if an.len() == norm.len() + 1 && an[0] == b'u' && &an[1..] == norm.as_slice() {
+            return true;
+        }
+    }
+    false
 }
 
 fn find_uniform_mat3(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32; 9]> {
@@ -849,12 +1126,162 @@ fn find_uniform_mat3(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32
     let Some(Some(prog)) = st.programs.get(idx) else {
         return None;
     };
+    for (i, n) in prog.uniform_names.iter().enumerate() {
+        if uniform_name_matches_alias(n.as_slice(), names) {
+            if let Some(Some(m)) = prog.uniform_mat3.get(i) {
+                return Some(*m);
+            }
+        }
+    }
+    None
+}
+
+fn find_uniform_mat4(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32; 16]> {
+    if prog_id == 0 {
+        return None;
+    }
+    let idx = (prog_id - 1) as usize;
+    let Some(Some(prog)) = st.programs.get(idx) else {
+        return None;
+    };
+    for (i, n) in prog.uniform_names.iter().enumerate() {
+        if uniform_name_matches_alias(n.as_slice(), names) {
+            if let Some(Some(m)) = prog.uniform_mat4.get(i) {
+                return Some(*m);
+            }
+        }
+    }
+    None
+}
+
+fn read_f32_le(buf: &[u8], off: usize) -> Option<f32> {
+    let b = buf.get(off..off + 4)?;
+    Some(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+fn read_mat3_std140(buf: &[u8], off: usize) -> Option<[f32; 9]> {
+    // mat3 in std140 is 3 vec4 columns.
+    let c0x = read_f32_le(buf, off)?;
+    let c0y = read_f32_le(buf, off + 4)?;
+    let c0z = read_f32_le(buf, off + 8)?;
+    let c1x = read_f32_le(buf, off + 16)?;
+    let c1y = read_f32_le(buf, off + 20)?;
+    let c1z = read_f32_le(buf, off + 24)?;
+    let c2x = read_f32_le(buf, off + 32)?;
+    let c2y = read_f32_le(buf, off + 36)?;
+    let c2z = read_f32_le(buf, off + 40)?;
+    Some([c0x, c0y, c0z, c1x, c1y, c1z, c2x, c2y, c2z])
+}
+
+fn read_mat4_std140(buf: &[u8], off: usize) -> Option<[f32; 16]> {
+    let mut m = [0.0f32; 16];
+    for (i, dst) in m.iter_mut().enumerate() {
+        *dst = read_f32_le(buf, off + i * 4)?;
+    }
+    Some(m)
+}
+
+fn find_ubo_matrices(st: &GlState, prog_id: u32) -> (Option<[f32; 9]>, Option<[f32; 9]>) {
+    if prog_id == 0 {
+        return (None, None);
+    }
+    let mut local_m: Option<[f32; 9]> = None;
+    let mut proj_m: Option<[f32; 9]> = None;
+    let idx = (prog_id - 1) as usize;
+    let Some(Some(prog)) = st.programs.get(idx) else {
+        return (None, None);
+    };
+
+    for (bi, name) in prog.uniform_block_names.iter().enumerate() {
+        let binding = prog
+            .uniform_block_bindings
+            .get(bi)
+            .copied()
+            .unwrap_or(u32::MAX);
+        if binding == u32::MAX || (binding as usize) >= MAX_UNIFORM_BUFFER_BINDINGS {
+            continue;
+        }
+        let ub = st.uniform_bindings[binding as usize];
+        if ub.buffer_id == 0 {
+            continue;
+        }
+        let Some(buf) = st
+            .buffers
+            .get(ub.buffer_id.saturating_sub(1) as usize)
+            .and_then(|b| b.as_ref())
+        else {
+            continue;
+        };
+        let base = ub.offset.min(buf.len());
+        let cap = if ub.size == 0 {
+            buf.len().saturating_sub(base)
+        } else {
+            ub.size.min(buf.len().saturating_sub(base))
+        };
+        let data = &buf[base..base + cap];
+
+        let mat = read_mat3_std140(data, 0).or_else(|| read_mat4_std140(data, 0).map(|m4| mat3_from_mat4_2d(&m4)));
+        let Some(m) = mat else {
+            continue;
+        };
+        let norm_name = normalize_uniform_name(name.as_slice());
+        let is_proj = norm_name.windows(4).any(|w| w == b"proj")
+            || norm_name.windows(10).any(|w| w == b"projection")
+            || norm_name.windows(6).any(|w| w == b"global");
+        let is_local = norm_name.windows(5).any(|w| w == b"local")
+            || norm_name.windows(8).any(|w| w == b"transform")
+            || norm_name.windows(5).any(|w| w == b"world")
+            || norm_name.windows(5).any(|w| w == b"model");
+
+        if is_proj && proj_m.is_none() {
+            proj_m = Some(m);
+            continue;
+        }
+        if is_local && local_m.is_none() {
+            local_m = Some(m);
+            continue;
+        }
+        if local_m.is_none() {
+            local_m = Some(m);
+        } else if proj_m.is_none() {
+            proj_m = Some(m);
+        }
+    }
+    (local_m, proj_m)
+}
+
+fn uniform_name_is_colorish(name: &[u8]) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut lower = Vec::with_capacity(name.len());
+    for b in name {
+        lower.push(b.to_ascii_lowercase());
+    }
+    lower.windows(5).any(|w| w == b"color") || lower.windows(4).any(|w| w == b"tint")
+}
+
+fn find_uniform_vec4(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32; 4]> {
+    if prog_id == 0 {
+        return None;
+    }
+    let idx = (prog_id - 1) as usize;
+    let Some(Some(prog)) = st.programs.get(idx) else {
+        return None;
+    };
     for target in names {
         for (i, n) in prog.uniform_names.iter().enumerate() {
             if n.as_slice() == *target {
-                if let Some(Some(m)) = prog.uniform_mat3.get(i) {
-                    return Some(*m);
+                if let Some(Some(v)) = prog.uniform_vec4.get(i) {
+                    return Some(*v);
                 }
+            }
+        }
+    }
+    for (i, n) in prog.uniform_names.iter().enumerate() {
+        if uniform_name_is_colorish(n.as_slice()) {
+            if let Some(Some(v)) = prog.uniform_vec4.get(i) {
+                return Some(*v);
             }
         }
     }
@@ -864,18 +1291,86 @@ fn find_uniform_mat3(st: &GlState, prog_id: u32, names: &[&[u8]]) -> Option<[f32
 fn transform_xy(st: &GlState, x: f32, y: f32) -> (f32, f32) {
     let mut tx = x;
     let mut ty = y;
-    if let Some(m) = find_uniform_mat3(
+    let uniform_local_m3 = find_uniform_mat3(
         st,
         st.current_program,
-        &[b"translationMatrix", b"uTranslationMatrix"],
-    ) {
+        &[
+            b"translationMatrix",
+            b"uTranslationMatrix",
+            b"transformMatrix",
+            b"uTransformMatrix",
+            b"modelMatrix",
+            b"uModelMatrix",
+        ],
+    );
+    let uniform_local_m4 = find_uniform_mat4(
+        st,
+        st.current_program,
+        &[
+            b"translationMatrix",
+            b"uTranslationMatrix",
+            b"transformMatrix",
+            b"uTransformMatrix",
+            b"modelMatrix",
+            b"uModelMatrix",
+        ],
+    );
+    let (ubo_local, ubo_proj) = find_ubo_matrices(st, st.current_program);
+    let use_ubo_local = uniform_local_m3
+        .as_ref()
+        .map(|m| mat3_is_identity(m))
+        .unwrap_or_else(|| {
+            uniform_local_m4
+                .as_ref()
+                .map(|m| mat4_is_identity_2d(m))
+                .unwrap_or(false)
+        });
+    if use_ubo_local {
+        if let Some(m) = ubo_local {
+            (tx, ty) = mat3_apply(&m, tx, ty);
+        } else if let Some(m) = uniform_local_m3 {
+            (tx, ty) = mat3_apply(&m, tx, ty);
+        } else if let Some(m) = uniform_local_m4 {
+            (tx, ty) = mat4_apply(&m, tx, ty);
+        }
+    } else if let Some(m) = uniform_local_m3 {
+        (tx, ty) = mat3_apply(&m, tx, ty);
+    } else if let Some(m) = uniform_local_m4 {
+        (tx, ty) = mat4_apply(&m, tx, ty);
+    } else if let Some(m) = ubo_local {
         (tx, ty) = mat3_apply(&m, tx, ty);
     }
     if let Some(m) = find_uniform_mat3(
         st,
         st.current_program,
-        &[b"projectionMatrix", b"uProjectionMatrix"],
+        &[b"worldTransformMatrix", b"uWorldTransformMatrix"],
     ) {
+        (tx, ty) = mat3_apply(&m, tx, ty);
+    } else if let Some(m) = find_uniform_mat4(
+        st,
+        st.current_program,
+        &[b"worldTransformMatrix", b"uWorldTransformMatrix"],
+    ) {
+        (tx, ty) = mat4_apply(&m, tx, ty);
+    }
+    let uniform_proj_m3 = find_uniform_mat3(
+        st,
+        st.current_program,
+        &[b"projectionMatrix", b"uProjectionMatrix", b"projMatrix"],
+    );
+    let uniform_proj_m4 = find_uniform_mat4(
+        st,
+        st.current_program,
+        &[b"projectionMatrix", b"uProjectionMatrix", b"projMatrix"],
+    );
+    if let Some(m) = uniform_proj_m3 {
+        (tx, ty) = mat3_apply(&m, tx, ty);
+        return (tx, ty);
+    } else if let Some(m) = uniform_proj_m4 {
+        (tx, ty) = mat4_apply(&m, tx, ty);
+        return (tx, ty);
+    }
+    if let Some(m) = ubo_proj {
         (tx, ty) = mat3_apply(&m, tx, ty);
         return (tx, ty);
     }
@@ -904,6 +1399,128 @@ fn pack_vertex_tex(dst: &mut Vec<u8>, x: f32, y: f32, u: f32, v: f32, r: u8, g: 
     dst.push(a);
 }
 
+#[derive(Clone, Copy)]
+struct EmitVertex {
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+fn scissor_rect_ndc(st: &GlState) -> Option<(f32, f32, f32, f32)> {
+    if !st.scissor_enabled {
+        return None;
+    }
+    let vw = st.viewport_w.max(1);
+    let vh = st.viewport_h.max(1);
+    let sx = st.scissor_x.clamp(0, vw);
+    let sy = st.scissor_y.clamp(0, vh);
+    let max_w = vw.saturating_sub(sx);
+    let max_h = vh.saturating_sub(sy);
+    let sw = st.scissor_w.max(0).min(max_w);
+    let sh = st.scissor_h.max(0).min(max_h);
+
+    let left = (2.0 * (sx as f32 / vw as f32)) - 1.0;
+    let right = (2.0 * ((sx + sw) as f32 / vw as f32)) - 1.0;
+    let bottom = -1.0 + (2.0 * (sy as f32 / vh as f32));
+    let top = -1.0 + (2.0 * ((sy + sh) as f32 / vh as f32));
+    Some((left, right, bottom, top))
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    let af = a as f32;
+    let bf = b as f32;
+    ((af + (bf - af) * t).clamp(0.0, 255.0)) as u8
+}
+
+fn lerp_emit(a: EmitVertex, b: EmitVertex, t: f32) -> EmitVertex {
+    EmitVertex {
+        x: a.x + (b.x - a.x) * t,
+        y: a.y + (b.y - a.y) * t,
+        u: a.u + (b.u - a.u) * t,
+        v: a.v + (b.v - a.v) * t,
+        r: lerp_u8(a.r, b.r, t),
+        g: lerp_u8(a.g, b.g, t),
+        b: lerp_u8(a.b, b.b, t),
+        a: lerp_u8(a.a, b.a, t),
+    }
+}
+
+fn inside_edge(v: EmitVertex, edge: u8, value: f32) -> bool {
+    match edge {
+        0 => v.x >= value, // left
+        1 => v.x <= value, // right
+        2 => v.y >= value, // bottom
+        _ => v.y <= value, // top
+    }
+}
+
+fn intersect_edge(a: EmitVertex, b: EmitVertex, edge: u8, value: f32) -> EmitVertex {
+    let denom = match edge {
+        0 | 1 => b.x - a.x,
+        _ => b.y - a.y,
+    };
+    let t = if denom.abs() <= 1.0e-20 {
+        0.0
+    } else {
+        let num = match edge {
+            0 | 1 => value - a.x,
+            _ => value - a.y,
+        };
+        (num / denom).clamp(0.0, 1.0)
+    };
+    lerp_emit(a, b, t)
+}
+
+fn clip_poly_against_edge(input: &[EmitVertex], edge: u8, value: f32, out: &mut Vec<EmitVertex>) {
+    out.clear();
+    if input.is_empty() {
+        return;
+    }
+    let mut s = input[input.len() - 1];
+    let mut s_in = inside_edge(s, edge, value);
+    for &e in input {
+        let e_in = inside_edge(e, edge, value);
+        if e_in {
+            if !s_in {
+                out.push(intersect_edge(s, e, edge, value));
+            }
+            out.push(e);
+        } else if s_in {
+            out.push(intersect_edge(s, e, edge, value));
+        }
+        s = e;
+        s_in = e_in;
+    }
+}
+
+fn clip_triangle_scissor(tri: [EmitVertex; 3], rect: (f32, f32, f32, f32), out: &mut Vec<EmitVertex>) {
+    let (left, right, bottom, top) = rect;
+    let mut a = Vec::with_capacity(8);
+    let mut b = Vec::with_capacity(8);
+    a.extend_from_slice(&tri);
+    clip_poly_against_edge(a.as_slice(), 0, left, &mut b);
+    core::mem::swap(&mut a, &mut b);
+    clip_poly_against_edge(a.as_slice(), 1, right, &mut b);
+    core::mem::swap(&mut a, &mut b);
+    clip_poly_against_edge(a.as_slice(), 2, bottom, &mut b);
+    core::mem::swap(&mut a, &mut b);
+    clip_poly_against_edge(a.as_slice(), 3, top, &mut b);
+    if b.len() < 3 {
+        return;
+    }
+    let base = b[0];
+    for i in 1..(b.len() - 1) {
+        out.push(base);
+        out.push(b[i]);
+        out.push(b[i + 1]);
+    }
+}
+
 fn emit_triangles(st: &mut GlState, indices: &[u32]) {
     let mut pos_attr: Option<(usize, AttribState)> = None;
     let mut preferred_loc: Option<usize> = None;
@@ -915,6 +1532,13 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                 .iter()
                 .enumerate()
                 .find(|(_, n)| n.as_slice() == b"aVertexPosition")
+            {
+                preferred_loc = Some(i);
+            } else if let Some((i, _)) = p
+                .attrib_names
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.as_slice() == b"aPosition")
             {
                 preferred_loc = Some(i);
             } else if let Some((i, _)) = p
@@ -962,6 +1586,14 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
     let Some((pos_loc, pa)) = pos_attr else {
         return;
     };
+    let old = ATTR_LOG_MASK.fetch_or(1 << 2, Ordering::Relaxed);
+    if (old & (1 << 2)) == 0 {
+        let msg = format!(
+            "qjs-webgl: emit pos_loc={} size={} type=0x{:X} stride={} offset={} buf={}\n",
+            pos_loc, pa.size, pa.type_enum, pa.stride, pa.offset, pa.buffer_id
+        );
+        webgl_log(msg.as_bytes());
+    }
     let mut color_attr: Option<AttribState> = None;
     let mut uv_attr: Option<AttribState> = None;
     if st.current_program != 0 {
@@ -1169,6 +1801,11 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         uv_type_enum,
         texture_id: tex_id,
         texture_rev: tex_rev,
+        scissor_enabled: st.scissor_enabled,
+        scissor_x: st.scissor_x,
+        scissor_y: st.scissor_y,
+        scissor_w: st.scissor_w,
+        scissor_h: st.scissor_h,
     };
     if st.packed_vertex_cache_key == Some(packed_key) && !st.packed_vertex_cache.is_empty() {
         if use_tex {
@@ -1222,8 +1859,7 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         decoded_local.as_slice()
     };
 
-    let mut out =
-        Vec::with_capacity((src_xy.len() / 2).saturating_mul(if use_tex { 20 } else { 12 }));
+    let mut verts = Vec::with_capacity(src_xy.len() / 2);
     let color_buf = color_attr.and_then(|ca| {
         st.buffers
             .get((ca.buffer_id - 1) as usize)
@@ -1234,6 +1870,12 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
             .get((ua.buffer_id - 1) as usize)
             .and_then(|v| v.as_ref())
     });
+    let uniform_color_mul = find_uniform_vec4(
+        st,
+        st.current_program,
+        &[b"uColor", b"uTint", b"tint", b"uTintColor", b"uBaseColor"],
+    )
+    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
     let mut i = 0usize;
     while i + 1 < src_xy.len() {
         let x = src_xy[i];
@@ -1294,6 +1936,14 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                 _ => {}
             }
         }
+        let rf = ((r as f32) * uniform_color_mul[0]).clamp(0.0, 255.0);
+        let gf = ((g as f32) * uniform_color_mul[1]).clamp(0.0, 255.0);
+        let bf = ((b as f32) * uniform_color_mul[2]).clamp(0.0, 255.0);
+        let af = ((a as f32) * uniform_color_mul[3]).clamp(0.0, 255.0);
+        r = rf as u8;
+        g = gf as u8;
+        b = bf as u8;
+        a = af as u8;
         if use_tex {
             if let (Some(ua), Some(ub)) = (uv_attr, uv_buf) {
                 let idx_i = i / 2;
@@ -1312,10 +1962,17 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                     v = f32::from_le_bytes([py[0], py[1], py[2], py[3]]);
                 }
             }
-            pack_vertex_tex(&mut out, nx, ny, u, v, r, g, b, a);
-        } else {
-            pack_vertex(&mut out, nx, ny, r, g, b);
         }
+        verts.push(EmitVertex {
+            x: nx,
+            y: ny,
+            u,
+            v,
+            r,
+            g,
+            b,
+            a,
+        });
         i += 2;
     }
 
@@ -1326,6 +1983,30 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
         st.vertex_decode_cache.indices.clear();
         st.vertex_decode_cache.indices.extend_from_slice(indices);
         st.vertex_decode_cache.xy = decoded_local;
+    }
+
+    let mut final_verts: Vec<EmitVertex> = Vec::new();
+    if let Some(rect) = scissor_rect_ndc(st) {
+        if verts.len() >= 3 {
+            final_verts.reserve(verts.len().saturating_mul(2));
+            let tris = verts.len() / 3;
+            for t in 0..tris {
+                let b = t * 3;
+                clip_triangle_scissor([verts[b], verts[b + 1], verts[b + 2]], rect, &mut final_verts);
+            }
+        }
+    } else {
+        final_verts = verts;
+    }
+
+    let mut out =
+        Vec::with_capacity(final_verts.len().saturating_mul(if use_tex { 20 } else { 12 }));
+    for vtx in final_verts {
+        if use_tex {
+            pack_vertex_tex(&mut out, vtx.x, vtx.y, vtx.u, vtx.v, vtx.r, vtx.g, vtx.b, vtx.a);
+        } else {
+            pack_vertex(&mut out, vtx.x, vtx.y, vtx.r, vtx.g, vtx.b);
+        }
     }
 
     if !out.is_empty() {
@@ -1576,6 +2257,20 @@ unsafe extern "C" fn gl_create_texture(
         rgba: upload_rgba,
     });
     js_new_handle_obj(ctx, id)
+}
+
+unsafe extern "C" fn gl_create_sampler(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // Minimal sampler object support for Pixi WebGL2 paths.
+    let o = qjs::JS_NewObject(ctx);
+    if o.is_exception() {
+        return o;
+    }
+    o
 }
 
 unsafe extern "C" fn gl_tex_parameteri(
@@ -1937,6 +2632,8 @@ unsafe extern "C" fn gl_bind_buffer(
         st.current_array_buffer = id;
     } else if target == GL_ELEMENT_ARRAY_BUFFER {
         st.current_element_array_buffer = id;
+    } else if target == GL_UNIFORM_BUFFER {
+        st.current_uniform_buffer = id;
     }
     qjs::JSValue::undefined()
 }
@@ -2037,6 +2734,8 @@ unsafe extern "C" fn gl_buffer_data(
         st.current_array_buffer
     } else if target == GL_ELEMENT_ARRAY_BUFFER {
         st.current_element_array_buffer
+    } else if target == GL_UNIFORM_BUFFER {
+        st.current_uniform_buffer
     } else {
         0
     };
@@ -2084,6 +2783,8 @@ unsafe extern "C" fn gl_buffer_sub_data(
         st.current_array_buffer
     } else if target == GL_ELEMENT_ARRAY_BUFFER {
         st.current_element_array_buffer
+    } else if target == GL_UNIFORM_BUFFER {
+        st.current_uniform_buffer
     } else {
         0
     };
@@ -2101,6 +2802,90 @@ unsafe extern "C" fn gl_buffer_sub_data(
             *rev = rev.wrapping_add(1);
         }
     }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_bind_buffer_base(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let old = UBO_LOG_MASK.fetch_or(1 << 2, Ordering::Relaxed);
+    if (old & (1 << 2)) == 0 {
+        webgl_log(b"qjs-webgl: gl.bindBufferBase hit\n");
+    }
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(target) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    if target != GL_UNIFORM_BUFFER {
+        return qjs::JSValue::undefined();
+    }
+    let Some(index) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as usize) else {
+        return qjs::JSValue::undefined();
+    };
+    if index >= MAX_UNIFORM_BUFFER_BINDINGS {
+        return qjs::JSValue::undefined();
+    }
+    let buffer_id = js_get_handle_id(ctx, args[2]).unwrap_or(0);
+    let mut st = GL_STATE.lock();
+    let size = st
+        .buffers
+        .get(buffer_id.saturating_sub(1) as usize)
+        .and_then(|b| b.as_ref())
+        .map(|b| b.len())
+        .unwrap_or(0);
+    st.uniform_bindings[index] = UniformBufferBinding {
+        buffer_id,
+        offset: 0,
+        size,
+    };
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_bind_buffer_range(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let old = UBO_LOG_MASK.fetch_or(1 << 3, Ordering::Relaxed);
+    if (old & (1 << 3)) == 0 {
+        webgl_log(b"qjs-webgl: gl.bindBufferRange hit\n");
+    }
+    if argv.is_null() || argc < 5 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(target) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    if target != GL_UNIFORM_BUFFER {
+        return qjs::JSValue::undefined();
+    }
+    let Some(index) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as usize) else {
+        return qjs::JSValue::undefined();
+    };
+    if index >= MAX_UNIFORM_BUFFER_BINDINGS {
+        return qjs::JSValue::undefined();
+    }
+    let buffer_id = js_get_handle_id(ctx, args[2]).unwrap_or(0);
+    let Some(offset) = js_get_f64(ctx, args[3]).map(|x| x.max(0.0) as usize) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(size) = js_get_f64(ctx, args[4]).map(|x| x.max(0.0) as usize) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    st.uniform_bindings[index] = UniformBufferBinding {
+        buffer_id,
+        offset,
+        size,
+    };
     qjs::JSValue::undefined()
 }
 
@@ -2241,6 +3026,14 @@ unsafe extern "C" fn gl_bind_attrib_location(
         }
         p.attrib_names[loc] = name;
     }
+    let old = ATTR_LOG_MASK.fetch_or(1 << 0, Ordering::Relaxed);
+    if (old & (1 << 0)) == 0 {
+        let msg = format!(
+            "qjs-webgl: gl.bindAttribLocation prog={} loc={}\n",
+            prog_id, loc
+        );
+        webgl_log(msg.as_bytes());
+    }
     qjs::JSValue::undefined()
 }
 
@@ -2271,10 +3064,51 @@ unsafe extern "C" fn gl_link_program(
     if let Some(p) = program_slot_mut(&mut st, prog_id) {
         p.active_attribs.clear();
         p.active_uniforms.clear();
+        p.uniform_block_names.clear();
         scan_glsl_decl(vs_src.as_slice(), b"attribute ", &mut p.active_attribs);
         scan_glsl_decl(vs_src.as_slice(), b"in ", &mut p.active_attribs);
         scan_glsl_decl(vs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
         scan_glsl_decl(fs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
+        // Fallback for minified/templated Pixi shaders where declaration scan can
+        // miss specific uniforms that are still referenced and required at runtime.
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uProjectionMatrix",
+            GL_FLOAT_MAT3,
+        );
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uTransformMatrix",
+            GL_FLOAT_MAT3,
+        );
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uWorldTransformMatrix",
+            GL_FLOAT_MAT3,
+        );
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uTextureMatrix",
+            GL_FLOAT_MAT3,
+        );
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uWorldColorAlpha",
+            GL_FLOAT_VEC4,
+        );
+        ensure_active_uniform_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_uniforms,
+            b"uResolution",
+            GL_FLOAT_VEC2,
+        );
+        scan_glsl_uniform_blocks(vs_src.as_slice(), &mut p.uniform_block_names);
+        scan_glsl_uniform_blocks(fs_src.as_slice(), &mut p.uniform_block_names);
         if p.attrib_names.is_empty() {
             for (n, _, _) in p.active_attribs.iter() {
                 p.attrib_names.push(n.clone());
@@ -2284,8 +3118,21 @@ unsafe extern "C" fn gl_link_program(
             for (n, _, _) in p.active_uniforms.iter() {
                 p.uniform_names.push(n.clone());
                 p.uniform_mat3.push(None);
+                p.uniform_mat4.push(None);
+                p.uniform_vec4.push(None);
             }
         }
+        if p.uniform_mat3.len() < p.uniform_names.len() {
+            p.uniform_mat3.resize(p.uniform_names.len(), None);
+        }
+        if p.uniform_mat4.len() < p.uniform_names.len() {
+            p.uniform_mat4.resize(p.uniform_names.len(), None);
+        }
+        if p.uniform_vec4.len() < p.uniform_names.len() {
+            p.uniform_vec4.resize(p.uniform_names.len(), None);
+        }
+        p.uniform_block_bindings
+            .resize(p.uniform_block_names.len(), u32::MAX);
         p.linked = true;
     }
     qjs::JSValue::undefined()
@@ -2349,6 +3196,16 @@ unsafe extern "C" fn gl_get_active_uniform(
     let Some((name, type_enum, size)) = p.active_uniforms.get(idx) else {
         return js_null();
     };
+    let seen = ACTIVE_UNIFORM_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if seen < 12 {
+        let msg = format!(
+            "qjs-webgl: gl.getActiveUniform idx={} name={} type=0x{:X}\n",
+            idx,
+            core::str::from_utf8(name.as_slice()).unwrap_or("?"),
+            *type_enum
+        );
+        webgl_log(msg.as_bytes());
+    }
     let o = qjs::JS_NewObject(ctx);
     if o.is_exception() {
         return o;
@@ -2494,6 +3351,14 @@ unsafe extern "C" fn gl_vertex_attrib_pointer(
         offset,
         buffer_id: st.current_array_buffer,
     };
+    let old = ATTR_LOG_MASK.fetch_or(1 << 1, Ordering::Relaxed);
+    if (old & (1 << 1)) == 0 {
+        let msg = format!(
+            "qjs-webgl: gl.vertexAttribPointer loc={} size={} type=0x{:X} stride={} offset={} buf={}\n",
+            loc, size, type_enum, stride, offset, st.current_array_buffer
+        );
+        webgl_log(msg.as_bytes());
+    }
     qjs::JSValue::undefined()
 }
 
@@ -2515,6 +3380,9 @@ unsafe extern "C" fn gl_get_uniform_location(
     let raw_name = CStr::from_ptr(name_c).to_bytes().to_vec();
     qjs::JS_FreeCString(ctx, name_c);
     let name = sanitize_glsl_name(raw_name.as_slice());
+    webgl_log(b"qjs-webgl: gl.getUniformLocation name=");
+    webgl_log(name.as_slice());
+    webgl_log(b"\n");
     let mut st = GL_STATE.lock();
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return js_null();
@@ -2529,6 +3397,8 @@ unsafe extern "C" fn gl_get_uniform_location(
     } else {
         p.uniform_names.push(name);
         p.uniform_mat3.push(None);
+        p.uniform_mat4.push(None);
+        p.uniform_vec4.push(None);
         p.uniform_names.len() - 1
     };
     let o = qjs::JS_NewObject(ctx);
@@ -2550,12 +3420,127 @@ unsafe extern "C" fn gl_get_uniform_location(
     o
 }
 
+unsafe extern "C" fn gl_get_uniform_block_index(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let old = UBO_LOG_MASK.fetch_or(1 << 0, Ordering::Relaxed);
+    if (old & (1 << 0)) == 0 {
+        webgl_log(b"qjs-webgl: gl.getUniformBlockIndex hit\n");
+    }
+    if argv.is_null() || argc < 2 {
+        return qjs::JS_NewFloat64(ctx, u32::MAX as f64);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let name_c = qjs::js_to_cstring(ctx, args[1]);
+    if name_c.is_null() {
+        return qjs::JS_NewFloat64(ctx, u32::MAX as f64);
+    }
+    let name = sanitize_glsl_name(CStr::from_ptr(name_c).to_bytes());
+    qjs::JS_FreeCString(ctx, name_c);
+    let mut st = GL_STATE.lock();
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JS_NewFloat64(ctx, u32::MAX as f64);
+    };
+    if let Some((idx, _)) = p
+        .uniform_block_names
+        .iter()
+        .enumerate()
+        .find(|(_, n)| **n == name)
+    {
+        return qjs::JS_NewFloat64(ctx, idx as f64);
+    }
+    // WebGL semantics: return INVALID_INDEX when the named uniform block
+    // does not exist in the linked program.
+    qjs::JS_NewFloat64(ctx, u32::MAX as f64)
+}
+
+unsafe extern "C" fn gl_get_active_uniform_block_name(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return qjs::JS_NewStringLen(ctx, b"\0".as_ptr() as *const c_char, 0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let idx = js_get_f64(ctx, args[1]).unwrap_or(0.0).max(0.0) as usize;
+    let st = GL_STATE.lock();
+    let name = st
+        .programs
+        .get(prog_id.saturating_sub(1) as usize)
+        .and_then(|p| p.as_ref())
+        .and_then(|p| p.uniform_block_names.get(idx))
+        .map(|n| n.as_slice())
+        .unwrap_or(b"");
+    qjs::JS_NewStringLen(ctx, name.as_ptr() as *const c_char, name.len())
+}
+
+unsafe extern "C" fn gl_get_active_uniform_block_parameter(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let pname = js_get_f64(ctx, args[2]).unwrap_or(0.0).max(0.0) as u32;
+    if pname == GL_UNIFORM_BLOCK_DATA_SIZE {
+        // Small fixed fallback size; enough for Pixi's mat/vec uniform blocks in this shim.
+        return js_int32(256);
+    }
+    js_int32(0)
+}
+
+unsafe extern "C" fn gl_uniform_block_binding(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let old = UBO_LOG_MASK.fetch_or(1 << 1, Ordering::Relaxed);
+    if (old & (1 << 1)) == 0 {
+        webgl_log(b"qjs-webgl: gl.uniformBlockBinding hit\n");
+    }
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let prog_id = js_get_handle_id(ctx, args[0]).unwrap_or(0);
+    let Some(block_index) = js_get_f64(ctx, args[1]).map(|x| x.max(0.0) as usize) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(binding_point) = js_get_f64(ctx, args[2]).map(|x| x.max(0.0) as u32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JSValue::undefined();
+    };
+    if block_index >= p.uniform_block_bindings.len() {
+        p.uniform_block_bindings.resize(block_index + 1, u32::MAX);
+    }
+    p.uniform_block_bindings[block_index] = binding_point;
+    qjs::JSValue::undefined()
+}
+
 unsafe extern "C" fn gl_uniform_matrix3fv(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
+    let old = UBO_LOG_MASK.fetch_or(1 << 2, Ordering::Relaxed);
+    if (old & (1 << 2)) == 0 {
+        webgl_log(b"qjs-webgl: gl.uniformMatrix3fv hit\n");
+    }
     if argv.is_null() || argc < 3 {
         return qjs::JSValue::undefined();
     }
@@ -2564,17 +3549,9 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
     let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
         return qjs::JSValue::undefined();
     };
-    let Some((ptr, len)) = js_get_arraybuffer_view(ctx, args[2]) else {
-        return qjs::JSValue::undefined();
-    };
-    if len < 36 {
-        return qjs::JSValue::undefined();
-    }
-    let src = core::slice::from_raw_parts(ptr, 36);
     let mut m = [0.0f32; 9];
-    for i in 0..9 {
-        let b = &src[i * 4..i * 4 + 4];
-        m[i] = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    if !js_read_f32_array_like(ctx, args[2], &mut m) {
+        return qjs::JSValue::undefined();
     }
     let mut st = GL_STATE.lock();
     let prog_id = {
@@ -2588,6 +3565,41 @@ unsafe extern "C" fn gl_uniform_matrix3fv(
     let Some(p) = program_slot_mut(&mut st, prog_id) else {
         return qjs::JSValue::undefined();
     };
+    let name = if loc < p.uniform_names.len() {
+        p.uniform_names[loc].as_slice()
+    } else {
+        b""
+    };
+    let bit = if loc < 32 { 1u32 << loc } else { 0 };
+    if bit != 0 {
+        let old_names = MAT3_NAME_LOG_MASK.fetch_or(bit, Ordering::Relaxed);
+        if (old_names & bit) == 0 {
+            webgl_log(b"qjs-webgl: gl.uniformMatrix3fv name=");
+            webgl_log(name);
+            webgl_log(b"\n");
+            let eps = 1.0e-5f32;
+            let row_t = m[2].abs() > eps || m[5].abs() > eps;
+            let col_t = m[6].abs() > eps || m[7].abs() > eps;
+            let ident = (m[0] - 1.0).abs() <= eps
+                && m[1].abs() <= eps
+                && m[2].abs() <= eps
+                && m[3].abs() <= eps
+                && (m[4] - 1.0).abs() <= eps
+                && m[5].abs() <= eps
+                && m[6].abs() <= eps
+                && m[7].abs() <= eps
+                && (m[8] - 1.0).abs() <= eps;
+            if row_t {
+                webgl_log(b"qjs-webgl: mat3 tx in [2,5]\n");
+            }
+            if col_t {
+                webgl_log(b"qjs-webgl: mat3 tx in [6,7]\n");
+            }
+            if ident {
+                webgl_log(b"qjs-webgl: mat3 is identity\n");
+            }
+        }
+    }
     if loc < p.uniform_mat3.len() {
         let changed = p.uniform_mat3[loc].map(|old| old != m).unwrap_or(true);
         p.uniform_mat3[loc] = Some(m);
@@ -2700,13 +3712,37 @@ unsafe extern "C" fn gl_enable_disable(
     let Some(cap) = js_get_f64(ctx, args[0]).map(|x| x.max(0.0) as u32) else {
         return qjs::JSValue::undefined();
     };
+    let mut st = GL_STATE.lock();
     if cap == GL_BLEND {
-        let mut st = GL_STATE.lock();
         if st.blend_enabled != enabled {
             st.blend_enabled = enabled;
             st.blend_dirty = true;
         }
+    } else if cap == GL_SCISSOR_TEST {
+        st.scissor_enabled = enabled;
     }
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn gl_scissor(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 4 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let x = js_get_f64(ctx, args[0]).unwrap_or(0.0) as i32;
+    let y = js_get_f64(ctx, args[1]).unwrap_or(0.0) as i32;
+    let w = js_get_f64(ctx, args[2]).unwrap_or(0.0).max(0.0) as i32;
+    let h = js_get_f64(ctx, args[3]).unwrap_or(0.0).max(0.0) as i32;
+    let mut st = GL_STATE.lock();
+    st.scissor_x = x;
+    st.scissor_y = y;
+    st.scissor_w = w;
+    st.scissor_h = h;
     qjs::JSValue::undefined()
 }
 
@@ -2739,11 +3775,51 @@ unsafe extern "C" fn gl_uniform_3f(
 
 unsafe extern "C" fn gl_uniform_4f(
     ctx: *mut qjs::JSContext,
-    this_val: qjs::JSValueConst,
+    _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    gl_uniform_store_noop(ctx, this_val, argc, argv)
+    if argv.is_null() || argc < 5 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let loc_obj = args[0];
+    let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(x) = js_get_f64(ctx, args[1]).map(|v| v as f32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(y) = js_get_f64(ctx, args[2]).map(|v| v as f32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(z) = js_get_f64(ctx, args[3]).map(|v| v as f32) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(w) = js_get_f64(ctx, args[4]).map(|v| v as f32) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut st = GL_STATE.lock();
+    let prog_id = {
+        let p = uniform_loc_program(ctx, loc_obj);
+        if p != 0 {
+            p
+        } else {
+            st.current_program
+        }
+    };
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JSValue::undefined();
+    };
+    if loc < p.uniform_vec4.len() {
+        let v = [x, y, z, w];
+        let changed = p.uniform_vec4[loc].map(|old| old != v).unwrap_or(true);
+        p.uniform_vec4[loc] = Some(v);
+        if changed {
+            st.transform_epoch = st.transform_epoch.wrapping_add(1);
+        }
+    }
+    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn gl_uniform_1i(
@@ -2811,11 +3887,42 @@ unsafe extern "C" fn gl_uniform_3fv(
 
 unsafe extern "C" fn gl_uniform_4fv(
     ctx: *mut qjs::JSContext,
-    this_val: qjs::JSValueConst,
+    _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    gl_uniform_store_noop(ctx, this_val, argc, argv)
+    if argv.is_null() || argc < 2 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let loc_obj = args[0];
+    let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut v = [0.0f32; 4];
+    if !js_read_f32_array_like(ctx, args[1], &mut v) {
+        return qjs::JSValue::undefined();
+    }
+    let mut st = GL_STATE.lock();
+    let prog_id = {
+        let p = uniform_loc_program(ctx, loc_obj);
+        if p != 0 {
+            p
+        } else {
+            st.current_program
+        }
+    };
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JSValue::undefined();
+    };
+    if loc < p.uniform_vec4.len() {
+        let changed = p.uniform_vec4[loc].map(|old| old != v).unwrap_or(true);
+        p.uniform_vec4[loc] = Some(v);
+        if changed {
+            st.transform_epoch = st.transform_epoch.wrapping_add(1);
+        }
+    }
+    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn gl_uniform_1iv(
@@ -2937,11 +4044,46 @@ unsafe extern "C" fn gl_uniform_matrix2fv(
 
 unsafe extern "C" fn gl_uniform_matrix4fv(
     ctx: *mut qjs::JSContext,
-    this_val: qjs::JSValueConst,
+    _this_val: qjs::JSValueConst,
     argc: c_int,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    gl_uniform_store_noop(ctx, this_val, argc, argv)
+    let old = UBO_LOG_MASK.fetch_or(1 << 3, Ordering::Relaxed);
+    if (old & (1 << 3)) == 0 {
+        webgl_log(b"qjs-webgl: gl.uniformMatrix4fv hit\n");
+    }
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let loc_obj = args[0];
+    let Some(loc) = uniform_loc_index(ctx, loc_obj) else {
+        return qjs::JSValue::undefined();
+    };
+    let mut m = [0.0f32; 16];
+    if !js_read_f32_array_like(ctx, args[2], &mut m) {
+        return qjs::JSValue::undefined();
+    }
+    let mut st = GL_STATE.lock();
+    let prog_id = {
+        let p = uniform_loc_program(ctx, loc_obj);
+        if p != 0 {
+            p
+        } else {
+            st.current_program
+        }
+    };
+    let Some(p) = program_slot_mut(&mut st, prog_id) else {
+        return qjs::JSValue::undefined();
+    };
+    if loc < p.uniform_mat4.len() {
+        let changed = p.uniform_mat4[loc].map(|old| old != m).unwrap_or(true);
+        p.uniform_mat4[loc] = Some(m);
+        if changed {
+            st.transform_epoch = st.transform_epoch.wrapping_add(1);
+        }
+    }
+    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn gl_enable(
@@ -3122,6 +4264,26 @@ unsafe extern "C" fn gl_draw_arrays(
     qjs::JSValue::undefined()
 }
 
+unsafe extern "C" fn gl_draw_arrays_instanced(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // MVP: ignore instanceCount and run a single drawArrays expansion.
+    gl_draw_arrays(ctx, this_val, argc, argv)
+}
+
+unsafe extern "C" fn gl_draw_elements_instanced(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    // MVP: ignore instanceCount and run a single indexed draw.
+    gl_draw_elements(ctx, this_val, argc, argv)
+}
+
 unsafe extern "C" fn gl_get_shader_program_parameter(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -3166,6 +4328,15 @@ unsafe extern "C" fn gl_get_shader_program_parameter(
             .unwrap_or(0);
         return js_int32(n);
     }
+    if pname == GL_ACTIVE_UNIFORM_BLOCKS {
+        let n = st
+            .programs
+            .get(id.saturating_sub(1) as usize)
+            .and_then(|p| p.as_ref())
+            .map(|p| p.uniform_block_names.len() as i32)
+            .unwrap_or(0);
+        return js_int32(n);
+    }
     js_int32(1)
 }
 
@@ -3191,6 +4362,7 @@ unsafe extern "C" fn gl_get_parameter(
         GL_MAX_VERTEX_ATTRIBS => js_int32(MAX_ATTRS as i32),
         GL_MAX_TEXTURE_IMAGE_UNITS => js_int32(8),
         GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS => js_int32(8),
+        GL_MAX_UNIFORM_BUFFER_BINDINGS => js_int32(MAX_UNIFORM_BUFFER_BINDINGS as i32),
         GL_STENCIL_BITS => js_int32(8),
         _ => js_int32(0),
     }
@@ -3432,12 +4604,238 @@ unsafe extern "C" fn canvas2d_noop(
     qjs::JSValue::undefined()
 }
 
+unsafe fn canvas2d_get_canvas(
+    ctx: *mut qjs::JSContext,
+    c2d: qjs::JSValueConst,
+) -> Option<qjs::JSValue> {
+    let canvas = qjs::JS_GetPropertyStr(ctx, c2d, b"canvas\0".as_ptr() as *const c_char);
+    if canvas.is_exception() || canvas.tag != qjs::JS_TAG_OBJECT {
+        qjs::js_free_value(ctx, canvas);
+        return None;
+    }
+    Some(canvas)
+}
+
+unsafe fn canvas2d_load_pixels(
+    ctx: *mut qjs::JSContext,
+    canvas: qjs::JSValueConst,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let need = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    let mut out = vec![0u8; need];
+    if let Some((ptr, len)) =
+        js_get_obj_arraybuffer_view(ctx, canvas, b"pixels\0".as_ptr() as *const c_char)
+    {
+        if !ptr.is_null() && len > 0 {
+            let take = len.min(need);
+            let src = core::slice::from_raw_parts(ptr, take);
+            out[..take].copy_from_slice(src);
+        }
+    }
+    out
+}
+
+unsafe fn canvas2d_store_pixels(
+    ctx: *mut qjs::JSContext,
+    canvas: qjs::JSValueConst,
+    rgba: &[u8],
+) {
+    let ab = qjs::JS_NewArrayBufferCopy(ctx, rgba.as_ptr(), rgba.len());
+    let _ = qjs::JS_SetPropertyStr(ctx, canvas, b"pixels\0".as_ptr() as *const c_char, ab);
+}
+
+fn canvas2d_put_pixel_rgba(
+    rgba: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let ux = x as u32;
+    let uy = y as u32;
+    if ux >= width || uy >= height {
+        return;
+    }
+    let idx = ((uy as usize) * (width as usize) + (ux as usize)).saturating_mul(4);
+    if idx + 3 >= rgba.len() {
+        return;
+    }
+    rgba[idx] = r;
+    rgba[idx + 1] = g;
+    rgba[idx + 2] = b;
+    rgba[idx + 3] = a;
+}
+
+unsafe fn canvas2d_draw_text_blocks(
+    ctx: *mut qjs::JSContext,
+    c2d: qjs::JSValueConst,
+    text_val: qjs::JSValueConst,
+    x: i32,
+    y: i32,
+    rgba_color: (u8, u8, u8, u8),
+) {
+    let Some(canvas) = canvas2d_get_canvas(ctx, c2d) else {
+        return;
+    };
+    let Some(width) = js_get_obj_u32(ctx, canvas, b"width\0".as_ptr() as *const c_char) else {
+        qjs::js_free_value(ctx, canvas);
+        return;
+    };
+    let Some(height) = js_get_obj_u32(ctx, canvas, b"height\0".as_ptr() as *const c_char) else {
+        qjs::js_free_value(ctx, canvas);
+        return;
+    };
+    if width == 0 || height == 0 {
+        qjs::js_free_value(ctx, canvas);
+        return;
+    }
+
+    let mut rgba = canvas2d_load_pixels(ctx, canvas, width, height);
+    let txt_c = qjs::js_to_cstring(ctx, text_val);
+    if txt_c.is_null() {
+        qjs::js_free_value(ctx, canvas);
+        return;
+    }
+    let txt = CStr::from_ptr(txt_c).to_bytes();
+    // Fixed-size block glyphs (6x10) with 8px advance. Baseline-aware.
+    let glyph_w = 6i32;
+    let glyph_h = 10i32;
+    let advance = 8i32;
+    let top = y.saturating_sub(glyph_h);
+    let (r, g, b, a) = rgba_color;
+    for (i, ch) in txt.iter().copied().enumerate() {
+        if ch == b' ' || ch == b'\t' || ch == b'\n' || ch == b'\r' {
+            continue;
+        }
+        let gx = x.saturating_add((i as i32).saturating_mul(advance));
+        for yy in 0..glyph_h {
+            for xx in 0..glyph_w {
+                canvas2d_put_pixel_rgba(
+                    rgba.as_mut_slice(),
+                    width,
+                    height,
+                    gx.saturating_add(xx),
+                    top.saturating_add(yy),
+                    r,
+                    g,
+                    b,
+                    a,
+                );
+            }
+        }
+    }
+    qjs::JS_FreeCString(ctx, txt_c);
+    canvas2d_store_pixels(ctx, canvas, rgba.as_slice());
+    qjs::js_free_value(ctx, canvas);
+}
+
+unsafe extern "C" fn canvas2d_fill_text(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let x = js_get_f64(ctx, args[1]).unwrap_or(0.0) as i32;
+    let y = js_get_f64(ctx, args[2]).unwrap_or(0.0) as i32;
+    canvas2d_draw_text_blocks(ctx, this_val, args[0], x, y, (0, 0, 0, 255));
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn canvas2d_stroke_text(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 3 {
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let x = js_get_f64(ctx, args[1]).unwrap_or(0.0) as i32;
+    let y = js_get_f64(ctx, args[2]).unwrap_or(0.0) as i32;
+    canvas2d_draw_text_blocks(ctx, this_val, args[0], x, y, (0, 0, 0, 255));
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn canvas2d_clear_rect(
+    ctx: *mut qjs::JSContext,
+    this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(canvas) = canvas2d_get_canvas(ctx, this_val) else {
+        return qjs::JSValue::undefined();
+    };
+    let Some(width) = js_get_obj_u32(ctx, canvas, b"width\0".as_ptr() as *const c_char) else {
+        qjs::js_free_value(ctx, canvas);
+        return qjs::JSValue::undefined();
+    };
+    let Some(height) = js_get_obj_u32(ctx, canvas, b"height\0".as_ptr() as *const c_char) else {
+        qjs::js_free_value(ctx, canvas);
+        return qjs::JSValue::undefined();
+    };
+    let mut rgba = canvas2d_load_pixels(ctx, canvas, width, height);
+    if argv.is_null() || argc < 4 {
+        rgba.fill(0);
+        canvas2d_store_pixels(ctx, canvas, rgba.as_slice());
+        qjs::js_free_value(ctx, canvas);
+        return qjs::JSValue::undefined();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let x = js_get_f64(ctx, args[0]).unwrap_or(0.0) as i32;
+    let y = js_get_f64(ctx, args[1]).unwrap_or(0.0) as i32;
+    let w = js_get_f64(ctx, args[2]).unwrap_or(0.0).max(0.0) as i32;
+    let h = js_get_f64(ctx, args[3]).unwrap_or(0.0).max(0.0) as i32;
+    for yy in 0..h {
+        for xx in 0..w {
+            canvas2d_put_pixel_rgba(
+                rgba.as_mut_slice(),
+                width,
+                height,
+                x.saturating_add(xx),
+                y.saturating_add(yy),
+                0,
+                0,
+                0,
+                0,
+            );
+        }
+    }
+    canvas2d_store_pixels(ctx, canvas, rgba.as_slice());
+    qjs::js_free_value(ctx, canvas);
+    qjs::JSValue::undefined()
+}
+
 unsafe extern "C" fn canvas2d_measure_text(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
-    _argc: c_int,
-    _argv: *const qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
+    let mut chars = 0usize;
+    if !argv.is_null() && argc >= 1 {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let txt_c = qjs::js_to_cstring(ctx, args[0]);
+        if !txt_c.is_null() {
+            chars = CStr::from_ptr(txt_c).to_bytes().len();
+            qjs::JS_FreeCString(ctx, txt_c);
+        }
+    }
+    let width = (chars as f64) * 8.0;
     let m = qjs::JS_NewObject(ctx);
     if m.is_exception() {
         return m;
@@ -3446,7 +4844,31 @@ unsafe extern "C" fn canvas2d_measure_text(
         ctx,
         m,
         b"width\0".as_ptr() as *const c_char,
-        qjs::JS_NewFloat64(ctx, 0.0),
+        qjs::JS_NewFloat64(ctx, width),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        m,
+        b"actualBoundingBoxAscent\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 10.0),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        m,
+        b"actualBoundingBoxDescent\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 2.0),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        m,
+        b"fontBoundingBoxAscent\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 10.0),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        m,
+        b"fontBoundingBoxDescent\0".as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, 2.0),
     );
     m
 }
@@ -3474,7 +4896,7 @@ unsafe fn make_canvas_2d_context(
         }};
     }
     c2d_fn!("fillRect", canvas2d_noop, 4);
-    c2d_fn!("clearRect", canvas2d_noop, 4);
+    c2d_fn!("clearRect", canvas2d_clear_rect, 4);
     c2d_fn!("drawImage", canvas2d_noop, 9);
     c2d_fn!("save", canvas2d_noop, 0);
     c2d_fn!("restore", canvas2d_noop, 0);
@@ -3493,6 +4915,8 @@ unsafe fn make_canvas_2d_context(
     c2d_fn!("stroke", canvas2d_noop, 0);
     c2d_fn!("clip", canvas2d_noop, 0);
     c2d_fn!("measureText", canvas2d_measure_text, 1);
+    c2d_fn!("fillText", canvas2d_fill_text, 4);
+    c2d_fn!("strokeText", canvas2d_stroke_text, 4);
 
     let _ = qjs::JS_SetPropertyStr(
         ctx,
@@ -3695,8 +5119,9 @@ pub unsafe extern "C" fn canvas_get_context(
         return c2d;
     }
 
-    let ok =
-        kind.eq_ignore_ascii_case(b"webgl") || kind.eq_ignore_ascii_case(b"experimental-webgl");
+    let ok = kind.eq_ignore_ascii_case(b"webgl")
+        || kind.eq_ignore_ascii_case(b"experimental-webgl")
+        || kind.eq_ignore_ascii_case(b"webgl2");
     qjs::JS_FreeCString(ctx, kind_c);
     if !ok {
         return js_null();
@@ -3737,6 +5162,8 @@ pub unsafe extern "C" fn canvas_get_context(
 
     gl_fn!("createBuffer", gl_create_buffer, 0);
     gl_fn!("bindBuffer", gl_bind_buffer, 2);
+    gl_fn!("bindBufferBase", gl_bind_buffer_base, 3);
+    gl_fn!("bindBufferRange", gl_bind_buffer_range, 5);
     gl_fn!("bufferData", gl_buffer_data, 3);
     gl_fn!("bufferSubData", gl_buffer_sub_data, 3);
     gl_fn!("createProgram", gl_create_program, 0);
@@ -3755,6 +5182,12 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("getProgramInfoLog", gl_get_info_log, 1);
     gl_fn!("getActiveAttrib", gl_get_active_attrib, 2);
     gl_fn!("getActiveUniform", gl_get_active_uniform, 2);
+    gl_fn!("getActiveUniformBlockName", gl_get_active_uniform_block_name, 2);
+    gl_fn!(
+        "getActiveUniformBlockParameter",
+        gl_get_active_uniform_block_parameter,
+        3
+    );
     gl_fn!(
         "getShaderPrecisionFormat",
         gl_get_shader_precision_format,
@@ -3768,7 +5201,18 @@ pub unsafe extern "C" fn canvas_get_context(
         1
     );
     gl_fn!("vertexAttribPointer", gl_vertex_attrib_pointer, 6);
+    // Pixi v8's WebGL path expects core WebGL2-style VAO/instancing entry points.
+    // We alias these to our extension-compatible no-op/handle implementations.
+    gl_fn!("createVertexArray", gl_create_vertex_array_oes, 0);
+    gl_fn!("bindVertexArray", gl_bind_vertex_array_oes, 1);
+    gl_fn!("deleteVertexArray", gl_delete_vertex_array_oes, 1);
+    gl_fn!("isVertexArray", gl_is_vertex_array_oes, 1);
+    gl_fn!("drawArraysInstanced", gl_draw_arrays_instanced, 4);
+    gl_fn!("drawElementsInstanced", gl_draw_elements_instanced, 5);
+    gl_fn!("vertexAttribDivisor", gl_noop, 2);
     gl_fn!("getUniformLocation", gl_get_uniform_location, 2);
+    gl_fn!("getUniformBlockIndex", gl_get_uniform_block_index, 2);
+    gl_fn!("uniformBlockBinding", gl_uniform_block_binding, 3);
     gl_fn!("uniformMatrix3fv", gl_uniform_matrix3fv, 3);
     gl_fn!("uniformMatrix2fv", gl_uniform_matrix2fv, 3);
     gl_fn!("uniformMatrix4fv", gl_uniform_matrix4fv, 3);
@@ -3816,6 +5260,7 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("isContextLost", gl_is_context_lost, 0);
     gl_fn!("getSupportedExtensions", gl_get_supported_extensions, 0);
     gl_fn!("createTexture", gl_create_texture, 0);
+    gl_fn!("createSampler", gl_create_sampler, 0);
     gl_fn!("deleteTexture", gl_noop, 1);
     gl_fn!("bindTexture", gl_bind_texture, 2);
     gl_fn!("activeTexture", gl_active_texture, 1);
@@ -3836,7 +5281,7 @@ pub unsafe extern "C" fn canvas_get_context(
     gl_fn!("renderbufferStorage", gl_noop, 4);
     gl_fn!("framebufferRenderbuffer", gl_noop, 4);
     gl_fn!("deleteBuffer", gl_noop, 1);
-    gl_fn!("scissor", gl_noop, 4);
+    gl_fn!("scissor", gl_scissor, 4);
     gl_fn!("colorMask", gl_noop, 4);
     gl_fn!("depthMask", gl_noop, 1);
     gl_fn!("depthFunc", gl_noop, 1);
@@ -3860,6 +5305,7 @@ pub unsafe extern "C" fn canvas_get_context(
         b"ELEMENT_ARRAY_BUFFER\0",
         GL_ELEMENT_ARRAY_BUFFER as i32,
     );
+    set_i32_const(ctx, gl, b"UNIFORM_BUFFER\0", GL_UNIFORM_BUFFER as i32);
     set_i32_const(ctx, gl, b"STATIC_DRAW\0", 0x88E4);
     set_i32_const(ctx, gl, b"DYNAMIC_DRAW\0", 0x88E8);
     set_i32_const(ctx, gl, b"FLOAT\0", GL_FLOAT as i32);
@@ -3893,6 +5339,18 @@ pub unsafe extern "C" fn canvas_get_context(
     set_i32_const(ctx, gl, b"LINK_STATUS\0", GL_LINK_STATUS as i32);
     set_i32_const(ctx, gl, b"ACTIVE_ATTRIBUTES\0", GL_ACTIVE_ATTRIBUTES as i32);
     set_i32_const(ctx, gl, b"ACTIVE_UNIFORMS\0", GL_ACTIVE_UNIFORMS as i32);
+    set_i32_const(
+        ctx,
+        gl,
+        b"ACTIVE_UNIFORM_BLOCKS\0",
+        GL_ACTIVE_UNIFORM_BLOCKS as i32,
+    );
+    set_i32_const(
+        ctx,
+        gl,
+        b"UNIFORM_BLOCK_DATA_SIZE\0",
+        GL_UNIFORM_BLOCK_DATA_SIZE as i32,
+    );
     set_i32_const(ctx, gl, b"VERSION\0", GL_VERSION as i32);
     set_i32_const(ctx, gl, b"RENDERER\0", GL_RENDERER as i32);
     set_i32_const(ctx, gl, b"VENDOR\0", GL_VENDOR as i32);
@@ -3915,6 +5373,12 @@ pub unsafe extern "C" fn canvas_get_context(
         gl,
         b"MAX_COMBINED_TEXTURE_IMAGE_UNITS\0",
         GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS as i32,
+    );
+    set_i32_const(
+        ctx,
+        gl,
+        b"MAX_UNIFORM_BUFFER_BINDINGS\0",
+        GL_MAX_UNIFORM_BUFFER_BINDINGS as i32,
     );
     set_i32_const(ctx, gl, b"STENCIL_BITS\0", GL_STENCIL_BITS as i32);
     set_i32_const(ctx, gl, b"HIGH_FLOAT\0", GL_HIGH_FLOAT as i32);
