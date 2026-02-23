@@ -315,7 +315,7 @@ impl GlState {
             },
             packed_vertex_cache_key: None,
             packed_vertex_cache: Vec::new(),
-            clear_rgb: 0x12161d,
+            clear_rgb: 0x00ff_ffff,
             viewport_w: 1280,
             viewport_h: 800,
             blend_enabled: false,
