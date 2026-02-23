@@ -1512,10 +1512,28 @@ DCL OUT[0], COLOR\n\
     0: MOV OUT[0], IN[0]\n\
     1: END\n";
 
-// Textured pipeline (pos + uv + color), samples SAMP[0].
-//
-// For now, keep the fragment shader minimal so virglrenderer accepts it.
-// Alpha handling will be done via proper blend state next.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextureDiagShaderMode {
+    // Baseline: texture path uses vertex color only.
+    ColorOnly,
+    // UV debug: output interpolated UV in RG channels.
+    UvDebug,
+    // Sample-only: output sampled texture only.
+    SampleOnly,
+}
+
+// Bring-up toggles for deterministic texture diagnostics.
+const VIRGL_TEXTURE_DIAG_SHADER_MODE: TextureDiagShaderMode = TextureDiagShaderMode::SampleOnly;
+const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
+const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
+const VIRGL_DEBUG_TEXTURE_RGBA_2X2: [u8; 16] = [
+    255, 0, 0, 255, // red
+    0, 255, 0, 255, // green
+    0, 0, 255, 255, // blue
+    255, 255, 255, 255, // white
+];
+
+// Textured pipeline (pos + uv + color), shader selected by `VIRGL_TEXTURE_DIAG_SHADER_MODE`.
 const VS_TEX: &str = "VERT\n\
 DCL IN[0]\n\
 DCL IN[1]\n\
@@ -1528,15 +1546,45 @@ DCL OUT[2], COLOR\n\
     2: MOV OUT[0], IN[0]\n\
     3: END\n";
 
-const FS_TEX: &str = "FRAG\n\
+const VS_TEX_UV_DEBUG: &str = "VERT\n\
+DCL IN[0]\n\
+DCL IN[1]\n\
+DCL IN[2]\n\
+DCL OUT[0], POSITION\n\
+DCL OUT[1], COLOR\n\
+    0: MOV OUT[1], IN[2]\n\
+    1: MOV OUT[1].xy, IN[1]\n\
+    2: MOV OUT[0], IN[0]\n\
+    3: END\n";
+
+const FS_TEX_COLOR_ONLY: &str = "FRAG\n\
 DCL IN[0], TEXCOORD[0], LINEAR\n\
 DCL IN[1], COLOR, LINEAR\n\
 DCL SAMP[0]\n\
 DCL OUT[0], COLOR\n\
-DCL TEMP[0]\n\
-    0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
-    1: MUL OUT[0], TEMP[0], IN[1]\n\
-    2: END\n";
+    0: MOV OUT[0], IN[1]\n\
+    1: END\n";
+
+const FS_TEX_UV_DEBUG: &str = "FRAG\n\
+DCL IN[0], COLOR, LINEAR\n\
+DCL OUT[0], COLOR\n\
+    0: MOV OUT[0], IN[0]\n\
+    1: END\n";
+
+const FS_TEX_SAMPLE_ONLY: &str = "FRAG\n\
+DCL IN[0], TEXCOORD[0], LINEAR\n\
+DCL SAMP[0]\n\
+DCL OUT[0], COLOR\n\
+    0: TEX OUT[0], IN[0], SAMP[0], 2D\n\
+    1: END\n";
+
+fn tex_diag_shader_sources(mode: TextureDiagShaderMode) -> (&'static str, &'static str) {
+    match mode {
+        TextureDiagShaderMode::ColorOnly => (VS_TEX, FS_TEX_COLOR_ONLY),
+        TextureDiagShaderMode::UvDebug => (VS_TEX_UV_DEBUG, FS_TEX_UV_DEBUG),
+        TextureDiagShaderMode::SampleOnly => (VS_TEX, FS_TEX_SAMPLE_ONLY),
+    }
+}
 
 // --- gfx-core backend (virgl) ---
 
@@ -1687,6 +1735,10 @@ pub struct VirglGfxBackend {
     fs_tex_handle: u32,
     sampler_state_nearest_handle: u32,
     sampler_state_linear_handle: u32,
+    debug_tex_res: u32,
+    debug_tex_view: u32,
+    debug_tex_uploaded: bool,
+    debug_tex_view_created: bool,
     blend_handle_disabled: u32,
     blend_handle_straight: u32,
     blend_handle_premult: u32,
@@ -1711,6 +1763,7 @@ pub struct VirglGfxBackend {
 
     next_fence: u64,
     completed_fence: u64,
+    frame_counter: u64,
 }
 
 fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
@@ -1780,6 +1833,7 @@ impl VirglGfxBackend {
         // Allocate resource ids.
         let (scanout_res, rt_res) = alloc_res_pair();
         let vbo_res = alloc_res_pair().0;
+        let debug_tex_res = alloc_res_id();
 
         // 2D scanout + backing.
         // Architectural decision: keep scanout backing owned by the gfx backend (DMA memory).
@@ -1864,10 +1918,28 @@ impl VirglGfxBackend {
             crate::log!("virgl-backend: resource_create_3d vbo failed\n");
             return None;
         }
+        if !gpu.resource_create_3d(
+            ctx_id,
+            debug_tex_res,
+            PIPE_TEXTURE_2D,
+            VIRGL_FORMAT_R8G8B8A8_UNORM,
+            PIPE_BIND_SAMPLER_VIEW,
+            2,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+        ) {
+            crate::log!("virgl-backend: resource_create_3d debug tex failed\n");
+            return None;
+        }
 
         let _ = gpu.ctx_attach_resource(ctx_id, scanout_res);
         let _ = gpu.ctx_attach_resource(ctx_id, rt_res);
         let _ = gpu.ctx_attach_resource(ctx_id, vbo_res);
+        let _ = gpu.ctx_attach_resource(ctx_id, debug_tex_res);
 
         // One-time state/program setup.
         let surf_handle = 10u32;
@@ -1878,6 +1950,7 @@ impl VirglGfxBackend {
         let fs_tex_handle = 23u32;
         let sampler_state_handle = 24u32;
         let sampler_state_linear_handle = 25u32;
+        let debug_tex_view = alloc_obj_handle();
         // Blend object handles.
         // 30.. are reserved for our fixed state objects.
         let blend_handle_disabled = 30u32;
@@ -1904,8 +1977,9 @@ impl VirglGfxBackend {
         encode_link_shader(&mut init, vs_color_handle, fs_color_handle);
 
         // Textured pipeline program.
-        encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, VS_TEX);
-        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, FS_TEX);
+        let (vs_tex_src, fs_tex_src) = tex_diag_shader_sources(VIRGL_TEXTURE_DIAG_SHADER_MODE);
+        encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, vs_tex_src);
+        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, fs_tex_src);
         encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_handle);
@@ -1981,6 +2055,10 @@ impl VirglGfxBackend {
             fs_tex_handle,
             sampler_state_nearest_handle: sampler_state_handle,
             sampler_state_linear_handle,
+            debug_tex_res,
+            debug_tex_view,
+            debug_tex_uploaded: false,
+            debug_tex_view_created: false,
             blend_handle_disabled,
             blend_handle_straight,
             blend_handle_premult,
@@ -2013,6 +2091,7 @@ impl VirglGfxBackend {
             last_submitted_frame: None,
             next_fence: 1,
             completed_fence: 0,
+            frame_counter: 1,
         })
     }
 
@@ -2475,6 +2554,12 @@ impl GfxDevice for VirglGfxBackend {
     }
 
     fn submit(&mut self, cmds: CommandBuffer<'_>) -> GfxResult<FenceId> {
+        let frame_no = self.frame_counter;
+        self.frame_counter = self.frame_counter.wrapping_add(1);
+        if self.frame_counter == 0 {
+            self.frame_counter = 1;
+        }
+
         // Translate gfx-core commands into a single virgl command stream per submit.
         let mut draw_vertex_count: Option<(u32, u32)> = None;
         for cmd in cmds.commands {
@@ -2607,8 +2692,20 @@ impl GfxDevice for VirglGfxBackend {
                 layout_color_format: pipe_desc.vertex_layout.color_format,
                 layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
                 layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
-                image_id: self.state.image.raw(),
-                image_rev: if self.state.image.is_valid() {
+                image_id: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                    && (VIRGL_FORCE_DEBUG_TEXTURE
+                        || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
+                {
+                    VIRGL_DEBUG_TEXTURE_ID_RAW
+                } else {
+                    self.state.image.raw()
+                },
+                image_rev: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                    && (VIRGL_FORCE_DEBUG_TEXTURE
+                        || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
+                {
+                    1
+                } else if self.state.image.is_valid() {
                     self.images
                         .get(self.state.image.raw().saturating_sub(1) as usize)
                         .and_then(|i| i.as_ref())
@@ -2622,12 +2719,18 @@ impl GfxDevice for VirglGfxBackend {
             if self.converted_cache.key != Some(cache_key) {
                 let bound_image =
                     if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                        if !self.state.image.is_valid() {
+                        let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
+                            || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
+                        if !use_debug_texture && !self.state.image.is_valid() {
                             return Err(Error::Invalid);
                         }
-                        self.images
-                            .get(self.state.image.raw().saturating_sub(1) as usize)
-                            .and_then(|i| i.as_ref())
+                        if use_debug_texture {
+                            None
+                        } else {
+                            self.images
+                                .get(self.state.image.raw().saturating_sub(1) as usize)
+                                .and_then(|i| i.as_ref())
+                        }
                     } else {
                         None
                     };
@@ -2675,86 +2778,118 @@ impl GfxDevice for VirglGfxBackend {
 
             // Bind program + texture state for this draw.
             if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                // Ensure bound ImageId exists.
-                let img_raw = self.state.image.raw();
-                let img_idx = img_raw.saturating_sub(1) as usize;
-                let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
-                    return Err(Error::NotFound);
-                };
-                if img.virgl_res == 0 {
-                    return Err(Error::Invalid);
-                }
+                let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
+                    || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
+                let (img_raw, virgl_res, virgl_view, samp_handle) = if use_debug_texture {
+                    if !self.debug_tex_uploaded {
+                        encode_inline_write_texture(&mut cmd, self.debug_tex_res, 2, 2, &VIRGL_DEBUG_TEXTURE_RGBA_2X2);
+                        self.debug_tex_uploaded = true;
+                        draw_upload_needed = true;
+                    }
+                    if !self.debug_tex_view_created {
+                        encode_create_sampler_view(
+                            &mut cmd,
+                            self.debug_tex_view,
+                            self.debug_tex_res,
+                            VIRGL_FORMAT_R8G8B8A8_UNORM,
+                        );
+                        self.debug_tex_view_created = true;
+                        draw_upload_needed = true;
+                    }
+                    (
+                        VIRGL_DEBUG_TEXTURE_ID_RAW,
+                        self.debug_tex_res,
+                        self.debug_tex_view,
+                        self.sampler_state_nearest_handle,
+                    )
+                } else {
+                    // Ensure bound ImageId exists.
+                    let img_raw = self.state.image.raw();
+                    let img_idx = img_raw.saturating_sub(1) as usize;
+                    let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
+                        return Err(Error::NotFound);
+                    };
+                    if img.virgl_res == 0 {
+                        return Err(Error::Invalid);
+                    }
 
-                // Upload full image when changed.
-                if img.virgl_uploaded_rev != img.revision {
-                    let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
-                    if n < 8 {
-                        crate::log!(
-                            "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
-                            img_raw,
+                    // Upload full image when changed.
+                    if img.virgl_uploaded_rev != img.revision {
+                        let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                        if n < 8 {
+                            crate::log!(
+                                "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
+                                img_raw,
+                                img.desc.width,
+                                img.desc.height,
+                                img.virgl_uploaded_rev,
+                                img.revision,
+                                img.virgl_res,
+                                img.virgl_view
+                            );
+                        }
+                        encode_inline_write_texture(
+                            &mut cmd,
+                            img.virgl_res,
                             img.desc.width,
                             img.desc.height,
-                            img.virgl_uploaded_rev,
-                            img.revision,
-                            img.virgl_res,
-                            img.virgl_view
+                            img.bytes.as_slice(),
                         );
+                        img.virgl_uploaded_rev = img.revision;
+                        draw_upload_needed = true;
                     }
-                    encode_inline_write_texture(
-                        &mut cmd,
-                        img.virgl_res,
-                        img.desc.width,
-                        img.desc.height,
-                        img.bytes.as_slice(),
-                    );
-                    img.virgl_uploaded_rev = img.revision;
-                    draw_upload_needed = true;
-                }
 
-                // Create sampler view once (objects live in the virgl context).
-                if !img.virgl_view_created {
-                    let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
-                    if n < 8 {
-                        crate::log!(
-                            "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
-                            img_raw,
-                            img.virgl_res,
+                    // Create sampler view once (objects live in the virgl context).
+                    if !img.virgl_view_created {
+                        let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                        if n < 8 {
+                            crate::log!(
+                                "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
+                                img_raw,
+                                img.virgl_res,
+                                img.virgl_view,
+                                VIRGL_FORMAT_R8G8B8A8_UNORM
+                            );
+                        }
+                        encode_create_sampler_view(
+                            &mut cmd,
                             img.virgl_view,
-                            VIRGL_FORMAT_R8G8B8A8_UNORM
+                            img.virgl_res,
+                            VIRGL_FORMAT_R8G8B8A8_UNORM,
                         );
+                        img.virgl_view_created = true;
+                        draw_upload_needed = true;
                     }
-                    encode_create_sampler_view(
-                        &mut cmd,
-                        img.virgl_view,
-                        img.virgl_res,
-                        VIRGL_FORMAT_R8G8B8A8_UNORM,
-                    );
-                    img.virgl_view_created = true;
-                    draw_upload_needed = true;
-                }
 
-                let samp_handle = if self.state.sampler.min_filter
-                    == trueos_gfx_core::SamplerFilter::Linear
-                    || self.state.sampler.mag_filter == trueos_gfx_core::SamplerFilter::Linear
-                {
-                    self.sampler_state_linear_handle
-                } else {
-                    self.sampler_state_nearest_handle
+                    let samp_handle = if self.state.sampler.min_filter
+                        == trueos_gfx_core::SamplerFilter::Linear
+                        || self.state.sampler.mag_filter == trueos_gfx_core::SamplerFilter::Linear
+                    {
+                        self.sampler_state_linear_handle
+                    } else {
+                        self.sampler_state_nearest_handle
+                    };
+                    (img_raw, img.virgl_res, img.virgl_view, samp_handle)
                 };
 
-                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
-                if n < 12 {
+                if frame_no % 100 == 0 {
                     crate::log!(
-                        "virgl-backend: tex bind img={} view={} samp_state={} min={:?} mag={:?}\n",
+                        "virgl-diag: frame={} mode={:?} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
+                        frame_no,
+                        VIRGL_TEXTURE_DIAG_SHADER_MODE,
                         img_raw,
-                        img.virgl_view,
+                        virgl_res,
+                        virgl_view,
                         samp_handle,
+                        self.state.sampler.wrap_s,
+                        self.state.sampler.wrap_t,
                         self.state.sampler.min_filter,
                         self.state.sampler.mag_filter
                     );
                 }
 
-                encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[img.virgl_view]);
+                // Keep SET_SAMPLER_VIEWS before BIND_SAMPLER_STATES for deterministic bring-up.
+                encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[virgl_view]);
                 encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[samp_handle]);
                 encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
                 encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
