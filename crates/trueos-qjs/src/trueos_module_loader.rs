@@ -513,8 +513,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"fs"
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
-            || spec == b"text"
-            || spec == b"trueos:text"
             || spec == b"worker_threads"
             || spec == b"process"
             || spec == b"node:process"
