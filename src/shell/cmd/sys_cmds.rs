@@ -145,6 +145,25 @@ pub(crate) fn cmd_gfx(
     _args: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
     crate::gfx::init(crate::limine::framebuffer_response());
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        ctx.io.write_str("gfx: gfx_virgl not enabled; cannot start pixi_ui\r\n");
+        return CommandAction::None;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    {
+        if !crate::gfx::is_virgl_present_cached() {
+            ctx.io
+                .write_str("gfx: virgl/virtio-gpu not ready yet; skipping launch\r\n");
+            return CommandAction::None;
+        }
+        if !crate::gfx::is_virgl_active() && !crate::gfx::switch_to_virgl() {
+            ctx.io.write_str("gfx: virgl backend switch failed\r\n");
+            return CommandAction::None;
+        }
+    }
+
     // match ctx
     //     .spawner
     //     .spawn(trueos_qjs::stream_gfx_smoke::boot_stream_gfx_smoke_task())

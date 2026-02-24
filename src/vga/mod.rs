@@ -822,24 +822,8 @@ pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
     (buffer, total_width, height)
 }
 
-#[repr(C)]
-pub struct FontAtlasInfo {
-    pub rgba_ptr: *const u8,
-    pub rgba_len: usize,
-    pub width: u32,
-    pub height: u32,
-    pub cell_w: u32,
-    pub cell_h: u32,
-    pub grid_w: u32,
-    pub grid_h: u32,
-    pub index_ptr: *const u16,
-    pub index_len: usize,
-    pub widths_ptr: *const u8,
-    pub widths_len: usize,
-}
-
 struct FontAtlasBuffers {
-    rgba: Vec<u8>,
+    alpha: Vec<u8>,
     index: Vec<u16>,
     widths: Vec<u8>,
     width: u32,
@@ -850,12 +834,24 @@ struct FontAtlasBuffers {
     grid_h: u32,
 }
 
+pub struct FontAtlasView<'a> {
+    pub alpha: &'a [u8],
+    pub index: &'a [u16],
+    pub widths: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    pub cell_w: u32,
+    pub cell_h: u32,
+    pub grid_w: u32,
+    pub grid_h: u32,
+}
+
 fn build_font_atlas_small() -> FontAtlasBuffers {
     const GRID: usize = 16;
     let cache = font_cache_small();
     let width = GRID * FONT_CELL_W;
     let height = GRID * FONT_CELL_H;
-    let mut rgba = vec![0u8; width * height * 4];
+    let mut alpha = vec![0u8; width * height];
 
     for (slot, glyph) in cache.glyphs.iter().enumerate() {
         if slot >= GRID * GRID {
@@ -867,12 +863,9 @@ fn build_font_atlas_small() -> FontAtlasBuffers {
             let dst_y = cell_y + y;
             for x in 0..FONT_CELL_W {
                 let dst_x = cell_x + x;
-                let alpha = glyph.alpha[y * FONT_CELL_W + x];
-                let dst = (dst_y * width + dst_x) * 4;
-                rgba[dst] = 0xFF;
-                rgba[dst + 1] = 0xFF;
-                rgba[dst + 2] = 0xFF;
-                rgba[dst + 3] = alpha;
+                let a = glyph.alpha[y * FONT_CELL_W + x];
+                let dst = dst_y * width + dst_x;
+                alpha[dst] = a;
             }
         }
     }
@@ -881,7 +874,7 @@ fn build_font_atlas_small() -> FontAtlasBuffers {
     index.extend_from_slice(&cache.index);
 
     FontAtlasBuffers {
-        rgba,
+        alpha,
         index,
         widths: Vec::new(),
         width: width as u32,
@@ -898,7 +891,7 @@ fn build_font_atlas_large() -> FontAtlasBuffers {
     let cache = font_cache_large();
     let width = GRID * BANNER_CELL_W;
     let height = GRID * BANNER_CELL_H;
-    let mut rgba = vec![0u8; width * height * 4];
+    let mut alpha = vec![0u8; width * height];
 
     for (slot, glyph) in cache.glyphs.iter().enumerate() {
         if slot >= GRID * GRID {
@@ -910,12 +903,9 @@ fn build_font_atlas_large() -> FontAtlasBuffers {
             let dst_y = cell_y + y;
             for x in 0..BANNER_CELL_W {
                 let dst_x = cell_x + x;
-                let alpha = glyph.alpha[y * BANNER_CELL_W + x];
-                let dst = (dst_y * width + dst_x) * 4;
-                rgba[dst] = 0xFF;
-                rgba[dst + 1] = 0xFF;
-                rgba[dst + 2] = 0xFF;
-                rgba[dst + 3] = alpha;
+                let a = glyph.alpha[y * BANNER_CELL_W + x];
+                let dst = dst_y * width + dst_x;
+                alpha[dst] = a;
             }
         }
     }
@@ -929,7 +919,7 @@ fn build_font_atlas_large() -> FontAtlasBuffers {
     }
 
     FontAtlasBuffers {
-        rgba,
+        alpha,
         index,
         widths,
         width: width as u32,
@@ -949,50 +939,27 @@ fn font_atlas_large() -> &'static FontAtlasBuffers {
     FONT_ATLAS_LARGE.call_once(build_font_atlas_large)
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_font_atlas_small(info: *mut FontAtlasInfo) -> bool {
-    if info.is_null() {
-        return false;
+#[inline]
+fn font_atlas_view_from_buffers(atlas: &'static FontAtlasBuffers) -> FontAtlasView<'static> {
+    FontAtlasView {
+        alpha: atlas.alpha.as_slice(),
+        index: atlas.index.as_slice(),
+        widths: atlas.widths.as_slice(),
+        width: atlas.width,
+        height: atlas.height,
+        cell_w: atlas.cell_w,
+        cell_h: atlas.cell_h,
+        grid_w: atlas.grid_w,
+        grid_h: atlas.grid_h,
     }
-    let atlas = font_atlas_small();
-    unsafe {
-        (*info).rgba_ptr = atlas.rgba.as_ptr();
-        (*info).rgba_len = atlas.rgba.len();
-        (*info).width = atlas.width;
-        (*info).height = atlas.height;
-        (*info).cell_w = atlas.cell_w;
-        (*info).cell_h = atlas.cell_h;
-        (*info).grid_w = atlas.grid_w;
-        (*info).grid_h = atlas.grid_h;
-        (*info).index_ptr = atlas.index.as_ptr();
-        (*info).index_len = atlas.index.len();
-        (*info).widths_ptr = core::ptr::null();
-        (*info).widths_len = 0;
-    }
-    true
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_font_atlas_large(info: *mut FontAtlasInfo) -> bool {
-    if info.is_null() {
-        return false;
-    }
-    let atlas = font_atlas_large();
-    unsafe {
-        (*info).rgba_ptr = atlas.rgba.as_ptr();
-        (*info).rgba_len = atlas.rgba.len();
-        (*info).width = atlas.width;
-        (*info).height = atlas.height;
-        (*info).cell_w = atlas.cell_w;
-        (*info).cell_h = atlas.cell_h;
-        (*info).grid_w = atlas.grid_w;
-        (*info).grid_h = atlas.grid_h;
-        (*info).index_ptr = atlas.index.as_ptr();
-        (*info).index_len = atlas.index.len();
-        (*info).widths_ptr = atlas.widths.as_ptr();
-        (*info).widths_len = atlas.widths.len();
-    }
-    true
+pub fn font_atlas_small_view() -> FontAtlasView<'static> {
+    font_atlas_view_from_buffers(font_atlas_small())
+}
+
+pub fn font_atlas_large_view() -> FontAtlasView<'static> {
+    font_atlas_view_from_buffers(font_atlas_large())
 }
 
 fn font_cache_large() -> &'static FontCacheLarge {

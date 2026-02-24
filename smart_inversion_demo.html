@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Inversion Demo</title>
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; background:#222; color:#fff; font-family:sans-serif; }
+    body { display:flex; flex-direction:column; }
+    #topbar { display:flex; gap:.5em; align-items:center; flex-wrap:wrap; padding:6px 10px; background:#111; box-shadow:0 2px 4px rgba(0,0,0,.4); z-index:10; }
+    #canvas { flex:1 1 auto; width:100vw; height:100vh; cursor:crosshair; display:block; }
+    #indicator { position:fixed; top:8px; right:12px; background:rgba(0,0,0,0.55); padding:4px 8px; font-size:12px; border:1px solid #444; border-radius:4px; display:none; backdrop-filter:blur(3px); letter-spacing:.5px; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <label for="mode">Algorithm:</label>
+    <select id="mode">
+      <option value="rgbInvert">RGB Invert</option>
+      <option value="hsl180">HSL 180° + L invert</option>
+      <option value="labOpp">Lab Opponent</option>
+      <option value="hybrid">Hybrid (Gray-aware Hue180 + Boost)</option>
+  <option value="neutralAxis">Neutral-Axis Adaptive</option>
+    <option value="neutralAxisSoft">Neutral-Axis Soft (blended)</option>
+  <option value="waveGray">Wave Gray Accent</option>
+  <option value="neutralAxisBand">Neutral-Axis Band (narrow blend)</option>
+  <option value="neutralAxisLogistic">Neutral-Axis Logistic (smooth)</option>
+  <option value="extendedGray">Extended Gray Domain</option>
+  <option value="neutralAxisField">Neutral-Axis Field (pre-smoothed)</option>
+    </select>
+    <span id="desc" style="font-size:.8em;opacity:.8;"></span>
+  </div>
+  <canvas id="canvas" width="500" height="500"></canvas>
+  <div id="indicator">Reverting…</div>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+  // Dynamic canvas dimensions
+  let cw = canvas.width;
+  let ch = canvas.height;
+  const rectSize = 150;
+  // Position of inversion rectangle (top-left); will init to center on first draw
+  let rectX = null;
+  let rectY = null;
+  const handleSize = 24; // enlarged draggable handle in top-left corner of rect
+  let dragging = false;
+  let grabOffsetX = 0, grabOffsetY = 0;
+  // Text objects state (multiple independent draggable text overlays)
+  const texts = [
+    { str: 'Smart Pixel Inversion Demo', font: '48px lucida-sans unicode', x: null, y: null, handleSize: 24 },
+    { str: 'This is the Answer to clear visual text on any BG', font: '36px lucida-sans unicode', x: null, y: null, handleSize: 24 }
+  ];
+  let draggingTextIndex = -1;
+  let textGrabOffsetX = 0, textGrabOffsetY = 0;
+    let bgColor = null; // if set, background will be solid instead of rainbow
+    let revertTimer = null; // timer id for reverting back to rainbow
+  let mode = 'hybrid';
+  // Wave animation state for waveGray algorithm
+  let wavePhase = 0;
+  let waveAnimating = false;
+    const modeSelect = document.getElementById('mode');
+    const descEl = document.getElementById('desc');
+
+    const DESCRIPTIONS = {
+      rgbInvert: 'Classic 255-RGB inversion (baseline).',
+      hsl180: 'Rotate hue 180°, invert lightness for complementary feel.',
+      labOpp: 'Invert Lab (L->100-L, a,b -> -a,-b) then back to sRGB.',
+      hybrid: 'Gray-aware: if low chroma invert lightness; else hue 180° + boost.',
+  neutralAxis: 'Neutral-axis distance: lightness invert for near-gray; hue180 + boost else.',
+    neutralAxisSoft: 'Neutral-axis soft blend + edge blur.',  
+  waveGray: 'Near-gray pixels get an animated wave hue accent; colored pixels use hybrid.'
+  ,neutralAxisBand: 'Neutral-axis with small blend band to avoid dithering.'
+  ,neutralAxisLogistic: 'Neutral-axis logistic blend + boost suppression near boundary.'
+  ,extendedGray: 'Broader near-gray treated as gray (lightness invert) with faint adaptive tint.'
+  ,neutralAxisField: 'Neutral distance field smoothed, logistic blend (no post blur).'
+    };
+
+    function updateDesc(){ descEl.textContent = DESCRIPTIONS[mode] || ''; }
+    updateDesc();
+
+  modeSelect.addEventListener('change', () => { mode = modeSelect.value; updateDesc(); drawScene(); ensureWaveAnimation(); });
+
+    // Utility conversions
+    function rgbToHsl(r,g,b){
+      r/=255; g/=255; b/=255;
+      const max=Math.max(r,g,b), min=Math.min(r,g,b);
+      let h,s,l=(max+min)/2;
+      if(max===min){ h=s=0; }
+      else {
+        const d=max-min;
+        s = l>0.5 ? d/(2-max-min) : d/(max+min);
+        switch(max){
+          case r: h=(g-b)/d + (g<b?6:0); break;
+          case g: h=(b-r)/d + 2; break;
+          case b: h=(r-g)/d + 4; break;
+        }
+        h*=60;
+      }
+      return [h,s,l];
+    }
+    function hslToRgb(h,s,l){
+      h = ((h%360)+360)%360; // wrap
+      function hue2rgb(p,q,t){
+        if(t<0) t+=1; if(t>1) t-=1;
+        if(t<1/6) return p + (q-p)*6*t;
+        if(t<1/2) return q;
+        if(t<2/3) return p + (q-p)*(2/3 - t)*6;
+        return p;
+      }
+      if(s===0){ const v=Math.round(l*255); return [v,v,v]; }
+      const q = l<0.5 ? l*(1+s) : l + s - l*s;
+      const p = 2*l - q;
+      const r = hue2rgb(p,q,(h/360)+1/3);
+      const g = hue2rgb(p,q,(h/360));
+      const b = hue2rgb(p,q,(h/360)-1/3);
+      return [Math.round(r*255),Math.round(g*255),Math.round(b*255)];
+    }
+
+    // sRGB <-> Lab helpers
+    function rgbToXyz(r,g,b){
+      r/=255; g/=255; b/=255;
+      // gamma correction
+      [r,g,b] = [r,g,b].map(v=> v>0.04045 ? Math.pow((v+0.055)/1.055,2.4) : v/12.92);
+      // sRGB D65
+      const x = r*0.4124 + g*0.3576 + b*0.1805;
+      const y = r*0.2126 + g*0.7152 + b*0.0722;
+      const z = r*0.0193 + g*0.1192 + b*0.9505;
+      return [x,y,z];
+    }
+    function xyzToLab(x,y,z){
+      // D65 reference white
+      const Xr=0.95047, Yr=1.00000, Zr=1.08883;
+      [x,y,z] = [x/Xr,y/Yr,z/Zr];
+      function f(t){ return t>0.008856 ? Math.cbrt(t) : (7.787*t)+(16/116); }
+      const fx=f(x), fy=f(y), fz=f(z);
+      const L = (y>0.008856)? (116*fy -16) : (903.3*y);
+      const a = 500*(fx - fy);
+      const b = 200*(fy - fz);
+      return [L,a,b];
+    }
+    function labToXyz(L,a,b){
+      const fy = (L+16)/116;
+      const fx = a/500 + fy;
+      const fz = fy - b/200;
+      function finv(t){ const t3=t*t*t; return t3>0.008856 ? t3 : (t -16/116)/7.787; }
+      const Xr=0.95047, Yr=1.00000, Zr=1.08883;
+      const x = Xr*finv(fx);
+      const y = Yr*finv(fy);
+      const z = Zr*finv(fz);
+      return [x,y,z];
+    }
+    function xyzToRgb(x,y,z){
+      let r =  3.2406*x -1.5372*y -0.4986*z;
+      let g = -0.9689*x +1.8758*y +0.0415*z;
+      let b =  0.0557*x -0.2040*y +1.0570*z;
+      [r,g,b] = [r,g,b].map(v=> v<=0.0031308 ? 12.92*v : 1.055*Math.pow(v,1/2.4)-0.055);
+      return [r,g,b].map(v=> Math.min(255, Math.max(0, Math.round(v*255))));
+    }
+
+    function rgbToLab(r,g,b){ return xyzToLab(...rgbToXyz(r,g,b)); }
+    function labToRgb(L,a,b){ return xyzToRgb(...labToXyz(L,a,b)); }
+
+    function relativeLuminance(r,g,b){
+      function chan(v){ v/=255; return v<=0.03928? v/12.92 : Math.pow((v+0.055)/1.055,2.4); }
+      const R=chan(r), G=chan(g), B=chan(b);
+      return 0.2126*R + 0.7152*G + 0.0722*B;
+    }
+    function contrastRatio(rgb1,rgb2){
+      const L1=relativeLuminance(...rgb1); const L2=relativeLuminance(...rgb2);
+      const lighter=Math.max(L1,L2)+0.05; const darker=Math.min(L1,L2)+0.05;
+      return lighter/darker;
+    }
+
+    // 1. RGB invert
+    function rgbInvert(r,g,b){ return [255-r,255-g,255-b]; }
+  // 2. HSL 180 + L invert
+    function hsl180(r,g,b){
+      let [h,s,l]=rgbToHsl(r,g,b);
+      h = (h+180)%360; l = 1-l; // invert lightness
+      // Slight saturation floor to avoid washed grays
+      if(s<0.25) s=0.25;
+      return hslToRgb(h,s,l);
+    }
+    // 4. Lab opponent
+    function labOpp(r,g,b){
+      let [L,a,b2]=rgbToLab(r,g,b);
+      L = 100 - L; a = -a; b2 = -b2;
+      return labToRgb(L,a,b2);
+    }
+    // Neutral-axis adaptive (distance from gray axis)
+    function neutralAxis(r,g,b){
+      const k = (r+g+b)/3;
+      const dr = r-k, dg = g-k, db = b-k;
+      const D = Math.sqrt(dr*dr + dg*dg + db*db); // neutral distance
+      // Threshold could be adaptive by luminance; keep simple constant for now
+      const thresh = 9; // about 3.5% of 255
+      if (D < thresh){
+        // invert lightness with min delta similar to hybrid path
+        const l = (Math.max(r,g,b)+Math.min(r,g,b))/510;
+        let targetL = 1 - l;
+        const minDelta = 0.30;
+        if (Math.abs(targetL - l) < minDelta) {
+          targetL = targetL > l ? Math.min(1, l + minDelta) : Math.max(0, l - minDelta);
+        }
+        const v = Math.round(targetL*255);
+        return [v,v,v];
+      }
+      // For colored pixels reuse hybrid style transform
+      let [h,s,l]=rgbToHsl(r,g,b);
+      h=(h+180)%360; l=1-l;
+      if(l>0.25 && l<0.75) s=Math.min(1,s*1.25);
+      let [nr,ng,nb]=hslToRgb(h,s,l);
+      const avg=(nr+ng+nb)/3; if(avg>40 && avg<215){
+        if(nr>=ng && nr>=nb) nr=255; else if(ng>=nr && ng>=nb) ng=255; else nb=255;
+      }
+      return [nr,ng,nb];
+    }
+    // Neutral-axis with narrow blending band (hysteresis-style) to suppress speckle/dither at threshold
+    function neutralAxisBand(r,g,b){
+      const k=(r+g+b)/3; const dr=r-k,dg=g-k,db=b-k; const D=Math.sqrt(dr*dr+dg*dg+db*db);
+      const thresh=9; const band=4; // blend across (thresh-band) .. (thresh+band)
+      // Gray path prep
+      const lGray = (Math.max(r,g,b)+Math.min(r,g,b))/510;
+      let targetL = 1 - lGray; const minDelta=0.30;
+      if(Math.abs(targetL - lGray) < minDelta) targetL = targetL>lGray? Math.min(1,lGray+minDelta):Math.max(0,lGray-minDelta);
+      const gv = Math.round(targetL*255); const grayRGB=[gv,gv,gv];
+      // Colored path prep
+      let [h,s,l]=rgbToHsl(r,g,b); h=(h+180)%360; l=1-l; if(l>0.25 && l<0.75) s=Math.min(1,s*1.25);
+      let colorRGB=hslToRgb(h,s,l); const avg=(colorRGB[0]+colorRGB[1]+colorRGB[2])/3; if(avg>40 && avg<215){
+        if(colorRGB[0]>=colorRGB[1] && colorRGB[0]>=colorRGB[2]) colorRGB[0]=255; else if(colorRGB[1]>=colorRGB[0] && colorRGB[1]>=colorRGB[2]) colorRGB[1]=255; else colorRGB[2]=255;
+      }
+      if(D <= thresh - band) return grayRGB;
+      if(D >= thresh + band) return colorRGB;
+      const w = (D - (thresh - band)) / (2*band); // 0..1
+      return [
+        Math.round(grayRGB[0]*(1-w) + colorRGB[0]*w),
+        Math.round(grayRGB[1]*(1-w) + colorRGB[1]*w),
+        Math.round(grayRGB[2]*(1-w) + colorRGB[2]*w)
+      ];
+    }
+    // Neutral-axis logistic: continuous blending using logistic curve on (optionally) locally smoothed distance
+    function neutralAxisLogisticPixel(r,g,b){
+      const k=(r+g+b)/3; const dr=r-k,dg=g-k,db=b-k; const D=Math.sqrt(dr*dr+dg*dg+db*db);
+      const center=9, softness=2.2; // logistic parameters
+      const w = 1 / (1 + Math.exp(-(D - center)/softness));
+      const l0=(Math.max(r,g,b)+Math.min(r,g,b))/510; let targetL=1-l0; const minDelta=0.30;
+      if(Math.abs(targetL-l0)<minDelta) targetL = targetL>l0? Math.min(1,l0+minDelta):Math.max(0,l0-minDelta);
+      const gv=Math.round(targetL*255); const grayRGB=[gv,gv,gv];
+      let [h,s,l]=rgbToHsl(r,g,b); h=(h+180)%360; l=1-l; if(l>0.25 && l<0.75) s=Math.min(1,s*1.2);
+      let [cr,cg,cb]=hslToRgb(h,s,l);
+      if(w>0.55){
+        const boostStrength = Math.min(1,(w-0.55)/0.45);
+        const avg=(cr+cg+cb)/3; if(avg>40 && avg<215){
+          if(cr>=cg && cr>=cb) cr=Math.round(cr + (255-cr)*boostStrength);
+          else if(cg>=cr && cg>=cb) cg=Math.round(cg + (255-cg)*boostStrength);
+          else cb=Math.round(cb + (255-cb)*boostStrength);
+        }
+      }
+      const nr=Math.round(grayRGB[0]*(1-w) + cr*w);
+      const ng=Math.round(grayRGB[1]*(1-w) + cg*w);
+      const nb=Math.round(grayRGB[2]*(1-w) + cb*w);
+      return [nr,ng,nb,w];
+    }
+    function extendedGrayLogisticPixel(r,g,b){
+      // Wider gray domain logistic: choose larger center & softness for gradual transition
+      const k=(r+g+b)/3; const dr=r-k,dg=g-k,db=b-k; const D=Math.sqrt(dr*dr+dg*dg+db*db);
+      const center=28; const softness=6.0; // broad transition
+      const w = 1 / (1 + Math.exp(-(D - center)/softness)); // color weight
+      const l0=(Math.max(r,g,b)+Math.min(r,g,b))/510; let targetL=1-l0; const minDelta=0.28;
+      if(Math.abs(targetL-l0)<minDelta) targetL = targetL>l0? Math.min(1,l0+minDelta):Math.max(0,l0-minDelta);
+      const base=Math.round(targetL*255);
+      // subtle directional tint while near gray (w small)
+      let tintR=base, tintG=base, tintB=base;
+      if(D>0){
+        const tintStrength=(1-w)*0.15; // decays as we move to color
+        tintR = Math.round(base + dr*tintStrength);
+        tintG = Math.round(base + dg*tintStrength);
+        tintB = Math.round(base + db*tintStrength);
+      }
+      // Color transform (hybrid style but slightly gentler saturation)
+      let [h,s,l]=rgbToHsl(r,g,b); h=(h+180)%360; l=1-l; if(l>0.25 && l<0.75) s=Math.min(1,s*1.15);
+      let [cr,cg,cb]=hslToRgb(h,s,l);
+      // Blend tinted gray to color
+      const nr=Math.round(tintR*(1-w) + cr*w);
+      const ng=Math.round(tintG*(1-w) + cg*w);
+      const nb=Math.round(tintB*(1-w) + cb*w);
+      return [nr,ng,nb,w];
+    }
+    // Pre-smoothed neutral distance field logistic blend (no post blur needed)
+    function buildNeutralDistanceField(data,width,height){
+      const field = new Float32Array(width*height);
+      for(let y=0;y<height;y++){
+        for(let x=0;x<width;x++){
+          const i=(y*width+x)*4; const r=data[i], g=data[i+1], b=data[i+2];
+          const k=(r+g+b)/3; const dr=r-k,dg=g-k,db=b-k; field[y*width+x]=Math.sqrt(dr*dr+dg*dg+db*db);
+        }
+      }
+      return field;
+    }
+    function smoothField(field,width,height,passes=1){
+      // Simple separable box blur (radius=1) repeated
+      const tmp = new Float32Array(field.length);
+      for(let p=0;p<passes;p++){
+        // horizontal
+        for(let y=0;y<height;y++){
+          for(let x=0;x<width;x++){
+            let acc=0,c=0; for(let dx=-1;dx<=1;dx++){ const xx=x+dx; if(xx<0||xx>=width) continue; acc+=field[y*width+xx]; c++; }
+            tmp[y*width+x]=acc/c;
+          }
+        }
+        // vertical
+        for(let y=0;y<height;y++){
+          for(let x=0;x<width;x++){
+            let acc=0,c=0; for(let dy=-1;dy<=1;dy++){ const yy=y+dy; if(yy<0||yy>=height) continue; acc+=tmp[yy*width+x]; c++; }
+            field[y*width+x]=acc/c;
+          }
+        }
+      }
+      return field;
+    }
+    function neutralAxisFieldPixel(r,g,b,Dsm){
+      // Logistic on pre-smoothed distance
+      const center=9, softness=2.0;
+      const w = 1 / (1 + Math.exp(-(Dsm - center)/softness));
+      const l0=(Math.max(r,g,b)+Math.min(r,g,b))/510; let targetL=1-l0; const minDelta=0.30;
+      if(Math.abs(targetL-l0)<minDelta) targetL = targetL>l0? Math.min(1,l0+minDelta):Math.max(0,l0-minDelta);
+      const gv=Math.round(targetL*255); const grayRGB=[gv,gv,gv];
+      let [h,s,l]=rgbToHsl(r,g,b); h=(h+180)%360; l=1-l; if(l>0.25 && l<0.75) s=Math.min(1,s*1.18);
+      let [cr,cg,cb]=hslToRgb(h,s,l);
+      // Boost gating (reduced near transition)
+      if(w>0.65){
+        const boostStrength = Math.min(1,(w-0.65)/0.35);
+        const avg=(cr+cg+cb)/3; if(avg>40 && avg<215){
+          if(cr>=cg && cr>=cb) cr=Math.round(cr + (255-cr)*boostStrength);
+          else if(cg>=cr && cg>=cb) cg=Math.round(cg + (255-cg)*boostStrength);
+          else cb=Math.round(cb + (255-cb)*boostStrength);
+        }
+      }
+      const nr=Math.round(grayRGB[0]*(1-w) + cr*w);
+      const ng=Math.round(grayRGB[1]*(1-w) + cg*w);
+      const nb=Math.round(grayRGB[2]*(1-w) + cb*w);
+      return [nr,ng,nb,w];
+    }
+    // Neutral-axis soft blend version returns color + weight (stored externally)
+    function neutralAxisSoftPixel(r,g,b){
+      const k = (r+g+b)/3;
+      const dr = r-k, dg = g-k, db = b-k;
+      const D = Math.sqrt(dr*dr + dg*dg + db*db);
+      const t0 = 6; // fully gray below
+      const t1 = 14; // fully colored above
+      let w; // blend weight toward colored variant
+      if (D <= t0) w = 0; else if (D >= t1) w = 1; else w = (D - t0)/(t1 - t0);
+      // Gray path (lightness invert with min delta)
+      const l0 = (Math.max(r,g,b)+Math.min(r,g,b))/510;
+      let targetL0 = 1 - l0;
+      const minDelta = 0.30;
+      if (Math.abs(targetL0 - l0) < minDelta) targetL0 = targetL0 > l0 ? Math.min(1, l0 + minDelta) : Math.max(0, l0 - minDelta);
+      const gv = Math.round(targetL0*255);
+      let grayRGB = [gv,gv,gv];
+      // Colored path (hybrid style)
+      let [h,s,l]=rgbToHsl(r,g,b);
+      h=(h+180)%360; l=1-l;
+      if(l>0.25 && l<0.75) s=Math.min(1,s*1.25);
+      let colorRGB = hslToRgb(h,s,l);
+      const avg=(colorRGB[0]+colorRGB[1]+colorRGB[2])/3; if(avg>40 && avg<215){
+        if(colorRGB[0]>=colorRGB[1] && colorRGB[0]>=colorRGB[2]) colorRGB[0]=255;
+        else if(colorRGB[1]>=colorRGB[0] && colorRGB[1]>=colorRGB[2]) colorRGB[1]=255; else colorRGB[2]=255;
+      }
+      // Blend
+      const nr = Math.round(grayRGB[0]*(1-w) + colorRGB[0]*w);
+      const ng = Math.round(grayRGB[1]*(1-w) + colorRGB[1]*w);
+      const nb = Math.round(grayRGB[2]*(1-w) + colorRGB[2]*w);
+      return [nr,ng,nb,w];
+    }
+    // Wave-based gray accent algorithm: introduces a smoothly animated hue accent for near-gray pixels
+    function waveGray(r,g,b,x,y){
+      // Neutral-axis distance to detect near gray
+      const k=(r+g+b)/3; const dr=r-k,dg=g-k,db=b-k; const D=Math.sqrt(dr*dr+dg*dg+db*db);
+      const t0=6, t1=14; // soft band thresholds similar to neutralAxisSoft
+      if(D>t1){ // clearly colored -> reuse hybrid path
+        return hybrid(r,g,b);
+      }
+      // Base grayscale inversion with enforced contrast
+      const l = (Math.max(r,g,b)+Math.min(r,g,b))/510; // 0..1
+      let targetL = 1 - l; const minDelta=0.30;
+      if(Math.abs(targetL-l)<minDelta) targetL = targetL>l? Math.min(1,l+minDelta):Math.max(0,l-minDelta);
+      const base = Math.round(targetL*255);
+      // Gray proximity weight (1 fully gray -> more color; 0 at outer threshold) inverted due to aesthetic choice
+      let wGray = D<=t0?1: (D>=t1?0: (t1-D)/(t1-t0));
+      // Animated hue: combine spatial term + temporal phase for flowing pattern
+      const spatialFreq = 0.012; // lower -> wider waves
+      const angle = (x + y) * spatialFreq + wavePhase; // continuous value
+      const h = (angle % (Math.PI*2)) / (Math.PI*2); // normalize to 0..1
+      // Convert hue to RGB (HSV with S=1,V=1) then mix with base gray
+      function hueToRgb(h){
+        const i = Math.floor(h*6); const f = h*6 - i; const q = 1 - f; switch(i%6){
+          case 0: return [1,f,0];
+          case 1: return [q,1,0];
+          case 2: return [0,1,f];
+          case 3: return [0,q,1];
+          case 4: return [f,0,1];
+          case 5: return [1,0,q];
+        }
+      }
+      const [hr,hg,hb] = hueToRgb(h);
+      // Strength of colorization (higher -> more vivid)
+      const accentStrength = 0.60;
+      const mixFactor = accentStrength * wGray; // fade colorization as we leave pure gray zone
+      const nr = Math.round(base*(1 - mixFactor) + 255*hr*mixFactor);
+      const ng = Math.round(base*(1 - mixFactor) + 255*hg*mixFactor);
+      const nb = Math.round(base*(1 - mixFactor) + 255*hb*mixFactor);
+      return [nr,ng,nb];
+    }
+  // 4. Hybrid (requested): gray-aware + hue rotate + dominant boost / lightness invert for near gray
+    function hybrid(r,g,b){
+      const maxc=Math.max(r,g,b), minc=Math.min(r,g,b);
+      const chroma=maxc-minc;
+      // detect near gray
+      if(chroma < 15){ // near gray region -> invert lightness (grayscale-preserving) with enforced contrast
+        // Approximate HSL lightness: (max+min)/2 normalized to [0,1]
+        const l = (maxc + minc) / 510; // since maxc,minc in [0,255]
+        let targetL = 1 - l; // simple lightness inversion
+        // Enforce a minimum perceptual distance to avoid very small change for mid-grays
+        const minDelta = 0.30;
+        if (Math.abs(targetL - l) < minDelta) {
+          if (targetL > l) targetL = Math.min(1, l + minDelta); else targetL = Math.max(0, l - minDelta);
+        }
+        const v = Math.round(targetL * 255);
+        return [v,v,v];
+      }
+      // otherwise hue 180 + possible boost
+      let [h,s,l]=rgbToHsl(r,g,b);
+      h=(h+180)%360; l=1-l; // invert lightness for contrast
+      // boost saturation for mid luminance to increase contrast
+      if(l>0.25 && l<0.75) s=Math.min(1,s*1.25);
+      let [nr,ng,nb]=hslToRgb(h,s,l);
+      // dominant channel boost (like original smart) if mid gray after transform
+      const avg=(nr+ng+nb)/3; if(avg>40 && avg<215){
+        if(nr>=ng && nr>=nb) nr=255; else if(ng>=nr && ng>=nb) ng=255; else nb=255;
+      }
+      return [nr,ng,nb];
+    }
+
+    function applyAlgorithm(r,g,b){
+      switch(mode){
+        case 'rgbInvert': return rgbInvert(r,g,b);
+        case 'hsl180': return hsl180(r,g,b);
+        case 'labOpp': return labOpp(r,g,b);
+        case 'hybrid': return hybrid(r,g,b);
+  case 'neutralAxis': return neutralAxis(r,g,b);
+  case 'neutralAxisSoft': return neutralAxisSoftPixel(r,g,b); // placeholder (loop overrides for soft)
+  case 'waveGray': return waveGray(r,g,b,0,0); // x,y provided in loops
+  case 'neutralAxisBand': return neutralAxisBand(r,g,b);
+  case 'neutralAxisLogistic': return neutralAxisLogisticPixel(r,g,b); // loop overrides to capture weight
+  case 'extendedGray': return extendedGrayLogisticPixel(r,g,b); // loop overrides to capture weight
+  case 'neutralAxisField': return neutralAxisLogisticPixel(r,g,b); // placeholder, loops use field
+        default: return rgbInvert(r,g,b);
+      }
+    }
+
+    // Draw background
+    function drawBackground() {
+      if (bgColor) {
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, cw, ch);
+      } else {
+        let gradient = ctx.createLinearGradient(0, 0, cw, 0);
+        gradient.addColorStop(0, 'red');
+        gradient.addColorStop(0.17, 'orange');
+        gradient.addColorStop(0.34, 'yellow');
+        gradient.addColorStop(0.51, 'green');
+        gradient.addColorStop(0.68, 'blue');
+        gradient.addColorStop(0.85, 'indigo');
+        gradient.addColorStop(1, 'violet');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, cw, ch);
+      }
+
+  // Footer white->black gradient band
+  const footerHeight = Math.min(160, Math.max(60, Math.round(ch * 0.18)));
+  const footerY = ch - footerHeight;
+  const footGrad = ctx.createLinearGradient(0, footerY, cw, footerY);
+  footGrad.addColorStop(0, '#ffffff');
+  footGrad.addColorStop(1, '#000000');
+  ctx.fillStyle = footGrad;
+  ctx.fillRect(0, footerY, cw, footerHeight);
+  // Optional subtle separator line
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.moveTo(0, footerY + 0.5);
+  ctx.lineTo(cw, footerY + 0.5);
+  ctx.stroke();
+    }
+
+    // Smart inversion function
+  // (Original smartInvert replaced by modular approaches above.)
+
+    function drawScene() {
+      drawBackground();
+
+      // Capture pristine background for algorithm reference
+      const backgroundImage = ctx.getImageData(0,0,cw,ch);
+      const orig = backgroundImage.data;
+      // Working copy we will mutate
+      const working = new Uint8ClampedArray(orig); // clone
+
+      // Initialize positions if needed
+      if(rectX === null || rectY === null){
+        rectX = (cw - rectSize)/2;
+        rectY = (ch - rectSize)/2;
+      }
+      // Initialize text positions if needed
+      texts.forEach((t,i)=>{
+        if(t.x == null || t.y == null){
+          ctx.font = t.font;
+          const m = ctx.measureText(t.str);
+            const approxH = parseInt(t.font,10) || 40;
+          t.x = (cw - m.width)/2;
+          // stagger vertically
+          t.y = (ch * 0.25) + i * (approxH + 30);
+        }
+      });
+
+      // Clamp rect
+      rectX = Math.min(cw-rectSize, Math.max(0, rectX));
+      rectY = Math.min(ch-rectSize, Math.max(0, rectY));
+
+      // Rectangle inversion
+      const rStartX = Math.round(rectX);
+      const rStartY = Math.round(rectY);
+  // Allocate weight mask if needed for any weighted blending mode
+      let weightMask = null;
+      if (mode === 'neutralAxisSoft' || mode==='neutralAxisLogistic' || mode==='extendedGray') {
+        weightMask = new Float32Array(cw * ch); // 0 untouched by default (w=0 valid). We'll mark untouched with -1.
+        weightMask.fill(-1);
+      }
+
+      // Precompute neutral distance field if using field mode (no post blur required)
+      let distanceField=null;
+      if(mode==='neutralAxisField'){
+        const backgroundImage = ctx.getImageData(0,0,cw,ch); // we already have above but reused name earlier; safe fetch
+        distanceField = smoothField(buildNeutralDistanceField(backgroundImage.data,cw,ch),cw,ch,2);
+      }
+
+      for (let y = rStartY; y < rStartY + rectSize; y++) {
+        if(y<0||y>=ch) continue;
+        for (let x = rStartX; x < rStartX + rectSize; x++) {
+          if(x<0||x>=cw) continue;
+          const index = (y * cw + x) * 4;
+          const r = orig[index];
+          const g = orig[index + 1];
+          const b = orig[index + 2];
+          let nr,ng,nb,w;
+          if(mode==='neutralAxisSoft'){
+            [nr,ng,nb,w] = neutralAxisSoftPixel(r,g,b);
+            weightMask[(y * cw + x)] = w;
+          } else if(mode==='neutralAxisField') {
+            const Dsm = distanceField[y*cw + x];
+            [nr,ng,nb,w] = neutralAxisFieldPixel(r,g,b,Dsm);
+          } else if(mode==='neutralAxisLogistic') {
+            [nr,ng,nb,w] = neutralAxisLogisticPixel(r,g,b);
+            weightMask[(y * cw + x)] = w;
+          } else if(mode==='extendedGray') {
+            [nr,ng,nb,w] = extendedGrayLogisticPixel(r,g,b);
+            weightMask[(y * cw + x)] = w;
+          } else if(mode==='waveGray') {
+            [nr,ng,nb] = waveGray(r,g,b,x,y);
+          } else {
+            [nr, ng, nb] = applyAlgorithm(r, g, b);
+          }
+          working[index] = nr;
+          working[index + 1] = ng;
+          working[index + 2] = nb;
+        }
+      }
+
+      // Text mask creation for each text object
+      texts.forEach(t=>{
+        ctx.save();
+        ctx.font = t.font; ctx.textBaseline='top';
+        const m = ctx.measureText(t.str);
+        const tw = Math.ceil(m.width);
+        const th = parseInt(t.font,10) || 40;
+        const sx = Math.max(0, Math.floor(t.x));
+        const sy = Math.max(0, Math.floor(t.y));
+        if(tw<=0 || th<=0) { ctx.restore(); return; }
+        const off = document.createElement('canvas');
+        off.width = tw; off.height = th;
+        const octx = off.getContext('2d');
+        octx.font = t.font; octx.textBaseline='top'; octx.fillStyle = 'black';
+        octx.fillText(t.str, 0, 0);
+        const textImage = octx.getImageData(0,0,tw,th);
+        const tData = textImage.data;
+        for(let ty=0; ty<th; ty++){
+          const gy = sy + ty; if(gy<0||gy>=ch) continue;
+          for(let tx=0; tx<tw; tx++){
+            const gx = sx + tx; if(gx<0||gx>=cw) continue;
+            const idx = (ty*tw + tx)*4;
+            const alpha = tData[idx+3];
+            if(alpha>0){
+              const a = alpha/255; // preserve antialias edges
+              const index = (gy * cw + gx) * 4;
+              const r = orig[index];
+              const g = orig[index+1];
+              const b = orig[index+2];
+              let nr,ng,nb,w;
+              if(mode==='neutralAxisSoft'){
+                [nr,ng,nb,w] = neutralAxisSoftPixel(r,g,b);
+                weightMask[(gy * cw + gx)] = w;
+              } else if(mode==='neutralAxisField') {
+                const Dsm = distanceField[gy*cw + gx];
+                [nr,ng,nb,w] = neutralAxisFieldPixel(r,g,b,Dsm);
+              } else if(mode==='neutralAxisLogistic') {
+                [nr,ng,nb,w] = neutralAxisLogisticPixel(r,g,b);
+                weightMask[(gy * cw + gx)] = w;
+              } else if(mode==='extendedGray') {
+                [nr,ng,nb,w] = extendedGrayLogisticPixel(r,g,b);
+                weightMask[(gy * cw + gx)] = w;
+              } else if(mode==='waveGray') {
+                [nr,ng,nb] = waveGray(r,g,b,gx,gy);
+              } else {
+                [nr,ng,nb] = applyAlgorithm(r,g,b);
+              }
+              // Alpha blend inverted color over original background
+              working[index]   = Math.round(r*(1-a) + nr*a);
+              working[index+1] = Math.round(g*(1-a) + ng*a);
+              working[index+2] = Math.round(b*(1-a) + nb*a);
+              working[index+3] = 255; // keep opaque
+            }
+          }
+        }
+        ctx.restore();
+      });
+
+  // Edge blur for any weighted mode (only pixels with 0<w<1)
+  if(weightMask){
+        const pre = new Uint8ClampedArray(working); // snapshot
+        const w = cw, h = ch;
+        for(let y=0;y<h;y++){
+          for(let x=0;x<w;x++){
+            const wi = weightMask[y*w + x];
+            if(wi>0 && wi<1){
+              let rs=0,gs=0,bs=0,cnt=0;
+              for(let dy=-1;dy<=1;dy++){
+                const yy=y+dy; if(yy<0||yy>=h) continue;
+                for(let dx=-1;dx<=1;dx++){
+                  const xx=x+dx; if(xx<0||xx>=w) continue;
+                  const wj = weightMask[yy*w + xx];
+                  if(wj>=0){
+                    const ii=(yy*w+xx)*4;
+                    rs+=pre[ii]; gs+=pre[ii+1]; bs+=pre[ii+2]; cnt++;
+                  }
+                }
+              }
+              if(cnt>0){
+                const ii=(y*w+x)*4;
+                working[ii]=Math.round(rs/cnt);
+                working[ii+1]=Math.round(gs/cnt);
+                working[ii+2]=Math.round(bs/cnt);
+              }
+            }
+          }
+        }
+      }
+  // No commit yet if waveGray? We still commit each frame; animation loop will refresh.
+
+      // Commit working image
+      const finalImage = new ImageData(working, cw, ch);
+      ctx.putImageData(finalImage, 0, 0);
+
+      // Draw rectangle outline & handle
+      ctx.save();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rStartX, rStartY, rectSize, rectSize);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillRect(rStartX, rStartY, handleSize, handleSize);
+      ctx.fillStyle = '#000';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('☩', rStartX + handleSize/2, rStartY + handleSize/2);
+
+      // Draw text bounding boxes & handles
+      texts.forEach(t=>{
+        ctx.save();
+        ctx.font = t.font; ctx.textBaseline='top';
+        const m = ctx.measureText(t.str);
+        const tw = Math.ceil(m.width);
+        const th = parseInt(t.font,10) || 40;
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.setLineDash([4,3]);
+        ctx.strokeRect(t.x, t.y, tw, th);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fillRect(t.x, t.y, t.handleSize, t.handleSize);
+        ctx.fillStyle = '#000';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText('T', t.x + t.handleSize/2, t.y + t.handleSize/2);
+        ctx.restore();
+      });
+      ctx.restore();
+    }
+
+    // Animation loop for waveGray mode
+    function animateWave(){
+      if(mode !== 'waveGray'){ waveAnimating=false; return; }
+      wavePhase += 0.02; // speed
+      drawScene();
+      requestAnimationFrame(animateWave);
+    }
+    function ensureWaveAnimation(){
+      if(mode==='waveGray' && !waveAnimating){
+        waveAnimating = true;
+        requestAnimationFrame(animateWave);
+      }
+    }
+
+    function resizeCanvas(){
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      cw = canvas.width; ch = canvas.height;
+      drawScene();
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Clicking canvas sets solid background color from clicked pixel
+    const indicator = document.getElementById('indicator');
+
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // Ignore clicks on the drag handles so they don't sample background
+      if (x >= rectX && x <= rectX + handleSize && y >= rectY && y <= rectY + handleSize) {
+        return; // skip
+      }
+      // Any text handle region
+      for (const t of texts){
+        ctx.font = t.font; ctx.textBaseline='top';
+        if (x >= t.x && x <= t.x + t.handleSize && y >= t.y && y <= t.y + t.handleSize) {
+          return; // skip sampling
+        }
+      }
+      const img = ctx.getImageData(x, y, 1, 1).data;
+      bgColor = `rgb(${img[0]},${img[1]},${img[2]})`;
+      drawScene();
+
+      // Reset any existing revert timer
+      if (revertTimer) { clearTimeout(revertTimer); revertTimer = null; }
+      indicator.style.display = 'block';
+      // After 3 seconds, revert to rainbow background (bgColor = null)
+      revertTimer = setTimeout(() => {
+        bgColor = null;
+        drawScene();
+        indicator.style.display = 'none';
+        revertTimer = null;
+      }, 3000);
+    });
+
+    // Drag handling (only if mousedown inside handle region)
+    canvas.addEventListener('mousedown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // Rect handle
+      if (x >= rectX && x <= rectX + handleSize && y >= rectY && y <= rectY + handleSize) {
+        dragging = true;
+        grabOffsetX = x - rectX;
+        grabOffsetY = y - rectY;
+        return;
+      }
+      // Text handles (iterate, pick first match)
+      for (let i=0;i<texts.length;i++){
+        const t=texts[i];
+        if (x >= t.x && x <= t.x + t.handleSize && y >= t.y && y <= t.y + t.handleSize) {
+          draggingTextIndex = i;
+          textGrabOffsetX = x - t.x;
+          textGrabOffsetY = y - t.y;
+          return;
+        }
+      }
+    });
+    window.addEventListener('mousemove', (e) => {
+      if(!dragging) return;
+  const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      rectX = x - grabOffsetX;
+      rectY = y - grabOffsetY;
+      drawScene();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if(draggingTextIndex === -1) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const t = texts[draggingTextIndex];
+      t.x = x - textGrabOffsetX;
+      t.y = y - textGrabOffsetY;
+      drawScene();
+    });
+    window.addEventListener('mouseup', () => { dragging = false; draggingTextIndex = -1; });
+  </script>
+</body>
+</html>

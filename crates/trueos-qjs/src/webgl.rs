@@ -819,11 +819,14 @@ fn scan_glsl_decl(src: &[u8], key: &[u8], out: &mut Vec<(Vec<u8>, u32, i32)>) {
         if line.starts_with(key_s) {
             decl_tail = line.strip_prefix(key_s);
         } else if key_s == "in " && line.starts_with("layout") {
-            if let Some(pos) = line.find(')') {
-                let tail = line[pos + 1..].trim_start();
-                if let Some(t) = tail.strip_prefix("in ") {
-                    decl_tail = Some(t);
-                }
+            // Handle both:
+            // - layout(...) in vecN aFoo;
+            // - layout(...)flat in vecN aFoo;
+            if let Some(pos) = line.find(" in ") {
+                decl_tail = Some(&line[pos + 4..]);
+            } else if let Some(pos) = line.find("in ") {
+                // Fallback for minified forms without preceding whitespace.
+                decl_tail = Some(&line[pos + 3..]);
             }
         }
 
@@ -858,6 +861,21 @@ fn scan_glsl_decl(src: &[u8], key: &[u8], out: &mut Vec<(Vec<u8>, u32, i32)>) {
             out.push((n, gl_type, 1));
         }
     }
+}
+
+fn ensure_active_attrib_if_source_mentions(
+    source: &[u8],
+    out: &mut Vec<(Vec<u8>, u32, i32)>,
+    name: &[u8],
+    gl_type: u32,
+) {
+    if !source.windows(name.len()).any(|w| w == name) {
+        return;
+    }
+    if out.iter().any(|(n, _, _)| n.as_slice() == name) {
+        return;
+    }
+    out.push((name.to_vec(), gl_type, 1));
 }
 
 fn scan_glsl_uniform_blocks(src: &[u8], out: &mut Vec<Vec<u8>>) {
@@ -1593,12 +1611,40 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
             pos_loc, pa.size, pa.type_enum, pa.stride, pa.offset, pa.buffer_id
         );
         webgl_log(msg.as_bytes());
+        if st.current_program != 0 {
+            let pidx = st.current_program.saturating_sub(1) as usize;
+            if let Some(Some(p)) = st.programs.get(pidx) {
+                let msg = format!(
+                    "qjs-webgl: emit prog={} attrib_names={}\n",
+                    st.current_program,
+                    p.attrib_names.len()
+                );
+                webgl_log(msg.as_bytes());
+            }
+        }
     }
     let mut color_attr: Option<AttribState> = None;
     let mut uv_attr: Option<AttribState> = None;
+    let mut wants_color_attr = false;
+    let mut wants_uv_attr = false;
+    let mut wants_texid_round_attr = false;
     if st.current_program != 0 {
         let pidx = st.current_program.saturating_sub(1) as usize;
         if let Some(Some(p)) = st.programs.get(pidx) {
+            wants_color_attr = p
+                .attrib_names
+                .iter()
+                .any(|n| n.as_slice() == b"aColor" || n.as_slice() == b"color");
+            wants_uv_attr = p.attrib_names.iter().any(|n| {
+                n.as_slice() == b"aTextureCoord"
+                    || n.as_slice() == b"texCoord"
+                    || n.as_slice() == b"aUV"
+                    || n.as_slice() == b"uv"
+            });
+            wants_texid_round_attr = p
+                .attrib_names
+                .iter()
+                .any(|n| n.as_slice() == b"aTextureIdAndRound");
             if let Some((i, _)) = p
                 .attrib_names
                 .iter()
@@ -1641,7 +1687,12 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                 .attrib_names
                 .iter()
                 .enumerate()
-                .find(|(_, n)| n.as_slice() == b"aTextureCoord" || n.as_slice() == b"texCoord")
+                .find(|(_, n)| {
+                    n.as_slice() == b"aTextureCoord"
+                        || n.as_slice() == b"texCoord"
+                        || n.as_slice() == b"aUV"
+                        || n.as_slice() == b"uv"
+                })
             {
                 if i < MAX_ATTRS {
                     let a = st.attribs[i];
@@ -1651,6 +1702,18 @@ fn emit_triangles(st: &mut GlState, indices: &[u32]) {
                 }
             }
         }
+    }
+    // Do not silently degrade to position-only rendering for Pixi batch programs
+    // that declare extra attributes. Missing wiring should be visible in logs.
+    if wants_color_attr && color_attr.is_none() {
+        return;
+    }
+    if wants_uv_attr && uv_attr.is_none() {
+        return;
+    }
+    if wants_texid_round_attr {
+        // The backend currently does not consume this attribute explicitly, but we
+        // keep track of its presence to avoid mis-detecting a position-only path.
     }
     if uv_attr.is_none() {
         for i in 0..MAX_ATTRS {
@@ -3067,6 +3130,44 @@ unsafe extern "C" fn gl_link_program(
         p.uniform_block_names.clear();
         scan_glsl_decl(vs_src.as_slice(), b"attribute ", &mut p.active_attribs);
         scan_glsl_decl(vs_src.as_slice(), b"in ", &mut p.active_attribs);
+        // Fallback for templated/minified Pixi shaders where declaration scanning can
+        // miss attributes that are still required at runtime.
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aVertexPosition",
+            GL_FLOAT_VEC2,
+        );
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aPosition",
+            GL_FLOAT_VEC2,
+        );
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aTextureCoord",
+            GL_FLOAT_VEC2,
+        );
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aUV",
+            GL_FLOAT_VEC2,
+        );
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aColor",
+            GL_FLOAT_VEC4,
+        );
+        ensure_active_attrib_if_source_mentions(
+            vs_src.as_slice(),
+            &mut p.active_attribs,
+            b"aTextureIdAndRound",
+            GL_FLOAT_VEC2,
+        );
         scan_glsl_decl(vs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
         scan_glsl_decl(fs_src.as_slice(), b"uniform ", &mut p.active_uniforms);
         // Fallback for minified/templated Pixi shaders where declaration scan can

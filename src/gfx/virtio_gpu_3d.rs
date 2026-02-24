@@ -1512,18 +1512,7 @@ DCL OUT[0], COLOR\n\
     0: MOV OUT[0], IN[0]\n\
     1: END\n";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TextureDiagShaderMode {
-    // Baseline: texture path uses vertex color only.
-    ColorOnly,
-    // UV debug: output interpolated UV in RG channels.
-    UvDebug,
-    // Sample-only: output sampled texture only.
-    SampleOnly,
-}
-
 // Bring-up toggles for deterministic texture diagnostics.
-const VIRGL_TEXTURE_DIAG_SHADER_MODE: TextureDiagShaderMode = TextureDiagShaderMode::SampleOnly;
 const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
 const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
 const VIRGL_DEBUG_TEXTURE_RGBA_2X2: [u8; 16] = [
@@ -1533,7 +1522,7 @@ const VIRGL_DEBUG_TEXTURE_RGBA_2X2: [u8; 16] = [
     255, 255, 255, 255, // white
 ];
 
-// Textured pipeline (pos + uv + color), shader selected by `VIRGL_TEXTURE_DIAG_SHADER_MODE`.
+// Textured pipeline (pos + uv + color).
 const VS_TEX: &str = "VERT\n\
 DCL IN[0]\n\
 DCL IN[1]\n\
@@ -1546,45 +1535,15 @@ DCL OUT[2], COLOR\n\
     2: MOV OUT[0], IN[0]\n\
     3: END\n";
 
-const VS_TEX_UV_DEBUG: &str = "VERT\n\
-DCL IN[0]\n\
-DCL IN[1]\n\
-DCL IN[2]\n\
-DCL OUT[0], POSITION\n\
-DCL OUT[1], COLOR\n\
-    0: MOV OUT[1], IN[2]\n\
-    1: MOV OUT[1].xy, IN[1]\n\
-    2: MOV OUT[0], IN[0]\n\
-    3: END\n";
-
-const FS_TEX_COLOR_ONLY: &str = "FRAG\n\
+const FS_TEX: &str = "FRAG\n\
 DCL IN[0], TEXCOORD[0], LINEAR\n\
 DCL IN[1], COLOR, LINEAR\n\
 DCL SAMP[0]\n\
+DCL TEMP[0]\n\
 DCL OUT[0], COLOR\n\
-    0: MOV OUT[0], IN[1]\n\
-    1: END\n";
-
-const FS_TEX_UV_DEBUG: &str = "FRAG\n\
-DCL IN[0], COLOR, LINEAR\n\
-DCL OUT[0], COLOR\n\
-    0: MOV OUT[0], IN[0]\n\
-    1: END\n";
-
-const FS_TEX_SAMPLE_ONLY: &str = "FRAG\n\
-DCL IN[0], TEXCOORD[0], LINEAR\n\
-DCL SAMP[0]\n\
-DCL OUT[0], COLOR\n\
-    0: TEX OUT[0], IN[0], SAMP[0], 2D\n\
-    1: END\n";
-
-fn tex_diag_shader_sources(mode: TextureDiagShaderMode) -> (&'static str, &'static str) {
-    match mode {
-        TextureDiagShaderMode::ColorOnly => (VS_TEX, FS_TEX_COLOR_ONLY),
-        TextureDiagShaderMode::UvDebug => (VS_TEX_UV_DEBUG, FS_TEX_UV_DEBUG),
-        TextureDiagShaderMode::SampleOnly => (VS_TEX, FS_TEX_SAMPLE_ONLY),
-    }
-}
+    0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
+    1: MUL OUT[0], TEMP[0], IN[1]\n\
+    2: END\n";
 
 // --- gfx-core backend (virgl) ---
 
@@ -1602,6 +1561,37 @@ use trueos_gfx_core::Result as GfxResult;
 static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32)> {
+    let stride = core::mem::size_of::<Vertex>();
+    if stride == 0 || blob.len() < stride {
+        return None;
+    }
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut min_a = f32::INFINITY;
+    let mut max_a = f32::NEG_INFINITY;
+    let mut i = 0usize;
+    while i + stride <= blob.len() {
+        let px = i;
+        let py = i + 4;
+        let pa = i + 44;
+        let x = f32::from_le_bytes(blob[px..px + 4].try_into().ok()?);
+        let y = f32::from_le_bytes(blob[py..py + 4].try_into().ok()?);
+        let a = f32::from_le_bytes(blob[pa..pa + 4].try_into().ok()?);
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+        min_a = min_a.min(a);
+        max_a = max_a.max(a);
+        i += stride;
+    }
+    Some((min_x, max_x, min_y, max_y, min_a, max_a))
+}
 
 #[derive(Clone)]
 struct HostBuffer {
@@ -1977,9 +1967,8 @@ impl VirglGfxBackend {
         encode_link_shader(&mut init, vs_color_handle, fs_color_handle);
 
         // Textured pipeline program.
-        let (vs_tex_src, fs_tex_src) = tex_diag_shader_sources(VIRGL_TEXTURE_DIAG_SHADER_MODE);
-        encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, vs_tex_src);
-        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, fs_tex_src);
+        encode_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX, VS_TEX);
+        encode_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT, FS_TEX);
         encode_bind_shader(&mut init, vs_tex_handle, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut init, fs_tex_handle, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_handle);
@@ -2560,19 +2549,37 @@ impl GfxDevice for VirglGfxBackend {
             self.frame_counter = 1;
         }
 
-        // Translate gfx-core commands into a single virgl command stream per submit.
-        let mut draw_vertex_count: Option<(u32, u32)> = None;
-        for cmd in cmds.commands {
-            match *cmd {
+        #[derive(Clone, Copy)]
+        struct DrawOp {
+            state: VirglDrawState,
+            vertex_count: u32,
+            first_vertex: u32,
+        }
+
+        #[derive(Clone, Copy)]
+        enum Op {
+            SetViewport(Viewport),
+            ClearColor(u32),
+            Draw(DrawOp),
+            Present,
+        }
+
+        // Capture commands in-order with draw-state snapshots.
+        let mut ops: Vec<Op> = Vec::new();
+        for c in cmds.commands {
+            match *c {
                 Command::SetViewport(vp) => {
                     self.state.viewport = vp;
+                    ops.push(Op::SetViewport(vp));
                 }
                 Command::ClearColor { rgb } => {
                     self.state.clear_rgb = rgb;
+                    ops.push(Op::ClearColor(rgb));
                 }
                 Command::ClearRect { rgb, .. } => {
                     // Rect clears are not supported yet; approximate with full clear.
                     self.state.clear_rgb = rgb;
+                    ops.push(Op::ClearColor(rgb));
                 }
                 Command::BindPipeline(p) => {
                     self.state.pipeline = p;
@@ -2593,340 +2600,383 @@ impl GfxDevice for VirglGfxBackend {
                     vertex_count,
                     first_vertex,
                 } => {
-                    draw_vertex_count = Some((vertex_count, first_vertex));
+                    if vertex_count != 0 {
+                        ops.push(Op::Draw(DrawOp {
+                            state: self.state,
+                            vertex_count,
+                            first_vertex,
+                        }));
+                    }
                 }
-                Command::Present => {
-                    // handled after loop
-                }
+                Command::Present => ops.push(Op::Present),
             }
-        }
-
-        let (vertex_count, first_vertex) = draw_vertex_count.unwrap_or((0, 0));
-        if vertex_count == 0 {
-            // Still allow present-only clears.
         }
 
         let mut cmd = VirglCmdBuf::new();
-        let mut submitted_draw: Option<(ConvertedVertexCacheKey, u32)> = None;
-        let mut draw_upload_needed = false;
+        let mut did_work = false;
+        let mut did_present = false;
+        let mut last_viewport: Option<(u32, u32)> = None;
 
-        // Ensure viewport matches our swapchain.
-        let vp_w = self.state.viewport.width.max(0) as u32;
-        let vp_h = self.state.viewport.height.max(0) as u32;
-        let vp_w = if vp_w == 0 {
-            self.width
-        } else {
-            vp_w.min(self.width)
-        };
-        let vp_h = if vp_h == 0 {
-            self.height
-        } else {
-            vp_h.min(self.height)
-        };
-        encode_set_viewport(&mut cmd, vp_w, vp_h);
-
-        // Clear.
-        let (r, g, b) = Self::rgb_to_f32(self.state.clear_rgb);
-        encode_clear_color(&mut cmd, r, g, b, 1.0);
-
-        // Draw.
-        if vertex_count != 0 {
-            let blend_handle = if !self.state.blend.enabled {
-                self.blend_handle_disabled
-            } else {
-                match (self.state.blend.src, self.state.blend.dst) {
-                    (BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha) => {
-                        self.blend_handle_straight
+        for op in ops {
+            match op {
+                Op::SetViewport(vp) => {
+                    let mut vp_w = vp.width.max(0) as u32;
+                    let mut vp_h = vp.height.max(0) as u32;
+                    if vp_w == 0 {
+                        vp_w = self.width;
+                    } else {
+                        vp_w = vp_w.min(self.width);
                     }
-                    (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => self.blend_handle_premult,
-                    // Enabled but mathematically equivalent to disabled.
-                    (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
-                    other => {
-                        let n = VIRGL_BLEND_UNSUPPORTED_LOGS.fetch_add(1, Ordering::Relaxed);
-                        if n < 8 {
-                            crate::log!(
-                                "virgl-backend: unsupported blend {:?}; using straight alpha\n",
-                                other
-                            );
-                        }
-                        self.blend_handle_straight
+                    if vp_h == 0 {
+                        vp_h = self.height;
+                    } else {
+                        vp_h = vp_h.min(self.height);
+                    }
+                    if last_viewport != Some((vp_w, vp_h)) {
+                        encode_set_viewport(&mut cmd, vp_w, vp_h);
+                        last_viewport = Some((vp_w, vp_h));
+                        did_work = true;
                     }
                 }
-            };
-            let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
-            if n < 8 {
-                crate::log!(
-                    "virgl-backend: bind blend {:?} -> handle={}\n",
-                    self.state.blend,
-                    blend_handle
-                );
-            }
-            encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+                Op::ClearColor(rgb) => {
+                    let (r, g, b) = Self::rgb_to_f32(rgb);
+                    encode_clear_color(&mut cmd, r, g, b, 1.0);
+                    did_work = true;
+                }
+                Op::Draw(draw) => {
+                    self.state = draw.state;
+                    let vertex_count = draw.vertex_count;
+                    let first_vertex = draw.first_vertex;
 
-            let pipeline_raw = self.state.pipeline.raw();
-            let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
-            let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
-                return Err(Error::NotFound);
-            };
+                    // Ensure current viewport is encoded before drawing.
+                    let mut vp_w = self.state.viewport.width.max(0) as u32;
+                    let mut vp_h = self.state.viewport.height.max(0) as u32;
+                    if vp_w == 0 {
+                        vp_w = self.width;
+                    } else {
+                        vp_w = vp_w.min(self.width);
+                    }
+                    if vp_h == 0 {
+                        vp_h = self.height;
+                    } else {
+                        vp_h = vp_h.min(self.height);
+                    }
+                    if last_viewport != Some((vp_w, vp_h)) {
+                        encode_set_viewport(&mut cmd, vp_w, vp_h);
+                        last_viewport = Some((vp_w, vp_h));
+                        did_work = true;
+                    }
 
-            // PipelineDesc is Copy; take a snapshot so we can drop the immutable borrow
-            // of self.pipelines before any later mutable calls.
-            let pipe_desc = pipe.desc;
-
-            let vraw = self.state.vertex.id.raw();
-            let vidx = vraw.saturating_sub(1) as usize;
-            let Some(vb) = self.buffers.get(vidx).and_then(|b| b.as_ref()) else {
-                return Err(Error::NotFound);
-            };
-
-            let cache_key = ConvertedVertexCacheKey {
-                pipeline_id: pipeline_raw,
-                buffer_id: vraw,
-                buffer_rev: vb.revision,
-                binding_offset: self.state.vertex.offset,
-                first_vertex,
-                vertex_count,
-                layout_stride: pipe_desc.vertex_layout.stride,
-                layout_pos_offset: pipe_desc.vertex_layout.pos_offset,
-                layout_color_offset: pipe_desc.vertex_layout.color_offset,
-                layout_color_format: pipe_desc.vertex_layout.color_format,
-                layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
-                layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
-                image_id: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
-                    && (VIRGL_FORCE_DEBUG_TEXTURE
-                        || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
-                {
-                    VIRGL_DEBUG_TEXTURE_ID_RAW
-                } else {
-                    self.state.image.raw()
-                },
-                image_rev: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
-                    && (VIRGL_FORCE_DEBUG_TEXTURE
-                        || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
-                {
-                    1
-                } else if self.state.image.is_valid() {
-                    self.images
-                        .get(self.state.image.raw().saturating_sub(1) as usize)
-                        .and_then(|i| i.as_ref())
-                        .map(|i| i.revision)
-                        .unwrap_or(0)
-                } else {
-                    0
-                },
-            };
-
-            if self.converted_cache.key != Some(cache_key) {
-                let bound_image =
-                    if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                        let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
-                            || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
-                        if !use_debug_texture && !self.state.image.is_valid() {
-                            return Err(Error::Invalid);
+                    let blend_handle = if !self.state.blend.enabled {
+                        self.blend_handle_disabled
+                    } else {
+                        match (self.state.blend.src, self.state.blend.dst) {
+                            (BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha) => {
+                                self.blend_handle_straight
+                            }
+                            (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => {
+                                self.blend_handle_premult
+                            }
+                            (BlendFactor::One, BlendFactor::Zero) => self.blend_handle_disabled,
+                            other => {
+                                let n =
+                                    VIRGL_BLEND_UNSUPPORTED_LOGS.fetch_add(1, Ordering::Relaxed);
+                                if n < 8 {
+                                    crate::log!(
+                                        "virgl-backend: unsupported blend {:?}; using straight alpha\n",
+                                        other
+                                    );
+                                }
+                                self.blend_handle_straight
+                            }
                         }
-                        if use_debug_texture {
-                            None
+                    };
+                    let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        crate::log!(
+                            "virgl-backend: bind blend {:?} -> handle={}\n",
+                            self.state.blend,
+                            blend_handle
+                        );
+                    }
+                    encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+
+                    let pipeline_raw = self.state.pipeline.raw();
+                    let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
+                    let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
+                        return Err(Error::NotFound);
+                    };
+                    let pipe_desc = pipe.desc;
+
+                    let vraw = self.state.vertex.id.raw();
+                    let vidx = vraw.saturating_sub(1) as usize;
+                    let Some(vb) = self.buffers.get(vidx).and_then(|b| b.as_ref()) else {
+                        return Err(Error::NotFound);
+                    };
+
+                    let cache_key = ConvertedVertexCacheKey {
+                        pipeline_id: pipeline_raw,
+                        buffer_id: vraw,
+                        buffer_rev: vb.revision,
+                        binding_offset: self.state.vertex.offset,
+                        first_vertex,
+                        vertex_count,
+                        layout_stride: pipe_desc.vertex_layout.stride,
+                        layout_pos_offset: pipe_desc.vertex_layout.pos_offset,
+                        layout_color_offset: pipe_desc.vertex_layout.color_offset,
+                        layout_color_format: pipe_desc.vertex_layout.color_format,
+                        layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
+                        layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
+                        image_id: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                            && (VIRGL_FORCE_DEBUG_TEXTURE
+                                || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
+                        {
+                            VIRGL_DEBUG_TEXTURE_ID_RAW
                         } else {
+                            self.state.image.raw()
+                        },
+                        image_rev: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                            && (VIRGL_FORCE_DEBUG_TEXTURE
+                                || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
+                        {
+                            1
+                        } else if self.state.image.is_valid() {
                             self.images
                                 .get(self.state.image.raw().saturating_sub(1) as usize)
                                 .and_then(|i| i.as_ref())
-                        }
-                    } else {
-                        None
+                                .map(|i| i.revision)
+                                .unwrap_or(0)
+                        } else {
+                            0
+                        },
                     };
-                let verts = self
-                    .build_virgl_vertices(
-                        &vb.bytes,
-                        pipe_desc,
-                        self.state.vertex,
-                        (vertex_count, first_vertex),
-                        bound_image,
-                    )
-                    .ok_or(Error::Invalid)?;
-                let vbytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(
-                        verts.as_ptr() as *const u8,
-                        core::mem::size_of_val(verts.as_slice()),
-                    )
-                };
-                self.converted_cache.key = Some(cache_key);
-                self.converted_cache.bytes.clear();
-                self.converted_cache.bytes.extend_from_slice(vbytes);
-                self.converted_cache.vertex_count = verts.len() as u32;
-            }
 
-            if self.converted_cache.bytes.is_empty() || self.converted_cache.vertex_count == 0 {
-                return Err(Error::Invalid);
-            }
-
-            if !self.ensure_vbo_capacity(self.converted_cache.bytes.len()) {
-                return Err(Error::OutOfMemory);
-            }
-
-            let need_upload = self.uploaded_cache_key != Some(cache_key)
-                || self.uploaded_cache_vbo_generation != self.vbo_generation;
-            if need_upload {
-                encode_inline_write_buffer(
-                    &mut cmd,
-                    self.vbo_res,
-                    self.converted_cache.bytes.as_slice(),
-                );
-                self.uploaded_cache_key = Some(cache_key);
-                self.uploaded_cache_vbo_generation = self.vbo_generation;
-                draw_upload_needed = true;
-            }
-
-            // Bind program + texture state for this draw.
-            if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
-                let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
-                    || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
-                let (img_raw, virgl_res, virgl_view, samp_handle) = if use_debug_texture {
-                    if !self.debug_tex_uploaded {
-                        encode_inline_write_texture(&mut cmd, self.debug_tex_res, 2, 2, &VIRGL_DEBUG_TEXTURE_RGBA_2X2);
-                        self.debug_tex_uploaded = true;
-                        draw_upload_needed = true;
+                    if self.converted_cache.key != Some(cache_key) {
+                        let bound_image =
+                            if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                                let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
+                                    || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
+                                if !use_debug_texture && !self.state.image.is_valid() {
+                                    return Err(Error::Invalid);
+                                }
+                                if use_debug_texture {
+                                    None
+                                } else {
+                                    self.images
+                                        .get(self.state.image.raw().saturating_sub(1) as usize)
+                                        .and_then(|i| i.as_ref())
+                                }
+                            } else {
+                                None
+                            };
+                        let verts = self
+                            .build_virgl_vertices(
+                                &vb.bytes,
+                                pipe_desc,
+                                self.state.vertex,
+                                (vertex_count, first_vertex),
+                                bound_image,
+                            )
+                            .ok_or(Error::Invalid)?;
+                        let vbytes: &[u8] = unsafe {
+                            core::slice::from_raw_parts(
+                                verts.as_ptr() as *const u8,
+                                core::mem::size_of_val(verts.as_slice()),
+                            )
+                        };
+                        self.converted_cache.key = Some(cache_key);
+                        self.converted_cache.bytes.clear();
+                        self.converted_cache.bytes.extend_from_slice(vbytes);
+                        self.converted_cache.vertex_count = verts.len() as u32;
                     }
-                    if !self.debug_tex_view_created {
-                        encode_create_sampler_view(
-                            &mut cmd,
-                            self.debug_tex_view,
-                            self.debug_tex_res,
-                            VIRGL_FORMAT_R8G8B8A8_UNORM,
-                        );
-                        self.debug_tex_view_created = true;
-                        draw_upload_needed = true;
-                    }
-                    (
-                        VIRGL_DEBUG_TEXTURE_ID_RAW,
-                        self.debug_tex_res,
-                        self.debug_tex_view,
-                        self.sampler_state_nearest_handle,
-                    )
-                } else {
-                    // Ensure bound ImageId exists.
-                    let img_raw = self.state.image.raw();
-                    let img_idx = img_raw.saturating_sub(1) as usize;
-                    let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
-                        return Err(Error::NotFound);
-                    };
-                    if img.virgl_res == 0 {
+
+                    if self.converted_cache.bytes.is_empty() || self.converted_cache.vertex_count == 0 {
                         return Err(Error::Invalid);
                     }
 
-                    // Upload full image when changed.
-                    if img.virgl_uploaded_rev != img.revision {
-                        let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
-                        if n < 8 {
-                            crate::log!(
-                                "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
-                                img_raw,
-                                img.desc.width,
-                                img.desc.height,
-                                img.virgl_uploaded_rev,
-                                img.revision,
-                                img.virgl_res,
-                                img.virgl_view
-                            );
-                        }
-                        encode_inline_write_texture(
-                            &mut cmd,
-                            img.virgl_res,
-                            img.desc.width,
-                            img.desc.height,
-                            img.bytes.as_slice(),
-                        );
-                        img.virgl_uploaded_rev = img.revision;
-                        draw_upload_needed = true;
+                    if !self.ensure_vbo_capacity(self.converted_cache.bytes.len()) {
+                        return Err(Error::OutOfMemory);
                     }
 
-                    // Create sampler view once (objects live in the virgl context).
-                    if !img.virgl_view_created {
-                        let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
-                        if n < 8 {
-                            crate::log!(
-                                "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
-                                img_raw,
-                                img.virgl_res,
-                                img.virgl_view,
-                                VIRGL_FORMAT_R8G8B8A8_UNORM
-                            );
-                        }
-                        encode_create_sampler_view(
+                    let need_upload = self.uploaded_cache_key != Some(cache_key)
+                        || self.uploaded_cache_vbo_generation != self.vbo_generation;
+                    if need_upload {
+                        encode_inline_write_buffer(
                             &mut cmd,
-                            img.virgl_view,
-                            img.virgl_res,
-                            VIRGL_FORMAT_R8G8B8A8_UNORM,
+                            self.vbo_res,
+                            self.converted_cache.bytes.as_slice(),
                         );
-                        img.virgl_view_created = true;
-                        draw_upload_needed = true;
+                        self.uploaded_cache_key = Some(cache_key);
+                        self.uploaded_cache_vbo_generation = self.vbo_generation;
                     }
 
-                    let samp_handle = if self.state.sampler.min_filter
-                        == trueos_gfx_core::SamplerFilter::Linear
-                        || self.state.sampler.mag_filter == trueos_gfx_core::SamplerFilter::Linear
-                    {
-                        self.sampler_state_linear_handle
+                    if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                        let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
+                            || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW;
+                        let (img_raw, virgl_res, virgl_view, samp_handle) = if use_debug_texture {
+                            if !self.debug_tex_uploaded {
+                                encode_inline_write_texture(
+                                    &mut cmd,
+                                    self.debug_tex_res,
+                                    2,
+                                    2,
+                                    &VIRGL_DEBUG_TEXTURE_RGBA_2X2,
+                                );
+                                self.debug_tex_uploaded = true;
+                            }
+                            if !self.debug_tex_view_created {
+                                encode_create_sampler_view(
+                                    &mut cmd,
+                                    self.debug_tex_view,
+                                    self.debug_tex_res,
+                                    VIRGL_FORMAT_R8G8B8A8_UNORM,
+                                );
+                                self.debug_tex_view_created = true;
+                            }
+                            (
+                                VIRGL_DEBUG_TEXTURE_ID_RAW,
+                                self.debug_tex_res,
+                                self.debug_tex_view,
+                                self.sampler_state_nearest_handle,
+                            )
+                        } else {
+                            let img_raw = self.state.image.raw();
+                            let img_idx = img_raw.saturating_sub(1) as usize;
+                            let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
+                                return Err(Error::NotFound);
+                            };
+                            if img.virgl_res == 0 {
+                                return Err(Error::Invalid);
+                            }
+
+                            if img.virgl_uploaded_rev != img.revision {
+                                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                                if n < 8 {
+                                    crate::log!(
+                                        "virgl-backend: tex upload img={} {}x{} rev {}->{} res={} view={}\n",
+                                        img_raw,
+                                        img.desc.width,
+                                        img.desc.height,
+                                        img.virgl_uploaded_rev,
+                                        img.revision,
+                                        img.virgl_res,
+                                        img.virgl_view
+                                    );
+                                }
+                                encode_inline_write_texture(
+                                    &mut cmd,
+                                    img.virgl_res,
+                                    img.desc.width,
+                                    img.desc.height,
+                                    img.bytes.as_slice(),
+                                );
+                                img.virgl_uploaded_rev = img.revision;
+                            }
+
+                            if !img.virgl_view_created {
+                                let n = VIRGL_TEX_DEBUG_LOGS.fetch_add(1, Ordering::Relaxed);
+                                if n < 8 {
+                                    crate::log!(
+                                        "virgl-backend: tex create_view img={} res={} view={} fmt={}\n",
+                                        img_raw,
+                                        img.virgl_res,
+                                        img.virgl_view,
+                                        VIRGL_FORMAT_R8G8B8A8_UNORM
+                                    );
+                                }
+                                encode_create_sampler_view(
+                                    &mut cmd,
+                                    img.virgl_view,
+                                    img.virgl_res,
+                                    VIRGL_FORMAT_R8G8B8A8_UNORM,
+                                );
+                                img.virgl_view_created = true;
+                            }
+
+                            let samp_handle = if self.state.sampler.min_filter
+                                == trueos_gfx_core::SamplerFilter::Linear
+                                || self.state.sampler.mag_filter
+                                    == trueos_gfx_core::SamplerFilter::Linear
+                            {
+                                self.sampler_state_linear_handle
+                            } else {
+                                self.sampler_state_nearest_handle
+                            };
+                            (img_raw, img.virgl_res, img.virgl_view, samp_handle)
+                        };
+
+                        if frame_no % 100 == 0 {
+                            crate::log!(
+                                "virgl-diag: frame={} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
+                                frame_no,
+                                img_raw,
+                                virgl_res,
+                                virgl_view,
+                                samp_handle,
+                                self.state.sampler.wrap_s,
+                                self.state.sampler.wrap_t,
+                                self.state.sampler.min_filter,
+                                self.state.sampler.mag_filter
+                            );
+                        }
+
+                        encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[virgl_view]);
+                        encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[samp_handle]);
+                        encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
+                        encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
                     } else {
-                        self.sampler_state_nearest_handle
-                    };
-                    (img_raw, img.virgl_res, img.virgl_view, samp_handle)
-                };
+                        encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
+                        encode_bind_shader(&mut cmd, self.fs_color_handle, PIPE_SHADER_FRAGMENT);
+                    }
 
-                if frame_no % 100 == 0 {
-                    crate::log!(
-                        "virgl-diag: frame={} mode={:?} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
-                        frame_no,
-                        VIRGL_TEXTURE_DIAG_SHADER_MODE,
-                        img_raw,
-                        virgl_res,
-                        virgl_view,
-                        samp_handle,
-                        self.state.sampler.wrap_s,
-                        self.state.sampler.wrap_t,
-                        self.state.sampler.min_filter,
-                        self.state.sampler.mag_filter
-                    );
+                    if frame_no <= 5 || (frame_no % 100) == 0 {
+                        if let Some((min_x, max_x, min_y, max_y, min_a, max_a)) =
+                            vertex_blob_bounds(self.converted_cache.bytes.as_slice())
+                        {
+                            crate::log!(
+                                "virgl-draw: frame={} verts={} img={} ndc_x=[{:.3},{:.3}] ndc_y=[{:.3},{:.3}] a=[{:.3},{:.3}] vp={}x{}\n",
+                                frame_no,
+                                self.converted_cache.vertex_count,
+                                self.state.image.raw(),
+                                min_x,
+                                max_x,
+                                min_y,
+                                max_y,
+                                min_a,
+                                max_a,
+                                vp_w,
+                                vp_h
+                            );
+                        }
+                    }
+
+                    encode_draw_vbo_count(&mut cmd, self.converted_cache.vertex_count);
+                    did_work = true;
                 }
-
-                // Keep SET_SAMPLER_VIEWS before BIND_SAMPLER_STATES for deterministic bring-up.
-                encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[virgl_view]);
-                encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[samp_handle]);
-                encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
-                encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
-            } else {
-                encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
-                encode_bind_shader(&mut cmd, self.fs_color_handle, PIPE_SHADER_FRAGMENT);
+                Op::Present => {
+                    encode_resource_copy_region(
+                        &mut cmd,
+                        self.scanout_res,
+                        self.rt_res,
+                        self.width,
+                        self.height,
+                    );
+                    did_present = true;
+                    did_work = true;
+                }
             }
-
-            submitted_draw = Some((cache_key, self.vbo_generation));
-            encode_draw_vbo_count(&mut cmd, self.converted_cache.vertex_count);
         }
 
-        let frame_key = SubmittedFrameKey {
-            viewport_w: vp_w,
-            viewport_h: vp_h,
-            clear_rgb: self.state.clear_rgb,
-            draw: submitted_draw,
-        };
-        if !draw_upload_needed && self.last_submitted_frame == Some(frame_key) {
+        if !did_work {
             let fence = self.next_fence;
             self.next_fence = self.next_fence.wrapping_add(1);
             self.completed_fence = fence;
             return Ok(FenceId::from_raw(fence));
         }
 
-        // Present: copy to 2D scanout and flush.
-        // NOTE: `transfer_to_host_2d` copies *guest* backing into the host resource.
-        // Our scanout is produced via virgl/host-side rendering + copy, so a transfer-to-host
-        // here can overwrite the freshly rendered image with stale (often zeroed) guest memory,
-        // resulting in a persistent black screen.
-        encode_resource_copy_region(
-            &mut cmd,
-            self.scanout_res,
-            self.rt_res,
-            self.width,
-            self.height,
-        );
+        // Disable single-draw frame-cache shortcut until a multi-draw key is implemented.
+        self.last_submitted_frame = None;
+
         let fence = self.next_fence;
         self.next_fence = self.next_fence.wrapping_add(1);
 
@@ -2934,11 +2984,12 @@ impl GfxDevice for VirglGfxBackend {
             return Err(Error::Unsupported);
         }
 
-        let _ = self
-            .gpu
-            .resource_flush(self.scanout_res, self.width, self.height);
+        if did_present {
+            let _ = self
+                .gpu
+                .resource_flush(self.scanout_res, self.width, self.height);
+        }
 
-        self.last_submitted_frame = Some(frame_key);
         self.completed_fence = fence;
         Ok(FenceId::from_raw(fence))
     }
@@ -3231,6 +3282,8 @@ fn encode_set_sampler_views(
     views: &[u32],
 ) {
     let num = views.len().min(32) as u32;
+    // virgl expects: shader_type, start_slot, then view handles.
+    // Count is encoded in command length (VIRGL_SET_SAMPLER_VIEWS_SIZE).
     let len = num + 2;
     buf.push(virgl_cmd0(VIRGL_CCMD_SET_SAMPLER_VIEWS, 0, len));
     buf.push(shader_type);
@@ -3247,6 +3300,8 @@ fn encode_bind_sampler_states(
     states: &[u32],
 ) {
     let num = states.len().min(32) as u32;
+    // virgl expects: shader_type, start_slot, then state handles.
+    // Count is encoded in command length (VIRGL_BIND_SAMPLER_STATES).
     let len = num + 2;
     buf.push(virgl_cmd0(VIRGL_CCMD_BIND_SAMPLER_STATES, 0, len));
     buf.push(shader_type);

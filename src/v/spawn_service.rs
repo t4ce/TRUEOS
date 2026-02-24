@@ -46,6 +46,7 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static GFX_BOOT_AUTO_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_PIXI_BOOT_AUTO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -62,6 +63,21 @@ static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
+    let v = crate::vga::font_atlas_large_view();
+    trueos_qjs::FontAtlasView {
+        alpha: v.alpha,
+        index: v.index,
+        widths: v.widths,
+        width: v.width,
+        height: v.height,
+        cell_w: v.cell_w,
+        cell_h: v.cell_h,
+        grid_w: v.grid_w,
+        grid_h: v.grid_h,
+    }
+}
 
 // --- spawn wrappers (keep per-task logic out of main.rs) ---
 
@@ -168,7 +184,7 @@ fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
 
     #[cfg(feature = "gfx_virgl")]
     {
-        if !crate::gfx::virtio_gpu_3d::is_present_cached() {
+        if !crate::gfx::is_virgl_present_cached() {
             return SpawnAttempt::Skipped;
         }
 
@@ -179,7 +195,36 @@ fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
         }
     }
 
-    // Match the interactive `gfx` command behavior: boot the Pixi UI once gfx is active.
+    trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
+
+    // Boot-time direct gfx test (no JS/Pixi): submit a compact multi-mesh scene at 20Hz.
+    match spawner.spawn(trueos_qjs::webgl_smoke::boot_webgl_smoke_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_gfx_pixi_boot_auto(spawner: Spawner) -> SpawnAttempt {
+    // Always call init first so later backend switches have stored framebuffers.
+    crate::gfx::init(crate::limine::framebuffer_response());
+
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    {
+        if !crate::gfx::is_virgl_present_cached() {
+            return SpawnAttempt::Skipped;
+        }
+
+        if !crate::gfx::is_virgl_active() && !crate::gfx::switch_to_virgl() {
+            return SpawnAttempt::Skipped;
+        }
+    }
+
     match spawner.spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -400,10 +445,17 @@ static TASKS: &[TaskSpec] = &[
     // Boot-time graphics bringup (virtio-gpu/virgl).
     TaskSpec {
         name: "gfx-boot-auto",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &GFX_BOOT_AUTO_STARTED,
         spawn: spawn_gfx_boot_auto,
+    },
+    TaskSpec {
+        name: "gfx-pixi-boot-auto",
+        disabled: false,
+        required: 0,
+        started: &GFX_PIXI_BOOT_AUTO_STARTED,
+        spawn: spawn_gfx_pixi_boot_auto,
     },
     TaskSpec {
         name: "usb-controller-tasks",
