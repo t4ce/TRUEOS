@@ -17,6 +17,201 @@ G.__trueos_canvas = canvas;
 
 import * as PIXI from '/qjs/vendor/pixi.mjs';
 
+// --- TRUEOS text shim: route PIXI.Text to a mesh-only bitmap path ---
+// This avoids Canvas/Text raster plumbing and keeps text on the proven mesh+texture route.
+var __TRUEOS_BITMAP_5x7 = {
+	' ': [0,0,0,0,0,0,0],
+	'0': [14,17,19,21,25,17,14],
+	'1': [4,12,4,4,4,4,14],
+	'2': [14,17,1,2,4,8,31],
+	'3': [30,1,1,14,1,1,30],
+	'4': [2,6,10,18,31,2,2],
+	'5': [31,16,16,30,1,1,30],
+	'6': [14,16,16,30,17,17,14],
+	'7': [31,1,2,4,8,8,8],
+	'8': [14,17,17,14,17,17,14],
+	'9': [14,17,17,15,1,1,14],
+	'A': [14,17,17,31,17,17,17],
+	'B': [30,17,17,30,17,17,30],
+	'C': [14,17,16,16,16,17,14],
+	'D': [30,17,17,17,17,17,30],
+	'E': [31,16,16,30,16,16,31],
+	'F': [31,16,16,30,16,16,16],
+	'G': [14,17,16,23,17,17,14],
+	'H': [17,17,17,31,17,17,17],
+	'I': [14,4,4,4,4,4,14],
+	'J': [1,1,1,1,17,17,14],
+	'K': [17,18,20,24,20,18,17],
+	'L': [16,16,16,16,16,16,31],
+	'M': [17,27,21,21,17,17,17],
+	'N': [17,25,21,19,17,17,17],
+	'O': [14,17,17,17,17,17,14],
+	'P': [30,17,17,30,16,16,16],
+	'Q': [14,17,17,17,21,18,13],
+	'R': [30,17,17,30,20,18,17],
+	'S': [14,17,16,14,1,17,14],
+	'T': [31,4,4,4,4,4,4],
+	'U': [17,17,17,17,17,17,14],
+	'V': [17,17,17,17,17,10,4],
+	'W': [17,17,17,21,21,21,10],
+	'X': [17,17,10,4,10,17,17],
+	'Y': [17,17,10,4,4,4,4],
+	'Z': [31,1,2,4,8,16,31],
+	'.': [0,0,0,0,0,12,12],
+	'-': [0,0,0,31,0,0,0],
+	':': [0,12,12,0,12,12,0]
+};
+
+function __trueosTextStyle(style) {
+	var s = style || {};
+	var fill = Number(s.fill);
+	if (!isFinite(fill)) fill = 0x102A43;
+	var fontSize = Number(s.fontSize);
+	if (!isFinite(fontSize) || fontSize <= 0) fontSize = 18;
+	var alpha = Number(s.alpha);
+	if (!isFinite(alpha) || alpha < 0) alpha = 1.0;
+	if (alpha > 1) alpha = 1.0;
+	return { fill: fill >>> 0, fontSize: fontSize, alpha: alpha };
+}
+
+function __buildBitmapMesh(text, style) {
+	var t = String(text == null ? '' : text);
+	var st = __trueosTextStyle(style);
+	var scale = Math.max(1, (st.fontSize / 8) | 0);
+	var glyphW = 5 * scale;
+	var glyphH = 7 * scale;
+	var advance = glyphW + scale;
+
+	var maxQuads = t.length * 5 * 7 * scale * scale;
+	var pos = new Float32Array(maxQuads * 6 * 2);
+	var uv = new Float32Array(maxQuads * 6 * 2);
+	var p = 0;
+	var u = 0;
+	var xBase = 0;
+
+	function pushQuad(x0, y0, x1, y1) {
+		pos[p++] = x0; pos[p++] = y0;
+		pos[p++] = x1; pos[p++] = y0;
+		pos[p++] = x1; pos[p++] = y1;
+		pos[p++] = x0; pos[p++] = y0;
+		pos[p++] = x1; pos[p++] = y1;
+		pos[p++] = x0; pos[p++] = y1;
+		for (var i = 0; i < 6; i++) {
+			uv[u++] = 0.5;
+			uv[u++] = 0.5;
+		}
+	}
+
+	for (var ci = 0; ci < t.length; ci++) {
+		var ch = t.charAt(ci);
+		var key = ch.toUpperCase();
+		var rows = __TRUEOS_BITMAP_5x7[key] || __TRUEOS_BITMAP_5x7['?'] || __TRUEOS_BITMAP_5x7[' '];
+		for (var ry = 0; ry < 7; ry++) {
+			var bits = rows[ry] | 0;
+			for (var rx = 0; rx < 5; rx++) {
+				if ((bits & (1 << (4 - rx))) === 0) continue;
+				var px = xBase + rx * scale;
+				var py = ry * scale;
+				// One quad per glyph pixel (scaled), not scale*scale quads.
+				// This keeps the hot-loop vertex count bounded.
+				pushQuad(px, py, px + scale, py + scale);
+			}
+		}
+		xBase += advance;
+	}
+
+	var posUsed = pos.subarray(0, p);
+	var uvUsed = uv.subarray(0, u);
+	var geo = new PIXI.Geometry({
+		attributes: {
+			aPosition: posUsed,
+			aUV: uvUsed,
+		},
+	});
+	var mesh = new PIXI.Mesh({
+		geometry: geo,
+		texture: PIXI.Texture.WHITE,
+	});
+	mesh.tint = st.fill;
+	mesh.alpha = st.alpha;
+	return mesh;
+}
+
+function __createTrueosTextNode(arg) {
+	var text = '';
+	var style = {};
+	if (typeof arg === 'string' || typeof arg === 'number') {
+		text = String(arg);
+	} else if (arg && typeof arg === 'object') {
+		if (arg.text != null) text = String(arg.text);
+		if (arg.style && typeof arg.style === 'object') style = arg.style;
+	}
+
+	var node = new PIXI.Container();
+	node.__trueos_text = text;
+	node.__trueos_style = style;
+	node.__trueos_mesh = null;
+
+	node.__rebuildText = function() {
+		if (node.__trueos_mesh && typeof node.removeChild === 'function') {
+			try { node.removeChild(node.__trueos_mesh); } catch (_e0) {}
+			try { node.__trueos_mesh.destroy && node.__trueos_mesh.destroy(true); } catch (_e1) {}
+		}
+		node.__trueos_mesh = __buildBitmapMesh(node.__trueos_text, node.__trueos_style);
+		node.addChild(node.__trueos_mesh);
+	};
+
+	Object.defineProperty(node, 'text', {
+		get: function() { return node.__trueos_text; },
+		set: function(v) {
+			var next = String(v == null ? '' : v);
+			if (next === node.__trueos_text) return;
+			node.__trueos_text = next;
+			node.__rebuildText();
+		},
+		enumerable: true,
+		configurable: true,
+	});
+
+	Object.defineProperty(node, 'style', {
+		get: function() { return node.__trueos_style; },
+		set: function(v) {
+			var next = (v && typeof v === 'object') ? v : {};
+			if (next === node.__trueos_style) return;
+			node.__trueos_style = next;
+			node.__rebuildText();
+		},
+		enumerable: true,
+		configurable: true,
+	});
+
+	node.__rebuildText();
+	return node;
+}
+
+var __TRUEOS_TextFactory = function(arg) {
+	return __createTrueosTextNode(arg);
+};
+
+function installTrueosTextShim() {
+	if (!PIXI || typeof PIXI !== 'object') return;
+	try {
+		// If this succeeds, normal `new PIXI.Text(...)` call sites keep working.
+		PIXI.Text = function TrueosTextShim(arg) {
+			return __createTrueosTextNode(arg);
+		};
+		__TRUEOS_TextFactory = function(arg) { return new PIXI.Text(arg); };
+	} catch (_e) {
+		// Some Pixi bundles expose a non-extensible namespace object.
+		// Keep using local factory without mutating PIXI exports.
+		__TRUEOS_TextFactory = function(arg) {
+			return __createTrueosTextNode(arg);
+		};
+	}
+}
+
+installTrueosTextShim();
+
 function resolveRendererCtor() {
 	if (PIXI && typeof PIXI.Renderer === 'function') return PIXI.Renderer;
 	if (PIXI && typeof PIXI.WebGLRenderer === 'function') return PIXI.WebGLRenderer;
@@ -216,7 +411,7 @@ function runTextSmoke(root) {
 	}
 
 	check('new Text({ text, style })', function() {
-		txtMain = new PIXI.Text({
+		txtMain = __TRUEOS_TextFactory({
 			text: 'TRUEOS Text Smoke',
 			style: {
 				fill: 0x102A43,
@@ -229,7 +424,7 @@ function runTextSmoke(root) {
 	});
 
 	check('secondary label', function() {
-		txtLive = new PIXI.Text({
+		txtLive = __TRUEOS_TextFactory({
 			text: 'ticks=0',
 			style: {
 				fill: 0x334E68,
@@ -352,9 +547,15 @@ function renderStage() {
 	if (!renderer || !stage || typeof renderer.render !== 'function') return;
 	if (__render_mode === 2) {
 		renderer.render({ container: stage });
+		if (G.__trueos_gl_ctx && typeof G.__trueos_gl_ctx.flush === 'function') {
+			try { G.__trueos_gl_ctx.flush(); } catch (_eFlush0) {}
+		}
 		return;
 	}
 	renderer.render({ container: stage });
+	if (G.__trueos_gl_ctx && typeof G.__trueos_gl_ctx.flush === 'function') {
+		try { G.__trueos_gl_ctx.flush(); } catch (_eFlush1) {}
+	}
 	__render_mode = 2;
 }
 
@@ -371,12 +572,7 @@ G.__trueos_pixi_ui_tick = function(angleRad) {
 		orbit.rotation = -a * 1.2;
 		m1.rotation = a * 0.7;
 		txtTick++;
-		if (txtLive) {
-			txtLive.text = 'ticks=' + String(txtTick);
-		}
-		if (txtMain && (txtTick % 40) === 0) {
-			txtMain.text = 'TRUEOS Text Smoke ' + String((txtTick / 40) | 0);
-		}
+		// Keep text static in the hot loop to preserve bounded allocations.
 		renderStage();
 	} catch (e) {
 		__render_failed = true;
@@ -400,7 +596,9 @@ function startPixi() {
 	var gl = canvas.getContext('webgl2', { alpha: false, antialias: false, stencil: true })
 		|| canvas.getContext('webgl', { alpha: false, antialias: false, stencil: true });
 	if (!gl) throw new Error('pixi_gui: WebGL context not available');
-	if (!G.__trueos_gl_trace_installed) {
+	G.__trueos_gl_ctx = gl;
+	// Optional GL tracing (very expensive): set `globalThis.__trueos_pixi_gl_trace = true`.
+	if (G.__trueos_pixi_gl_trace === true && !G.__trueos_gl_trace_installed) {
 		G.__trueos_gl_trace_installed = true;
 		G.__trueos_gl_calls = G.__trueos_gl_calls || Object.create(null);
 		var names = [];
@@ -456,7 +654,7 @@ Promise.resolve(startPixi()).catch(function(e) {
 	throw new Error('pixi_gui: webgl bootstrap failed: ' + String(e && e.message ? e.message : e));
 });
 
-// Self-driven 20Hz loop (preferred). If timers are unavailable, Rust can still
+// Self-driven 60Hz loop (preferred). If timers are unavailable, Rust can still
 // drive `__trueos_pixi_ui_tick` externally.
 if (!G.__trueos_pixi_ui_running && typeof setInterval === 'function') {
 	G.__trueos_pixi_ui_running = true;
@@ -464,7 +662,7 @@ if (!G.__trueos_pixi_ui_running && typeof setInterval === 'function') {
 	G.__trueos_pixi_ui_timer = setInterval(function() {
 		G.__trueos_pixi_ui_a = (G.__trueos_pixi_ui_a || 0) + 0.03;
 		if (G.__trueos_pixi_ui_tick) G.__trueos_pixi_ui_tick(G.__trueos_pixi_ui_a);
-	}, 50);
+	}, 16);
 	G.__trueos_pixi_ui_stop = function() {
 		try {
 			if (G.__trueos_pixi_ui_timer && typeof clearInterval === 'function') {

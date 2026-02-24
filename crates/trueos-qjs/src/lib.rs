@@ -63,6 +63,37 @@ pub use pixi::pixi_gui as pixi_ui;
 #[cfg(feature = "trueos")]
 pub use pixi::webgl_smoke;
 
+#[cfg(feature = "trueos")]
+#[derive(Clone, Copy)]
+pub struct FontAtlasView<'a> {
+    pub alpha: &'a [u8],
+    pub index: &'a [u16],
+    pub widths: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+    pub cell_w: u32,
+    pub cell_h: u32,
+    pub grid_w: u32,
+    pub grid_h: u32,
+}
+
+#[cfg(feature = "trueos")]
+pub type FontAtlasSmallProvider = fn() -> FontAtlasView<'static>;
+
+#[cfg(feature = "trueos")]
+static FONT_ATLAS_SMALL_PROVIDER: spin::Mutex<Option<FontAtlasSmallProvider>> =
+    spin::Mutex::new(None);
+
+#[cfg(feature = "trueos")]
+pub fn set_font_atlas_small_provider(provider: FontAtlasSmallProvider) {
+    *FONT_ATLAS_SMALL_PROVIDER.lock() = Some(provider);
+}
+
+#[cfg(feature = "trueos")]
+pub fn font_atlas_small_view() -> Option<FontAtlasView<'static>> {
+    FONT_ATLAS_SMALL_PROVIDER.lock().as_ref().copied().map(|f| f())
+}
+
 #[repr(C)]
 pub struct JSRuntime {
     _private: [u8; 0],

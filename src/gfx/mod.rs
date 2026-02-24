@@ -185,6 +185,22 @@ pub fn is_virgl_active() -> bool {
     with_system(|sys| matches!(sys.backend, backends::Backend::Virgl(_))).unwrap_or(false)
 }
 
+/// Returns whether a virgl-capable virtio-gpu device is currently visible.
+///
+/// This keeps virgl probing behind the `gfx` API so non-gfx modules do not
+/// reach into backend implementation modules directly.
+pub fn is_virgl_present_cached() -> bool {
+    #[cfg(feature = "gfx_virgl")]
+    {
+        return virtio_gpu_3d::is_present_cached();
+    }
+
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        false
+    }
+}
+
 #[cfg(feature = "gfx_virgl")]
 #[allow(dead_code)]
 pub fn switch_to_virgl() -> bool {

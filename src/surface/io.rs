@@ -851,6 +851,7 @@ pub mod cabi {
         },
         Tex {
             tex_id: u32,
+            image: ImageId,
             sampler: SamplerDesc,
             vertices: Vec<u8>,
             blend: BlendDesc,
@@ -1360,6 +1361,7 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
+        const MAX_RGB_DRAW_BYTES: usize = 48 * 1024;
         if vtx_ptr.is_null() {
             return if vtx_len == 0 { 0 } else { -1 };
         }
@@ -1387,10 +1389,20 @@ pub mod cabi {
         st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
         let blend = st.cur_blend;
-        st.frame_draws.push(PendingDraw::Rgb {
-            vertices: bytes,
-            blend,
-        });
+        let mut off = 0usize;
+        while off < bytes.len() {
+            let rem = bytes.len() - off;
+            let chunk = core::cmp::min(MAX_RGB_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            st.frame_draws.push(PendingDraw::Rgb {
+                vertices: bytes[off..off + chunk].to_vec(),
+                blend,
+            });
+            off += chunk;
+        }
         0
     }
 
@@ -1400,6 +1412,7 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
+        const MAX_TEX_DRAW_BYTES: usize = 64 * 1024;
         if tex_id == 0 {
             return -1;
         }
@@ -1429,14 +1442,33 @@ pub mod cabi {
         }
         st.frame_tex_draws = st.frame_tex_draws.saturating_add(1);
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
+        let idx = tex_id.saturating_sub(1) as usize;
+        let image = st
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|e| e.as_ref())
+            .map(|e| e.image)
+            .unwrap_or(ImageId::invalid());
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
-        st.frame_draws.push(PendingDraw::Tex {
-            tex_id,
-            sampler,
-            vertices: bytes,
-            blend,
-        });
+        let mut off = 0usize;
+        while off < bytes.len() {
+            let rem = bytes.len() - off;
+            let chunk = core::cmp::min(MAX_TEX_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            st.frame_draws.push(PendingDraw::Tex {
+                tex_id,
+                image,
+                sampler,
+                vertices: bytes[off..off + chunk].to_vec(),
+                blend,
+            });
+            off += chunk;
+        }
         0
     }
 
@@ -1476,6 +1508,8 @@ pub mod cabi {
                 height: swap.extent.height as i32,
             };
 
+            const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
+
             enum Plan {
                 Rgb {
                     offset: u64,
@@ -1484,6 +1518,7 @@ pub mod cabi {
                 },
                 Tex {
                     tex_id: u32,
+                    image: ImageId,
                     sampler: SamplerDesc,
                     offset: u64,
                     vcount: u32,
@@ -1491,145 +1526,165 @@ pub mod cabi {
                 },
             }
 
-            let mut plans: Vec<Plan> = Vec::new();
-            let mut rgb_blob: Vec<u8> = Vec::new();
-            let mut tex_blob: Vec<u8> = Vec::new();
+            let mut draw_idx = 0usize;
+            let mut first_pass = true;
 
-            for draw in draws.iter() {
-                match draw {
-                    PendingDraw::Rgb { vertices, blend } => {
-                        const VTX_SIZE: usize = 12;
-                        let usable = vertices.len() - (vertices.len() % VTX_SIZE);
-                        if usable == 0 {
-                            continue;
-                        }
-                        let vcount = (usable / VTX_SIZE) as u32;
-                        let off = rgb_blob.len() as u64;
-                        rgb_blob.extend_from_slice(&vertices[..usable]);
-                        plans.push(Plan::Rgb {
-                            offset: off,
-                            vcount,
-                            blend: *blend,
-                        });
+            while draw_idx < draws.len() {
+                let start = draw_idx;
+                let mut pass_bytes = 0usize;
+                while draw_idx < draws.len() {
+                    let add = match &draws[draw_idx] {
+                        PendingDraw::Rgb { vertices, .. } => vertices.len() - (vertices.len() % 12),
+                        PendingDraw::Tex { vertices, .. } => vertices.len() - (vertices.len() % 20),
+                    };
+                    if add == 0 {
+                        draw_idx += 1;
+                        continue;
                     }
-                    PendingDraw::Tex {
-                        tex_id,
-                        sampler,
-                        vertices,
-                        blend,
-                    } => {
-                        const VTX_SIZE: usize = 20;
-                        let usable = vertices.len() - (vertices.len() % VTX_SIZE);
-                        if usable == 0 {
-                            continue;
+                    if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {
+                        break;
+                    }
+                    pass_bytes = pass_bytes.saturating_add(add);
+                    draw_idx += 1;
+                }
+
+                let mut plans: Vec<Plan> = Vec::new();
+                let mut rgb_blob: Vec<u8> = Vec::new();
+                let mut tex_blob: Vec<u8> = Vec::new();
+
+                for draw in draws[start..draw_idx].iter() {
+                    match draw {
+                        PendingDraw::Rgb { vertices, blend } => {
+                            const VTX_SIZE: usize = 12;
+                            let usable = vertices.len() - (vertices.len() % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = rgb_blob.len() as u64;
+                            rgb_blob.extend_from_slice(&vertices[..usable]);
+                            plans.push(Plan::Rgb {
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
                         }
-                        let vcount = (usable / VTX_SIZE) as u32;
-                        let off = tex_blob.len() as u64;
-                        tex_blob.extend_from_slice(&vertices[..usable]);
-                        plans.push(Plan::Tex {
-                            tex_id: *tex_id,
-                            sampler: *sampler,
-                            offset: off,
-                            vcount,
-                            blend: *blend,
-                        });
+                        PendingDraw::Tex {
+                            tex_id,
+                            image,
+                            sampler,
+                            vertices,
+                            blend,
+                        } => {
+                            const VTX_SIZE: usize = 20;
+                            let usable = vertices.len() - (vertices.len() % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = tex_blob.len() as u64;
+                            tex_blob.extend_from_slice(&vertices[..usable]);
+                            plans.push(Plan::Tex {
+                                tex_id: *tex_id,
+                                image: *image,
+                                sampler: *sampler,
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
+                        }
                     }
                 }
-            }
 
-            let mut rgb_res: Option<(PipelineId, BufferId)> = None;
-            if !rgb_blob.is_empty() {
-                let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, rgb_blob.len()) {
-                    Some(v) => v,
-                    None => return -4,
-                };
-                if ctx.write_buffer(vbuf, 0, rgb_blob.as_slice()).is_err() {
-                    return -5;
+                if plans.is_empty() {
+                    continue;
                 }
-                rgb_res = Some((pipeline, vbuf));
-            }
 
-            let mut tex_res: Option<(PipelineId, BufferId)> = None;
-            if !tex_blob.is_empty() {
-                let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len()) {
-                    Some(v) => v,
-                    None => return -6,
-                };
-                if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
-                    return -7;
+                let mut rgb_res: Option<(PipelineId, BufferId)> = None;
+                if !rgb_blob.is_empty() {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, rgb_blob.len()) {
+                        Some(v) => v,
+                        None => return -4,
+                    };
+                    if ctx.write_buffer(vbuf, 0, rgb_blob.as_slice()).is_err() {
+                        return -5;
+                    }
+                    rgb_res = Some((pipeline, vbuf));
                 }
-                tex_res = Some((pipeline, vbuf));
-            }
 
-            let mut cmds: Vec<Command> = Vec::new();
-            if need_set_viewport {
-                cmds.push(Command::SetViewport(vp));
-            }
-            cmds.push(Command::ClearColor { rgb: clear_rgb });
+                let mut tex_res: Option<(PipelineId, BufferId)> = None;
+                if !tex_blob.is_empty() {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len()) {
+                        Some(v) => v,
+                        None => return -6,
+                    };
+                    if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
+                        return -7;
+                    }
+                    tex_res = Some((pipeline, vbuf));
+                }
 
-            let mut last_blend: Option<BlendDesc> = None;
+                let is_last_pass = draw_idx >= draws.len();
+                let mut cmds: Vec<Command> = Vec::new();
+                if first_pass && need_set_viewport {
+                    cmds.push(Command::SetViewport(vp));
+                }
+                if first_pass {
+                    cmds.push(Command::ClearColor { rgb: clear_rgb });
+                }
 
-            for plan in plans.iter() {
-                match *plan {
-                    Plan::Rgb {
-                        offset,
-                        vcount,
-                        blend,
-                    } => {
-                        if last_blend != Some(blend) {
-                            cmds.push(Command::SetBlend(blend));
-                            last_blend = Some(blend);
-                        }
-                        let Some((pipeline, vbuf)) = rgb_res else {
-                            return -8;
-                        };
-                        cmds.push(Command::BindPipeline(pipeline));
-                        cmds.push(Command::BindVertexBuffer {
-                            buffer: vbuf,
+                let mut last_blend: Option<BlendDesc> = None;
+
+                for plan in plans.iter() {
+                    match *plan {
+                        Plan::Rgb {
                             offset,
-                        });
-                        cmds.push(Command::Draw {
-                            vertex_count: vcount,
-                            first_vertex: 0,
-                        });
-                    }
-                    Plan::Tex {
-                        tex_id,
-                        sampler,
-                        offset,
-                        vcount,
-                        blend,
-                    } => {
-                        if last_blend != Some(blend) {
-                            cmds.push(Command::SetBlend(blend));
-                            last_blend = Some(blend);
-                        }
-                        let Some((pipeline, vbuf)) = tex_res else {
-                            return -9;
-                        };
-                        let (image_id, log_missing_tex) = {
-                            let mut st = GFX_CABI_STATE.lock();
-                            let idx = tex_id.saturating_sub(1) as usize;
-
-                            // First: check if the texture already exists.
-                            let existing = {
-                                let images = st.tex_images.get_or_insert_with(Vec::new);
-                                if idx >= images.len() {
-                                    images.resize_with(idx + 1, || None);
-                                }
-                                images.get(idx).and_then(|e| e.as_ref()).map(|e| e.image)
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = rgb_res else {
+                                return -8;
                             };
-                            if let Some(img) = existing {
-                                (img, false)
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
+                        }
+                        Plan::Tex {
+                            tex_id,
+                            image,
+                            sampler,
+                            offset,
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = tex_res else {
+                                return -9;
+                            };
+                            let (image_id, log_missing_tex) = if image.is_valid() {
+                                (image, false)
                             } else {
-                                // Now that `images` borrow is dropped, we can touch other `st.*` fields.
+                                let mut st = GFX_CABI_STATE.lock();
+                                let idx = tex_id.saturating_sub(1) as usize;
                                 let should_log =
                                     st.missing_tex_logs < 16 && st.last_missing_tex_id != tex_id;
                                 if should_log {
                                     st.last_missing_tex_id = tex_id;
                                     st.missing_tex_logs = st.missing_tex_logs.saturating_add(1);
                                 }
-
                                 let desc = ImageDesc {
                                     width: 1,
                                     height: 1,
@@ -1640,8 +1695,6 @@ pub mod cabi {
                                 };
                                 let white = [255u8, 255u8, 255u8, 255u8];
                                 let _ = ctx.write_image(img, &white);
-
-                                // Re-borrow images to insert.
                                 let images = st.tex_images.get_or_insert_with(Vec::new);
                                 if idx >= images.len() {
                                     images.resize_with(idx + 1, || None);
@@ -1652,47 +1705,69 @@ pub mod cabi {
                                     height: 1,
                                 });
                                 (img, should_log)
+                            };
+                            if log_missing_tex {
+                                crate::globalog::log(format_args!(
+                                    "gfx-cabi: missing texture tex_id={} (using 1x1 fallback)\n",
+                                    tex_id
+                                ));
                             }
-                        };
-                        if log_missing_tex {
-                            crate::globalog::log(format_args!(
-                                "gfx-cabi: missing texture tex_id={} (using 1x1 fallback)\n",
-                                tex_id
-                            ));
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::SetSampler(sampler));
+                            cmds.push(Command::BindImage(image_id));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
                         }
-                        cmds.push(Command::BindPipeline(pipeline));
-                        cmds.push(Command::SetSampler(sampler));
-                        cmds.push(Command::BindImage(image_id));
-                        cmds.push(Command::BindVertexBuffer {
-                            buffer: vbuf,
-                            offset,
-                        });
-                        cmds.push(Command::Draw {
-                            vertex_count: vcount,
-                            first_vertex: 0,
-                        });
                     }
                 }
+
+                if is_last_pass {
+                    cmds.push(Command::Present);
+                }
+
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                } else {
+                    if let Err(e) = submit_res {
+                        crate::globalog::log(format_args!("gfx-cabi: submit failed: {:?}\n", e));
+                    }
+                    return -11;
+                }
+                first_pass = false;
             }
 
-            cmds.push(Command::Present);
-            let submit_res = ctx.submit(CommandBuffer {
-                commands: cmds.as_slice(),
-            });
-            if submit_res.is_ok() {
-                let mut st = GFX_CABI_STATE.lock();
-                st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
-            }
-            if submit_res.is_ok() {
-                0
-            } else {
-                // This used to be a silent -11, which is confusing because -11 is also used
-                // as NET_ERR_TIMEOUT in other C ABI code paths.
+            if first_pass {
+                // No valid draw payloads in this frame; keep clear/present behavior.
+                let mut cmds: Vec<Command> = Vec::new();
+                if need_set_viewport {
+                    cmds.push(Command::SetViewport(vp));
+                }
+                cmds.push(Command::ClearColor { rgb: clear_rgb });
+                cmds.push(Command::Present);
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                    return 0;
+                }
                 if let Err(e) = submit_res {
                     crate::globalog::log(format_args!("gfx-cabi: submit failed: {:?}\n", e));
                 }
-                -11
+                return -11;
             }
+            0
         }) else {
             return -12;
         };
