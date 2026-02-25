@@ -672,6 +672,5 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("tetris", &NO_ARGS, cmd::cmd_tetris);
         let _ = REGSHCMD("rain", &NO_ARGS, cmd::cmd_rain);
         let _ = REGSHCMD("insane", &[], cmd::cmd_insane);
-        let _ = REGSHCMD("gfx", &NO_ARGS, cmd::cmd_gfx);
     });
 }

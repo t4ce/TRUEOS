@@ -7,22 +7,10 @@ use alloc::vec::Vec;
 use core::ffi::{c_char, c_int, c_void};
 
 #[cfg(feature = "trueos")]
-pub mod trueos_smoke;
-
-#[cfg(feature = "trueos")]
 pub mod async_ops;
 
 #[cfg(feature = "trueos")]
 pub mod async_fs;
-
-#[cfg(feature = "trueos")]
-pub mod trueos_modules;
-
-#[cfg(feature = "trueos")]
-pub mod cmd_stream;
-
-#[cfg(feature = "trueos")]
-pub mod webgl;
 
 #[cfg(feature = "trueos")]
 pub mod trueos_module_loader;
@@ -56,12 +44,6 @@ pub mod threejs;
 
 #[cfg(feature = "trueos")]
 pub use pixi::hex as stream_gfx_smoke;
-
-#[cfg(feature = "trueos")]
-pub use pixi::pixi_gui as pixi_ui;
-
-#[cfg(feature = "trueos")]
-pub use pixi::webgl_smoke;
 
 #[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]

@@ -113,6 +113,23 @@ fn log_normalized(out: &[u8]) {
     trace_nl();
 }
 
+#[inline]
+unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
+    if ctx.is_null() {
+        return;
+    }
+    let s = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
+    let _ = qjs::JS_Throw(ctx, s);
+}
+
+#[inline]
+unsafe fn load_native_module(
+    _ctx: *mut qjs::JSContext,
+    _module_name: *const c_char,
+) -> *mut qjs::JSModuleDef {
+    core::ptr::null_mut()
+}
+
 fn path_is_relative(spec: &[u8]) -> bool {
     spec.starts_with(b"./") || spec.starts_with(b"../")
 }
@@ -713,7 +730,7 @@ unsafe fn load_url_module(
                 msg.extend_from_slice(cabi_rc_name(rc as i32));
                 msg.extend_from_slice(b") cache=");
                 msg.extend_from_slice(&cache_path);
-                qjs::trueos_modules::throw_error(ctx, &msg);
+                throw_error(ctx, &msg);
                 return core::ptr::null_mut();
             }
         }
@@ -733,7 +750,7 @@ unsafe fn load_url_module(
         msg.extend_from_slice(url);
         msg.extend_from_slice(b" cache=");
         msg.extend_from_slice(&cache_path);
-        qjs::trueos_modules::throw_error(ctx, &msg);
+        throw_error(ctx, &msg);
         return core::ptr::null_mut();
     }
     trace_str("qjs: url prefetch ok\n");
@@ -746,7 +763,7 @@ unsafe fn load_url_module(
             msg.extend_from_slice(url);
             msg.extend_from_slice(b" cache=");
             msg.extend_from_slice(&cache_path);
-            qjs::trueos_modules::throw_error(ctx, &msg);
+            throw_error(ctx, &msg);
             return core::ptr::null_mut();
         }
     };
@@ -830,7 +847,7 @@ unsafe fn load_fs_module(
             let mut msg = Vec::new();
             msg.extend_from_slice(b"read module failed path=");
             msg.extend_from_slice(path);
-            qjs::trueos_modules::throw_error(ctx, &msg);
+            throw_error(ctx, &msg);
             return core::ptr::null_mut();
         }
     };
@@ -859,7 +876,7 @@ pub(crate) unsafe extern "C" fn trueos_module_loader(
         log_str("qjs: loader spec=<null>\n");
     }
 
-    let m = qjs::trueos_modules::load_native_module(ctx, module_name);
+    let m = load_native_module(ctx, module_name);
     if !m.is_null() {
         trace_str("qjs: loader native ok\n");
         return m;

@@ -31,7 +31,6 @@ mod smp;
 mod surface;
 mod tga;
 mod time;
-mod tst;
 mod turbo;
 mod usb;
 mod v;

@@ -809,6 +809,12 @@ pub mod cabi {
     };
 
     const GFX_CABI_VBUF_RING_LEN: usize = 3;
+    // Shared draw chunk budget used by cmd-stream draw capture paths.
+    const MAX_CMDSTREAM_DRAW_BYTES: usize = 64 * 1024;
+    // Conservative pre-submit guard to avoid submit_3d request overflow.
+    const MAX_EST_SUBMIT_BYTES: usize = 240 * 1024;
+    static SUBMIT_BUDGET_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
 
     struct GfxCabiState {
         pipeline: PipelineId,
@@ -973,6 +979,31 @@ pub mod cabi {
     }
 
     static GFX_CABI_STATE: spin::Mutex<GfxCabiState> = spin::Mutex::new(GfxCabiState::new());
+
+    #[inline]
+    fn estimate_submit_bytes(draw_bytes: usize, command_count: usize) -> usize {
+        // Rough upper-bound proxy: encoded draw payload plus command stream overhead.
+        draw_bytes
+            .saturating_mul(2)
+            .saturating_add(command_count.saturating_mul(32))
+            .saturating_add(4096)
+    }
+
+    #[inline]
+    fn check_submit_budget(draw_bytes: usize, command_count: usize, site: &'static str) -> bool {
+        let est = estimate_submit_bytes(draw_bytes, command_count);
+        if est <= MAX_EST_SUBMIT_BYTES {
+            return true;
+        }
+        let n = SUBMIT_BUDGET_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if n < 16 {
+            crate::globalog::log(format_args!(
+                "gfx-cabi: submit budget exceeded site={} est={} draw={} cmds={} limit={}\n",
+                site, est, draw_bytes, command_count, MAX_EST_SUBMIT_BYTES
+            ));
+        }
+        false
+    }
 
     fn ensure_gfx_resources(
         ctx: &mut dyn GfxContext,
@@ -1209,6 +1240,9 @@ pub mod cabi {
                     },
                     Command::Present,
                 ];
+                if !check_submit_budget(usable, cmds.len(), "draw_rgb_triangles_vp") {
+                    return -5;
+                }
                 ctx.submit(CommandBuffer { commands: &cmds })
             } else {
                 let cmds = [
@@ -1224,6 +1258,9 @@ pub mod cabi {
                     },
                     Command::Present,
                 ];
+                if !check_submit_budget(usable, cmds.len(), "draw_rgb_triangles") {
+                    return -5;
+                }
                 ctx.submit(CommandBuffer { commands: &cmds })
             };
 
@@ -1361,7 +1398,6 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
-        const MAX_RGB_DRAW_BYTES: usize = 48 * 1024;
         if vtx_ptr.is_null() {
             return if vtx_len == 0 { 0 } else { -1 };
         }
@@ -1392,7 +1428,7 @@ pub mod cabi {
         let mut off = 0usize;
         while off < bytes.len() {
             let rem = bytes.len() - off;
-            let chunk = core::cmp::min(MAX_RGB_DRAW_BYTES, rem);
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
                 break;
@@ -1412,7 +1448,6 @@ pub mod cabi {
         vtx_ptr: *const u8,
         vtx_len: usize,
     ) -> i32 {
-        const MAX_TEX_DRAW_BYTES: usize = 64 * 1024;
         if tex_id == 0 {
             return -1;
         }
@@ -1455,7 +1490,7 @@ pub mod cabi {
         let mut off = 0usize;
         while off < bytes.len() {
             let rem = bytes.len() - off;
-            let chunk = core::cmp::min(MAX_TEX_DRAW_BYTES, rem);
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
                 break;
@@ -1731,6 +1766,13 @@ pub mod cabi {
                     cmds.push(Command::Present);
                 }
 
+                if !check_submit_budget(
+                    rgb_blob.len().saturating_add(tex_blob.len()),
+                    cmds.len(),
+                    "end_frame_pass",
+                ) {
+                    return -11;
+                }
                 let submit_res = ctx.submit(CommandBuffer {
                     commands: cmds.as_slice(),
                 });
@@ -1754,6 +1796,9 @@ pub mod cabi {
                 }
                 cmds.push(Command::ClearColor { rgb: clear_rgb });
                 cmds.push(Command::Present);
+                if !check_submit_budget(0, cmds.len(), "end_frame_clear_only") {
+                    return -11;
+                }
                 let submit_res = ctx.submit(CommandBuffer {
                     commands: cmds.as_slice(),
                 });

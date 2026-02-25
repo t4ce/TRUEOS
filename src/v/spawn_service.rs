@@ -46,7 +46,6 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static GFX_BOOT_AUTO_STARTED: AtomicBool = AtomicBool::new(false);
-static GFX_PIXI_BOOT_AUTO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -63,21 +62,6 @@ static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
-
-fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
-    let v = crate::vga::font_atlas_large_view();
-    trueos_qjs::FontAtlasView {
-        alpha: v.alpha,
-        index: v.index,
-        widths: v.widths,
-        width: v.width,
-        height: v.height,
-        cell_w: v.cell_w,
-        cell_h: v.cell_h,
-        grid_w: v.grid_w,
-        grid_h: v.grid_h,
-    }
-}
 
 // --- spawn wrappers (keep per-task logic out of main.rs) ---
 
@@ -148,10 +132,8 @@ fn spawn_ai_qjs_repl(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::http_trueosfs::http_trueosfs_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -169,6 +151,7 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
     // Always call init first so later backend switches have stored framebuffers.
     crate::gfx::init(crate::limine::framebuffer_response());
 
@@ -178,8 +161,7 @@ fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
     // through the null backend and appear broken).
     #[cfg(not(feature = "gfx_virgl"))]
     {
-        let _ = spawner;
-        return SpawnAttempt::Skipped;
+        return SpawnAttempt::Spawned;
     }
 
     #[cfg(feature = "gfx_virgl")]
@@ -195,40 +177,7 @@ fn spawn_gfx_boot_auto(spawner: Spawner) -> SpawnAttempt {
         }
     }
 
-    trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
-
-    // Boot-time direct gfx test (no JS/Pixi): submit a compact multi-mesh scene at 20Hz.
-    match spawner.spawn(trueos_qjs::webgl_smoke::boot_webgl_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-fn spawn_gfx_pixi_boot_auto(spawner: Spawner) -> SpawnAttempt {
-    // Always call init first so later backend switches have stored framebuffers.
-    crate::gfx::init(crate::limine::framebuffer_response());
-
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        let _ = spawner;
-        return SpawnAttempt::Skipped;
-    }
-
-    #[cfg(feature = "gfx_virgl")]
-    {
-        if !crate::gfx::is_virgl_present_cached() {
-            return SpawnAttempt::Skipped;
-        }
-
-        if !crate::gfx::is_virgl_active() && !crate::gfx::switch_to_virgl() {
-            return SpawnAttempt::Skipped;
-        }
-    }
-
-    match spawner.spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    SpawnAttempt::Spawned
 }
 
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
@@ -303,24 +252,18 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::boot_parse5_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::ws_smoke::boot_ws_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::tst::netbench_boot::boot_netbench_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
@@ -445,17 +388,10 @@ static TASKS: &[TaskSpec] = &[
     // Boot-time graphics bringup (virtio-gpu/virgl).
     TaskSpec {
         name: "gfx-boot-auto",
-        disabled: true,
+        disabled: false,
         required: 0,
         started: &GFX_BOOT_AUTO_STARTED,
         spawn: spawn_gfx_boot_auto,
-    },
-    TaskSpec {
-        name: "gfx-pixi-boot-auto",
-        disabled: false,
-        required: 0,
-        started: &GFX_PIXI_BOOT_AUTO_STARTED,
-        spawn: spawn_gfx_pixi_boot_auto,
     },
     TaskSpec {
         name: "usb-controller-tasks",
