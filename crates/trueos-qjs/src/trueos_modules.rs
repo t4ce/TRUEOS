@@ -7,8 +7,6 @@ use core::ffi::{c_char, c_int, CStr};
 use spin::Mutex;
 
 use crate as qjs;
-use crate::cmd_stream;
-use crate::webgl;
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -2314,7 +2312,6 @@ unsafe extern "C" fn qjs_cmd_stream_begin_frame(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::BeginFrame);
     qjs::JSValue::undefined()
 }
 
@@ -2324,7 +2321,6 @@ unsafe extern "C" fn qjs_cmd_stream_end_frame(
     _argc: c_int,
     _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::EndFrame);
     qjs::JSValue::undefined()
 }
 
@@ -2343,7 +2339,6 @@ unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
         return qjs::JSValue::undefined();
     }
     let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetClearColor { clear_rgb: rgb });
     qjs::JSValue::undefined()
 }
 
@@ -2366,7 +2361,6 @@ unsafe extern "C" fn qjs_cmd_stream_set_viewport(
     }
     let w = (w_f as i32).max(0);
     let h = (h_f as i32).max(0);
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetViewport { w, h });
     qjs::JSValue::undefined()
 }
 
@@ -2385,7 +2379,6 @@ unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
         return qjs::JSValue::undefined();
     }
     let enabled = enabled_f != 0.0;
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEnabled { enabled });
     qjs::JSValue::undefined()
 }
 
@@ -2410,13 +2403,6 @@ unsafe extern "C" fn qjs_cmd_stream_set_blend_func(
     {
         return qjs::JSValue::undefined();
     }
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendFunc {
-        src_rgb: (sr as i32).max(0) as u32,
-        dst_rgb: (dr as i32).max(0) as u32,
-        src_alpha: (sa as i32).max(0) as u32,
-        dst_alpha: (da as i32).max(0) as u32,
-    });
-    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn qjs_cmd_stream_set_blend_equation(
@@ -2431,16 +2417,6 @@ unsafe extern "C" fn qjs_cmd_stream_set_blend_equation(
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut rgb: f64 = 0.0;
     let mut alpha: f64 = 0.0;
-    if qjs::JS_ToFloat64(ctx, &mut rgb as *mut f64, args[0]) != 0
-        || qjs::JS_ToFloat64(ctx, &mut alpha as *mut f64, args[1]) != 0
-    {
-        return qjs::JSValue::undefined();
-    }
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::SetBlendEquation {
-        rgb: (rgb as i32).max(0) as u32,
-        alpha: (alpha as i32).max(0) as u32,
-    });
-    qjs::JSValue::undefined()
 }
 
 unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
@@ -2457,7 +2433,6 @@ unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
         return qjs::JSValue::undefined();
     };
     let bytes = core::slice::from_raw_parts(ptr, len).to_vec();
-    cmd_stream::enqueue(cmd_stream::CmdStreamCommand::DrawTriangles { vertices: bytes });
     qjs::JSValue::undefined()
 }
 

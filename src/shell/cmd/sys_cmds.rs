@@ -140,60 +140,6 @@ pub(crate) fn cmd_hv(
     CommandAction::None
 }
 
-pub(crate) fn cmd_gfx(
-    ctx: &mut ShellCommandCtx<'_>,
-    _args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    crate::gfx::init(crate::limine::framebuffer_response());
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        ctx.io.write_str("gfx: gfx_virgl not enabled; cannot start pixi_ui\r\n");
-        return CommandAction::None;
-    }
-
-    #[cfg(feature = "gfx_virgl")]
-    {
-        if !crate::gfx::is_virgl_present_cached() {
-            ctx.io
-                .write_str("gfx: virgl/virtio-gpu not ready yet; skipping launch\r\n");
-            return CommandAction::None;
-        }
-        if !crate::gfx::is_virgl_active() && !crate::gfx::switch_to_virgl() {
-            ctx.io.write_str("gfx: virgl backend switch failed\r\n");
-            return CommandAction::None;
-        }
-    }
-
-    // match ctx
-    //     .spawner
-    //     .spawn(trueos_qjs::stream_gfx_smoke::boot_stream_gfx_smoke_task())
-    // {
-    //     Ok(()) => ctx.io.write_str("gfx: started stream_gfx_smoke task (20Hz)\r\n"),
-    //     Err(e) => ctx.io.write_fmt(format_args!(
-    //         "gfx: stream_gfx_smoke task spawn failed: {:?}\r\n",
-    //         e
-    //     )),
-    // }
-    match ctx.spawner.spawn(trueos_qjs::pixi_ui::boot_pixi_ui_task()) {
-        Ok(()) => ctx.io.write_str("gfx: started pixi_ui task (20Hz)\r\n"),
-        Err(e) => ctx
-            .io
-            .write_fmt(format_args!("gfx: pixi_ui task spawn failed: {:?}\r\n", e)),
-    }
-
-    // match ctx
-    //     .spawner
-    //     .spawn(trueos_qjs::webgl_smoke::boot_webgl_smoke_task())
-    // {
-    //     Ok(()) => ctx.io.write_str("gfx: started webgl_smoke task (20Hz, no-qjs)\r\n"),
-    //     Err(e) => ctx.io.write_fmt(format_args!(
-    //         "gfx: webgl_smoke task spawn failed: {:?}\r\n",
-    //         e
-    //     )),
-    // }
-    CommandAction::None
-}
-
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",
@@ -838,23 +784,9 @@ pub(crate) fn cmd_net_http(
         }
     }
 
-    match crate::matrix::alloc_slot(title.as_str()) {
-        Some(slot) => {
-            let mut u: heapless::String<256> = heapless::String::new();
-            for ch in url.chars() {
-                if u.push(ch).is_err() {
-                    break;
-                }
-            }
-            let _ = ctx
-                .spawner
-                .spawn(crate::tst::html::http_get_matrix_job(slot, u));
-            ctx.io
-                .write_fmt(format_args!("net.http: started §{}\r\n", slot + 1));
-            crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-        }
-        None => ctx.io.write_str("net.http: matrix full\r\n"),
-    }
+    let _ = title;
+    ctx.io
+        .write_str("net.http: disabled (tst module removed)\r\n");
 
     CommandAction::None
 }
@@ -874,23 +806,9 @@ pub(crate) fn cmd_net_https(
         }
     }
 
-    match crate::matrix::alloc_slot(title.as_str()) {
-        Some(slot) => {
-            let mut h: heapless::String<96> = heapless::String::new();
-            for ch in host.chars() {
-                if h.push(ch).is_err() {
-                    break;
-                }
-            }
-            let _ = ctx
-                .spawner
-                .spawn(crate::tst::tls_demo::tls_demo_matrix_job(slot, h));
-            ctx.io
-                .write_fmt(format_args!("net.https: started §{}\r\n", slot + 1));
-            crate::matrix::refresh_matrix_symbols(ctx.io, *ctx.term_cols);
-        }
-        None => ctx.io.write_str("net.https: matrix full\r\n"),
-    }
+    let _ = title;
+    ctx.io
+        .write_str("net.https: disabled (tst module removed)\r\n");
 
     CommandAction::None
 }
