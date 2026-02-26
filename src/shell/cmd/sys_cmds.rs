@@ -144,16 +144,16 @@ pub(crate) fn cmd_gfx(
     ctx: &mut ShellCommandCtx<'_>,
     _args: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
-    let next = match crate::gfx::display_source() {
-        crate::gfx::DisplaySource::Gfx => crate::gfx::DisplaySource::Vga,
-        crate::gfx::DisplaySource::Vga => crate::gfx::DisplaySource::Gfx,
+    let next = match crate::gfx::present_owner() {
+        crate::gfx::PresentOwner::Forward => crate::gfx::PresentOwner::Pixi,
+        crate::gfx::PresentOwner::Pixi => crate::gfx::PresentOwner::Forward,
     };
-    crate::gfx::set_display_source(next);
-    let src = match next {
-        crate::gfx::DisplaySource::Gfx => "gfx",
-        crate::gfx::DisplaySource::Vga => "vga",
+    crate::gfx::set_present_owner(next);
+    let owner = match next {
+        crate::gfx::PresentOwner::Forward => "forward",
+        crate::gfx::PresentOwner::Pixi => "pixi",
     };
-    ctx.io.write_fmt(format_args!("gfx: source={}\r\n", src));
+    ctx.io.write_fmt(format_args!("gfx: owner={}\r\n", owner));
     CommandAction::None
 }
 
@@ -162,12 +162,12 @@ pub(crate) fn cmd_gfx_status(
     _args: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
     let swapped = if crate::vga::vga_swapped() { 1 } else { 0 };
-    let src = match crate::gfx::display_source() {
-        crate::gfx::DisplaySource::Gfx => "gfx",
-        crate::gfx::DisplaySource::Vga => "vga",
+    let owner = match crate::gfx::present_owner() {
+        crate::gfx::PresentOwner::Forward => "forward",
+        crate::gfx::PresentOwner::Pixi => "pixi",
     };
     ctx.io
-        .write_fmt(format_args!("gfx: swapped={} source={}\r\n", swapped, src));
+        .write_fmt(format_args!("gfx: swapped={} owner={}\r\n", swapped, owner));
     CommandAction::None
 }
 

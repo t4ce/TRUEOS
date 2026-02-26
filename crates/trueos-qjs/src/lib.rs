@@ -64,19 +64,36 @@ pub struct FontAtlasView<'a> {
 
 #[cfg(feature = "trueos")]
 pub type FontAtlasSmallProvider = fn() -> FontAtlasView<'static>;
+#[cfg(feature = "trueos")]
+pub type FontAtlasLargeProvider = fn() -> FontAtlasView<'static>;
 
 #[cfg(feature = "trueos")]
 static FONT_ATLAS_SMALL_PROVIDER: spin::Mutex<Option<FontAtlasSmallProvider>> =
+    spin::Mutex::new(None);
+#[cfg(feature = "trueos")]
+static FONT_ATLAS_LARGE_PROVIDER: spin::Mutex<Option<FontAtlasLargeProvider>> =
     spin::Mutex::new(None);
 
 #[cfg(feature = "trueos")]
 pub fn set_font_atlas_small_provider(provider: FontAtlasSmallProvider) {
     *FONT_ATLAS_SMALL_PROVIDER.lock() = Some(provider);
 }
+#[cfg(feature = "trueos")]
+pub fn set_font_atlas_large_provider(provider: FontAtlasLargeProvider) {
+    *FONT_ATLAS_LARGE_PROVIDER.lock() = Some(provider);
+}
 
 #[cfg(feature = "trueos")]
 pub fn font_atlas_small_view() -> Option<FontAtlasView<'static>> {
     FONT_ATLAS_SMALL_PROVIDER
+        .lock()
+        .as_ref()
+        .copied()
+        .map(|f| f())
+}
+#[cfg(feature = "trueos")]
+pub fn font_atlas_large_view() -> Option<FontAtlasView<'static>> {
+    FONT_ATLAS_LARGE_PROVIDER
         .lock()
         .as_ref()
         .copied()

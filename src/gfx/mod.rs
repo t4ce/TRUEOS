@@ -15,7 +15,7 @@ use trueos_gfx_core::GfxContext;
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static CPU_BACKBUFFER: Once<Mutex<Option<CpuBackbuffer>>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
-static DISPLAY_SOURCE: AtomicU8 = AtomicU8::new(0);
+static PRESENT_OWNER: AtomicU8 = AtomicU8::new(0);
 
 // Frame completion register.
 //
@@ -93,22 +93,37 @@ fn bump_backend_epoch() {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum DisplaySource {
-    Gfx = 0,
-    Vga = 1,
+pub enum PresentOwner {
+    Forward = 0,
+    Pixi = 1,
 }
 
 #[inline]
-pub fn display_source() -> DisplaySource {
-    match DISPLAY_SOURCE.load(Ordering::Relaxed) {
-        1 => DisplaySource::Vga,
-        _ => DisplaySource::Gfx,
+pub fn present_owner() -> PresentOwner {
+    match PRESENT_OWNER.load(Ordering::Relaxed) {
+        1 => PresentOwner::Pixi,
+        _ => PresentOwner::Forward,
     }
 }
 
 #[inline]
-pub fn set_display_source(src: DisplaySource) {
-    DISPLAY_SOURCE.store(src as u8, Ordering::Relaxed);
+pub fn set_present_owner(owner: PresentOwner) {
+    PRESENT_OWNER.store(owner as u8, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gfx_present_owner_set(owner: u32) {
+    let o = if owner == 1 {
+        PresentOwner::Pixi
+    } else {
+        PresentOwner::Forward
+    };
+    set_present_owner(o);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gfx_present_owner_get() -> u32 {
+    present_owner() as u32
 }
 
 pub struct System {

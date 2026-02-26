@@ -33,11 +33,117 @@ unsafe extern "C" {
         eq_alpha: u32,
     ) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
+    fn trueos_cabi_gfx_draw_tex_triangles_no_present(
+        tex_id: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32;
+    fn trueos_cabi_gfx_upload_texture_rgba(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    fn trueos_cabi_gfx_set_sampler(wrap_u: u32, wrap_v: u32, min_filter: u32, mag_filter: u32) -> i32;
+    fn trueos_cabi_gfx_present_owner_get() -> u32;
 }
 
 include!("../../../src/surface/cabi_codes.rs");
 
 static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0x000000);
+static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
+static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
+static CMD_STREAM_FONT_TEX_READY: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
+const CMD_STREAM_FONT_TEX_ID: u32 = 1024;
+
+#[inline]
+fn cmd_stream_push_vtx(
+    out: &mut Vec<u8>,
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    out.extend_from_slice(&x.to_le_bytes());
+    out.extend_from_slice(&y.to_le_bytes());
+    out.extend_from_slice(&u.to_le_bytes());
+    out.extend_from_slice(&v.to_le_bytes());
+    out.push(r);
+    out.push(g);
+    out.push(b);
+    out.push(a);
+}
+
+fn cmd_stream_ensure_font_texture() -> Option<qjs::FontAtlasView<'static>> {
+    let atlas = qjs::font_atlas_large_view().or_else(qjs::font_atlas_small_view)?;
+    if CMD_STREAM_FONT_TEX_READY.load(Ordering::Acquire) != 0 {
+        return Some(atlas);
+    }
+    let px = atlas.alpha.len();
+    if px == 0 {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(px.saturating_mul(4));
+    for &a in atlas.alpha.iter() {
+        rgba.push(255);
+        rgba.push(255);
+        rgba.push(255);
+        rgba.push(a);
+    }
+    let rc = unsafe {
+        trueos_cabi_gfx_upload_texture_rgba(
+            CMD_STREAM_FONT_TEX_ID,
+            atlas.width,
+            atlas.height,
+            rgba.as_ptr(),
+            rgba.len(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let _ = unsafe { trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
+    CMD_STREAM_FONT_TEX_READY.store(1, Ordering::Release);
+    Some(atlas)
+}
+
+#[inline]
+fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
+    match mode {
+        // Add
+        1 => {
+            let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 1, 1, 1, 0, 0) };
+        }
+        // Multiply
+        2 => {
+            let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0306, 0x0303, 0x0306, 0x0303, 0, 0) };
+        }
+        // Screen
+        3 => {
+            let _ = unsafe { trueos_cabi_gfx_set_blend(1, 1, 0x0301, 1, 0x0301, 0, 0) };
+        }
+        // Normal
+        _ => {
+            if pma {
+                let _ = unsafe { trueos_cabi_gfx_set_blend(1, 1, 0x0303, 1, 0x0303, 0, 0) };
+            } else {
+                let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
+            }
+        }
+    }
+}
+
+#[inline]
+fn cmd_stream_owner_is_pixi() -> bool {
+    unsafe { trueos_cabi_gfx_present_owner_get() == 1 }
+}
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -153,6 +259,9 @@ unsafe fn load_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !cmd_stream_owner_is_pixi() {
+                return qjs::JSValue::undefined();
+            }
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
             let _ = trueos_cabi_gfx_begin_frame(clear);
             qjs::JSValue::undefined()
@@ -164,6 +273,9 @@ unsafe fn load_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !cmd_stream_owner_is_pixi() {
+                return qjs::JSValue::undefined();
+            }
             let _ = trueos_cabi_gfx_end_frame();
             qjs::JSValue::undefined()
         }
@@ -188,12 +300,26 @@ unsafe fn load_native_module(
         }
 
         unsafe extern "C" fn qjs_cmd_stream_set_viewport(
-            _ctx: *mut qjs::JSContext,
+            ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
-            _argc: i32,
-            _argv: *const qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            // Current gfx-cabi path consumes NDC vertex positions; viewport is implicit.
+            if argv.is_null() || argc < 2 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut w_f: f64 = 0.0;
+            let mut h_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[1]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+            let w = (w_f as i64).max(1) as u32;
+            let h = (h_f as i64).max(1) as u32;
+            CMD_STREAM_VIEW_W.store(w, Ordering::Relaxed);
+            CMD_STREAM_VIEW_H.store(h, Ordering::Relaxed);
             qjs::JSValue::undefined()
         }
 
@@ -212,12 +338,50 @@ unsafe fn load_native_module(
                 return qjs::JSValue::undefined();
             }
             if enabled_f != 0.0 {
-                // src alpha / one-minus-src-alpha
-                let _ = trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 1, 0, 0, 0);
+                let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+                let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+                cmd_stream_apply_blend_mode(mode, pma);
             } else {
                 // disabled
                 let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
             }
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut mode_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            let mode = ((mode_f as i64).clamp(0, 3)) as u32;
+            CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_set_premultiplied_alpha(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut pma_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut pma_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
             qjs::JSValue::undefined()
         }
 
@@ -227,6 +391,9 @@ unsafe fn load_native_module(
             argc: i32,
             argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
+            if !cmd_stream_owner_is_pixi() {
+                return qjs::JSValue::undefined();
+            }
             if argv.is_null() || argc < 1 {
                 return qjs::JSValue::undefined();
             }
@@ -268,6 +435,195 @@ unsafe fn load_native_module(
             qjs::JSValue::undefined()
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if !cmd_stream_owner_is_pixi() {
+                return qjs::JSValue::undefined();
+            }
+            if argv.is_null() || argc < 2 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+
+            let mut tex_id_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut tex_id_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            if tex_id == 0 {
+                return qjs::JSValue::undefined();
+            }
+
+            let mut byte_off: usize = 0;
+            let mut byte_len: usize = 0;
+            let mut bpe: usize = 0;
+            let ab = qjs::JS_GetTypedArrayBuffer(
+                ctx,
+                args[1],
+                &mut byte_off as *mut usize,
+                &mut byte_len as *mut usize,
+                &mut bpe as *mut usize,
+            );
+
+            if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED && ab.tag != qjs::JS_TAG_NULL {
+                let mut buf_len: usize = 0;
+                let ptr = qjs::JS_GetArrayBuffer(ctx, &mut buf_len as *mut usize, ab);
+                if !ptr.is_null() {
+                    let usable = core::cmp::min(byte_len, buf_len.saturating_sub(byte_off));
+                    let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(
+                        tex_id,
+                        ptr.add(byte_off) as *const u8,
+                        usable,
+                    );
+                }
+                qjs::js_free_value(ctx, ab);
+                return qjs::JSValue::undefined();
+            }
+            if !ab.is_exception() {
+                qjs::js_free_value(ctx, ab);
+            }
+
+            let mut len: usize = 0;
+            let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[1]);
+            if !ptr.is_null() && len > 0 {
+                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr as *const u8, len);
+            }
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_draw_text(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if !cmd_stream_owner_is_pixi() {
+                return qjs::JSValue::undefined();
+            }
+            if argv.is_null() || argc < 3 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut text_len: usize = 0;
+            let text_c = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[0], 0);
+            if text_c.is_null() || text_len == 0 {
+                if !text_c.is_null() {
+                    qjs::JS_FreeCString(ctx, text_c);
+                }
+                return qjs::JSValue::undefined();
+            }
+
+            let mut x_f: f64 = 0.0;
+            let mut y_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[1]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[2]) != 0
+            {
+                qjs::JS_FreeCString(ctx, text_c);
+                return qjs::JSValue::undefined();
+            }
+            let mut px_h: f64 = 26.0;
+            if argc >= 4 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut px_h as *mut f64, args[3]);
+            }
+            let mut rgb_f: f64 = 0xEAF4FF as f64;
+            if argc >= 5 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut rgb_f as *mut f64, args[4]);
+            }
+            let mut alpha_f: f64 = 255.0;
+            if argc >= 6 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut alpha_f as *mut f64, args[5]);
+            }
+
+            let Some(atlas) = cmd_stream_ensure_font_texture() else {
+                qjs::JS_FreeCString(ctx, text_c);
+                return qjs::JSValue::undefined();
+            };
+            let text = core::slice::from_raw_parts(text_c as *const u8, text_len);
+            let w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+            let h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+            let atlas_w = atlas.width.max(1) as f32;
+            let atlas_h = atlas.height.max(1) as f32;
+            let grid_w = atlas.grid_w.max(1);
+            let cell_h = atlas.cell_h.max(1) as f32;
+            let scale = if px_h <= 0.0 {
+                1.0
+            } else {
+                ((px_h as f32) / cell_h).max(0.1)
+            };
+            let rgb = ((rgb_f as i64).max(0) as u32) & 0x00FF_FFFF;
+            let r = ((rgb >> 16) & 0xFF) as u8;
+            let g = ((rgb >> 8) & 0xFF) as u8;
+            let b = (rgb & 0xFF) as u8;
+            let a = ((alpha_f as i64).clamp(0, 255)) as u8;
+
+            let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+            let mut pen_x = x_f as f32;
+            let pen_y = y_f as f32;
+            let mut verts = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+
+            for &ch in text.iter() {
+                if ch == b'\n' {
+                    pen_x = x_f as f32;
+                    continue;
+                }
+                if ch == b' ' {
+                    pen_x += (atlas.cell_w as f32) * scale * 0.6;
+                    continue;
+                }
+                let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+                if slot == u16::MAX {
+                    slot = fallback;
+                }
+                let glyph_w_px = atlas
+                    .widths
+                    .get(slot as usize)
+                    .copied()
+                    .unwrap_or(atlas.cell_w as u8) as f32;
+                let glyph_h_px = atlas.cell_h as f32;
+
+                let sx = (slot as u32) % grid_w;
+                let sy = (slot as u32) / grid_w;
+                let px0 = (sx * atlas.cell_w) as f32;
+                let py0 = (sy * atlas.cell_h) as f32;
+                let u0 = px0 / atlas_w;
+                let v0 = py0 / atlas_h;
+                let u1 = (px0 + glyph_w_px) / atlas_w;
+                let v1 = (py0 + glyph_h_px) / atlas_h;
+
+                let x0 = pen_x;
+                let y0 = pen_y;
+                let x1 = x0 + glyph_w_px * scale;
+                let y1 = y0 + glyph_h_px * scale;
+
+                let nx0 = (2.0 * (x0 / w)) - 1.0;
+                let ny0 = 1.0 - (2.0 * (y0 / h));
+                let nx1 = (2.0 * (x1 / w)) - 1.0;
+                let ny1 = 1.0 - (2.0 * (y1 / h));
+
+                cmd_stream_push_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_vtx(&mut verts, nx1, ny1, u1, v1, r, g, b, a);
+                cmd_stream_push_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_vtx(&mut verts, nx0, ny0, u0, v0, r, g, b, a);
+                pen_x += (glyph_w_px * scale) + (glyph_h_px * scale * 0.08);
+            }
+
+            if !verts.is_empty() {
+                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(
+                    CMD_STREAM_FONT_TEX_ID,
+                    verts.as_ptr(),
+                    verts.len(),
+                );
+            }
+            qjs::JS_FreeCString(ctx, text_c);
+            qjs::JSValue::undefined()
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_module_init(
             ctx: *mut qjs::JSContext,
             m: *mut qjs::JSModuleDef,
@@ -291,7 +647,15 @@ unsafe fn load_native_module(
             export_fn!("setClearRgb", qjs_cmd_stream_set_clear_rgb, 1);
             export_fn!("setViewport", qjs_cmd_stream_set_viewport, 2);
             export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
+            export_fn!("setBlendMode", qjs_cmd_stream_set_blend_mode, 1);
+            export_fn!("setPremultipliedAlpha", qjs_cmd_stream_set_premultiplied_alpha, 1);
             export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
+            export_fn!(
+                "drawTexturedTrianglesU8",
+                qjs_cmd_stream_draw_textured_triangles_u8,
+                2
+            );
+            export_fn!("drawText", qjs_cmd_stream_draw_text, 6);
             0
         }
 
@@ -310,7 +674,11 @@ unsafe fn load_native_module(
         add_export!("setClearRgb");
         add_export!("setViewport");
         add_export!("setBlendEnabled");
+        add_export!("setBlendMode");
+        add_export!("setPremultipliedAlpha");
         add_export!("drawTrianglesU8");
+        add_export!("drawTexturedTrianglesU8");
+        add_export!("drawText");
         return m;
     }
 

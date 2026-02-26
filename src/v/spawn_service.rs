@@ -209,7 +209,7 @@ async fn gfx_vga_swap_forward_task() {
                 Timer::after(EmbassyDuration::from_millis(33)).await;
                 continue;
             }
-            if matches!(crate::gfx::display_source(), crate::gfx::DisplaySource::Vga) {
+            if !matches!(crate::gfx::present_owner(), crate::gfx::PresentOwner::Forward) {
                 Timer::after(EmbassyDuration::from_millis(16)).await;
                 continue;
             }
@@ -352,6 +352,10 @@ async fn webgpu_mesh_task() {
             return;
         }
     }
+
+    // Reserve presenter ownership for the text demo so forward-task doesn't
+    // race and overwrite frames during the 2.5s text window.
+    crate::gfx::set_present_owner(crate::gfx::PresentOwner::Pixi);
 
     const TEX_ID: u32 = 1;
     let atlas = crate::gfx::webgpu_font::font_atlas_large_view();
@@ -508,6 +512,14 @@ async fn webgpu_mesh_task() {
         ticks
     };
     let phase_a_start = now();
+    let mut swapped = false;
+    let mut hold_start_ticks: u64 = 0;
+    let hold_ms: u64 = 2500;
+    let hold_ticks = if TICK_HZ == 0 {
+        0
+    } else {
+        hold_ms.saturating_mul(TICK_HZ).div_ceil(1000).max(1)
+    };
     loop {
         let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
         if len != 0 {
@@ -519,8 +531,9 @@ async fn webgpu_mesh_task() {
         }
         let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
         Timer::after(EmbassyDuration::from_millis(16)).await;
-        let elapsed_ticks = now().saturating_sub(phase_a_start);
-        if swap_ticks != 0 && elapsed_ticks >= swap_ticks {
+        let now_ticks = now();
+        let elapsed_ticks = now_ticks.saturating_sub(phase_a_start);
+        if !swapped && swap_ticks != 0 && elapsed_ticks >= swap_ticks {
             let elapsed_ms = if TICK_HZ == 0 {
                 0
             } else {
@@ -533,8 +546,12 @@ async fn webgpu_mesh_task() {
             );
             crate::vga::mark_vga_swapped();
             crate::log!("wgpu_text: hold GFX mode for 2500ms\n");
-            Timer::after(EmbassyDuration::from_millis(2500)).await;
+            swapped = true;
+            hold_start_ticks = now_ticks;
+        }
+        if swapped && hold_ticks != 0 && now_ticks.saturating_sub(hold_start_ticks) >= hold_ticks {
             crate::log!("wgpu_text: text phase done; handoff to VGA-buffer-on-GFX\n");
+            crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
             crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
             return;
         }

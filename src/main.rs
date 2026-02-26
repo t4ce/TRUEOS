@@ -46,6 +46,36 @@ pub(crate) use shell::matrix;
 pub use surface::pat as pattern;
 pub use surface::{io, path};
 
+fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
+    let atlas = crate::gfx::webgpu_font::font_atlas_small_view();
+    trueos_qjs::FontAtlasView {
+        alpha: atlas.alpha,
+        index: atlas.index,
+        widths: atlas.widths,
+        width: atlas.width,
+        height: atlas.height,
+        cell_w: atlas.cell_w,
+        cell_h: atlas.cell_h,
+        grid_w: atlas.grid_w,
+        grid_h: atlas.grid_h,
+    }
+}
+
+fn qjs_font_atlas_large_provider() -> trueos_qjs::FontAtlasView<'static> {
+    let atlas = crate::gfx::webgpu_font::font_atlas_large_view();
+    trueos_qjs::FontAtlasView {
+        alpha: atlas.alpha,
+        index: atlas.index,
+        widths: atlas.widths,
+        width: atlas.width,
+        height: atlas.height,
+        cell_w: atlas.cell_w,
+        cell_h: atlas.cell_h,
+        grid_w: atlas.grid_w,
+        grid_h: atlas.grid_h,
+    }
+}
+
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
 const BSP_BOOT_STACK_BYTES: usize = 8 * 1024 * 1024;
 
@@ -108,6 +138,8 @@ pub extern "C" fn kmain() -> ! {
     pci::enumerate_impl();
     vga::init(limine::framebuffer_response());
     vga::cube::tick();
+    trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
+    trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
 
     usb::xhci::init_once();
     usb::truekey::init();
