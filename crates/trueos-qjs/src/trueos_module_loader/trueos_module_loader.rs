@@ -50,7 +50,7 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_present_owner_get() -> u32;
 }
 
-include!("../../../src/surface/cabi_codes.rs");
+include!("../../../../src/surface/cabi_codes.rs");
 
 static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0x000000);
 static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
@@ -60,6 +60,22 @@ static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
 static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 static CMD_STREAM_ATLAS_TRACE_LOGS: AtomicU32 = AtomicU32::new(0);
+const CMD_STREAM_TEXT_CACHE_CAP: usize = 16;
+
+struct CmdStreamTextMeshCacheEntry {
+    kind: u32,
+    view_w: u32,
+    view_h: u32,
+    x_bits: u32,
+    y_bits: u32,
+    px_h_bits: u32,
+    rgb: u32,
+    alpha: u8,
+    text: Vec<u8>,
+    verts: Vec<u8>,
+}
+
+static CMD_STREAM_TEXT_MESH_CACHE: Mutex<Vec<CmdStreamTextMeshCacheEntry>> = Mutex::new(Vec::new());
 
 #[inline]
 fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
@@ -127,9 +143,9 @@ fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::FontAtlasView<'static
     }
     let mut rgba = Vec::with_capacity(px.saturating_mul(4));
     for &a in atlas.alpha.iter() {
-        // Atlas-mask upload: store coverage in red channel.
-        // Some virgl paths appear to mishandle sampled alpha; text shader
-        // derives coverage from sampled .r for atlas text draws.
+        // Atlas-mask upload: keep coverage in red.
+        // FS_TEX uses min(sample.r, sample.a), so this stays robust even if
+        // sampled alpha handling differs across virgl paths.
         rgba.push(a);
         rgba.push(0);
         rgba.push(0);
@@ -157,16 +173,6 @@ fn cmd_stream_push_tex_vtx(
     out.extend_from_slice(&y.to_le_bytes());
     out.extend_from_slice(&u.to_le_bytes());
     out.extend_from_slice(&v.to_le_bytes());
-    out.push(r);
-    out.push(g);
-    out.push(b);
-    out.push(a);
-}
-
-#[inline]
-fn cmd_stream_push_rgb_vtx(out: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8, a: u8) {
-    out.extend_from_slice(&x.to_le_bytes());
-    out.extend_from_slice(&y.to_le_bytes());
     out.push(r);
     out.push(g);
     out.push(b);
@@ -852,26 +858,56 @@ unsafe fn load_native_module(
                 log_str(msg.as_str());
                 CMD_STREAM_ATLAS_TRACE_LOGS.fetch_add(1, Ordering::Relaxed);
             }
-            let w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
-            let h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+            let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
+            let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
+            let w = view_w as f32;
+            let h = view_h as f32;
             let grid_w = atlas.grid_w.max(1);
             let cell_h = atlas.cell_h.max(1);
-            let scale = if px_h <= 0.0 {
-                1.0
-            } else {
-                ((px_h as f32) / (cell_h as f32)).max(0.1)
-            };
+            // Keep atlas-native text size for now; ignore requested fontSize.
+            let _ = px_h;
+            let scale = 1.0f32;
             let rgb = ((rgb_f as i64).max(0) as u32) & 0x00FF_FFFF;
             let r = ((rgb >> 16) & 0xFF) as u8;
             let g = ((rgb >> 8) & 0xFF) as u8;
             let b = (rgb & 0xFF) as u8;
             let a = ((alpha_f as i64).clamp(0, 255)) as u8;
+            let x_bits = (x_f as f32).to_bits();
+            let y_bits = (y_f as f32).to_bits();
+            let px_h_bits = (px_h as f32).to_bits();
+            let text_owned = text.to_vec();
+
+            {
+                let cache = CMD_STREAM_TEXT_MESH_CACHE.lock();
+                if let Some(entry) = cache.iter().find(|e| {
+                    e.kind == kind
+                        && e.view_w == view_w
+                        && e.view_h == view_h
+                        && e.x_bits == x_bits
+                        && e.y_bits == y_bits
+                        && e.px_h_bits == px_h_bits
+                        && e.rgb == rgb
+                        && e.alpha == a
+                        && e.text.as_slice() == text_owned.as_slice()
+                }) {
+                    if !entry.verts.is_empty() {
+                        let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(
+                            tex_id,
+                            entry.verts.as_ptr(),
+                            entry.verts.len(),
+                        );
+                    }
+                    qjs::JS_FreeCString(ctx, text_c);
+                    return qjs::JSValue::undefined();
+                }
+            }
 
             let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
             let mut pen_x = x_f as f32;
             let pen_y = y_f as f32;
-            let mut verts = Vec::with_capacity(text.len().saturating_mul(6 * 12 * 32));
-            let atlas_w_u = atlas.width as usize;
+            let mut verts = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+            let atlas_w_f = (atlas.width.max(1)) as f32;
+            let atlas_h_f = (atlas.height.max(1)) as f32;
             let atlas_cell_w_u = atlas.cell_w as usize;
             let atlas_cell_h_u = atlas.cell_h as usize;
 
@@ -893,49 +929,59 @@ unsafe fn load_native_module(
                     .get(slot as usize)
                     .copied()
                     .unwrap_or(atlas.cell_w as u8) as usize;
-                let glyph_h_u = atlas_cell_h_u;
+                let glyph_h_u = atlas_cell_h_u.max(1);
 
                 let sx = (slot as u32) % grid_w;
                 let sy = (slot as u32) / grid_w;
-                let px0 = (sx as usize).saturating_mul(atlas_cell_w_u);
-                let py0 = (sy as usize).saturating_mul(atlas_cell_h_u);
+                let px0 = (sx as f32) * (atlas.cell_w as f32);
+                let py0 = (sy as f32) * (atlas.cell_h as f32);
+                let px1 = px0 + (glyph_w_u as f32);
+                let py1 = py0 + (glyph_h_u as f32);
 
-                for gy in 0..glyph_h_u {
-                    for gx in 0..glyph_w_u {
-                        let ix = py0
-                            .saturating_add(gy)
-                            .saturating_mul(atlas_w_u)
-                            .saturating_add(px0.saturating_add(gx));
-                        let cov = atlas.alpha.get(ix).copied().unwrap_or(0);
-                        if cov == 0 {
-                            continue;
-                        }
-                        let out_a = ((cov as u16).saturating_mul(a as u16) / 255) as u8;
-                        if out_a == 0 {
-                            continue;
-                        }
-                        let x0 = pen_x + (gx as f32) * scale;
-                        let y0 = pen_y + (gy as f32) * scale;
-                        let x1 = x0 + scale;
-                        let y1 = y0 + scale;
-                        let nx0 = (2.0 * (x0 / w)) - 1.0;
-                        let ny0 = 1.0 - (2.0 * (y0 / h));
-                        let nx1 = (2.0 * (x1 / w)) - 1.0;
-                        let ny1 = 1.0 - (2.0 * (y1 / h));
+                let u0 = px0 / atlas_w_f;
+                let v0 = py0 / atlas_h_f;
+                let u1 = px1 / atlas_w_f;
+                let v1 = py1 / atlas_h_f;
 
-                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny1, r, g, b, out_a);
-                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny1, r, g, b, out_a);
-                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny0, r, g, b, out_a);
-                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny1, r, g, b, out_a);
-                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny0, r, g, b, out_a);
-                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny0, r, g, b, out_a);
-                    }
-                }
+                let x0 = pen_x;
+                let y0 = pen_y;
+                let x1 = pen_x + (glyph_w_u as f32) * scale;
+                let y1 = pen_y + (glyph_h_u as f32) * scale;
+                let nx0 = (2.0 * (x0 / w)) - 1.0;
+                let ny0 = 1.0 - (2.0 * (y0 / h));
+                let nx1 = (2.0 * (x1 / w)) - 1.0;
+                let ny1 = 1.0 - (2.0 * (y1 / h));
+
+                cmd_stream_push_tex_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut verts, nx1, ny1, u1, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut verts, nx0, ny0, u0, v0, r, g, b, a);
                 pen_x += (glyph_w_u as f32 * scale) + ((glyph_h_u as f32) * scale * 0.08);
             }
 
             if !verts.is_empty() {
-                let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(verts.as_ptr(), verts.len());
+                let _ =
+                    trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, verts.as_ptr(), verts.len());
+            }
+            {
+                let mut cache = CMD_STREAM_TEXT_MESH_CACHE.lock();
+                if cache.len() >= CMD_STREAM_TEXT_CACHE_CAP {
+                    cache.remove(0);
+                }
+                cache.push(CmdStreamTextMeshCacheEntry {
+                    kind,
+                    view_w,
+                    view_h,
+                    x_bits,
+                    y_bits,
+                    px_h_bits,
+                    rgb,
+                    alpha: a,
+                    text: text_owned,
+                    verts,
+                });
             }
             qjs::JS_FreeCString(ctx, text_c);
             qjs::JSValue::undefined()
