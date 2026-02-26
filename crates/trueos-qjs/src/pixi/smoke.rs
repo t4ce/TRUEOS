@@ -9,6 +9,7 @@ use crate as qjs;
 
 unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
+    fn trueos_cabi_gfx_present_owner_set(owner: u32);
 }
 
 static PIXI_SMOKE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
@@ -98,11 +99,13 @@ pub async fn boot_pixi_scene_smoke_task() {
     }
 
     log_str("qjs-pixi-smoke: starting (render bridge on)\n");
+    unsafe { trueos_cabi_gfx_present_owner_set(1) };
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
                 log_str("qjs-pixi-smoke: JS_NewRuntime failed\n");
+                unsafe { trueos_cabi_gfx_present_owner_set(0) };
                 PIXI_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
                 return;
             }
@@ -114,81 +117,57 @@ pub async fn boot_pixi_scene_smoke_task() {
         let init_filename = b"<pixi-smoke-init>\0";
         let init_script = br#"
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
-if (typeof G.Intl === 'undefined') {
-  const LOCALES = {
-    en: { code: 'en', decimalSeparator: '.', groupingSeparator: ',', datePattern: 'MM/dd/yyyy', timePattern: 'HH:mm:ss', firstDayOfWeek: 7 },
-    de: { code: 'de', decimalSeparator: ',', groupingSeparator: '.', datePattern: 'dd.MM.yyyy', timePattern: 'HH:mm:ss', firstDayOfWeek: 1 },
-    fr: { code: 'fr', decimalSeparator: ',', groupingSeparator: ' ', datePattern: 'dd/MM/yyyy', timePattern: 'HH:mm:ss', firstDayOfWeek: 1 },
-    pt: { code: 'pt', decimalSeparator: ',', groupingSeparator: '.', datePattern: 'dd/MM/yyyy', timePattern: 'HH:mm:ss', firstDayOfWeek: 1 },
-    sv: { code: 'sv', decimalSeparator: ',', groupingSeparator: ' ', datePattern: 'yyyy-MM-dd', timePattern: 'HH:mm:ss', firstDayOfWeek: 1 },
-  };
-  const norm = (raw) => {
-    if (raw === undefined || raw === null || raw === '') return 'en';
-    const s = String(raw).replace(/_/g, '-').toLowerCase();
-    const b = s.split('-')[0];
-    return LOCALES[b] ? b : 'en';
-  };
-  const mk = (kind, loc) => {
-    const p = LOCALES[norm(loc)];
-    return {
-      format(v) { return String(v === undefined ? '' : v); },
-      resolvedOptions() {
-        return {
-          locale: p.code,
-          kind,
-          numberingSystem: 'latn',
-          calendar: 'gregory',
-          decimalSeparator: p.decimalSeparator,
-          groupingSeparator: p.groupingSeparator,
-          datePattern: p.datePattern,
-          timePattern: p.timePattern,
-          firstDayOfWeek: p.firstDayOfWeek
-        };
-      }
-    };
-  };
-  G.Intl = {
-    NumberFormat(loc) { return mk('number', loc); },
-    DateTimeFormat(loc) { return mk('dateTime', loc); },
-    Collator(loc) { return mk('generic', loc); },
-    PluralRules(loc) { return mk('generic', loc); },
-    RelativeTimeFormat(loc) { return mk('generic', loc); },
-    ListFormat(loc) { return mk('generic', loc); },
-    DisplayNames(loc) { return mk('generic', loc); },
-    Locale(loc) { const p = LOCALES[norm(loc)]; this.baseName = p.code; },
-    getCanonicalLocales(loc) { const p = LOCALES[norm(loc)]; return [p.code]; }
-  };
-}
+
 import * as cmd from 'cmd_stream';
 const PIXI = await import('/qjs/vendor/pixi.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
 const CX = W * 0.5;
 const CY = H * 0.5;
+const RING_COUNT = 10;
 
 const root = new PIXI.Container();
 const tex = PIXI.Texture.WHITE;
 const bg = new PIXI.Sprite(tex);
 bg.anchor.set(0.5, 0.5);
-bg.width = 128;
-bg.height = 128;
-bg.tint = 0x3BA7FF;
-bg.alpha = 0.8;
+bg.width = 420;
+bg.height = 260;
+bg.tint = 0x2A84FF;
+bg.alpha = 0.58;
 
 const fg = new PIXI.Sprite(tex);
 fg.anchor.set(0.5, 0.5);
-fg.width = 72;
-fg.height = 72;
-fg.tint = 0xFF9B3D;
-fg.alpha = 0.9;
+fg.width = 360;
+fg.height = 220;
+fg.tint = 0xFF8B2E;
+fg.alpha = 0.56;
 
 root.addChild(bg);
 root.addChild(fg);
+
+const ring = [];
+for (let i = 0; i < RING_COUNT; i++) {
+  const sp = new PIXI.Sprite(tex);
+  sp.anchor.set(0.5, 0.5);
+  sp.width = 18 + ((i % 3) * 6);
+  sp.height = sp.width;
+  sp.tint = (i & 1) ? 0x7AD5FF : 0xFF6A88;
+  sp.alpha = 0.45;
+  root.addChild(sp);
+  ring.push(sp);
+}
+
+const MAX_QUADS = 2 + RING_COUNT;
+const out = new Uint8Array(12 * 6 * MAX_QUADS);
+const dv = new DataView(out.buffer);
 
 G.__pixi_smoke = {
   root,
   bg,
   fg,
+  ring,
+  out,
+  dv,
   t: 0.0,
   frame: 0,
 };
@@ -235,9 +214,19 @@ G.__pixi_smoke_tick = function(dt) {
   s.root.rotation = Math.sin(s.t * 0.5) * 0.25;
   s.bg.rotation -= 0.0125;
   s.fg.rotation += 0.03;
-  s.fg.x = Math.cos(s.t * 1.7) * 56.0;
-  s.fg.y = Math.sin(s.t * 1.2) * 36.0;
-  s.fg.alpha = 0.55 + 0.45 * Math.abs(Math.sin(s.t * 1.3));
+  s.fg.x = Math.cos(s.t * 1.25) * 22.0;
+  s.fg.y = Math.sin(s.t * 0.95) * 16.0;
+  s.bg.alpha = 0.32 + 0.42 * (0.5 + 0.5 * Math.sin(s.t * 1.05));
+  s.fg.alpha = 0.32 + 0.42 * (0.5 + 0.5 * Math.sin((s.t * 1.05) + 3.14159));
+  for (let i = 0; i < s.ring.length; i++) {
+    const sp = s.ring[i];
+    const a = s.t * (0.7 + i * 0.03) + i * 0.62;
+    const r = 96 + ((i % 4) * 14);
+    sp.x = Math.cos(a) * r;
+    sp.y = Math.sin(a * 1.13) * (r * 0.66);
+    sp.rotation = -a * 0.7;
+    sp.alpha = 0.18 + 0.28 * Math.abs(Math.sin(a * 1.9));
+  }
 
   const rootRot = s.root.rotation;
   const c = Math.cos(rootRot);
@@ -249,15 +238,34 @@ G.__pixi_smoke_tick = function(dt) {
   const bgr = rootRot + s.bg.rotation;
   const fgr = rootRot + s.fg.rotation;
 
-  const out = new Uint8Array(12 * 6 * 2);
-  const dv = new DataView(out.buffer);
+  const out = s.out;
+  const dv = s.dv;
   let off = 0;
   off = emitQuad(dv, out, off, bgx, bgy, s.bg.width, s.bg.height, bgr, s.bg.tint >>> 0, (s.bg.alpha * 255) | 0);
   off = emitQuad(dv, out, off, fgx, fgy, s.fg.width, s.fg.height, fgr, s.fg.tint >>> 0, (s.fg.alpha * 255) | 0);
+  for (let i = 0; i < s.ring.length; i++) {
+    const sp = s.ring[i];
+    const qx = CX + (sp.x * c - sp.y * si);
+    const qy = CY + (sp.x * si + sp.y * c);
+    off = emitQuad(
+      dv,
+      out,
+      off,
+      qx,
+      qy,
+      sp.width,
+      sp.height,
+      rootRot + sp.rotation,
+      sp.tint >>> 0,
+      (sp.alpha * 255) | 0
+    );
+  }
 
   cmd.setViewport(W | 0, H | 0);
+  cmd.setPremultipliedAlpha(false);
+  cmd.setBlendMode(0);
   cmd.setBlendEnabled(true);
-  cmd.setClearRgb(0x101824);
+  cmd.setClearRgb(0xFFFFFF);
   cmd.beginFrame();
   cmd.drawTrianglesU8(out.subarray(0, off));
   cmd.endFrame();
@@ -272,6 +280,7 @@ G.__pixi_smoke_tick = function(dt) {
             "init",
         ) {
             drop(vm);
+            unsafe { trueos_cabi_gfx_present_owner_set(0) };
             PIXI_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
             return;
         }
@@ -311,6 +320,7 @@ G.__pixi_smoke_tick = function(dt) {
         drop(vm);
     }
 
+    unsafe { trueos_cabi_gfx_present_owner_set(0) };
     log_str("qjs-pixi-smoke: stopped\n");
     PIXI_SMOKE_TASK_STARTED.store(false, Ordering::SeqCst);
 }
