@@ -145,6 +145,19 @@ fg.alpha = 0.56;
 root.addChild(bg);
 root.addChild(fg);
 
+const title = new PIXI.Text({
+  text: 'T',
+  style: {
+    fontFamily: 'sans-serif',
+    fontSize: 34,
+    fill: 0x101010,
+  },
+});
+title.x = 44;
+title.y = 20;
+title.alpha = 1.0;
+root.addChild(title);
+
 const ring = [];
 for (let i = 0; i < RING_COUNT; i++) {
   const sp = new PIXI.Sprite(tex);
@@ -160,11 +173,14 @@ for (let i = 0; i < RING_COUNT; i++) {
 const MAX_QUADS = 2 + RING_COUNT;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
 const dv = new DataView(out.buffer);
+const atlasTex = cmd.createAtlasTexture(1);
 
 G.__pixi_smoke = {
   root,
   bg,
   fg,
+  title,
+  atlasTex,
   ring,
   out,
   dv,
@@ -217,7 +233,7 @@ G.__pixi_smoke_tick = function(dt) {
   s.fg.x = Math.cos(s.t * 1.25) * 22.0;
   s.fg.y = Math.sin(s.t * 0.95) * 16.0;
   s.bg.alpha = 0.32 + 0.42 * (0.5 + 0.5 * Math.sin(s.t * 1.05));
-  s.fg.alpha = 0.32 + 0.42 * (0.5 + 0.5 * Math.sin((s.t * 1.05) + 3.14159));
+  s.title.alpha = 1.0;
   for (let i = 0; i < s.ring.length; i++) {
     const sp = s.ring[i];
     const a = s.t * (0.7 + i * 0.03) + i * 0.62;
@@ -268,6 +284,16 @@ G.__pixi_smoke_tick = function(dt) {
   cmd.setClearRgb(0xFFFFFF);
   cmd.beginFrame();
   cmd.drawTrianglesU8(out.subarray(0, off));
+  cmd.drawAtlasText(
+    s.atlasTex,
+    1,
+    s.title.x | 0,
+    s.title.y | 0,
+    String(s.title.text || 'T'),
+    Number((s.title.style && s.title.style.fontSize) || 34),
+    Number((s.title.style && s.title.style.fill) || 0x101010),
+    (s.title.alpha * 255) | 0
+  );
   cmd.endFrame();
 };
 "#;
