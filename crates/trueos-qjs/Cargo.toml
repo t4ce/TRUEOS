@@ -19,9 +19,10 @@ embassy-executor = { version = "0.9.1", default-features = false, optional = tru
 embassy-time = { version = "0.5.0", default-features = false, optional = true, features = ["tick-hz-1_000"] }
 libm = { version = "0.2", default-features = false, optional = true }
 trueos-math = { path = "../trueos-math", default-features = false, optional = true }
+trueos-weather = { path = "../trueos-weather", default-features = false, optional = true }
 
 [features]
 default = []
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
-trueos = ["dep:trueos-math", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:libm"]
+trueos = ["dep:trueos-math", "dep:trueos-weather", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:libm"]

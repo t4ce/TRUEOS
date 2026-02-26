@@ -140,6 +140,37 @@ pub(crate) fn cmd_hv(
     CommandAction::None
 }
 
+pub(crate) fn cmd_gfx(
+    ctx: &mut ShellCommandCtx<'_>,
+    _args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let next = match crate::gfx::display_source() {
+        crate::gfx::DisplaySource::Gfx => crate::gfx::DisplaySource::Vga,
+        crate::gfx::DisplaySource::Vga => crate::gfx::DisplaySource::Gfx,
+    };
+    crate::gfx::set_display_source(next);
+    let src = match next {
+        crate::gfx::DisplaySource::Gfx => "gfx",
+        crate::gfx::DisplaySource::Vga => "vga",
+    };
+    ctx.io.write_fmt(format_args!("gfx: source={}\r\n", src));
+    CommandAction::None
+}
+
+pub(crate) fn cmd_gfx_status(
+    ctx: &mut ShellCommandCtx<'_>,
+    _args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let swapped = if crate::vga::vga_swapped() { 1 } else { 0 };
+    let src = match crate::gfx::display_source() {
+        crate::gfx::DisplaySource::Gfx => "gfx",
+        crate::gfx::DisplaySource::Vga => "vga",
+    };
+    ctx.io
+        .write_fmt(format_args!("gfx: swapped={} source={}\r\n", swapped, src));
+    CommandAction::None
+}
+
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",

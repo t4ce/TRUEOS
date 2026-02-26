@@ -1,11 +1,9 @@
 extern crate alloc;
 
-use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering, fence};
 
 use crate::{pci, wait};
-use embassy_time_driver::{TICK_HZ, now};
 // a Rectangle is just two triangles
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 // Virtio 1.0 GPU device id (0x1040 + virtio device id 16).
@@ -57,6 +55,10 @@ const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0207;
 
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+
+// Control queue request buffer capacity for inline submit_3d payloads.
+// Keep this modest but above typical UI frame bursts.
+const SUBMIT_3D_REQ_CAP_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
 const VIRTIO_GPU_RESP_OK_EDID: u32 = 0x1104;
 // --- Minimal virgl/Gallium constants we need for a triangle ---
 // From virglrenderer 1.0.0 headers (Gallium subset):
@@ -749,191 +751,10 @@ pub struct VirtioGpu3d {
     resp: DmaRegion,
 }
 
-use spin::Mutex;
-
-// -------------------------------------------------------------------------------------------------
-// Serialized virtio-gpu access ("GPU actor")
-// -------------------------------------------------------------------------------------------------
-//
-// The virtio-gpu device has a single control queue and this driver is written assuming a single
-// outstanding ctrlq descriptor chain. If multiple subsystems call into VirtioGpu3d concurrently
-// (scanout/mirror paths, shell gfx switching), and especially if any of those
-// paths poll the async executor while holding locks, we can hit lock inversion and apparent BSP
-// freezes.
-//
-// To avoid this, we serialize all virtio-gpu operations through a small in-kernel "actor":
-// - A single global VirtioGpu3d instance (no external mutex exposure)
-// - A command queue + response map
-// - A `gpu_service_step()` function that executes at most one command
-//
-// This is intentionally synchronous: callers can drive progress by calling `gpu_service_step()`
-// while waiting for their response, without polling the async executor.
-
-static GPU_ACTOR_GPU: Mutex<Option<VirtioGpu3d>> = Mutex::new(None);
-static GPU_ACTOR_QUEUE: Mutex<VecDeque<(u32, GpuCmd)>> = Mutex::new(VecDeque::new());
-static GPU_ACTOR_RESP: Mutex<BTreeMap<u32, GpuResp>> = Mutex::new(BTreeMap::new());
-static GPU_ACTOR_NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static GPU_ACTOR_PROCESSING: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-#[derive(Clone, Copy, Debug)]
-enum GpuCmd {
-    GetDisplayInfo,
-    ResourceCreate2D {
-        resource_id: u32,
-        format: u32,
-        width: u32,
-        height: u32,
-    },
-    ResourceAttachBacking {
-        resource_id: u32,
-        backing_phys: u64,
-        backing_len: u32,
-    },
-    SetScanout {
-        scanout_id: u32,
-        resource_id: u32,
-        width: u32,
-        height: u32,
-    },
-    TransferToHost2D {
-        resource_id: u32,
-        width: u32,
-        height: u32,
-    },
-    ResourceFlush {
-        resource_id: u32,
-        width: u32,
-        height: u32,
-    },
-}
-
-#[derive(Clone, Copy, Debug)]
-enum GpuResp {
-    DisplayInfo(Option<(u32, u32, u32)>),
-    Bool(bool),
-}
-
-fn gpu_submit(cmd: GpuCmd) -> u32 {
-    let id = GPU_ACTOR_NEXT_ID
-        .fetch_add(1, Ordering::Relaxed)
-        .wrapping_add(1);
-    GPU_ACTOR_QUEUE.lock().push_back((id, cmd));
-    id
-}
-
-fn gpu_take_resp(id: u32) -> Option<GpuResp> {
-    GPU_ACTOR_RESP.lock().remove(&id)
-}
-
-fn gpu_ensure_inited_locked(gpu_slot: &mut Option<VirtioGpu3d>) -> bool {
-    if gpu_slot.is_some() {
-        return true;
-    }
-    *gpu_slot = VirtioGpu3d::init_first();
-    gpu_slot.is_some()
-}
-
-/// Execute at most one queued GPU command.
-fn gpu_service_step() {
-    if GPU_ACTOR_PROCESSING
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-
-    let maybe_cmd = GPU_ACTOR_QUEUE.lock().pop_front();
-    if let Some((id, cmd)) = maybe_cmd {
-        let mut gpu_guard = GPU_ACTOR_GPU.lock();
-        if !gpu_ensure_inited_locked(&mut gpu_guard) {
-            GPU_ACTOR_RESP.lock().insert(
-                id,
-                match cmd {
-                    GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(None),
-                    _ => GpuResp::Bool(false),
-                },
-            );
-        } else {
-            let gpu = gpu_guard.as_mut().expect("gpu init");
-            let resp = match cmd {
-                GpuCmd::GetDisplayInfo => GpuResp::DisplayInfo(gpu.get_display_info()),
-                GpuCmd::ResourceCreate2D {
-                    resource_id,
-                    format,
-                    width,
-                    height,
-                } => GpuResp::Bool(gpu.resource_create_2d(resource_id, format, width, height)),
-                GpuCmd::ResourceAttachBacking {
-                    resource_id,
-                    backing_phys,
-                    backing_len,
-                } => GpuResp::Bool(gpu.resource_attach_backing(
-                    resource_id,
-                    backing_phys,
-                    backing_len,
-                )),
-                GpuCmd::SetScanout {
-                    scanout_id,
-                    resource_id,
-                    width,
-                    height,
-                } => GpuResp::Bool(gpu.set_scanout(scanout_id, resource_id, width, height)),
-                GpuCmd::TransferToHost2D {
-                    resource_id,
-                    width,
-                    height,
-                } => GpuResp::Bool(gpu.transfer_to_host_2d(resource_id, width, height)),
-                GpuCmd::ResourceFlush {
-                    resource_id,
-                    width,
-                    height,
-                } => GpuResp::Bool(gpu.resource_flush(resource_id, width, height)),
-            };
-            GPU_ACTOR_RESP.lock().insert(id, resp);
-        }
-    }
-
-    GPU_ACTOR_PROCESSING.store(false, Ordering::Release);
-}
-
-fn gpu_wait_resp(id: u32, timeout_ms: u64) -> Option<GpuResp> {
-    let hz = TICK_HZ;
-    let ticks = if hz == 0 {
-        0
-    } else {
-        timeout_ms.saturating_mul(hz).div_ceil(1000).max(1)
-    };
-    let deadline = now().saturating_add(ticks);
-
-    loop {
-        if let Some(r) = gpu_take_resp(id) {
-            return Some(r);
-        }
-
-        // Drive one GPU step locally.
-        gpu_service_step();
-
-        if let Some(r) = gpu_take_resp(id) {
-            return Some(r);
-        }
-        if timeout_ms != 0 && now() >= deadline {
-            return None;
-        }
-
-        // Low-level wait: do not poll the async executor here.
-        wait::spin_step_no_exec();
-    }
-}
-
-// Public wrappers used by scanout/mirror/backends.
-
+// NOTE: `with_global_gpu` is intentionally removed from cross-subsystem usage.
+// All scanout/mirror callers must use the serialized `gpu_*` wrappers.
 pub fn gpu_get_display_info(timeout_ms: u64) -> Option<(u32, u32, u32)> {
-    let id = gpu_submit(GpuCmd::GetDisplayInfo);
-    match gpu_wait_resp(id, timeout_ms)? {
-        GpuResp::DisplayInfo(v) => v,
-        _ => None,
-    }
+    super::wgpu_act::gpu_get_display_info(timeout_ms)
 }
 
 pub fn gpu_resource_create_2d(
@@ -943,13 +764,7 @@ pub fn gpu_resource_create_2d(
     height: u32,
     timeout_ms: u64,
 ) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceCreate2D {
-        resource_id,
-        format,
-        width,
-        height,
-    });
-    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+    super::wgpu_act::gpu_resource_create_2d(resource_id, format, width, height, timeout_ms)
 }
 
 pub fn gpu_resource_attach_backing(
@@ -958,12 +773,7 @@ pub fn gpu_resource_attach_backing(
     backing_len: u32,
     timeout_ms: u64,
 ) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceAttachBacking {
-        resource_id,
-        backing_phys,
-        backing_len,
-    });
-    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+    super::wgpu_act::gpu_resource_attach_backing(resource_id, backing_phys, backing_len, timeout_ms)
 }
 
 pub fn gpu_set_scanout(
@@ -973,35 +783,16 @@ pub fn gpu_set_scanout(
     height: u32,
     timeout_ms: u64,
 ) -> bool {
-    let id = gpu_submit(GpuCmd::SetScanout {
-        scanout_id,
-        resource_id,
-        width,
-        height,
-    });
-    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+    super::wgpu_act::gpu_set_scanout(scanout_id, resource_id, width, height, timeout_ms)
 }
 
 pub fn gpu_transfer_to_host_2d(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::TransferToHost2D {
-        resource_id,
-        width,
-        height,
-    });
-    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+    super::wgpu_act::gpu_transfer_to_host_2d(resource_id, width, height, timeout_ms)
 }
 
 pub fn gpu_resource_flush(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    let id = gpu_submit(GpuCmd::ResourceFlush {
-        resource_id,
-        width,
-        height,
-    });
-    matches!(gpu_wait_resp(id, timeout_ms), Some(GpuResp::Bool(true)))
+    super::wgpu_act::gpu_resource_flush(resource_id, width, height, timeout_ms)
 }
-
-// NOTE: `with_global_gpu` is intentionally removed from cross-subsystem usage.
-// All scanout/mirror callers must use the serialized `gpu_*` wrappers above.
 
 unsafe impl Send for VirtioGpu3d {}
 
@@ -1042,10 +833,9 @@ impl VirtioGpu3d {
         }
 
         // The control request DMA buffer must hold the entire VIRTIO_GPU_CMD_SUBMIT_3D
-        // payload (header + virgl command stream). Larger UI frames (more draw calls
-        // and inline vertex uploads) can exceed 64KB and make submit_3d fail.
-        // 256KB is still small, but avoids the immediate overflow observed with Pixi.
-        let req = DmaRegion::alloc(256 * 1024, 16)?;
+        // payload (header + virgl command stream). Large UI/text texture uploads can
+        // exceed 256KiB, so keep a 1MiB request buffer to avoid immediate overflows.
+        let req = DmaRegion::alloc(SUBMIT_3D_REQ_CAP_BYTES, 16)?;
         let resp = DmaRegion::alloc(4 * 1024, 16)?;
 
         Some(Self {
@@ -1563,7 +1353,7 @@ static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
-fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32)> {
+fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
     let stride = core::mem::size_of::<Vertex>();
     if stride == 0 || blob.len() < stride {
         return None;
@@ -1574,28 +1364,41 @@ fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32)> {
     let mut max_y = f32::NEG_INFINITY;
     let mut min_a = f32::INFINITY;
     let mut max_a = f32::NEG_INFINITY;
+    let mut min_u = f32::INFINITY;
+    let mut max_u = f32::NEG_INFINITY;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
     let mut i = 0usize;
     while i + stride <= blob.len() {
         let px = i;
         let py = i + 4;
+        let pu = i + 16;
+        let pv = i + 20;
         let pa = i + 44;
         let x = f32::from_le_bytes(blob[px..px + 4].try_into().ok()?);
         let y = f32::from_le_bytes(blob[py..py + 4].try_into().ok()?);
+        let u = f32::from_le_bytes(blob[pu..pu + 4].try_into().ok()?);
+        let v = f32::from_le_bytes(blob[pv..pv + 4].try_into().ok()?);
         let a = f32::from_le_bytes(blob[pa..pa + 4].try_into().ok()?);
         min_x = min_x.min(x);
         max_x = max_x.max(x);
         min_y = min_y.min(y);
         max_y = max_y.max(y);
+        min_u = min_u.min(u);
+        max_u = max_u.max(u);
+        min_v = min_v.min(v);
+        max_v = max_v.max(v);
         min_a = min_a.min(a);
         max_a = max_a.max(a);
         i += stride;
     }
-    Some((min_x, max_x, min_y, max_y, min_a, max_a))
+    Some((
+        min_x, max_x, min_y, max_y, min_a, max_a, min_u, max_u, min_v, max_v,
+    ))
 }
 
 #[derive(Clone)]
 struct HostBuffer {
-    desc: BufferDesc,
     bytes: Vec<u8>,
     mapped: bool,
     revision: u32,
@@ -1709,6 +1512,7 @@ pub struct VirglGfxBackend {
     width: u32,
     height: u32,
     scanout_res: u32,
+    // Keep backing ownership alive for the lifetime of the backend.
     scanout_backing: DmaRegion,
     rt_res: u32,
 
@@ -1717,8 +1521,6 @@ pub struct VirglGfxBackend {
     vbo_cap_bytes: u32,
 
     // One-time virgl state handles.
-    surf_handle: u32,
-    ve_handle: u32,
     vs_color_handle: u32,
     fs_color_handle: u32,
     vs_tex_handle: u32,
@@ -1732,8 +1534,6 @@ pub struct VirglGfxBackend {
     blend_handle_disabled: u32,
     blend_handle_straight: u32,
     blend_handle_premult: u32,
-    dsa_handle: u32,
-    rs_handle: u32,
 
     swapchain: SwapchainDesc,
 
@@ -2036,8 +1836,6 @@ impl VirglGfxBackend {
             rt_res,
             vbo_res,
             vbo_cap_bytes,
-            surf_handle,
-            ve_handle,
             vs_color_handle,
             fs_color_handle,
             vs_tex_handle,
@@ -2051,8 +1849,6 @@ impl VirglGfxBackend {
             blend_handle_disabled,
             blend_handle_straight,
             blend_handle_premult,
-            dsa_handle,
-            rs_handle,
             swapchain,
 
             refresh_millihz,
@@ -2276,7 +2072,6 @@ impl GfxDevice for VirglGfxBackend {
         let slot = Self::alloc_slot(
             &mut self.buffers,
             HostBuffer {
-                desc,
                 bytes,
                 mapped: false,
                 revision: 1,
@@ -2727,7 +2522,8 @@ impl GfxDevice for VirglGfxBackend {
                         layout_color_format: pipe_desc.vertex_layout.color_format,
                         layout_texcoord_offset: pipe_desc.vertex_layout.texcoord_offset,
                         layout_texcoord_format: pipe_desc.vertex_layout.texcoord_format,
-                        image_id: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                        image_id: if pipe_desc.vertex_layout.texcoord_format
+                            == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
                                 || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
                         {
@@ -2735,7 +2531,8 @@ impl GfxDevice for VirglGfxBackend {
                         } else {
                             self.state.image.raw()
                         },
-                        image_rev: if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32
+                        image_rev: if pipe_desc.vertex_layout.texcoord_format
+                            == TexCoordFormat::UvF32
                             && (VIRGL_FORCE_DEBUG_TEXTURE
                                 || self.state.image.raw() == VIRGL_DEBUG_TEXTURE_ID_RAW)
                         {
@@ -2790,7 +2587,9 @@ impl GfxDevice for VirglGfxBackend {
                         self.converted_cache.vertex_count = verts.len() as u32;
                     }
 
-                    if self.converted_cache.bytes.is_empty() || self.converted_cache.vertex_count == 0 {
+                    if self.converted_cache.bytes.is_empty()
+                        || self.converted_cache.vertex_count == 0
+                    {
                         return Err(Error::Invalid);
                     }
 
@@ -2842,7 +2641,8 @@ impl GfxDevice for VirglGfxBackend {
                         } else {
                             let img_raw = self.state.image.raw();
                             let img_idx = img_raw.saturating_sub(1) as usize;
-                            let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut()) else {
+                            let Some(img) = self.images.get_mut(img_idx).and_then(|i| i.as_mut())
+                            else {
                                 return Err(Error::NotFound);
                             };
                             if img.virgl_res == 0 {
@@ -2921,7 +2721,12 @@ impl GfxDevice for VirglGfxBackend {
                         }
 
                         encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[virgl_view]);
-                        encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[samp_handle]);
+                        encode_bind_sampler_states(
+                            &mut cmd,
+                            PIPE_SHADER_FRAGMENT,
+                            0,
+                            &[samp_handle],
+                        );
                         encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
                         encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
                     } else {
@@ -2930,11 +2735,21 @@ impl GfxDevice for VirglGfxBackend {
                     }
 
                     if frame_no <= 5 || (frame_no % 100) == 0 {
-                        if let Some((min_x, max_x, min_y, max_y, min_a, max_a)) =
-                            vertex_blob_bounds(self.converted_cache.bytes.as_slice())
+                        if let Some((
+                            min_x,
+                            max_x,
+                            min_y,
+                            max_y,
+                            min_a,
+                            max_a,
+                            min_u,
+                            max_u,
+                            min_v,
+                            max_v,
+                        )) = vertex_blob_bounds(self.converted_cache.bytes.as_slice())
                         {
                             crate::log!(
-                                "virgl-draw: frame={} verts={} img={} ndc_x=[{:.3},{:.3}] ndc_y=[{:.3},{:.3}] a=[{:.3},{:.3}] vp={}x{}\n",
+                                "virgl-draw: frame={} verts={} img={} ndc_x=[{:.3},{:.3}] ndc_y=[{:.3},{:.3}] a=[{:.3},{:.3}] uv_u=[{:.3},{:.3}] uv_v=[{:.3},{:.3}] vp={}x{}\n",
                                 frame_no,
                                 self.converted_cache.vertex_count,
                                 self.state.image.raw(),
@@ -2944,6 +2759,10 @@ impl GfxDevice for VirglGfxBackend {
                                 max_y,
                                 min_a,
                                 max_a,
+                                min_u,
+                                max_u,
+                                min_v,
+                                max_v,
                                 vp_w,
                                 vp_h
                             );
@@ -3342,6 +3161,8 @@ fn encode_inline_write_texture(
     rgba: &[u8],
 ) {
     // Matches virgl_encoder_inline_write() with a provided box for a 2D texture.
+    // VIRGL_CMD0 stores payload length in 16 bits (dwords), so large textures must
+    // be split into multiple RESOURCE_INLINE_WRITE commands.
     let expected = (width as usize)
         .saturating_mul(height as usize)
         .saturating_mul(4);
@@ -3350,24 +3171,46 @@ fn encode_inline_write_texture(
     } else {
         rgba
     };
-    let data_dwords = (data.len() as u32).div_ceil(4);
-    buf.push(virgl_cmd0(
-        VIRGL_CCMD_RESOURCE_INLINE_WRITE,
-        0,
-        data_dwords + 11,
-    ));
-    buf.push(res_handle);
-    buf.push(0); // level
-    buf.push(0); // usage
-    buf.push(width.saturating_mul(4)); // stride
-    buf.push(width.saturating_mul(height).saturating_mul(4)); // layer_stride
-    buf.push(0); // box x
-    buf.push(0); // box y
-    buf.push(0); // box z
-    buf.push(width); // box width
-    buf.push(height); // box height
-    buf.push(1); // box depth
-    buf.push_bytes_padded(data);
+    let stride = width.saturating_mul(4);
+    if stride == 0 || height == 0 || data.is_empty() {
+        return;
+    }
+
+    // VIRGL RESOURCE_INLINE_WRITE command has 11 dwords before inline payload.
+    // cmd0 length field is 16-bit dwords, so keep each command at <= 0xFFFF dwords.
+    let max_payload_dwords = 0xFFFFu32.saturating_sub(11);
+    let max_payload_bytes = (max_payload_dwords as usize).saturating_mul(4);
+    let rows_per_chunk = (max_payload_bytes / stride as usize).max(1);
+    let total_rows = (data.len() / stride as usize).min(height as usize);
+
+    let mut row = 0usize;
+    while row < total_rows {
+        let chunk_rows = (total_rows - row).min(rows_per_chunk);
+        let chunk_bytes = chunk_rows.saturating_mul(stride as usize);
+        let byte_off = row.saturating_mul(stride as usize);
+        let chunk = &data[byte_off..byte_off + chunk_bytes];
+        let data_dwords = (chunk.len() as u32).div_ceil(4);
+
+        buf.push(virgl_cmd0(
+            VIRGL_CCMD_RESOURCE_INLINE_WRITE,
+            0,
+            data_dwords + 11,
+        ));
+        buf.push(res_handle);
+        buf.push(0); // level
+        buf.push(0); // usage
+        buf.push(stride); // stride
+        buf.push(stride.saturating_mul(chunk_rows as u32)); // layer_stride
+        buf.push(0); // box x
+        buf.push(row as u32); // box y
+        buf.push(0); // box z
+        buf.push(width); // box width
+        buf.push(chunk_rows as u32); // box height
+        buf.push(1); // box depth
+        buf.push_bytes_padded(chunk);
+
+        row += chunk_rows;
+    }
 }
 
 fn encode_resource_copy_region(
@@ -3493,23 +3336,6 @@ fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32) {
     buf.push(fui(0.0)); // offset_clamp
 }
 
-fn encode_draw_vbo(buf: &mut VirglCmdBuf) {
-    // VIRGL_DRAW_VBO_SIZE = 12
-    buf.push(virgl_cmd0(VIRGL_CCMD_DRAW_VBO, 0, 12));
-    buf.push(0); // start
-    buf.push(3); // count
-    buf.push(PIPE_PRIM_TRIANGLES);
-    buf.push(0); // indexed
-    buf.push(1); // instance_count
-    buf.push(0); // index_bias
-    buf.push(0); // start_instance
-    buf.push(0); // primitive_restart
-    buf.push(0); // restart_index
-    buf.push(0); // min_index
-    buf.push(0); // max_index
-    buf.push(0); // count_from_so
-}
-
 static VIRGL_NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static VIRGL_NEXT_RES_ID: AtomicU32 = AtomicU32::new(1);
 static VIRGL_NEXT_OBJ_HANDLE: AtomicU32 = AtomicU32::new(64);
@@ -3537,13 +3363,6 @@ fn alloc_obj_handle() -> u32 {
     // object handle 0 is reserved.
     let id = VIRGL_NEXT_OBJ_HANDLE.fetch_add(1, Ordering::Relaxed);
     if id == 0 { 64 } else { id }
-}
-
-fn alloc_res_triple() -> (u32, u32, u32) {
-    // resource_id 0 is reserved.
-    let base = VIRGL_NEXT_RES_ID.fetch_add(3, Ordering::Relaxed);
-    let base = if base == 0 { 1 } else { base };
-    (base, base.wrapping_add(1), base.wrapping_add(2))
 }
 
 fn modern_negotiate_minimal(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
@@ -3640,5 +3459,62 @@ pub fn is_present_cached() -> bool {
 fn as_bytes<T: Copy>(value: &T) -> &[u8] {
     unsafe {
         core::slice::from_raw_parts((value as *const T) as *const u8, core::mem::size_of::<T>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_write_texture_splits_512x512_rgba_without_len_overflow() {
+        let width = 512u32;
+        let height = 512u32;
+        let bytes = vec![0xABu8; (width as usize) * (height as usize) * 4];
+
+        let mut cmd = VirglCmdBuf::new();
+        encode_inline_write_texture(&mut cmd, 123, width, height, &bytes);
+
+        let dwords = cmd.dwords.as_slice();
+        assert!(!dwords.is_empty());
+
+        let mut i = 0usize;
+        let mut commands = 0usize;
+        let mut total_payload_bytes = 0usize;
+        let mut expected_box_y = 0u32;
+        while i < dwords.len() {
+            let cmd0 = dwords[i];
+            let cmd_type = (cmd0 & 0xFF) as u8;
+            let len_dwords = cmd0 >> 16;
+            assert_eq!(cmd_type, VIRGL_CCMD_RESOURCE_INLINE_WRITE);
+            assert!(len_dwords <= 0xFFFF);
+            assert!(len_dwords >= 11);
+
+            let payload_start = i + 1;
+            let payload_end = payload_start + (len_dwords as usize);
+            assert!(payload_end <= dwords.len());
+
+            let stride = dwords[payload_start + 3];
+            let box_y = dwords[payload_start + 6];
+            let box_w = dwords[payload_start + 8];
+            let box_h = dwords[payload_start + 9];
+            assert_eq!(stride, width * 4);
+            assert_eq!(box_w, width);
+            assert!(box_h > 0);
+            assert_eq!(box_y, expected_box_y);
+
+            let data_dwords = len_dwords as usize - 11;
+            let payload_bytes = data_dwords * 4;
+            assert_eq!(payload_bytes, (box_h as usize) * (stride as usize));
+
+            total_payload_bytes += payload_bytes;
+            expected_box_y += box_h;
+            commands += 1;
+            i = payload_end;
+        }
+
+        assert!(commands > 1);
+        assert_eq!(expected_box_y, height);
+        assert_eq!(total_payload_bytes, bytes.len());
     }
 }
