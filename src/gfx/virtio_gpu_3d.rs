@@ -1305,6 +1305,9 @@ DCL OUT[0], COLOR\n\
 // Bring-up toggles for deterministic texture diagnostics.
 const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
 const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
+// Debug correctness switch: force per-draw vertex conversion/upload and bypass
+// converted vertex cache reuse.
+const VIRGL_DISABLE_CONVERTED_VERTEX_CACHE: bool = false;
 const VIRGL_DEBUG_TEXTURE_RGBA_2X2: [u8; 16] = [
     255, 0, 0, 255, // red
     0, 255, 0, 255, // green
@@ -2551,7 +2554,9 @@ impl GfxDevice for VirglGfxBackend {
                         },
                     };
 
-                    if self.converted_cache.key != Some(cache_key) {
+                    if VIRGL_DISABLE_CONVERTED_VERTEX_CACHE
+                        || self.converted_cache.key != Some(cache_key)
+                    {
                         let bound_image =
                             if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
                                 let use_debug_texture = VIRGL_FORCE_DEBUG_TEXTURE
@@ -2600,7 +2605,8 @@ impl GfxDevice for VirglGfxBackend {
                         return Err(Error::OutOfMemory);
                     }
 
-                    let need_upload = self.uploaded_cache_key != Some(cache_key)
+                    let need_upload = VIRGL_DISABLE_CONVERTED_VERTEX_CACHE
+                        || self.uploaded_cache_key != Some(cache_key)
                         || self.uploaded_cache_vbo_generation != self.vbo_generation;
                     if need_upload {
                         encode_inline_write_buffer(

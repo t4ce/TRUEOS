@@ -194,20 +194,14 @@ fg.alpha = 0.56;
 root.addChild(bg);
 root.addChild(fg);
 
-const title = new PIXI.Text({
-  text: 'True OS',
-  style: {
-    fontFamily: 'sans-serif',
-    fontSize: 34,
-    fill: 0x101010,
-  },
-});
-title.x = 44;
-title.y = 20;
-title.alpha = 1.0;
-root.addChild(title);
-
-const orbitTexts = ['true', 'os', 'pixi', 'qjs', 'virgl', 'wgpu', 'demo', 's'];
+const labels = [
+  { text: 'true',  color: 0x101010, size: 12, phase: 0.00, r: 220 },
+  { text: 'os',    color: 0x101010, size: 12, phase: 0.78, r: 220 },
+  { text: 'wgpu',  color: 0x003366, size: 12, phase: 1.57, r: 220 },
+  { text: 'pixi',  color: 0x660000, size: 12, phase: 2.35, r: 220 },
+  { text: 'virgl', color: 0x203000, size: 12, phase: 3.14, r: 220 },
+  { text: 'demo',  color: 0x303030, size: 12, phase: 3.92, r: 220 },
+];
 
 const MAX_QUADS = 2 + RING_COUNT;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
@@ -218,9 +212,8 @@ G.__pixi_smoke = {
   root,
   bg,
   fg,
-  title,
+  labels,
   atlasTex,
-  orbitTexts,
   out,
   dv,
   t: 0.0,
@@ -266,7 +259,6 @@ G.__pixi_smoke_tick = function(dt) {
   if (!s) return;
   s.t += dt;
   s.frame = (s.frame + 1) | 0;
-  s.title.alpha = 1.0;
 
   cmd.setViewport(W | 0, H | 0);
   cmd.setPremultipliedAlpha(false);
@@ -274,31 +266,20 @@ G.__pixi_smoke_tick = function(dt) {
   cmd.setBlendEnabled(true);
   cmd.setClearRgb(0xFFFFFF);
   cmd.beginFrame();
-  cmd.drawAtlasText(
-    s.atlasTex,
-    1,
-    s.title.x | 0,
-    s.title.y | 0,
-    String(s.title.text || 'T'),
-    Number((s.title.style && s.title.style.fontSize) || 34),
-    Number((s.title.style && s.title.style.fill) || 0x101010),
-    (s.title.alpha * 255) | 0
-  );
-  for (let i = 0; i < s.orbitTexts.length; i++) {
-    const a = (s.t * 0.9) + (i * (6.283185307179586 / s.orbitTexts.length));
-    const rr = 120 + ((i % 3) * 18);
-    const x = CX + Math.cos(a) * rr;
-    const y = CY + Math.sin(a * 1.07) * (rr * 0.6);
-    const alpha = (145 + (90 * (0.5 + 0.5 * Math.sin(a * 1.7)))) | 0;
+  for (let i = 0; i < s.labels.length; i++) {
+    const lb = s.labels[i];
+    const a = s.t * 0.55 + lb.phase;
+    const x = (CX + Math.cos(a) * lb.r - ((lb.text.length * 8) * 0.5)) | 0;
+    const y = (CY + Math.sin(a) * lb.r - 6) | 0;
     cmd.drawAtlasText(
       s.atlasTex,
       1,
-      x | 0,
-      y | 0,
-      s.orbitTexts[i],
-      12,
-      0x101010,
-      alpha
+      x,
+      y,
+      String(lb.text || ''),
+      Number(lb.size || 12),
+      Number(lb.color || 0x101010),
+      255
     );
   }
   cmd.endFrame();
