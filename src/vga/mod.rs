@@ -44,20 +44,14 @@ static FONT_CACHE_SMALL: Once<FontCacheSmall> = Once::new();
 static FONT_CACHE_LARGE: Once<FontCacheLarge> = Once::new();
 static FONT_READY_SMALL: AtomicBool = AtomicBool::new(false);
 static FONT_READY_LARGE: AtomicBool = AtomicBool::new(false);
-// THIS IS ONE WAY; BY LAW; TOGGLE IT BACK MAKE 0 SENCE;
-static VGA_SWAPPED: AtomicBool = AtomicBool::new(false);
 static TOP_MARGIN: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_NEXT_Y: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
 
 #[inline]
 pub fn vga_swapped() -> bool {
-    VGA_SWAPPED.load(Ordering::Acquire)
-}
-
-#[inline]
-pub fn mark_vga_swapped() {
-    VGA_SWAPPED.store(true, Ordering::Release);
+    // Ownership is the single source of truth for VGA routing.
+    matches!(crate::gfx::present_owner(), crate::gfx::PresentOwner::Forward)
 }
 
 pub fn restore_vga_from_gfx_backbuffer() -> bool {
