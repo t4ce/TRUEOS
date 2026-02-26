@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 use core::sync::atomic::{AtomicU32, Ordering};
+use spin::Mutex;
 
 use embassy_time_driver::{TICK_HZ, now};
 
@@ -54,65 +55,11 @@ include!("../../../src/surface/cabi_codes.rs");
 static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0x000000);
 static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
 static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
-static CMD_STREAM_FONT_TEX_READY: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
-const CMD_STREAM_FONT_TEX_ID: u32 = 1024;
-
-#[inline]
-fn cmd_stream_push_vtx(
-    out: &mut Vec<u8>,
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    out.extend_from_slice(&x.to_le_bytes());
-    out.extend_from_slice(&y.to_le_bytes());
-    out.extend_from_slice(&u.to_le_bytes());
-    out.extend_from_slice(&v.to_le_bytes());
-    out.push(r);
-    out.push(g);
-    out.push(b);
-    out.push(a);
-}
-
-fn cmd_stream_ensure_font_texture() -> Option<qjs::FontAtlasView<'static>> {
-    let atlas = qjs::font_atlas_large_view().or_else(qjs::font_atlas_small_view)?;
-    if CMD_STREAM_FONT_TEX_READY.load(Ordering::Acquire) != 0 {
-        return Some(atlas);
-    }
-    let px = atlas.alpha.len();
-    if px == 0 {
-        return None;
-    }
-    let mut rgba = Vec::with_capacity(px.saturating_mul(4));
-    for &a in atlas.alpha.iter() {
-        rgba.push(255);
-        rgba.push(255);
-        rgba.push(255);
-        rgba.push(a);
-    }
-    let rc = unsafe {
-        trueos_cabi_gfx_upload_texture_rgba(
-            CMD_STREAM_FONT_TEX_ID,
-            atlas.width,
-            atlas.height,
-            rgba.as_ptr(),
-            rgba.len(),
-        )
-    };
-    if rc != 0 {
-        return None;
-    }
-    let _ = unsafe { trueos_cabi_gfx_set_sampler(0, 0, 0, 0) };
-    CMD_STREAM_FONT_TEX_READY.store(1, Ordering::Release);
-    Some(atlas)
-}
+static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
+static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+static CMD_STREAM_ATLAS_TRACE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
@@ -138,6 +85,92 @@ fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
             }
         }
     }
+}
+
+#[inline]
+fn cmd_stream_alloc_tex_id() -> u32 {
+    let id = CMD_STREAM_NEXT_TEX_ID.fetch_add(1, Ordering::AcqRel);
+    CMD_STREAM_TEX_IDS.lock().push(id);
+    id
+}
+
+#[inline]
+fn cmd_stream_is_managed_tex(id: u32) -> bool {
+    if id == 0 {
+        return false;
+    }
+    CMD_STREAM_TEX_IDS.lock().iter().copied().any(|v| v == id)
+}
+
+#[inline]
+fn cmd_stream_release_tex_id(id: u32) {
+    let mut ids = CMD_STREAM_TEX_IDS.lock();
+    if let Some(pos) = ids.iter().position(|v| *v == id) {
+        ids.swap_remove(pos);
+    }
+}
+
+#[inline]
+fn cmd_stream_select_atlas(kind: u32) -> Option<qjs::FontAtlasView<'static>> {
+    if kind == 0 {
+        qjs::font_atlas_small_view()
+    } else {
+        qjs::font_atlas_large_view().or_else(qjs::font_atlas_small_view)
+    }
+}
+
+#[inline]
+fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::FontAtlasView<'static>) -> bool {
+    let px = atlas.alpha.len();
+    if px == 0 {
+        return false;
+    }
+    let mut rgba = Vec::with_capacity(px.saturating_mul(4));
+    for &a in atlas.alpha.iter() {
+        // Atlas-mask upload: store coverage in red channel.
+        // Some virgl paths appear to mishandle sampled alpha; text shader
+        // derives coverage from sampled .r for atlas text draws.
+        rgba.push(a);
+        rgba.push(0);
+        rgba.push(0);
+        rgba.push(255);
+    }
+    let rc = unsafe {
+        trueos_cabi_gfx_upload_texture_rgba(tex_id, atlas.width, atlas.height, rgba.as_ptr(), rgba.len())
+    };
+    rc == 0
+}
+
+#[inline]
+fn cmd_stream_push_tex_vtx(
+    out: &mut Vec<u8>,
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) {
+    out.extend_from_slice(&x.to_le_bytes());
+    out.extend_from_slice(&y.to_le_bytes());
+    out.extend_from_slice(&u.to_le_bytes());
+    out.extend_from_slice(&v.to_le_bytes());
+    out.push(r);
+    out.push(g);
+    out.push(b);
+    out.push(a);
+}
+
+#[inline]
+fn cmd_stream_push_rgb_vtx(out: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8, a: u8) {
+    out.extend_from_slice(&x.to_le_bytes());
+    out.extend_from_slice(&y.to_le_bytes());
+    out.push(r);
+    out.push(g);
+    out.push(b);
+    out.push(a);
 }
 
 #[inline]
@@ -348,6 +381,36 @@ unsafe fn load_native_module(
             qjs::JSValue::undefined()
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_set_sampler(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 4 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut wrap_u = 0.0f64;
+            let mut wrap_v = 0.0f64;
+            let mut min_f = 0.0f64;
+            let mut mag_f = 0.0f64;
+            if qjs::JS_ToFloat64(ctx, &mut wrap_u as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut wrap_v as *mut f64, args[1]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut min_f as *mut f64, args[2]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut mag_f as *mut f64, args[3]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+            let _ = trueos_cabi_gfx_set_sampler(
+                (wrap_u as i64).max(0) as u32,
+                (wrap_v as i64).max(0) as u32,
+                (min_f as i64).max(0) as u32,
+                (mag_f as i64).max(0) as u32,
+            );
+            qjs::JSValue::undefined()
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_set_blend_mode(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
@@ -495,7 +558,192 @@ unsafe fn load_native_module(
             qjs::JSValue::undefined()
         }
 
-        unsafe extern "C" fn qjs_cmd_stream_draw_text(
+        unsafe extern "C" fn qjs_cmd_stream_create_texture_rgba(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 3 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut w_f: f64 = 0.0;
+            let mut h_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[1]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+            let w = (w_f as i64).max(1) as u32;
+            let h = (h_f as i64).max(1) as u32;
+            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+            if need == 0 {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = cmd_stream_alloc_tex_id();
+
+            let mut byte_off: usize = 0;
+            let mut byte_len: usize = 0;
+            let mut bpe: usize = 0;
+            let ab = qjs::JS_GetTypedArrayBuffer(
+                ctx,
+                args[2],
+                &mut byte_off as *mut usize,
+                &mut byte_len as *mut usize,
+                &mut bpe as *mut usize,
+            );
+            let mut uploaded = false;
+            if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED && ab.tag != qjs::JS_TAG_NULL {
+                let mut buf_len: usize = 0;
+                let ptr = qjs::JS_GetArrayBuffer(ctx, &mut buf_len as *mut usize, ab);
+                if !ptr.is_null() {
+                    let usable = core::cmp::min(byte_len, buf_len.saturating_sub(byte_off));
+                    if usable >= need {
+                        uploaded = true;
+                        let _ = trueos_cabi_gfx_upload_texture_rgba(
+                            tex_id,
+                            w,
+                            h,
+                            ptr.add(byte_off) as *const u8,
+                            need,
+                        );
+                    }
+                }
+                qjs::js_free_value(ctx, ab);
+            }
+            if !uploaded {
+                let mut len: usize = 0;
+                let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[2]);
+                if !ptr.is_null() && len >= need {
+                    uploaded = true;
+                    let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr as *const u8, need);
+                }
+            }
+            if !uploaded {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 4 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut tex_id_f: f64 = 0.0;
+            let mut w_f: f64 = 0.0;
+            let mut h_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut tex_id_f as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut w_f as *mut f64, args[1]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut h_f as *mut f64, args[2]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            let w = (w_f as i64).max(1) as u32;
+            let h = (h_f as i64).max(1) as u32;
+            let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+            if !cmd_stream_is_managed_tex(tex_id) || need == 0 {
+                return qjs::JSValue::undefined();
+            }
+
+            let mut byte_off: usize = 0;
+            let mut byte_len: usize = 0;
+            let mut bpe: usize = 0;
+            let ab = qjs::JS_GetTypedArrayBuffer(
+                ctx,
+                args[3],
+                &mut byte_off as *mut usize,
+                &mut byte_len as *mut usize,
+                &mut bpe as *mut usize,
+            );
+            if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED && ab.tag != qjs::JS_TAG_NULL {
+                let mut buf_len: usize = 0;
+                let ptr = qjs::JS_GetArrayBuffer(ctx, &mut buf_len as *mut usize, ab);
+                if !ptr.is_null() {
+                    let usable = core::cmp::min(byte_len, buf_len.saturating_sub(byte_off));
+                    if usable >= need {
+                        let _ = trueos_cabi_gfx_upload_texture_rgba(
+                            tex_id,
+                            w,
+                            h,
+                            ptr.add(byte_off) as *const u8,
+                            need,
+                        );
+                    }
+                }
+                qjs::js_free_value(ctx, ab);
+                return qjs::JSValue::undefined();
+            }
+            if !ab.is_exception() {
+                qjs::js_free_value(ctx, ab);
+            }
+
+            let mut len: usize = 0;
+            let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[3]);
+            if !ptr.is_null() && len >= need {
+                let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr as *const u8, need);
+            }
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut tex_id_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut tex_id_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            if !cmd_stream_is_managed_tex(tex_id) {
+                return qjs::JSValue::undefined();
+            }
+            let clear = [0u8, 0, 0, 0];
+            let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len());
+            cmd_stream_release_tex_id(tex_id);
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_create_atlas_texture(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let mut kind: u32 = 1;
+            if !argv.is_null() && argc >= 1 {
+                let args = core::slice::from_raw_parts(argv, argc as usize);
+                let mut kind_f: f64 = 0.0;
+                if qjs::JS_ToFloat64(ctx, &mut kind_f as *mut f64, args[0]) == 0 {
+                    kind = (kind_f as i64).max(0) as u32;
+                }
+            }
+            let Some(atlas) = cmd_stream_select_atlas(kind) else {
+                return qjs::JSValue::undefined();
+            };
+            let tex_id = cmd_stream_alloc_tex_id();
+            if !cmd_stream_upload_atlas_to_tex(tex_id, atlas) {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_draw_atlas_text(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
             argc: i32,
@@ -504,12 +752,30 @@ unsafe fn load_native_module(
             if !cmd_stream_owner_is_pixi() {
                 return qjs::JSValue::undefined();
             }
-            if argv.is_null() || argc < 3 {
+            if argv.is_null() || argc < 5 {
                 return qjs::JSValue::undefined();
             }
             let args = core::slice::from_raw_parts(argv, argc as usize);
+
+            let mut tex_id_f: f64 = 0.0;
+            let mut kind_f: f64 = 1.0;
+            let mut x_f: f64 = 0.0;
+            let mut y_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut tex_id_f as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut kind_f as *mut f64, args[1]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[2]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[3]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            if tex_id == 0 {
+                return qjs::JSValue::undefined();
+            }
+            let kind = (kind_f as i64).max(0) as u32;
+
             let mut text_len: usize = 0;
-            let text_c = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[0], 0);
+            let text_c = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[4], 0);
             if text_c.is_null() || text_len == 0 {
                 if !text_c.is_null() {
                     qjs::JS_FreeCString(ctx, text_c);
@@ -517,42 +783,83 @@ unsafe fn load_native_module(
                 return qjs::JSValue::undefined();
             }
 
-            let mut x_f: f64 = 0.0;
-            let mut y_f: f64 = 0.0;
-            if qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[1]) != 0
-                || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[2]) != 0
-            {
-                qjs::JS_FreeCString(ctx, text_c);
-                return qjs::JSValue::undefined();
-            }
             let mut px_h: f64 = 26.0;
-            if argc >= 4 {
-                let _ = qjs::JS_ToFloat64(ctx, &mut px_h as *mut f64, args[3]);
+            if argc >= 6 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut px_h as *mut f64, args[5]);
             }
-            let mut rgb_f: f64 = 0xEAF4FF as f64;
-            if argc >= 5 {
-                let _ = qjs::JS_ToFloat64(ctx, &mut rgb_f as *mut f64, args[4]);
+            let mut rgb_f: f64 = 0x101010 as f64;
+            if argc >= 7 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut rgb_f as *mut f64, args[6]);
             }
             let mut alpha_f: f64 = 255.0;
-            if argc >= 6 {
-                let _ = qjs::JS_ToFloat64(ctx, &mut alpha_f as *mut f64, args[5]);
+            if argc >= 8 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut alpha_f as *mut f64, args[7]);
             }
 
-            let Some(atlas) = cmd_stream_ensure_font_texture() else {
+            let Some(atlas) = cmd_stream_select_atlas(kind) else {
                 qjs::JS_FreeCString(ctx, text_c);
                 return qjs::JSValue::undefined();
             };
             let text = core::slice::from_raw_parts(text_c as *const u8, text_len);
+            if CMD_STREAM_ATLAS_TRACE_LOGS.load(Ordering::Relaxed) < 8 && !text.is_empty() {
+                let first = text[0];
+                let fallback_slot = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+                let mut slot = atlas.index.get(first as usize).copied().unwrap_or(fallback_slot);
+                if slot == u16::MAX {
+                    slot = fallback_slot;
+                }
+                let grid_w = atlas.grid_w.max(1);
+                let sx = (slot as u32) % grid_w;
+                let sy = (slot as u32) / grid_w;
+                let px0 = (sx * atlas.cell_w) as usize;
+                let py0 = (sy * atlas.cell_h) as usize;
+                let cell_w = atlas.cell_w as usize;
+                let cell_h = atlas.cell_h as usize;
+                let aw = atlas.width as usize;
+                let mut nz = 0usize;
+                let mut a_min = 255u8;
+                let mut a_max = 0u8;
+                for y in 0..cell_h {
+                    for x in 0..cell_w {
+                        let ix = (py0 + y).saturating_mul(aw).saturating_add(px0 + x);
+                        if let Some(&a) = atlas.alpha.get(ix) {
+                            if a != 0 {
+                                nz += 1;
+                            }
+                            if a < a_min {
+                                a_min = a;
+                            }
+                            if a > a_max {
+                                a_max = a;
+                            }
+                        }
+                    }
+                }
+                let glyph_w = atlas.widths.get(slot as usize).copied().unwrap_or(atlas.cell_w as u8);
+                let msg = alloc::format!(
+                    "cmd-stream: atlas-trace ch={} slot={} tex={} cell={}x{} gw={} nz={}/{} a=[{},{}]\n",
+                    first,
+                    slot,
+                    tex_id,
+                    atlas.cell_w,
+                    atlas.cell_h,
+                    glyph_w,
+                    nz,
+                    cell_w.saturating_mul(cell_h),
+                    a_min,
+                    a_max
+                );
+                log_str(msg.as_str());
+                CMD_STREAM_ATLAS_TRACE_LOGS.fetch_add(1, Ordering::Relaxed);
+            }
             let w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
             let h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
-            let atlas_w = atlas.width.max(1) as f32;
-            let atlas_h = atlas.height.max(1) as f32;
             let grid_w = atlas.grid_w.max(1);
-            let cell_h = atlas.cell_h.max(1) as f32;
+            let cell_h = atlas.cell_h.max(1);
             let scale = if px_h <= 0.0 {
                 1.0
             } else {
-                ((px_h as f32) / cell_h).max(0.1)
+                ((px_h as f32) / (cell_h as f32)).max(0.1)
             };
             let rgb = ((rgb_f as i64).max(0) as u32) & 0x00FF_FFFF;
             let r = ((rgb >> 16) & 0xFF) as u8;
@@ -563,7 +870,10 @@ unsafe fn load_native_module(
             let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
             let mut pen_x = x_f as f32;
             let pen_y = y_f as f32;
-            let mut verts = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+            let mut verts = Vec::with_capacity(text.len().saturating_mul(6 * 12 * 32));
+            let atlas_w_u = atlas.width as usize;
+            let atlas_cell_w_u = atlas.cell_w as usize;
+            let atlas_cell_h_u = atlas.cell_h as usize;
 
             for &ch in text.iter() {
                 if ch == b'\n' {
@@ -578,47 +888,54 @@ unsafe fn load_native_module(
                 if slot == u16::MAX {
                     slot = fallback;
                 }
-                let glyph_w_px = atlas
+                let glyph_w_u = atlas
                     .widths
                     .get(slot as usize)
                     .copied()
-                    .unwrap_or(atlas.cell_w as u8) as f32;
-                let glyph_h_px = atlas.cell_h as f32;
+                    .unwrap_or(atlas.cell_w as u8) as usize;
+                let glyph_h_u = atlas_cell_h_u;
 
                 let sx = (slot as u32) % grid_w;
                 let sy = (slot as u32) / grid_w;
-                let px0 = (sx * atlas.cell_w) as f32;
-                let py0 = (sy * atlas.cell_h) as f32;
-                let u0 = px0 / atlas_w;
-                let v0 = py0 / atlas_h;
-                let u1 = (px0 + glyph_w_px) / atlas_w;
-                let v1 = (py0 + glyph_h_px) / atlas_h;
+                let px0 = (sx as usize).saturating_mul(atlas_cell_w_u);
+                let py0 = (sy as usize).saturating_mul(atlas_cell_h_u);
 
-                let x0 = pen_x;
-                let y0 = pen_y;
-                let x1 = x0 + glyph_w_px * scale;
-                let y1 = y0 + glyph_h_px * scale;
+                for gy in 0..glyph_h_u {
+                    for gx in 0..glyph_w_u {
+                        let ix = py0
+                            .saturating_add(gy)
+                            .saturating_mul(atlas_w_u)
+                            .saturating_add(px0.saturating_add(gx));
+                        let cov = atlas.alpha.get(ix).copied().unwrap_or(0);
+                        if cov == 0 {
+                            continue;
+                        }
+                        let out_a = ((cov as u16).saturating_mul(a as u16) / 255) as u8;
+                        if out_a == 0 {
+                            continue;
+                        }
+                        let x0 = pen_x + (gx as f32) * scale;
+                        let y0 = pen_y + (gy as f32) * scale;
+                        let x1 = x0 + scale;
+                        let y1 = y0 + scale;
+                        let nx0 = (2.0 * (x0 / w)) - 1.0;
+                        let ny0 = 1.0 - (2.0 * (y0 / h));
+                        let nx1 = (2.0 * (x1 / w)) - 1.0;
+                        let ny1 = 1.0 - (2.0 * (y1 / h));
 
-                let nx0 = (2.0 * (x0 / w)) - 1.0;
-                let ny0 = 1.0 - (2.0 * (y0 / h));
-                let nx1 = (2.0 * (x1 / w)) - 1.0;
-                let ny1 = 1.0 - (2.0 * (y1 / h));
-
-                cmd_stream_push_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
-                cmd_stream_push_vtx(&mut verts, nx1, ny1, u1, v1, r, g, b, a);
-                cmd_stream_push_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
-                cmd_stream_push_vtx(&mut verts, nx0, ny1, u0, v1, r, g, b, a);
-                cmd_stream_push_vtx(&mut verts, nx1, ny0, u1, v0, r, g, b, a);
-                cmd_stream_push_vtx(&mut verts, nx0, ny0, u0, v0, r, g, b, a);
-                pen_x += (glyph_w_px * scale) + (glyph_h_px * scale * 0.08);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny1, r, g, b, out_a);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny1, r, g, b, out_a);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny0, r, g, b, out_a);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny1, r, g, b, out_a);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx1, ny0, r, g, b, out_a);
+                        cmd_stream_push_rgb_vtx(&mut verts, nx0, ny0, r, g, b, out_a);
+                    }
+                }
+                pen_x += (glyph_w_u as f32 * scale) + ((glyph_h_u as f32) * scale * 0.08);
             }
 
             if !verts.is_empty() {
-                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(
-                    CMD_STREAM_FONT_TEX_ID,
-                    verts.as_ptr(),
-                    verts.len(),
-                );
+                let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(verts.as_ptr(), verts.len());
             }
             qjs::JS_FreeCString(ctx, text_c);
             qjs::JSValue::undefined()
@@ -647,15 +964,20 @@ unsafe fn load_native_module(
             export_fn!("setClearRgb", qjs_cmd_stream_set_clear_rgb, 1);
             export_fn!("setViewport", qjs_cmd_stream_set_viewport, 2);
             export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
+            export_fn!("setSampler", qjs_cmd_stream_set_sampler, 4);
             export_fn!("setBlendMode", qjs_cmd_stream_set_blend_mode, 1);
             export_fn!("setPremultipliedAlpha", qjs_cmd_stream_set_premultiplied_alpha, 1);
+            export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
+            export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
+            export_fn!("destroyTexture", qjs_cmd_stream_destroy_texture, 1);
+            export_fn!("createAtlasTexture", qjs_cmd_stream_create_atlas_texture, 1);
             export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
             export_fn!(
                 "drawTexturedTrianglesU8",
                 qjs_cmd_stream_draw_textured_triangles_u8,
                 2
             );
-            export_fn!("drawText", qjs_cmd_stream_draw_text, 6);
+            export_fn!("drawAtlasText", qjs_cmd_stream_draw_atlas_text, 8);
             0
         }
 
@@ -674,11 +996,16 @@ unsafe fn load_native_module(
         add_export!("setClearRgb");
         add_export!("setViewport");
         add_export!("setBlendEnabled");
+        add_export!("setSampler");
         add_export!("setBlendMode");
         add_export!("setPremultipliedAlpha");
+        add_export!("createTextureRgba");
+        add_export!("updateTextureRgba");
+        add_export!("destroyTexture");
+        add_export!("createAtlasTexture");
         add_export!("drawTrianglesU8");
         add_export!("drawTexturedTrianglesU8");
-        add_export!("drawText");
+        add_export!("drawAtlasText");
         return m;
     }
 

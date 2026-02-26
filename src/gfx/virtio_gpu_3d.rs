@@ -1330,10 +1330,13 @@ DCL IN[0], TEXCOORD[0], LINEAR\n\
 DCL IN[1], COLOR, LINEAR\n\
 DCL SAMP[0]\n\
 DCL TEMP[0]\n\
+DCL TEMP[1]\n\
 DCL OUT[0], COLOR\n\
     0: TEX TEMP[0], IN[0], SAMP[0], 2D\n\
-    1: MUL OUT[0], TEMP[0], IN[1]\n\
-    2: END\n";
+    1: MIN TEMP[1], TEMP[0].xxxx, TEMP[0].wwww\n\
+    2: MUL OUT[0].xyz, IN[1], TEMP[1].xxxx\n\
+    3: MUL OUT[0].w, IN[1].wwww, TEMP[1].xxxx\n\
+    4: END\n";
 
 // --- gfx-core backend (virgl) ---
 
