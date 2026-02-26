@@ -520,16 +520,8 @@ async fn webgpu_mesh_task() {
     } else {
         hold_ms.saturating_mul(TICK_HZ).div_ceil(1000).max(1)
     };
+    let mut single_submitted = false;
     loop {
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
-        if len != 0 {
-            let _ = unsafe {
-                crate::surface::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
-                    TEX_ID, ptr, len,
-                )
-            };
-        }
-        let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
         Timer::after(EmbassyDuration::from_millis(16)).await;
         let now_ticks = now();
         let elapsed_ticks = now_ticks.saturating_sub(phase_a_start);
@@ -545,6 +537,19 @@ async fn webgpu_mesh_task() {
                 swap_delay_ms
             );
             crate::vga::mark_vga_swapped();
+            if !single_submitted {
+                let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
+                if len != 0 {
+                    let _ = unsafe {
+                        crate::surface::io::cabi::trueos_cabi_gfx_draw_tex_triangles_no_present(
+                            TEX_ID, ptr, len,
+                        )
+                    };
+                }
+                let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+                single_submitted = true;
+                let _ = trueos_qjs::pixi::smoke::preload_pixi_cdn_once().await;
+            }
             crate::log!("wgpu_text: hold GFX mode for 2500ms\n");
             swapped = true;
             hold_start_ticks = now_ticks;

@@ -13,6 +13,7 @@ unsafe extern "C" {
 }
 
 static PIXI_SMOKE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+static PIXI_CDN_PRELOAD_DONE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -91,6 +92,54 @@ unsafe fn eval_or_log(
     true
 }
 
+pub async fn preload_pixi_cdn_once() -> bool {
+    if PIXI_CDN_PRELOAD_DONE.load(Ordering::Acquire) {
+        return true;
+    }
+    unsafe {
+        let vm = match qjs::vm::QjsVm::new_node() {
+            Some(vm) => vm,
+            None => {
+                log_str("qjs-pixi-preload: JS_NewRuntime failed\n");
+                return false;
+            }
+        };
+        let rt = vm.rt_ptr();
+        let ctx = vm.ctx_ptr();
+        qjs::node::install_globals(ctx);
+
+        let preload_filename = b"<pixi-cdn-preload>\0";
+        let preload_script = br#"
+await import('/qjs/cdn/8d2f5f0bba6a6702.mjs');
+"#;
+        if !eval_or_log(
+            ctx,
+            preload_script,
+            preload_filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_MODULE,
+            "cdn-preload",
+        ) {
+            drop(vm);
+            return false;
+        }
+        for _ in 0..120 {
+            if !pump_runtime_once(rt, ctx) {
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+        qjs::workers::terminate_all_for_context(ctx);
+        let _ = pump_runtime_once(rt, ctx);
+        qjs::async_ops::drain_all_for_context(ctx);
+        qjs::workers::drain_all_for_context(ctx);
+        qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+        drop(vm);
+    }
+    PIXI_CDN_PRELOAD_DONE.store(true, Ordering::Release);
+    log_str("qjs-pixi-preload: cached /qjs/cdn/8d2f5f0bba6a6702.mjs\n");
+    true
+}
+
 #[embassy_executor::task]
 pub async fn boot_pixi_scene_smoke_task() {
     if PIXI_SMOKE_TASK_STARTED.swap(true, Ordering::SeqCst) {
@@ -124,7 +173,7 @@ const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
 const CX = W * 0.5;
 const CY = H * 0.5;
-const RING_COUNT = 10;
+const RING_COUNT = 8;
 
 const root = new PIXI.Container();
 const tex = PIXI.Texture.WHITE;
@@ -146,7 +195,7 @@ root.addChild(bg);
 root.addChild(fg);
 
 const title = new PIXI.Text({
-  text: 'T',
+  text: 'True OS',
   style: {
     fontFamily: 'sans-serif',
     fontSize: 34,
@@ -158,17 +207,7 @@ title.y = 20;
 title.alpha = 1.0;
 root.addChild(title);
 
-const ring = [];
-for (let i = 0; i < RING_COUNT; i++) {
-  const sp = new PIXI.Sprite(tex);
-  sp.anchor.set(0.5, 0.5);
-  sp.width = 18 + ((i % 3) * 6);
-  sp.height = sp.width;
-  sp.tint = (i & 1) ? 0x7AD5FF : 0xFF6A88;
-  sp.alpha = 0.45;
-  root.addChild(sp);
-  ring.push(sp);
-}
+const orbitTexts = ['true', 'os', 'pixi', 'qjs', 'virgl', 'wgpu', 'demo', 's'];
 
 const MAX_QUADS = 2 + RING_COUNT;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
@@ -181,7 +220,7 @@ G.__pixi_smoke = {
   fg,
   title,
   atlasTex,
-  ring,
+  orbitTexts,
   out,
   dv,
   t: 0.0,
@@ -227,55 +266,7 @@ G.__pixi_smoke_tick = function(dt) {
   if (!s) return;
   s.t += dt;
   s.frame = (s.frame + 1) | 0;
-  s.root.rotation = Math.sin(s.t * 0.5) * 0.25;
-  s.bg.rotation -= 0.0125;
-  s.fg.rotation += 0.03;
-  s.fg.x = Math.cos(s.t * 1.25) * 22.0;
-  s.fg.y = Math.sin(s.t * 0.95) * 16.0;
-  s.bg.alpha = 0.32 + 0.42 * (0.5 + 0.5 * Math.sin(s.t * 1.05));
   s.title.alpha = 1.0;
-  for (let i = 0; i < s.ring.length; i++) {
-    const sp = s.ring[i];
-    const a = s.t * (0.7 + i * 0.03) + i * 0.62;
-    const r = 96 + ((i % 4) * 14);
-    sp.x = Math.cos(a) * r;
-    sp.y = Math.sin(a * 1.13) * (r * 0.66);
-    sp.rotation = -a * 0.7;
-    sp.alpha = 0.18 + 0.28 * Math.abs(Math.sin(a * 1.9));
-  }
-
-  const rootRot = s.root.rotation;
-  const c = Math.cos(rootRot);
-  const si = Math.sin(rootRot);
-  const bgx = CX;
-  const bgy = CY;
-  const fgx = CX + (s.fg.x * c - s.fg.y * si);
-  const fgy = CY + (s.fg.x * si + s.fg.y * c);
-  const bgr = rootRot + s.bg.rotation;
-  const fgr = rootRot + s.fg.rotation;
-
-  const out = s.out;
-  const dv = s.dv;
-  let off = 0;
-  off = emitQuad(dv, out, off, bgx, bgy, s.bg.width, s.bg.height, bgr, s.bg.tint >>> 0, (s.bg.alpha * 255) | 0);
-  off = emitQuad(dv, out, off, fgx, fgy, s.fg.width, s.fg.height, fgr, s.fg.tint >>> 0, (s.fg.alpha * 255) | 0);
-  for (let i = 0; i < s.ring.length; i++) {
-    const sp = s.ring[i];
-    const qx = CX + (sp.x * c - sp.y * si);
-    const qy = CY + (sp.x * si + sp.y * c);
-    off = emitQuad(
-      dv,
-      out,
-      off,
-      qx,
-      qy,
-      sp.width,
-      sp.height,
-      rootRot + sp.rotation,
-      sp.tint >>> 0,
-      (sp.alpha * 255) | 0
-    );
-  }
 
   cmd.setViewport(W | 0, H | 0);
   cmd.setPremultipliedAlpha(false);
@@ -283,7 +274,6 @@ G.__pixi_smoke_tick = function(dt) {
   cmd.setBlendEnabled(true);
   cmd.setClearRgb(0xFFFFFF);
   cmd.beginFrame();
-  cmd.drawTrianglesU8(out.subarray(0, off));
   cmd.drawAtlasText(
     s.atlasTex,
     1,
@@ -294,6 +284,23 @@ G.__pixi_smoke_tick = function(dt) {
     Number((s.title.style && s.title.style.fill) || 0x101010),
     (s.title.alpha * 255) | 0
   );
+  for (let i = 0; i < s.orbitTexts.length; i++) {
+    const a = (s.t * 0.9) + (i * (6.283185307179586 / s.orbitTexts.length));
+    const rr = 120 + ((i % 3) * 18);
+    const x = CX + Math.cos(a) * rr;
+    const y = CY + Math.sin(a * 1.07) * (rr * 0.6);
+    const alpha = (145 + (90 * (0.5 + 0.5 * Math.sin(a * 1.7)))) | 0;
+    cmd.drawAtlasText(
+      s.atlasTex,
+      1,
+      x | 0,
+      y | 0,
+      s.orbitTexts[i],
+      12,
+      0x101010,
+      alpha
+    );
+  }
   cmd.endFrame();
 };
 "#;
