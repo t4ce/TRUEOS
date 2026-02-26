@@ -205,10 +205,6 @@ async fn gfx_vga_swap_forward_task() {
         let mut stage_h: usize = 0;
 
         loop {
-            if !crate::vga::vga_swapped() {
-                Timer::after(EmbassyDuration::from_millis(33)).await;
-                continue;
-            }
             if !matches!(crate::gfx::present_owner(), crate::gfx::PresentOwner::Forward) {
                 Timer::after(EmbassyDuration::from_millis(16)).await;
                 continue;
@@ -536,7 +532,6 @@ async fn webgpu_mesh_task() {
                 elapsed_ms,
                 swap_delay_ms
             );
-            crate::vga::mark_vga_swapped();
             if !single_submitted {
                 let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
                 if len != 0 {

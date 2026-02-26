@@ -1591,14 +1591,21 @@ pub mod cabi {
             while draw_idx < draws.len() {
                 let start = draw_idx;
                 let mut pass_bytes = 0usize;
+                let mut pass_kind: u8 = 0; // 1=rgb, 2=tex
                 while draw_idx < draws.len() {
-                    let add = match &draws[draw_idx] {
-                        PendingDraw::Rgb { blob_len, .. } => blob_len - (blob_len % 12),
-                        PendingDraw::Tex { blob_len, .. } => blob_len - (blob_len % 20),
+                    let (kind, add) = match &draws[draw_idx] {
+                        PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
+                        PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
                     };
                     if add == 0 {
                         draw_idx += 1;
                         continue;
+                    }
+                    if pass_kind == 0 {
+                        pass_kind = kind;
+                    } else if kind != pass_kind {
+                        // Keep pass submissions homogeneous by vertex format/pipeline type.
+                        break;
                     }
                     if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {
                         break;

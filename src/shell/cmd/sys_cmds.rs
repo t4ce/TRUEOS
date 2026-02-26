@@ -161,13 +161,11 @@ pub(crate) fn cmd_gfx_status(
     ctx: &mut ShellCommandCtx<'_>,
     _args: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
-    let swapped = if crate::vga::vga_swapped() { 1 } else { 0 };
     let owner = match crate::gfx::present_owner() {
         crate::gfx::PresentOwner::Forward => "forward",
         crate::gfx::PresentOwner::Pixi => "pixi",
     };
-    ctx.io
-        .write_fmt(format_args!("gfx: swapped={} owner={}\r\n", swapped, owner));
+    ctx.io.write_fmt(format_args!("gfx: owner={}\r\n", owner));
     CommandAction::None
 }
 

@@ -58,6 +58,8 @@ static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
 static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
 static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_BLEND_ENABLED: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
 static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 static CMD_STREAM_ATLAS_TRACE_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -103,6 +105,14 @@ struct CmdStreamAtlasGlyphMetaTable {
 
 static CMD_STREAM_ATLAS_META_SMALL: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> = Mutex::new(None);
 static CMD_STREAM_ATLAS_META_LARGE: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> = Mutex::new(None);
+
+struct CmdStreamAtlasTexRecord {
+    tex_id: u32,
+    kind: u32,
+    last_refresh_frame: u32,
+}
+
+static CMD_STREAM_ATLAS_TEX_RECS: Mutex<Vec<CmdStreamAtlasTexRecord>> = Mutex::new(Vec::new());
 
 struct CmdStreamTextBatchRun {
     tex_id: u32,
@@ -157,6 +167,10 @@ fn cmd_stream_release_tex_id(id: u32) {
     let mut ids = CMD_STREAM_TEX_IDS.lock();
     if let Some(pos) = ids.iter().position(|v| *v == id) {
         ids.swap_remove(pos);
+    }
+    let mut atlas = CMD_STREAM_ATLAS_TEX_RECS.lock();
+    if let Some(pos) = atlas.iter().position(|r| r.tex_id == id) {
+        atlas.swap_remove(pos);
     }
 }
 
@@ -277,10 +291,7 @@ fn cmd_stream_atlas_meta_lookup(
     ch: u8,
 ) -> Option<&CmdStreamAtlasGlyphMeta> {
     let slot = table.slots_by_char[ch as usize] as usize;
-    if let Some(g) = table.glyphs.get(slot) {
-        return Some(g);
-    }
-    table.glyphs.get(table.fallback_slot as usize)
+    table.glyphs.get(slot)
 }
 
 #[inline]
@@ -303,6 +314,39 @@ fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::FontAtlasView<'static
         trueos_cabi_gfx_upload_texture_rgba(tex_id, atlas.width, atlas.height, rgba.as_ptr(), rgba.len())
     };
     rc == 0
+}
+
+#[inline]
+fn cmd_stream_mark_atlas_tex(tex_id: u32, kind: u32) {
+    let mut recs = CMD_STREAM_ATLAS_TEX_RECS.lock();
+    if let Some(rec) = recs.iter_mut().find(|r| r.tex_id == tex_id) {
+        rec.kind = kind;
+        rec.last_refresh_frame = 0;
+        return;
+    }
+    recs.push(CmdStreamAtlasTexRecord {
+        tex_id,
+        kind,
+        last_refresh_frame: 0,
+    });
+}
+
+#[inline]
+fn cmd_stream_refresh_atlas_tex_if_needed(tex_id: u32) {
+    let frame = CMD_STREAM_FRAME_SEQ.load(Ordering::Relaxed);
+    let mut recs = CMD_STREAM_ATLAS_TEX_RECS.lock();
+    let Some(rec) = recs.iter_mut().find(|r| r.tex_id == tex_id) else {
+        return;
+    };
+    if rec.last_refresh_frame == frame {
+        return;
+    }
+    let Some(atlas) = cmd_stream_select_atlas(rec.kind) else {
+        return;
+    };
+    if cmd_stream_upload_atlas_to_tex(tex_id, atlas) {
+        rec.last_refresh_frame = frame;
+    }
 }
 
 #[inline]
@@ -554,6 +598,7 @@ unsafe fn load_native_module(
             if !cmd_stream_owner_is_pixi() {
                 return qjs::JSValue::undefined();
             }
+            let _ = CMD_STREAM_FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
             cmd_stream_clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
             let _ = trueos_cabi_gfx_begin_frame(clear);
@@ -633,10 +678,12 @@ unsafe fn load_native_module(
             }
             cmd_stream_flush_text_batches();
             if enabled_f != 0.0 {
+                CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
                 let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
                 let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
                 cmd_stream_apply_blend_mode(mode, pma);
             } else {
+                CMD_STREAM_BLEND_ENABLED.store(0, Ordering::Relaxed);
                 // disabled
                 let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
             }
@@ -688,8 +735,13 @@ unsafe fn load_native_module(
             if qjs::JS_ToFloat64(ctx, &mut mode_f as *mut f64, args[0]) != 0 {
                 return qjs::JSValue::undefined();
             }
+            cmd_stream_flush_text_batches();
             let mode = ((mode_f as i64).clamp(0, 3)) as u32;
             CMD_STREAM_BLEND_MODE.store(mode, Ordering::Relaxed);
+            if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+                let pma = CMD_STREAM_PMA.load(Ordering::Relaxed) != 0;
+                cmd_stream_apply_blend_mode(mode, pma);
+            }
             qjs::JSValue::undefined()
         }
 
@@ -707,7 +759,12 @@ unsafe fn load_native_module(
             if qjs::JS_ToFloat64(ctx, &mut pma_f as *mut f64, args[0]) != 0 {
                 return qjs::JSValue::undefined();
             }
+            cmd_stream_flush_text_batches();
             CMD_STREAM_PMA.store(if pma_f != 0.0 { 1 } else { 0 }, Ordering::Relaxed);
+            if CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) != 0 {
+                let mode = CMD_STREAM_BLEND_MODE.load(Ordering::Relaxed);
+                cmd_stream_apply_blend_mode(mode, pma_f != 0.0);
+            }
             qjs::JSValue::undefined()
         }
 
@@ -1005,6 +1062,7 @@ unsafe fn load_native_module(
                 cmd_stream_release_tex_id(tex_id);
                 return qjs::JSValue::undefined();
             }
+            cmd_stream_mark_atlas_tex(tex_id, kind);
             qjs::JS_NewFloat64(ctx, tex_id as f64)
         }
 
@@ -1037,6 +1095,7 @@ unsafe fn load_native_module(
             if tex_id == 0 {
                 return qjs::JSValue::undefined();
             }
+            cmd_stream_refresh_atlas_tex_if_needed(tex_id);
             let kind = (kind_f as i64).max(0) as u32;
 
             let mut text_len: usize = 0;
