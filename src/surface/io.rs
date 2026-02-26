@@ -836,6 +836,8 @@ pub mod cabi {
         frame_tex_draws: u32,
         frame_draw_bytes: usize,
         frame_draws: Vec<PendingDraw>,
+        frame_rgb_blob: Vec<u8>,
+        frame_tex_blob: Vec<u8>,
         // Current sampler state (set by the WebGL shim) that will be captured per textured draw.
         cur_sampler: SamplerDesc,
         // Current blend state (set by the WebGL shim) that will be captured per draw.
@@ -852,14 +854,16 @@ pub mod cabi {
 
     enum PendingDraw {
         Rgb {
-            vertices: Vec<u8>,
+            blob_offset: usize,
+            blob_len: usize,
             blend: BlendDesc,
         },
         Tex {
             tex_id: u32,
             image: ImageId,
             sampler: SamplerDesc,
-            vertices: Vec<u8>,
+            blob_offset: usize,
+            blob_len: usize,
             blend: BlendDesc,
         },
     }
@@ -892,6 +896,8 @@ pub mod cabi {
                 frame_tex_draws: 0,
                 frame_draw_bytes: 0,
                 frame_draws: Vec::new(),
+                frame_rgb_blob: Vec::new(),
+                frame_tex_blob: Vec::new(),
                 cur_sampler: SamplerDesc {
                     wrap_s: SamplerWrap::ClampToEdge,
                     wrap_t: SamplerWrap::ClampToEdge,
@@ -1038,6 +1044,8 @@ pub mod cabi {
             st.frame_tex_draws = 0;
             st.frame_draw_bytes = 0;
             st.frame_draws.clear();
+            st.frame_rgb_blob.clear();
+            st.frame_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -1124,6 +1132,8 @@ pub mod cabi {
             st.frame_tex_draws = 0;
             st.frame_draw_bytes = 0;
             st.frame_draws.clear();
+            st.frame_rgb_blob.clear();
+            st.frame_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -1325,6 +1335,8 @@ pub mod cabi {
                 st.frame_tex_draws = 0;
                 st.frame_draw_bytes = 0;
                 st.frame_draws.clear();
+                st.frame_rgb_blob.clear();
+                st.frame_tex_blob.clear();
                 st.epoch = epoch;
             }
             let images = st.tex_images.get_or_insert_with(Vec::new);
@@ -1382,6 +1394,8 @@ pub mod cabi {
         st.frame_tex_draws = 0;
         st.frame_draw_bytes = 0;
         st.frame_draws.clear();
+        st.frame_rgb_blob.clear();
+        st.frame_tex_blob.clear();
         let seq = st.frame_seq;
         if seq <= 10 || seq.is_multiple_of(20) {
             crate::globalog::log(format_args!(
@@ -1413,7 +1427,7 @@ pub mod cabi {
         if vcount == 0 {
             return 0;
         }
-        let bytes = core::slice::from_raw_parts(vtx_ptr, usable).to_vec();
+        let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
         let mut st = GFX_CABI_STATE.lock();
         if !st.frame_active {
             crate::globalog::log(format_args!(
@@ -1426,15 +1440,19 @@ pub mod cabi {
         st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
         let blend = st.cur_blend;
         let mut off = 0usize;
-        while off < bytes.len() {
-            let rem = bytes.len() - off;
+        while off < usable {
+            let rem = usable - off;
             let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
                 break;
             }
+            let blob_offset = st.frame_rgb_blob.len();
+            st.frame_rgb_blob
+                .extend_from_slice(&bytes[off..off + chunk]);
             st.frame_draws.push(PendingDraw::Rgb {
-                vertices: bytes[off..off + chunk].to_vec(),
+                blob_offset,
+                blob_len: chunk,
                 blend,
             });
             off += chunk;
@@ -1466,7 +1484,7 @@ pub mod cabi {
         if vcount == 0 {
             return 0;
         }
-        let bytes = core::slice::from_raw_parts(vtx_ptr, usable).to_vec();
+        let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
         let mut st = GFX_CABI_STATE.lock();
         if !st.frame_active {
             crate::globalog::log(format_args!(
@@ -1488,18 +1506,22 @@ pub mod cabi {
         let sampler = st.cur_sampler;
         let blend = st.cur_blend;
         let mut off = 0usize;
-        while off < bytes.len() {
-            let rem = bytes.len() - off;
+        while off < usable {
+            let rem = usable - off;
             let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
                 break;
             }
+            let blob_offset = st.frame_tex_blob.len();
+            st.frame_tex_blob
+                .extend_from_slice(&bytes[off..off + chunk]);
             st.frame_draws.push(PendingDraw::Tex {
                 tex_id,
                 image,
                 sampler,
-                vertices: bytes[off..off + chunk].to_vec(),
+                blob_offset,
+                blob_len: chunk,
                 blend,
             });
             off += chunk;
@@ -1511,7 +1533,7 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
-        let (seq, rgb_draws, tex_draws, draw_bytes, was_active, clear_rgb, draws) = {
+        let (seq, rgb_draws, tex_draws, draw_bytes, was_active, clear_rgb, draws, rgb_src, tex_src) = {
             let mut st = GFX_CABI_STATE.lock();
             let out = (
                 st.frame_seq,
@@ -1521,6 +1543,8 @@ pub mod cabi {
                 st.frame_active,
                 st.frame_clear_rgb,
                 core::mem::take(&mut st.frame_draws),
+                core::mem::take(&mut st.frame_rgb_blob),
+                core::mem::take(&mut st.frame_tex_blob),
             );
             st.frame_active = false;
             out
@@ -1569,8 +1593,8 @@ pub mod cabi {
                 let mut pass_bytes = 0usize;
                 while draw_idx < draws.len() {
                     let add = match &draws[draw_idx] {
-                        PendingDraw::Rgb { vertices, .. } => vertices.len() - (vertices.len() % 12),
-                        PendingDraw::Tex { vertices, .. } => vertices.len() - (vertices.len() % 20),
+                        PendingDraw::Rgb { blob_len, .. } => blob_len - (blob_len % 12),
+                        PendingDraw::Tex { blob_len, .. } => blob_len - (blob_len % 20),
                     };
                     if add == 0 {
                         draw_idx += 1;
@@ -1589,15 +1613,24 @@ pub mod cabi {
 
                 for draw in draws[start..draw_idx].iter() {
                     match draw {
-                        PendingDraw::Rgb { vertices, blend } => {
+                        PendingDraw::Rgb {
+                            blob_offset,
+                            blob_len,
+                            blend,
+                        } => {
                             const VTX_SIZE: usize = 12;
-                            let usable = vertices.len() - (vertices.len() % VTX_SIZE);
+                            let usable = blob_len - (blob_len % VTX_SIZE);
                             if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > rgb_src.len() {
                                 continue;
                             }
                             let vcount = (usable / VTX_SIZE) as u32;
                             let off = rgb_blob.len() as u64;
-                            rgb_blob.extend_from_slice(&vertices[..usable]);
+                            rgb_blob.extend_from_slice(&rgb_src[start..end]);
                             plans.push(Plan::Rgb {
                                 offset: off,
                                 vcount,
@@ -1608,17 +1641,23 @@ pub mod cabi {
                             tex_id,
                             image,
                             sampler,
-                            vertices,
+                            blob_offset,
+                            blob_len,
                             blend,
                         } => {
                             const VTX_SIZE: usize = 20;
-                            let usable = vertices.len() - (vertices.len() % VTX_SIZE);
+                            let usable = blob_len - (blob_len % VTX_SIZE);
                             if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > tex_src.len() {
                                 continue;
                             }
                             let vcount = (usable / VTX_SIZE) as u32;
                             let off = tex_blob.len() as u64;
-                            tex_blob.extend_from_slice(&vertices[..usable]);
+                            tex_blob.extend_from_slice(&tex_src[start..end]);
                             plans.push(Plan::Tex {
                                 tex_id: *tex_id,
                                 image: *image,
