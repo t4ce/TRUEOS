@@ -259,6 +259,7 @@ G.__pixi_smoke_tick = function(dt) {
   if (!s) return;
   s.t += dt;
   s.frame = (s.frame + 1) | 0;
+  const t = s.t;
 
   cmd.setViewport(W | 0, H | 0);
   cmd.setPremultipliedAlpha(false);
@@ -266,9 +267,77 @@ G.__pixi_smoke_tick = function(dt) {
   cmd.setBlendEnabled(true);
   cmd.setClearRgb(0xFFFFFF);
   cmd.beginFrame();
+
+  let off = 0;
+  // Core slabs.
+  off = emitQuad(
+    s.dv, s.out, off,
+    CX, CY,
+    420, 260,
+    t * 0.20,
+    0x2A84FF,
+    150
+  );
+  off = emitQuad(
+    s.dv, s.out, off,
+    CX, CY,
+    360, 220,
+    -t * 0.27,
+    0xFF8B2E,
+    140
+  );
+  // Orbiting ring quads with varied alpha.
+  for (let i = 0; i < RING_COUNT; i++) {
+    const p = t * 0.7 + (i * (Math.PI * 2.0 / RING_COUNT));
+    const rr = 86 + (12 * Math.sin(t * 0.9 + i * 0.73));
+    const qx = CX + Math.cos(p) * rr;
+    const qy = CY + Math.sin(p) * rr;
+    const qa = (84 + ((Math.sin(t * 1.4 + i * 0.91) * 0.5 + 0.5) * 120)) | 0;
+    const qw = 44 + (i % 3) * 10;
+    const qh = 20 + (i % 4) * 6;
+    const c = (i & 1) ? 0x2A84FF : 0xFF8B2E;
+    off = emitQuad(
+      s.dv, s.out, off,
+      qx, qy,
+      qw, qh,
+      -p * 1.7,
+      c,
+      qa
+    );
+  }
+  if (off > 0) {
+    cmd.drawTrianglesU8(s.out.subarray(0, off));
+  }
+
+  // Additive glow accents.
+  cmd.setBlendMode(1);
+  let glowOff = 0;
+  glowOff = emitQuad(
+    s.dv, s.out, glowOff,
+    CX + Math.cos(t * 0.6) * 42,
+    CY + Math.sin(t * 0.5) * 34,
+    180, 58,
+    t * 1.1,
+    0x7ACBFF,
+    72
+  );
+  glowOff = emitQuad(
+    s.dv, s.out, glowOff,
+    CX + Math.cos(t * 0.4 + 1.7) * 50,
+    CY + Math.sin(t * 0.7 + 0.8) * 26,
+    170, 54,
+    -t * 1.0,
+    0xFFC07A,
+    66
+  );
+  if (glowOff > 0) {
+    cmd.drawTrianglesU8(s.out.subarray(0, glowOff));
+  }
+  cmd.setBlendMode(0);
+
   for (let i = 0; i < s.labels.length; i++) {
     const lb = s.labels[i];
-    const a = s.t * 0.55 + lb.phase;
+    const a = t * 0.55 + lb.phase;
     const x = (CX + Math.cos(a) * lb.r - ((lb.text.length * 8) * 0.5)) | 0;
     const y = (CY + Math.sin(a) * lb.r - 6) | 0;
     cmd.drawAtlasText(
