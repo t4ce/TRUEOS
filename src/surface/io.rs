@@ -1049,10 +1049,10 @@ pub mod cabi {
 
         if !st.pipeline.is_valid() {
             let layout = VertexLayout {
-                stride: 12, // f32 x, f32 y, u8 r,g,b, pad
+                stride: 12, // f32 x, f32 y, u8 r,g,b,a
                 pos_offset: 0,
                 color_offset: 8,
-                color_format: ColorFormat::RgbU8,
+                color_format: ColorFormat::RgbaU8,
                 texcoord_offset: 0,
                 texcoord_format: TexCoordFormat::None,
             };
