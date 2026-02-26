@@ -1,6 +1,6 @@
 #![cfg(feature = "trueos")]
 
-use core::ffi::{c_char, c_int, CStr};
+use core::ffi::{CStr, c_char, c_int};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate as qjs;

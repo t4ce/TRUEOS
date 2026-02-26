@@ -3,9 +3,10 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::ffi::{c_char, CStr};
+use core::ffi::{CStr, c_char};
+use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time_driver::{now, TICK_HZ};
+use embassy_time_driver::{TICK_HZ, now};
 
 use crate as qjs;
 mod compiled;
@@ -20,9 +21,23 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
+    fn trueos_cabi_gfx_end_frame() -> i32;
+    fn trueos_cabi_gfx_set_blend(
+        enabled: u32,
+        src_rgb: u32,
+        dst_rgb: u32,
+        src_alpha: u32,
+        dst_alpha: u32,
+        eq_rgb: u32,
+        eq_alpha: u32,
+    ) -> i32;
+    fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
 }
 
 include!("../../../src/surface/cabi_codes.rs");
+
+static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0x000000);
 
 #[inline]
 fn log_bytes(bytes: &[u8]) {
@@ -124,9 +139,181 @@ unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
 
 #[inline]
 unsafe fn load_native_module(
-    _ctx: *mut qjs::JSContext,
-    _module_name: *const c_char,
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
 ) -> *mut qjs::JSModuleDef {
+    if ctx.is_null() || module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+    let name = CStr::from_ptr(module_name).to_bytes();
+    if name == b"cmd_stream" || name == b"trueos:cmd_stream" {
+        unsafe extern "C" fn qjs_cmd_stream_begin_frame(
+            _ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            _argc: i32,
+            _argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
+            let _ = trueos_cabi_gfx_begin_frame(clear);
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_end_frame(
+            _ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            _argc: i32,
+            _argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let _ = trueos_cabi_gfx_end_frame();
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_set_clear_rgb(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut v_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut v_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            let rgb = (v_f as i64).max(0) as u32 & 0x00FF_FFFF;
+            CMD_STREAM_CLEAR_RGB.store(rgb, Ordering::Relaxed);
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_set_viewport(
+            _ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            _argc: i32,
+            _argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            // Current gfx-cabi path consumes NDC vertex positions; viewport is implicit.
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_set_blend_enabled(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+            let mut enabled_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut enabled_f as *mut f64, args[0]) != 0 {
+                return qjs::JSValue::undefined();
+            }
+            if enabled_f != 0.0 {
+                // src alpha / one-minus-src-alpha
+                let _ = trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 1, 0, 0, 0);
+            } else {
+                // disabled
+                let _ = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
+            }
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_draw_triangles_u8(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 1 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+
+            let mut byte_off: usize = 0;
+            let mut byte_len: usize = 0;
+            let mut bpe: usize = 0;
+            let ab = qjs::JS_GetTypedArrayBuffer(
+                ctx,
+                args[0],
+                &mut byte_off as *mut usize,
+                &mut byte_len as *mut usize,
+                &mut bpe as *mut usize,
+            );
+
+            if !ab.is_exception() && ab.tag != qjs::JS_TAG_UNDEFINED && ab.tag != qjs::JS_TAG_NULL {
+                let mut buf_len: usize = 0;
+                let ptr = qjs::JS_GetArrayBuffer(ctx, &mut buf_len as *mut usize, ab);
+                if !ptr.is_null() {
+                    let usable = core::cmp::min(byte_len, buf_len.saturating_sub(byte_off));
+                    let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(
+                        ptr.add(byte_off) as *const u8,
+                        usable,
+                    );
+                }
+                qjs::js_free_value(ctx, ab);
+                return qjs::JSValue::undefined();
+            }
+            if !ab.is_exception() {
+                qjs::js_free_value(ctx, ab);
+            }
+
+            let mut len: usize = 0;
+            let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[0]);
+            if !ptr.is_null() && len > 0 {
+                let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(ptr as *const u8, len);
+            }
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_module_init(
+            ctx: *mut qjs::JSContext,
+            m: *mut qjs::JSModuleDef,
+        ) -> i32 {
+            macro_rules! export_fn {
+                ($name:literal, $func:expr, $argc:expr) => {{
+                    let k = concat!($name, "\0");
+                    let f = qjs::JS_NewCFunction2(
+                        ctx,
+                        Some($func),
+                        k.as_ptr() as *const c_char,
+                        $argc,
+                        qjs::JS_CFUNC_GENERIC,
+                        0,
+                    );
+                    let _ = qjs::JS_SetModuleExport(ctx, m, k.as_ptr() as *const c_char, f);
+                }};
+            }
+            export_fn!("beginFrame", qjs_cmd_stream_begin_frame, 0);
+            export_fn!("endFrame", qjs_cmd_stream_end_frame, 0);
+            export_fn!("setClearRgb", qjs_cmd_stream_set_clear_rgb, 1);
+            export_fn!("setViewport", qjs_cmd_stream_set_viewport, 2);
+            export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
+            export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
+            0
+        }
+
+        let m = qjs::JS_NewCModule(ctx, module_name, Some(qjs_cmd_stream_module_init));
+        if m.is_null() {
+            return core::ptr::null_mut();
+        }
+        macro_rules! add_export {
+            ($name:literal) => {{
+                let k = concat!($name, "\0");
+                let _ = qjs::JS_AddModuleExport(ctx, m, k.as_ptr() as *const c_char);
+            }};
+        }
+        add_export!("beginFrame");
+        add_export!("endFrame");
+        add_export!("setClearRgb");
+        add_export!("setViewport");
+        add_export!("setBlendEnabled");
+        add_export!("drawTrianglesU8");
+        return m;
+    }
+
     core::ptr::null_mut()
 }
 

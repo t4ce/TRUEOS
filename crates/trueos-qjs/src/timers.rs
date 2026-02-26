@@ -41,11 +41,7 @@ fn js_int32(v: i32) -> qjs::JSValue {
 unsafe fn js_get_f64(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<f64> {
     let mut out = 0.0f64;
     let rc = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, v);
-    if rc == 0 {
-        Some(out)
-    } else {
-        None
-    }
+    if rc == 0 { Some(out) } else { None }
 }
 
 #[inline]
@@ -125,9 +121,7 @@ pub unsafe fn pump(ctx: *mut qjs::JSContext) -> bool {
         // Re-check and take/update under lock.
         let (cb, args, repeating, interval) = {
             let mut timers = TIMERS.lock();
-            let pos = timers
-                .iter()
-                .position(|t| t.ctx_owner == ctx && t.id == id);
+            let pos = timers.iter().position(|t| t.ctx_owner == ctx && t.id == id);
             let Some(pos) = pos else {
                 continue;
             };

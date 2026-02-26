@@ -155,9 +155,12 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
 
     let span = (size - 1).max(1) as f32;
 
+    let swapped = super::vga_swapped();
+
     #[inline]
     fn draw_ring_clipped(
         fb: &super::FramebufferSurface,
+        swapped: bool,
         ox: i32,
         oy: i32,
         size: i32,
@@ -170,18 +173,35 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
         let max_x = ox + size;
         let max_y = oy + size;
 
-        for dy in -R..=R {
-            for dx in -R..=R {
-                let d2 = dx * dx + dy * dy;
-                if (d2 - R2).abs() > 2 {
-                    continue;
+        if swapped {
+            for dy in -R..=R {
+                for dx in -R..=R {
+                    let d2 = dx * dx + dy * dy;
+                    if (d2 - R2).abs() > 2 {
+                        continue;
+                    }
+                    let px = x + dx;
+                    let py = y + dy;
+                    if px < ox || py < oy || px >= max_x || py >= max_y {
+                        continue;
+                    }
+                    fb.plot_swapped(px, py, color);
                 }
-                let px = x + dx;
-                let py = y + dy;
-                if px < ox || py < oy || px >= max_x || py >= max_y {
-                    continue;
+            }
+        } else {
+            for dy in -R..=R {
+                for dx in -R..=R {
+                    let d2 = dx * dx + dy * dy;
+                    if (d2 - R2).abs() > 2 {
+                        continue;
+                    }
+                    let px = x + dx;
+                    let py = y + dy;
+                    if px < ox || py < oy || px >= max_x || py >= max_y {
+                        continue;
+                    }
+                    fb.plot(px, py, color);
                 }
-                fb.plot(px, py, color);
             }
         }
     }
@@ -189,13 +209,13 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
     for (mx, my) in mice {
         let x = ox + roundf((mx as f32) * span) as i32;
         let y = oy + roundf((my as f32) * span) as i32;
-        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_00_FF_00);
+        draw_ring_clipped(fb, swapped, ox, oy, size, x, y, 0x00_00_FF_00);
     }
 
     for (tx, ty) in tablets {
         let x = ox + roundf((tx as f32) * span) as i32;
         let y = oy + roundf((ty as f32) * span) as i32;
-        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_FF_00_FF);
+        draw_ring_clipped(fb, swapped, ox, oy, size, x, y, 0x00_FF_00_FF);
     }
 }
 

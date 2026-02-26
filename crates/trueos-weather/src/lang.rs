@@ -4,6 +4,22 @@ pub struct Language {
     pub name: &'static str,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct IntlLocaleProfile {
+    pub code: &'static str,
+    pub language_name: &'static str,
+    pub decimal_separator: char,
+    pub grouping_separator: char,
+    pub minus_sign: char,
+    pub percent_sign: char,
+    /// CLDR-like date skeleton for simple formatter shims.
+    pub date_pattern: &'static str,
+    /// CLDR-like time skeleton for simple formatter shims.
+    pub time_pattern: &'static str,
+    /// First day of week using ISO: 1=Mon ... 7=Sun.
+    pub first_day_of_week: u8,
+}
+
 pub const LANGUAGES: &[Language] = &[
     Language {
         code: "sq",
@@ -205,6 +221,65 @@ pub const LANGUAGES: &[Language] = &[
 
 pub const DEFAULT_LANGUAGE_CODE: &str = "en";
 pub const DEFAULT_GERMAN_LANGUAGE_CODE: &str = "de";
+pub const DEFAULT_INTL_LOCALE: &str = "en";
+
+pub const INTL_LOCALES: &[IntlLocaleProfile] = &[
+    IntlLocaleProfile {
+        code: "en",
+        language_name: "English",
+        decimal_separator: '.',
+        grouping_separator: ',',
+        minus_sign: '-',
+        percent_sign: '%',
+        date_pattern: "MM/dd/yyyy",
+        time_pattern: "HH:mm:ss",
+        first_day_of_week: 7,
+    },
+    IntlLocaleProfile {
+        code: "de",
+        language_name: "German",
+        decimal_separator: ',',
+        grouping_separator: '.',
+        minus_sign: '-',
+        percent_sign: '%',
+        date_pattern: "dd.MM.yyyy",
+        time_pattern: "HH:mm:ss",
+        first_day_of_week: 1,
+    },
+    IntlLocaleProfile {
+        code: "fr",
+        language_name: "French",
+        decimal_separator: ',',
+        grouping_separator: ' ',
+        minus_sign: '-',
+        percent_sign: '%',
+        date_pattern: "dd/MM/yyyy",
+        time_pattern: "HH:mm:ss",
+        first_day_of_week: 1,
+    },
+    IntlLocaleProfile {
+        code: "pt",
+        language_name: "Portuguese",
+        decimal_separator: ',',
+        grouping_separator: '.',
+        minus_sign: '-',
+        percent_sign: '%',
+        date_pattern: "dd/MM/yyyy",
+        time_pattern: "HH:mm:ss",
+        first_day_of_week: 1,
+    },
+    IntlLocaleProfile {
+        code: "sv",
+        language_name: "Swedish",
+        decimal_separator: ',',
+        grouping_separator: ' ',
+        minus_sign: '-',
+        percent_sign: '%',
+        date_pattern: "yyyy-MM-dd",
+        time_pattern: "HH:mm:ss",
+        first_day_of_week: 1,
+    },
+];
 
 #[inline]
 pub fn is_supported_language(code: &str) -> bool {
@@ -218,4 +293,36 @@ pub fn normalized_language_code(code: &str) -> &str {
     } else {
         DEFAULT_LANGUAGE_CODE
     }
+}
+
+#[inline]
+fn base_language(code: &str) -> &str {
+    code.split(['-', '_']).next().unwrap_or(DEFAULT_LANGUAGE_CODE)
+}
+
+#[inline]
+pub fn is_supported_intl_locale(code: &str) -> bool {
+    let base = base_language(code);
+    INTL_LOCALES
+        .iter()
+        .any(|l| l.code.eq_ignore_ascii_case(base))
+}
+
+#[inline]
+pub fn normalized_intl_locale(code: &str) -> &str {
+    let base = base_language(code);
+    if is_supported_intl_locale(base) {
+        base
+    } else {
+        DEFAULT_INTL_LOCALE
+    }
+}
+
+#[inline]
+pub fn intl_locale_profile(code: &str) -> &'static IntlLocaleProfile {
+    let normalized = normalized_intl_locale(code);
+    INTL_LOCALES
+        .iter()
+        .find(|l| l.code.eq_ignore_ascii_case(normalized))
+        .unwrap_or(&INTL_LOCALES[0])
 }

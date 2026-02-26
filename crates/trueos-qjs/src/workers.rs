@@ -532,11 +532,7 @@ unsafe fn worker_id_from_this(
         -1
     };
     unsafe { qjs::js_free_value(ctx, v) };
-    if id <= 0 {
-        None
-    } else {
-        Some(id as u32)
-    }
+    if id <= 0 { None } else { Some(id as u32) }
 }
 
 #[inline]

@@ -323,7 +323,7 @@ impl<T, const N: usize> Tree<T, N> {
         W: Write,
         F: FnMut(&T, &mut W) -> fmt::Result,
     {
-        use crate::ascii_tree::{write_ascii_tree, ArrayStack, AsciiStack, Frame};
+        use crate::ascii_tree::{ArrayStack, AsciiStack, Frame, write_ascii_tree};
 
         if max_entries == 0 || !self.is_used(start) {
             return Ok(());
@@ -363,7 +363,7 @@ impl<T, const N: usize> Tree<T, N> {
     where
         F: FnMut(&T, &mut alloc::string::String),
     {
-        use crate::html_tree::{tree_to_html_string, DEFAULT_MAX_ITEMS};
+        use crate::html_tree::{DEFAULT_MAX_ITEMS, tree_to_html_string};
 
         tree_to_html_string(self, start, DEFAULT_MAX_ITEMS, |id, s| {
             let v = &self.node(id).value;

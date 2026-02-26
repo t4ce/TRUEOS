@@ -5,7 +5,6 @@ use spin::Once;
 
 // NOTE: VGA is immediate-mode into the Limine framebuffer.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::PI;
 use core::fmt;
@@ -43,13 +42,33 @@ unsafe impl Sync for FramebufferSurface {}
 static FRAMEBUFFER: Once<Option<FramebufferSurface>> = Once::new();
 static FONT_CACHE_SMALL: Once<FontCacheSmall> = Once::new();
 static FONT_CACHE_LARGE: Once<FontCacheLarge> = Once::new();
-static FONT_ATLAS_SMALL: Once<FontAtlasBuffers> = Once::new();
-static FONT_ATLAS_LARGE: Once<FontAtlasBuffers> = Once::new();
 static FONT_READY_SMALL: AtomicBool = AtomicBool::new(false);
 static FONT_READY_LARGE: AtomicBool = AtomicBool::new(false);
+// THIS IS ONE WAY; BY LAW; TOGGLE IT BACK MAKE 0 SENCE;
+static VGA_SWAPPED: AtomicBool = AtomicBool::new(false);
 static TOP_MARGIN: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_NEXT_Y: AtomicUsize = AtomicUsize::new(DEFAULT_TOP_MARGIN);
 static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
+
+#[inline]
+pub fn vga_swapped() -> bool {
+    VGA_SWAPPED.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn mark_vga_swapped() {
+    VGA_SWAPPED.store(true, Ordering::Release);
+}
+
+pub fn restore_vga_from_gfx_backbuffer() -> bool {
+    with_framebuffer(|fb| {
+        crate::gfx::with_cpu_backbuffer_mut(|pixels, bw, bh| {
+            fb.blit_from_cpu_backbuffer(pixels, bw, bh);
+        })
+        .is_some()
+    })
+    .unwrap_or(false)
+}
 
 fn log_advance_line(fb_height: usize, current_y: usize) -> usize {
     let start_y = TOP_MARGIN.load(Ordering::Relaxed);
@@ -256,6 +275,18 @@ impl FramebufferSurface {
     }
 
     fn clear(&self, color: u32) {
+        if vga_swapped() {
+            let _ = crate::gfx::with_cpu_backbuffer_mut(|pixels, bw, bh| {
+                let copy_w = self.width.min(bw);
+                let copy_h = self.height.min(bh);
+                for y in 0..copy_h {
+                    let off = y.saturating_mul(bw);
+                    pixels[off..off + copy_w].fill(color);
+                }
+            });
+            return;
+        }
+
         if self.bytes_per_pixel != 4 || self.width == 0 || self.height == 0 {
             return;
         }
@@ -266,6 +297,24 @@ impl FramebufferSurface {
             // We only touch the visible `width` pixels, not the full `pitch`.
             let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, self.width) };
             row.fill(color);
+        }
+    }
+
+    fn blit_from_cpu_backbuffer(&self, src: &[u32], src_w: usize, src_h: usize) {
+        if self.bytes_per_pixel != 4 || self.width == 0 || self.height == 0 {
+            return;
+        }
+        let copy_w = self.width.min(src_w);
+        let copy_h = self.height.min(src_h);
+        if copy_w == 0 || copy_h == 0 {
+            return;
+        }
+        for y in 0..copy_h {
+            let src_off = y.saturating_mul(src_w);
+            let src_row = &src[src_off..src_off + copy_w];
+            let dst_row_ptr = unsafe { self.addr.add(y.saturating_mul(self.pitch)) as *mut u32 };
+            let dst_row = unsafe { core::slice::from_raw_parts_mut(dst_row_ptr, self.width) };
+            dst_row[..copy_w].copy_from_slice(src_row);
         }
     }
     fn blit_text(
@@ -331,10 +380,16 @@ impl FramebufferSurface {
         if !FONT_READY_SMALL.load(Ordering::Acquire) {
             return;
         }
+        let swapped = vga_swapped();
         let cache = font_cache_small();
 
         // Fast path: default log palette uses a precolored 6x6 cache.
-        if fg == DEFAULT_FG_COLOR && bg == DEFAULT_BG_COLOR && shadow == DEFAULT_SHADOW_COLOR {
+        // Keep swapped-mode writes routed through `write_pixel`.
+        if !swapped
+            && fg == DEFAULT_FG_COLOR
+            && bg == DEFAULT_BG_COLOR
+            && shadow == DEFAULT_SHADOW_COLOR
+        {
             let glyph = cache
                 .lookup_colored(ch)
                 .or_else(|| cache.lookup_colored('?'))
@@ -400,25 +455,51 @@ impl FramebufferSurface {
             return;
         };
 
-        for row in 0..FONT_CELL_H {
-            let pixel_y = origin_y + row;
-            if pixel_y >= self.height {
-                continue;
-            }
-            for col in 0..FONT_CELL_W {
-                let pixel_x = origin_x + col;
-                if pixel_x >= self.width {
+        if swapped {
+            for row in 0..FONT_CELL_H {
+                let pixel_y = origin_y + row;
+                if pixel_y >= self.height {
                     continue;
                 }
-                let alpha = glyph.alpha[row * FONT_CELL_W + col];
-                let color = Self::blend_color(bg, fg, alpha);
-                self.write_pixel(pixel_x, pixel_y, color);
-                if alpha > 0 {
-                    let shadow_x = pixel_x + 1;
-                    let shadow_y = pixel_y + 1;
-                    if shadow_x < self.width && shadow_y < self.height {
-                        let shadow_color = Self::blend_color(bg, shadow, alpha);
-                        self.write_pixel(shadow_x, shadow_y, shadow_color);
+                for col in 0..FONT_CELL_W {
+                    let pixel_x = origin_x + col;
+                    if pixel_x >= self.width {
+                        continue;
+                    }
+                    let alpha = glyph.alpha[row * FONT_CELL_W + col];
+                    let color = Self::blend_color(bg, fg, alpha);
+                    self.write_pixel_swapped(pixel_x, pixel_y, color);
+                    if alpha > 0 {
+                        let shadow_x = pixel_x + 1;
+                        let shadow_y = pixel_y + 1;
+                        if shadow_x < self.width && shadow_y < self.height {
+                            let shadow_color = Self::blend_color(bg, shadow, alpha);
+                            self.write_pixel_swapped(shadow_x, shadow_y, shadow_color);
+                        }
+                    }
+                }
+            }
+        } else {
+            for row in 0..FONT_CELL_H {
+                let pixel_y = origin_y + row;
+                if pixel_y >= self.height {
+                    continue;
+                }
+                for col in 0..FONT_CELL_W {
+                    let pixel_x = origin_x + col;
+                    if pixel_x >= self.width {
+                        continue;
+                    }
+                    let alpha = glyph.alpha[row * FONT_CELL_W + col];
+                    let color = Self::blend_color(bg, fg, alpha);
+                    self.write_pixel(pixel_x, pixel_y, color);
+                    if alpha > 0 {
+                        let shadow_x = pixel_x + 1;
+                        let shadow_y = pixel_y + 1;
+                        if shadow_x < self.width && shadow_y < self.height {
+                            let shadow_color = Self::blend_color(bg, shadow, alpha);
+                            self.write_pixel(shadow_x, shadow_y, shadow_color);
+                        }
                     }
                 }
             }
@@ -434,25 +515,51 @@ impl FramebufferSurface {
         bg: u32,
         shadow: u32,
     ) {
-        for row in 0..BANNER_CELL_H {
-            let pixel_y = origin_y + row;
-            if pixel_y >= self.height {
-                continue;
-            }
-            for col in 0..BANNER_CELL_W {
-                let pixel_x = origin_x + col;
-                if pixel_x >= self.width {
+        if vga_swapped() {
+            for row in 0..BANNER_CELL_H {
+                let pixel_y = origin_y + row;
+                if pixel_y >= self.height {
                     continue;
                 }
-                let alpha = glyph.alpha[row * BANNER_CELL_W + col];
-                let color = Self::blend_color(bg, fg, alpha);
-                self.write_pixel(pixel_x, pixel_y, color);
-                if alpha > 0 {
-                    let shadow_x = pixel_x + 1;
-                    let shadow_y = pixel_y + 1;
-                    if shadow_x < self.width && shadow_y < self.height {
-                        let shadow_color = Self::blend_color(bg, shadow, alpha);
-                        self.write_pixel(shadow_x, shadow_y, shadow_color);
+                for col in 0..BANNER_CELL_W {
+                    let pixel_x = origin_x + col;
+                    if pixel_x >= self.width {
+                        continue;
+                    }
+                    let alpha = glyph.alpha[row * BANNER_CELL_W + col];
+                    let color = Self::blend_color(bg, fg, alpha);
+                    self.write_pixel_swapped(pixel_x, pixel_y, color);
+                    if alpha > 0 {
+                        let shadow_x = pixel_x + 1;
+                        let shadow_y = pixel_y + 1;
+                        if shadow_x < self.width && shadow_y < self.height {
+                            let shadow_color = Self::blend_color(bg, shadow, alpha);
+                            self.write_pixel_swapped(shadow_x, shadow_y, shadow_color);
+                        }
+                    }
+                }
+            }
+        } else {
+            for row in 0..BANNER_CELL_H {
+                let pixel_y = origin_y + row;
+                if pixel_y >= self.height {
+                    continue;
+                }
+                for col in 0..BANNER_CELL_W {
+                    let pixel_x = origin_x + col;
+                    if pixel_x >= self.width {
+                        continue;
+                    }
+                    let alpha = glyph.alpha[row * BANNER_CELL_W + col];
+                    let color = Self::blend_color(bg, fg, alpha);
+                    self.write_pixel(pixel_x, pixel_y, color);
+                    if alpha > 0 {
+                        let shadow_x = pixel_x + 1;
+                        let shadow_y = pixel_y + 1;
+                        if shadow_x < self.width && shadow_y < self.height {
+                            let shadow_color = Self::blend_color(bg, shadow, alpha);
+                            self.write_pixel(shadow_x, shadow_y, shadow_color);
+                        }
                     }
                 }
             }
@@ -468,6 +575,15 @@ impl FramebufferSurface {
         }
     }
 
+    fn write_pixel_swapped(&self, x: usize, y: usize, color: u32) {
+        let _ = crate::gfx::with_cpu_backbuffer_mut(|pixels, w, h| {
+            if x < w && y < h {
+                let off = y.saturating_mul(w).saturating_add(x);
+                pixels[off] = color;
+            }
+        });
+    }
+
     fn plot_if_visible(&self, x: i32, y: i32, color: u32) {
         if x < 0 || y < 0 {
             return;
@@ -479,8 +595,23 @@ impl FramebufferSurface {
         self.write_pixel(xu, yu, color);
     }
 
+    fn plot_if_visible_swapped(&self, x: i32, y: i32, color: u32) {
+        if x < 0 || y < 0 {
+            return;
+        }
+        let (xu, yu) = (x as usize, y as usize);
+        if xu >= self.width || yu >= self.height {
+            return;
+        }
+        self.write_pixel_swapped(xu, yu, color);
+    }
+
     pub(super) fn plot(&self, x: i32, y: i32, color: u32) {
         self.plot_if_visible(x, y, color);
+    }
+
+    pub(super) fn plot_swapped(&self, x: i32, y: i32, color: u32) {
+        self.plot_if_visible_swapped(x, y, color);
     }
 
     #[inline]
@@ -515,19 +646,37 @@ impl FramebufferSurface {
         let sy = if y0 < y1 { 1 } else { -1 };
         let mut err = dx + dy;
 
-        loop {
-            self.plot_if_visible(x0, y0, color);
-            if x0 == x1 && y0 == y1 {
-                break;
+        if vga_swapped() {
+            loop {
+                self.plot_if_visible_swapped(x0, y0, color);
+                if x0 == x1 && y0 == y1 {
+                    break;
+                }
+                let e2 = err.saturating_mul(2);
+                if e2 >= dy {
+                    err += dy;
+                    x0 = x0.saturating_add(sx);
+                }
+                if e2 <= dx {
+                    err += dx;
+                    y0 = y0.saturating_add(sy);
+                }
             }
-            let e2 = err.saturating_mul(2);
-            if e2 >= dy {
-                err += dy;
-                x0 = x0.saturating_add(sx);
-            }
-            if e2 <= dx {
-                err += dx;
-                y0 = y0.saturating_add(sy);
+        } else {
+            loop {
+                self.plot_if_visible(x0, y0, color);
+                if x0 == x1 && y0 == y1 {
+                    break;
+                }
+                let e2 = err.saturating_mul(2);
+                if e2 >= dy {
+                    err += dy;
+                    x0 = x0.saturating_add(sx);
+                }
+                if e2 <= dx {
+                    err += dx;
+                    y0 = y0.saturating_add(sy);
+                }
             }
         }
     }
@@ -540,6 +689,21 @@ impl FramebufferSurface {
         height: usize,
         color: u32,
     ) {
+        if vga_swapped() {
+            let _ = crate::gfx::with_cpu_backbuffer_mut(|pixels, bw, bh| {
+                let max_x = origin_x.saturating_add(width).min(self.width).min(bw);
+                let max_y = origin_y.saturating_add(height).min(self.height).min(bh);
+                if origin_x >= max_x || origin_y >= max_y {
+                    return;
+                }
+                for y in origin_y..max_y {
+                    let off = y.saturating_mul(bw);
+                    pixels[off + origin_x..off + max_x].fill(color);
+                }
+            });
+            return;
+        }
+
         if self.bytes_per_pixel != 4 {
             return;
         }
@@ -566,13 +730,39 @@ impl FramebufferSurface {
             return;
         }
 
-        if self.bytes_per_pixel != 4 || origin_x >= self.width || origin_y >= self.height {
+        if origin_x >= self.width || origin_y >= self.height {
             return;
         }
 
         let copy_w = image.width.min(self.width - origin_x);
         let copy_h = image.height.min(self.height - origin_y);
         if copy_w == 0 || copy_h == 0 {
+            return;
+        }
+
+        if vga_swapped() {
+            let _ = crate::gfx::with_cpu_backbuffer_mut(|pixels, bw, bh| {
+                if origin_x >= bw || origin_y >= bh {
+                    return;
+                }
+                let routed_w = copy_w.min(bw - origin_x);
+                let routed_h = copy_h.min(bh - origin_y);
+                if routed_w == 0 || routed_h == 0 {
+                    return;
+                }
+                for y in 0..routed_h {
+                    let dst_y = origin_y + y;
+                    let src_off = y * image.width;
+                    let src_row = &image.pixels[src_off..src_off + routed_w];
+                    let dst_off = dst_y.saturating_mul(bw);
+                    pixels[dst_off + origin_x..dst_off + origin_x + routed_w]
+                        .copy_from_slice(src_row);
+                }
+            });
+            return;
+        }
+
+        if self.bytes_per_pixel != 4 {
             return;
         }
 
@@ -781,6 +971,10 @@ pub fn get_banner_glyph(ch: char) -> Option<(&'static [u8], usize)> {
         .map(|g| (&g.alpha[..], g.width as usize))
 }
 
+pub fn get_small_glyph(ch: char) -> Option<&'static [u8]> {
+    font_cache_small().lookup(ch).map(|g| &g.alpha[..])
+}
+
 pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
     let text = BANNER_TEXT;
     let height = BANNER_CELL_H;
@@ -820,146 +1014,6 @@ pub fn get_logo_buffer() -> (Vec<u32>, usize, usize) {
     }
 
     (buffer, total_width, height)
-}
-
-struct FontAtlasBuffers {
-    alpha: Vec<u8>,
-    index: Vec<u16>,
-    widths: Vec<u8>,
-    width: u32,
-    height: u32,
-    cell_w: u32,
-    cell_h: u32,
-    grid_w: u32,
-    grid_h: u32,
-}
-
-pub struct FontAtlasView<'a> {
-    pub alpha: &'a [u8],
-    pub index: &'a [u16],
-    pub widths: &'a [u8],
-    pub width: u32,
-    pub height: u32,
-    pub cell_w: u32,
-    pub cell_h: u32,
-    pub grid_w: u32,
-    pub grid_h: u32,
-}
-
-fn build_font_atlas_small() -> FontAtlasBuffers {
-    const GRID: usize = 16;
-    let cache = font_cache_small();
-    let width = GRID * FONT_CELL_W;
-    let height = GRID * FONT_CELL_H;
-    let mut alpha = vec![0u8; width * height];
-
-    for (slot, glyph) in cache.glyphs.iter().enumerate() {
-        if slot >= GRID * GRID {
-            break;
-        }
-        let cell_x = (slot % GRID) * FONT_CELL_W;
-        let cell_y = (slot / GRID) * FONT_CELL_H;
-        for y in 0..FONT_CELL_H {
-            let dst_y = cell_y + y;
-            for x in 0..FONT_CELL_W {
-                let dst_x = cell_x + x;
-                let a = glyph.alpha[y * FONT_CELL_W + x];
-                let dst = dst_y * width + dst_x;
-                alpha[dst] = a;
-            }
-        }
-    }
-
-    let mut index = Vec::with_capacity(cache.index.len());
-    index.extend_from_slice(&cache.index);
-
-    FontAtlasBuffers {
-        alpha,
-        index,
-        widths: Vec::new(),
-        width: width as u32,
-        height: height as u32,
-        cell_w: FONT_CELL_W as u32,
-        cell_h: FONT_CELL_H as u32,
-        grid_w: GRID as u32,
-        grid_h: GRID as u32,
-    }
-}
-
-fn build_font_atlas_large() -> FontAtlasBuffers {
-    const GRID: usize = 16;
-    let cache = font_cache_large();
-    let width = GRID * BANNER_CELL_W;
-    let height = GRID * BANNER_CELL_H;
-    let mut alpha = vec![0u8; width * height];
-
-    for (slot, glyph) in cache.glyphs.iter().enumerate() {
-        if slot >= GRID * GRID {
-            break;
-        }
-        let cell_x = (slot % GRID) * BANNER_CELL_W;
-        let cell_y = (slot / GRID) * BANNER_CELL_H;
-        for y in 0..BANNER_CELL_H {
-            let dst_y = cell_y + y;
-            for x in 0..BANNER_CELL_W {
-                let dst_x = cell_x + x;
-                let a = glyph.alpha[y * BANNER_CELL_W + x];
-                let dst = dst_y * width + dst_x;
-                alpha[dst] = a;
-            }
-        }
-    }
-
-    let mut index = Vec::with_capacity(cache.index.len());
-    index.extend_from_slice(&cache.index);
-
-    let mut widths = Vec::with_capacity(cache.glyphs.len());
-    for g in cache.glyphs.iter() {
-        widths.push(g.width);
-    }
-
-    FontAtlasBuffers {
-        alpha,
-        index,
-        widths,
-        width: width as u32,
-        height: height as u32,
-        cell_w: BANNER_CELL_W as u32,
-        cell_h: BANNER_CELL_H as u32,
-        grid_w: GRID as u32,
-        grid_h: GRID as u32,
-    }
-}
-
-fn font_atlas_small() -> &'static FontAtlasBuffers {
-    FONT_ATLAS_SMALL.call_once(build_font_atlas_small)
-}
-
-fn font_atlas_large() -> &'static FontAtlasBuffers {
-    FONT_ATLAS_LARGE.call_once(build_font_atlas_large)
-}
-
-#[inline]
-fn font_atlas_view_from_buffers(atlas: &'static FontAtlasBuffers) -> FontAtlasView<'static> {
-    FontAtlasView {
-        alpha: atlas.alpha.as_slice(),
-        index: atlas.index.as_slice(),
-        widths: atlas.widths.as_slice(),
-        width: atlas.width,
-        height: atlas.height,
-        cell_w: atlas.cell_w,
-        cell_h: atlas.cell_h,
-        grid_w: atlas.grid_w,
-        grid_h: atlas.grid_h,
-    }
-}
-
-pub fn font_atlas_small_view() -> FontAtlasView<'static> {
-    font_atlas_view_from_buffers(font_atlas_small())
-}
-
-pub fn font_atlas_large_view() -> FontAtlasView<'static> {
-    font_atlas_view_from_buffers(font_atlas_large())
 }
 
 fn font_cache_large() -> &'static FontCacheLarge {

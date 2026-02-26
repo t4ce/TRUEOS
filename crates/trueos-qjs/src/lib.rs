@@ -43,6 +43,9 @@ pub mod pixi;
 pub mod threejs;
 
 #[cfg(feature = "trueos")]
+pub mod wgpu;
+
+#[cfg(feature = "trueos")]
 pub use pixi::hex as stream_gfx_smoke;
 
 #[cfg(feature = "trueos")]
@@ -73,7 +76,11 @@ pub fn set_font_atlas_small_provider(provider: FontAtlasSmallProvider) {
 
 #[cfg(feature = "trueos")]
 pub fn font_atlas_small_view() -> Option<FontAtlasView<'static>> {
-    FONT_ATLAS_SMALL_PROVIDER.lock().as_ref().copied().map(|f| f())
+    FONT_ATLAS_SMALL_PROVIDER
+        .lock()
+        .as_ref()
+        .copied()
+        .map(|f| f())
 }
 
 #[repr(C)]

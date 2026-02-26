@@ -1,7 +1,11 @@
 pub mod backends;
+pub mod webgpu_font;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
+#[cfg(feature = "gfx_virgl")]
+pub mod wgpu_act;
 
+use alloc::vec;
 use spin::{Mutex, Once};
 
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -9,6 +13,7 @@ use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
+static CPU_BACKBUFFER: Once<Mutex<Option<CpuBackbuffer>>> = Once::new();
 static BACKEND_EPOCH: AtomicU64 = AtomicU64::new(1);
 static DISPLAY_SOURCE: AtomicU8 = AtomicU8::new(0);
 
@@ -111,6 +116,29 @@ pub struct System {
     framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
 }
 
+struct CpuBackbuffer {
+    width: usize,
+    height: usize,
+    pixels: vec::Vec<u32>,
+}
+
+fn alloc_cpu_backbuffer(
+    framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+) -> Option<CpuBackbuffer> {
+    let fb = framebuffers.and_then(|resp| resp.framebuffers().next())?;
+    let width = fb.width() as usize;
+    let height = fb.height() as usize;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let len = width.saturating_mul(height);
+    Some(CpuBackbuffer {
+        width,
+        height,
+        pixels: vec![0u32; len],
+    })
+}
+
 impl System {
     fn new(
         backend: backends::Backend,
@@ -128,10 +156,32 @@ impl System {
 }
 
 pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferResponse>) {
+    let _ = CPU_BACKBUFFER.call_once(|| Mutex::new(alloc_cpu_backbuffer(framebuffers)));
     let _ = SYSTEM.call_once(|| {
+        // if we use this qemu will do whatever it wants. that hurts particularly much
+        // because a seemingly harmless init is a contract here:
+        // that takes our eyeballs
         let backend = backends::Backend::init_auto(framebuffers);
+        #[cfg(feature = "gfx_virgl")]
+        if matches!(&backend, backends::Backend::Virgl(_)) {
+            crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
+        }
         Mutex::new(System::new(backend, framebuffers))
     });
+}
+
+pub fn with_cpu_backbuffer_mut<R>(f: impl FnOnce(&mut [u32], usize, usize) -> R) -> Option<R> {
+    let bb = CPU_BACKBUFFER.get()?;
+    let mut guard = bb.lock();
+    let buf = guard.as_mut()?;
+    Some(f(buf.pixels.as_mut_slice(), buf.width, buf.height))
+}
+
+pub fn cpu_backbuffer_dimensions() -> Option<(usize, usize)> {
+    let bb = CPU_BACKBUFFER.get()?;
+    let guard = bb.lock();
+    let buf = guard.as_ref()?;
+    Some((buf.width, buf.height))
 }
 
 pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
@@ -216,6 +266,7 @@ pub fn switch_to_virgl() -> bool {
     with_system(|sys| {
         sys.backend = b;
         bump_backend_epoch();
+        crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
     })

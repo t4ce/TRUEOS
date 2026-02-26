@@ -155,14 +155,16 @@ unsafe fn resolve_undefined(ctx: *mut qjs::JSContext, op: &PendingOp) {
 }
 
 fn read_file_via_cabi(path: &[u8]) -> Result<Vec<u8>, i32> {
-    let len = unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
+    let len =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), core::ptr::null_mut(), 0) };
     if len < 0 {
         return Err(len as i32);
     }
     let len = len as usize;
     let mut buf: Vec<u8> = Vec::with_capacity(len);
     buf.resize(len, 0);
-    let got = unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf.as_mut_ptr(), buf.len()) };
+    let got =
+        unsafe { trueos_cabi_fs_read_file(path.as_ptr(), path.len(), buf.as_mut_ptr(), buf.len()) };
     if got < 0 {
         return Err(got as i32);
     }
@@ -212,11 +214,8 @@ unsafe fn pump_net_fetch_text(ctx: *mut qjs::JSContext) -> bool {
         // Read downloaded bytes and resolve as a JS string.
         match read_file_via_cabi(op.aux.as_slice()) {
             Ok(buf) => {
-                let s = qjs::JS_NewStringLen(
-                    ctx,
-                    buf.as_ptr() as *const core::ffi::c_char,
-                    buf.len(),
-                );
+                let s =
+                    qjs::JS_NewStringLen(ctx, buf.as_ptr() as *const core::ffi::c_char, buf.len());
                 resolve_with_value(ctx, &op, s);
             }
             Err(code) => {
