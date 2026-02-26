@@ -197,7 +197,7 @@ impl<K: Ord + Clone, V, const M: usize> BPlusTree<K, V, M> {
         W: Write,
         F: FnMut(&K, &mut W) -> fmt::Result,
     {
-        use crate::ascii_tree::{write_ascii_tree, Frame};
+        use crate::ascii_tree::{Frame, write_ascii_tree};
 
         if max_nodes == 0 {
             return Ok(());

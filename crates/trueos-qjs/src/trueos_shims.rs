@@ -152,11 +152,7 @@ pub unsafe extern "C" fn __assert_fail(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abs(x: c_int) -> c_int {
-    if x < 0 {
-        -x
-    } else {
-        x
-    }
+    if x < 0 { -x } else { x }
 }
 
 #[unsafe(no_mangle)]

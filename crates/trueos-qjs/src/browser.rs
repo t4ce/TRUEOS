@@ -34,11 +34,7 @@ fn js_bool(b: bool) -> qjs::JSValue {
 unsafe fn js_get_f64(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<f64> {
     let mut out = 0.0f64;
     let rc = unsafe { qjs::JS_ToFloat64(ctx, &mut out as *mut f64, v) };
-    if rc == 0 {
-        Some(out)
-    } else {
-        None
-    }
+    if rc == 0 { Some(out) } else { None }
 }
 
 #[inline]
@@ -635,9 +631,7 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
         // Walk parentNode chain.
         let mut cur = qjs::js_dup_value(ctx, needle);
         for _ in 0..64 {
-            if cur.is_exception()
-                || cur.tag == qjs::JS_TAG_UNDEFINED
-                || cur.tag == qjs::JS_TAG_NULL
+            if cur.is_exception() || cur.tag == qjs::JS_TAG_UNDEFINED || cur.tag == qjs::JS_TAG_NULL
             {
                 qjs::js_free_value(ctx, cur);
                 return js_bool(false);
@@ -646,8 +640,7 @@ pub unsafe fn make_dom_like_element(ctx: *mut qjs::JSContext) -> qjs::JSValue {
                 qjs::js_free_value(ctx, cur);
                 return js_bool(true);
             }
-            let next =
-                qjs::JS_GetPropertyStr(ctx, cur, b"parentNode\0".as_ptr() as *const c_char);
+            let next = qjs::JS_GetPropertyStr(ctx, cur, b"parentNode\0".as_ptr() as *const c_char);
             qjs::js_free_value(ctx, cur);
             cur = next;
         }

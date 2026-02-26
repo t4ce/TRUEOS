@@ -54,8 +54,6 @@ pub fn run_ap_forever() -> ! {
     // "frame-locked" to whatever other subsystem happens to call `time::poll()`.
     let mut counter: u64 = 0;
     loop {
- 
-
         // Low-rate maintenance / indicator.
         if counter.is_multiple_of(100_000) {
             // Drive async wakeups and progress continuously on APs.

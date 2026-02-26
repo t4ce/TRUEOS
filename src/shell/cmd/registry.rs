@@ -643,6 +643,8 @@ pub(crate) fn init_builtin_shell_commands() {
 
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
+        let _ = REGSHCMD("gfx", &NO_ARGS, cmd::cmd_gfx);
+        let _ = REGSHCMD("gfx.status", &NO_ARGS, cmd::cmd_gfx_status);
         let _ = REGSHCMD("go", &[], cmd::cmd_go);
         let _ = REGSHCMD("go.two", &[], cmd::cmd_go_two);
 

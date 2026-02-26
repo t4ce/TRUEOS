@@ -1826,6 +1826,66 @@ pub mod cabi {
         ret
     }
 
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_present_rgba(
+        tex_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+        clear_rgb: u32,
+    ) -> i32 {
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct TexVertex {
+            x: f32,
+            y: f32,
+            u: f32,
+            v: f32,
+            r: u8,
+            g: u8,
+            b: u8,
+            a: u8,
+        }
+
+        let rc = trueos_cabi_gfx_upload_texture_rgba(tex_id, width, height, data_ptr, data_len);
+        if rc != 0 {
+            return rc;
+        }
+
+        let rc = trueos_cabi_gfx_set_sampler(0, 0, 0, 0);
+        if rc != 0 {
+            return rc;
+        }
+        let rc = trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0);
+        if rc != 0 {
+            return rc;
+        }
+
+        let rc = trueos_cabi_gfx_begin_frame(clear_rgb);
+        if rc != 0 {
+            return rc;
+        }
+
+        let verts = [
+            TexVertex { x: -1.0, y: -1.0, u: 0.0, v: 1.0, r: 255, g: 255, b: 255, a: 255 },
+            TexVertex { x: 1.0, y: -1.0, u: 1.0, v: 1.0, r: 255, g: 255, b: 255, a: 255 },
+            TexVertex { x: 1.0, y: 1.0, u: 1.0, v: 0.0, r: 255, g: 255, b: 255, a: 255 },
+            TexVertex { x: -1.0, y: -1.0, u: 0.0, v: 1.0, r: 255, g: 255, b: 255, a: 255 },
+            TexVertex { x: 1.0, y: 1.0, u: 1.0, v: 0.0, r: 255, g: 255, b: 255, a: 255 },
+            TexVertex { x: -1.0, y: 1.0, u: 0.0, v: 0.0, r: 255, g: 255, b: 255, a: 255 },
+        ];
+        let vtx_ptr = verts.as_ptr() as *const u8;
+        let vtx_len = core::mem::size_of::<TexVertex>() * verts.len();
+        let rc = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, vtx_ptr, vtx_len);
+        if rc != 0 {
+            let _ = trueos_cabi_gfx_end_frame();
+            return rc;
+        }
+
+        trueos_cabi_gfx_end_frame()
+    }
+
     // --- Input C-ABI ---
 
     #[unsafe(no_mangle)]

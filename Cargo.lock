@@ -1656,6 +1656,7 @@ dependencies = [
  "libm",
  "spin 0.10.0",
  "trueos-math",
+ "trueos-weather",
 ]
 
 [[package]]
