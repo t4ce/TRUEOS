@@ -30,7 +30,14 @@ static FONT_ATLAS_SMALL: Once<FontAtlasBuffers> = Once::new();
 static FONT_ATLAS_LARGE: Once<FontAtlasBuffers> = Once::new();
 
 #[inline]
-fn fill_cell(alpha: &mut [u8], atlas_w: usize, cell_w: usize, cell_h: usize, slot: usize, src: &[u8]) {
+fn fill_cell(
+    alpha: &mut [u8],
+    atlas_w: usize,
+    cell_w: usize,
+    cell_h: usize,
+    slot: usize,
+    src: &[u8],
+) {
     const GRID: usize = 16;
     let cell_x = (slot % GRID) * cell_w;
     let cell_y = (slot / GRID) * cell_h;

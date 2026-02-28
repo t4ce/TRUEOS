@@ -1539,6 +1539,7 @@ pub struct VirglGfxBackend {
     debug_tex_view_created: bool,
     blend_handle_disabled: u32,
     blend_handle_straight: u32,
+    blend_handle_additive: u32,
     blend_handle_premult: u32,
 
     swapchain: SwapchainDesc,
@@ -1751,6 +1752,7 @@ impl VirglGfxBackend {
         // 30.. are reserved for our fixed state objects.
         let blend_handle_disabled = 30u32;
         let blend_handle_straight = 33u32;
+        let blend_handle_additive = 35u32;
         let blend_handle_premult = 34u32;
         let dsa_handle = 31u32;
         let rs_handle = 32u32;
@@ -1802,12 +1804,37 @@ impl VirglGfxBackend {
             },
         );
 
+        // Gallium blend factors (Mesa pipe/p_defines.h).
+        const PIPE_BLENDFACTOR_ONE: u32 = 1;
+        const PIPE_BLENDFACTOR_SRC_ALPHA: u32 = 3;
+        const PIPE_BLENDFACTOR_INV_SRC_ALPHA: u32 = 0x13;
+
         // Disabled blending (opaque path).
         encode_create_blend(&mut init, blend_handle_disabled, false, 0, 0);
         // Straight alpha: src*srcA + dst*(1-srcA)
-        encode_create_blend(&mut init, blend_handle_straight, true, 0x12, 0x13);
+        encode_create_blend(
+            &mut init,
+            blend_handle_straight,
+            true,
+            PIPE_BLENDFACTOR_SRC_ALPHA,
+            PIPE_BLENDFACTOR_INV_SRC_ALPHA,
+        );
+        // Additive: src*srcA + dst*1
+        encode_create_blend(
+            &mut init,
+            blend_handle_additive,
+            true,
+            PIPE_BLENDFACTOR_SRC_ALPHA,
+            PIPE_BLENDFACTOR_ONE,
+        );
         // Premult alpha: src*1 + dst*(1-srcA)
-        encode_create_blend(&mut init, blend_handle_premult, true, 1, 0x13);
+        encode_create_blend(
+            &mut init,
+            blend_handle_premult,
+            true,
+            PIPE_BLENDFACTOR_ONE,
+            PIPE_BLENDFACTOR_INV_SRC_ALPHA,
+        );
 
         // Bind disabled by default to match WebGL state.
         encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle_disabled);
@@ -1854,6 +1881,7 @@ impl VirglGfxBackend {
             debug_tex_view_created: false,
             blend_handle_disabled,
             blend_handle_straight,
+            blend_handle_additive,
             blend_handle_premult,
             swapchain,
 
@@ -2475,6 +2503,7 @@ impl GfxDevice for VirglGfxBackend {
                             (BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha) => {
                                 self.blend_handle_straight
                             }
+                            (BlendFactor::SrcAlpha, BlendFactor::One) => self.blend_handle_additive,
                             (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => {
                                 self.blend_handle_premult
                             }
@@ -2554,7 +2583,10 @@ impl GfxDevice for VirglGfxBackend {
                         },
                     };
 
+                    let bypass_cache_for_color =
+                        pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::None;
                     if VIRGL_DISABLE_CONVERTED_VERTEX_CACHE
+                        || bypass_cache_for_color
                         || self.converted_cache.key != Some(cache_key)
                     {
                         let bound_image =
@@ -2606,6 +2638,7 @@ impl GfxDevice for VirglGfxBackend {
                     }
 
                     let need_upload = VIRGL_DISABLE_CONVERTED_VERTEX_CACHE
+                        || bypass_cache_for_color
                         || self.uploaded_cache_key != Some(cache_key)
                         || self.uploaded_cache_vbo_generation != self.vbo_generation;
                     if need_upload {
@@ -2739,6 +2772,11 @@ impl GfxDevice for VirglGfxBackend {
                         encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
                         encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
                     } else {
+                        // Keep color-only draws isolated from prior textured draws:
+                        // explicitly null-bind slot 0. Some virgl paths treat an
+                        // empty list as no-op and keep previous bindings alive.
+                        encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
+                        encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
                         encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
                         encode_bind_shader(&mut cmd, self.fs_color_handle, PIPE_SHADER_FRAGMENT);
                     }
