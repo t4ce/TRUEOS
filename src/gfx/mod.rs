@@ -1,7 +1,7 @@
 pub mod backends;
-pub mod webgpu_font;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
+pub mod webgpu_font;
 #[cfg(feature = "gfx_virgl")]
 pub mod wgpu_act;
 

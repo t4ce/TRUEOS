@@ -58,7 +58,7 @@ static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
 static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
 static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
-static CMD_STREAM_BLEND_ENABLED: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_BLEND_ENABLED: AtomicU32 = AtomicU32::new(1);
 static CMD_STREAM_FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
 static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -121,6 +121,14 @@ struct CmdStreamTextBatchRun {
 
 static CMD_STREAM_TEXT_BATCH_RUNS: Mutex<Vec<CmdStreamTextBatchRun>> = Mutex::new(Vec::new());
 
+const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
+const CMD_STREAM_DEFAULT_PMA: u32 = 0;
+const CMD_STREAM_DEFAULT_BLEND_ENABLED: u32 = 1;
+const CMD_STREAM_DEFAULT_WRAP_U: u32 = 0;
+const CMD_STREAM_DEFAULT_WRAP_V: u32 = 0;
+const CMD_STREAM_DEFAULT_MIN_FILTER: u32 = 1;
+const CMD_STREAM_DEFAULT_MAG_FILTER: u32 = 1;
+
 #[inline]
 fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
     match mode {
@@ -144,6 +152,28 @@ fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
                 let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
             }
         }
+    }
+}
+
+#[inline]
+fn cmd_stream_reset_frame_state_defaults() {
+    CMD_STREAM_BLEND_MODE.store(CMD_STREAM_DEFAULT_BLEND_MODE, Ordering::Relaxed);
+    CMD_STREAM_PMA.store(CMD_STREAM_DEFAULT_PMA, Ordering::Relaxed);
+    CMD_STREAM_BLEND_ENABLED.store(CMD_STREAM_DEFAULT_BLEND_ENABLED, Ordering::Relaxed);
+
+    let _ = unsafe {
+        trueos_cabi_gfx_set_sampler(
+            CMD_STREAM_DEFAULT_WRAP_U,
+            CMD_STREAM_DEFAULT_WRAP_V,
+            CMD_STREAM_DEFAULT_MIN_FILTER,
+            CMD_STREAM_DEFAULT_MAG_FILTER,
+        )
+    };
+
+    if CMD_STREAM_DEFAULT_BLEND_ENABLED != 0 {
+        cmd_stream_apply_blend_mode(CMD_STREAM_DEFAULT_BLEND_MODE, CMD_STREAM_DEFAULT_PMA != 0);
+    } else {
+        let _ = unsafe { trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
     }
 }
 
@@ -602,6 +632,7 @@ unsafe fn load_native_module(
             cmd_stream_clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
             let _ = trueos_cabi_gfx_begin_frame(clear);
+            cmd_stream_reset_frame_state_defaults();
             qjs::JSValue::undefined()
         }
 

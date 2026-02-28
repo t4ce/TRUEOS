@@ -175,6 +175,75 @@ const CX = W * 0.5;
 const CY = H * 0.5;
 const RING_COUNT = 8;
 
+const uiRoot = new PIXI.Container();
+
+const panel = new PIXI.Sprite(PIXI.Texture.WHITE);
+panel.anchor.set(0, 0);
+panel.tint = 0xF4F7FB;
+panel.alpha = 1.0;
+uiRoot.addChild(panel);
+
+const header = new PIXI.Sprite(PIXI.Texture.WHITE);
+header.anchor.set(0, 0);
+header.tint = 0x2A84FF;
+header.alpha = 0.18;
+uiRoot.addChild(header);
+
+const footer = new PIXI.Sprite(PIXI.Texture.WHITE);
+footer.anchor.set(0, 0);
+footer.tint = 0x1B3D63;
+footer.alpha = 0.14;
+uiRoot.addChild(footer);
+
+const cards = [];
+for (let i = 0; i < 3; i++) {
+    const c = new PIXI.Sprite(PIXI.Texture.WHITE);
+    c.anchor.set(0, 0);
+    c.tint = i === 1 ? 0xFF8B2E : 0x2A84FF;
+    c.alpha = i === 1 ? 0.30 : 0.22;
+    cards.push(c);
+    uiRoot.addChild(c);
+}
+
+function layoutUiBox(w, h) {
+    const pad = 24;
+    const gap = 14;
+    const headerH = 70;
+    const footerH = 52;
+    const rowY = pad + headerH + gap;
+    const rowH = Math.max(120, h - rowY - footerH - pad - gap);
+    const cardGap = 12;
+    const cardW = Math.max(80, ((w - pad * 2) - cardGap * 2) / 3);
+
+    panel.position.set(0, 0);
+    panel.width = w;
+    panel.height = h;
+
+    header.position.set(pad, pad);
+    header.width = Math.max(1, w - pad * 2);
+    header.height = headerH;
+
+    for (let i = 0; i < cards.length; i++) {
+        const x = pad + i * (cardW + cardGap);
+        cards[i].position.set(x, rowY);
+        cards[i].width = cardW;
+        cards[i].height = rowH;
+    }
+
+    footer.position.set(pad, h - pad - footerH);
+    footer.width = Math.max(1, w - pad * 2);
+    footer.height = footerH;
+
+    return {
+        pad,
+        headerH,
+        rowY,
+        rowH,
+        cardW,
+        footerY: h - pad - footerH,
+    };
+}
+
 const root = new PIXI.Container();
 const tex = PIXI.Texture.WHITE;
 const bg = new PIXI.Sprite(tex);
@@ -203,7 +272,7 @@ const labels = [
   { text: 'demo',  color: 0x303030, size: 12, phase: 3.92, r: 220 },
 ];
 
-const MAX_QUADS = 2 + RING_COUNT;
+const MAX_QUADS = 128;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
 const dv = new DataView(out.buffer);
 const atlasTex = cmd.createAtlasTexture(1);
@@ -212,6 +281,11 @@ G.__pixi_smoke = {
   root,
   bg,
   fg,
+    uiRoot,
+    panel,
+    header,
+    footer,
+    cards,
   labels,
   atlasTex,
   out,
@@ -254,12 +328,79 @@ function emitQuad(dv, out, off, cx, cy, w, h, rot, rgb, alpha) {
   return off;
 }
 
+function emitSpriteQuadFromPixiNode(dv, out, off, root, spr) {
+    const rw = Number(root.scale?.x ?? 1.0);
+    const rh = Number(root.scale?.y ?? 1.0);
+    const rr = Number(root.rotation ?? 0.0);
+    const rc = Math.cos(rr);
+    const rs = Math.sin(rr);
+    const rtx = Number(root.position?.x ?? 0.0);
+    const rty = Number(root.position?.y ?? 0.0);
+
+    const sw = Number(spr.width ?? 0.0);
+    const sh = Number(spr.height ?? 0.0);
+    const sx = Number(spr.position?.x ?? 0.0);
+    const sy = Number(spr.position?.y ?? 0.0);
+    const sr = Number(spr.rotation ?? 0.0);
+    const sc = Math.cos(sr);
+    const ss = Math.sin(sr);
+    const sax = Number(spr.anchor?.x ?? 0.0);
+    const say = Number(spr.anchor?.y ?? 0.0);
+
+    const tint = Number(spr.tint ?? 0xFFFFFF) >>> 0;
+    const alpha = Math.max(0, Math.min(255, Math.round(Number(spr.alpha ?? 1.0) * 255.0)));
+
+    const p = [
+        [-sax * sw, -say * sh],
+        [(1.0 - sax) * sw, -say * sh],
+        [(1.0 - sax) * sw, (1.0 - say) * sh],
+        [-sax * sw, (1.0 - say) * sh],
+    ];
+
+    const outPts = [];
+    for (let i = 0; i < 4; i++) {
+        const lx = p[i][0];
+        const ly = p[i][1];
+        const x1 = lx * sc - ly * ss + sx;
+        const y1 = lx * ss + ly * sc + sy;
+        const x2 = x1 * rw;
+        const y2 = y1 * rh;
+        const x3 = x2 * rc - y2 * rs + rtx;
+        const y3 = x2 * rs + y2 * rc + rty;
+        outPts.push([x3, y3]);
+    }
+
+    off = writeVertex(dv, out, off, outPts[0][0], outPts[0][1], tint, alpha);
+    off = writeVertex(dv, out, off, outPts[1][0], outPts[1][1], tint, alpha);
+    off = writeVertex(dv, out, off, outPts[2][0], outPts[2][1], tint, alpha);
+    off = writeVertex(dv, out, off, outPts[0][0], outPts[0][1], tint, alpha);
+    off = writeVertex(dv, out, off, outPts[2][0], outPts[2][1], tint, alpha);
+    off = writeVertex(dv, out, off, outPts[3][0], outPts[3][1], tint, alpha);
+    return off;
+}
+
 G.__pixi_smoke_tick = function(dt) {
   const s = G.__pixi_smoke;
   if (!s) return;
   s.t += dt;
   s.frame = (s.frame + 1) | 0;
   const t = s.t;
+
+    // Pixi scene-graph feature usage (Container + Sprite transforms) driving cmd-stream output.
+    s.root.position.set(CX, CY);
+    s.root.rotation = Math.sin(t * 0.32) * 0.28;
+    s.root.scale.set(1.0 + Math.sin(t * 0.95) * 0.08);
+    s.bg.rotation = t * 0.20;
+    s.fg.rotation = -t * 0.27;
+
+    const uiW = Math.max(420, Math.min(W - 80, W * 0.78));
+    const uiH = Math.max(260, Math.min(H - 80, H * 0.70));
+    s.uiRoot.position.set((W - uiW) * 0.5, (H - uiH) * 0.5);
+    const uiBox = layoutUiBox(uiW, uiH);
+    s.uiRoot.rotation = Math.sin(t * 0.22) * 0.02;
+    s.cards[0].alpha = 0.16 + (Math.sin(t * 1.5) * 0.5 + 0.5) * 0.18;
+    s.cards[1].alpha = 0.22 + (Math.sin(t * 1.3 + 1.1) * 0.5 + 0.5) * 0.22;
+    s.cards[2].alpha = 0.16 + (Math.sin(t * 1.8 + 2.2) * 0.5 + 0.5) * 0.18;
 
   cmd.setViewport(W | 0, H | 0);
   cmd.setPremultipliedAlpha(false);
@@ -269,23 +410,16 @@ G.__pixi_smoke_tick = function(dt) {
   cmd.beginFrame();
 
   let off = 0;
-  // Core slabs.
-  off = emitQuad(
-    s.dv, s.out, off,
-    CX, CY,
-    420, 260,
-    t * 0.20,
-    0x2A84FF,
-    150
-  );
-  off = emitQuad(
-    s.dv, s.out, off,
-    CX, CY,
-    360, 220,
-    -t * 0.27,
-    0xFF8B2E,
-    140
-  );
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.panel);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.header);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.cards[0]);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.cards[1]);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.cards[2]);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.uiRoot, s.footer);
+
+    // Core slabs from Pixi nodes (instead of raw hard-coded geometry).
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.root, s.bg);
+    off = emitSpriteQuadFromPixiNode(s.dv, s.out, off, s.root, s.fg);
   // Orbiting ring quads with varied alpha.
   for (let i = 0; i < RING_COUNT; i++) {
     const p = t * 0.7 + (i * (Math.PI * 2.0 / RING_COUNT));
@@ -335,6 +469,24 @@ G.__pixi_smoke_tick = function(dt) {
   }
   cmd.setBlendMode(0);
 
+    // Bottom parity proof: panel 1 only (outer rectangle).
+        cmd.setPremultipliedAlpha(false);
+        cmd.setBlendEnabled(true);
+        cmd.setBlendMode(0);
+    const proofPad = 18;
+    const proofH = 94;
+    const proofW = Math.max(160, Math.min(W - proofPad * 2, 320));
+    const proofY = H - proofH - 16;
+    const p1x = proofPad + proofW * 0.5;
+    const pcy = proofY + proofH * 0.5;
+
+    let proofOff = 0;
+    proofOff = emitQuad(s.dv, s.out, proofOff, p1x, pcy, proofW, proofH, 0.0, 0xF2F6FC, 255);
+
+    if (proofOff > 0) {
+        cmd.drawTrianglesU8(s.out.subarray(0, proofOff));
+    }
+
   for (let i = 0; i < s.labels.length; i++) {
     const lb = s.labels[i];
     const a = t * 0.55 + lb.phase;
@@ -351,6 +503,18 @@ G.__pixi_smoke_tick = function(dt) {
       255
     );
   }
+
+    const uiX = s.uiRoot.position.x;
+    const uiY = s.uiRoot.position.y;
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + 26) | 0, 'Pixi Basic Layout', 16, 0x0F2A45, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + 48) | 0, 'header / cards row / footer', 12, 0x214869, 230);
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34) | 0, (uiY + uiBox.rowY + 16) | 0, 'card A', 12, 0x143658, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34 + uiBox.cardW + 12) | 0, (uiY + uiBox.rowY + 16) | 0, 'card B', 12, 0x5A2A0D, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34 + (uiBox.cardW + 12) * 2) | 0, (uiY + uiBox.rowY + 16) | 0, 'card C', 12, 0x143658, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + uiBox.footerY + 18) | 0, 'footer', 12, 0x1A3247, 220);
+
+    cmd.drawAtlasText(s.atlasTex, 1, (p1x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'outer rect', 11, 0x183A5B, 255);
+
   cmd.endFrame();
 };
 "#;

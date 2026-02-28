@@ -205,7 +205,10 @@ async fn gfx_vga_swap_forward_task() {
         let mut stage_h: usize = 0;
 
         loop {
-            if !matches!(crate::gfx::present_owner(), crate::gfx::PresentOwner::Forward) {
+            if !matches!(
+                crate::gfx::present_owner(),
+                crate::gfx::PresentOwner::Forward
+            ) {
                 Timer::after(EmbassyDuration::from_millis(16)).await;
                 continue;
             }
