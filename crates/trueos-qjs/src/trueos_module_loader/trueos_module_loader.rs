@@ -132,9 +132,9 @@ unsafe fn load_native_module(
         return core::ptr::null_mut();
     }
 
-    let browser_input_mod = unsafe { crate::browser_input::try_create_native_module(ctx, module_name) };
-    if !browser_input_mod.is_null() {
-        return browser_input_mod;
+    let browser_context_mod = unsafe { crate::browser_context::try_create_native_module(ctx, module_name) };
+    if !browser_context_mod.is_null() {
+        return browser_context_mod;
     }
 
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
@@ -538,7 +538,7 @@ pub(crate) unsafe fn normalize_with_mode(
         // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"
-            || spec == b"trueos:browser_input"
+            || spec == b"trueos:browser_context"
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"

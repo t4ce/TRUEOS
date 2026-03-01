@@ -2009,6 +2009,47 @@ pub mod cabi {
         *out_wheel = m.wheel;
         1
     }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
+        cursor_id: u32,
+        out_x: *mut i32,
+        out_y: *mut i32,
+    ) -> i32 {
+        if out_x.is_null() || out_y.is_null() {
+            return -1;
+        }
+        if cursor_id == 0 {
+            return -1;
+        }
+
+        let idx = (cursor_id - 1) as usize;
+        let mice = crate::usb::hid::mouse_cursor_snapshot();
+        let tablets = crate::usb::hid::tablet_cursor_snapshot();
+
+        let sample = if idx < mice.len() {
+            Some(mice[idx])
+        } else {
+            let tidx = idx - mice.len();
+            if tidx < tablets.len() {
+                Some(tablets[tidx])
+            } else {
+                None
+            }
+        };
+
+        let Some((nx, ny)) = sample else {
+            return 1;
+        };
+
+        let (w, h) = crate::gfx::cpu_backbuffer_dimensions().unwrap_or((320, 200));
+        let w1 = w.saturating_sub(1) as f64;
+        let h1 = h.saturating_sub(1) as f64;
+
+        *out_x = libm::round(nx * w1) as i32;
+        *out_y = libm::round(ny * h1) as i32;
+        0
+    }
 }
 
 /// Writer that routes bytes to the global console pipeline (stdout).

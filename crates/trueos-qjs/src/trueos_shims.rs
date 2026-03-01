@@ -56,6 +56,7 @@ unsafe extern "C" {
         out_dy: *mut i8,
         out_wheel: *mut i8,
     ) -> i32;
+    pub fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
 
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
