@@ -916,8 +916,10 @@ pub mod cabi {
         match v {
             0 => BlendFactor::Zero,                  // GL_ZERO
             1 => BlendFactor::One,                   // GL_ONE
+            0x0301 => BlendFactor::OneMinusSrcColor, // GL_ONE_MINUS_SRC_COLOR
             0x0302 => BlendFactor::SrcAlpha,         // GL_SRC_ALPHA
             0x0303 => BlendFactor::OneMinusSrcAlpha, // GL_ONE_MINUS_SRC_ALPHA
+            0x0306 => BlendFactor::DstColor,         // GL_DST_COLOR
             _ => BlendFactor::One,
         }
     }

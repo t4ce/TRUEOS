@@ -275,7 +275,24 @@ const labels = [
 const MAX_QUADS = 128;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
 const dv = new DataView(out.buffer);
+const texOut = new Uint8Array(20 * 6 * 24);
+const texDv = new DataView(texOut.buffer);
 const atlasTex = cmd.createAtlasTexture(1);
+
+const proofTexW = 8;
+const proofTexH = 8;
+const proofTexPixels = new Uint8Array(proofTexW * proofTexH * 4);
+for (let y = 0; y < proofTexH; y++) {
+    for (let x = 0; x < proofTexW; x++) {
+        const i = (y * proofTexW + x) * 4;
+        const c = (((x >> 1) + (y >> 1)) & 1) ? 0x2A84FF : 0xFF8B2E;
+        proofTexPixels[i + 0] = (c >>> 16) & 0xff;
+        proofTexPixels[i + 1] = (c >>> 8) & 0xff;
+        proofTexPixels[i + 2] = c & 0xff;
+        proofTexPixels[i + 3] = 255;
+    }
+}
+const proofTex = cmd.createTextureRgba(proofTexW, proofTexH, proofTexPixels);
 
 G.__pixi_smoke = {
   root,
@@ -288,8 +305,11 @@ G.__pixi_smoke = {
     cards,
   labels,
   atlasTex,
+    proofTex,
   out,
   dv,
+    texOut,
+    texDv,
   t: 0.0,
   frame: 0,
 };
@@ -326,6 +346,43 @@ function emitQuad(dv, out, off, cx, cy, w, h, rot, rgb, alpha) {
   off = writeVertex(dv, out, off, p2x, p2y, rgb, alpha);
   off = writeVertex(dv, out, off, p3x, p3y, rgb, alpha);
   return off;
+}
+
+function writeTexVertex(dv, out, off, x, y, u, v, rgb, alpha) {
+        const nx = (2.0 * (x / W)) - 1.0;
+        const ny = 1.0 - (2.0 * (y / H));
+        dv.setFloat32(off + 0, nx, true);
+        dv.setFloat32(off + 4, ny, true);
+        dv.setFloat32(off + 8, u, true);
+        dv.setFloat32(off + 12, v, true);
+        out[off + 16] = (rgb >>> 16) & 0xff;
+        out[off + 17] = (rgb >>> 8) & 0xff;
+        out[off + 18] = rgb & 0xff;
+        out[off + 19] = alpha & 0xff;
+        return off + 20;
+}
+
+function emitTexturedQuad(dv, out, off, cx, cy, w, h, rot, u0, v0, u1, v1, rgb, alpha) {
+        const hw = w * 0.5;
+        const hh = h * 0.5;
+        const c = Math.cos(rot);
+        const s = Math.sin(rot);
+        const p0x = cx + (-hw * c - -hh * s);
+        const p0y = cy + (-hw * s + -hh * c);
+        const p1x = cx + ( hw * c - -hh * s);
+        const p1y = cy + ( hw * s + -hh * c);
+        const p2x = cx + ( hw * c -  hh * s);
+        const p2y = cy + ( hw * s +  hh * c);
+        const p3x = cx + (-hw * c -  hh * s);
+        const p3y = cy + (-hw * s +  hh * c);
+
+        off = writeTexVertex(dv, out, off, p0x, p0y, u0, v0, rgb, alpha);
+        off = writeTexVertex(dv, out, off, p1x, p1y, u1, v0, rgb, alpha);
+        off = writeTexVertex(dv, out, off, p2x, p2y, u1, v1, rgb, alpha);
+        off = writeTexVertex(dv, out, off, p0x, p0y, u0, v0, rgb, alpha);
+        off = writeTexVertex(dv, out, off, p2x, p2y, u1, v1, rgb, alpha);
+        off = writeTexVertex(dv, out, off, p3x, p3y, u0, v1, rgb, alpha);
+        return off;
 }
 
 function emitSpriteQuadFromPixiNode(dv, out, off, root, spr) {
@@ -469,22 +526,60 @@ G.__pixi_smoke_tick = function(dt) {
   }
   cmd.setBlendMode(0);
 
-    // Bottom parity proof: panel 1 only (outer rectangle).
-        cmd.setPremultipliedAlpha(false);
-        cmd.setBlendEnabled(true);
-        cmd.setBlendMode(0);
+    // Bottom parity proofs: fill, stroke-like edges, texture sampling, and blend mapping.
     const proofPad = 18;
+    const proofGap = 12;
     const proofH = 94;
-    const proofW = Math.max(160, Math.min(W - proofPad * 2, 320));
+    const proofW = Math.max(150, ((W - proofPad * 2) - proofGap * 2) / 3);
     const proofY = H - proofH - 16;
+
     const p1x = proofPad + proofW * 0.5;
+    const p2x = p1x + (proofW + proofGap);
+    const p3x = p2x + (proofW + proofGap);
     const pcy = proofY + proofH * 0.5;
 
     let proofOff = 0;
     proofOff = emitQuad(s.dv, s.out, proofOff, p1x, pcy, proofW, proofH, 0.0, 0xF2F6FC, 255);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x, pcy, proofW, proofH, 0.0, 0xF2F6FC, 255);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p3x, pcy, proofW, proofH, 0.0, 0xF2F6FC, 255);
+
+    // (1) Fill + alpha overlap.
+    proofOff = emitQuad(s.dv, s.out, proofOff, p1x, pcy + 2, proofW - 28, proofH - 36, Math.sin(t * 0.9) * 0.08, 0x2A84FF, 155);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p1x + 8, pcy - 4, proofW - 46, proofH - 50, -Math.sin(t * 1.2 + 0.5) * 0.1, 0xFF8B2E, 180);
+
+    // (2) Stroke-style edges from thin quads + rotating diagonal stroke.
+    const strokeT = 3;
+    const innerW = proofW - 30;
+    const innerH = proofH - 36;
+    const frameY = pcy + 1;
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x, frameY - innerH * 0.5, innerW, strokeT, 0.0, 0x1E3D60, 240);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x, frameY + innerH * 0.5, innerW, strokeT, 0.0, 0x1E3D60, 240);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x - innerW * 0.5, frameY, strokeT, innerH, 0.0, 0x1E3D60, 240);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x + innerW * 0.5, frameY, strokeT, innerH, 0.0, 0x1E3D60, 240);
+    proofOff = emitQuad(s.dv, s.out, proofOff, p2x, frameY, innerW - 10, 2, t * 0.7, 0xFF8B2E, 220);
 
     if (proofOff > 0) {
         cmd.drawTrianglesU8(s.out.subarray(0, proofOff));
+    }
+
+    if (s.proofTex) {
+        // (3) Textured quad with clamp + linear sampling.
+        cmd.setSampler(0, 0, 1, 1);
+        let texOff = 0;
+        texOff = emitTexturedQuad(
+            s.texDv, s.texOut, texOff,
+            p3x, pcy + 1,
+            proofW - 30, proofH - 36,
+            Math.sin(t * 0.6) * 0.07,
+            0.0, 0.0, 1.0, 1.0,
+            0xFFFFFF, 255
+        );
+        if (texOff > 0) {
+            cmd.drawTexturedTrianglesU8(s.proofTex, s.texOut.subarray(0, texOff));
+        }
+
+        cmd.setBlendMode(0);
+        cmd.setSampler(0, 0, 1, 1);
     }
 
   for (let i = 0; i < s.labels.length; i++) {
@@ -513,7 +608,9 @@ G.__pixi_smoke_tick = function(dt) {
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34 + (uiBox.cardW + 12) * 2) | 0, (uiY + uiBox.rowY + 16) | 0, 'card C', 12, 0x143658, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + uiBox.footerY + 18) | 0, 'footer', 12, 0x1A3247, 220);
 
-    cmd.drawAtlasText(s.atlasTex, 1, (p1x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'outer rect', 11, 0x183A5B, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (p1x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'fill + alpha', 11, 0x183A5B, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (p2x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'stroke (thin quads)', 11, 0x183A5B, 255);
+    cmd.drawAtlasText(s.atlasTex, 1, (p3x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'tex clamp+linear', 11, 0x183A5B, 255);
 
   cmd.endFrame();
 };
