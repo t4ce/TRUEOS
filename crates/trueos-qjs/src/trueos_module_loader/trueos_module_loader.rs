@@ -465,6 +465,17 @@ fn node_builtin_shim_url(spec: &[u8]) -> Option<&'static [u8]> {
     }
 }
 
+fn qjs_vendor_specifier(spec: &[u8]) -> Option<&'static [u8]> {
+    match spec {
+        // Browser renderer stack: resolve to local embedded vendor modules
+        // instead of network fetches via esm.sh.
+        b"pixi.js" => Some(b"/qjs/vendor/pixi.mjs"),
+        b"parse5" => Some(b"/qjs/vendor/parse5.mjs"),
+        b"yoga-layout" => Some(b"/qjs/vendor/yoga.mjs"),
+        _ => None,
+    }
+}
+
 pub(crate) unsafe fn normalize_with_mode(
     ctx: *mut qjs::JSContext,
     module_base_name: *const c_char,
@@ -545,6 +556,11 @@ pub(crate) unsafe fn normalize_with_mode(
 
     // Bare specifiers.
     if !path_is_relative(spec) {
+        if let Some(vendor) = qjs_vendor_specifier(spec) {
+            log_normalized(vendor);
+            return js_strdup(ctx, vendor);
+        }
+
         // Always keep known TRUEOS native modules.
         if spec == b"complex"
             || spec == b"fs"

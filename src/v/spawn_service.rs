@@ -50,6 +50,7 @@ static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VGA_SWAP_FORWARD_STARTED: AtomicBool = AtomicBool::new(false);
 static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
+static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
@@ -579,6 +580,13 @@ fn spawn_webgpu_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(trueos_qjs::pixi::boot_browser()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn fill_demo_matrix(out: &mut [f32], n: usize, seed: f32) {
     let mut i = 0usize;
     while i < n {
@@ -789,7 +797,6 @@ const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
 
 const BOOT_NETBENCH_ENABLED: bool = false;
 const WGPU_TEXT_ENABLED: bool = true;
-const WEBGPU_PIXI_SMOKE_ENABLED: bool = true;
 const GFX_MATMUL_DEMO_ENABLED: bool = true;
 
 static TASKS: &[TaskSpec] = &[
@@ -897,10 +904,17 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "webgpu_pixi_smoke",
-        disabled: !WEBGPU_PIXI_SMOKE_ENABLED,
+        disabled: true,
         required: crate::v::readiness::WGPU_TEXT_DONE,
         started: &WEBGPU_PIXI_SMOKE_STARTED,
         spawn: spawn_webgpu_pixi_smoke,
+    },
+    TaskSpec {
+        name: "webgpu_browser",
+        disabled: false,
+        required: crate::v::readiness::WGPU_TEXT_DONE,
+        started: &WEBGPU_BROWSER_STARTED,
+        spawn: spawn_webgpu_browser,
     },
     TaskSpec {
         name: "gfx-matmul-demo",
