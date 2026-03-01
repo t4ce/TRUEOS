@@ -137,6 +137,11 @@ unsafe fn load_native_module(
         return browser_context_mod;
     }
 
+    let yoga_mod = unsafe { crate::yoga_native::try_create_native_module(ctx, module_name) };
+    if !yoga_mod.is_null() {
+        return yoga_mod;
+    }
+
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
 }
 
@@ -542,6 +547,8 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"
+            || spec == b"trueos:yoga"
+            || spec == b"yoga-native"
             || spec == b"process"
             || spec == b"node:process"
             || spec == b"node:worker_threads"
