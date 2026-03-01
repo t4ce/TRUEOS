@@ -142,6 +142,11 @@ unsafe fn load_native_module(
         return yoga_mod;
     }
 
+    let three_mod = unsafe { crate::threejs::try_create_native_module(ctx, module_name) };
+    if !three_mod.is_null() {
+        return three_mod;
+    }
+
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
 }
 
@@ -549,6 +554,9 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"worker_threads"
             || spec == b"trueos:yoga"
             || spec == b"yoga-native"
+            || spec == b"three"
+            || spec == b"trueos:threejs"
+            || spec == b"threejs-native"
             || spec == b"process"
             || spec == b"node:process"
             || spec == b"node:worker_threads"
