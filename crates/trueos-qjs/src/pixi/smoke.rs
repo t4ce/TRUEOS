@@ -168,6 +168,12 @@ pub async fn boot_pixi_scene_smoke_task() {
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 
 import * as cmd from 'cmd_stream';
+let browserInput = null;
+try {
+    browserInput = await import('trueos:browser_input');
+} catch {
+    browserInput = null;
+}
 const PIXI = await import('/qjs/vendor/pixi.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
@@ -191,8 +197,8 @@ uiRoot.addChild(header);
 
 const footer = new PIXI.Sprite(PIXI.Texture.WHITE);
 footer.anchor.set(0, 0);
-footer.tint = 0x1B3D63;
-footer.alpha = 0.14;
+footer.tint = 0x00FF00;
+footer.alpha = 1.0;
 uiRoot.addChild(footer);
 
 const cards = [];
@@ -272,6 +278,50 @@ const labels = [
   { text: 'demo',  color: 0x303030, size: 12, phase: 3.92, r: 220 },
 ];
 
+const globalCursors = [
+    { id: 1, color: 0x111111, posX: 0.31, posY: 0.58 },
+    { id: 2, color: 0x2563EB, posX: 0.36, posY: 0.54 },
+    { id: 3, color: 0x16A34A, posX: 0.42, posY: 0.62 },
+    { id: 4, color: 0xDC2626, posX: 0.47, posY: 0.57 },
+];
+
+// Ported AI cursor motion profile: single autonomous cursor patrol.
+const aiCursor = {
+    color: 0x7C3AED,
+    centerX: 0.75,
+    centerY: 0.25,
+    radius: 120,
+    speed: 0.9,
+    phase: 0.0,
+};
+
+// Future hook: kernel-side cursor tilt targets from hover/active UI state.
+// Nothing calls this yet; defaults keep cursors upright.
+const cursorTilt = {
+    byId: new Map(),
+    setState(id, hovered, active) {
+        const target = (hovered || active) ? (Math.PI * 0.25) : 0.0;
+        this.byId.set(id | 0, {
+            target,
+            active: !!active,
+            hovered: !!hovered,
+        });
+    },
+    step(id, dt) {
+        const key = id | 0;
+        const rec = this.byId.get(key) || { target: 0.0, rot: 0.0 };
+        const rot0 = Number(rec.rot || 0.0);
+        const target = Number(rec.target || 0.0);
+        const speed = 14.0;
+        const k = Math.max(0.0, Math.min(1.0, dt * speed));
+        const rot = rot0 + (target - rot0) * k;
+        rec.rot = rot;
+        rec.target = target;
+        this.byId.set(key, rec);
+        return rot;
+    },
+};
+
 const MAX_QUADS = 128;
 const out = new Uint8Array(12 * 6 * MAX_QUADS);
 const dv = new DataView(out.buffer);
@@ -304,6 +354,10 @@ G.__pixi_smoke = {
     footer,
     cards,
   labels,
+    globalCursors,
+        aiCursor,
+        cursorRuntime: new Map(),
+        cursorTilt,
   atlasTex,
     proofTex,
   out,
@@ -312,6 +366,23 @@ G.__pixi_smoke = {
     texDv,
   t: 0.0,
   frame: 0,
+};
+
+// Public prep API for future kernel/browser input wiring.
+G.__pixi_smoke_set_cursor_hover = function(id, hovered) {
+    const s = G.__pixi_smoke;
+    if (!s) return;
+    const key = (id | 0);
+    const prev = s.cursorTilt.byId.get(key);
+    s.cursorTilt.setState(key, !!hovered, !!(prev && prev.active));
+};
+
+G.__pixi_smoke_set_cursor_active = function(id, active) {
+    const s = G.__pixi_smoke;
+    if (!s) return;
+    const key = (id | 0);
+    const prev = s.cursorTilt.byId.get(key);
+    s.cursorTilt.setState(key, !!(prev && prev.hovered), !!active);
 };
 
 function writeVertex(dv, out, off, x, y, rgb, alpha) {
@@ -346,6 +417,12 @@ function emitQuad(dv, out, off, cx, cy, w, h, rot, rgb, alpha) {
   off = writeVertex(dv, out, off, p2x, p2y, rgb, alpha);
   off = writeVertex(dv, out, off, p3x, p3y, rgb, alpha);
   return off;
+}
+
+function emitCursorCross(dv, out, off, cx, cy, arm, stroke, rot, rgb, alpha) {
+    off = emitQuad(dv, out, off, cx, cy, arm * 2.0, stroke, rot, rgb, alpha);
+    off = emitQuad(dv, out, off, cx, cy, stroke, arm * 2.0, rot, rgb, alpha);
+    return off;
 }
 
 function writeTexVertex(dv, out, off, x, y, u, v, rgb, alpha) {
@@ -598,6 +675,69 @@ G.__pixi_smoke_tick = function(dt) {
       255
     );
   }
+
+    let cursorOff = 0;
+    for (let i = 0; i < s.globalCursors.length; i++) {
+        const c = s.globalCursors[i];
+        let st = s.cursorRuntime.get(c.id);
+        if (!st) {
+            const sx = W * c.posX;
+            const sy = H * c.posY;
+            st = { x: sx, y: sy, tx: sx, ty: sy, seen: false };
+            s.cursorRuntime.set(c.id, st);
+        }
+
+        if (browserInput) {
+            let bx = Number.NaN;
+            let by = Number.NaN;
+            try {
+                bx = Number(browserInput.getCursorX ? browserInput.getCursorX(c.id) : Number.NaN);
+                by = Number(browserInput.getCursorY ? browserInput.getCursorY(c.id) : Number.NaN);
+            } catch {}
+
+            let hovered = false;
+            let focused = false;
+            let menuOpen = false;
+            try {
+                hovered = !!(browserInput.getHoveredTarget && browserInput.getHoveredTarget(c.id));
+                focused = !!(browserInput.getFocusedTarget && browserInput.getFocusedTarget(c.id));
+                menuOpen = !!(browserInput.isContextMenuOpen && browserInput.isContextMenuOpen(c.id));
+            } catch {}
+
+            const hasPos = Number.isFinite(bx) && Number.isFinite(by);
+            const hasSignal = hovered || focused || menuOpen || (hasPos && (bx !== 0 || by !== 0));
+            if (hasPos && (hasSignal || st.seen)) {
+                st.tx = bx;
+                st.ty = by;
+                st.seen = true;
+            }
+            s.cursorTilt.setState(c.id, hovered, focused || menuOpen);
+        }
+
+        const followK = Math.max(0.0, Math.min(1.0, dt * 18.0));
+        st.x = st.x + (st.tx - st.x) * followK;
+        st.y = st.y + (st.ty - st.y) * followK;
+        const x = st.x;
+        const y = st.y;
+        const rot = s.cursorTilt.step(c.id, dt);
+        cursorOff = emitCursorCross(s.dv, s.out, cursorOff, x, y, 10, 2, rot, c.color, 255);
+    }
+
+    // Dedicated animated AI cursor (ported from previous scene behavior).
+    {
+        const ai = s.aiCursor;
+        const a = t * ai.speed + ai.phase;
+        const cx = W * ai.centerX;
+        const cy = H * ai.centerY;
+        const x = cx + Math.cos(a) * ai.radius;
+        const y = cy + Math.sin(a) * ai.radius;
+        const rot = Math.sin(a * 1.7) * 0.35;
+        cursorOff = emitCursorCross(s.dv, s.out, cursorOff, x, y, 10, 2, rot, ai.color, 255);
+    }
+
+    if (cursorOff > 0) {
+        cmd.drawTrianglesU8(s.out.subarray(0, cursorOff));
+    }
 
     const uiX = s.uiRoot.position.x;
     const uiY = s.uiRoot.position.y;

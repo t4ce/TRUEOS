@@ -19,6 +19,12 @@ pub mod trueos_module_loader;
 pub mod browser;
 
 #[cfg(feature = "trueos")]
+pub mod browser_input;
+
+#[cfg(feature = "trueos")]
+pub mod cmd_stream;
+
+#[cfg(feature = "trueos")]
 pub mod timers;
 
 #[cfg(feature = "trueos")]

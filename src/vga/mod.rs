@@ -50,11 +50,8 @@ static LOG_CUR_X: AtomicUsize = AtomicUsize::new(0);
 
 #[inline]
 pub fn vga_swapped() -> bool {
-    // Ownership is the single source of truth for VGA routing.
-    matches!(
-        crate::gfx::present_owner(),
-        crate::gfx::PresentOwner::Forward
-    )
+    // Temporary override: keep VGA on direct Limine framebuffer writes.
+    false
 }
 
 pub fn restore_vga_from_gfx_backbuffer() -> bool {
