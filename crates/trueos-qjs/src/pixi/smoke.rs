@@ -179,6 +179,11 @@ try {
 } catch {
     // Keep smoke startup alive if Yoga import fails.
 }
+try {
+    await import('trueos:threejs');
+} catch {
+    // Keep smoke startup alive if Three.js import fails.
+}
 const PIXI = await import('/qjs/vendor/pixi.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
