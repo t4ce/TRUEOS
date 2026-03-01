@@ -201,6 +201,52 @@ if (!G.document) {
   G.document = doc;
 }
 
+if (!G.navigator) {
+    let nav = null;
+    try {
+        const navNative = await import('trueos:browser_navigator');
+        const userAgent = String(navNative.getUserAgent());
+        const platform = String(navNative.getPlatform());
+        const language = String(navNative.getLanguage());
+        const vendor = String(navNative.getVendor());
+        const hardwareConcurrency = Number(navNative.getHardwareConcurrency()) || 1;
+        const onLine = !!navNative.isOnline();
+
+        nav = {
+            userAgent,
+            platform,
+            language,
+            languages: [language],
+            vendor,
+            hardwareConcurrency,
+            onLine,
+        };
+    } catch (_) {
+        nav = {
+            userAgent: 'Mozilla/5.0 (TRUEOS; QuickJS)',
+            platform: 'TRUEOS',
+            language: 'en-US',
+            languages: ['en-US'],
+            vendor: 'TRUEOS',
+            hardwareConcurrency: 1,
+            onLine: true,
+        };
+    }
+
+    try {
+        Object.defineProperty(G, 'navigator', {
+            value: nav,
+            configurable: true,
+            enumerable: true,
+            writable: false,
+        });
+    } catch (_) {
+        G.navigator = nav;
+    }
+}
+
+if (!G.window.navigator) G.window.navigator = G.navigator;
+
 if (!G.fetch) {
   G.fetch = async () => ({ text: async () => '<html><body><h1>TRUEOS Browser</h1></body></html>' });
 }

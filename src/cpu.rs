@@ -28,12 +28,6 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     runtime::run_ap_forever()
 }
 
-/// Best-effort Intel hybrid core kind hint via CPUID leaf 0x1A.
-///
-/// Returns one of:
-/// - `trueos_qjs::workers::CORE_KIND_PERF`
-/// - `trueos_qjs::workers::CORE_KIND_EFF`
-/// - `trueos_qjs::workers::CORE_KIND_UNKNOWN`
 pub(crate) fn intel_core_kind_hint() -> u8 {
     let r0 = unsafe { __cpuid(0) };
     let max = r0.eax;

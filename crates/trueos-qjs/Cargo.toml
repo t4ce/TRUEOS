@@ -23,6 +23,7 @@ trueos-weather = { path = "../trueos-weather", default-features = false, optiona
 
 [features]
 default = []
+yoga-native = []
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
 trueos = ["dep:trueos-math", "dep:trueos-weather", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:libm"]
