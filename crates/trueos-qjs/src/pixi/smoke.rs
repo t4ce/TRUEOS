@@ -174,8 +174,9 @@ try {
 } catch {
     browserContext = null;
 }
+let YogaCompat = null;
 try {
-    await import('trueos:yoga');
+    YogaCompat = await import('trueos:yoga');
 } catch {
     // Keep smoke startup alive if Yoga import fails.
 }
@@ -185,6 +186,9 @@ try {
     // Keep smoke startup alive if Three.js import fails.
 }
 const PIXI = await import('/qjs/vendor/pixi.mjs');
+const parse5 = await import('/qjs/vendor/parse5.mjs');
+const parse5ButtonWidget = await import('/qjs/browser/widgets/button.mjs');
+const parse5CheckboxWidget = await import('/qjs/browser/widgets/checkbox.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
 const CX = W * 0.5;
@@ -311,6 +315,299 @@ const menuItemH = 28;
 const menuPad = 6;
 const menuBorderW = 2;
 
+const SIMPLE_PARSE5_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HTML Only Visual Elements</title>
+</head>
+<body>
+
+        <button type="submit">Submit</button>
+
+</body>
+</html>`;
+
+function normalizeWhitespace(s) {
+    return String(s ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function attrsToMap(attrs) {
+    const out = {};
+    if (!Array.isArray(attrs)) return out;
+    for (let i = 0; i < attrs.length; i++) {
+        const a = attrs[i];
+        if (!a || typeof a.name !== 'string') continue;
+        out[a.name] = String(a.value ?? '');
+    }
+    return out;
+}
+
+function extractText(node) {
+    if (!node || typeof node !== 'object') return '';
+    const name = String(node.nodeName || '').toLowerCase();
+    if (name === '#text') return String(node.value ?? '');
+    const children = Array.isArray(node.childNodes) ? node.childNodes : [];
+    let out = '';
+    for (let i = 0; i < children.length; i++) out += extractText(children[i]);
+    return out;
+}
+
+function getBodyNode(doc) {
+    const queue = [doc];
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        if (!cur || typeof cur !== 'object') continue;
+        const tag = String(cur.tagName || cur.nodeName || '').toLowerCase();
+        if (tag === 'body') return cur;
+        const children = Array.isArray(cur.childNodes) ? cur.childNodes : [];
+        for (let i = 0; i < children.length; i++) queue.push(children[i]);
+    }
+    return doc;
+}
+
+function toSimpleRenderTree(node, path = '0') {
+    const out = [];
+    const children = Array.isArray(node?.childNodes) ? node.childNodes : [];
+    for (let i = 0; i < children.length; i++) {
+        const ch = children[i];
+        const childPath = `${path}.${i}`;
+        const nodeName = String(ch?.nodeName || '').toLowerCase();
+        const tagName = String(ch?.tagName || '').toLowerCase();
+
+        if (nodeName === '#text') {
+            const text = normalizeWhitespace(String(ch?.value ?? ''));
+            if (text.length > 0) out.push({ kind: 'text', text });
+            continue;
+        }
+
+        if (tagName === 'button') {
+            out.push({
+                kind: 'block',
+                key: `${childPath}:button`,
+                tagName: 'button',
+                attrs: attrsToMap(ch?.attrs),
+                children: [{ kind: 'text', text: normalizeWhitespace(extractText(ch) || 'Submit') }],
+            });
+            continue;
+        }
+
+        if (Array.isArray(ch?.childNodes) && ch.childNodes.length > 0) {
+            out.push(...toSimpleRenderTree(ch, childPath));
+        }
+    }
+    return out;
+}
+
+function makeYogaNodeAdapter(Y, id) {
+    return {
+        setFlexDirection(v) { Y.nodeSetFlexDirection?.(id, v); },
+        setPadding(edge, value) { Y.nodeSetPadding?.(id, edge, value); },
+        setMinHeight(value) { Y.nodeSetMinHeight?.(id, value); },
+        setMinWidth(value) { Y.nodeSetMinWidth?.(id, value); },
+        setAlignItems(v) { Y.nodeSetAlignItems?.(id, v); },
+        setJustifyContent(v) { Y.nodeSetJustifyContent?.(id, v); },
+        setWidth(value) { Y.nodeSetWidth?.(id, value); },
+        setHeight(value) { Y.nodeSetHeight?.(id, value); },
+        setMargin(edge, value) { Y.nodeSetMargin?.(id, edge, value); },
+    };
+}
+
+const SIMPLE_PARSE5_DOC = (parse5.parse?.(SIMPLE_PARSE5_HTML))
+    || (parse5.default && parse5.default.parse && parse5.default.parse(SIMPLE_PARSE5_HTML))
+    || null;
+const SIMPLE_PARSE5_BODY = SIMPLE_PARSE5_DOC ? (getBodyNode(SIMPLE_PARSE5_DOC) || SIMPLE_PARSE5_DOC) : null;
+const SIMPLE_PARSE5_RENDER_NODES = SIMPLE_PARSE5_BODY ? toSimpleRenderTree(SIMPLE_PARSE5_BODY, '0') : [];
+const SIMPLE_PARSE5_BUTTON_NODE = SIMPLE_PARSE5_RENDER_NODES.find((n) => n && n.kind === 'block' && n.tagName === 'button') || null;
+const SIMPLE_PARSE5_BUTTON_TEXT = SIMPLE_PARSE5_BUTTON_NODE
+    ? normalizeWhitespace(((SIMPLE_PARSE5_BUTTON_NODE.children || []).map((c) => c?.text || '').join(' ')) || 'Submit')
+    : 'Submit';
+
+function buildSimpleParse5YogaButtonLayout(viewW, viewH) {
+    const fallback = {
+        x: 0,
+        y: Math.max(0, (viewH - 34) * 0.5),
+        w: Math.max(120, Math.min(220, viewW)),
+        h: 34,
+    };
+
+    if (!YogaCompat || !SIMPLE_PARSE5_BUTTON_NODE) {
+        return { button: fallback, usedYoga: false, nodeCount: SIMPLE_PARSE5_RENDER_NODES.length };
+    }
+
+    const Y = YogaCompat;
+    const cfg = Y.configCreate ? (Y.configCreate() >>> 0) : 0;
+    const root = Y.nodeCreate ? (Y.nodeCreate(cfg) >>> 0) : 0;
+    if (!root) {
+        return { button: fallback, usedYoga: false, nodeCount: SIMPLE_PARSE5_RENDER_NODES.length };
+    }
+
+    const btn = Y.nodeCreate ? (Y.nodeCreate(cfg) >>> 0) : 0;
+    if (!btn) {
+        Y.nodeFreeRecursive?.(root);
+        return { button: fallback, usedYoga: false, nodeCount: SIMPLE_PARSE5_RENDER_NODES.length };
+    }
+
+    const rootA = makeYogaNodeAdapter(Y, root);
+    rootA.setFlexDirection(Y.FLEX_DIRECTION_COLUMN ?? 0);
+    rootA.setAlignItems(Y.ALIGN_STRETCH ?? 4);
+    rootA.setWidth(Math.max(1, viewW));
+    rootA.setHeight(Math.max(1, viewH));
+    rootA.setPadding(Y.EDGE_LEFT ?? 0, 8);
+    rootA.setPadding(Y.EDGE_RIGHT ?? 2, 8);
+    rootA.setPadding(Y.EDGE_TOP ?? 1, 8);
+    rootA.setPadding(Y.EDGE_BOTTOM ?? 3, 8);
+
+    const btnA = makeYogaNodeAdapter(Y, btn);
+    parse5ButtonWidget.applyYogaDefaultsButton(btnA, Y);
+    Y.nodeInsertChild?.(root, btn, Y.nodeGetChildCount ? Y.nodeGetChildCount(root) : 0);
+
+    Y.nodeCalculateLayout?.(root, Math.max(1, viewW), Math.max(1, viewH), Y.DIRECTION_LTR ?? 1);
+
+    const out = {
+        x: Number(Y.nodeGetComputedLeft?.(btn) ?? fallback.x),
+        y: Number(Y.nodeGetComputedTop?.(btn) ?? fallback.y),
+        w: Number(Y.nodeGetComputedWidth?.(btn) ?? fallback.w),
+        h: Number(Y.nodeGetComputedHeight?.(btn) ?? fallback.h),
+    };
+
+    Y.nodeFreeRecursive?.(root);
+
+    if (!Number.isFinite(out.w) || out.w < 1) out.w = fallback.w;
+    if (!Number.isFinite(out.h) || out.h < 1) out.h = fallback.h;
+    if (!Number.isFinite(out.x)) out.x = fallback.x;
+    if (!Number.isFinite(out.y)) out.y = fallback.y;
+
+    return { button: out, usedYoga: true, nodeCount: SIMPLE_PARSE5_RENDER_NODES.length };
+}
+
+const parse5ButtonTheme = {
+    control: {
+        button: {
+            fill: 0x1E3A5F,
+            hoverFill: 0x2A84FF,
+            activeFill: 0x8B2E2E,
+            border: 0x0F2742,
+            radius: 8,
+        },
+    },
+};
+
+const parse5CheckboxTheme = {
+    control: {
+        background: 0xFFFFFF,
+        border: 0x1A3247,
+        accent: 0x2A84FF,
+    },
+};
+
+const parse5ButtonModel = {
+    x: 0,
+    y: 0,
+    w: 196,
+    h: 34,
+    fill: parse5ButtonTheme.control.button.fill,
+    border: parse5ButtonTheme.control.button.border,
+    clickCount: 0,
+    pressSeq: new Map(),
+    activeUntil: 0.0,
+    mode: 'out',
+};
+
+const parse5ButtonGraphics = {
+    clear() {
+        return this;
+    },
+    roundRect(_x, _y, w, h, _r) {
+        parse5ButtonModel.w = Math.max(1, Number(w));
+        parse5ButtonModel.h = Math.max(1, Number(h));
+        return this;
+    },
+    rect(_x, _y, w, h) {
+        parse5ButtonModel.w = Math.max(1, Number(w));
+        parse5ButtonModel.h = Math.max(1, Number(h));
+        return this;
+    },
+    fill(v) {
+        if (typeof v === 'number') {
+            parse5ButtonModel.fill = v >>> 0;
+        } else if (v && typeof v.color === 'number') {
+            parse5ButtonModel.fill = v.color >>> 0;
+        }
+        return this;
+    },
+    stroke(v) {
+        if (typeof v === 'number') {
+            parse5ButtonModel.border = v >>> 0;
+        } else if (v && typeof v.color === 'number') {
+            parse5ButtonModel.border = v.color >>> 0;
+        }
+        return this;
+    },
+};
+
+const parse5ButtonContainer = {
+    eventMode: 'none',
+    cursor: 'default',
+    __handlers: {},
+    removeAllListeners() {
+        this.__handlers = {};
+    },
+    on(name, fn) {
+        this.__handlers[name] = fn;
+        return this;
+    },
+};
+
+parse5ButtonWidget.renderButton({
+    container: parse5ButtonContainer,
+    graphics: parse5ButtonGraphics,
+    w: parse5ButtonModel.w,
+    h: parse5ButtonModel.h,
+    theme: parse5ButtonTheme,
+});
+
+const parse5CheckboxModel = {
+    x: 0,
+    y: 0,
+    w: 16,
+    h: 16,
+    checked: false,
+    indeterminate: false,
+    pressSeq: new Map(),
+};
+
+const parse5CheckboxGraphics = {
+    clear() { return this; },
+    rect(_x, _y, _w, _h) { return this; },
+    fill(_v) { return this; },
+    stroke(_v) { return this; },
+    moveTo(_x, _y) { return this; },
+    lineTo(_x, _y) { return this; },
+};
+
+const parse5CheckboxContainer = {
+    eventMode: 'none',
+    cursor: 'default',
+    __handlers: {},
+    removeAllListeners() {
+        this.__handlers = {};
+    },
+    on(name, fn) {
+        this.__handlers[name] = fn;
+        return this;
+    },
+};
+
+parse5CheckboxWidget.renderCheckbox({
+    container: parse5CheckboxContainer,
+    graphics: parse5CheckboxGraphics,
+    w: parse5CheckboxModel.w,
+    h: parse5CheckboxModel.h,
+    theme: parse5CheckboxTheme,
+    state: parse5CheckboxModel,
+});
+
 // Future hook: kernel-side cursor tilt targets from hover/active UI state.
 // Nothing calls this yet; defaults keep cursors upright.
 const cursorTilt = {
@@ -377,6 +674,14 @@ G.__pixi_smoke = {
           menuClickSeq: new Map(),
   atlasTex,
     proofTex,
+    parse5ButtonModel,
+        parse5YogaDemo: {
+                html: SIMPLE_PARSE5_HTML,
+                buttonText: SIMPLE_PARSE5_BUTTON_TEXT,
+                renderNodeCount: SIMPLE_PARSE5_RENDER_NODES.length,
+                usedYoga: false,
+        },
+        parse5CheckboxModel,
   out,
   dv,
     texOut,
@@ -548,6 +853,8 @@ G.__pixi_smoke_tick = function(dt) {
     const uiH = Math.max(260, Math.min(H - 80, H * 0.70));
     s.uiRoot.position.set((W - uiW) * 0.5, (H - uiH) * 0.5);
     const uiBox = layoutUiBox(uiW, uiH);
+    const uiX = s.uiRoot.position.x;
+    const uiY = s.uiRoot.position.y;
     s.uiRoot.rotation = Math.sin(t * 0.22) * 0.02;
     s.cards[0].alpha = 0.16 + (Math.sin(t * 1.5) * 0.5 + 0.5) * 0.18;
     s.cards[1].alpha = 0.22 + (Math.sin(t * 1.3 + 1.1) * 0.5 + 0.5) * 0.22;
@@ -867,15 +1174,12 @@ G.__pixi_smoke_tick = function(dt) {
         cmd.drawTrianglesU8(s.out.subarray(0, menuOff));
     }
 
-    const uiX = s.uiRoot.position.x;
-    const uiY = s.uiRoot.position.y;
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + 26) | 0, 'Pixi Basic Layout', 16, 0x0F2A45, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + 48) | 0, 'header / cards row / footer', 12, 0x214869, 230);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34) | 0, (uiY + uiBox.rowY + 16) | 0, 'card A', 12, 0x143658, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34 + uiBox.cardW + 12) | 0, (uiY + uiBox.rowY + 16) | 0, 'card B', 12, 0x5A2A0D, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 34 + (uiBox.cardW + 12) * 2) | 0, (uiY + uiBox.rowY + 16) | 0, 'card C', 12, 0x143658, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (uiX + 32) | 0, (uiY + uiBox.footerY + 18) | 0, 'footer', 12, 0x1A3247, 220);
-
     cmd.drawAtlasText(s.atlasTex, 1, (p1x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'fill + alpha', 11, 0x183A5B, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (p2x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'stroke (thin quads)', 11, 0x183A5B, 255);
     cmd.drawAtlasText(s.atlasTex, 1, (p3x - proofW * 0.5 + 10) | 0, (proofY + 10) | 0, 'tex clamp+linear', 11, 0x183A5B, 255);
