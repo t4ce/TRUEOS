@@ -1305,9 +1305,9 @@ DCL OUT[0], COLOR\n\
 // Bring-up toggles for deterministic texture diagnostics.
 const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
 const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
-// Debug correctness switch: force per-draw vertex conversion/upload and bypass
-// converted vertex cache reuse.
-const VIRGL_DISABLE_CONVERTED_VERTEX_CACHE: bool = false;
+// Correctness-first switch: force per-draw vertex conversion/upload and bypass
+// converted vertex cache reuse until multi-draw cache keys are proven robust.
+const VIRGL_DISABLE_CONVERTED_VERTEX_CACHE: bool = true;
 const VIRGL_DEBUG_TEXTURE_RGBA_2X2: [u8; 16] = [
     255, 0, 0, 255, // red
     0, 255, 0, 255, // green
@@ -1357,6 +1357,7 @@ use trueos_gfx_core::Result as GfxResult;
 static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
+static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
@@ -1540,6 +1541,8 @@ pub struct VirglGfxBackend {
     blend_handle_disabled: u32,
     blend_handle_straight: u32,
     blend_handle_additive: u32,
+    blend_handle_multiply: u32,
+    blend_handle_screen: u32,
     blend_handle_premult: u32,
 
     swapchain: SwapchainDesc,
@@ -1649,7 +1652,7 @@ impl VirglGfxBackend {
         let (res_w, res_h, res_bytes, present_w, present_h) =
             (disp_w, disp_h, bytes, disp_w, disp_h);
 
-        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8X8_UNORM, res_w, res_h) {
+        if !gpu.resource_create_2d(scanout_res, VIRGL_FORMAT_B8G8R8A8_UNORM, res_w, res_h) {
             crate::log!("virgl-backend: resource_create_2d scanout failed\n");
             return None;
         }
@@ -1682,7 +1685,7 @@ impl VirglGfxBackend {
             ctx_id,
             rt_res,
             PIPE_TEXTURE_2D,
-            VIRGL_FORMAT_B8G8R8X8_UNORM,
+            VIRGL_FORMAT_B8G8R8A8_UNORM,
             rt_bind,
             present_w,
             present_h,
@@ -1753,12 +1756,14 @@ impl VirglGfxBackend {
         let blend_handle_disabled = 30u32;
         let blend_handle_straight = 33u32;
         let blend_handle_additive = 35u32;
+        let blend_handle_multiply = 36u32;
+        let blend_handle_screen = 37u32;
         let blend_handle_premult = 34u32;
         let dsa_handle = 31u32;
         let rs_handle = 32u32;
 
         let mut init = VirglCmdBuf::new();
-        encode_create_surface(&mut init, surf_handle, rt_res, VIRGL_FORMAT_B8G8R8X8_UNORM);
+        encode_create_surface(&mut init, surf_handle, rt_res, VIRGL_FORMAT_B8G8R8A8_UNORM);
         encode_set_framebuffer(&mut init, surf_handle);
 
         encode_create_vertex_elements(&mut init, ve_handle);
@@ -1806,6 +1811,8 @@ impl VirglGfxBackend {
 
         // Gallium blend factors (Mesa pipe/p_defines.h).
         const PIPE_BLENDFACTOR_ONE: u32 = 1;
+        const PIPE_BLENDFACTOR_DST_COLOR: u32 = 5;
+        const PIPE_BLENDFACTOR_INV_SRC_COLOR: u32 = 0x12;
         const PIPE_BLENDFACTOR_SRC_ALPHA: u32 = 3;
         const PIPE_BLENDFACTOR_INV_SRC_ALPHA: u32 = 0x13;
 
@@ -1826,6 +1833,22 @@ impl VirglGfxBackend {
             true,
             PIPE_BLENDFACTOR_SRC_ALPHA,
             PIPE_BLENDFACTOR_ONE,
+        );
+        // Multiply: src*dst + dst*(1-srcA)
+        encode_create_blend(
+            &mut init,
+            blend_handle_multiply,
+            true,
+            PIPE_BLENDFACTOR_DST_COLOR,
+            PIPE_BLENDFACTOR_INV_SRC_ALPHA,
+        );
+        // Screen: src*1 + dst*(1-srcColor)
+        encode_create_blend(
+            &mut init,
+            blend_handle_screen,
+            true,
+            PIPE_BLENDFACTOR_ONE,
+            PIPE_BLENDFACTOR_INV_SRC_COLOR,
         );
         // Premult alpha: src*1 + dst*(1-srcA)
         encode_create_blend(
@@ -1851,7 +1874,7 @@ impl VirglGfxBackend {
         }
 
         let swapchain = SwapchainDesc {
-            format: ImageFormat::Rgbx8888,
+            format: ImageFormat::Rgba8888,
             extent: trueos_gfx_core::Extent2D {
                 width: present_w,
                 height: present_h,
@@ -1882,6 +1905,8 @@ impl VirglGfxBackend {
             blend_handle_disabled,
             blend_handle_straight,
             blend_handle_additive,
+            blend_handle_multiply,
+            blend_handle_screen,
             blend_handle_premult,
             swapchain,
 
@@ -2378,6 +2403,23 @@ impl GfxDevice for VirglGfxBackend {
             self.frame_counter = 1;
         }
 
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum DrawKind {
+            Color,
+            Textured,
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        struct DrawStateKey {
+            kind: DrawKind,
+            pipeline: u32,
+            vertex_buffer: u32,
+            vertex_offset: u64,
+            blend: BlendDesc,
+            sampler: SamplerDesc,
+            image: u32,
+        }
+
         #[derive(Clone, Copy)]
         struct DrawOp {
             state: VirglDrawState,
@@ -2445,6 +2487,13 @@ impl GfxDevice for VirglGfxBackend {
         let mut did_work = false;
         let mut did_present = false;
         let mut last_viewport: Option<(u32, u32)> = None;
+        let mut last_draw_key: Option<DrawStateKey> = None;
+        let mut last_bound_blend: Option<u32> = None;
+        let mut last_bound_sampler_view: Option<u32> = None;
+        let mut last_bound_sampler_state: Option<u32> = None;
+        let mut last_bound_shader_kind: Option<DrawKind> = None;
+        let mut last_bound_vbo: Option<(u32, u32)> = None;
+        let mut frame_vbo_write_offset: u32 = 0;
 
         for op in ops {
             match op {
@@ -2477,6 +2526,44 @@ impl GfxDevice for VirglGfxBackend {
                     let vertex_count = draw.vertex_count;
                     let first_vertex = draw.first_vertex;
 
+                    let pipeline_raw = self.state.pipeline.raw();
+                    let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
+                    let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
+                        return Err(Error::NotFound);
+                    };
+                    let pipe_desc = pipe.desc;
+                    let draw_kind =
+                        if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
+                            DrawKind::Textured
+                        } else {
+                            DrawKind::Color
+                        };
+
+                    let draw_key = DrawStateKey {
+                        kind: draw_kind,
+                        pipeline: pipeline_raw,
+                        vertex_buffer: self.state.vertex.id.raw(),
+                        vertex_offset: self.state.vertex.offset,
+                        blend: self.state.blend,
+                        sampler: self.state.sampler,
+                        image: self.state.image.raw(),
+                    };
+
+                    if let Some(prev) = last_draw_key
+                        && prev.kind != draw_key.kind
+                    {
+                        let n = VIRGL_STATE_TRANSITION_LOGS.fetch_add(1, Ordering::Relaxed);
+                        if n < 8 {
+                            crate::log!(
+                                "virgl-backend: draw-kind transition {:?} -> {:?} frame={}\n",
+                                prev.kind,
+                                draw_key.kind,
+                                frame_no
+                            );
+                        }
+                    }
+                    last_draw_key = Some(draw_key);
+
                     // Ensure current viewport is encoded before drawing.
                     let mut vp_w = self.state.viewport.width.max(0) as u32;
                     let mut vp_h = self.state.viewport.height.max(0) as u32;
@@ -2504,6 +2591,12 @@ impl GfxDevice for VirglGfxBackend {
                                 self.blend_handle_straight
                             }
                             (BlendFactor::SrcAlpha, BlendFactor::One) => self.blend_handle_additive,
+                            (BlendFactor::DstColor, BlendFactor::OneMinusSrcAlpha) => {
+                                self.blend_handle_multiply
+                            }
+                            (BlendFactor::One, BlendFactor::OneMinusSrcColor) => {
+                                self.blend_handle_screen
+                            }
                             (BlendFactor::One, BlendFactor::OneMinusSrcAlpha) => {
                                 self.blend_handle_premult
                             }
@@ -2513,30 +2606,42 @@ impl GfxDevice for VirglGfxBackend {
                                     VIRGL_BLEND_UNSUPPORTED_LOGS.fetch_add(1, Ordering::Relaxed);
                                 if n < 8 {
                                     crate::log!(
-                                        "virgl-backend: unsupported blend {:?}; using straight alpha\n",
+                                        "virgl-backend: unsupported blend {:?}; failing draw\n",
                                         other
                                     );
                                 }
-                                self.blend_handle_straight
+                                return Err(Error::Unsupported);
                             }
                         }
                     };
-                    let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
-                    if n < 8 {
-                        crate::log!(
-                            "virgl-backend: bind blend {:?} -> handle={}\n",
-                            self.state.blend,
-                            blend_handle
-                        );
+                    if last_bound_blend != Some(blend_handle) {
+                        let n = VIRGL_BLEND_BIND_LOGS.fetch_add(1, Ordering::Relaxed);
+                        if n < 8 {
+                            crate::log!(
+                                "virgl-backend: bind blend {:?} -> handle={}\n",
+                                self.state.blend,
+                                blend_handle
+                            );
+                        }
+                        encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+                        last_bound_blend = Some(blend_handle);
+                        did_work = true;
                     }
-                    encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
+                    let is_textured_draw =
+                        pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32;
 
-                    let pipeline_raw = self.state.pipeline.raw();
-                    let pipe_idx = pipeline_raw.saturating_sub(1) as usize;
-                    let Some(pipe) = self.pipelines.get(pipe_idx).and_then(|p| p.as_ref()) else {
-                        return Err(Error::NotFound);
-                    };
-                    let pipe_desc = pipe.desc;
+                    // Defensive isolation between colored and textured draw paths:
+                    // if draw kind flips, invalidate converted/uploaded caches so
+                    // no previously converted vertex stream can bleed across paths.
+                    if let Some(prev) = self.converted_cache.key
+                        && prev.layout_texcoord_format != pipe_desc.vertex_layout.texcoord_format
+                    {
+                        self.converted_cache.key = None;
+                        self.converted_cache.bytes.clear();
+                        self.converted_cache.vertex_count = 0;
+                        self.uploaded_cache_key = None;
+                        self.uploaded_cache_vbo_generation = 0;
+                    }
 
                     let vraw = self.state.vertex.id.raw();
                     let vidx = vraw.saturating_sub(1) as usize;
@@ -2633,22 +2738,36 @@ impl GfxDevice for VirglGfxBackend {
                         return Err(Error::Invalid);
                     }
 
-                    if !self.ensure_vbo_capacity(self.converted_cache.bytes.len()) {
+                    let draw_bytes = self.converted_cache.bytes.len();
+                    let draw_bytes_u32 = draw_bytes.min(u32::MAX as usize) as u32;
+                    let Some(need_end) = frame_vbo_write_offset.checked_add(draw_bytes_u32) else {
+                        return Err(Error::OutOfMemory);
+                    };
+                    if !self.ensure_vbo_capacity(need_end as usize) {
                         return Err(Error::OutOfMemory);
                     }
 
-                    let need_upload = VIRGL_DISABLE_CONVERTED_VERTEX_CACHE
-                        || bypass_cache_for_color
-                        || self.uploaded_cache_key != Some(cache_key)
-                        || self.uploaded_cache_vbo_generation != self.vbo_generation;
+                    let need_upload = true;
                     if need_upload {
-                        encode_inline_write_buffer(
+                        encode_inline_write_buffer_at(
                             &mut cmd,
                             self.vbo_res,
+                            frame_vbo_write_offset,
                             self.converted_cache.bytes.as_slice(),
                         );
                         self.uploaded_cache_key = Some(cache_key);
                         self.uploaded_cache_vbo_generation = self.vbo_generation;
+                    }
+
+                    if last_bound_vbo != Some((self.vbo_res, frame_vbo_write_offset)) {
+                        encode_set_vertex_buffer(
+                            &mut cmd,
+                            core::mem::size_of::<Vertex>() as u32,
+                            frame_vbo_write_offset,
+                            self.vbo_res,
+                        );
+                        last_bound_vbo = Some((self.vbo_res, frame_vbo_write_offset));
+                        did_work = true;
                     }
 
                     if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
@@ -2762,23 +2881,56 @@ impl GfxDevice for VirglGfxBackend {
                             );
                         }
 
-                        encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[virgl_view]);
-                        encode_bind_sampler_states(
-                            &mut cmd,
-                            PIPE_SHADER_FRAGMENT,
-                            0,
-                            &[samp_handle],
-                        );
-                        encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
-                        encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
+                        if last_bound_sampler_view != Some(virgl_view) {
+                            encode_set_sampler_views(
+                                &mut cmd,
+                                PIPE_SHADER_FRAGMENT,
+                                0,
+                                &[virgl_view],
+                            );
+                            last_bound_sampler_view = Some(virgl_view);
+                            did_work = true;
+                        }
+                        if last_bound_sampler_state != Some(samp_handle) {
+                            encode_bind_sampler_states(
+                                &mut cmd,
+                                PIPE_SHADER_FRAGMENT,
+                                0,
+                                &[samp_handle],
+                            );
+                            last_bound_sampler_state = Some(samp_handle);
+                            did_work = true;
+                        }
+                        if last_bound_shader_kind != Some(DrawKind::Textured) {
+                            encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
+                            encode_bind_shader(&mut cmd, self.fs_tex_handle, PIPE_SHADER_FRAGMENT);
+                            last_bound_shader_kind = Some(DrawKind::Textured);
+                            did_work = true;
+                        }
                     } else {
                         // Keep color-only draws isolated from prior textured draws:
                         // explicitly null-bind slot 0. Some virgl paths treat an
                         // empty list as no-op and keep previous bindings alive.
-                        encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
-                        encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
-                        encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
-                        encode_bind_shader(&mut cmd, self.fs_color_handle, PIPE_SHADER_FRAGMENT);
+                        if last_bound_sampler_view != Some(0) {
+                            encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
+                            last_bound_sampler_view = Some(0);
+                            did_work = true;
+                        }
+                        if last_bound_sampler_state != Some(0) {
+                            encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
+                            last_bound_sampler_state = Some(0);
+                            did_work = true;
+                        }
+                        if last_bound_shader_kind != Some(DrawKind::Color) {
+                            encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
+                            encode_bind_shader(
+                                &mut cmd,
+                                self.fs_color_handle,
+                                PIPE_SHADER_FRAGMENT,
+                            );
+                            last_bound_shader_kind = Some(DrawKind::Color);
+                            did_work = true;
+                        }
                     }
 
                     if frame_no <= 5 || (frame_no % 100) == 0 {
@@ -2818,6 +2970,11 @@ impl GfxDevice for VirglGfxBackend {
 
                     encode_draw_vbo_count(&mut cmd, self.converted_cache.vertex_count);
                     did_work = true;
+
+                    // Keep each draw in a unique VBO range for this submit so driver
+                    // scheduling cannot alias vertices across neighboring draws.
+                    let advanced = need_end.saturating_add(63) & !63;
+                    frame_vbo_write_offset = advanced;
                 }
                 Op::Present => {
                     encode_resource_copy_region(
@@ -3177,7 +3334,12 @@ fn encode_bind_sampler_states(
     }
 }
 
-fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8]) {
+fn encode_inline_write_buffer_at(
+    buf: &mut VirglCmdBuf,
+    res_handle: u32,
+    dst_offset: u32,
+    data: &[u8],
+) {
     // Matches virgl_encoder_inline_send_box for a PIPE_BUFFER upload.
     // cmd length is data_dwords + 11
     let data_dwords = (data.len() as u32).div_ceil(4);
@@ -3191,7 +3353,7 @@ fn encode_inline_write_buffer(buf: &mut VirglCmdBuf, res_handle: u32, data: &[u8
     buf.push(0); // usage
     buf.push(data.len() as u32); // stride
     buf.push(0); // layer_stride
-    buf.push(0); // box x
+    buf.push(dst_offset); // box x (byte offset for PIPE_BUFFER)
     buf.push(0); // box y
     buf.push(0); // box z
     buf.push(data.len() as u32); // box width

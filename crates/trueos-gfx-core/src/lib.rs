@@ -347,6 +347,8 @@ pub enum BlendFactor {
     One,
     SrcAlpha,
     OneMinusSrcAlpha,
+    DstColor,
+    OneMinusSrcColor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
