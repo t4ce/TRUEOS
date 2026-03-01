@@ -15,6 +15,102 @@ fn js_u32(ctx: *mut qjs::JSContext, v: u32) -> qjs::JSValue {
 }
 
 #[inline]
+fn js_f64(ctx: *mut qjs::JSContext, v: f64) -> qjs::JSValue {
+    unsafe { qjs::JS_NewFloat64(ctx, v) }
+}
+
+#[inline]
+unsafe fn arg_f64(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> f64 {
+    if argc <= 0 || argv.is_null() || idx >= argc as usize {
+        return 0.0;
+    }
+    let mut out = 0.0f64;
+    let _ = unsafe { qjs::JS_ToFloat64(ctx, &mut out as *mut f64, *argv.add(idx)) };
+    out
+}
+
+#[inline]
+unsafe fn arg_i32(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> i32 {
+    unsafe { arg_f64(ctx, argc, argv, idx) as i32 }
+}
+
+#[inline]
+unsafe fn arg_u32(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> u32 {
+    let v = unsafe { arg_f64(ctx, argc, argv, idx) };
+    if !v.is_finite() || v <= 0.0 {
+        return 0;
+    }
+    v as u32
+}
+
+#[inline]
+unsafe fn arg_bool(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> bool {
+    unsafe { arg_f64(ctx, argc, argv, idx) != 0.0 }
+}
+
+#[cfg(feature = "yoga-native")]
+mod backend {
+    pub(crate) use crate::trueos_shims::yoga::{
+        config_create, config_free, config_set_use_web_defaults, node_calculate_layout, node_create,
+        node_free_recursive, node_get_child_count, node_get_computed_height, node_get_computed_left,
+        node_get_computed_top, node_get_computed_width, node_insert_child, node_set_align_items,
+        node_set_align_self, node_set_flex_direction, node_set_flex_grow, node_set_flex_shrink,
+        node_set_flex_wrap, node_set_height, node_set_justify_content, node_set_margin,
+        node_set_min_height, node_set_min_width, node_set_padding, node_set_position,
+        node_set_position_type, node_set_width,
+    };
+}
+
+#[cfg(not(feature = "yoga-native"))]
+mod backend {
+    pub(crate) fn config_create() -> u32 {
+        0
+    }
+    pub(crate) fn config_free(_handle: u32) {}
+    pub(crate) fn config_set_use_web_defaults(_handle: u32, _enabled: bool) {}
+
+    pub(crate) fn node_create(_config_handle: u32) -> u32 {
+        0
+    }
+    pub(crate) fn node_free_recursive(_handle: u32) {}
+    pub(crate) fn node_insert_child(_parent: u32, _child: u32, _index: u32) {}
+    pub(crate) fn node_get_child_count(_handle: u32) -> u32 {
+        0
+    }
+    pub(crate) fn node_calculate_layout(_handle: u32, _width: f32, _height: f32, _direction: i32) {}
+
+    pub(crate) fn node_set_flex_direction(_handle: u32, _v: i32) {}
+    pub(crate) fn node_set_align_items(_handle: u32, _v: i32) {}
+    pub(crate) fn node_set_align_self(_handle: u32, _v: i32) {}
+    pub(crate) fn node_set_justify_content(_handle: u32, _v: i32) {}
+    pub(crate) fn node_set_flex_wrap(_handle: u32, _v: i32) {}
+    pub(crate) fn node_set_flex_grow(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_flex_shrink(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_position_type(_handle: u32, _v: i32) {}
+
+    pub(crate) fn node_set_width(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_height(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_min_width(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_min_height(_handle: u32, _v: f32) {}
+    pub(crate) fn node_set_padding(_handle: u32, _edge: i32, _v: f32) {}
+    pub(crate) fn node_set_margin(_handle: u32, _edge: i32, _v: f32) {}
+    pub(crate) fn node_set_position(_handle: u32, _edge: i32, _v: f32) {}
+
+    pub(crate) fn node_get_computed_left(_handle: u32) -> f32 {
+        0.0
+    }
+    pub(crate) fn node_get_computed_top(_handle: u32) -> f32 {
+        0.0
+    }
+    pub(crate) fn node_get_computed_width(_handle: u32) -> f32 {
+        0.0
+    }
+    pub(crate) fn node_get_computed_height(_handle: u32) -> f32 {
+        0.0
+    }
+}
+
+#[inline]
 pub(crate) unsafe fn try_create_native_module(
     ctx: *mut qjs::JSContext,
     module_name: *const c_char,
@@ -27,32 +123,336 @@ pub(crate) unsafe fn try_create_native_module(
         return core::ptr::null_mut();
     }
 
-    // Keep a stable API shape while native Yoga C symbols are not linked yet.
-    unsafe extern "C" fn yoga_noop(
+    unsafe extern "C" fn yoga_config_create(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        _argc: i32,
+        _argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_u32(ctx, backend::config_create())
+    }
+
+    unsafe extern "C" fn yoga_config_free(
+        _ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        backend::config_free(unsafe { arg_u32(_ctx, argc, argv, 0) });
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_config_set_use_web_defaults(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let h = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let enabled = unsafe { arg_bool(ctx, argc, argv, 1) };
+        backend::config_set_use_web_defaults(h, enabled);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_create(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let cfg = unsafe { arg_u32(ctx, argc, argv, 0) };
+        js_u32(ctx, backend::node_create(cfg))
+    }
+
+    unsafe extern "C" fn yoga_node_free_recursive(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        backend::node_free_recursive(unsafe { arg_u32(ctx, argc, argv, 0) });
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_insert_child(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let parent = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let child = unsafe { arg_u32(ctx, argc, argv, 1) };
+        let index = unsafe { arg_u32(ctx, argc, argv, 2) };
+        backend::node_insert_child(parent, child, index);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_get_child_count(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_u32(
+            ctx,
+            backend::node_get_child_count(unsafe { arg_u32(ctx, argc, argv, 0) }),
+        )
+    }
+
+    unsafe extern "C" fn yoga_node_set_i32(
+        ctx: *mut qjs::JSContext,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+        f: fn(u32, i32),
+    ) {
+        let h = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let v = unsafe { arg_i32(ctx, argc, argv, 1) };
+        f(h, v);
+    }
+
+    unsafe extern "C" fn yoga_node_set_f32(
+        ctx: *mut qjs::JSContext,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+        f: fn(u32, f32),
+    ) {
+        let h = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let v = unsafe { arg_f64(ctx, argc, argv, 1) as f32 };
+        f(h, v);
+    }
+
+    unsafe extern "C" fn yoga_node_set_edge_f32(
+        ctx: *mut qjs::JSContext,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+        f: fn(u32, i32, f32),
+    ) {
+        let h = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let edge = unsafe { arg_i32(ctx, argc, argv, 1) };
+        let v = unsafe { arg_f64(ctx, argc, argv, 2) as f32 };
+        f(h, edge, v);
+    }
+
+    unsafe extern "C" fn yoga_node_set_flex_direction(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_flex_direction) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_align_items(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_align_items) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_align_self(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_align_self) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_justify_content(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_justify_content) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_flex_wrap(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_flex_wrap) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_flex_grow(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_flex_grow) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_flex_shrink(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_flex_shrink) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_position_type(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_i32(ctx, argc, argv, backend::node_set_position_type) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_width(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_width) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_height(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_height) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_min_width(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_min_width) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_min_height(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_f32(ctx, argc, argv, backend::node_set_min_height) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_padding(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_edge_f32(ctx, argc, argv, backend::node_set_padding) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_margin(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_edge_f32(ctx, argc, argv, backend::node_set_margin) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_set_position(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        unsafe { yoga_node_set_edge_f32(ctx, argc, argv, backend::node_set_position) };
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_calculate_layout(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        let handle = unsafe { arg_u32(ctx, argc, argv, 0) };
+        let w = unsafe { arg_f64(ctx, argc, argv, 1) as f32 };
+        let h = unsafe { arg_f64(ctx, argc, argv, 2) as f32 };
+        let dir = unsafe { arg_i32(ctx, argc, argv, 3) };
+        backend::node_calculate_layout(handle, w, h, dir);
+        qjs::JSValue::undefined()
+    }
+
+    unsafe extern "C" fn yoga_node_get_computed_left(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_f64(
+            ctx,
+            backend::node_get_computed_left(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
+        )
+    }
+
+    unsafe extern "C" fn yoga_node_get_computed_top(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_f64(
+            ctx,
+            backend::node_get_computed_top(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
+        )
+    }
+
+    unsafe extern "C" fn yoga_node_get_computed_width(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_f64(
+            ctx,
+            backend::node_get_computed_width(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
+        )
+    }
+
+    unsafe extern "C" fn yoga_node_get_computed_height(
+        ctx: *mut qjs::JSContext,
+        _this_val: qjs::JSValueConst,
+        argc: i32,
+        argv: *const qjs::JSValueConst,
+    ) -> qjs::JSValue {
+        js_f64(
+            ctx,
+            backend::node_get_computed_height(unsafe { arg_u32(ctx, argc, argv, 0) }) as f64,
+        )
+    }
+
+    // We do not bridge JS measure callbacks yet; keep API-compatible no-op.
+    unsafe extern "C" fn yoga_node_set_measure_func(
         _ctx: *mut qjs::JSContext,
         _this_val: qjs::JSValueConst,
         _argc: i32,
         _argv: *const qjs::JSValueConst,
     ) -> qjs::JSValue {
         qjs::JSValue::undefined()
-    }
-
-    unsafe extern "C" fn yoga_zero_u32(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        js_u32(ctx, 0)
-    }
-
-    unsafe extern "C" fn yoga_zero_f64(
-        ctx: *mut qjs::JSContext,
-        _this_val: qjs::JSValueConst,
-        _argc: i32,
-        _argv: *const qjs::JSValueConst,
-    ) -> qjs::JSValue {
-        unsafe { qjs::JS_NewFloat64(ctx, 0.0) }
     }
 
     unsafe extern "C" fn yoga_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> i32 {
@@ -82,34 +482,34 @@ pub(crate) unsafe fn try_create_native_module(
             }};
         }
 
-        export_fn!("configCreate", yoga_zero_u32, 0);
-        export_fn!("configFree", yoga_noop, 1);
-        export_fn!("configSetUseWebDefaults", yoga_noop, 2);
-        export_fn!("nodeCreate", yoga_zero_u32, 1);
-        export_fn!("nodeFreeRecursive", yoga_noop, 1);
-        export_fn!("nodeInsertChild", yoga_noop, 3);
-        export_fn!("nodeGetChildCount", yoga_zero_u32, 1);
-        export_fn!("nodeSetFlexDirection", yoga_noop, 2);
-        export_fn!("nodeSetAlignItems", yoga_noop, 2);
-        export_fn!("nodeSetAlignSelf", yoga_noop, 2);
-        export_fn!("nodeSetJustifyContent", yoga_noop, 2);
-        export_fn!("nodeSetFlexWrap", yoga_noop, 2);
-        export_fn!("nodeSetFlexGrow", yoga_noop, 2);
-        export_fn!("nodeSetFlexShrink", yoga_noop, 2);
-        export_fn!("nodeSetPositionType", yoga_noop, 2);
-        export_fn!("nodeSetWidth", yoga_noop, 2);
-        export_fn!("nodeSetHeight", yoga_noop, 2);
-        export_fn!("nodeSetMinWidth", yoga_noop, 2);
-        export_fn!("nodeSetMinHeight", yoga_noop, 2);
-        export_fn!("nodeSetPadding", yoga_noop, 3);
-        export_fn!("nodeSetMargin", yoga_noop, 3);
-        export_fn!("nodeSetPosition", yoga_noop, 3);
-        export_fn!("nodeCalculateLayout", yoga_noop, 4);
-        export_fn!("nodeGetComputedLeft", yoga_zero_f64, 1);
-        export_fn!("nodeGetComputedTop", yoga_zero_f64, 1);
-        export_fn!("nodeGetComputedWidth", yoga_zero_f64, 1);
-        export_fn!("nodeGetComputedHeight", yoga_zero_f64, 1);
-        export_fn!("nodeSetMeasureFunc", yoga_noop, 2);
+        export_fn!("configCreate", yoga_config_create, 0);
+        export_fn!("configFree", yoga_config_free, 1);
+        export_fn!("configSetUseWebDefaults", yoga_config_set_use_web_defaults, 2);
+        export_fn!("nodeCreate", yoga_node_create, 1);
+        export_fn!("nodeFreeRecursive", yoga_node_free_recursive, 1);
+        export_fn!("nodeInsertChild", yoga_node_insert_child, 3);
+        export_fn!("nodeGetChildCount", yoga_node_get_child_count, 1);
+        export_fn!("nodeSetFlexDirection", yoga_node_set_flex_direction, 2);
+        export_fn!("nodeSetAlignItems", yoga_node_set_align_items, 2);
+        export_fn!("nodeSetAlignSelf", yoga_node_set_align_self, 2);
+        export_fn!("nodeSetJustifyContent", yoga_node_set_justify_content, 2);
+        export_fn!("nodeSetFlexWrap", yoga_node_set_flex_wrap, 2);
+        export_fn!("nodeSetFlexGrow", yoga_node_set_flex_grow, 2);
+        export_fn!("nodeSetFlexShrink", yoga_node_set_flex_shrink, 2);
+        export_fn!("nodeSetPositionType", yoga_node_set_position_type, 2);
+        export_fn!("nodeSetWidth", yoga_node_set_width, 2);
+        export_fn!("nodeSetHeight", yoga_node_set_height, 2);
+        export_fn!("nodeSetMinWidth", yoga_node_set_min_width, 2);
+        export_fn!("nodeSetMinHeight", yoga_node_set_min_height, 2);
+        export_fn!("nodeSetPadding", yoga_node_set_padding, 3);
+        export_fn!("nodeSetMargin", yoga_node_set_margin, 3);
+        export_fn!("nodeSetPosition", yoga_node_set_position, 3);
+        export_fn!("nodeCalculateLayout", yoga_node_calculate_layout, 4);
+        export_fn!("nodeGetComputedLeft", yoga_node_get_computed_left, 1);
+        export_fn!("nodeGetComputedTop", yoga_node_get_computed_top, 1);
+        export_fn!("nodeGetComputedWidth", yoga_node_get_computed_width, 1);
+        export_fn!("nodeGetComputedHeight", yoga_node_get_computed_height, 1);
+        export_fn!("nodeSetMeasureFunc", yoga_node_set_measure_func, 2);
 
         export_i32!("ALIGN_AUTO", 0);
         export_i32!("ALIGN_FLEX_START", 1);

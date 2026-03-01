@@ -24,6 +24,10 @@ pub mod browser;
 pub mod browser_context;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_navigator.rs"]
+pub mod browser_navigator;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
