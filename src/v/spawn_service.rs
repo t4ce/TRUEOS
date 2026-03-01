@@ -395,15 +395,20 @@ async fn webgpu_mesh_task() {
     let mut n = 0usize;
     let mut pen_x = -0.92f32;
     let pen_y = 0.10f32;
-    let glyph_h_ndc = 0.14f32;
+    let (fb_w, fb_h) = crate::limine::framebuffer_response()
+        .and_then(|resp| resp.framebuffers().next())
+        .map(|fb| (fb.width() as f32, fb.height() as f32))
+        .unwrap_or((1024.0, 768.0));
+    let px_to_ndc_x = 2.0f32 / fb_w.max(1.0);
+    let px_to_ndc_y = 2.0f32 / fb_h.max(1.0);
+    let glyph_h_ndc = atlas.cell_h as f32 * px_to_ndc_y;
     let atlas_w = atlas.width as f32;
     let atlas_h = atlas.height as f32;
     let grid_w = atlas.grid_w.max(1);
-    let cell_h_f = atlas.cell_h as f32;
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
     for &ch in MSG {
         if ch == b' ' {
-            pen_x += glyph_h_ndc * 0.45;
+            pen_x += atlas.cell_w as f32 * 0.45 * px_to_ndc_x;
             continue;
         }
         let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
@@ -415,7 +420,7 @@ async fn webgpu_mesh_task() {
             .get(slot as usize)
             .copied()
             .unwrap_or(atlas.cell_w as u8) as f32;
-        let glyph_w_ndc = glyph_h_ndc * (glyph_w_px / cell_h_f.max(1.0));
+        let glyph_w_ndc = glyph_w_px * px_to_ndc_x;
 
         let sx = (slot as u32) % grid_w;
         let sy = (slot as u32) / grid_w;
@@ -495,7 +500,7 @@ async fn webgpu_mesh_task() {
             a: c.3,
         };
         n += 6;
-        pen_x += glyph_h_ndc * ((glyph_w_px / cell_h_f.max(1.0)) + 0.10);
+        pen_x += glyph_w_px * 1.10 * px_to_ndc_x;
     }
     let ptr = verts.as_ptr() as *const u8;
     let len = n.saturating_mul(core::mem::size_of::<TexVertex>());

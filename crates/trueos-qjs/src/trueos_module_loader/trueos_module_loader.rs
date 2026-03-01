@@ -137,7 +137,7 @@ unsafe fn load_native_module(
         return browser_context_mod;
     }
 
-    let yoga_mod = unsafe { crate::yoga_native::try_create_native_module(ctx, module_name) };
+    let yoga_mod = unsafe { crate::yoga::try_create_native_module(ctx, module_name) };
     if !yoga_mod.is_null() {
         return yoga_mod;
     }
