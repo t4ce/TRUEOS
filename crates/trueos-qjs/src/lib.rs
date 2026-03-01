@@ -16,10 +16,12 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/browser.rs"]
 pub mod browser;
 
 #[cfg(feature = "trueos")]
-pub mod browser_input;
+#[path = "../app/browser/browser_context.rs"]
+pub mod browser_context;
 
 #[cfg(feature = "trueos")]
 pub mod cmd_stream;
