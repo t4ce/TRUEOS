@@ -61,7 +61,6 @@ static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
-static BOOT_PARSE5_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -743,11 +742,6 @@ fn spawn_piano_drain(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_boot_parse5_smoke(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
-}
-
 fn spawn_boot_ws_smoke(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
     SpawnAttempt::Skipped
@@ -784,14 +778,9 @@ const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
-const PARSE5_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
-    | crate::v::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::v::readiness::QJS_ASYNC_FS_READY;
-
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
-    | crate::v::readiness::QJS_PARSE5_SMOKE_DONE;
+    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 
 const BOOT_NETBENCH_ENABLED: bool = false;
 const WGPU_TEXT_ENABLED: bool = true;
@@ -972,13 +961,6 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_piano_drain,
     },
     // Boot-time gated tasks
-    TaskSpec {
-        name: "boot-parse5-smoke",
-        disabled: true,
-        required: PARSE5_BOOT_READY,
-        started: &BOOT_PARSE5_SMOKE_STARTED,
-        spawn: spawn_boot_parse5_smoke,
-    },
     TaskSpec {
         name: "boot-ws-smoke",
         disabled: true,

@@ -174,6 +174,11 @@ try {
 } catch {
     browserContext = null;
 }
+try {
+    await import('trueos:yoga');
+} catch {
+    // Keep smoke startup alive if Yoga import fails.
+}
 const PIXI = await import('/qjs/vendor/pixi.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
 const H = Number((G.window && G.window.innerHeight) || 800);
@@ -781,7 +786,7 @@ G.__pixi_smoke_tick = function(dt) {
             255
         );
 
-        // Owner-colored border to mirror Parse5 context menu framing.
+        // Owner-colored border for per-cursor context menu framing.
         menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuW * 0.5, menuY + menuBorderW * 0.5, menuW, menuBorderW, 0.0, c.color, 255);
         menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuW * 0.5, menuY + menuH - menuBorderW * 0.5, menuW, menuBorderW, 0.0, c.color, 255);
         menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuBorderW * 0.5, menuY + menuH * 0.5, menuBorderW, menuH, 0.0, c.color, 255);
@@ -819,7 +824,7 @@ G.__pixi_smoke_tick = function(dt) {
             );
         }
 
-        // Parse5 parity: selecting any item closes the menu for the owner cursor.
+        // Selecting any item closes the menu for the owner cursor.
         if (browserContext.getPointerDownSeq) {
             let seq = 0;
             let button = 0;

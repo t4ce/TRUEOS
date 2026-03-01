@@ -30,7 +30,6 @@ pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
 pub const QJS_ASYNC_FS_READY: u32 = 1 << 17;
-pub const QJS_PARSE5_SMOKE_DONE: u32 = 1 << 18;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
 pub const WGPU_TEXT_DONE: u32 = 1 << 20;
 
