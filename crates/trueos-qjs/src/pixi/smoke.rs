@@ -168,11 +168,11 @@ pub async fn boot_pixi_scene_smoke_task() {
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 
 import * as cmd from 'cmd_stream';
-let browserInput = null;
+let browserContext = null;
 try {
-    browserInput = await import('trueos:browser_input');
+    browserContext = await import('trueos:browser_context');
 } catch {
-    browserInput = null;
+    browserContext = null;
 }
 const PIXI = await import('/qjs/vendor/pixi.mjs');
 const W = Number((G.window && G.window.innerWidth) || 1280);
@@ -295,6 +295,12 @@ const aiCursor = {
     phase: 0.0,
 };
 
+const menuLabels = ['Copy', 'Paste', 'Close'];
+const menuItemW = 140;
+const menuItemH = 28;
+const menuPad = 6;
+const menuBorderW = 2;
+
 // Future hook: kernel-side cursor tilt targets from hover/active UI state.
 // Nothing calls this yet; defaults keep cursors upright.
 const cursorTilt = {
@@ -358,6 +364,7 @@ G.__pixi_smoke = {
         aiCursor,
         cursorRuntime: new Map(),
         cursorTilt,
+          menuClickSeq: new Map(),
   atlasTex,
     proofTex,
   out,
@@ -687,21 +694,21 @@ G.__pixi_smoke_tick = function(dt) {
             s.cursorRuntime.set(c.id, st);
         }
 
-        if (browserInput) {
+        if (browserContext) {
             let bx = Number.NaN;
             let by = Number.NaN;
             try {
-                bx = Number(browserInput.getCursorX ? browserInput.getCursorX(c.id) : Number.NaN);
-                by = Number(browserInput.getCursorY ? browserInput.getCursorY(c.id) : Number.NaN);
+                bx = Number(browserContext.getCursorX ? browserContext.getCursorX(c.id) : Number.NaN);
+                by = Number(browserContext.getCursorY ? browserContext.getCursorY(c.id) : Number.NaN);
             } catch {}
 
             let hovered = false;
             let focused = false;
             let menuOpen = false;
             try {
-                hovered = !!(browserInput.getHoveredTarget && browserInput.getHoveredTarget(c.id));
-                focused = !!(browserInput.getFocusedTarget && browserInput.getFocusedTarget(c.id));
-                menuOpen = !!(browserInput.isContextMenuOpen && browserInput.isContextMenuOpen(c.id));
+                hovered = !!(browserContext.getHoveredTarget && browserContext.getHoveredTarget(c.id));
+                focused = !!(browserContext.getFocusedTarget && browserContext.getFocusedTarget(c.id));
+                menuOpen = !!(browserContext.isContextMenuOpen && browserContext.isContextMenuOpen(c.id));
             } catch {}
 
             const hasPos = Number.isFinite(bx) && Number.isFinite(by);
@@ -737,6 +744,117 @@ G.__pixi_smoke_tick = function(dt) {
 
     if (cursorOff > 0) {
         cmd.drawTrianglesU8(s.out.subarray(0, cursorOff));
+    }
+
+    let menuOff = 0;
+    for (let i = 0; i < s.globalCursors.length; i++) {
+        const c = s.globalCursors[i];
+        const st = s.cursorRuntime.get(c.id);
+        if (!st || !browserContext || !browserContext.isContextMenuOpen) continue;
+
+        let isOpen = false;
+        try {
+            isOpen = !!browserContext.isContextMenuOpen(c.id);
+        } catch {}
+        if (!isOpen) continue;
+
+        let menuX = 0;
+        let menuY = 0;
+        try {
+            menuX = Number(browserContext.getContextMenuX ? browserContext.getContextMenuX(c.id) : 0);
+            menuY = Number(browserContext.getContextMenuY ? browserContext.getContextMenuY(c.id) : 0);
+        } catch {}
+
+        const menuW = menuItemW + menuPad * 2;
+        const menuH = menuLabels.length * menuItemH + menuPad * 2;
+        menuX = Math.max(0, Math.min(W - menuW, menuX));
+        menuY = Math.max(0, Math.min(H - menuH, menuY));
+
+        menuOff = emitQuad(
+            s.dv, s.out, menuOff,
+            menuX + menuW * 0.5,
+            menuY + menuH * 0.5,
+            menuW,
+            menuH,
+            0.0,
+            0xFFFFFF,
+            255
+        );
+
+        // Owner-colored border to mirror Parse5 context menu framing.
+        menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuW * 0.5, menuY + menuBorderW * 0.5, menuW, menuBorderW, 0.0, c.color, 255);
+        menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuW * 0.5, menuY + menuH - menuBorderW * 0.5, menuW, menuBorderW, 0.0, c.color, 255);
+        menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuBorderW * 0.5, menuY + menuH * 0.5, menuBorderW, menuH, 0.0, c.color, 255);
+        menuOff = emitQuad(s.dv, s.out, menuOff, menuX + menuW - menuBorderW * 0.5, menuY + menuH * 0.5, menuBorderW, menuH, 0.0, c.color, 255);
+
+        let hoveredItem = -1;
+        const px = Number(st.x || 0);
+        const py = Number(st.y || 0);
+        for (let item = 0; item < menuLabels.length; item++) {
+            const rowX = menuX + menuPad;
+            const rowY = menuY + menuPad + item * menuItemH;
+            const rowHover = px >= rowX && px <= (rowX + menuItemW) && py >= rowY && py <= (rowY + menuItemH);
+            if (rowHover) hoveredItem = item;
+            menuOff = emitQuad(
+                s.dv,
+                s.out,
+                menuOff,
+                rowX + menuItemW * 0.5,
+                rowY + menuItemH * 0.5,
+                menuItemW,
+                menuItemH,
+                0.0,
+                rowHover ? 0xF2F2F2 : 0xFFFFFF,
+                255
+            );
+            cmd.drawAtlasText(
+                s.atlasTex,
+                1,
+                (rowX + 8) | 0,
+                (rowY + ((menuItemH - 12) * 0.5)) | 0,
+                menuLabels[item],
+                12,
+                0x202020,
+                255
+            );
+        }
+
+        // Parse5 parity: selecting any item closes the menu for the owner cursor.
+        if (browserContext.getPointerDownSeq) {
+            let seq = 0;
+            let button = 0;
+            try {
+                seq = Number(browserContext.getPointerDownSeq(c.id) || 0) | 0;
+                button = Number(browserContext.getPointerDownButton ? browserContext.getPointerDownButton(c.id) : 0) | 0;
+            } catch {}
+            const prevSeq = Number(s.menuClickSeq.get(c.id) || 0) | 0;
+            if (seq !== prevSeq) {
+                s.menuClickSeq.set(c.id, seq);
+                if (hoveredItem >= 0 && button !== 2) {
+                    const target =
+                        (browserContext.getFocusedTarget && browserContext.getFocusedTarget(c.id))
+                        || (browserContext.getContextMenuTarget && browserContext.getContextMenuTarget(c.id))
+                        || (browserContext.getHoveredTarget && browserContext.getHoveredTarget(c.id))
+                        || null;
+
+                    if (hoveredItem === 0 && browserContext.setClipboardText && target != null) {
+                        browserContext.setClipboardText(c.id, String(target));
+                    } else if (hoveredItem === 1 && browserContext.getClipboardText) {
+                        const clip = browserContext.getClipboardText(c.id) ?? '';
+                        if (clip.length > 0 && browserContext.setClipboardText) {
+                            browserContext.setClipboardText(c.id, clip);
+                        }
+                    }
+
+                    if (browserContext.closeContextMenu) {
+                        browserContext.closeContextMenu(c.id);
+                    }
+                }
+            }
+        }
+    }
+    if (menuOff > 0) {
+        cmd.drawTrianglesU8(s.out.subarray(0, menuOff));
     }
 
     const uiX = s.uiRoot.position.x;
