@@ -47,7 +47,21 @@ pub unsafe fn install(rt: *mut qjs::JSRuntime) {
 /// Convenience wrapper: Node mode currently reuses the same globals as the base loader.
 pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     ensure_global_console(ctx);
+    ensure_global_timers(ctx);
     ensure_global_intl(ctx);
+}
+
+unsafe fn ensure_global_timers(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    qjs::timers::install_globals(ctx, global);
+    qjs::js_free_value(ctx, global);
 }
 
 #[inline]
