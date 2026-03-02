@@ -143,6 +143,12 @@ unsafe fn load_native_module(
         return browser_navigator_mod;
     }
 
+    let browser_webgpu_mod =
+        unsafe { crate::browser_webgpu::try_create_native_module(ctx, module_name) };
+    if !browser_webgpu_mod.is_null() {
+        return browser_webgpu_mod;
+    }
+
     let yoga_mod = unsafe { crate::yoga::try_create_native_module(ctx, module_name) };
     if !yoga_mod.is_null() {
         return yoga_mod;
@@ -572,6 +578,7 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"fs"
             || spec == b"trueos:browser_context"
             || spec == b"trueos:browser_navigator"
+            || spec == b"trueos:browser_webgpu"
             || spec == b"cmd_stream"
             || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"

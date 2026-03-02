@@ -28,6 +28,14 @@ pub mod browser_context;
 pub mod browser_navigator;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_webgpu.rs"]
+pub mod browser_webgpu;
+
+#[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_canvas.rs"]
+pub mod browser_canvas;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
