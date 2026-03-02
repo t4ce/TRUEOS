@@ -57,6 +57,7 @@ unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -
     let mut progress = false;
     progress |= qjs::async_ops::pump(ctx);
     progress |= qjs::workers::pump(ctx);
+    progress |= qjs::timers::pump(ctx);
     if !drain_pending_jobs(rt, ctx) {
         return false;
     }
@@ -122,6 +123,7 @@ pub async fn boot_browser() {
 
         let init_filename = b"<pixi-browser-init>\0";
         let canvas_shim_filename = b"<pixi-browser-canvas-shim>\0";
+        let canvas_renderer_filename = b"<pixi-browser-canvas-renderer-shim>\0";
         let init_script = br#"
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 
@@ -147,56 +149,6 @@ if (!G.requestAnimationFrame) {
   };
 }
 if (!G.cancelAnimationFrame) G.cancelAnimationFrame = () => {};
-if (typeof G.setTimeout !== 'function' || typeof G.clearTimeout !== 'function'
-    || typeof G.setInterval !== 'function' || typeof G.clearInterval !== 'function') {
-    let __timerNextId = 1;
-    const __timers = new Map();
-
-    if (typeof G.setTimeout !== 'function') {
-        G.setTimeout = (cb, _ms, ...args) => {
-            const id = __timerNextId++;
-            __timers.set(id, { kind: 'timeout', active: true });
-            Promise.resolve().then(() => {
-                const t = __timers.get(id);
-                if (!t || !t.active) return;
-                __timers.delete(id);
-                if (typeof cb === 'function') cb(...args);
-            });
-            return id;
-        };
-    }
-
-    if (typeof G.clearTimeout !== 'function') {
-        G.clearTimeout = (id) => {
-            const t = __timers.get(id);
-            if (t) t.active = false;
-            __timers.delete(id);
-        };
-    }
-
-    if (typeof G.setInterval !== 'function') {
-        G.setInterval = (cb, _ms, ...args) => {
-            const id = __timerNextId++;
-            __timers.set(id, { kind: 'interval', active: true });
-            const tick = () => {
-                const t = __timers.get(id);
-                if (!t || !t.active) return;
-                if (typeof cb === 'function') cb(...args);
-                Promise.resolve().then(tick);
-            };
-            Promise.resolve().then(tick);
-            return id;
-        };
-    }
-
-    if (typeof G.clearInterval !== 'function') {
-        G.clearInterval = (id) => {
-            const t = __timers.get(id);
-            if (t) t.active = false;
-            __timers.delete(id);
-        };
-    }
-}
 
 const __trueosWebGpuState = {
     enabled: true,
@@ -204,6 +156,7 @@ const __trueosWebGpuState = {
     backendName: 'trueos-cmd-stream',
     nextId: 1,
 };
+G.__trueosWebGpuState = __trueosWebGpuState;
 
 const __trueosGpuLimits = {
     maxBindGroups: 4,
@@ -278,6 +231,7 @@ function __trueosToU8(data) {
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
     return null;
 }
+G.__trueosToU8 = __trueosToU8;
 
 function __trueosMakeRgbasStorage(width, height, prev) {
     const w = Math.max(1, Number(width || 1) | 0);
@@ -369,6 +323,7 @@ function __trueosUploadLinearRgbaToTexture(tex, src, bytesPerRow, width, height,
         dst.set(src.subarray(srcOff, srcEnd), dstOff);
     }
 }
+G.__trueosUploadLinearRgbaToTexture = __trueosUploadLinearRgbaToTexture;
 
 function __trueosMakeGpuTexture(label, width, height, format, usage) {
     const w = Math.max(1, Number(width) | 0);
@@ -437,158 +392,6 @@ function __trueosMakeGpuBuffer(desc = {}) {
     };
 }
 
-function __trueosMakeGpuCommandEncoder(device, desc = {}) {
-    const cmds = [];
-    return {
-        __id: __trueosWebGpuState.nextId++,
-        label: String(desc.label || ''),
-        __cmds: cmds,
-        beginRenderPass(passDesc = {}) {
-            const pass = {
-                __id: __trueosWebGpuState.nextId++,
-                __kind: 'render-pass',
-                __desc: passDesc,
-                __ops: [],
-                setPipeline(p) { this.__ops.push(['setPipeline', p]); },
-                setBindGroup(i, bg) { this.__ops.push(['setBindGroup', i, bg]); },
-                setVertexBuffer(slot, b, off = 0, size) { this.__ops.push(['setVertexBuffer', slot, b, off, size]); },
-                setIndexBuffer(b, f = 'uint16', off = 0, size) { this.__ops.push(['setIndexBuffer', b, f, off, size]); },
-                setViewport(x, y, w, h, minD = 0, maxD = 1) { this.__ops.push(['setViewport', x, y, w, h, minD, maxD]); },
-                setScissorRect(x, y, w, h) { this.__ops.push(['setScissorRect', x, y, w, h]); },
-                setStencilReference(v) { this.__ops.push(['setStencilReference', v]); },
-                setBlendConstant(c) { this.__ops.push(['setBlendConstant', c]); },
-                draw(vtxCount, instCount = 1, firstV = 0, firstI = 0) { this.__ops.push(['draw', vtxCount, instCount, firstV, firstI]); },
-                drawIndexed(idxCount, instCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
-                    this.__ops.push(['drawIndexed', idxCount, instCount, firstIndex, baseVertex, firstInstance]);
-                },
-                executeBundles(bundles = []) { this.__ops.push(['executeBundles', bundles]); },
-                end() {
-                    cmds.push(pass);
-                },
-            };
-            return pass;
-        },
-        copyBufferToBuffer(src, srcOff, dst, dstOff, size) {
-            cmds.push(['copyBufferToBuffer', src, srcOff, dst, dstOff, size]);
-        },
-        copyBufferToTexture(src, dst, size) {
-            cmds.push(['copyBufferToTexture', src, dst, size]);
-        },
-        copyTextureToTexture(src, dst, size) {
-            cmds.push(['copyTextureToTexture', src, dst, size]);
-        },
-        finish(finishDesc = {}) {
-            return {
-                __id: __trueosWebGpuState.nextId++,
-                label: String(finishDesc.label || ''),
-                __cmds: cmds.slice(),
-            };
-        },
-    };
-}
-
-function __trueosMakeGpuQueue(device) {
-    return {
-        __id: __trueosWebGpuState.nextId++,
-        submit(_cmdBuffers) {
-            // Bridge point: this queue currently validates flow and preserves API shape.
-            // Draw translation into cmd_stream is intentionally staged in follow-up work.
-            return;
-        },
-        writeBuffer(buffer, bufferOffset, data, dataOffset = 0, size) {
-            if (!buffer || !(buffer.__data instanceof Uint8Array) || !data) return;
-            const src = (data instanceof Uint8Array)
-                ? data
-                : (ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data));
-            const bo = Math.max(0, Number(bufferOffset) | 0);
-            const so = Math.max(0, Number(dataOffset) | 0);
-            const n = (size == null) ? (src.byteLength - so) : Math.max(0, Number(size) | 0);
-            const end = Math.min(src.byteLength, so + n);
-            const count = Math.max(0, end - so);
-            if (count <= 0 || bo >= buffer.__data.byteLength) return;
-            const dstEnd = Math.min(buffer.__data.byteLength, bo + count);
-            buffer.__data.set(src.subarray(so, so + (dstEnd - bo)), bo);
-        },
-        writeTexture(dstDesc, data, layout = {}, size = {}) {
-            const tex = dstDesc?.texture || dstDesc;
-            if (!tex) return;
-            const src = __trueosToU8(data);
-            if (!src) return;
-            const width = Number(size.width || size[0] || tex.width || 1) | 0;
-            const height = Number(size.height || size[1] || tex.height || 1) | 0;
-            const bytesPerRow = Number(layout.bytesPerRow || (Math.max(1, width) * 4)) | 0;
-            let ox = 0;
-            let oy = 0;
-            const origin = dstDesc?.origin;
-            if (Array.isArray(origin)) {
-                ox = Number(origin[0] || 0) | 0;
-                oy = Number(origin[1] || 0) | 0;
-            } else if (origin && typeof origin === 'object') {
-                ox = Number(origin.x || 0) | 0;
-                oy = Number(origin.y || 0) | 0;
-            }
-            __trueosUploadLinearRgbaToTexture(tex, src, bytesPerRow, width, height, ox, oy);
-        },
-        copyExternalImageToTexture(srcDesc, dstDesc, size = {}) {
-            const tex = dstDesc?.texture || dstDesc;
-            if (!tex) return;
-
-            const width = Number(size.width || size[0] || tex.width || 1) | 0;
-            const height = Number(size.height || size[1] || tex.height || 1) | 0;
-            const source = srcDesc?.source || srcDesc;
-
-            let srcBytes = null;
-            let srcStride = Math.max(1, width) * 4;
-
-            if (source && source.__rgbaData instanceof Uint8Array) {
-                srcBytes = source.__rgbaData;
-                srcStride = Number(source.__rgbaStride || srcStride) | 0;
-            } else if (source && source.data) {
-                srcBytes = __trueosToU8(source.data);
-                srcStride = Number(source.bytesPerRow || srcStride) | 0;
-            } else if (source) {
-                const srcU8 = __trueosToU8(source);
-                if (srcU8) {
-                    srcBytes = srcU8;
-                    srcStride = Math.max(1, width) * 4;
-                }
-            }
-
-            if (!srcBytes && source && typeof source.getContext === 'function') {
-                try {
-                    const ctx2d = source.getContext('2d');
-                    if (ctx2d && typeof ctx2d.getImageData === 'function') {
-                        const img = ctx2d.getImageData(0, 0, Math.max(1, width), Math.max(1, height));
-                        srcBytes = __trueosToU8(img?.data);
-                        srcStride = Math.max(1, width) * 4;
-                    }
-                } catch (_) {
-                    srcBytes = null;
-                }
-            }
-
-            if (!srcBytes) return;
-
-            let ox = 0;
-            let oy = 0;
-            const origin = dstDesc?.origin;
-            if (Array.isArray(origin)) {
-                ox = Number(origin[0] || 0) | 0;
-                oy = Number(origin[1] || 0) | 0;
-            } else if (origin && typeof origin === 'object') {
-                ox = Number(origin.x || 0) | 0;
-                oy = Number(origin.y || 0) | 0;
-            }
-
-            __trueosUploadLinearRgbaToTexture(tex, srcBytes, srcStride, width, height, ox, oy);
-            return;
-        },
-        async onSubmittedWorkDone() {
-            return;
-        },
-    };
-}
-
 function __trueosMakeGpuDevice(adapter, desc = {}) {
     const device = {
         __id: __trueosWebGpuState.nextId++,
@@ -614,7 +417,7 @@ function __trueosMakeGpuDevice(adapter, desc = {}) {
             p.getBindGroupLayout = (i) => (d.layout && d.layout.bindGroupLayouts && d.layout.bindGroupLayouts[i]) || { __id: __trueosWebGpuState.nextId++, entries: [] };
             return p;
         },
-        createCommandEncoder(d = {}) { return __trueosMakeGpuCommandEncoder(device, d); },
+        createCommandEncoder(d = {}) { return G.__trueosMakeGpuCommandEncoder(device, d); },
         createRenderBundleEncoder(d = {}) {
             return {
                 __id: __trueosWebGpuState.nextId++,
@@ -627,7 +430,7 @@ function __trueosMakeGpuDevice(adapter, desc = {}) {
         async popErrorScope() { return null; },
         destroy() {},
     };
-    device.queue = __trueosMakeGpuQueue(device);
+    device.queue = G.__trueosMakeGpuQueue(device);
     return device;
 }
 
@@ -1146,6 +949,26 @@ await import('/qjs/browser/main.mjs');
             let _ = pump_runtime_once(rt, ctx);
             qjs::async_ops::drain_all_for_context(ctx);
             qjs::workers::drain_all_for_context(ctx);
+            qjs::timers::drain_all_for_context(ctx);
+            qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
+            drop(vm);
+            trueos_cabi_gfx_present_owner_set(0);
+            WEBGPU_BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        if !eval_or_log(
+            ctx,
+            qjs::browser_canvas_renderer::CANVAS_RENDERER_SHIM_JS,
+            canvas_renderer_filename.as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+            "browser-canvas-renderer-shim",
+        ) {
+            qjs::workers::terminate_all_for_context(ctx);
+            let _ = pump_runtime_once(rt, ctx);
+            qjs::async_ops::drain_all_for_context(ctx);
+            qjs::workers::drain_all_for_context(ctx);
+            qjs::timers::drain_all_for_context(ctx);
             qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
             drop(vm);
             trueos_cabi_gfx_present_owner_set(0);
@@ -1164,6 +987,7 @@ await import('/qjs/browser/main.mjs');
             let _ = pump_runtime_once(rt, ctx);
             qjs::async_ops::drain_all_for_context(ctx);
             qjs::workers::drain_all_for_context(ctx);
+            qjs::timers::drain_all_for_context(ctx);
             qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
             drop(vm);
             trueos_cabi_gfx_present_owner_set(0);
@@ -1194,6 +1018,7 @@ await import('/qjs/browser/main.mjs');
         let _ = pump_runtime_once(rt, ctx);
         qjs::async_ops::drain_all_for_context(ctx);
         qjs::workers::drain_all_for_context(ctx);
+        qjs::timers::drain_all_for_context(ctx);
         qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);
     }
