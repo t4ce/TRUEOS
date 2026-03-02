@@ -1684,7 +1684,7 @@ function renderToPixi(app, box, sceneRoot) {
 async function main() {
     const rootEl = document.getElementById('app') ?? document.body;
     const app = new Application();
-    await app.init({ background: '#ffffff', resizeTo: window, antialias: false });
+    await app.init({ background: '#ffffff', resizeTo: window, antialias: false, preference: 'webgpu' });
     rootEl.appendChild(app.canvas);
     // We render on-demand (after state/layout changes) rather than continuously.
     // This saves substantial GPU time when the UI is static.
@@ -2521,9 +2521,41 @@ async function main() {
         virtualCursorG.visible = uiState.virtualCursor.enabled;
     });
 }
+
+function formatErrorForLog(err) {
+    if (err == null)
+        return 'Unknown error';
+    const anyErr = err;
+    const name = String(anyErr?.name || 'Error');
+    const message = String(anyErr?.message || err);
+    const stack = (typeof anyErr?.stack === 'string' && anyErr.stack.length > 0)
+        ? anyErr.stack
+        : null;
+    return stack ? `${name}: ${message}\n${stack}` : `${name}: ${message}`;
+}
+
+function logErrorWithStack(label, err) {
+    const text = `[${label}] ${formatErrorForLog(err)}`;
+    console.error(text);
+    try {
+        const pre = document.createElement('pre');
+        pre.textContent = text;
+        document.body.appendChild(pre);
+    }
+    catch {
+        // Best-effort UI fallback only.
+    }
+}
+
+if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('error', (ev) => {
+        logErrorWithStack('window.error', ev?.error ?? ev?.message ?? ev);
+    });
+    globalThis.addEventListener('unhandledrejection', (ev) => {
+        logErrorWithStack('unhandledrejection', ev?.reason ?? ev);
+    });
+}
+
 main().catch((err) => {
-    console.error(err);
-    const pre = document.createElement('pre');
-    pre.textContent = String(err?.stack ?? err);
-    document.body.appendChild(pre);
+    logErrorWithStack('main.catch', err);
 });
