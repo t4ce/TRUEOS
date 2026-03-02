@@ -36,6 +36,10 @@ pub mod browser_webgpu;
 pub mod browser_canvas;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_canvas_renderer.rs"]
+pub mod browser_canvas_renderer;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
