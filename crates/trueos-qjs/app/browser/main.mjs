@@ -1,11 +1,14 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
+import * as browserContext from 'trueos:browser_context';
+import { INPUT_HTML } from './input_html.mjs';
 import { defaultTheme } from './theme.mjs';
 import { BLOCK_TAGS } from './htmlDefaults.mjs';
 // SVG generation/parsing helpers live in widget modules.
 import { makeThemedText, TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from './text.mjs';
 import { clearGraphics, getOrCreateContainer, getOrCreateGraphics, getOrCreateText } from './pixiReuse.mjs';
+import { renderDirectCmdFrame } from './cmd_backend.mjs';
 import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from './widgets/textField.mjs';
 import { renderProgressOrMeter } from './widgets/progressMeter.mjs';
 import { applyYogaDefaultsProgressOrMeter } from './widgets/progressMeter.mjs';
@@ -38,8 +41,17 @@ import { applyYogaDefaultsTemporalInput, closeAllTemporalPopups, renderTemporalI
 const SCROLLBAR_PAD = 6;
 const SCROLLBAR_W = 10;
 const USER_POINTER_ID = 1;
-const USER_POINTER_ID_3 = 3;
-const USER_POINTER_ID_4 = 4;
+const USE_DIRECT_CMD_BACKEND = true;
+const TRACE_POSITION_FLOW = true;
+const TRACE_YOGA_LIFECYCLE = true;
+const RT_GLOBAL = globalThis;
+const RT_WINDOW = (typeof window === 'object' && window) ? window : ((typeof RT_GLOBAL.window === 'object' && RT_GLOBAL.window) ? RT_GLOBAL.window : RT_GLOBAL);
+const RT_DOCUMENT = (typeof document === 'object' && document) ? document : (RT_WINDOW?.document ?? null);
+const RT_HAS_WINDOW_RESIZE = !!(RT_WINDOW && typeof RT_WINDOW.addEventListener === 'function' && typeof RT_WINDOW.removeEventListener === 'function');
+const RT_EVENT_TARGET = RT_HAS_WINDOW_RESIZE
+    ? RT_WINDOW
+    : ((RT_GLOBAL && typeof RT_GLOBAL.addEventListener === 'function') ? RT_GLOBAL : null);
+const IS_TRUEOS_QJS_RUNTIME = !!(RT_GLOBAL && (RT_GLOBAL.__trueosWebGpuState || RT_GLOBAL.__trueosCmdStream));
 const uiState = {
     // Per-pointer focus (so multiple cursors can have focused fields at once).
     // Keyboard input is routed to keyboardOwnerPointerId (last cursor to click a field).
@@ -75,14 +87,7 @@ const uiState = {
     // Cursor colors (per pointerId). Used for cursor cross and selection border color.
     cursorColors: new Map(),
     primaryMousePointerId: 1,
-    // Multi-cursor harness: lets you drive pointerId 1 or 3 using the real mouse,
-    // cycling control every few seconds to stress-test the "last cursor wins" logic.
-    harness: {
-        enabled: true,
-        activeUserPointerId: USER_POINTER_ID,
-        periodMs: 3000,
-    },
-    // Stored positions for user cursors (so cursor 1 and cursor 3 can diverge).
+    // Stored positions for user cursors.
     userCursorPos: new Map(),
     lastMouse: { x: 0, y: 0, has: false },
     scroll: {
@@ -104,14 +109,6 @@ const uiState = {
     hoverHandlers: new Map(),
     hoveredKeyByPointer: new Map(),
     hoveredCursorByPointer: new Map(),
-    virtualCursor: {
-        enabled: false,
-        x: 0,
-        y: 0,
-        t: 0,
-        radius: 120,
-        speed: 0.9,
-    },
     // Drag-selection for text-like <input> and <textarea>.
     textDrags: new Map(),
     // Per-frame bounds for text-like fields, used for drag selection.
@@ -120,16 +117,14 @@ const uiState = {
     // Bounds are expressed in the coordinate space the dialog is drawn into.
     dialogDragBounds: new Map(),
     detailsOpen: new Map(),
-    // One context menu per pointerId.
-    contextMenus: new Map(),
-    // Per-pointer clipboard (used by context menu Copy/Paste).
-    clipboards: new Map(),
 };
 // Singleton canvas/context for text measurement during rendering (used by inputs/textarea).
 let renderMeasureCtx = null;
 function getRenderMeasure(theme) {
     if (!renderMeasureCtx) {
-        const c = document.createElement('canvas');
+        const c = RT_DOCUMENT?.createElement?.('canvas');
+        if (!c)
+            throw new Error('canvas element not available');
         const ctx = c.getContext('2d');
         if (!ctx)
             throw new Error('2D canvas not available');
@@ -202,12 +197,21 @@ function getCursorColor(pointerId) {
 }
 function getEffectivePointerId(ev) {
     const actual = Number(ev?.pointerId ?? ev?.data?.pointerId ?? 0);
-    const pt = String(ev?.pointerType ?? ev?.data?.pointerType ?? '').toLowerCase();
-    const isMouse = pt === 'mouse' || actual === 1 || actual === uiState.primaryMousePointerId;
-    if (uiState.harness.enabled && isMouse) {
-        return uiState.harness.activeUserPointerId;
+    if (actual > 0) {
+        try {
+            browserContext.setActiveCursor(actual);
+        }
+        catch {
+            // Keep pointer-id routing resilient if native module is unavailable.
+        }
+        return actual;
     }
-    return actual;
+    try {
+        return Number(browserContext.getActiveCursor() ?? 0) | 0;
+    }
+    catch {
+        return actual;
+    }
 }
 function computeScrollableContentHeight(root) {
     let max = 0;
@@ -225,6 +229,236 @@ function computeScrollableContentHeight(root) {
         walk(c, 0, 0);
     return max;
 }
+
+function countLayoutNodes(root) {
+    if (!root)
+        return 0;
+    let n = 1;
+    const kids = Array.isArray(root.children) ? root.children : [];
+    for (let i = 0; i < kids.length; i++) {
+        n += countLayoutNodes(kids[i]);
+    }
+    return n;
+}
+
+function collectPixiSnapshotItems(roots, viewportW, viewportH, maxItems = 480) {
+    const out = [];
+    const stack = [];
+    for (let i = 0; i < roots.length; i++) {
+        const r = roots[i];
+        if (r)
+            stack.push({ node: r, depth: 0 });
+    }
+
+    while (stack.length > 0 && out.length < maxItems) {
+        const cur = stack.pop();
+        const n = cur?.node;
+        const depth = Number(cur?.depth || 0) | 0;
+        if (!n || typeof n !== 'object')
+            continue;
+        if (n.visible === false)
+            continue;
+        const alpha = Number(n.worldAlpha ?? n.alpha ?? 1);
+        if (!(alpha > 0.001))
+            continue;
+
+        const kids = Array.isArray(n.children) ? n.children : [];
+        for (let i = kids.length - 1; i >= 0; i--) {
+            stack.push({ node: kids[i], depth: depth + 1 });
+        }
+
+        // Prefer concrete leaf drawables instead of aggregate container bounds.
+        if (kids.length > 0)
+            continue;
+
+        if (typeof n.getBounds !== 'function')
+            continue;
+        let b = null;
+        try {
+            b = n.getBounds();
+        }
+        catch {
+            b = null;
+        }
+        if (!b)
+            continue;
+
+        const x = Number(b.x || 0);
+        const y = Number(b.y || 0);
+        const w = Number(b.width || 0);
+        const h = Number(b.height || 0);
+        if (!(w > 1 && h > 1))
+            continue;
+
+        const offRight = x > viewportW + 12;
+        const offBottom = y > viewportH + 12;
+        const offLeft = (x + w) < -12;
+        const offTop = (y + h) < -12;
+        if (offRight || offBottom || offLeft || offTop)
+            continue;
+
+        const label = String(n.label || n.cursor || n.constructor?.name || 'node');
+        const ll = label.toLowerCase();
+        if (ll.includes('__background') || ll.includes('__contentroot') || ll.includes('__overlayroot') || ll.includes('__children')) {
+            continue;
+        }
+        let isText = false;
+        let text = '';
+        let fontSize = 12;
+        let color = 0x202020;
+        if (typeof n.text === 'string' && n.text.length > 0) {
+            isText = true;
+            text = String(n.text);
+            const fs = Number(n.style?.fontSize ?? n._style?.fontSize ?? 12);
+            if (Number.isFinite(fs) && fs > 0) fontSize = fs;
+            const fill = n.style?.fill ?? n._style?.fill;
+            if (typeof fill === 'number') {
+                color = Number(fill) >>> 0;
+            }
+        }
+        out.push({ x, y, w, h, depth, alpha, label, isText, text, fontSize, color });
+    }
+
+    return out;
+}
+
+function buildDirectBackendLayoutFromItems(items, viewportW, viewportH) {
+    const outChildren = [];
+    if (Array.isArray(items)) {
+        for (let i = 0; i < items.length; i++) {
+            const it = items[i] || {};
+            if (it.isText)
+                continue;
+            const w = Number(it.w || 0);
+            const h = Number(it.h || 0);
+            if (!(w > 1 && h > 1))
+                continue;
+            outChildren.push({
+                kind: 'block',
+                key: `direct:${i}`,
+                tagName: String(it.label || 'block'),
+                x: Number(it.x || 0),
+                y: Number(it.y || 0),
+                width: w,
+                height: h,
+                children: [],
+            });
+        }
+    }
+    return {
+        kind: 'block',
+        tagName: 'root',
+        x: 0,
+        y: 0,
+        width: Math.max(1, Number(viewportW || 1) | 0),
+        height: Math.max(1, Number(viewportH || 1) | 0),
+        children: outChildren,
+    };
+}
+
+function summarizeLayoutAbs(root, maxSamples = 8) {
+    let total = 0;
+    let sized = 0;
+    let nearOrigin = 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const samples = [];
+    const zeroSamples = [];
+
+    const walk = (n, ax = 0, ay = 0, depth = 0) => {
+        if (!n || typeof n !== 'object')
+            return;
+        const rx = Number(n.x || 0);
+        const ry = Number(n.y || 0);
+        const x = ax + rx;
+        const y = ay + ry;
+        const w = Number(n.width || 0);
+        const h = Number(n.height || 0);
+        if (n.kind === 'block') {
+            total++;
+            if (w > 1 && h > 1) {
+                sized++;
+                if (Math.abs(x) < 4 && Math.abs(y) < 4)
+                    nearOrigin++;
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x + w);
+                maxY = Math.max(maxY, y + h);
+                if (samples.length < maxSamples) {
+                    samples.push(`${String(n.tagName || 'block')}@${x.toFixed(1)},${y.toFixed(1)} ${w.toFixed(1)}x${h.toFixed(1)} d=${depth}`);
+                }
+            }
+            else if (zeroSamples.length < maxSamples) {
+                zeroSamples.push(`${String(n.tagName || 'block')}@${x.toFixed(1)},${y.toFixed(1)} ${w.toFixed(1)}x${h.toFixed(1)} d=${depth}`);
+            }
+        }
+        const kids = Array.isArray(n.children) ? n.children : [];
+        for (let i = 0; i < kids.length; i++) {
+            walk(kids[i], x, y, depth + 1);
+        }
+    };
+
+    const children = Array.isArray(root?.children) ? root.children : [];
+    for (let i = 0; i < children.length; i++) {
+        walk(children[i], Number(root?.x || 0), Number(root?.y || 0), 0);
+    }
+
+    return {
+        total,
+        sized,
+        nearOrigin,
+        minX: Number.isFinite(minX) ? minX : 0,
+        minY: Number.isFinite(minY) ? minY : 0,
+        maxX: Number.isFinite(maxX) ? maxX : 0,
+        maxY: Number.isFinite(maxY) ? maxY : 0,
+        samples,
+        zeroSamples,
+    };
+}
+
+function summarizeItems(items, maxSamples = 8) {
+    let total = 0;
+    let nearOrigin = 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const samples = [];
+    const list = Array.isArray(items) ? items : [];
+    for (let i = 0; i < list.length; i++) {
+        const it = list[i] || {};
+        if (it.isText)
+            continue;
+        const x = Number(it.x || 0);
+        const y = Number(it.y || 0);
+        const w = Number(it.w || 0);
+        const h = Number(it.h || 0);
+        if (!(w > 1 && h > 1))
+            continue;
+        total++;
+        if (Math.abs(x) < 4 && Math.abs(y) < 4)
+            nearOrigin++;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w);
+        maxY = Math.max(maxY, y + h);
+        if (samples.length < maxSamples) {
+            samples.push(`${String(it.label || 'item')}@${x.toFixed(1)},${y.toFixed(1)} ${w.toFixed(1)}x${h.toFixed(1)} d=${Number(it.depth || 0) | 0}`);
+        }
+    }
+    return {
+        total,
+        nearOrigin,
+        minX: Number.isFinite(minX) ? minX : 0,
+        minY: Number.isFinite(minY) ? minY : 0,
+        maxX: Number.isFinite(maxX) ? maxX : 0,
+        maxY: Number.isFinite(maxY) ? maxY : 0,
+        samples,
+    };
+}
+
 function getOrInitInputState(key, attrs) {
     const existing = uiState.inputs.get(key);
     if (existing)
@@ -608,7 +842,9 @@ function extractText(node) {
     return (node.childNodes ?? []).map(extractText).join(' ');
 }
 function createTextMeasurer(font) {
-    const canvas = document.createElement('canvas');
+    const canvas = RT_DOCUMENT?.createElement?.('canvas');
+    if (!canvas)
+        throw new Error('canvas element not available');
     const ctx = canvas.getContext('2d');
     if (!ctx)
         throw new Error('2D canvas not available');
@@ -650,6 +886,97 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
     const gap = 8;
     const theme = defaultTheme;
     const measurer = createTextMeasurer(`${theme.fontSize}px ${theme.fontFamily}`);
+    const yogaTraceEnabled = TRACE_POSITION_FLOW && TRACE_YOGA_LIFECYCLE;
+    const yogaNodeMeta = new WeakMap();
+    const yogaTrace = yogaTraceEnabled
+        ? {
+            created: 0,
+            rootInserts: 0,
+            nestedInserts: 0,
+            insertErrors: 0,
+            countAnomalies: 0,
+            samples: [],
+            maxSamples: 48,
+        }
+        : null;
+    const pushYogaTraceSample = (s) => {
+        if (!yogaTrace || yogaTrace.samples.length >= yogaTrace.maxSamples)
+            return;
+        yogaTrace.samples.push(String(s));
+    };
+    const safeYogaCount = (n) => {
+        if (!n || typeof n.getChildCount !== 'function')
+            return -1;
+        try {
+            return Number(n.getChildCount() || 0) | 0;
+        }
+        catch {
+            return -1;
+        }
+    };
+    const getYogaMeta = (n) => {
+        if (!n)
+            return { kind: 'none', key: 'none', depth: -1 };
+        return yogaNodeMeta.get(n) ?? { kind: 'unknown', key: 'unknown', depth: -1 };
+    };
+    const registerYogaMeta = (n, renderNode, depth) => {
+        if (!n)
+            return;
+        const isTextNode = renderNode?.kind === 'text';
+        const kind = isTextNode ? 'text' : 'block';
+        const key = isTextNode
+            ? String(renderNode?.text ?? '').slice(0, 28)
+            : String(renderNode?.key ?? renderNode?.tagName ?? 'block');
+        yogaNodeMeta.set(n, { kind, key, depth: Number(depth || 0) | 0 });
+        if (yogaTrace)
+            yogaTrace.created++;
+    };
+    const traceInsert = (parentNode, childNode, slot, scope) => {
+        const before = safeYogaCount(parentNode);
+        const parentMeta = getYogaMeta(parentNode);
+        const childMeta = getYogaMeta(childNode);
+        try {
+            parentNode.insertChild(childNode, slot);
+        }
+        catch (err) {
+            if (yogaTrace)
+                yogaTrace.insertErrors++;
+            pushYogaTraceSample(`insert-error scope=${scope} parent=${parentMeta.key} child=${childMeta.key} slot=${slot} before=${before} err=${String(err)}`);
+            throw err;
+        }
+        const after = safeYogaCount(parentNode);
+        let slotChild = null;
+        let slotChildMeta = null;
+        if (parentNode && typeof parentNode.getChild === 'function' && slot >= 0) {
+            try {
+                slotChild = parentNode.getChild(slot);
+            }
+            catch {
+                slotChild = null;
+            }
+            slotChildMeta = getYogaMeta(slotChild);
+        }
+        if (yogaTrace) {
+            if (scope === 'root')
+                yogaTrace.rootInserts++;
+            else
+                yogaTrace.nestedInserts++;
+        }
+        if (before >= 0 && after >= 0 && after !== before + 1) {
+            if (yogaTrace)
+                yogaTrace.countAnomalies++;
+            pushYogaTraceSample(`count-anomaly scope=${scope} parent=${parentMeta.key} child=${childMeta.key} before=${before} after=${after} slot=${slot} slotChild=${slotChildMeta?.key ?? 'none'} pDepth=${parentMeta.depth} cDepth=${childMeta.depth}`);
+        }
+        else if (!slotChild) {
+            pushYogaTraceSample(`slot-empty scope=${scope} parent=${parentMeta.key} child=${childMeta.key} slot=${slot} before=${before} after=${after}`);
+        }
+        else if (slotChild !== childNode) {
+            pushYogaTraceSample(`slot-mismatch scope=${scope} parent=${parentMeta.key} child=${childMeta.key} slot=${slot} got=${slotChildMeta?.key ?? 'unknown'} before=${before} after=${after}`);
+        }
+        else if (scope === 'root' || childMeta.depth <= 2) {
+            pushYogaTraceSample(`insert-ok scope=${scope} parent=${parentMeta.key} child=${childMeta.key} before=${before} after=${after} slot=${slot}`);
+        }
+    };
     function gapAfter(child) {
         if (child.kind !== 'block')
             return 0;
@@ -661,9 +988,10 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
             return 0;
         return gap;
     }
-    function yogaForNode(node) {
+    function yogaForNode(node, depth = 0) {
         if (node.kind === 'text') {
             const yogaNode = Yoga.Node.create();
+            registerYogaMeta(yogaNode, node, depth);
             yogaNode.setMeasureFunc((width, widthMode) => {
                 const maxWidth = widthMode === Yoga.MEASURE_MODE_UNDEFINED ? undefined : Math.max(0, width);
                 const m = measurer.measure(node.text, maxWidth);
@@ -687,9 +1015,12 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
         }
         // Some widgets are measured leaf nodes.
         if (node.tagName === 'sliderlabel') {
-            return createYogaNodeForSliderLabel({ node, Yoga, measurer });
+            const out = createYogaNodeForSliderLabel({ node, Yoga, measurer });
+            registerYogaMeta(out?.yogaNode, node, depth);
+            return out;
         }
         const yogaNode = Yoga.Node.create();
+        registerYogaMeta(yogaNode, node, depth);
         yogaNode.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
         yogaNode.setAlignItems(Yoga.ALIGN_STRETCH);
         yogaNode.setPadding(Yoga.EDGE_LEFT, padding);
@@ -768,6 +1099,19 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
             applyYogaDefaultsCanvas(yogaNode, node, Yoga);
         if (node.tagName === 'iframe')
             applyYogaDefaultsIframe(yogaNode, node, Yoga);
+        if (node.tagName === 'iframe' && String(node.attrs?.['data-root'] ?? '') === '1') {
+            // Top-level document is modeled as a synthetic iframe; give it a concrete
+            // viewport-sized box so downstream direct backends see real dimensions.
+            const rw = Math.max(1, viewportWidth - (16 + 16 + SCROLLBAR_PAD));
+            const rh = Math.max(1, viewportHeight - (16 + 16));
+            yogaNode.setWidth(rw);
+            yogaNode.setHeight(rh);
+            yogaNode.setMinWidth(rw);
+            yogaNode.setMinHeight(rh);
+            yogaNode.setFlexGrow(1);
+            yogaNode.setFlexShrink(0);
+            yogaNode.setAlignSelf(Yoga.ALIGN_STRETCH);
+        }
         if (node.tagName === 'button')
             applyYogaDefaultsButton(yogaNode, Yoga);
         if (node.tagName === 'dialog')
@@ -791,7 +1135,7 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
         if (node.tagName === 'slider')
             applyYogaDefaultsSlider(yogaNode, Yoga);
         const effectiveChildren = getEffectiveDetailsChildren(node, uiState.detailsOpen);
-        const childPairs = effectiveChildren.map(yogaForNode);
+        const childPairs = effectiveChildren.map((c) => yogaForNode(c, depth + 1));
         for (let i = 0; i < childPairs.length; i++) {
             const childRender = effectiveChildren[i];
             const childPair = childPairs[i];
@@ -799,7 +1143,8 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
                 const m = i === childPairs.length - 1 ? 0 : gapAfter(childRender);
                 childPair.yogaNode.setMargin(Yoga.EDGE_BOTTOM, m);
             }
-            yogaNode.insertChild(childPair.yogaNode, yogaNode.getChildCount());
+            const slot = safeYogaCount(yogaNode);
+            traceInsert(yogaNode, childPair.yogaNode, slot >= 0 ? slot : 0, 'nested');
         }
         return {
             yogaNode,
@@ -817,6 +1162,7 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
         };
     }
     const rootYoga = Yoga.Node.create();
+    registerYogaMeta(rootYoga, { kind: 'block', key: 'root', tagName: 'root' }, 0);
     rootYoga.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
     rootYoga.setAlignItems(Yoga.ALIGN_STRETCH);
     rootYoga.setWidth(viewportWidth);
@@ -826,7 +1172,7 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
     // Reserve an extra gutter so content doesn't touch the global scrollbar.
     rootYoga.setPadding(Yoga.EDGE_RIGHT, 16 + SCROLLBAR_PAD);
     rootYoga.setPadding(Yoga.EDGE_BOTTOM, 16);
-    const pairs = renderNodes.map(yogaForNode);
+    const pairs = renderNodes.map((n) => yogaForNode(n, 1));
     for (let i = 0; i < pairs.length; i++) {
         const renderNode = renderNodes[i];
         const pair = pairs[i];
@@ -834,9 +1180,34 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
             const m = i === pairs.length - 1 ? 0 : gapAfter(renderNode);
             pair.yogaNode.setMargin(Yoga.EDGE_BOTTOM, m);
         }
-        rootYoga.insertChild(pair.yogaNode, rootYoga.getChildCount());
+        const slot = safeYogaCount(rootYoga);
+        traceInsert(rootYoga, pair.yogaNode, slot >= 0 ? slot : 0, 'root');
     }
+    const rootCountPreLayout = safeYogaCount(rootYoga);
+    pushYogaTraceSample(`pre-layout rootChildren=${rootCountPreLayout} pairs=${pairs.length} renderNodes=${renderNodes.length}`);
     rootYoga.calculateLayout(viewportWidth, viewportHeight, Yoga.DIRECTION_LTR);
+    const rootCountPostLayout = safeYogaCount(rootYoga);
+    pushYogaTraceSample(`post-layout rootChildren=${rootCountPostLayout}`);
+    if (TRACE_POSITION_FLOW) {
+        try {
+            const c0 = rootYoga.getChildCount() > 0 ? rootYoga.getChild(0) : null;
+            const rw = Number(rootYoga.getComputedWidth() || 0);
+            const rh = Number(rootYoga.getComputedHeight() || 0);
+            const c0x = c0 ? Number(c0.getComputedLeft() || 0) : 0;
+            const c0y = c0 ? Number(c0.getComputedTop() || 0) : 0;
+            const c0w = c0 ? Number(c0.getComputedWidth() || 0) : 0;
+            const c0h = c0 ? Number(c0.getComputedHeight() || 0) : 0;
+            console.log(`[pos-trace:build] vp=${viewportWidth}x${viewportHeight} root=${rw}x${rh} c0=${c0x},${c0y} ${c0w}x${c0h} children=${rootYoga.getChildCount()}`);
+            if (yogaTrace) {
+                console.log(`[pos-trace:yoga-summary] created=${yogaTrace.created} rootInserts=${yogaTrace.rootInserts} nestedInserts=${yogaTrace.nestedInserts} insertErrors=${yogaTrace.insertErrors} anomalies=${yogaTrace.countAnomalies} pre=${rootCountPreLayout} post=${rootCountPostLayout}`);
+                if (yogaTrace.samples.length > 0)
+                    console.log(`[pos-trace:yoga-samples] ${yogaTrace.samples.join(' | ')}`);
+            }
+        }
+        catch {
+            // Keep trace non-fatal.
+        }
+    }
     const box = {
         kind: 'block',
         tagName: 'root',
@@ -848,6 +1219,9 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
     };
     // Cleanup yoga nodes to avoid leaks.
     // IMPORTANT: don't manually free children; Yoga's freeRecursive handles the whole subtree.
+    const freeType = typeof rootYoga.freeRecursive;
+    if (yogaTraceEnabled)
+        pushYogaTraceSample(`free type=${freeType}`);
     rootYoga.freeRecursive?.();
     return box;
 }
@@ -898,6 +1272,14 @@ function renderToPixi(app, box, sceneRoot) {
     for (const d of uiState.textDrags.values())
         activeDragKeys.add(d.key);
     const measure = getRenderMeasure(theme);
+    const directSnapshot = [];
+    const pushDirectSnapshot = (item) => {
+        if (!item)
+            return;
+        if (directSnapshot.length >= 1200)
+            return;
+        directSnapshot.push(item);
+    };
     function clamp(n, lo, hi) {
         return Math.max(lo, Math.min(hi, n));
     }
@@ -989,6 +1371,18 @@ function renderToPixi(app, box, sceneRoot) {
             g.zIndex = -10;
             let w = Math.max(0, node.width);
             let h = Math.max(0, node.height);
+            if (w > 1 && h > 1) {
+                pushDirectSnapshot({
+                    x: nodeAbsX,
+                    y: nodeAbsY,
+                    w,
+                    h,
+                    depth: Math.max(0, Number(path.split('.').length - 1) | 0),
+                    alpha: 1,
+                    label: String(node.tagName || 'block'),
+                    isText: false,
+                });
+            }
             let overlayLabel = null;
             // Headings: snap to whole pixels so the 1px border doesn't land on half pixels
             // (which can look like a faint extra 1px row outside the top edge).
@@ -1493,6 +1887,21 @@ function renderToPixi(app, box, sceneRoot) {
             t.style.wordWrap = true;
             t.style.wordWrapWidth = Math.max(0, Math.ceil(node.width) + WRAP_EPSILON_PX);
             t.position.set(0, TEXT_BASELINE_NUDGE_Y);
+            const tw = Math.max(1, Number(t.width || node.width || 0));
+            const th = Math.max(1, Number(t.height || node.height || theme.fontSize || 12));
+            pushDirectSnapshot({
+                x: nodeAbsX,
+                y: nodeAbsY + TEXT_BASELINE_NUDGE_Y,
+                w: tw,
+                h: th,
+                depth: Math.max(0, Number(path.split('.').length - 1) | 0),
+                alpha: 1,
+                label: 'text',
+                isText: true,
+                text: String(node.text ?? ''),
+                fontSize: Number(theme.fontSize || 12),
+                color: Number(theme.text || 0x202020) >>> 0,
+            });
         }
     }
     const baseTextCtx = { bold: false };
@@ -1556,14 +1965,28 @@ function renderToPixi(app, box, sceneRoot) {
             });
         }
     }
-    // Context menu overlay.
-    for (const [ownerPid, menuState] of uiState.contextMenus.entries()) {
-        if (!menuState?.open)
+    // Context menu overlay (authoritative state comes from browser_context).
+    const menuCursorIds = [1, 2, 3, 4];
+    for (const ownerPid of menuCursorIds) {
+        let isOpen = false;
+        let menuX = 0;
+        let menuY = 0;
+        try {
+            isOpen = !!browserContext.isContextMenuOpen(ownerPid);
+            if (isOpen) {
+                menuX = Number(browserContext.getContextMenuX(ownerPid) ?? 0) || 0;
+                menuY = Number(browserContext.getContextMenuY(ownerPid) ?? 0) || 0;
+            }
+        }
+        catch {
+            isOpen = false;
+        }
+        if (!isOpen)
             continue;
         const menu = new Container();
         menu.eventMode = 'static';
         menu.cursor = 'default';
-        menu.position.set(menuState.x, menuState.y);
+        menu.position.set(menuX, menuY);
         const itemW = 140;
         const itemH = 28;
         const pad = 6;
@@ -1613,7 +2036,15 @@ function renderToPixi(app, box, sceneRoot) {
                 if (!isOwnerEvent(ev))
                     return;
                 ev.stopPropagation?.();
-                const focusedKey = uiState.focusedKeyByPointer.get(ownerPid) ?? null;
+                let focusedKey = uiState.focusedKeyByPointer.get(ownerPid) ?? null;
+                try {
+                    const k = browserContext.getFocusedTarget(ownerPid);
+                    if (typeof k === 'string' && k.length > 0)
+                        focusedKey = k;
+                }
+                catch {
+                    // Fallback to local focus state.
+                }
                 const focusedState = focusedKey ? uiState.inputs.get(focusedKey) : null;
                 // Only allow Copy/Paste for text-like fields (<input>/<textarea>) that registered bounds this paint.
                 const isTextField = focusedKey != null &&
@@ -1629,10 +2060,23 @@ function renderToPixi(app, box, sceneRoot) {
                     const start = Math.min(a, b);
                     const end = Math.max(a, b);
                     const picked = start !== end ? full.slice(start, end) : full;
-                    uiState.clipboards.set(ownerPid, picked);
+                    try {
+                        browserContext.setClipboardText(ownerPid, picked);
+                    }
+                    catch {
+                        // Keep menu interaction resilient when browser_context is unavailable.
+                    }
                 }
                 else if (label === 'Paste' && isTextField) {
-                    const clip = uiState.clipboards.get(ownerPid) ?? '';
+                    let clip = '';
+                    try {
+                        const c = browserContext.getClipboardText(ownerPid);
+                        if (typeof c === 'string')
+                            clip = c;
+                    }
+                    catch {
+                        // Keep menu interaction resilient when browser_context is unavailable.
+                    }
                     if (clip.length > 0) {
                         const st = focusedState;
                         const full = st.value ?? '';
@@ -1654,10 +2098,11 @@ function renderToPixi(app, box, sceneRoot) {
                     }
                 }
                 // Close on selection (including Close).
-                const st = uiState.contextMenus.get(ownerPid);
-                if (st) {
-                    st.open = false;
-                    uiState.contextMenus.set(ownerPid, st);
+                try {
+                    browserContext.closeContextMenu(ownerPid);
+                }
+                catch {
+                    // Fallback: leave legacy menu state untouched.
                 }
                 requestPaint?.();
             });
@@ -1680,12 +2125,17 @@ function renderToPixi(app, box, sceneRoot) {
     }
     // Retained-mode renderer: we keep a stable scene graph rooted at `stage`.
     // Do not clear or re-add `stage` (it may be `sceneRoot` itself).
+    globalThis.__trueosDirectSnapshot = directSnapshot;
+    return directSnapshot;
 }
 async function main() {
-    const rootEl = document.getElementById('app') ?? document.body;
+    const rootEl = RT_DOCUMENT?.getElementById?.('app') ?? RT_DOCUMENT?.body;
     const app = new Application();
-    await app.init({ background: '#ffffff', resizeTo: window, antialias: false, preference: 'webgpu' });
-    rootEl.appendChild(app.canvas);
+    const initOpts = { background: '#ffffff', antialias: false, preference: 'webgpu' };
+    if (RT_HAS_WINDOW_RESIZE)
+        initOpts.resizeTo = RT_WINDOW;
+    await app.init(initOpts);
+    rootEl?.appendChild?.(app.canvas);
     // We render on-demand (after state/layout changes) rather than continuously.
     // This saves substantial GPU time when the UI is static.
     app.ticker.stop();
@@ -1730,27 +2180,42 @@ async function main() {
     // Global context menu + "outside click" behavior.
     // This must be registered once (retained scene); widget handlers can stopPropagation.
     app.stage.on('pointerdown', (ev) => {
+        const pid = getEffectivePointerId(ev);
+        const gx = ev.global?.x ?? 0;
+        const gy = ev.global?.y ?? 0;
         if (ev?.button === 2) {
-            const pid = getEffectivePointerId(ev);
             if (pid > 0) {
-                const m = uiState.contextMenus.get(pid) ?? { open: false, x: 0, y: 0 };
-                m.open = true;
-                m.x = ev.global?.x ?? 0;
-                m.y = ev.global?.y ?? 0;
-                uiState.contextMenus.set(pid, m);
+                try {
+                    browserContext.openContextMenu(pid, gx, gy, null);
+                }
+                catch {
+                    // Keep input path resilient when browser_context is unavailable.
+                }
             }
             requestPaint?.();
             ev.preventDefault?.();
             return;
         }
+        if (pid > 0) {
+            try {
+                browserContext.routePointerDown(pid, gx, gy, null, Number(ev?.button ?? 0) | 0);
+            }
+            catch {
+                // Keep legacy local input path alive.
+            }
+        }
         // Left click closes only THIS pointer's menu (clicks from other pointers don't dismiss it).
         if (ev?.button !== 2) {
-            const pid = getEffectivePointerId(ev);
-            const m = pid > 0 ? uiState.contextMenus.get(pid) : null;
-            if (m && m.open) {
-                m.open = false;
-                uiState.contextMenus.set(pid, m);
-                requestPaint?.();
+            if (pid > 0) {
+                try {
+                    if (browserContext.isContextMenuOpen(pid)) {
+                        browserContext.closeContextMenu(pid);
+                        requestPaint?.();
+                    }
+                }
+                catch {
+                    // Keep input path resilient when browser_context is unavailable.
+                }
             }
         }
         // Left click outside closes any open <select> popups.
@@ -1801,18 +2266,9 @@ async function main() {
     mouseCursorG.eventMode = 'none';
     mouseCursorG.visible = false;
     overlayRoot.addChild(mouseCursorG);
-    const cursor3G = new Graphics();
-    cursor3G.eventMode = 'none';
-    cursor3G.visible = false;
-    overlayRoot.addChild(cursor3G);
-    const cursor4G = new Graphics();
-    cursor4G.eventMode = 'none';
-    cursor4G.visible = false;
-    overlayRoot.addChild(cursor4G);
-    const virtualCursorG = new Graphics();
-    virtualCursorG.eventMode = 'none';
-    overlayRoot.addChild(virtualCursorG);
-    const dragMeasureCanvas = document.createElement('canvas');
+    const dragMeasureCanvas = RT_DOCUMENT?.createElement?.('canvas');
+    if (!dragMeasureCanvas)
+        throw new Error('canvas element not available');
     const dragMeasureCtx = dragMeasureCanvas.getContext('2d');
     if (!dragMeasureCtx)
         throw new Error('2D canvas not available');
@@ -1821,14 +2277,47 @@ async function main() {
     const dragLineHeight = defaultTheme.fontSize * 1.25;
     let html = '';
     try {
-        html = await fetch('/input.html').then((r) => r.text());
+        const candidates = IS_TRUEOS_QJS_RUNTIME
+            ? ['/qjs/browser/input.html', '/input.html']
+            : ['/input.html', '/qjs/browser/input.html'];
+        let loaded = false;
+        for (let i = 0; i < candidates.length; i++) {
+            const url = candidates[i];
+            try {
+                const res = await fetch(url);
+                if (res && typeof res.ok === 'boolean' && !res.ok)
+                    continue;
+                const candidate = await res.text();
+                const looksHtml = typeof candidate === 'string' &&
+                    candidate.length > 200 &&
+                    (candidate.includes('<html') || candidate.includes('<body'));
+                if (looksHtml) {
+                    html = candidate;
+                    loaded = true;
+                    break;
+                }
+            }
+            catch {
+                // Try next candidate path.
+            }
+        }
+        if (!loaded) {
+            throw new Error('input.html not found');
+        }
     }
     catch {
-        html = '<!doctype html><html><body><h1>TRUEOS Parse5 Browser</h1><p>Fallback input rendered (missing /input.html).</p><input type="text" value="hello" /><button>ok</button></body></html>';
+        html = INPUT_HTML;
+    }
+    try {
+        console.log(`[richui-html] len=${html.length} marker=${html.includes('Tree (Details + Checkbox)') ? 'rich' : 'small'}`);
+    }
+    catch {
+        // Debug logging should never affect startup.
     }
     const doc = parse5.parse(html);
     const body = getBody(doc) ?? doc;
     const innerRenderNodes = toRenderTree(body, '0');
+
     // Conceptual model: the top-level document is itself a hidden iframe.
     // This lets us evolve iframe semantics without changing input.html.
     const renderNodes = [
@@ -1877,20 +2366,85 @@ async function main() {
         scrollbarG.rect(trackX, thumbY, trackW, thumbH);
         scrollbarG.fill({ color: 0x000000, alpha: 0.25 });
     };
+    let posTraceFrame = 0;
     const paint = () => {
         if (!lastLayout)
             return;
         clampScroll();
-        renderToPixi(app, lastLayout, sceneRoot);
+        const directSnapshot = renderToPixi(app, lastLayout, sceneRoot);
         updateScrollbarVisuals();
+        try {
+            console.log(`[richui-paint] sceneChildren=${sceneRoot.children.length} overlayChildren=${overlayRoot.children.length} hoverRects=${uiState.hoverRects.length} layoutNodes=${countLayoutNodes(lastLayout)}`);
+        }
+        catch {
+            // Debug logging should never affect paint.
+        }
         // Manual render (ticker is stopped).
-        app.renderer.render(app.stage);
+        if (USE_DIRECT_CMD_BACKEND) {
+            const hasDirectBlocks = Array.isArray(directSnapshot)
+                && directSnapshot.some((it) => !it?.isText && Number(it?.w || 0) > 2 && Number(it?.h || 0) > 2);
+            const usingYogaSnapshot = !!hasDirectBlocks;
+            const pixiItems = usingYogaSnapshot
+                ? directSnapshot
+                : collectPixiSnapshotItems([sceneRoot, overlayUiRoot, overlayRoot], app.renderer.width, app.renderer.height);
+            const backendLayout = buildDirectBackendLayoutFromItems(pixiItems, app.renderer.width, app.renderer.height);
+            posTraceFrame++;
+            if (TRACE_POSITION_FLOW) {
+                const yoga = summarizeLayoutAbs(lastLayout);
+                const snap = summarizeItems(pixiItems);
+                const backend = summarizeLayoutAbs(backendLayout);
+                const noisy = posTraceFrame <= 3 || (posTraceFrame % 30) === 1;
+                const clustered = (snap.total > 0 && (snap.nearOrigin / snap.total) > 0.6)
+                    || (backend.sized > 0 && (backend.nearOrigin / backend.sized) > 0.6);
+                if (noisy || clustered) {
+                    console.log(`[pos-trace] frame=${posTraceFrame} src=${usingYogaSnapshot ? 'yoga-snapshot' : 'pixi-bounds'} yogaSized=${yoga.sized}/${yoga.total} yogaNear0=${yoga.nearOrigin} yogaBBox=${yoga.minX.toFixed(1)},${yoga.minY.toFixed(1)}..${yoga.maxX.toFixed(1)},${yoga.maxY.toFixed(1)} snap=${snap.total} snapNear0=${snap.nearOrigin} snapBBox=${snap.minX.toFixed(1)},${snap.minY.toFixed(1)}..${snap.maxX.toFixed(1)},${snap.maxY.toFixed(1)} backendSized=${backend.sized}/${backend.total} backendNear0=${backend.nearOrigin} backendBBox=${backend.minX.toFixed(1)},${backend.minY.toFixed(1)}..${backend.maxX.toFixed(1)},${backend.maxY.toFixed(1)}`);
+                    if (yoga.samples.length > 0)
+                        console.log(`[pos-trace:yoga-samples] ${yoga.samples.join(' | ')}`);
+                    if (yoga.zeroSamples.length > 0)
+                        console.log(`[pos-trace:yoga-zero] ${yoga.zeroSamples.join(' | ')}`);
+                    if (snap.samples.length > 0)
+                        console.log(`[pos-trace:snapshot-samples] ${snap.samples.join(' | ')}`);
+                    if (backend.samples.length > 0)
+                        console.log(`[pos-trace:backend-samples] ${backend.samples.join(' | ')}`);
+                }
+            }
+            const rendered = renderDirectCmdFrame({
+                layout: backendLayout,
+                pixiItems,
+                allowFit: !usingYogaSnapshot,
+                viewportW: app.renderer.width,
+                viewportH: app.renderer.height,
+                scrollY: uiState.scroll.y,
+                clearRgb: 0xFFFFFF,
+                browserContext,
+                getCursorColor,
+            });
+            if (!rendered) {
+                app.renderer.render(app.stage);
+            }
+        }
+        else {
+            app.renderer.render(app.stage);
+        }
     };
+
+    const getLayoutViewport = () => {
+        const ww = Number(RT_WINDOW?.innerWidth ?? 0) || 0;
+        const wh = Number(RT_WINDOW?.innerHeight ?? 0) || 0;
+        const rw = Number(app?.renderer?.width ?? 0) || 0;
+        const rh = Number(app?.renderer?.height ?? 0) || 0;
+        return {
+            w: Math.max(1, ww > 0 ? ww : rw, 1280),
+            h: Math.max(1, wh > 0 ? wh : rh, 800),
+        };
+    };
+
     const rerender = async () => {
-        const layout = await buildLayoutTree(renderNodes, window.innerWidth, window.innerHeight);
+        const vp = getLayoutViewport();
+        const layout = await buildLayoutTree(renderNodes, vp.w, vp.h);
         lastLayout = layout;
         uiState.scroll.contentHeight = computeScrollableContentHeight(layout);
-        uiState.scroll.viewportHeight = window.innerHeight;
+        uiState.scroll.viewportHeight = vp.h;
         paint();
     };
     requestRerender = () => {
@@ -1905,7 +2459,12 @@ async function main() {
         presentScheduled = true;
         requestAnimationFrame(() => {
             presentScheduled = false;
-            app.renderer.render(app.stage);
+            if (USE_DIRECT_CMD_BACKEND) {
+                paint();
+            }
+            else {
+                app.renderer.render(app.stage);
+            }
         });
     };
     requestPaint = () => {
@@ -1924,43 +2483,41 @@ async function main() {
     // Double the previous arm length.
     const CURSOR_HALF = 10;
     buildCrossShape(mouseCursorG, { half: CURSOR_HALF, strokeWidth: CURSOR_STROKE, color: getCursorColor(USER_POINTER_ID) });
-    buildCrossShape(cursor3G, { half: CURSOR_HALF, strokeWidth: CURSOR_STROKE, color: getCursorColor(USER_POINTER_ID_3) });
-    buildCrossShape(cursor4G, { half: CURSOR_HALF, strokeWidth: CURSOR_STROKE, color: getCursorColor(USER_POINTER_ID_4) });
-    // Virtual cursor uses a distinct id so it can have a distinct color.
-    const VIRTUAL_POINTER_ID = 2;
-    buildCrossShape(virtualCursorG, { half: CURSOR_HALF, strokeWidth: CURSOR_STROKE, color: getCursorColor(VIRTUAL_POINTER_ID) });
-    // Seed positions so both cursors can be visible immediately.
+    // Seed a primary cursor position.
     uiState.userCursorPos.set(USER_POINTER_ID, { x: app.renderer.width * 0.25, y: app.renderer.height * 0.5 });
-    uiState.userCursorPos.set(USER_POINTER_ID_3, { x: app.renderer.width * 0.25 + 40, y: app.renderer.height * 0.5 + 20 });
-    uiState.userCursorPos.set(USER_POINTER_ID_4, { x: app.renderer.width * 0.25 + 80, y: app.renderer.height * 0.5 + 40 });
     mouseCursorG.visible = true;
-    cursor3G.visible = true;
-    cursor4G.visible = true;
     {
         const p1 = uiState.userCursorPos.get(USER_POINTER_ID);
-        const p3 = uiState.userCursorPos.get(USER_POINTER_ID_3);
-        const p4 = uiState.userCursorPos.get(USER_POINTER_ID_4);
-        mouseCursorG.position.set(p1.x, p1.y);
-        cursor3G.position.set(p3.x, p3.y);
-        cursor4G.position.set(p4.x, p4.y);
+        if (p1)
+            mouseCursorG.position.set(p1.x, p1.y);
     }
-    virtualCursorG.visible = uiState.virtualCursor.enabled;
     const updateUserCursorOverlays = () => {
+        // Prefer kernel-owned cursor position when available.
+        try {
+            const x = Number(browserContext.getCursorX(USER_POINTER_ID));
+            const y = Number(browserContext.getCursorY(USER_POINTER_ID));
+            const w = Math.max(1, Number(app.renderer?.width ?? 1) || 1);
+            const h = Math.max(1, Number(app.renderer?.height ?? 1) || 1);
+            // Ignore uninitialized kernel coordinates (commonly 0,0) so local pointer state stays visible.
+            const kernelLooksValid = Number.isFinite(x) && Number.isFinite(y) && x >= 1 && y >= 1 && x <= (w - 1) && y <= (h - 1);
+            if (kernelLooksValid) {
+                uiState.userCursorPos.set(USER_POINTER_ID, { x, y });
+            }
+        }
+        catch {
+            // Keep local fallback behavior when browser_context query is unavailable.
+        }
         // Keep overlays and hover state in sync with uiState.userCursorPos.
         const p1 = uiState.userCursorPos.get(USER_POINTER_ID);
-        const p3 = uiState.userCursorPos.get(USER_POINTER_ID_3);
-        const p4 = uiState.userCursorPos.get(USER_POINTER_ID_4);
         if (p1) {
             mouseCursorG.visible = true;
             mouseCursorG.position.set(p1.x, p1.y);
-        }
-        if (p3) {
-            cursor3G.visible = true;
-            cursor3G.position.set(p3.x, p3.y);
-        }
-        if (p4) {
-            cursor4G.visible = true;
-            cursor4G.position.set(p4.x, p4.y);
+            // Fallback bridge for cmd-stream cursor heartbeat overlay.
+            globalThis.__trueosCursorDebug = {
+                x: Number(p1.x) || 0,
+                y: Number(p1.y) || 0,
+                visible: true,
+            };
         }
         const findHover = (x, y) => {
             let hitKey = null;
@@ -1982,144 +2539,26 @@ async function main() {
             const isActive = uiState.textDrags.has(USER_POINTER_ID) || uiState.sliderDrags.has(USER_POINTER_ID) || uiState.dialogDrags.has(USER_POINTER_ID);
             mouseCursorG.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
         }
-        if (p3) {
-            const { hitKey, hitCursor } = findHover(p3.x, p3.y);
-            uiState.hoveredKeyByPointer.set(USER_POINTER_ID_3, hitKey);
-            uiState.hoveredCursorByPointer.set(USER_POINTER_ID_3, hitCursor);
-            const isActive = uiState.textDrags.has(USER_POINTER_ID_3) || uiState.sliderDrags.has(USER_POINTER_ID_3) || uiState.dialogDrags.has(USER_POINTER_ID_3);
-            cursor3G.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
-        }
-        if (p4) {
-            const { hitKey, hitCursor } = findHover(p4.x, p4.y);
-            uiState.hoveredKeyByPointer.set(USER_POINTER_ID_4, hitKey);
-            uiState.hoveredCursorByPointer.set(USER_POINTER_ID_4, hitCursor);
-            const isActive = uiState.textDrags.has(USER_POINTER_ID_4) || uiState.sliderDrags.has(USER_POINTER_ID_4) || uiState.dialogDrags.has(USER_POINTER_ID_4);
-            cursor4G.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
-        }
         // Cursor overlays and hover-driven visuals update without needing a full paint traversal.
         requestPresent();
     };
-    // Multi-cursor harness: cycle mouse control between cursor 1, cursor 3, cursor 4.
-    // When enabled, this runs a periodic timer.
-    if (uiState.harness.enabled) {
-        setInterval(() => {
-            const prev = uiState.harness.activeUserPointerId;
-            const next = prev === USER_POINTER_ID ? USER_POINTER_ID_3 : prev === USER_POINTER_ID_3 ? USER_POINTER_ID_4 : USER_POINTER_ID;
-            uiState.harness.activeUserPointerId = next;
-            // Make the toggle visible immediately even if the real mouse hasn't moved:
-            // snap the newly-controlled cursor to the last known mouse position and
-            // move the previously-controlled cursor back to where the new cursor was.
-            if (uiState.lastMouse.has) {
-                const prevPos = uiState.userCursorPos.get(prev);
-                const nextPos = uiState.userCursorPos.get(next);
-                uiState.userCursorPos.set(next, { x: uiState.lastMouse.x, y: uiState.lastMouse.y });
-                if (nextPos)
-                    uiState.userCursorPos.set(prev, { x: nextPos.x, y: nextPos.y });
-                else if (prevPos)
-                    uiState.userCursorPos.set(prev, { x: prevPos.x, y: prevPos.y });
-            }
-            // If we cancel an active drag/scroll, the main scene visuals can change, so repaint.
-            const hadTextDrag = uiState.textDrags.size > 0;
-            const hadSliderDrag = uiState.sliderDrags.size > 0;
-            const hadDialogDrag = uiState.dialogDrags.size > 0;
-            const hadScrollDrag = uiState.scroll.draggingPointerId != null;
-            const hadColorDrag = uiState.color.draggingPointerId != null;
-            let hadIframeDrag = false;
-            for (const st of uiState.iframeScroll.values()) {
-                if (st.draggingPointerId != null) {
-                    hadIframeDrag = true;
-                    break;
-                }
-            }
-            const needsRepaint = hadTextDrag || hadSliderDrag || hadDialogDrag || hadScrollDrag || hadColorDrag || hadIframeDrag;
-            // Avoid stuck drags when control flips mid-gesture.
-            uiState.textDrags.delete(USER_POINTER_ID);
-            uiState.textDrags.delete(USER_POINTER_ID_3);
-            uiState.textDrags.delete(USER_POINTER_ID_4);
-            uiState.sliderDrags.delete(USER_POINTER_ID);
-            uiState.sliderDrags.delete(USER_POINTER_ID_3);
-            uiState.sliderDrags.delete(USER_POINTER_ID_4);
-            uiState.dialogDrags.delete(USER_POINTER_ID);
-            uiState.dialogDrags.delete(USER_POINTER_ID_3);
-            uiState.dialogDrags.delete(USER_POINTER_ID_4);
-            // Avoid stuck number holds.
-            for (const pid of [USER_POINTER_ID, USER_POINTER_ID_3, USER_POINTER_ID_4]) {
-                const h = uiState.numberHolds.get(pid);
-                if (h) {
-                    if (h.timeoutId != null)
-                        window.clearTimeout(h.timeoutId);
-                    if (h.intervalId != null)
-                        window.clearInterval(h.intervalId);
-                    uiState.numberHolds.delete(pid);
-                }
-            }
-            if (uiState.scroll.draggingPointerId === USER_POINTER_ID ||
-                uiState.scroll.draggingPointerId === USER_POINTER_ID_3 ||
-                uiState.scroll.draggingPointerId === USER_POINTER_ID_4) {
-                uiState.scroll.draggingPointerId = null;
-            }
-            if (uiState.color.draggingPointerId === USER_POINTER_ID ||
-                uiState.color.draggingPointerId === USER_POINTER_ID_3 ||
-                uiState.color.draggingPointerId === USER_POINTER_ID_4) {
-                uiState.color.draggingPointerId = null;
-            }
-            updateUserCursorOverlays();
-            if (needsRepaint)
-                requestPaint?.();
-        }, uiState.harness.periodMs);
-    }
-    // Virtual input device cursor: simple patrol (circle).
-    // Disabled by default; when disabled we avoid per-frame ticker work.
-    if (uiState.virtualCursor.enabled) {
-        app.ticker.add(() => {
-            const dt = Math.max(0, app.ticker.deltaMS) / 1000;
-            virtualCursorG.visible = true;
-            uiState.virtualCursor.t += dt;
-            const cx = app.renderer.width * 0.75;
-            const cy = app.renderer.height * 0.25;
-            const a = uiState.virtualCursor.t * uiState.virtualCursor.speed;
-            const r = uiState.virtualCursor.radius;
-            uiState.virtualCursor.x = cx + Math.cos(a) * r;
-            uiState.virtualCursor.y = cy + Math.sin(a) * r;
-            virtualCursorG.position.set(uiState.virtualCursor.x, uiState.virtualCursor.y);
-            // Virtual hover simulation.
-            {
-                const pid = VIRTUAL_POINTER_ID;
-                const x = uiState.virtualCursor.x;
-                const y = uiState.virtualCursor.y;
-                let hitKey = null;
-                let hitCursor = null;
-                // Iterate from end so later-drawn widgets win.
-                for (let i = uiState.hoverRects.length - 1; i >= 0; i--) {
-                    const rct = uiState.hoverRects[i];
-                    if (x >= rct.x && x <= rct.x + rct.w && y >= rct.y && y <= rct.y + rct.h) {
-                        hitKey = rct.key;
-                        hitCursor = rct.cursor;
-                        break;
-                    }
-                }
-                const prev = uiState.hoveredKeyByPointer.get(pid) ?? null;
-                if (prev !== hitKey) {
-                    if (prev)
-                        uiState.hoverHandlers.get(prev)?.out?.();
-                    if (hitKey)
-                        uiState.hoverHandlers.get(hitKey)?.over?.();
-                    uiState.hoveredKeyByPointer.set(pid, hitKey);
-                }
-                uiState.hoveredCursorByPointer.set(pid, hitCursor);
-                const isActive = uiState.textDrags.has(pid) || uiState.sliderDrags.has(pid) || uiState.dialogDrags.has(pid);
-                virtualCursorG.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
-            }
-        });
-    }
-    // Initial cursor draw.
-    uiState.virtualCursor.x = app.renderer.width * 0.75 + uiState.virtualCursor.radius;
-    uiState.virtualCursor.y = app.renderer.height * 0.25;
-    virtualCursorG.position.set(uiState.virtualCursor.x, uiState.virtualCursor.y);
+    // Keep cursor overlays alive even when scene repaint frequency is low.
+    app.ticker.add(() => {
+        updateUserCursorOverlays();
+    });
+    // Cursor overlay state is updated from real pointer input and per-frame sync.
     // Mouse drag selection for <input>/<textarea>.
     // Also used for slider drag, dialog drag, and scrollbar thumb drag.
     app.stage.on('pointerup', (ev) => {
         const pid = getEffectivePointerId(ev);
+        if (pid > 0) {
+            try {
+                browserContext.routePointerUp(pid, ev.global?.x ?? 0, ev.global?.y ?? 0, null);
+            }
+            catch {
+                // Keep legacy local input path alive.
+            }
+        }
         const releasedSliderKey = uiState.sliderDrags.get(pid)?.key ?? null;
         uiState.textDrags.delete(pid);
         uiState.sliderDrags.delete(pid);
@@ -2137,9 +2576,9 @@ async function main() {
             const h = uiState.numberHolds.get(pid);
             if (h) {
                 if (h.timeoutId != null)
-                    window.clearTimeout(h.timeoutId);
+                    RT_GLOBAL.clearTimeout?.(h.timeoutId);
                 if (h.intervalId != null)
-                    window.clearInterval(h.intervalId);
+                    RT_GLOBAL.clearInterval?.(h.intervalId);
                 uiState.numberHolds.delete(pid);
             }
         }
@@ -2160,6 +2599,14 @@ async function main() {
     });
     app.stage.on('pointerupoutside', (ev) => {
         const pid = getEffectivePointerId(ev);
+        if (pid > 0) {
+            try {
+                browserContext.routePointerUp(pid, ev.global?.x ?? 0, ev.global?.y ?? 0, null);
+            }
+            catch {
+                // Keep legacy local input path alive.
+            }
+        }
         const releasedSliderKey = uiState.sliderDrags.get(pid)?.key ?? null;
         uiState.textDrags.delete(pid);
         uiState.sliderDrags.delete(pid);
@@ -2177,9 +2624,9 @@ async function main() {
             const h = uiState.numberHolds.get(pid);
             if (h) {
                 if (h.timeoutId != null)
-                    window.clearTimeout(h.timeoutId);
+                    RT_GLOBAL.clearTimeout?.(h.timeoutId);
                 if (h.intervalId != null)
-                    window.clearInterval(h.intervalId);
+                    RT_GLOBAL.clearInterval?.(h.intervalId);
                 uiState.numberHolds.delete(pid);
             }
         }
@@ -2244,15 +2691,19 @@ async function main() {
             uiState.lastMouse.y = gy;
             uiState.lastMouse.has = true;
             uiState.primaryMousePointerId = pidAny;
-            // Update the stored position for whichever user cursor the harness says is under mouse control.
-            const controlPid = uiState.harness.enabled ? uiState.harness.activeUserPointerId : pidAny;
-            uiState.userCursorPos.set(controlPid, { x: gx, y: gy });
+            uiState.userCursorPos.set(pidAny, { x: gx, y: gy });
             // Keep overlays/hover in sync as the real mouse moves.
             updateUserCursorOverlays();
         }
         const pid = getEffectivePointerId(ev);
         if (pid <= 0)
             return;
+        try {
+            browserContext.routePointerMove(pid, ev.global?.x ?? 0, ev.global?.y ?? 0, null);
+        }
+        catch {
+            // Keep legacy local input path alive.
+        }
         let didUpdate = false;
         // Text selection drag.
         {
@@ -2372,9 +2823,17 @@ async function main() {
             requestPaint?.();
     });
     // Keyboard input: very lightweight text editing for focused <input type=text|password>.
-    window.addEventListener('keydown', (ev) => {
+    RT_EVENT_TARGET?.addEventListener?.('keydown', (ev) => {
         const pid = uiState.keyboardOwnerPointerId;
-        const key = uiState.focusedKeyByPointer.get(pid) ?? null;
+        let key = uiState.focusedKeyByPointer.get(pid) ?? null;
+        try {
+            const k = browserContext.getFocusedTarget(pid);
+            if (typeof k === 'string' && k.length > 0)
+                key = k;
+        }
+        catch {
+            // Keep local focus fallback.
+        }
         if (!key)
             return;
         const state = uiState.inputs.get(key);
@@ -2515,10 +2974,8 @@ async function main() {
             void rerender();
         }
     });
-    window.addEventListener('resize', () => {
+    RT_EVENT_TARGET?.addEventListener?.('resize', () => {
         void rerender();
-        // Cursor is animated by ticker; ensure it stays visible immediately after resize.
-        virtualCursorG.visible = uiState.virtualCursor.enabled;
     });
 }
 
@@ -2538,9 +2995,11 @@ function logErrorWithStack(label, err) {
     const text = `[${label}] ${formatErrorForLog(err)}`;
     console.error(text);
     try {
-        const pre = document.createElement('pre');
+        const pre = RT_DOCUMENT?.createElement?.('pre');
+        if (!pre)
+            return;
         pre.textContent = text;
-        document.body.appendChild(pre);
+        RT_DOCUMENT?.body?.appendChild?.(pre);
     }
     catch {
         // Best-effort UI fallback only.

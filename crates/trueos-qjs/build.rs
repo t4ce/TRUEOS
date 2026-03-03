@@ -568,6 +568,8 @@ fn main() {
         .join("src")
         .join("surface")
         .join("stdio.c");
+    let yoga_cabi = manifest_dir.join("src").join("yoga").join("yoga_cabi.c");
+    let enable_yoga_native = env::var_os("CARGO_FEATURE_YOGA_NATIVE").is_some();
 
     let sources = [
         "quickjs.c",
@@ -581,6 +583,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", quickjs_dir.join(src).display());
     }
     println!("cargo:rerun-if-changed={}", trueos_stdio.display());
+    if enable_yoga_native {
+        println!("cargo:rerun-if-changed={}", yoga_cabi.display());
+    }
     println!(
         "cargo:rerun-if-changed={}",
         quickjs_dir.join("quickjs.h").display()
@@ -601,6 +606,9 @@ fn main() {
         build.file(quickjs_dir.join(src));
     }
     build.file(&trueos_stdio);
+    if enable_yoga_native {
+        build.file(&yoga_cabi);
+    }
 
     if !target.contains('-') {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
