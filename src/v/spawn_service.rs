@@ -530,16 +530,7 @@ async fn webgpu_mesh_task() {
         let now_ticks = now();
         let elapsed_ticks = now_ticks.saturating_sub(phase_a_start);
         if !swapped && swap_ticks != 0 && elapsed_ticks >= swap_ticks {
-            let elapsed_ms = if TICK_HZ == 0 {
-                0
-            } else {
-                elapsed_ticks.saturating_mul(1000).div_ceil(TICK_HZ)
-            };
-            crate::log!(
-                "wgpu_text: swap VGA->GFX after {}ms (target={}ms)\n",
-                elapsed_ms,
-                swap_delay_ms
-            );
+            crate::log!("GFX Loadscreen\n");
             if !single_submitted {
                 let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
                 if len != 0 {
@@ -553,12 +544,10 @@ async fn webgpu_mesh_task() {
                 single_submitted = true;
                 let _ = trueos_qjs::pixi::smoke::preload_pixi_cdn_once().await;
             }
-            crate::log!("wgpu_text: hold GFX mode for 2500ms\n");
             swapped = true;
             hold_start_ticks = now_ticks;
         }
         if swapped && hold_ticks != 0 && now_ticks.saturating_sub(hold_start_ticks) >= hold_ticks {
-            crate::log!("wgpu_text: text phase done; handoff to VGA-buffer-on-GFX\n");
             crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
             crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
             return;
