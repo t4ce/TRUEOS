@@ -35,7 +35,7 @@ twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
 log = { version = "0.4", default-features = false }
-trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
+trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos", "yoga-native"] }
 trueos-gfx-core = { path = "crates/trueos-gfx-core", features = ["alloc"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }

@@ -143,10 +143,35 @@ if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
 if (typeof G.dispatchEvent !== 'function') G.dispatchEvent = () => true;
 if (!G.requestAnimationFrame) {
-  G.requestAnimationFrame = (cb) => {
-    Promise.resolve().then(() => cb(Date.now()));
-    return 1;
-  };
+    let __trueosRafId = 1;
+    const __trueosRafPending = [];
+    const __trueosRafCanceled = new Set();
+    G.requestAnimationFrame = (cb) => {
+        const id = __trueosRafId++;
+        __trueosRafPending.push([id, cb]);
+        return id;
+    };
+    G.cancelAnimationFrame = (id) => {
+        __trueosRafCanceled.add(Number(id) | 0);
+    };
+    G.__trueos_raf_pump = () => {
+        if (__trueosRafPending.length === 0) return;
+        const now = Date.now();
+        const batch = __trueosRafPending.splice(0, __trueosRafPending.length);
+        for (let i = 0; i < batch.length; i++) {
+            const pair = batch[i];
+            if (!pair) continue;
+            const id = Number(pair[0]) | 0;
+            const cb = pair[1];
+            if (__trueosRafCanceled.has(id)) {
+                __trueosRafCanceled.delete(id);
+                continue;
+            }
+            try {
+                if (typeof cb === 'function') cb(now);
+            } catch (_) {}
+        }
+    };
 }
 if (!G.cancelAnimationFrame) G.cancelAnimationFrame = () => {};
 
@@ -157,6 +182,13 @@ const __trueosWebGpuState = {
     nextId: 1,
 };
 G.__trueosWebGpuState = __trueosWebGpuState;
+let __trueosCmdStream = null;
+try {
+    __trueosCmdStream = await import('cmd_stream');
+} catch (_) {
+    __trueosCmdStream = null;
+}
+G.__trueosCmdStream = __trueosCmdStream;
 
 const __trueosGpuLimits = {
     maxBindGroups: 4,
@@ -362,6 +394,7 @@ function __trueosMakeGpuBuffer(desc = {}) {
     const data = new Uint8Array(size);
     const state = {
         mapped: !!desc.mappedAtCreation,
+        mapRanges: [],
     };
     return {
         __id: __trueosWebGpuState.nextId++,
@@ -374,9 +407,28 @@ function __trueosMakeGpuBuffer(desc = {}) {
             const o = Math.max(0, Number(offset) | 0);
             const n = Math.max(0, Number(length) | 0);
             const end = Math.min(data.byteLength, o + n);
-            return data.buffer.slice(o, end);
+            const tmp = data.buffer.slice(o, end);
+            state.mapRanges.push({
+                offset: o,
+                length: Math.max(0, end - o),
+                tmp,
+            });
+            return tmp;
         },
         unmap() {
+            // Commit mapped-range writes back into the backing store.
+            for (let i = 0; i < state.mapRanges.length; i++) {
+                const r = state.mapRanges[i];
+                if (!r || !r.tmp) continue;
+                const src = new Uint8Array(r.tmp);
+                const o = Math.max(0, Number(r.offset) | 0);
+                const len = Math.min(src.byteLength, Math.max(0, Number(r.length) | 0));
+                const end = Math.min(data.byteLength, o + len);
+                if (end > o) {
+                    data.set(src.subarray(0, end - o), o);
+                }
+            }
+            state.mapRanges.length = 0;
             state.mapped = false;
             this.mapState = 'unmapped';
         },
@@ -419,10 +471,31 @@ function __trueosMakeGpuDevice(adapter, desc = {}) {
         },
         createCommandEncoder(d = {}) { return G.__trueosMakeGpuCommandEncoder(device, d); },
         createRenderBundleEncoder(d = {}) {
+            const ops = [];
             return {
                 __id: __trueosWebGpuState.nextId++,
                 __desc: d,
-                finish() { return { __id: __trueosWebGpuState.nextId++, __bundle: true }; },
+                __ops: ops,
+                setPipeline(p) { ops.push(['setPipeline', p]); },
+                setBindGroup(i, bg) { ops.push(['setBindGroup', i, bg]); },
+                setVertexBuffer(slot, b, off = 0, size) { ops.push(['setVertexBuffer', slot, b, off, size]); },
+                setIndexBuffer(b, f = 'uint16', off = 0, size) { ops.push(['setIndexBuffer', b, f, off, size]); },
+                setViewport(x, y, w, h, minD = 0, maxD = 1) { ops.push(['setViewport', x, y, w, h, minD, maxD]); },
+                setScissorRect(x, y, w, h) { ops.push(['setScissorRect', x, y, w, h]); },
+                setStencilReference(v) { ops.push(['setStencilReference', v]); },
+                setBlendConstant(c) { ops.push(['setBlendConstant', c]); },
+                draw(vtxCount, instCount = 1, firstV = 0, firstI = 0) { ops.push(['draw', vtxCount, instCount, firstV, firstI]); },
+                drawIndexed(idxCount, instCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
+                    ops.push(['drawIndexed', idxCount, instCount, firstIndex, baseVertex, firstInstance]);
+                },
+                finish() {
+                    return {
+                        __id: __trueosWebGpuState.nextId++,
+                        __bundle: true,
+                        __desc: d,
+                        __ops: ops.slice(),
+                    };
+                },
             };
         },
         createCommandBuffer() { return { __id: __trueosWebGpuState.nextId++ }; },
@@ -997,7 +1070,7 @@ await import('/qjs/browser/main.mjs');
 
         let mouse_pump_filename = b"<pixi-browser-mouse-pump>\0";
         let mouse_pump_script =
-            b"var G=(typeof globalThis!=='undefined')?globalThis:this; if (G.__trueos_mouse_pump) G.__trueos_mouse_pump();";
+            b"var G=(typeof globalThis!=='undefined')?globalThis:this; if (G.__trueos_mouse_pump) G.__trueos_mouse_pump(); if (G.__trueos_raf_pump) G.__trueos_raf_pump();";
 
         // Browser loop: poll host events + async jobs + mouse bridge.
         loop {
