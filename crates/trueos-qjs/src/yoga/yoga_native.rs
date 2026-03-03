@@ -50,7 +50,7 @@ unsafe fn arg_bool(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValu
 
 #[cfg(feature = "yoga-native")]
 mod backend {
-    pub(crate) use crate::trueos_shims::yoga::{
+    pub(crate) use crate::yoga::ffi::{
         config_create, config_free, config_set_use_web_defaults, node_calculate_layout, node_create,
         node_free_recursive, node_get_child_count, node_get_computed_height, node_get_computed_left,
         node_get_computed_top, node_get_computed_width, node_insert_child, node_set_align_items,

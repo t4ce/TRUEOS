@@ -122,8 +122,6 @@ pub async fn boot_browser() {
         qjs::js_free_value(ctx, global);
 
         let init_filename = b"<pixi-browser-init>\0";
-        let canvas_shim_filename = b"<pixi-browser-canvas-shim>\0";
-        let canvas_renderer_filename = b"<pixi-browser-canvas-renderer-shim>\0";
         let init_script = br#"
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 
@@ -176,7 +174,7 @@ if (!G.requestAnimationFrame) {
 if (!G.cancelAnimationFrame) G.cancelAnimationFrame = () => {};
 
 const __trueosWebGpuState = {
-    enabled: true,
+    enabled: false,
     preferredCanvasFormat: 'bgra8unorm',
     backendName: 'trueos-cmd-stream',
     nextId: 1,
@@ -441,6 +439,84 @@ function __trueosMakeGpuBuffer(desc = {}) {
             this.destroyed = true;
             this.mapState = 'destroyed';
         },
+    };
+}
+
+// Minimal command encoder/queue fallback used when the canvas-renderer shim is
+// not present. This keeps WebGPU probes and lightweight command recording alive
+// while the rich UI renders through the direct cmd backend path.
+if (typeof G.__trueosMakeGpuCommandEncoder !== 'function') {
+    G.__trueosMakeGpuCommandEncoder = function __trueosMakeGpuCommandEncoder(_device, desc = {}) {
+        const cmds = [];
+        return {
+            __id: __trueosWebGpuState.nextId++,
+            __desc: desc,
+            __cmds: cmds,
+            beginRenderPass(passDesc = {}) {
+                const ops = [];
+                const pass = {
+                    __id: __trueosWebGpuState.nextId++,
+                    __kind: 'render-pass',
+                    __desc: passDesc,
+                    __ops: ops,
+                    setPipeline(p) { ops.push(['setPipeline', p]); },
+                    setBindGroup(i, bg) { ops.push(['setBindGroup', i, bg]); },
+                    setVertexBuffer(slot, b, off = 0, size) { ops.push(['setVertexBuffer', slot, b, off, size]); },
+                    setIndexBuffer(b, f = 'uint16', off = 0, size) { ops.push(['setIndexBuffer', b, f, off, size]); },
+                    setViewport(x, y, w, h, minD = 0, maxD = 1) { ops.push(['setViewport', x, y, w, h, minD, maxD]); },
+                    setScissorRect(x, y, w, h) { ops.push(['setScissorRect', x, y, w, h]); },
+                    setStencilReference(v) { ops.push(['setStencilReference', v]); },
+                    setBlendConstant(c) { ops.push(['setBlendConstant', c]); },
+                    executeBundles(bundles) { ops.push(['executeBundles', bundles]); },
+                    draw(vtxCount, instCount = 1, firstV = 0, firstI = 0) { ops.push(['draw', vtxCount, instCount, firstV, firstI]); },
+                    drawIndexed(idxCount, instCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
+                        ops.push(['drawIndexed', idxCount, instCount, firstIndex, baseVertex, firstInstance]);
+                    },
+                    end() {},
+                };
+                cmds.push(pass);
+                return pass;
+            },
+            copyBufferToBuffer(src, srcOffset, dst, dstOffset, size) {
+                cmds.push(['copyBufferToBuffer', src, srcOffset, dst, dstOffset, size]);
+            },
+            copyBufferToTexture(src, dst, size) {
+                cmds.push(['copyBufferToTexture', src, dst, size]);
+            },
+            copyTextureToTexture(src, dst, size) {
+                cmds.push(['copyTextureToTexture', src, dst, size]);
+            },
+            finish(_finishDesc = {}) {
+                return {
+                    __id: __trueosWebGpuState.nextId++,
+                    __cmds: cmds.slice(),
+                };
+            },
+        };
+    };
+}
+
+if (typeof G.__trueosMakeGpuQueue !== 'function') {
+    G.__trueosMakeGpuQueue = function __trueosMakeGpuQueue(_device) {
+        return {
+            __id: __trueosWebGpuState.nextId++,
+            submit(_cmdBuffers) {},
+            writeBuffer(buffer, bufferOffset, data, dataOffset = 0, size) {
+                if (!buffer || !(buffer.__data instanceof Uint8Array)) return;
+                const srcAll = (typeof G.__trueosToU8 === 'function') ? G.__trueosToU8(data) : new Uint8Array();
+                if (!(srcAll instanceof Uint8Array)) return;
+                const bo = Math.max(0, Number(bufferOffset || 0) | 0);
+                const so = Math.max(0, Number(dataOffset || 0) | 0);
+                const n = (size == null) ? Math.max(0, srcAll.byteLength - so) : Math.max(0, Number(size) | 0);
+                const end = Math.min(buffer.__data.byteLength, bo + n);
+                const srcEnd = Math.min(srcAll.byteLength, so + (end - bo));
+                if (end > bo && srcEnd > so) {
+                    buffer.__data.set(srcAll.subarray(so, srcEnd), bo);
+                }
+            },
+            writeTexture() {},
+            async onSubmittedWorkDone() { return; },
+        };
     };
 }
 
@@ -928,7 +1004,6 @@ if (!G.navigator) {
         const onLine = !!navNative.isOnline();
         if (webgpuNative) {
             try {
-                __trueosWebGpuState.enabled = !!webgpuNative.isAvailable();
                 const fmt = String(webgpuNative.getPreferredCanvasFormat() || '').trim();
                 if (fmt) __trueosWebGpuState.preferredCanvasFormat = fmt;
                 const backend = String(webgpuNative.getBackendName() || '').trim();
@@ -1010,44 +1085,6 @@ if (!G.fetch) {
 
 await import('/qjs/browser/main.mjs');
 "#;
-
-        if !eval_or_log(
-            ctx,
-            qjs::browser_canvas::CANVAS_2D_SHIM_JS,
-            canvas_shim_filename.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-            "browser-canvas-shim",
-        ) {
-            qjs::workers::terminate_all_for_context(ctx);
-            let _ = pump_runtime_once(rt, ctx);
-            qjs::async_ops::drain_all_for_context(ctx);
-            qjs::workers::drain_all_for_context(ctx);
-            qjs::timers::drain_all_for_context(ctx);
-            qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
-            drop(vm);
-            trueos_cabi_gfx_present_owner_set(0);
-            WEBGPU_BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-            return;
-        }
-
-        if !eval_or_log(
-            ctx,
-            qjs::browser_canvas_renderer::CANVAS_RENDERER_SHIM_JS,
-            canvas_renderer_filename.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-            "browser-canvas-renderer-shim",
-        ) {
-            qjs::workers::terminate_all_for_context(ctx);
-            let _ = pump_runtime_once(rt, ctx);
-            qjs::async_ops::drain_all_for_context(ctx);
-            qjs::workers::drain_all_for_context(ctx);
-            qjs::timers::drain_all_for_context(ctx);
-            qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
-            drop(vm);
-            trueos_cabi_gfx_present_owner_set(0);
-            WEBGPU_BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-            return;
-        }
 
         if !eval_or_log(
             ctx,
