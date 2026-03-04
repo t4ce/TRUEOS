@@ -15,15 +15,17 @@ export function renderButton(opts) {
     drawButton(theme.control.button.fill);
     const over = () => drawButton(theme.control.button.hoverFill);
     const out = () => drawButton(theme.control.button.fill);
-    registerHoverHandlers?.({ over, out });
+    const down = () => drawButton(theme.control.button.activeFill);
+    const up = () => drawButton(theme.control.button.hoverFill);
+    registerHoverHandlers?.({ over, out, down, up });
     // Lightweight interactivity: hover/active state.
     clearContainerEvents(container);
     container.eventMode = 'static';
     container.cursor = 'pointer';
     container.on('pointerover', over);
     container.on('pointerout', out);
-    container.on('pointerdown', () => drawButton(theme.control.button.activeFill));
-    container.on('pointerup', () => drawButton(theme.control.button.hoverFill));
+    container.on('pointerdown', down);
+    container.on('pointerup', up);
 }
 export function applyYogaDefaultsButton(yogaNode, Yoga) {
     yogaNode.setFlexDirection(Yoga.FLEX_DIRECTION_ROW);

@@ -110,8 +110,10 @@ pub async fn preload_pixi_cdn_once() -> bool {
 
         let preload_filename = b"<pixi-cdn-preload>\0";
         let preload_script = br#"
-await import('/qjs/cdn/8d2f5f0bba6a6702.mjs');
-"#;
+    await import('/qjs/cdn/8d2f5f0bba6a6702.mjs');
+    await import('/qjs/vendor/parse5.mjs');
+    await import('/qjs/vendor/yoga.mjs');
+    "#;
         if !eval_or_log(
             ctx,
             preload_script,
@@ -137,6 +139,8 @@ await import('/qjs/cdn/8d2f5f0bba6a6702.mjs');
     }
     PIXI_CDN_PRELOAD_DONE.store(true, Ordering::Release);
     log_str("qjs-pixi-preload: cached /qjs/cdn/8d2f5f0bba6a6702.mjs\n");
+    log_str("qjs-pixi-preload: cached /qjs/vendor/parse5.mjs\n");
+    log_str("qjs-pixi-preload: cached /qjs/vendor/yoga.mjs\n");
     true
 }
 

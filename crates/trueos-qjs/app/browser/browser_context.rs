@@ -30,17 +30,21 @@ struct CursorInputState {
     menu: ContextMenuState,
     pointer_down_seq: u32,
     pointer_down_button: i32,
+    wheel_pending: i32,
+    last_event_seq: u32,
 }
 
 #[derive(Default)]
 struct BrowserContextState {
     active_cursor: u32,
     cursors: Vec<CursorInputState>,
+    kernel_cursor_read_seq: u64,
 }
 
 static BROWSER_CONTEXT_STATE: Mutex<BrowserContextState> = Mutex::new(BrowserContextState {
     active_cursor: 1,
     cursors: Vec::new(),
+    kernel_cursor_read_seq: 0,
 });
 
 #[inline]
@@ -149,6 +153,54 @@ fn live_cursor_pos(cursor_id: u32) -> Option<(f64, f64)> {
         Some((x as f64, y as f64))
     } else {
         None
+    }
+}
+
+#[inline]
+fn live_cursor_buttons(cursor_id: u32) -> Option<u32> {
+    if cursor_id == 0 {
+        return None;
+    }
+    let mut buttons = 0u32;
+    let rc = unsafe { trueos_shims::trueos_cabi_input_cursor_buttons(cursor_id, &mut buttons) };
+    if rc == 0 { Some(buttons) } else { None }
+}
+
+fn pump_kernel_cursor_events(state: &mut BrowserContextState) {
+    const BATCH: usize = 32;
+    let mut out = [trueos_shims::TrueosHidCursorEvent::default(); BATCH];
+
+    loop {
+        let mut next_seq = state.kernel_cursor_read_seq;
+        let mut dropped = 0u32;
+        let wrote = unsafe {
+            trueos_shims::trueos_cabi_input_read_cursor_events_since(
+                state.kernel_cursor_read_seq,
+                out.as_mut_ptr(),
+                BATCH as u32,
+                &mut next_seq as *mut u64,
+                &mut dropped as *mut u32,
+            )
+        } as usize;
+
+        state.kernel_cursor_read_seq = next_seq;
+
+        if wrote == 0 {
+            break;
+        }
+
+        for ev in out.iter().take(wrote) {
+            let cursor_id = if ev.slot_id == 0 { 1 } else { ev.slot_id };
+            let c = get_or_create_cursor(state, cursor_id);
+            c.x = ev.x;
+            c.y = ev.y;
+            c.last_event_seq = ev.seq;
+            c.wheel_pending = c.wheel_pending.saturating_add(ev.wheel as i32);
+        }
+
+        if dropped != 0 || wrote < BATCH {
+            break;
+        }
     }
 }
 
@@ -577,6 +629,10 @@ unsafe extern "C" fn qjs_browser_context_get_cursor_x(
     } else {
         unsafe { js_get_u32_or(ctx, args[0], 1) }.max(1)
     };
+    {
+        let mut st = BROWSER_CONTEXT_STATE.lock();
+        pump_kernel_cursor_events(&mut st);
+    }
     if let Some((x, _)) = live_cursor_pos(cursor_id) {
         return js_int32(x as i32);
     }
@@ -601,12 +657,90 @@ unsafe extern "C" fn qjs_browser_context_get_cursor_y(
     } else {
         unsafe { js_get_u32_or(ctx, args[0], 1) }.max(1)
     };
+    {
+        let mut st = BROWSER_CONTEXT_STATE.lock();
+        pump_kernel_cursor_events(&mut st);
+    }
     if let Some((_, y)) = live_cursor_pos(cursor_id) {
         return js_int32(y as i32);
     }
     let st = BROWSER_CONTEXT_STATE.lock();
     let y = find_cursor(&st, cursor_id).map(|c| c.y).unwrap_or(0.0);
     js_int32(y as i32)
+}
+
+unsafe extern "C" fn qjs_browser_context_get_cursor_buttons(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let args = if !argv.is_null() && argc > 0 {
+        unsafe { core::slice::from_raw_parts(argv, argc as usize) }
+    } else {
+        &[]
+    };
+    let cursor_id = if args.is_empty() {
+        BROWSER_CONTEXT_STATE.lock().active_cursor
+    } else {
+        unsafe { js_get_u32_or(ctx, args[0], 1) }.max(1)
+    };
+    {
+        let mut st = BROWSER_CONTEXT_STATE.lock();
+        pump_kernel_cursor_events(&mut st);
+    }
+    if let Some(buttons) = live_cursor_buttons(cursor_id) {
+        return js_int32(buttons as i32);
+    }
+    js_int32(0)
+}
+
+unsafe extern "C" fn qjs_browser_context_get_cursor_event_seq(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let args = if !argv.is_null() && argc > 0 {
+        unsafe { core::slice::from_raw_parts(argv, argc as usize) }
+    } else {
+        &[]
+    };
+    let cursor_id = if args.is_empty() {
+        BROWSER_CONTEXT_STATE.lock().active_cursor
+    } else {
+        unsafe { js_get_u32_or(ctx, args[0], 1) }.max(1)
+    };
+    let mut st = BROWSER_CONTEXT_STATE.lock();
+    pump_kernel_cursor_events(&mut st);
+    let seq = find_cursor(&st, cursor_id)
+        .map(|c| c.last_event_seq as i32)
+        .unwrap_or(0);
+    js_int32(seq)
+}
+
+unsafe extern "C" fn qjs_browser_context_consume_cursor_wheel(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let args = if !argv.is_null() && argc > 0 {
+        unsafe { core::slice::from_raw_parts(argv, argc as usize) }
+    } else {
+        &[]
+    };
+    let cursor_id = if args.is_empty() {
+        BROWSER_CONTEXT_STATE.lock().active_cursor
+    } else {
+        unsafe { js_get_u32_or(ctx, args[0], 1) }.max(1)
+    };
+    let mut st = BROWSER_CONTEXT_STATE.lock();
+    pump_kernel_cursor_events(&mut st);
+    let c = get_or_create_cursor(&mut st, cursor_id);
+    let wheel = c.wheel_pending;
+    c.wheel_pending = 0;
+    js_int32(wheel)
 }
 
 pub unsafe fn try_create_native_module(
@@ -661,6 +795,9 @@ pub unsafe fn try_create_native_module(
         export_fn!("clearClipboard", qjs_browser_context_clear_clipboard, 1);
         export_fn!("getCursorX", qjs_browser_context_get_cursor_x, 1);
         export_fn!("getCursorY", qjs_browser_context_get_cursor_y, 1);
+        export_fn!("getCursorButtons", qjs_browser_context_get_cursor_buttons, 1);
+        export_fn!("getCursorEventSeq", qjs_browser_context_get_cursor_event_seq, 1);
+        export_fn!("consumeCursorWheel", qjs_browser_context_consume_cursor_wheel, 1);
         export_fn!("getPointerDownSeq", qjs_browser_context_get_pointer_down_seq, 1);
         export_fn!(
             "getPointerDownButton",
@@ -699,6 +836,9 @@ pub unsafe fn try_create_native_module(
     add_export!("clearClipboard");
     add_export!("getCursorX");
     add_export!("getCursorY");
+    add_export!("getCursorButtons");
+    add_export!("getCursorEventSeq");
+    add_export!("consumeCursorWheel");
     add_export!("getPointerDownSeq");
     add_export!("getPointerDownButton");
 
