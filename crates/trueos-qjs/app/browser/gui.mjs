@@ -1,10 +1,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
-import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 import * as browserContext from 'trueos:browser_context';
-import { INPUT_HTML } from './input_html.mjs';
 import { defaultTheme } from './theme.mjs';
-import { BLOCK_TAGS } from './htmlDefaults.mjs';
 // SVG generation/parsing helpers live in widget modules.
 import { makeThemedText, TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from './text.mjs';
 import { clearGraphics, getOrCreateContainer, getOrCreateGraphics, getOrCreateText } from './pixiReuse.mjs';
@@ -61,6 +58,10 @@ import {
     logCursorButtonEvent,
     computeScrollableContentHeight,
     countLayoutNodes,
+    normalizeWhitespace,
+    getOrInitInputState,
+    collectRadioGroups,
+    buildDefaultRenderNodes,
 } from './ui.mjs';
 
 // Singleton canvas/context for text measurement during rendering (used by inputs/textarea).
@@ -80,6 +81,7 @@ function getRenderMeasure(theme) {
 }
 // Retained-mode: cache LayoutBox containers per scene root so we can update in place.
 const retainedNodeCache = new WeakMap();
+const ROOT_SCROLL_DOMAIN = 'iframe:root';
 function wouldCreateCycle(parent, child) {
     // Adding `child` under `parent` would create a cycle if `parent` is already in
     // the ancestry chain of `child`.
@@ -349,461 +351,6 @@ function summarizeItems(items, maxSamples = 8) {
     };
 }
 
-function getOrInitInputState(key, attrs) {
-    const existing = uiState.inputs.get(key);
-    if (existing)
-        return existing;
-    const state = {};
-    const type = (attrs?.type ?? 'text').toLowerCase();
-    if (type === 'checkbox' || type === 'radio') {
-        state.checked = attrs ? Object.prototype.hasOwnProperty.call(attrs, 'checked') : false;
-        if (type === 'checkbox') {
-            const aria = (attrs?.['aria-checked'] ?? '').toLowerCase();
-            const data = (attrs?.['data-indeterminate'] ?? '').toLowerCase();
-            state.indeterminate =
-                (attrs ? Object.prototype.hasOwnProperty.call(attrs, 'indeterminate') : false) ||
-                    aria === 'mixed' ||
-                    data === 'true' ||
-                    data === '1' ||
-                    data === 'yes';
-        }
-    }
-    else {
-        state.value = attrs?.value ?? '';
-    }
-    uiState.inputs.set(key, state);
-    return state;
-}
-function collectRadioGroups(root) {
-    const groups = new Map();
-    function walk(node) {
-        if (node.kind === 'block' && node.tagName === 'input') {
-            const type = (node.attrs?.type ?? 'text').toLowerCase();
-            if (type === 'radio') {
-                const name = node.attrs?.name ?? '__default__';
-                const groupKey = `radio:${name}`;
-                const key = node.key;
-                if (key) {
-                    const arr = groups.get(groupKey) ?? [];
-                    arr.push(key);
-                    groups.set(groupKey, arr);
-                }
-            }
-        }
-        for (const c of node.children)
-            walk(c);
-    }
-    walk(root);
-    return groups;
-}
-function isElement(node) {
-    return node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
-}
-function isText(node) {
-    return node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
-}
-function getBody(doc) {
-    const html = (doc.childNodes ?? []).find((n) => isElement(n) && n.tagName === 'html');
-    if (!html)
-        return undefined;
-    return (html.childNodes ?? []).find((n) => isElement(n) && n.tagName === 'body');
-}
-function normalizeWhitespace(text) {
-    return text.replace(/\s+/g, ' ').trim();
-}
-function toRenderTree(node, path = '0') {
-    if (!isElement(node))
-        return [];
-    const out = [];
-    const tagName = node.tagName ?? node.nodeName;
-    const attrs = attrsToMap(node);
-    // Treat textarea as a leaf control: its text content becomes its value.
-    if (tagName === 'textarea') {
-        const value = extractText(node);
-        const a = { ...(attrs ?? {}), value };
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs: a, children: [] }];
-    }
-    // Temporal <input> types are remapped into custom leaf widgets.
-    // This keeps the authoring surface as "natural HTML" while letting us implement
-    // richer picker UIs than the generic text-like <input> renderer.
-    if (tagName === 'input') {
-        const t = String(attrs?.type ?? 'text').toLowerCase();
-        if (t === 'time')
-            return [{ kind: 'block', key: `${path}:input`, tagName: 'timeinput', attrs, children: [] }];
-        if (t === 'month')
-            return [{ kind: 'block', key: `${path}:input`, tagName: 'monthinput', attrs, children: [] }];
-        if (t === 'week')
-            return [{ kind: 'block', key: `${path}:input`, tagName: 'weekinput', attrs, children: [] }];
-        if (t === 'date')
-            return [{ kind: 'block', key: `${path}:input`, tagName: 'dateinput', attrs, children: [] }];
-        if (t === 'datetime-local')
-            return [{ kind: 'block', key: `${path}:input`, tagName: 'datetimelocalinput', attrs, children: [] }];
-    }
-    // Treat progress/meter as leaf controls: their inner text is fallback content.
-    if (tagName === 'progress' || tagName === 'meter') {
-        const fallbackText = normalizeWhitespace(extractText(node));
-        // Render as a row: [label] [bar]
-        const barAttrs = attrs;
-        const barNode = {
-            kind: 'block',
-            key: `${path}:${tagName}`,
-            tagName,
-            attrs: barAttrs,
-            children: [],
-        };
-        const rowChildren = [];
-        if (fallbackText.length > 0)
-            rowChildren.push({ kind: 'text', text: fallbackText });
-        rowChildren.push(barNode);
-        return [
-            {
-                kind: 'block',
-                key: `${path}:${tagName}-row`,
-                tagName: 'barrow',
-                attrs: { 'data-kind': tagName },
-                children: rowChildren,
-            },
-        ];
-    }
-    // Demo widget: slider renders as a row: [value label] [bar]
-    if (tagName === 'slider') {
-        const sliderKey = `${path}:${tagName}`;
-        const barNode = {
-            kind: 'block',
-            key: sliderKey,
-            tagName,
-            attrs,
-            children: [],
-        };
-        const labelNode = {
-            kind: 'block',
-            key: `${path}:${tagName}-label`,
-            tagName: 'sliderlabel',
-            attrs: { 'data-slider-key': sliderKey, 'data-slider-init': String(attrs?.value ?? '') },
-            children: [],
-        };
-        return [
-            {
-                kind: 'block',
-                key: `${path}:${tagName}-row`,
-                tagName: 'barrow',
-                attrs: { 'data-kind': tagName },
-                children: [labelNode, barNode],
-            },
-        ];
-    }
-    // Treat img as a leaf node (replaced element).
-    if (tagName === 'img') {
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
-    }
-    if (tagName === 'svg') {
-        const a = { ...(attrs ?? {}) };
-        try {
-            a['data-svg'] = parse5.serialize(node);
-        }
-        catch {
-            a['data-svg'] = '';
-        }
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs: a, children: [] }];
-    }
-    if (tagName === 'canvas') {
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
-    }
-    if (tagName === 'iframe') {
-        const srcdoc = String(attrs?.srcdoc ?? '');
-        let children = [];
-        if (srcdoc.trim().length > 0) {
-            try {
-                const doc = parse5.parse(srcdoc);
-                const body = getBody(doc) ?? doc;
-                children = toRenderTree(body, `${path}:iframe-doc`);
-            }
-            catch {
-                children = [{ kind: 'text', text: '(iframe srcdoc parse error)' }];
-            }
-        }
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children }];
-    }
-    if (tagName === 'select') {
-        const options = [];
-        let selectedIndex = 0;
-        const childrenArr = Array.isArray(node.childNodes) ? node.childNodes : [];
-        for (const ch of childrenArr) {
-            const isOpt = ch && typeof ch === 'object' && (ch.tagName === 'option' || ch.nodeName === 'option');
-            if (!isOpt)
-                continue;
-            const label = normalizeWhitespace(extractText(ch));
-            if (label.length > 0)
-                options.push(label);
-            const oAttrs = ch.attrs;
-            const hasSelected = Array.isArray(oAttrs) && oAttrs.some((a) => String(a?.name ?? '').toLowerCase() === 'selected');
-            if (hasSelected)
-                selectedIndex = Math.max(0, options.length - 1);
-        }
-        const joined = options.join('\n');
-        const a = { ...(attrs ?? {}) };
-        a['data-options'] = joined;
-        a['data-selected-index'] = String(selectedIndex);
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs: a, children: [] }];
-    }
-    // Demo widgets: leaf controls.
-    if (tagName === 'number') {
-        return [{ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: [] }];
-    }
-    // Composite widget: <color> expands into the picker + 4 internal channel spinners (RGBA).
-    if (tagName === 'color') {
-        const picker = { kind: 'block', key: `${path}:color`, tagName: 'color', attrs, children: [] };
-        const mkSpin = (ch) => ({
-            kind: 'block',
-            key: `${path}:color-${ch}`,
-            tagName: 'number',
-            attrs: {
-                channel: ch,
-                min: '0',
-                max: '255',
-                step: '1',
-                value: ch === 'a' ? '255' : ch === 'r' ? '255' : '0',
-            },
-            children: [],
-        });
-        const controls = {
-            kind: 'block',
-            key: `${path}:color-controls`,
-            tagName: 'p',
-            attrs: {},
-            children: [mkSpin('r'), mkSpin('g'), mkSpin('b'), mkSpin('a')],
-        };
-        return [picker, controls];
-    }
-    // Composite widget: <search> becomes [icon button][input].
-    if (tagName === 'search') {
-        const inputKey = `${path}:search-input`;
-        const buttonKey = `${path}:search-btn`;
-        const inputAttrs = { ...(attrs ?? {}) };
-        // Force text-like input semantics.
-        inputAttrs.type = 'text';
-        const btnAttrs = {
-            'data-focus-key': inputKey,
-        };
-        return [
-            {
-                kind: 'block',
-                key: `${path}:search-row`,
-                tagName: 'searchrow',
-                attrs: {},
-                children: [
-                    { kind: 'block', key: buttonKey, tagName: 'searchbutton', attrs: btnAttrs, children: [] },
-                    { kind: 'block', key: inputKey, tagName: 'input', attrs: inputAttrs, children: [] },
-                ],
-            },
-        ];
-    }
-    // Treat details specially so we can hide/show its content and draw a custom disclosure arrow.
-    // Also support <stub> as an alias for <details> (handy while iterating on markup).
-    if (tagName === 'details' || tagName === 'stub') {
-        const children = [];
-        const detailsKey = `${path}:${tagName}`;
-        // Find the first <summary>.
-        const summaryEl = (node.childNodes ?? []).find((c) => isElement(c) && (c.tagName ?? c.nodeName) === 'summary');
-        const summaryTextFallback = summaryEl
-            ? normalizeWhitespace(extractText(summaryEl))
-            : normalizeWhitespace(String(attrs?.summary ?? attrs?.title ?? '')) || 'Details';
-        // Preserve interactive children (like <input type=checkbox>) inside <summary>.
-        // We also intentionally reorder checkbox/radio controls to the end so they end up
-        // visually on the right (applyYogaDefaultsSummary uses space-between).
-        const buildSummaryChildren = () => {
-            if (!summaryEl)
-                return summaryTextFallback.length > 0 ? [{ kind: 'text', text: summaryTextFallback }] : [];
-            const keep = [];
-            const trailing = [];
-            let inlineText = '';
-            let elementIndex = 0;
-            for (const ch of summaryEl.childNodes ?? []) {
-                if (isText(ch)) {
-                    inlineText += ch.value;
-                    continue;
-                }
-                if (isElement(ch)) {
-                    const t = ch.tagName ?? ch.nodeName;
-                    const childPath = `${path}:summary.${elementIndex}`;
-                    elementIndex++;
-                    // If it's a control element, keep it as a block child so it gets rendered.
-                    if (t === 'input' || t === 'button' || t === 'select' || t === 'textarea') {
-                        const nodes = toRenderTree(ch, childPath);
-                        const isCheckboxOrRadio = t === 'input' &&
-                            (() => {
-                                const a = attrsToMap(ch);
-                                const typ = String(a?.type ?? 'text').toLowerCase();
-                                return typ === 'checkbox' || typ === 'radio';
-                            })();
-                        if (isCheckboxOrRadio)
-                            trailing.push(...nodes);
-                        else
-                            keep.push(...nodes);
-                        continue;
-                    }
-                    // Non-control content: treat its text as part of the label.
-                    inlineText += extractText(ch) + ' ';
-                }
-            }
-            const txt = normalizeWhitespace(inlineText);
-            const textNode = txt.length > 0 ? [{ kind: 'text', text: txt }] : [];
-            // Default: label text first, then controls. Checkbox/radio are forced to the end.
-            const out = [...textNode, ...keep, ...trailing];
-            return out.length > 0 ? out : summaryTextFallback.length > 0 ? [{ kind: 'text', text: summaryTextFallback }] : [];
-        };
-        children.push({
-            kind: 'block',
-            key: `${path}:summary`,
-            tagName: 'summary',
-            attrs: { ...(attrsToMap(summaryEl) ?? {}), 'data-details-key': detailsKey },
-            children: buildSummaryChildren(),
-        });
-        // Remaining content (excluding summary).
-        let elementIndex = 0;
-        for (const child of node.childNodes ?? []) {
-            if (!isElement(child))
-                continue;
-            const childTag = child.tagName ?? child.nodeName;
-            const childPath = `${path}.${elementIndex}`;
-            elementIndex++;
-            if (childTag === 'summary')
-                continue;
-            if (BLOCK_TAGS.has(childTag))
-                children.push(...toRenderTree(child, childPath));
-        }
-        // Alias: always render as <details> so Yoga defaults + renderer paths apply.
-        return [{ kind: 'block', key: detailsKey, tagName: 'details', attrs, children }];
-    }
-    // Gather text (including inline elements) into the current block.
-    const childBlocks = [];
-    let inlineText = '';
-    let elementIndex = 0;
-    for (const child of node.childNodes ?? []) {
-        if (isText(child)) {
-            inlineText += child.value;
-            continue;
-        }
-        if (isElement(child)) {
-            const childTag = child.tagName ?? child.nodeName;
-            const childPath = `${path}.${elementIndex}`;
-            elementIndex++;
-            if (BLOCK_TAGS.has(childTag)) {
-                const t = normalizeWhitespace(inlineText);
-                if (t.length > 0)
-                    childBlocks.push({ kind: 'text', text: t });
-                inlineText = '';
-                // NOTE: toRenderTree(child) already returns a wrapped block node for normal elements.
-                // If we wrapped again here, we'd get nested duplicates (e.g. each <button> becomes two).
-                childBlocks.push(...toRenderTree(child, childPath));
-            }
-            else {
-                // Inline-ish: treat its text as part of this block's text.
-                inlineText += extractText(child) + ' ';
-            }
-            continue;
-        }
-    }
-    const tail = normalizeWhitespace(inlineText);
-    if (tail.length > 0)
-        childBlocks.push({ kind: 'text', text: tail });
-    // Wrap: for BODY/HTML just return its children.
-    if (tagName === 'html' || tagName === 'body')
-        return childBlocks;
-    out.push({ kind: 'block', key: `${path}:${tagName}`, tagName, attrs, children: childBlocks });
-    return out;
-}
-function attrsToMap(node) {
-    const attrs = node?.attrs;
-    if (!Array.isArray(attrs) || attrs.length === 0)
-        return undefined;
-    const out = {};
-    for (const a of attrs) {
-        if (a && typeof a.name === 'string')
-            out[a.name] = String(a.value ?? '');
-    }
-    return Object.keys(out).length > 0 ? out : undefined;
-}
-function extractText(node) {
-    if (isText(node))
-        return node.value;
-    if (!isElement(node))
-        return '';
-    return (node.childNodes ?? []).map(extractText).join(' ');
-}
-
-function collectHtmlElementTagCounts(node, out = new Map()) {
-    if (!node || typeof node !== 'object')
-        return out;
-    if (isElement(node)) {
-        const tag = String(node.tagName ?? node.nodeName ?? '').toLowerCase();
-        if (tag.length > 0) {
-            out.set(tag, (out.get(tag) ?? 0) + 1);
-        }
-        const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-        for (let i = 0; i < kids.length; i++)
-            collectHtmlElementTagCounts(kids[i], out);
-        return out;
-    }
-    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-    for (let i = 0; i < kids.length; i++)
-        collectHtmlElementTagCounts(kids[i], out);
-    return out;
-}
-
-function collectRenderBlockTagCounts(nodes, out = new Map()) {
-    const list = Array.isArray(nodes) ? nodes : [];
-    for (let i = 0; i < list.length; i++) {
-        const n = list[i];
-        if (!n || typeof n !== 'object')
-            continue;
-        if (n.kind === 'block') {
-            const tag = String(n.tagName ?? '').toLowerCase();
-            if (tag.length > 0)
-                out.set(tag, (out.get(tag) ?? 0) + 1);
-        }
-        collectRenderBlockTagCounts(n.children, out);
-    }
-    return out;
-}
-
-function sourceTagCoveredByRender(tag, renderCounts) {
-    const has = (t) => (renderCounts.get(t) ?? 0) > 0;
-    switch (tag) {
-        case 'search':
-            return has('searchrow') || has('searchbutton') || has('input');
-        case 'input':
-            return has('input') || has('timeinput') || has('dateinput') || has('monthinput') || has('weekinput') || has('datetimelocalinput');
-        case 'stub':
-            return has('details');
-        default:
-            return has(tag);
-    }
-}
-
-function logRichHtmlCoverage(body, renderNodes) {
-    const sourceCounts = collectHtmlElementTagCounts(body, new Map());
-    const renderCounts = collectRenderBlockTagCounts(renderNodes, new Map());
-    const tracked = ['details', 'summary', 'input', 'textarea', 'select', 'progress', 'meter', 'slider', 'number', 'color', 'search', 'dialog', 'canvas', 'svg', 'iframe'];
-    const missing = [];
-    for (let i = 0; i < tracked.length; i++) {
-        const tag = tracked[i];
-        const srcN = sourceCounts.get(tag) ?? 0;
-        if (srcN <= 0)
-            continue;
-        if (!sourceTagCoveredByRender(tag, renderCounts))
-            missing.push(tag);
-    }
-    const sourceTotal = Array.from(sourceCounts.values()).reduce((a, b) => a + b, 0);
-    const renderTotal = Array.from(renderCounts.values()).reduce((a, b) => a + b, 0);
-    try {
-        console.log(`[richui-coverage] sourceElems=${sourceTotal} renderBlocks=${renderTotal} trackedMissing=${missing.length ? missing.join(',') : 'none'}`);
-    }
-    catch {
-        // Keep diagnostics non-fatal.
-    }
-}
-
 function createTextMeasurer(font) {
     const canvas = RT_DOCUMENT?.createElement?.('canvas');
     if (!canvas)
@@ -844,6 +391,83 @@ function createTextMeasurer(font) {
         font,
     };
 }
+
+function applyContextMenuAction(ownerPid, label) {
+    let focusedKey = uiState.focusedKeyByPointer.get(ownerPid) ?? null;
+    try {
+        const k = browserContext.getFocusedTarget(ownerPid);
+        if (typeof k === 'string' && k.length > 0)
+            focusedKey = k;
+    }
+    catch {
+        // Fallback to local focus state.
+    }
+
+    const focusedState = focusedKey ? uiState.inputs.get(focusedKey) : null;
+    // Only allow Copy/Paste for text-like fields (<input>/<textarea>) that registered bounds this paint.
+    const isTextField = focusedKey != null
+        && uiState.fieldBounds.has(focusedKey)
+        && focusedState != null
+        && typeof focusedState.value === 'string';
+
+    if (label === 'Copy' && isTextField) {
+        const st = focusedState;
+        const full = st.value ?? '';
+        const sel = st.selections?.get(ownerPid) ?? null;
+        const a = sel ? Math.max(0, Math.min(full.length, sel.start ?? 0)) : 0;
+        const b = sel ? Math.max(0, Math.min(full.length, sel.end ?? a)) : a;
+        const start = Math.min(a, b);
+        const end = Math.max(a, b);
+        const picked = start !== end ? full.slice(start, end) : full;
+        try {
+            browserContext.setClipboardText(ownerPid, picked);
+        }
+        catch {
+            // Keep menu interaction resilient when browser_context is unavailable.
+        }
+    }
+    else if (label === 'Paste' && isTextField) {
+        let clip = '';
+        try {
+            const c = browserContext.getClipboardText(ownerPid);
+            if (typeof c === 'string')
+                clip = c;
+        }
+        catch {
+            // Keep menu interaction resilient when browser_context is unavailable.
+        }
+        if (clip.length > 0) {
+            const st = focusedState;
+            const full = st.value ?? '';
+            if (!st.selections)
+                st.selections = new Map();
+            if (!st.selections.has(ownerPid)) {
+                const p = full.length;
+                st.selections.set(ownerPid, { start: p, end: p });
+            }
+            const sel = st.selections.get(ownerPid);
+            const a = Math.max(0, Math.min(full.length, sel.start ?? full.length));
+            const b = Math.max(0, Math.min(full.length, sel.end ?? a));
+            const start = Math.min(a, b);
+            const end = Math.max(a, b);
+            st.value = full.slice(0, start) + clip + full.slice(end);
+            const caret = start + clip.length;
+            sel.start = caret;
+            sel.end = caret;
+        }
+    }
+
+    // Close on selection (including Close).
+    try {
+        browserContext.closeContextMenu(ownerPid);
+    }
+    catch {
+        // Fallback: leave legacy menu state untouched.
+    }
+    requestPaint?.();
+    return true;
+}
+
 async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
     const padding = 12;
     const gap = 8;
@@ -1315,7 +939,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
         requestPresent?.();
     };
 
-    function drawNode(node, parent, textCtx, absX = 0, absY = 0, dialogSink, dialogClampRect, path, orderIndex) {
+    function drawNode(node, parent, textCtx, absX = 0, absY = 0, dialogSink, dialogClampRect, path, orderIndex, scrollDomain = ROOT_SCROLL_DOMAIN) {
         if (!fullRepaint && dirtySubtree.get(node) !== true) {
             return;
         }
@@ -1397,6 +1021,8 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                     alpha: 1,
                     label: String(node.tagName || 'block'),
                     isText: false,
+                    scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
+                    scrollDomain: String(scrollDomain || ''),
                 });
             }
             let overlayLabel = null;
@@ -1845,6 +1471,8 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                         depth: Math.max(0, Number(path.split('.').length - 1) | 0),
                         alpha: 0.06,
                         label: 'scrollbar-track',
+                        scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
+                        scrollDomain: String(scrollDomain || ''),
                     });
                     pushDirectSnapshot({
                         x: st.thumb.x,
@@ -1854,6 +1482,8 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                         depth: Math.max(0, Number(path.split('.').length - 1) | 0),
                         alpha: 0.25,
                         label: 'scrollbar-thumb',
+                        scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
+                        scrollDomain: String(scrollDomain || ''),
                     });
                     scrollbar.rect(trackX, trackY, trackW, trackH);
                     scrollbar.fill({ color: 0x000000, alpha: 0.06 });
@@ -1925,6 +1555,9 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
             const childParent = iframeScrollRoot ?? iframeContentRoot ?? childrenRoot;
             const childAbsX = nodeAbsX + (iframeContentRoot?.position.x ?? 0);
             const childAbsY = nodeAbsY + (iframeContentRoot?.position.y ?? 0) + (iframeScrollRoot?.position.y ?? 0);
+            const childScrollDomain = (node.tagName === 'iframe' && !isRootIframe)
+                ? `iframe:${String(node.key || path)}`
+                : scrollDomain;
             let childOrder = 0;
             for (let ci = 0; ci < (node.children ?? []).length; ci++) {
                 const child = (node.children ?? [])[ci];
@@ -1932,7 +1565,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                     childSink.push(child);
                 }
                 else {
-                    drawNode(child, childParent, nextTextCtx, childAbsX, childAbsY, childSink, childDialogClampRect, `${path}.${ci}`, childOrder++);
+                    drawNode(child, childParent, nextTextCtx, childAbsX, childAbsY, childSink, childDialogClampRect, `${path}.${ci}`, childOrder++, childScrollDomain);
                 }
             }
             if ((node.tagName === 'dialog' || (node.tagName === 'iframe' && !isRootIframe)) && localDialogs.length > 0) {
@@ -1943,7 +1576,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                 });
                 for (const dlg of localDialogs) {
                     const dlgKey = dlg.key && dlg.key.length > 0 ? dlg.key : `${path}.dlg.${childOrder}`;
-                    drawNode(dlg, childParent, nextTextCtx, childAbsX, childAbsY, localDialogs, childDialogClampRect, `${path}.dlg.${dlgKey}`, childOrder++);
+                    drawNode(dlg, childParent, nextTextCtx, childAbsX, childAbsY, localDialogs, childDialogClampRect, `${path}.dlg.${dlgKey}`, childOrder++, childScrollDomain);
                 }
             }
         }
@@ -1982,6 +1615,8 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                 text: String(node.text ?? ''),
                 fontSize: Number(theme.fontSize || 12),
                 color: Number(theme.text || 0x202020) >>> 0,
+                scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
+                scrollDomain: String(scrollDomain || ''),
             });
         }
     }
@@ -1994,7 +1629,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
         if (child.kind === 'block' && child.tagName === 'dialog')
             rootDialogs.push(child);
         else
-            drawNode(child, contentRoot, baseTextCtx, 0, contentRoot.position.y, rootDialogs, stageClampRect, `root.${i}`, rootOrder++);
+            drawNode(child, contentRoot, baseTextCtx, 0, contentRoot.position.y, rootDialogs, stageClampRect, `root.${i}`, rootOrder++, ROOT_SCROLL_DOMAIN);
     }
     if (rootDialogs.length > 0) {
         rootDialogs.sort((a, b) => {
@@ -2005,7 +1640,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
         let dlgOrder = 0;
         for (const dlg of rootDialogs) {
             const dlgKey = dlg.key && dlg.key.length > 0 ? dlg.key : `rootdlg.${dlgOrder}`;
-            drawNode(dlg, dialogRoot, baseTextCtx, 0, 0, rootDialogs, stageClampRect, `dlg.${dlgKey}`, dlgOrder++);
+            drawNode(dlg, dialogRoot, baseTextCtx, 0, 0, rootDialogs, stageClampRect, `dlg.${dlgKey}`, dlgOrder++, '');
         }
     }
     // Draw temporal picker popups before <select> popups so time pickers can contribute
@@ -2117,75 +1752,7 @@ function renderToPixi(app, box, sceneRoot, opts = {}) {
                 if (!isOwnerEvent(ev))
                     return;
                 ev.stopPropagation?.();
-                let focusedKey = uiState.focusedKeyByPointer.get(ownerPid) ?? null;
-                try {
-                    const k = browserContext.getFocusedTarget(ownerPid);
-                    if (typeof k === 'string' && k.length > 0)
-                        focusedKey = k;
-                }
-                catch {
-                    // Fallback to local focus state.
-                }
-                const focusedState = focusedKey ? uiState.inputs.get(focusedKey) : null;
-                // Only allow Copy/Paste for text-like fields (<input>/<textarea>) that registered bounds this paint.
-                const isTextField = focusedKey != null &&
-                    uiState.fieldBounds.has(focusedKey) &&
-                    focusedState != null &&
-                    typeof focusedState.value === 'string';
-                if (label === 'Copy' && isTextField) {
-                    const st = focusedState;
-                    const full = st.value ?? '';
-                    const sel = st.selections?.get(ownerPid) ?? null;
-                    const a = sel ? Math.max(0, Math.min(full.length, sel.start ?? 0)) : 0;
-                    const b = sel ? Math.max(0, Math.min(full.length, sel.end ?? a)) : a;
-                    const start = Math.min(a, b);
-                    const end = Math.max(a, b);
-                    const picked = start !== end ? full.slice(start, end) : full;
-                    try {
-                        browserContext.setClipboardText(ownerPid, picked);
-                    }
-                    catch {
-                        // Keep menu interaction resilient when browser_context is unavailable.
-                    }
-                }
-                else if (label === 'Paste' && isTextField) {
-                    let clip = '';
-                    try {
-                        const c = browserContext.getClipboardText(ownerPid);
-                        if (typeof c === 'string')
-                            clip = c;
-                    }
-                    catch {
-                        // Keep menu interaction resilient when browser_context is unavailable.
-                    }
-                    if (clip.length > 0) {
-                        const st = focusedState;
-                        const full = st.value ?? '';
-                        if (!st.selections)
-                            st.selections = new Map();
-                        if (!st.selections.has(ownerPid)) {
-                            const p = full.length;
-                            st.selections.set(ownerPid, { start: p, end: p });
-                        }
-                        const sel = st.selections.get(ownerPid);
-                        const a = Math.max(0, Math.min(full.length, sel.start ?? full.length));
-                        const b = Math.max(0, Math.min(full.length, sel.end ?? a));
-                        const start = Math.min(a, b);
-                        const end = Math.max(a, b);
-                        st.value = full.slice(0, start) + clip + full.slice(end);
-                        const caret = start + clip.length;
-                        sel.start = caret;
-                        sel.end = caret;
-                    }
-                }
-                // Close on selection (including Close).
-                try {
-                    browserContext.closeContextMenu(ownerPid);
-                }
-                catch {
-                    // Fallback: leave legacy menu state untouched.
-                }
-                requestPaint?.();
+                applyContextMenuAction(ownerPid, label);
             });
             menu.addChild(hit);
         });
@@ -2295,9 +1862,11 @@ export async function startGui() {
             if (menuPid > 0) {
                 try {
                     browserContext.openContextMenu(menuPid, gx, gy, null);
+                    const isOpenNow = !!browserContext.isContextMenuOpen?.(menuPid);
+                    console.log(`[context-menu] open pid=${menuPid} x=${Math.round(gx)} y=${Math.round(gy)} ok=${isOpenNow ? 1 : 0}`);
                 }
-                catch {
-                    // Keep input path resilient when browser_context is unavailable.
+                catch (err) {
+                    console.log(`[context-menu] open-fail pid=${menuPid} x=${Math.round(gx)} y=${Math.round(gy)} err=${String(err)}`);
                 }
             }
             requestPaint?.();
@@ -2383,30 +1952,7 @@ export async function startGui() {
     dragMeasureCtx.font = `${defaultTheme.fontSize}px ${defaultTheme.fontFamily}`;
     const dragMeasure = (s) => dragMeasureCtx.measureText(s).width;
     const dragLineHeight = defaultTheme.fontSize * 1.25;
-    // Keep startup deterministic: always use the embedded HTML template.
-    let html = INPUT_HTML;
-    try {
-        console.log(`[richui-html] len=${html.length} marker=${html.includes('Tree (Details + Checkbox)') ? 'rich' : 'small'}`);
-    }
-    catch {
-        // Debug logging should never affect startup.
-    }
-    const doc = parse5.parse(html);
-    const body = getBody(doc) ?? doc;
-    const innerRenderNodes = toRenderTree(body, '0');
-    logRichHtmlCoverage(body, innerRenderNodes);
-
-    // Conceptual model: the top-level document is itself a hidden iframe.
-    // This lets us evolve iframe semantics without changing input.html.
-    const renderNodes = [
-        {
-            kind: 'block',
-            key: 'root:internal-iframe',
-            tagName: 'iframe',
-            attrs: { 'data-root': '1' },
-            children: innerRenderNodes,
-        },
-    ];
+    const { renderNodes } = buildDefaultRenderNodes();
     let lastLayout = null;
     const clampScroll = () => {
         const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
@@ -2447,10 +1993,111 @@ export async function startGui() {
     let posTraceFrame = 0;
     const dirtyWidgetKeys = new Set();
     let forceFullRepaint = true;
+    let lastDirectSnapshot = null;
+    let lastDirectSnapshotScrollY = 0;
+    let lastDirectSnapshotScrollByDomain = {};
+
+    const captureScrollByDomain = () => {
+        const out = {};
+        out[ROOT_SCROLL_DOMAIN] = Number(uiState.scroll.y || 0);
+        for (const [k, st] of uiState.iframeScroll.entries()) {
+            const key = String(k || '');
+            if (key.length <= 0)
+                continue;
+            out[`iframe:${key}`] = Number(st?.y || 0);
+        }
+        return out;
+    };
+
+    const computeScrollDeltaByDomain = (prev, cur) => {
+        const out = {};
+        const keys = new Set([...Object.keys(prev || {}), ...Object.keys(cur || {})]);
+        for (const k of keys) {
+            out[k] = Number((cur?.[k] ?? 0) - (prev?.[k] ?? 0));
+        }
+        return out;
+    };
+
+    const withScrollbars = (items) => {
+        const base = Array.isArray(items) ? items : [];
+        const out = [];
+        for (let i = 0; i < base.length; i++) {
+            const it = base[i] || {};
+            const ll = String(it.label || '').toLowerCase();
+            if (ll.includes('scrollbar-track') || ll.includes('scrollbar-thumb'))
+                continue;
+            out.push(it);
+        }
+        if (uiState.scroll.track.h > 0 && uiState.scroll.thumb.h > 0) {
+            out.push({
+                x: uiState.scroll.track.x,
+                y: uiState.scroll.track.y,
+                w: uiState.scroll.track.w,
+                h: uiState.scroll.track.h,
+                depth: 0,
+                alpha: 0.06,
+                label: 'scrollbar-track',
+                scrollWithGlobal: false,
+            });
+            out.push({
+                x: uiState.scroll.thumb.x,
+                y: uiState.scroll.thumb.y,
+                w: uiState.scroll.thumb.w,
+                h: uiState.scroll.thumb.h,
+                depth: 0,
+                alpha: 0.25,
+                label: 'scrollbar-thumb',
+                scrollWithGlobal: false,
+            });
+        }
+        return out;
+    };
+
     const paint = () => {
         if (!lastLayout)
             return;
         clampScroll();
+        const hasScrollDirty = dirtyWidgetKeys.has(GLOBAL_SCROLL_DIRTY_KEY);
+        const singleDirtyKey = dirtyWidgetKeys.size === 1 ? Array.from(dirtyWidgetKeys)[0] : null;
+        const hasIframeScrollDirty = typeof singleDirtyKey === 'string' && singleDirtyKey.length > 0 && uiState.iframeScroll.has(singleDirtyKey);
+        const scrollOnlyDirectPaint = USE_DIRECT_CMD_BACKEND
+            && !forceFullRepaint
+            && dirtyWidgetKeys.size === 1
+            && (hasScrollDirty || hasIframeScrollDirty)
+            && Array.isArray(lastDirectSnapshot)
+            && lastDirectSnapshot.length > 0;
+
+        if (scrollOnlyDirectPaint) {
+            updateScrollbarVisuals();
+            const pixiItems = withScrollbars(lastDirectSnapshot);
+            const backendLayout = buildDirectBackendLayoutFromItems(pixiItems, app.renderer.width, app.renderer.height);
+            const nowScrollByDomain = captureScrollByDomain();
+            const deltaByDomain = computeScrollDeltaByDomain(lastDirectSnapshotScrollByDomain, nowScrollByDomain);
+            const rendered = renderDirectCmdFrame({
+                layout: backendLayout,
+                pixiItems,
+                viewportW: app.renderer.width,
+                viewportH: app.renderer.height,
+                worldW: app.screen.width,
+                worldH: app.screen.height,
+                scrollY: uiState.scroll.y,
+                scrollDeltaY: uiState.scroll.y - lastDirectSnapshotScrollY,
+                scrollDeltaByDomain: deltaByDomain,
+                clearRgb: 0xFFFFFF,
+                browserContext,
+                getCursorColor,
+                onMenuAction: applyContextMenuAction,
+            });
+            if (!rendered) {
+                app.renderer.render(app.stage);
+            }
+            dirtyWidgetKeys.clear();
+            forceFullRepaint = false;
+            lastDirectSnapshotScrollY = uiState.scroll.y;
+            lastDirectSnapshotScrollByDomain = nowScrollByDomain;
+            return;
+        }
+
         const incrementalWidgetPaint = USE_DIRECT_CMD_BACKEND && !forceFullRepaint && dirtyWidgetKeys.size > 0;
         const directSnapshot = renderToPixi(app, lastLayout, sceneRoot, {
             fullRepaint: !incrementalWidgetPaint,
@@ -2463,27 +2110,9 @@ export async function startGui() {
             forceFullRepaint = false;
             return;
         }
-        if (Array.isArray(directSnapshot) && uiState.scroll.track.h > 0 && uiState.scroll.thumb.h > 0) {
-            // Mirror existing global scrollbar visuals into direct-cmd snapshot stream.
-            directSnapshot.push({
-                x: uiState.scroll.track.x,
-                y: uiState.scroll.track.y,
-                w: uiState.scroll.track.w,
-                h: uiState.scroll.track.h,
-                depth: 0,
-                alpha: 0.06,
-                label: 'scrollbar-track',
-            });
-            directSnapshot.push({
-                x: uiState.scroll.thumb.x,
-                y: uiState.scroll.thumb.y,
-                w: uiState.scroll.thumb.w,
-                h: uiState.scroll.thumb.h,
-                depth: 0,
-                alpha: 0.25,
-                label: 'scrollbar-thumb',
-            });
-        }
+        const directSnapshotWithScrollbars = Array.isArray(directSnapshot)
+            ? withScrollbars(directSnapshot)
+            : directSnapshot;
         try {
             console.log(`[richui-paint] sceneChildren=${sceneRoot.children.length} overlayChildren=${overlayRoot.children.length} hoverRects=${uiState.hoverRects.length} layoutNodes=${countLayoutNodes(lastLayout)}`);
         }
@@ -2492,11 +2121,11 @@ export async function startGui() {
         }
         // Manual render (ticker is stopped).
         if (USE_DIRECT_CMD_BACKEND) {
-            const hasDirectBlocks = Array.isArray(directSnapshot)
-                && directSnapshot.some((it) => !it?.isText && Number(it?.w || 0) > 2 && Number(it?.h || 0) > 2);
+            const hasDirectBlocks = Array.isArray(directSnapshotWithScrollbars)
+                && directSnapshotWithScrollbars.some((it) => !it?.isText && Number(it?.w || 0) > 2 && Number(it?.h || 0) > 2);
             const usingYogaSnapshot = !!hasDirectBlocks;
             const pixiItems = usingYogaSnapshot
-                ? directSnapshot
+                ? directSnapshotWithScrollbars
                 : collectPixiSnapshotItems([sceneRoot, overlayUiRoot, overlayRoot], app.renderer.width, app.renderer.height);
             const backendLayout = buildDirectBackendLayoutFromItems(pixiItems, app.renderer.width, app.renderer.height);
             posTraceFrame++;
@@ -2528,13 +2157,19 @@ export async function startGui() {
                 worldW: app.screen.width,
                 worldH: app.screen.height,
                 scrollY: uiState.scroll.y,
+                scrollDeltaY: 0,
+                scrollDeltaByDomain: {},
                 clearRgb: 0xFFFFFF,
                 browserContext,
                 getCursorColor,
+                onMenuAction: applyContextMenuAction,
             });
             if (!rendered) {
                 app.renderer.render(app.stage);
             }
+            lastDirectSnapshot = Array.isArray(pixiItems) ? pixiItems.map((it) => ({ ...(it || {}) })) : null;
+            lastDirectSnapshotScrollY = uiState.scroll.y;
+            lastDirectSnapshotScrollByDomain = captureScrollByDomain();
         }
         else {
             app.renderer.render(app.stage);
@@ -2617,6 +2252,25 @@ export async function startGui() {
         });
     };
     await rerender();
+
+    // Debug bootstrap: open one context menu at startup so direct-menu rendering
+    // can be validated without requiring an initial right-click.
+    if (!globalThis.__trueosBootMenuOpened) {
+        globalThis.__trueosBootMenuOpened = true;
+        const bootPid = USER_POINTER_ID;
+        const cx = Math.max(0, (Number(app.renderer.width || 0) * 0.5) | 0);
+        const cy = Math.max(0, (Number(app.renderer.height || 0) * 0.5) | 0);
+        try {
+            browserContext.setActiveCursor?.(bootPid);
+            browserContext.openContextMenu(bootPid, cx, cy, null);
+            console.log(`[context-menu] boot-open pid=${bootPid} x=${cx} y=${cy} ok=${browserContext.isContextMenuOpen?.(bootPid) ? 1 : 0}`);
+            requestPaint?.();
+        }
+        catch (err) {
+            console.log(`[context-menu] boot-open-fail pid=${bootPid} err=${String(err)}`);
+        }
+    }
+
     // Start cursor-plane updates only after the first full scene paint.
     // This avoids brief startup flicker while text atlas and base frame settle.
     startCursorPlaneTick();
@@ -2635,65 +2289,17 @@ export async function startGui() {
             mouseCursorG.position.set(p1.x, p1.y);
     }
     const updateUserCursorOverlays = () => {
-        // Prefer kernel-owned cursor position when available.
-        let kernelButtons = 0;
-        let kernelEventSeq = 0;
-        let kernelWheelDelta = 0;
+        const KERNEL_CURSOR_IDS = [1, 2, 3, 4];
+        // HID mouse button bits are typically: 0=left, 1=right, 2=middle, 3=back, 4=forward.
+        // DOM/Pixi button codes use: 0=left, 1=middle, 2=right, 3=back, 4=forward.
+        const KERNEL_BIT_TO_BUTTON = [0, 2, 1, 3, 4];
         let didStateChange = false;
-        try {
-            const x = Number(browserContext.getCursorX(USER_POINTER_ID));
-            const y = Number(browserContext.getCursorY(USER_POINTER_ID));
-            kernelButtons = Number(browserContext.getCursorButtons?.(USER_POINTER_ID) ?? 0) | 0;
-            kernelEventSeq = Number(browserContext.getCursorEventSeq?.(USER_POINTER_ID) ?? 0) | 0;
-            kernelWheelDelta = Number(browserContext.consumeCursorWheel?.(USER_POINTER_ID) ?? 0) | 0;
-            const worldW = Math.max(1, Number(app.screen?.width ?? 1) || 1);
-            const worldH = Math.max(1, Number(app.screen?.height ?? 1) || 1);
-            const pixelW = Math.max(1, Number(app.renderer?.width ?? 1) || 1);
-            const pixelH = Math.max(1, Number(app.renderer?.height ?? 1) || 1);
-            const scaleDownX = worldW / pixelW;
-            const scaleDownY = worldH / pixelH;
-            // Ignore uninitialized kernel coordinates (commonly 0,0) so local pointer state stays visible.
-            let wx = x;
-            let wy = y;
-            const looksWorld = Number.isFinite(x) && Number.isFinite(y) && x >= 1 && y >= 1 && x <= (worldW - 1) && y <= (worldH - 1);
-            const looksPixel = Number.isFinite(x) && Number.isFinite(y) && x >= 1 && y >= 1 && x <= (pixelW - 1) && y <= (pixelH - 1);
-            if (!looksWorld && looksPixel) {
-                wx = x * scaleDownX;
-                wy = y * scaleDownY;
-            }
-            const kernelLooksValid = Number.isFinite(wx) && Number.isFinite(wy) && wx >= 1 && wy >= 1 && wx <= (worldW - 1) && wy <= (worldH - 1);
-            if (kernelLooksValid) {
-                uiState.userCursorPos.set(USER_POINTER_ID, { x: wx, y: wy });
-            }
+        const worldW = Math.max(1, Number(app.screen?.width ?? 1) || 1);
+        const worldH = Math.max(1, Number(app.screen?.height ?? 1) || 1);
+        const pixelW = Math.max(1, Number(app.renderer?.width ?? 1) || 1);
+        const pixelH = Math.max(1, Number(app.renderer?.height ?? 1) || 1);
+        const debugById = {};
 
-            if (kernelWheelDelta !== 0) {
-                const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
-                if (maxScroll > 0) {
-                    const px = (-kernelWheelDelta) * 48;
-                    uiState.scroll.y = Math.max(0, Math.min(maxScroll, uiState.scroll.y + px));
-                    didStateChange = true;
-                    requestPaint?.(GLOBAL_SCROLL_DIRTY_KEY);
-                }
-            }
-        }
-        catch {
-            // Keep local fallback behavior when browser_context query is unavailable.
-        }
-        // Keep overlays and hover state in sync with uiState.userCursorPos.
-        const p1 = uiState.userCursorPos.get(USER_POINTER_ID);
-        if (p1) {
-            mouseCursorG.visible = true;
-            mouseCursorG.position.set(p1.x, p1.y);
-            // Fallback bridge for cmd-stream cursor heartbeat overlay.
-            globalThis.__trueosCursorDebug = {
-                x: Number(p1.x) || 0,
-                y: Number(p1.y) || 0,
-                seq: kernelEventSeq,
-                wheel: kernelWheelDelta,
-                buttons: kernelButtons,
-                visible: true,
-            };
-        }
         const findHover = (x, y) => {
             let hitKey = null;
             let hitCursor = null;
@@ -2707,10 +2313,103 @@ export async function startGui() {
             }
             return { hitKey, hitCursor };
         };
-        if (p1) {
-            const prevHitKey = uiState.hoveredKeyByPointer.get(USER_POINTER_ID) ?? null;
-            const prevButtons = Number(uiState.kernelButtonsByPointer.get(USER_POINTER_ID) ?? 0) | 0;
-            const { hitKey, hitCursor } = findHover(p1.x, p1.y);
+
+        for (let i = 0; i < KERNEL_CURSOR_IDS.length; i++) {
+            const pid = KERNEL_CURSOR_IDS[i];
+            let kernelButtons = 0;
+            let kernelEventSeq = 0;
+            let kernelWheelDelta = 0;
+            let hasKernelState = false;
+
+            try {
+                const x = Number(browserContext.getCursorX(pid));
+                const y = Number(browserContext.getCursorY(pid));
+                kernelButtons = Number(browserContext.getCursorButtons?.(pid) ?? 0) | 0;
+                kernelEventSeq = Number(browserContext.getCursorEventSeq?.(pid) ?? 0) | 0;
+                kernelWheelDelta = Number(browserContext.consumeCursorWheel?.(pid) ?? 0) | 0;
+                hasKernelState = true;
+
+                // Ignore uninitialized kernel coordinates (commonly 0,0) so local pointer state stays visible.
+                // Kernel coordinates can be reported in either "world" or renderer pixel space.
+                // When both look valid, pick the mapping closest to the recent UI cursor anchor.
+                const looksWorld = Number.isFinite(x) && Number.isFinite(y) && x >= 1 && y >= 1 && x <= (worldW - 1) && y <= (worldH - 1);
+                const looksPixel = Number.isFinite(x) && Number.isFinite(y) && x >= 1 && y >= 1 && x <= (pixelW - 1) && y <= (pixelH - 1);
+                const scaledX = looksWorld ? (x / worldW) * pixelW : Number.NaN;
+                const scaledY = looksWorld ? (y / worldH) * pixelH : Number.NaN;
+                const rawValid = looksPixel;
+                const scaledValid = Number.isFinite(scaledX) && Number.isFinite(scaledY)
+                    && scaledX >= 1 && scaledY >= 1 && scaledX <= (pixelW - 1) && scaledY <= (pixelH - 1);
+                let px = x;
+                let py = y;
+                if (rawValid && scaledValid) {
+                    const prev = uiState.userCursorPos.get(pid);
+                    const anchorX = Number((pid === USER_POINTER_ID && uiState.lastMouse?.has)
+                        ? uiState.lastMouse.x
+                        : (prev?.x ?? x));
+                    const anchorY = Number((pid === USER_POINTER_ID && uiState.lastMouse?.has)
+                        ? uiState.lastMouse.y
+                        : (prev?.y ?? y));
+                    const dRaw = Math.abs(x - anchorX) + Math.abs(y - anchorY);
+                    const dScaled = Math.abs(scaledX - anchorX) + Math.abs(scaledY - anchorY);
+                    if (dScaled < dRaw) {
+                        px = scaledX;
+                        py = scaledY;
+                    }
+                }
+                else if (scaledValid) {
+                    px = scaledX;
+                    py = scaledY;
+                }
+                const kernelLooksValid = Number.isFinite(px) && Number.isFinite(py) && px >= 1 && py >= 1 && px <= (pixelW - 1) && py <= (pixelH - 1);
+                if (kernelLooksValid) {
+                    uiState.userCursorPos.set(pid, { x: px, y: py });
+                }
+
+                // Keep global scroll ownership simple for now: primary cursor wheel.
+                if (pid === USER_POINTER_ID && kernelWheelDelta !== 0) {
+                    const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
+                    if (maxScroll > 0) {
+                        const pxWheel = (-kernelWheelDelta) * 48;
+                        uiState.scroll.y = Math.max(0, Math.min(maxScroll, uiState.scroll.y + pxWheel));
+                        didStateChange = true;
+                        requestPaint?.(GLOBAL_SCROLL_DIRTY_KEY);
+                    }
+                }
+            }
+            catch {
+                // Keep local fallback behavior when browser_context query is unavailable.
+                hasKernelState = false;
+            }
+
+            const pos = uiState.userCursorPos.get(pid);
+            if (!pos)
+                continue;
+
+            if (pid === USER_POINTER_ID) {
+                mouseCursorG.visible = true;
+                mouseCursorG.position.set(pos.x, pos.y);
+                // Back-compat single-cursor bridge for existing logs/tooling.
+                globalThis.__trueosCursorDebug = {
+                    x: Number(pos.x) || 0,
+                    y: Number(pos.y) || 0,
+                    seq: kernelEventSeq,
+                    wheel: kernelWheelDelta,
+                    buttons: kernelButtons,
+                    visible: true,
+                };
+            }
+            debugById[pid] = {
+                x: Number(pos.x) || 0,
+                y: Number(pos.y) || 0,
+                seq: kernelEventSeq,
+                wheel: kernelWheelDelta,
+                buttons: kernelButtons,
+                visible: true,
+            };
+
+            const prevHitKey = uiState.hoveredKeyByPointer.get(pid) ?? null;
+            const prevButtons = Number(uiState.kernelButtonsByPointer.get(pid) ?? 0) | 0;
+            const { hitKey, hitCursor } = findHover(pos.x, pos.y);
 
             if (hitKey !== prevHitKey) {
                 const prevHandlers = prevHitKey ? uiState.hoverHandlers.get(prevHitKey) : null;
@@ -2725,43 +2424,73 @@ export async function startGui() {
                 }
             }
 
-            const leftMask = 1;
-            const prevDown = (prevButtons & leftMask) !== 0;
-            const nowDown = (kernelButtons & leftMask) !== 0;
-            if (!prevDown && nowDown) {
-                const targetHandlers = hitKey ? uiState.hoverHandlers.get(hitKey) : null;
-                try {
-                    logCursorButtonEvent('down', USER_POINTER_ID, 0, p1.x, p1.y);
-                    browserContext.routePointerDown(USER_POINTER_ID, p1.x, p1.y, null, 0);
-                    targetHandlers?.down?.();
-                    didStateChange = true;
+            const targetHandlers = hitKey ? uiState.hoverHandlers.get(hitKey) : null;
+            let sawAnyUp = false;
+            if (hasKernelState) {
+                for (let bit = 0; bit < KERNEL_BIT_TO_BUTTON.length; bit++) {
+                    const mask = (1 << bit);
+                    const prevDown = (prevButtons & mask) !== 0;
+                    const nowDown = (kernelButtons & mask) !== 0;
+                    if (prevDown === nowDown)
+                        continue;
+                    const button = KERNEL_BIT_TO_BUTTON[bit] ?? bit;
+                    if (nowDown) {
+                        try {
+                            logCursorButtonEvent('down', pid, button, pos.x, pos.y);
+                            if (button === 2) {
+                                // Mirror stage right-click behavior for kernel-fed cursors.
+                                browserContext.openContextMenu(pid, pos.x, pos.y, null);
+                                requestPaint?.();
+                            }
+                            else {
+                                browserContext.routePointerDown(pid, pos.x, pos.y, null, button);
+                                if (button === 0)
+                                    targetHandlers?.down?.();
+                            }
+                            didStateChange = true;
+                        }
+                        catch {
+                            // Keep kernel fallback resilient when browser_context is unavailable.
+                        }
+                    }
+                    else {
+                        sawAnyUp = true;
+                        try {
+                            logCursorButtonEvent('up', pid, button, pos.x, pos.y);
+                            if (button === 0)
+                                targetHandlers?.up?.();
+                            didStateChange = true;
+                        }
+                        catch {
+                            // Keep kernel fallback resilient when browser_context is unavailable.
+                        }
+                    }
                 }
-                catch {
-                    // Keep kernel fallback resilient when browser_context is unavailable.
+
+                if (sawAnyUp) {
+                    try {
+                        browserContext.routePointerUp(pid, pos.x, pos.y, null);
+                    }
+                    catch {
+                        // Keep kernel fallback resilient when browser_context is unavailable.
+                    }
                 }
-            }
-            else if (prevDown && !nowDown) {
-                const targetHandlers = hitKey ? uiState.hoverHandlers.get(hitKey) : null;
-                try {
-                    logCursorButtonEvent('up', USER_POINTER_ID, 0, p1.x, p1.y);
-                    browserContext.routePointerUp(USER_POINTER_ID, p1.x, p1.y, null);
-                    targetHandlers?.up?.();
-                    didStateChange = true;
-                }
-                catch {
-                    // Keep kernel fallback resilient when browser_context is unavailable.
-                }
+                uiState.kernelButtonsByPointer.set(pid, kernelButtons);
             }
 
-            uiState.hoveredKeyByPointer.set(USER_POINTER_ID, hitKey);
-            uiState.hoveredCursorByPointer.set(USER_POINTER_ID, hitCursor);
-            uiState.kernelButtonsByPointer.set(USER_POINTER_ID, kernelButtons);
-            const isActive = uiState.textDrags.has(USER_POINTER_ID)
-                || uiState.sliderDrags.has(USER_POINTER_ID)
-                || uiState.dialogDrags.has(USER_POINTER_ID)
-                || (kernelButtons & 0xFF) !== 0;
-            mouseCursorG.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
+            uiState.hoveredKeyByPointer.set(pid, hitKey);
+            uiState.hoveredCursorByPointer.set(pid, hitCursor);
+
+            if (pid === USER_POINTER_ID) {
+                const isActive = uiState.textDrags.has(pid)
+                    || uiState.sliderDrags.has(pid)
+                    || uiState.dialogDrags.has(pid)
+                    || (kernelButtons & 0xFF) !== 0;
+                mouseCursorG.rotation = hitCursor != null || isActive ? Math.PI / 4 : 0;
+            }
         }
+
+        globalThis.__trueosCursorDebugById = debugById;
         // Only present when UI/hover visuals changed.
         if (didStateChange) {
             requestPresent();
