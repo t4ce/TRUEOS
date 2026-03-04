@@ -54,7 +54,6 @@ static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
 static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_PMA: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_BLEND_ENABLED: AtomicU32 = AtomicU32::new(1);
-static CMD_STREAM_FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
 static CMD_STREAM_NEXT_TEX_ID: AtomicU32 = AtomicU32::new(16);
 static CMD_STREAM_TEX_IDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 static CMD_STREAM_ATLAS_TRACE_LOGS: AtomicU32 = AtomicU32::new(0);
@@ -104,7 +103,6 @@ static CMD_STREAM_ATLAS_META_LARGE: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> 
 struct CmdStreamAtlasTexRecord {
     tex_id: u32,
     kind: u32,
-    last_refresh_frame: u32,
 }
 
 static CMD_STREAM_ATLAS_TEX_RECS: Mutex<Vec<CmdStreamAtlasTexRecord>> = Mutex::new(Vec::new());
@@ -346,31 +344,25 @@ fn cmd_stream_mark_atlas_tex(tex_id: u32, kind: u32) {
     let mut recs = CMD_STREAM_ATLAS_TEX_RECS.lock();
     if let Some(rec) = recs.iter_mut().find(|r| r.tex_id == tex_id) {
         rec.kind = kind;
-        rec.last_refresh_frame = 0;
         return;
     }
-    recs.push(CmdStreamAtlasTexRecord {
-        tex_id,
-        kind,
-        last_refresh_frame: 0,
-    });
+    recs.push(CmdStreamAtlasTexRecord { tex_id, kind });
 }
 
 #[inline]
-fn cmd_stream_refresh_atlas_tex_if_needed(tex_id: u32) {
-    let frame = CMD_STREAM_FRAME_SEQ.load(Ordering::Relaxed);
+fn cmd_stream_refresh_atlas_tex_if_needed(tex_id: u32, requested_kind: u32) {
     let mut recs = CMD_STREAM_ATLAS_TEX_RECS.lock();
     let Some(rec) = recs.iter_mut().find(|r| r.tex_id == tex_id) else {
         return;
     };
-    if rec.last_refresh_frame == frame {
+    if rec.kind == requested_kind {
         return;
     }
-    let Some(atlas) = cmd_stream_select_atlas(rec.kind) else {
+    let Some(atlas) = cmd_stream_select_atlas(requested_kind) else {
         return;
     };
     if cmd_stream_upload_atlas_to_tex(tex_id, atlas) {
-        rec.last_refresh_frame = frame;
+        rec.kind = requested_kind;
     }
 }
 
@@ -623,7 +615,6 @@ pub(crate) unsafe fn try_create_native_module(
             if !cmd_stream_owner_is_pixi() {
                 return qjs::JSValue::undefined();
             }
-            let _ = CMD_STREAM_FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
             cmd_stream_clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
             let _ = trueos_cabi_gfx_begin_frame(clear);
@@ -1265,8 +1256,8 @@ pub(crate) unsafe fn try_create_native_module(
             if tex_id == 0 {
                 return qjs::JSValue::undefined();
             }
-            cmd_stream_refresh_atlas_tex_if_needed(tex_id);
             let kind = (kind_f as i64).max(0) as u32;
+            cmd_stream_refresh_atlas_tex_if_needed(tex_id, kind);
 
             let mut text_len: usize = 0;
             let text_c = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[4], 0);
