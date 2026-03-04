@@ -20,6 +20,7 @@ use spin::Mutex;
 const MAX_REPORT_DESC: usize = 512;
 const HID_MOUSE_RING_CAP: usize = 2048;
 const HID_TABLET_RING_CAP: usize = 512;
+const HID_CURSOR_EVENT_CAP: usize = 256;
 const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
 const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
@@ -48,6 +49,42 @@ pub struct TrueosHidTabletSample {
     pub y: u16,
     pub flags: u8,
 }
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidCursorEvent {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u8,
+    pub reserved0: u8,
+    pub reserved1: u16,
+    pub buttons_down: u32,
+    pub wheel: i16,
+    pub reserved2: u16,
+    pub x: f64,
+    pub y: f64,
+    pub flags: u32,
+}
+
+const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
+    t_ms: 0,
+    seq: 0,
+    controller_id: 0,
+    slot_id: 0,
+    ep_target: 0,
+    hid_kind: 0,
+    reserved0: 0,
+    reserved1: 0,
+    buttons_down: 0,
+    wheel: 0,
+    reserved2: 0,
+    x: 0.0,
+    y: 0.0,
+    flags: 0,
+};
 
 const ZERO_MOUSE_SAMPLE: TrueosHidMouseSample = TrueosHidMouseSample {
     t_ms: 0,
@@ -196,6 +233,18 @@ pub fn mouse_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     out
 }
 
+pub fn mouse_cursor_snapshot_with_buttons() -> heapless::Vec<(f64, f64, u32), MAX_HID_DEVICES> {
+    let guard = HID_RUNTIMES.lock();
+    let mut out: heapless::Vec<(f64, f64, u32), MAX_HID_DEVICES> = heapless::Vec::new();
+    for rt in guard.iter() {
+        if rt.hid_kind != 2 {
+            continue;
+        }
+        let _ = out.push((rt.mouse_x, rt.mouse_y, rt.mouse_buttons_down));
+    }
+    out
+}
+
 pub fn tablet_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
     let guard = HID_RUNTIMES.lock();
     let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
@@ -301,6 +350,7 @@ pub struct HidRuntime {
 
     mouse_x: f64,
     mouse_y: f64,
+    mouse_buttons_down: u32,
 
     tablet_ring: TabletRing,
     tablet_x: f64,
@@ -314,6 +364,90 @@ unsafe impl Sync for HidRuntime {}
 const MAX_HID_DEVICES: usize = 16;
 const MAX_HID_INTERFACES: usize = 8;
 static HID_RUNTIMES: Mutex<Vec<HidRuntime, MAX_HID_DEVICES>> = Mutex::new(Vec::new());
+
+// Global cursor history ring: multi-producer (multiple active cursors/devices)
+// and multi-consumer (each reader tracks its own sequence) without interference.
+#[derive(Copy, Clone, Debug)]
+struct CursorEventRing {
+    buf: [TrueosHidCursorEvent; HID_CURSOR_EVENT_CAP],
+    write_seq: u64,
+}
+
+impl CursorEventRing {
+    const fn new() -> Self {
+        Self {
+            buf: [ZERO_CURSOR_EVENT; HID_CURSOR_EVENT_CAP],
+            write_seq: 0,
+        }
+    }
+}
+
+static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::new());
+static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
+
+#[inline]
+fn push_cursor_event(mut evt: TrueosHidCursorEvent) {
+    let mut ring = CURSOR_EVENT_RING.lock();
+    ring.write_seq = ring.write_seq.wrapping_add(1);
+    let seq = ring.write_seq;
+    evt.seq = seq as u32;
+    let idx = ((seq - 1) as usize) % HID_CURSOR_EVENT_CAP;
+    ring.buf[idx] = evt;
+}
+
+pub fn read_cursor_events_since(
+    read_seq: u64,
+    out: &mut [TrueosHidCursorEvent],
+) -> (u64, u32, usize) {
+    let ring = CURSOR_EVENT_RING.lock();
+    if ring.write_seq == 0 || out.is_empty() {
+        return (read_seq, 0, 0);
+    }
+
+    let cap = HID_CURSOR_EVENT_CAP as u64;
+    let oldest = if ring.write_seq > cap {
+        ring.write_seq - cap + 1
+    } else {
+        1
+    };
+
+    let mut start = read_seq.wrapping_add(1);
+    let mut dropped = 0u32;
+    if start < oldest {
+        dropped = core::cmp::min(u32::MAX as u64, oldest - start) as u32;
+        start = oldest;
+    }
+    if start > ring.write_seq {
+        return (read_seq, dropped, 0);
+    }
+
+    let mut wrote = 0usize;
+    let mut seq = start;
+    while seq <= ring.write_seq && wrote < out.len() {
+        let idx = ((seq - 1) as usize) % HID_CURSOR_EVENT_CAP;
+        out[wrote] = ring.buf[idx];
+        wrote += 1;
+        seq = seq.wrapping_add(1);
+    }
+
+    let next_seq = if wrote == 0 {
+        read_seq
+    } else {
+        start + (wrote as u64) - 1
+    };
+    (next_seq, dropped, wrote)
+}
+
+pub fn pop_cursor_event() -> Option<TrueosHidCursorEvent> {
+    let mut seq = CURSOR_EVENT_POP_SEQ.lock();
+    let mut one = [ZERO_CURSOR_EVENT; 1];
+    let (next_seq, _dropped, wrote) = read_cursor_events_since(*seq, &mut one);
+    if wrote == 0 {
+        return None;
+    }
+    *seq = next_seq;
+    Some(one[0])
+}
 
 pub(crate) fn ep0_state_for_slot(controller_id: usize, slot_id: u32) -> Option<TrbRingState> {
     let guard = HID_RUNTIMES.lock();
@@ -424,6 +558,8 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
             let dx = i8::from_le_bytes([data[1]]);
             let dy = i8::from_le_bytes([data[2]]);
             let wheel = i8::from_le_bytes([data[3]]);
+            let prev_buttons = runtime.mouse_buttons_down;
+            runtime.mouse_buttons_down = u32::from(buttons);
 
             if dx != 0 || dy != 0 {
                 runtime.mouse_x = clamp01(runtime.mouse_x + (dx as f64) * HID_MOUSE_NORM_PER_DELTA);
@@ -439,6 +575,34 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 dy,
                 wheel,
                 flags: 1 << 0,
+            });
+
+            let mut flags = 0u32;
+            if dx != 0 || dy != 0 {
+                flags |= 1 << 0;
+            }
+            if wheel != 0 {
+                flags |= 1 << 1;
+            }
+            if runtime.mouse_buttons_down != prev_buttons {
+                flags |= 1 << 2;
+            }
+
+            push_cursor_event(TrueosHidCursorEvent {
+                t_ms: hid_uptime_ms() as u32,
+                seq: runtime.seq as u32,
+                controller_id: runtime.controller_id as u32,
+                slot_id: runtime.slot_id,
+                ep_target: runtime.ep_target,
+                hid_kind: runtime.hid_kind,
+                reserved0: 0,
+                reserved1: 0,
+                buttons_down: runtime.mouse_buttons_down,
+                wheel: wheel as i16,
+                reserved2: 0,
+                x: runtime.mouse_x,
+                y: runtime.mouse_y,
+                flags,
             });
         }
     } else if runtime.hid_kind == 3 {
@@ -539,6 +703,23 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 x,
                 y,
                 flags: 0,
+            });
+
+            push_cursor_event(TrueosHidCursorEvent {
+                t_ms: now_ms,
+                seq: runtime.seq as u32,
+                controller_id: runtime.controller_id as u32,
+                slot_id: runtime.slot_id,
+                ep_target: runtime.ep_target,
+                hid_kind: runtime.hid_kind,
+                reserved0: 0,
+                reserved1: 0,
+                buttons_down: u32::from(buttons),
+                wheel: 0,
+                reserved2: 0,
+                x: runtime.tablet_x,
+                y: runtime.tablet_y,
+                flags: (1 << 0) | (1 << 2),
             });
         }
     } else {
@@ -1019,6 +1200,7 @@ pub async fn attach_hid_devices(params: BootAttachParams<'_>) -> Result<usize, (
             mouse_ring: MouseRing::new(),
             mouse_x: 0.5,
             mouse_y: 0.5,
+            mouse_buttons_down: 0,
 
             tablet_ring: TabletRing::new(),
             tablet_x: 0.5,
