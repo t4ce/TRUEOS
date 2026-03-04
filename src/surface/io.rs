@@ -838,6 +838,19 @@ pub mod cabi {
         frame_draws: Vec<PendingDraw>,
         frame_rgb_blob: Vec<u8>,
         frame_tex_blob: Vec<u8>,
+        cursor_frame_active: bool,
+        cursor_frame_seq: u32,
+        cursor_rgb_draws: u32,
+        cursor_tex_draws: u32,
+        cursor_draw_bytes: usize,
+        cursor_draws: Vec<PendingDraw>,
+        cursor_rgb_blob: Vec<u8>,
+        cursor_tex_blob: Vec<u8>,
+        base_cache_valid: bool,
+        base_cache_clear_rgb: u32,
+        base_cache_draws: Vec<PendingDraw>,
+        base_cache_rgb_blob: Vec<u8>,
+        base_cache_tex_blob: Vec<u8>,
         // Current sampler state (set by the WebGL shim) that will be captured per textured draw.
         cur_sampler: SamplerDesc,
         // Current blend state (set by the WebGL shim) that will be captured per draw.
@@ -852,6 +865,7 @@ pub mod cabi {
         height: u32,
     }
 
+    #[derive(Clone, Copy)]
     enum PendingDraw {
         Rgb {
             blob_offset: usize,
@@ -898,6 +912,19 @@ pub mod cabi {
                 frame_draws: Vec::new(),
                 frame_rgb_blob: Vec::new(),
                 frame_tex_blob: Vec::new(),
+                cursor_frame_active: false,
+                cursor_frame_seq: 0,
+                cursor_rgb_draws: 0,
+                cursor_tex_draws: 0,
+                cursor_draw_bytes: 0,
+                cursor_draws: Vec::new(),
+                cursor_rgb_blob: Vec::new(),
+                cursor_tex_blob: Vec::new(),
+                base_cache_valid: false,
+                base_cache_clear_rgb: 0x00ff_ffff,
+                base_cache_draws: Vec::new(),
+                base_cache_rgb_blob: Vec::new(),
+                base_cache_tex_blob: Vec::new(),
                 cur_sampler: SamplerDesc {
                     wrap_s: SamplerWrap::ClampToEdge,
                     wrap_t: SamplerWrap::ClampToEdge,
@@ -1048,6 +1075,18 @@ pub mod cabi {
             st.frame_draws.clear();
             st.frame_rgb_blob.clear();
             st.frame_tex_blob.clear();
+            st.cursor_frame_active = false;
+            st.cursor_frame_seq = 0;
+            st.cursor_rgb_draws = 0;
+            st.cursor_tex_draws = 0;
+            st.cursor_draw_bytes = 0;
+            st.cursor_draws.clear();
+            st.cursor_rgb_blob.clear();
+            st.cursor_tex_blob.clear();
+            st.base_cache_valid = false;
+            st.base_cache_draws.clear();
+            st.base_cache_rgb_blob.clear();
+            st.base_cache_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -1136,6 +1175,18 @@ pub mod cabi {
             st.frame_draws.clear();
             st.frame_rgb_blob.clear();
             st.frame_tex_blob.clear();
+            st.cursor_frame_active = false;
+            st.cursor_frame_seq = 0;
+            st.cursor_rgb_draws = 0;
+            st.cursor_tex_draws = 0;
+            st.cursor_draw_bytes = 0;
+            st.cursor_draws.clear();
+            st.cursor_rgb_blob.clear();
+            st.cursor_tex_blob.clear();
+            st.base_cache_valid = false;
+            st.base_cache_draws.clear();
+            st.base_cache_rgb_blob.clear();
+            st.base_cache_tex_blob.clear();
             st.epoch = epoch;
         }
         if !st.swapchain_configured || st.swapchain_desc != desired_swap {
@@ -1339,6 +1390,18 @@ pub mod cabi {
                 st.frame_draws.clear();
                 st.frame_rgb_blob.clear();
                 st.frame_tex_blob.clear();
+                st.cursor_frame_active = false;
+                st.cursor_frame_seq = 0;
+                st.cursor_rgb_draws = 0;
+                st.cursor_tex_draws = 0;
+                st.cursor_draw_bytes = 0;
+                st.cursor_draws.clear();
+                st.cursor_rgb_blob.clear();
+                st.cursor_tex_blob.clear();
+                st.base_cache_valid = false;
+                st.base_cache_draws.clear();
+                st.base_cache_rgb_blob.clear();
+                st.base_cache_tex_blob.clear();
                 st.epoch = epoch;
             }
             let images = st.tex_images.get_or_insert_with(Vec::new);
@@ -1865,12 +1928,547 @@ pub mod cabi {
             return -12;
         };
 
+        if ret == 0 {
+            let mut st = GFX_CABI_STATE.lock();
+            st.base_cache_valid = true;
+            st.base_cache_clear_rgb = clear_rgb;
+            st.base_cache_draws = draws.clone();
+            st.base_cache_rgb_blob = rgb_src.clone();
+            st.base_cache_tex_blob = tex_src.clone();
+        }
+
         if seq <= 10 || (seq % 20) == 0 {
             crate::globalog::log(format_args!(
                 "gfx-cabi: end seq={} rgb={} tex={} bytes={} rc={}\n",
                 seq, rgb_draws, tex_draws, draw_bytes, ret
             ));
         }
+        ret
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_cursor_begin_frame() -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        let mut st = GFX_CABI_STATE.lock();
+        st.cursor_frame_seq = st.cursor_frame_seq.wrapping_add(1);
+        st.cursor_frame_active = true;
+        st.cursor_rgb_draws = 0;
+        st.cursor_tex_draws = 0;
+        st.cursor_draw_bytes = 0;
+        st.cursor_draws.clear();
+        st.cursor_rgb_blob.clear();
+        st.cursor_tex_blob.clear();
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32 {
+        if vtx_ptr.is_null() {
+            return if vtx_len == 0 { 0 } else { -1 };
+        }
+        if vtx_len == 0 {
+            return 0;
+        }
+        const VTX_SIZE: usize = 12;
+        let usable = vtx_len - (vtx_len % VTX_SIZE);
+        if usable == 0 {
+            return -2;
+        }
+        let vcount = (usable / VTX_SIZE) as u32;
+        if vcount == 0 {
+            return 0;
+        }
+        let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.cursor_frame_active {
+            return -3;
+        }
+        st.cursor_rgb_draws = st.cursor_rgb_draws.saturating_add(1);
+        st.cursor_draw_bytes = st.cursor_draw_bytes.saturating_add(usable);
+        let blend = st.cur_blend;
+        let mut off = 0usize;
+        while off < usable {
+            let rem = usable - off;
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            let blob_offset = st.cursor_rgb_blob.len();
+            st.cursor_rgb_blob
+                .extend_from_slice(&bytes[off..off + chunk]);
+            st.cursor_draws.push(PendingDraw::Rgb {
+                blob_offset,
+                blob_len: chunk,
+                blend,
+            });
+            off += chunk;
+        }
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
+        tex_id: u32,
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32 {
+        if tex_id == 0 {
+            return -1;
+        }
+        if vtx_ptr.is_null() {
+            return if vtx_len == 0 { 0 } else { -2 };
+        }
+        if vtx_len == 0 {
+            return 0;
+        }
+        const VTX_SIZE: usize = 20;
+        let usable = vtx_len - (vtx_len % VTX_SIZE);
+        if usable == 0 {
+            return -3;
+        }
+        let vcount = (usable / VTX_SIZE) as u32;
+        if vcount == 0 {
+            return 0;
+        }
+        let bytes = core::slice::from_raw_parts(vtx_ptr, usable);
+        let mut st = GFX_CABI_STATE.lock();
+        if !st.cursor_frame_active {
+            return -4;
+        }
+        st.cursor_tex_draws = st.cursor_tex_draws.saturating_add(1);
+        st.cursor_draw_bytes = st.cursor_draw_bytes.saturating_add(usable);
+        let idx = tex_id.saturating_sub(1) as usize;
+        let image = st
+            .tex_images
+            .as_ref()
+            .and_then(|images| images.get(idx))
+            .and_then(|e| e.as_ref())
+            .map(|e| e.image)
+            .unwrap_or(ImageId::invalid());
+        let sampler = st.cur_sampler;
+        let blend = st.cur_blend;
+        let mut off = 0usize;
+        while off < usable {
+            let rem = usable - off;
+            let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
+            let chunk = chunk - (chunk % VTX_SIZE);
+            if chunk == 0 {
+                break;
+            }
+            let blob_offset = st.cursor_tex_blob.len();
+            st.cursor_tex_blob
+                .extend_from_slice(&bytes[off..off + chunk]);
+            st.cursor_draws.push(PendingDraw::Tex {
+                tex_id,
+                image,
+                sampler,
+                blob_offset,
+                blob_len: chunk,
+                blend,
+            });
+            off += chunk;
+        }
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        let (_seq, was_active, cursor_draws, cursor_rgb_src, cursor_tex_src) = {
+            let mut st = GFX_CABI_STATE.lock();
+            let out = (
+                st.cursor_frame_seq,
+                st.cursor_frame_active,
+                core::mem::take(&mut st.cursor_draws),
+                core::mem::take(&mut st.cursor_rgb_blob),
+                core::mem::take(&mut st.cursor_tex_blob),
+            );
+            st.cursor_frame_active = false;
+            out
+        };
+        if !was_active {
+            return -3;
+        }
+
+        let (base_valid, base_clear_rgb, base_draws, base_rgb_src, base_tex_src) = {
+            let st = GFX_CABI_STATE.lock();
+            (
+                st.base_cache_valid,
+                st.base_cache_clear_rgb,
+                st.base_cache_draws.clone(),
+                st.base_cache_rgb_blob.clone(),
+                st.base_cache_tex_blob.clone(),
+            )
+        };
+
+        let Some(ret) = crate::gfx::with_context(|ctx| {
+            let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
+                Some(v) => v,
+                None => return -1,
+            };
+            let swap = ctx.swapchain_desc();
+            let vp = Viewport {
+                x: 0,
+                y: 0,
+                width: swap.extent.width as i32,
+                height: swap.extent.height as i32,
+            };
+
+            const MAX_PASS_VERTEX_BYTES: usize = 96 * 1024;
+
+            enum Plan {
+                Rgb {
+                    offset: u64,
+                    vcount: u32,
+                    blend: BlendDesc,
+                },
+                Tex {
+                    tex_id: u32,
+                    image: ImageId,
+                    sampler: SamplerDesc,
+                    offset: u64,
+                    vcount: u32,
+                    blend: BlendDesc,
+                },
+            }
+
+            let mut draws: Vec<PendingDraw> = Vec::new();
+            let mut rgb_src: Vec<u8> = Vec::new();
+            let mut tex_src: Vec<u8> = Vec::new();
+
+            let mut append_draw_stream =
+                |src_draws: &[PendingDraw], src_rgb: &[u8], src_tex: &[u8]| {
+                    for d in src_draws.iter() {
+                        match *d {
+                            PendingDraw::Rgb {
+                                blob_offset,
+                                blob_len,
+                                blend,
+                            } => {
+                                let start = blob_offset;
+                                let end = start.saturating_add(blob_len);
+                                if end > src_rgb.len() {
+                                    continue;
+                                }
+                                let new_off = rgb_src.len();
+                                rgb_src.extend_from_slice(&src_rgb[start..end]);
+                                draws.push(PendingDraw::Rgb {
+                                    blob_offset: new_off,
+                                    blob_len,
+                                    blend,
+                                });
+                            }
+                            PendingDraw::Tex {
+                                tex_id,
+                                image,
+                                sampler,
+                                blob_offset,
+                                blob_len,
+                                blend,
+                            } => {
+                                let start = blob_offset;
+                                let end = start.saturating_add(blob_len);
+                                if end > src_tex.len() {
+                                    continue;
+                                }
+                                let new_off = tex_src.len();
+                                tex_src.extend_from_slice(&src_tex[start..end]);
+                                draws.push(PendingDraw::Tex {
+                                    tex_id,
+                                    image,
+                                    sampler,
+                                    blob_offset: new_off,
+                                    blob_len,
+                                    blend,
+                                });
+                            }
+                        }
+                    }
+                };
+
+            if base_valid {
+                append_draw_stream(
+                    base_draws.as_slice(),
+                    base_rgb_src.as_slice(),
+                    base_tex_src.as_slice(),
+                );
+            }
+            append_draw_stream(
+                cursor_draws.as_slice(),
+                cursor_rgb_src.as_slice(),
+                cursor_tex_src.as_slice(),
+            );
+
+            let mut draw_idx = 0usize;
+            let mut first_pass = true;
+
+            while draw_idx < draws.len() {
+                let start = draw_idx;
+                let mut pass_bytes = 0usize;
+                let mut pass_kind: u8 = 0;
+                while draw_idx < draws.len() {
+                    let (kind, add) = match &draws[draw_idx] {
+                        PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
+                        PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
+                    };
+                    if add == 0 {
+                        draw_idx += 1;
+                        continue;
+                    }
+                    if pass_kind == 0 {
+                        pass_kind = kind;
+                    } else if kind != pass_kind {
+                        break;
+                    }
+                    if pass_bytes != 0 && pass_bytes.saturating_add(add) > MAX_PASS_VERTEX_BYTES {
+                        break;
+                    }
+                    pass_bytes = pass_bytes.saturating_add(add);
+                    draw_idx += 1;
+                }
+
+                let mut plans: Vec<Plan> = Vec::new();
+                let mut rgb_blob: Vec<u8> = Vec::new();
+                let mut tex_blob: Vec<u8> = Vec::new();
+
+                for draw in draws[start..draw_idx].iter() {
+                    match draw {
+                        PendingDraw::Rgb {
+                            blob_offset,
+                            blob_len,
+                            blend,
+                        } => {
+                            const VTX_SIZE: usize = 12;
+                            let usable = blob_len - (blob_len % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > rgb_src.len() {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = rgb_blob.len() as u64;
+                            rgb_blob.extend_from_slice(&rgb_src[start..end]);
+                            plans.push(Plan::Rgb {
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
+                        }
+                        PendingDraw::Tex {
+                            tex_id,
+                            image,
+                            sampler,
+                            blob_offset,
+                            blob_len,
+                            blend,
+                        } => {
+                            const VTX_SIZE: usize = 20;
+                            let usable = blob_len - (blob_len % VTX_SIZE);
+                            if usable == 0 {
+                                continue;
+                            }
+                            let start = *blob_offset;
+                            let end = start.saturating_add(usable);
+                            if end > tex_src.len() {
+                                continue;
+                            }
+                            let vcount = (usable / VTX_SIZE) as u32;
+                            let off = tex_blob.len() as u64;
+                            tex_blob.extend_from_slice(&tex_src[start..end]);
+                            plans.push(Plan::Tex {
+                                tex_id: *tex_id,
+                                image: *image,
+                                sampler: *sampler,
+                                offset: off,
+                                vcount,
+                                blend: *blend,
+                            });
+                        }
+                    }
+                }
+
+                if plans.is_empty() {
+                    continue;
+                }
+
+                let mut rgb_res: Option<(PipelineId, BufferId)> = None;
+                if !rgb_blob.is_empty() {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources(ctx, rgb_blob.len()) {
+                        Some(v) => v,
+                        None => return -4,
+                    };
+                    if ctx.write_buffer(vbuf, 0, rgb_blob.as_slice()).is_err() {
+                        return -5;
+                    }
+                    rgb_res = Some((pipeline, vbuf));
+                }
+
+                let mut tex_res: Option<(PipelineId, BufferId)> = None;
+                if !tex_blob.is_empty() {
+                    let (pipeline, vbuf, _) = match ensure_gfx_resources_tex(ctx, tex_blob.len()) {
+                        Some(v) => v,
+                        None => return -6,
+                    };
+                    if ctx.write_buffer(vbuf, 0, tex_blob.as_slice()).is_err() {
+                        return -7;
+                    }
+                    tex_res = Some((pipeline, vbuf));
+                }
+
+                let is_last_pass = draw_idx >= draws.len();
+                let mut cmds: Vec<Command> = Vec::new();
+                if first_pass && need_set_viewport {
+                    cmds.push(Command::SetViewport(vp));
+                }
+                if first_pass && base_valid {
+                    cmds.push(Command::ClearColor {
+                        rgb: base_clear_rgb,
+                    });
+                }
+
+                let mut last_blend: Option<BlendDesc> = None;
+
+                for plan in plans.iter() {
+                    match *plan {
+                        Plan::Rgb {
+                            offset,
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = rgb_res else {
+                                return -8;
+                            };
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
+                        }
+                        Plan::Tex {
+                            tex_id,
+                            image,
+                            sampler,
+                            offset,
+                            vcount,
+                            blend,
+                        } => {
+                            if last_blend != Some(blend) {
+                                cmds.push(Command::SetBlend(blend));
+                                last_blend = Some(blend);
+                            }
+                            let Some((pipeline, vbuf)) = tex_res else {
+                                return -9;
+                            };
+                            let (image_id, _log_missing_tex) = if image.is_valid() {
+                                (image, false)
+                            } else {
+                                let mut st = GFX_CABI_STATE.lock();
+                                let idx = tex_id.saturating_sub(1) as usize;
+                                let desc = ImageDesc {
+                                    width: 1,
+                                    height: 1,
+                                    format: ImageFormat::Rgba8888,
+                                };
+                                let Ok(img) = ctx.create_image(desc) else {
+                                    return -10;
+                                };
+                                let white = [255u8, 255u8, 255u8, 255u8];
+                                let _ = ctx.write_image(img, &white);
+                                let images = st.tex_images.get_or_insert_with(Vec::new);
+                                if idx >= images.len() {
+                                    images.resize_with(idx + 1, || None);
+                                }
+                                images[idx] = Some(TexImage {
+                                    image: img,
+                                    width: 1,
+                                    height: 1,
+                                });
+                                (img, false)
+                            };
+                            cmds.push(Command::BindPipeline(pipeline));
+                            cmds.push(Command::SetSampler(sampler));
+                            cmds.push(Command::BindImage(image_id));
+                            cmds.push(Command::BindVertexBuffer {
+                                buffer: vbuf,
+                                offset,
+                            });
+                            cmds.push(Command::Draw {
+                                vertex_count: vcount,
+                                first_vertex: 0,
+                            });
+                        }
+                    }
+                }
+
+                if is_last_pass {
+                    cmds.push(Command::Present);
+                }
+
+                if !check_submit_budget(
+                    rgb_blob.len().saturating_add(tex_blob.len()),
+                    cmds.len(),
+                    "cursor_end_frame_pass",
+                ) {
+                    return -11;
+                }
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                } else {
+                    return -11;
+                }
+                first_pass = false;
+            }
+
+            if first_pass {
+                let mut cmds: Vec<Command> = Vec::new();
+                if need_set_viewport {
+                    cmds.push(Command::SetViewport(vp));
+                }
+                cmds.push(Command::Present);
+                if !check_submit_budget(
+                    rgb_src.len().saturating_add(tex_src.len()),
+                    cmds.len(),
+                    "cursor_end_frame_present_only",
+                ) {
+                    return -11;
+                }
+                let submit_res = ctx.submit(CommandBuffer {
+                    commands: cmds.as_slice(),
+                });
+                if submit_res.is_ok() {
+                    let mut st = GFX_CABI_STATE.lock();
+                    st.ring_idx = (st.ring_idx + 1) % GFX_CABI_VBUF_RING_LEN;
+                    return 0;
+                }
+                return -11;
+            }
+
+            0
+        }) else {
+            return -12;
+        };
+
         ret
     }
 
@@ -2049,6 +2647,80 @@ pub mod cabi {
         *out_x = libm::round(nx * w1) as i32;
         *out_y = libm::round(ny * h1) as i32;
         0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_cursor_buttons(
+        cursor_id: u32,
+        out_buttons_down: *mut u32,
+    ) -> i32 {
+        if out_buttons_down.is_null() {
+            return -1;
+        }
+        if cursor_id == 0 {
+            return -1;
+        }
+
+        let idx = (cursor_id - 1) as usize;
+        let mice = crate::usb::hid::mouse_cursor_snapshot_with_buttons();
+        let tablets = crate::usb::hid::tablet_cursor_snapshot();
+
+        if idx < mice.len() {
+            *out_buttons_down = mice[idx].2;
+            return 0;
+        }
+
+        let tidx = idx - mice.len();
+        if tidx < tablets.len() {
+            *out_buttons_down = 0;
+            return 0;
+        }
+
+        1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_pop_cursor_event(
+        out: *mut crate::usb::hid::TrueosHidCursorEvent,
+    ) -> i32 {
+        if out.is_null() {
+            return -1;
+        }
+        let Some(ev) = crate::usb::hid::pop_cursor_event() else {
+            return 0;
+        };
+        *out = ev;
+        1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_read_cursor_events_since(
+        read_seq: u64,
+        out: *mut crate::usb::hid::TrueosHidCursorEvent,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32 {
+        if out_next_seq.is_null() || out_dropped.is_null() {
+            return 0;
+        }
+
+        let cap = out_cap as usize;
+        if cap == 0 || out.is_null() {
+            let mut none: [crate::usb::hid::TrueosHidCursorEvent; 0] = [];
+            let (next_seq, dropped, _wrote) =
+                crate::usb::hid::read_cursor_events_since(read_seq, &mut none);
+            *out_next_seq = next_seq;
+            *out_dropped = dropped;
+            return 0;
+        }
+
+        let out_slice = core::slice::from_raw_parts_mut(out, cap);
+        let (next_seq, dropped, wrote) =
+            crate::usb::hid::read_cursor_events_since(read_seq, out_slice);
+        *out_next_seq = next_seq;
+        *out_dropped = dropped;
+        wrote as u32
     }
 }
 

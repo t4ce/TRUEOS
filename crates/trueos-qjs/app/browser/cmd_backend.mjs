@@ -35,12 +35,36 @@ function pushRectPx(verts, x0, y0, x1, y1, r, g, b, a, viewportW, viewportH) {
     pushVertex12(verts, lx, ty, r, g, b, a, viewportW, viewportH);
 }
 
+function pushTriPx(verts, ax, ay, bx, by, cx, cy, r, g, b, a, viewportW, viewportH) {
+    pushVertex12(verts, ax, ay, r, g, b, a, viewportW, viewportH);
+    pushVertex12(verts, bx, by, r, g, b, a, viewportW, viewportH);
+    pushVertex12(verts, cx, cy, r, g, b, a, viewportW, viewportH);
+}
+
 function pushBorderPx(verts, x0, y0, x1, y1, bw, r, g, b, a, viewportW, viewportH) {
     const w = Math.max(1, Number(bw || 1));
     pushRectPx(verts, x0, y0, x1, y0 + w, r, g, b, a, viewportW, viewportH);
     pushRectPx(verts, x0, y1 - w, x1, y1, r, g, b, a, viewportW, viewportH);
     pushRectPx(verts, x0, y0, x0 + w, y1, r, g, b, a, viewportW, viewportH);
     pushRectPx(verts, x1 - w, y0, x1, y1, r, g, b, a, viewportW, viewportH);
+}
+
+function pushCirclePx(verts, cx, cy, radius, segments, r, g, b, a, viewportW, viewportH) {
+    const rr = Math.max(1, Number(radius || 1));
+    const segs = Math.max(8, Number(segments || 24) | 0);
+    const x = Number(cx || 0);
+    const y = Number(cy || 0);
+    for (let i = 0; i < segs; i++) {
+        const a0 = (i / segs) * Math.PI * 2.0;
+        const a1 = ((i + 1) / segs) * Math.PI * 2.0;
+        const x0 = x + Math.cos(a0) * rr;
+        const y0 = y + Math.sin(a0) * rr;
+        const x1 = x + Math.cos(a1) * rr;
+        const y1 = y + Math.sin(a1) * rr;
+        pushVertex12(verts, x, y, r, g, b, a, viewportW, viewportH);
+        pushVertex12(verts, x0, y0, r, g, b, a, viewportW, viewportH);
+        pushVertex12(verts, x1, y1, r, g, b, a, viewportW, viewportH);
+    }
 }
 
 function packVertices12(verts) {
@@ -87,6 +111,7 @@ function mixRgb(a, b, t) {
 
 function classifySurface(label) {
     const ll = String(label || '').toLowerCase();
+    if (ll.includes('scrollbar')) return 'scrollbar';
     if (ll.includes('dialog')) return 'dialog';
     if (ll.includes('select') || ll.includes('list') || ll.includes('option')) return 'select';
     if (ll.includes('week') || ll.includes('month') || ll.includes('date') || ll.includes('time') || ll.includes('temporal')) return 'temporal';
@@ -96,6 +121,7 @@ function classifySurface(label) {
 }
 
 function paletteForSurface(kind) {
+    if (kind === 'scrollbar') return { fill: 0xa8adb6, stroke: 0xa8adb6, accent: 0xa8adb6 };
     if (kind === 'dialog') return { fill: 0xf8fbff, stroke: 0x5f7ca2, accent: 0x9ab7db };
     if (kind === 'select') return { fill: 0xfafcff, stroke: 0x6a7e98, accent: 0xadc5e7 };
     if (kind === 'temporal') return { fill: 0xfbfdff, stroke: 0x607992, accent: 0xa6c0e0 };
@@ -104,45 +130,168 @@ function paletteForSurface(kind) {
     return { fill: 0xf8fafc, stroke: 0x7b8898, accent: 0xc8d2de };
 }
 
-function drawPixiSnapshotItems(verts, items, viewportW, viewportH) {
+function drawWidgetDetail(verts, label, x, y, w, h, alpha, viewportW, viewportH) {
+    const ll = String(label || '').toLowerCase();
+    const inkA = clampU8(Math.round(210 * alpha));
+
+    if ((ll === 'input' || ll.includes('checkbox')) && w <= 24 && h <= 24) {
+        // Checkbox-like control: explicit frame + centered check hint.
+        const strokeA = clampU8(Math.round(235 * alpha));
+        const inset = 1;
+        pushBorderPx(
+            verts,
+            x + inset,
+            y + inset,
+            x + w - inset,
+            y + h - inset,
+            1,
+            66,
+            90,
+            120,
+            strokeA,
+            viewportW,
+            viewportH,
+        );
+
+        // Soft inner fill keeps the box readable over light surfaces.
+        pushRectPx(
+            verts,
+            x + 2,
+            y + 2,
+            x + w - 2,
+            y + h - 2,
+            248,
+            251,
+            255,
+            clampU8(Math.round(145 * alpha)),
+            viewportW,
+            viewportH,
+        );
+
+        const cx = x + w * 0.52;
+        const cy = y + h * 0.56;
+        const s = Math.max(2, Math.min(5, Math.floor(Math.min(w, h) * 0.32)));
+        pushRectPx(verts, cx - s * 1.2, cy, cx - s * 0.2, cy + 1, 35, 58, 85, inkA, viewportW, viewportH);
+        pushRectPx(verts, cx - s * 0.3, cy, cx + s * 1.3, cy - s * 1.3, 35, 58, 85, inkA, viewportW, viewportH);
+        return;
+    }
+
+    if (ll.includes('radio') && w <= 24 && h <= 24) {
+        const cx = x + w * 0.5;
+        const cy = y + h * 0.5;
+        const rr = Math.max(2, Math.floor(Math.min(w, h) * 0.22));
+        pushCirclePx(verts, cx, cy, rr, 16, 43, 66, 96, inkA, viewportW, viewportH);
+        return;
+    }
+
+    if (ll.includes('summary')) {
+        // Disclosure chevron.
+        const cx = x + Math.max(7, Math.min(14, w * 0.1));
+        const cy = y + h * 0.5;
+        const s = Math.max(3, Math.min(6, Math.floor(h * 0.18)));
+        pushTriPx(verts, cx - s, cy - s, cx + s, cy, cx - s, cy + s, 50, 74, 104, inkA, viewportW, viewportH);
+        return;
+    }
+
+    if (ll.includes('select')) {
+        // Dropdown arrow on the right side.
+        const cx = x + w - Math.max(10, Math.min(18, w * 0.14));
+        const cy = y + h * 0.52;
+        const s = Math.max(3, Math.min(7, Math.floor(h * 0.16)));
+        pushTriPx(verts, cx - s, cy - s * 0.5, cx + s, cy - s * 0.5, cx, cy + s, 49, 70, 99, inkA, viewportW, viewportH);
+        return;
+    }
+
+    if (ll.includes('progress') || ll.includes('meter')) {
+        // Mid-level fill hint so bars read as values in direct mode.
+        const pad = Math.max(2, Math.floor(h * 0.22));
+        const innerX0 = x + pad;
+        const innerY0 = y + pad;
+        const innerX1 = x + w - pad;
+        const innerY1 = y + h - pad;
+        if (innerX1 > innerX0 + 6 && innerY1 > innerY0 + 2) {
+            const fillW = (innerX1 - innerX0) * 0.56;
+            pushRectPx(verts, innerX0, innerY0, innerX0 + fillW, innerY1, 84, 131, 186, clampU8(Math.round(160 * alpha)), viewportW, viewportH);
+        }
+        return;
+    }
+
+    if (ll.includes('slider')) {
+        const cy = y + h * 0.5;
+        const tx0 = x + Math.max(6, w * 0.12);
+        const tx1 = x + w - Math.max(6, w * 0.12);
+        pushRectPx(verts, tx0, cy - 1, tx1, cy + 1, 96, 122, 153, clampU8(Math.round(140 * alpha)), viewportW, viewportH);
+        const thumbX = tx0 + (tx1 - tx0) * 0.58;
+        pushRectPx(verts, thumbX - 3, cy - 6, thumbX + 3, cy + 6, 63, 95, 131, clampU8(Math.round(215 * alpha)), viewportW, viewportH);
+        return;
+    }
+
+    if (ll.includes('number')) {
+        // Spinner split indicator on the right.
+        const rw = Math.max(10, Math.min(18, Math.floor(w * 0.22)));
+        const x0 = x + w - rw;
+        pushRectPx(verts, x0, y + 1, x0 + 1, y + h - 1, 99, 120, 146, clampU8(Math.round(170 * alpha)), viewportW, viewportH);
+        pushRectPx(verts, x0 + 2, y + h * 0.5, x + w - 2, y + h * 0.5 + 1, 99, 120, 146, clampU8(Math.round(170 * alpha)), viewportW, viewportH);
+    }
+}
+
+function drawPixiSnapshotItems(verts, items, viewportW, viewportH, scaleX = 1, scaleY = 1) {
     if (!Array.isArray(items) || items.length === 0) return 0;
     let drew = 0;
+    const cullPad = 2;
     for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
         if (it.isText) continue;
-        const x = Number(it.x || 0);
-        const y = Number(it.y || 0);
-        const w = Number(it.w || 0);
-        const h = Number(it.h || 0);
+        const x = Number(it.x || 0) * Number(scaleX || 1);
+        const y = Number(it.y || 0) * Number(scaleY || 1);
+        const w = Number(it.w || 0) * Number(scaleX || 1);
+        const h = Number(it.h || 0) * Number(scaleY || 1);
         if (!(w > 1 && h > 1)) continue;
+        if (x > viewportW + cullPad || y > viewportH + cullPad || (x + w) < -cullPad || (y + h) < -cullPad) continue;
 
         const label = String(it.label || '');
+        const ll = label.toLowerCase();
         const kind = classifySurface(label);
         const palette = paletteForSurface(kind);
         const depth = Math.max(0, Number(it.depth || 0));
         const alpha = Math.max(0.1, Math.min(1, Number(it.alpha == null ? 1 : it.alpha)));
+        const frameCoverage = (w * h) / Math.max(1, viewportW * viewportH);
+        const isNearViewportOrigin = x <= (viewportW * 0.03) && y <= (viewportH * 0.03);
+        const isRootFrameLike = ll.includes('iframe') || ll.includes('root') || ll.includes('stage');
+        const suppressChrome = isNearViewportOrigin && frameCoverage >= 0.70 && (depth <= 1 || isRootFrameLike);
 
-        // Soft shadow pass.
-        const shadowA = clampU8(Math.round((kind === 'dialog' ? 44 : 34) * alpha));
-        const sh = kind === 'dialog' ? 2 : 1;
-        pushRectPx(verts, x + sh, y + sh + 1, x + w + sh, y + h + sh + 1, 0, 0, 0, shadowA, viewportW, viewportH);
+        const drawFlat = kind === 'scrollbar';
 
         // Base fill gets slightly cooler with depth to improve stacking readability.
         const depthMix = Math.min(0.28, depth * 0.035);
         const fillRgb = mixRgb(palette.fill, 0xe7edf5, depthMix);
-        pushRectPx(verts, x, y, x + w, y + h, fillRgb.r, fillRgb.g, fillRgb.b, clampU8(Math.round(228 * alpha)), viewportW, viewportH);
+        const fillAlpha = suppressChrome
+            ? clampU8(Math.round(255 * alpha))
+            : clampU8(Math.round(228 * alpha));
+        pushRectPx(verts, x, y, x + w, y + h, fillRgb.r, fillRgb.g, fillRgb.b, fillAlpha, viewportW, viewportH);
 
-        // Top sheen strip simulates subtle sprite-like highlight.
-        const topH = Math.max(2, Math.min(10, Math.round(h * 0.24)));
-        pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 1 + topH, 255, 255, 255, clampU8(Math.round(18 * alpha)), viewportW, viewportH);
+        if (!suppressChrome && !drawFlat) {
+            // Top sheen strip simulates subtle sprite-like highlight.
+            const topH = Math.max(2, Math.min(10, Math.round(h * 0.24)));
+            pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 1 + topH, 255, 255, 255, clampU8(Math.round(18 * alpha)), viewportW, viewportH);
+        }
 
-        // Accent edge helps popup/dialog/select boundaries read clearly.
-        const accent = splitRgb(palette.accent);
-        pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 2, accent.r, accent.g, accent.b, clampU8(Math.round(130 * alpha)), viewportW, viewportH);
+        if (!suppressChrome && !drawFlat) {
+            // Accent edge helps popup/dialog/select boundaries read clearly.
+            const accent = splitRgb(palette.accent);
+            pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 2, accent.r, accent.g, accent.b, clampU8(Math.round(130 * alpha)), viewportW, viewportH);
+        }
 
-        const stroke = splitRgb(palette.stroke);
-        const borderW = kind === 'dialog' || kind === 'select' || kind === 'temporal' ? 2 : 1;
-        pushBorderPx(verts, x, y, x + w, y + h, borderW, stroke.r, stroke.g, stroke.b, clampU8(Math.round(235 * alpha)), viewportW, viewportH);
+        if (!suppressChrome && !drawFlat) {
+            const stroke = splitRgb(palette.stroke);
+            const borderW = kind === 'dialog' || kind === 'select' || kind === 'temporal' ? 2 : 1;
+            pushBorderPx(verts, x, y, x + w, y + h, borderW, stroke.r, stroke.g, stroke.b, clampU8(Math.round(235 * alpha)), viewportW, viewportH);
+        }
+
+        // Widget detail pass: bring control semantics to life in direct-cmd mode.
+        if (!suppressChrome && !drawFlat) {
+            drawWidgetDetail(verts, label, x, y, w, h, alpha, viewportW, viewportH);
+        }
         drew++;
     }
     return drew;
@@ -156,21 +305,27 @@ function ensureDirectAtlasTex(cmd) {
     return id;
 }
 
-function drawPixiSnapshotText(cmd, atlasTex, items) {
+function drawPixiSnapshotText(cmd, atlasTex, items, scaleX = 1, scaleY = 1, viewportW = 0, viewportH = 0) {
     if (!cmd || atlasTex <= 0 || typeof cmd.drawAtlasText !== 'function') return 0;
     if (!Array.isArray(items) || items.length === 0) return 0;
     let n = 0;
+    const cullPad = 4;
+    const hasViewport = viewportW > 0 && viewportH > 0;
     for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
         if (!it.isText) continue;
         const txt = String(it.text || '');
         if (txt.length <= 0) continue;
-        const x = Number(it.x || 0) | 0;
-        const y = Number(it.y || 0) | 0;
-        const fs = Math.max(10, Math.min(44, Number(it.fontSize || 12) | 0));
+        const x = (Number(it.x || 0) * Number(scaleX || 1)) | 0;
+        const y = (Number(it.y || 0) * Number(scaleY || 1)) | 0;
+        const fontScale = Math.max(0.75, Math.min(4, (Number(scaleX || 1) + Number(scaleY || 1)) * 0.5));
+        const fs = Math.max(10, Math.min(44, (Number(it.fontSize || 12) * fontScale) | 0));
+        if (hasViewport) {
+            const estW = Math.max(1, txt.length * fs * 0.62);
+            const estH = Math.max(1, fs * 1.25);
+            if (x > viewportW + cullPad || y > viewportH + cullPad || (x + estW) < -cullPad || (y + estH) < -cullPad) continue;
+        }
         const color = Number(it.color == null ? 0x202020 : it.color) >>> 0;
-        // Global readability polish: subtle drop shadow before main glyph pass.
-        cmd.drawAtlasText(atlasTex, 1, x + 1, y + 1, txt, fs, 0x0f1722, 118);
         cmd.drawAtlasText(atlasTex, 1, x, y, txt, fs, color, 255);
         n++;
     }
@@ -447,7 +602,7 @@ function drawCursorMenus(verts, menuText, browserContext, viewportW, viewportH) 
     }
 }
 
-function drawAllCursors(verts, browserContext, getCursorColor, viewportW, viewportH, dt, t, menuText) {
+function drawAllCursors(verts, browserContext, getCursorColor, viewportW, viewportH, dt, t, menuText, includeMenus = true) {
     ensureDirectCursorPublicApi();
     const rt = directCursorRuntimeMap();
     for (let i = 0; i < DIRECT_GLOBAL_CURSORS.length; i++) {
@@ -511,7 +666,9 @@ function drawAllCursors(verts, browserContext, getCursorColor, viewportW, viewpo
         drawCursorCross(verts, x, y, ai.color, viewportW, viewportH, rot);
     }
 
-    drawCursorMenus(verts, menuText, browserContext, viewportW, viewportH);
+    if (includeMenus) {
+        drawCursorMenus(verts, menuText, browserContext, viewportW, viewportH);
+    }
 }
 
 function drawCursorCross(verts, x, y, color, viewportW, viewportH, rot = 0) {
@@ -525,6 +682,68 @@ function drawCursorCross(verts, x, y, color, viewportW, viewportH, rot = 0) {
     pushRotQuadPx(verts, x, y, stroke, arm * 2.0, rot, r, g, b, 255, viewportW, viewportH);
 }
 
+function stepDirectCursorClock() {
+    const nowMs = Date.now();
+    const prevMs = Number(globalThis.__trueosDirectCursorLastMs || nowMs);
+    let dt = (nowMs - prevMs) / 1000.0;
+    if (!Number.isFinite(dt) || dt <= 0)
+        dt = 0.05;
+    dt = Math.max(0.001, Math.min(0.25, dt));
+    globalThis.__trueosDirectCursorLastMs = nowMs;
+    const t = Number(globalThis.__trueosDirectCursorTime || 0) + dt;
+    globalThis.__trueosDirectCursorTime = t;
+    return { dt, t };
+}
+
+export function renderCursorPlaneFrame(opts = {}) {
+    const cmd = globalThis.__trueosCmdStream;
+    if (!cmd
+        || typeof cmd.cursorBeginFrame !== 'function'
+        || typeof cmd.cursorDrawTrianglesU8 !== 'function'
+        || typeof cmd.cursorEndFrame !== 'function') {
+        return false;
+    }
+
+    const viewportW = Math.max(1, Number(opts.viewportW || 1) | 0);
+    const viewportH = Math.max(1, Number(opts.viewportH || 1) | 0);
+    const browserContext = opts.browserContext || null;
+    const getCursorColor = typeof opts.getCursorColor === 'function' ? opts.getCursorColor : (() => 0x111111);
+    const { dt, t } = stepDirectCursorClock();
+
+    const verts = [];
+    const menuText = [];
+    drawAllCursors(verts, browserContext, getCursorColor, viewportW, viewportH, dt, t, menuText, false);
+    const bytes = packVertices12(verts);
+
+    const seq = (Number(globalThis.__trueosCursorPlaneSeq || 0) + 1) | 0;
+    globalThis.__trueosCursorPlaneSeq = seq;
+    if (seq <= 3 || (seq % 40) === 0) {
+        try {
+            console.log(`[cursor-plane] seq=${seq} verts=${verts.length} bytes=${bytes ? bytes.byteLength : 0} vp=${viewportW}x${viewportH}`);
+        }
+        catch {
+            // Keep cursor-plane path resilient if logging fails.
+        }
+    }
+
+    if (typeof cmd.setViewport === 'function') {
+        cmd.setViewport(viewportW, viewportH);
+    }
+    if (typeof cmd.setBlendEnabled === 'function') {
+        cmd.setBlendEnabled(true);
+    }
+    if (typeof cmd.setBlendMode === 'function') {
+        cmd.setBlendMode(0);
+    }
+
+    cmd.cursorBeginFrame();
+    if (bytes && bytes.byteLength > 0) {
+        cmd.cursorDrawTrianglesU8(bytes);
+    }
+    cmd.cursorEndFrame();
+    return true;
+}
+
 export function renderDirectCmdFrame(opts = {}) {
     const cmd = globalThis.__trueosCmdStream;
     if (!cmd || typeof cmd.beginFrame !== 'function' || typeof cmd.endFrame !== 'function' || typeof cmd.drawTrianglesU8 !== 'function') {
@@ -536,29 +755,28 @@ export function renderDirectCmdFrame(opts = {}) {
 
     const viewportW = Math.max(1, Number(opts.viewportW || 1) | 0);
     const viewportH = Math.max(1, Number(opts.viewportH || 1) | 0);
+    const worldW = Math.max(1, Number(opts.worldW || viewportW) || viewportW);
+    const worldH = Math.max(1, Number(opts.worldH || viewportH) || viewportH);
+    const worldToViewportX = Math.max(0.001, viewportW / worldW);
+    const worldToViewportY = Math.max(0.001, viewportH / worldH);
     const scrollY = Math.max(0, Number(opts.scrollY || 0));
     const clearRgb = (opts.clearRgb == null) ? 0xFFFFFF : (Number(opts.clearRgb) >>> 0);
     const browserContext = opts.browserContext || null;
     const pixiItems = Array.isArray(opts.pixiItems) ? opts.pixiItems : [];
     const getCursorColor = typeof opts.getCursorColor === 'function' ? opts.getCursorColor : (() => 0x111111);
-    const nowMs = Date.now();
-    const prevMs = Number(globalThis.__trueosDirectCursorLastMs || nowMs);
-    let dt = (nowMs - prevMs) / 1000.0;
-    if (!Number.isFinite(dt) || dt <= 0)
-        dt = 0.05;
-    dt = Math.max(0.001, Math.min(0.25, dt));
-    globalThis.__trueosDirectCursorLastMs = nowMs;
-    const t = Number(globalThis.__trueosDirectCursorTime || 0) + dt;
-    globalThis.__trueosDirectCursorTime = t;
+    const { dt, t } = stepDirectCursorClock();
 
     const counts = countLayout(layout);
     const verts = [];
+    const overlayVerts = [];
     const menuText = [];
-    const pixiDrawn = drawPixiSnapshotItems(verts, pixiItems, viewportW, viewportH);
+    const pixiDrawn = drawPixiSnapshotItems(verts, pixiItems, viewportW, viewportH, worldToViewportX, worldToViewportY);
 
-    drawAllCursors(verts, browserContext, getCursorColor, viewportW, viewportH, dt, t, menuText);
+    // Cursor geometry is owned by the dedicated cursor-plane path.
+    // Do not draw fallback cursors in the base frame.
 
     const bytes = packVertices12(verts);
+    const overlayBytes = packVertices12(overlayVerts);
     try {
         console.log(`[direct-backend] blocks=${counts.blockCount} sized=${counts.sizedBlocks} zero=${counts.zeroBlocks} text=${counts.textCount} pixi=${pixiItems.length}/${pixiDrawn} verts=${verts.length} bytes=${bytes ? bytes.byteLength : 0} scrollY=${scrollY} vp=${viewportW}x${viewportH}`);
     } catch {
@@ -573,10 +791,17 @@ export function renderDirectCmdFrame(opts = {}) {
         cmd.drawTrianglesU8(bytes);
     }
 
+    // Blend overlay layer over the already rendered UI frame.
+    if (overlayBytes && overlayBytes.byteLength > 0) {
+        if (typeof cmd.setBlendEnabled === 'function') cmd.setBlendEnabled(true);
+        if (typeof cmd.setBlendMode === 'function') cmd.setBlendMode(0);
+        cmd.drawTrianglesU8(overlayBytes);
+    }
+
     const atlasTex = ensureDirectAtlasTex(cmd);
     if (typeof cmd.setBlendEnabled === 'function') cmd.setBlendEnabled(true);
     if (typeof cmd.setBlendMode === 'function') cmd.setBlendMode(0);
-    const textDrawn = drawPixiSnapshotText(cmd, atlasTex, pixiItems);
+    const textDrawn = drawPixiSnapshotText(cmd, atlasTex, pixiItems, worldToViewportX, worldToViewportY, viewportW, viewportH);
     for (let i = 0; i < menuText.length; i++) {
         const row = menuText[i] || {};
         const x = Number(row.x || 0) | 0;
@@ -586,7 +811,6 @@ export function renderDirectCmdFrame(opts = {}) {
             continue;
         const fs = Math.max(10, Math.min(44, Number(row.size || 12) | 0));
         const color = Number(row.color == null ? 0x202020 : row.color) >>> 0;
-        cmd.drawAtlasText(atlasTex, 1, x + 1, y + 1, txt, fs, 0x0f1722, 98);
         cmd.drawAtlasText(atlasTex, 1, x, y, txt, fs, color, 255);
     }
     try {

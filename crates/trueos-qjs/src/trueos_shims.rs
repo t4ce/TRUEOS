@@ -57,6 +57,14 @@ unsafe extern "C" {
         out_wheel: *mut i8,
     ) -> i32;
     pub fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
+    pub fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
+    pub fn trueos_cabi_input_read_cursor_events_since(
+        read_seq: u64,
+        out: *mut TrueosHidCursorEvent,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32;
 
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
@@ -73,6 +81,25 @@ pub struct TrueosMouseState {
     pub buttons: u32,
     pub seq: u32,
     pub slot_id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosHidCursorEvent {
+    pub t_ms: u32,
+    pub seq: u32,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u8,
+    pub reserved0: u8,
+    pub reserved1: u16,
+    pub buttons_down: u32,
+    pub wheel: i16,
+    pub reserved2: u16,
+    pub x: f64,
+    pub y: f64,
+    pub flags: u32,
 }
 
 #[inline]
