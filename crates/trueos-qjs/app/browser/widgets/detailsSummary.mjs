@@ -1,5 +1,5 @@
 import { Rectangle } from 'pixi.js';
-import { clearContainerEvents, clearGraphics, getOrCreateGraphics } from '../pixiReuse.mjs';
+import { clearContainerEvents, clearGraphics, getOrCreateGraphics } from '../../pixi/architecture/pixiReuse.mjs';
 export function renderSummary(opts) {
     const { node, container, w, h, theme, detailsOpen, requestRerender } = opts;
     const detailsKey = node.attrs?.['data-details-key'];

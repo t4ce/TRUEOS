@@ -1,4 +1,4 @@
-import { clearContainerEvents } from '../pixiReuse.mjs';
+import { clearContainerEvents } from '../../pixi/architecture/pixiReuse.mjs';
 export function renderButton(opts) {
     const { container, graphics: g, w, h, theme, registerHoverHandlers } = opts;
     const drawButton = (fill) => {

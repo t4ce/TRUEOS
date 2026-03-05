@@ -1501,7 +1501,7 @@ impl Default for VirglDrawState {
                 width: 0,
                 height: 0,
             },
-            clear_rgb: 0x00_08_18_30,
+            clear_rgb: 0x00FF_FFFF,
         }
     }
 }

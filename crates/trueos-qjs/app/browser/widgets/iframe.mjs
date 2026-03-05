@@ -1,6 +1,6 @@
 import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
-import { getOrCreateText } from '../pixiReuse.mjs';
+import { getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function applyYogaDefaultsIframe(yogaNode, node, Yoga) {
     const isRoot = String(node.attrs?.['data-root'] ?? '') === '1';
     // Treat iframe like a replaced element that also forms a nested layout root.

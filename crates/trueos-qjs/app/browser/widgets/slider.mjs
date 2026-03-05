@@ -1,6 +1,6 @@
 import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
-import { clearContainerEvents, getOrCreateText } from '../pixiReuse.mjs';
+import { clearContainerEvents, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function getOrInitSliderState(map, key, attrs) {
     const existing = map.get(key);
     if (existing)

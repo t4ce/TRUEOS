@@ -1,5 +1,5 @@
 import { Buffer, BufferUsage, Mesh, MeshGeometry, Rectangle, Shader, colorBitGl, compileHighShaderGlProgram, localUniformBitGl, roundPixelsBitGl, } from 'pixi.js';
-import { getOrCreateGraphics, getOrCreateText, clearGraphics } from '../pixiReuse.mjs';
+import { getOrCreateGraphics, getOrCreateText, clearGraphics } from '../../pixi/architecture/pixiReuse.mjs';
 let sharedVertexColorBuffer = null;
 function getSharedVertexColorBuffer() {
     if (sharedVertexColorBuffer)

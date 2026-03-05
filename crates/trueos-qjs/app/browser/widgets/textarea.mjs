@@ -1,7 +1,7 @@
 import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
 import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from './textField.mjs';
-import { clearContainerEvents, clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
+import { clearContainerEvents, clearGraphics, getOrCreateGraphics, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function applyYogaDefaultsTextarea(yogaNode, Yoga) {
     yogaNode.setPadding(Yoga.EDGE_TOP, 6);
     yogaNode.setPadding(Yoga.EDGE_BOTTOM, 6);

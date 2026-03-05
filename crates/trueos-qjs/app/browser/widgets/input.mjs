@@ -1,7 +1,7 @@
 import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
 import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from './textField.mjs';
-import { clearContainerEvents, clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
+import { clearContainerEvents, clearGraphics, getOrCreateGraphics, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function applyYogaDefaultsInput(yogaNode, node, Yoga) {
     const inputType = (node.attrs?.type ?? 'text').toLowerCase();
     if (inputType === 'checkbox' || inputType === 'radio') {

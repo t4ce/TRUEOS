@@ -1,5 +1,5 @@
 import { Rectangle } from 'pixi.js';
-import { clearContainerEvents } from '../pixiReuse.mjs';
+import { clearContainerEvents } from '../../pixi/architecture/pixiReuse.mjs';
 function drawMagnifier(g, cx, cy, r, color) {
     // Lens circle.
     g.circle(cx, cy, r);

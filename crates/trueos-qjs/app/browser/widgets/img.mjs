@@ -1,6 +1,6 @@
 import { TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from '../text.mjs';
 import { makeImgPlaceholderSvg, makeNeonOrbSvg } from '../svgs.mjs';
-import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
+import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 function decodeSvgDataUri(src) {
     const s = String(src ?? '');
     if (!s.startsWith('data:image/svg+xml'))

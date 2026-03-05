@@ -1,31 +1,31 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import Yoga from 'yoga-layout';
 import * as browserContext from 'trueos:browser_context';
-import { defaultTheme } from './theme.mjs';
-import { renderCursorPlaneFrame, renderDirectCmdFrame } from './cmd_backend.mjs';
-import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from './widgets/textField.mjs';
-import { applyYogaDefaultsProgressOrMeter } from './widgets/progressMeter.mjs';
-import { applyYogaDefaultsSlider, createYogaNodeForSliderLabel, getOrInitSliderState as widgetGetOrInitSliderState, } from './widgets/slider.mjs';
-import { getEffectiveDetailsChildren } from './widgets/detailsSummary.mjs';
-import { applyYogaDefaultsDetails, applyYogaDefaultsSummary } from './widgets/detailsSummary.mjs';
-import { applyYogaDefaultsHr } from './widgets/hr.mjs';
-import { applyYogaDefaultsButton } from './widgets/button.mjs';
-import { applyYogaDefaultsCell, applyYogaDefaultsTable, applyYogaDefaultsTr } from './widgets/table.mjs';
-import { isHeadingTag } from './widgets/headings.mjs';
-import { applyYogaDefaultsHeading } from './widgets/headings.mjs';
-import { applyYogaDefaultsImg } from './widgets/img.mjs';
-import { applyYogaDefaultsSvg } from './widgets/svgElement.mjs';
-import { applyYogaDefaultsCanvas } from './widgets/canvasElement.mjs';
-import { applyYogaDefaultsIframe } from './widgets/iframe.mjs';
-import { applyYogaDefaultsInput } from './widgets/input.mjs';
-import { applyYogaDefaultsTextarea } from './widgets/textarea.mjs';
-import { applyYogaDefaultsBarrow } from './widgets/barrow.mjs';
-import { applyYogaDefaultsSearchButton, applyYogaDefaultsSearchRow } from './widgets/search.mjs';
-import { applyYogaDefaultsDialog, getOrInitDialogState } from './widgets/dialog.mjs';
-import { applyYogaDefaultsNumber } from './widgets/number.mjs';
-import { applyYogaDefaultsColor, sampleColorPickerAtLocal } from './widgets/color.mjs';
-import { applyYogaDefaultsSelect, getOrInitSelectState } from './widgets/select.mjs';
-import { applyYogaDefaultsTemporalInput, closeAllTemporalPopups } from './widgets/temporal.mjs';
+import { defaultTheme } from '../browser/theme.mjs';
+import { renderCursorPlaneFrame, renderDirectCmdFrame } from '../browser/cmd_backend.mjs';
+import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from '../browser/widgets/textField.mjs';
+import { applyYogaDefaultsProgressOrMeter } from '../browser/widgets/progressMeter.mjs';
+import { applyYogaDefaultsSlider, createYogaNodeForSliderLabel, getOrInitSliderState as widgetGetOrInitSliderState, } from '../browser/widgets/slider.mjs';
+import { getEffectiveDetailsChildren } from '../browser/widgets/detailsSummary.mjs';
+import { applyYogaDefaultsDetails, applyYogaDefaultsSummary } from '../browser/widgets/detailsSummary.mjs';
+import { applyYogaDefaultsHr } from '../browser/widgets/hr.mjs';
+import { applyYogaDefaultsButton } from '../browser/widgets/button.mjs';
+import { applyYogaDefaultsCell, applyYogaDefaultsTable, applyYogaDefaultsTr } from '../browser/widgets/table.mjs';
+import { isHeadingTag } from '../browser/widgets/headings.mjs';
+import { applyYogaDefaultsHeading } from '../browser/widgets/headings.mjs';
+import { applyYogaDefaultsImg } from '../browser/widgets/img.mjs';
+import { applyYogaDefaultsSvg } from '../browser/widgets/svgElement.mjs';
+import { applyYogaDefaultsCanvas } from '../browser/widgets/canvasElement.mjs';
+import { applyYogaDefaultsIframe } from '../browser/widgets/iframe.mjs';
+import { applyYogaDefaultsInput } from '../browser/widgets/input.mjs';
+import { applyYogaDefaultsTextarea } from '../browser/widgets/textarea.mjs';
+import { applyYogaDefaultsBarrow } from '../browser/widgets/barrow.mjs';
+import { applyYogaDefaultsSearchButton, applyYogaDefaultsSearchRow } from '../browser/widgets/search.mjs';
+import { applyYogaDefaultsDialog, getOrInitDialogState } from '../browser/widgets/dialog.mjs';
+import { applyYogaDefaultsNumber } from '../browser/widgets/number.mjs';
+import { applyYogaDefaultsColor, sampleColorPickerAtLocal } from '../browser/widgets/color.mjs';
+import { applyYogaDefaultsSelect, getOrInitSelectState } from '../browser/widgets/select.mjs';
+import { applyYogaDefaultsTemporalInput, closeAllTemporalPopups } from '../browser/widgets/temporal.mjs';
 import {
     SCROLLBAR_PAD,
     SCROLLBAR_W,
@@ -34,6 +34,7 @@ import {
     TRACE_YOGA_LIFECYCLE,
     USE_CURSOR_PLANE_TICK,
     CURSOR_PLANE_TICK_MS,
+    USE_WEBGPU_NATIVE_PAINT,
     GLOBAL_SCROLL_DIRTY_KEY,
     GLOBAL_MENU_DIRTY_KEY,
     RT_GLOBAL,
@@ -51,7 +52,7 @@ import {
     normalizeWhitespace,
     getOrInitInputState,
     buildDefaultRenderNodes,
-} from './ui.mjs';
+} from '../browser/ui.mjs';
 
 // Singleton canvas/context for text measurement during rendering (used by inputs/textarea).
 let renderMeasureCtx = null;
@@ -898,14 +899,42 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
 export async function startGui() {
     const rootEl = RT_DOCUMENT?.getElementById?.('app') ?? RT_DOCUMENT?.body;
     const app = new Application();
-    const initOpts = { background: '#ffffff', antialias: false, preference: 'webgpu' };
+    const initOpts = {
+        background: '#ffffff',
+        backgroundColor: 0xFFFFFF,
+        clearBeforeRender: true,
+        antialias: false,
+        preference: 'webgpu',
+    };
     if (RT_HAS_WINDOW_RESIZE)
         initOpts.resizeTo = RT_WINDOW;
     await app.init(initOpts);
+    // In non-browser runtimes resizeTo may be unavailable/ineffective; force a sane surface.
+    if (!(Number(app.renderer?.width || 0) > 1 && Number(app.renderer?.height || 0) > 1)) {
+        const w = Math.max(1, Number(RT_WINDOW?.innerWidth ?? 0) || 1280);
+        const h = Math.max(1, Number(RT_WINDOW?.innerHeight ?? 0) || 800);
+        app.renderer.resize(w, h);
+    }
+    if (app.renderer?.background) {
+        app.renderer.background.color = 0xFFFFFF;
+        app.renderer.background.alpha = 1;
+    }
+    try {
+        const rendererType = String(app.renderer?.type ?? app.renderer?.context?.type ?? 'unknown');
+        console.log(`[webgpu-native] init enabled=${USE_WEBGPU_NATIVE_PAINT ? 1 : 0} pref=${String(initOpts.preference || 'none')} renderer=${rendererType} size=${Number(app.renderer?.width || 0)}x${Number(app.renderer?.height || 0)}`);
+    }
+    catch {
+        // Keep bring-up trace non-fatal.
+    }
     rootEl?.appendChild?.(app.canvas);
+    const useCursorPlaneTick = USE_CURSOR_PLANE_TICK && !USE_WEBGPU_NATIVE_PAINT;
+    const nativePaintTrace = {
+        frame: 0,
+        lastChildren: -1,
+    };
 
     const startCursorPlaneTick = () => {
-        if (!USE_CURSOR_PLANE_TICK)
+        if (!useCursorPlaneTick)
             return;
         if (typeof globalThis.__trueosCursorPlaneTimer !== 'number') {
             globalThis.__trueosCursorPlaneTimer = setInterval(() => {
@@ -1128,6 +1157,9 @@ export async function startGui() {
     // Overlay sits above the scene, but must not steal input.
     const overlayRoot = new Container();
     overlayRoot.eventMode = 'none';
+    const nativeBg = new Graphics();
+    nativeBg.eventMode = 'none';
+    app.stage.addChild(nativeBg);
     app.stage.addChild(overlayUiRoot);
     app.stage.addChild(overlayRoot);
     const scrollbarG = new Graphics();
@@ -1237,6 +1269,25 @@ export async function startGui() {
         if (!lastLayout)
             return;
         clampScroll();
+        if (USE_WEBGPU_NATIVE_PAINT) {
+            nativePaintTrace.frame++;
+            nativeBg.clear();
+            nativeBg.rect(0, 0, app.renderer.width, app.renderer.height);
+            nativeBg.fill({ color: 0xFFFFFF, alpha: 1 });
+            updateScrollbarVisuals();
+            const childCount = Number(app.stage?.children?.length || 0) | 0;
+            const shouldLog = nativePaintTrace.frame <= 10
+                || (nativePaintTrace.frame % 120) === 0
+                || childCount !== nativePaintTrace.lastChildren;
+            if (shouldLog) {
+                console.log(`[webgpu-native] paint frame=${nativePaintTrace.frame} viewport=${app.renderer.width}x${app.renderer.height} stageChildren=${childCount} overlayChildren=${overlayRoot.children.length} hoverRects=${uiState.hoverRects.length} nativeBlocks=0`);
+            }
+            nativePaintTrace.lastChildren = childCount;
+            app.renderer.render(app.stage);
+            dirtyWidgetKeys.clear();
+            forceFullRepaint = false;
+            return;
+        }
         const hasScrollDirty = dirtyWidgetKeys.has(GLOBAL_SCROLL_DIRTY_KEY);
         const hasMenuDirty = dirtyWidgetKeys.has(GLOBAL_MENU_DIRTY_KEY);
         const singleDirtyKey = dirtyWidgetKeys.size === 1 ? Array.from(dirtyWidgetKeys)[0] : null;
@@ -1377,10 +1428,17 @@ export async function startGui() {
         presentScheduled = true;
         requestAnimationFrame(() => {
             presentScheduled = false;
+            if (USE_WEBGPU_NATIVE_PAINT) {
+                nativeBg.clear();
+                nativeBg.rect(0, 0, app.renderer.width, app.renderer.height);
+                nativeBg.fill({ color: 0xFFFFFF, alpha: 1 });
+                app.renderer.render(app.stage);
+                return;
+            }
             // Avoid Pixi stage presents because they can race/overdraw
             // cmd-stream output during bring-up and cause transient text artifacts.
             // Cursor visuals are handled by the cursor-plane tick.
-            if (!USE_CURSOR_PLANE_TICK) {
+            if (!useCursorPlaneTick) {
                 try {
                     renderCursorPlaneFrame({
                         viewportW: app.renderer.width,
@@ -1598,8 +1656,9 @@ export async function startGui() {
                         sawAnyUp = true;
                         try {
                             logCursorButtonEvent('up', pid, button, pos.x, pos.y);
-                            if (button === 0)
+                            if (button === 0) {
                                 targetHandlers?.up?.();
+                            }
                             didStateChange = true;
                         }
                         catch {
@@ -1641,7 +1700,7 @@ export async function startGui() {
     app.ticker.add(() => {
         updateUserCursorOverlays();
     });
-    if (USE_CURSOR_PLANE_TICK) {
+    if (useCursorPlaneTick || USE_WEBGPU_NATIVE_PAINT) {
         if (typeof globalThis.__trueosCursorUiSyncTimer !== 'number') {
             globalThis.__trueosCursorUiSyncTimer = setInterval(() => {
                 try {

@@ -1,5 +1,5 @@
 import { Rectangle } from 'pixi.js';
-import { clearGraphics, getOrCreateGraphics } from '../pixiReuse.mjs';
+import { clearGraphics, getOrCreateGraphics } from '../../pixi/architecture/pixiReuse.mjs';
 export function getOrInitDialogState(map, key) {
     const existing = map.get(key);
     if (existing)

@@ -1,6 +1,6 @@
 import { Container, Graphics, Rectangle } from 'pixi.js';
 import { makeThemedText, TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
-import { clearContainerEvents, getOrCreateText } from '../pixiReuse.mjs';
+import { clearContainerEvents, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 import { getOrInitSelectState, renderSelect } from './select.mjs';
 import { getOrInitSliderState, renderSlider } from './slider.mjs';
 function clampInt(n, lo, hi) {
