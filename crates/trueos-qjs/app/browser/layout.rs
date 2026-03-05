@@ -9,6 +9,21 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
+    fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
+    fn trueos_cabi_gfx_clear_scissor() -> i32;
+}
+
+#[inline]
+fn intersect_rect(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
+    let x0 = a.0.max(b.0);
+    let y0 = a.1.max(b.1);
+    let x1 = a.2.min(b.2);
+    let y1 = a.3.min(b.3);
+    if x1 > x0 && y1 > y0 {
+        Some((x0, y0, x1, y1))
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -143,41 +158,90 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         0
     };
 
-    let mut bytes = Vec::with_capacity((len as usize).saturating_mul(12));
+    let mut bytes = Vec::with_capacity(12 * 6);
+    let mut clip_stack: Vec<(u32, (f32, f32, f32, f32))> = Vec::new();
+
+    let _ = trueos_cabi_gfx_begin_frame(0xFFFFFF);
     let mut i = 0u32;
-    while i + 3 < len {
+    while i + 5 < len {
         let vx = qjs::JS_GetPropertyUint32(ctx, rects, i + 0);
         let vy = qjs::JS_GetPropertyUint32(ctx, rects, i + 1);
         let vw2 = qjs::JS_GetPropertyUint32(ctx, rects, i + 2);
         let vh2 = qjs::JS_GetPropertyUint32(ctx, rects, i + 3);
+        let vd = qjs::JS_GetPropertyUint32(ctx, rects, i + 4);
+        let vs = qjs::JS_GetPropertyUint32(ctx, rects, i + 5);
 
         let mut x = 0.0f64;
         let mut y = 0.0f64;
         let mut w = 0.0f64;
         let mut h = 0.0f64;
+        let mut depth_f = 0.0f64;
+        let mut scrollable_f = 0.0f64;
         let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
         let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
         let _ = qjs::JS_ToFloat64(ctx, &mut w as *mut f64, vw2);
         let _ = qjs::JS_ToFloat64(ctx, &mut h as *mut f64, vh2);
+        let _ = qjs::JS_ToFloat64(ctx, &mut depth_f as *mut f64, vd);
+        let _ = qjs::JS_ToFloat64(ctx, &mut scrollable_f as *mut f64, vs);
 
         qjs::js_free_value(ctx, vx);
         qjs::js_free_value(ctx, vy);
         qjs::js_free_value(ctx, vw2);
         qjs::js_free_value(ctx, vh2);
+        qjs::js_free_value(ctx, vd);
+        qjs::js_free_value(ctx, vs);
 
         let xf = x as f32;
         let yf = y as f32;
         let wf = (w as f32).max(0.0);
         let hf = (h as f32).max(0.0);
+        let depth = if depth_f.is_finite() && depth_f >= 0.0 {
+            depth_f as u32
+        } else {
+            0
+        };
+        let is_scrollable = scrollable_f.is_finite() && scrollable_f >= 0.5;
+
+        while let Some((d, _)) = clip_stack.last().copied() {
+            if d >= depth {
+                clip_stack.pop();
+            } else {
+                break;
+            }
+        }
+
+        let parent_clip = clip_stack.last().map(|(_, r)| *r);
+        if let Some((cx0, cy0, cx1, cy1)) = parent_clip {
+            let sx = cx0.max(0.0) as u32;
+            let sy = cy0.max(0.0) as u32;
+            let sw = (cx1 - cx0).max(0.0) as u32;
+            let sh = (cy1 - cy0).max(0.0) as u32;
+            let _ = trueos_cabi_gfx_set_scissor(sx, sy, sw, sh);
+        } else {
+            let _ = trueos_cabi_gfx_clear_scissor();
+        }
+
+        bytes.clear();
         push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
+        if !bytes.is_empty() {
+            let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
+        }
 
-        i += 4;
+        if is_scrollable {
+            let self_clip = (xf, yf, xf + wf, yf + hf);
+            let effective = match parent_clip {
+                Some(p) => intersect_rect(p, self_clip),
+                None => Some(self_clip),
+            };
+            if let Some(rect) = effective {
+                clip_stack.push((depth, rect));
+            }
+        }
+
+        i += 6;
     }
 
-    let _ = trueos_cabi_gfx_begin_frame(0xFFFFFF);
-    if !bytes.is_empty() {
-        let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
-    }
+    let _ = trueos_cabi_gfx_clear_scissor();
     let _ = trueos_cabi_gfx_end_frame();
 
     qjs::JSValue::undefined()

@@ -855,8 +855,18 @@ pub mod cabi {
         cur_sampler: SamplerDesc,
         // Current blend state (set by the WebGL shim) that will be captured per draw.
         cur_blend: BlendDesc,
+        // Optional scissor clip in viewport pixel coordinates.
+        cur_scissor: Option<ScissorRect>,
         last_missing_tex_id: u32,
         missing_tex_logs: u32,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ScissorRect {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
     }
 
     struct TexImage {
@@ -932,10 +942,211 @@ pub mod cabi {
                     mag_filter: SamplerFilter::Linear,
                 },
                 cur_blend: BlendDesc::disabled(),
+                cur_scissor: None,
                 last_missing_tex_id: 0,
                 missing_tex_logs: 0,
             }
         }
+    }
+
+    #[derive(Clone, Copy)]
+    struct RgbVtx {
+        x: f32,
+        y: f32,
+        r: f32,
+        g: f32,
+        b: f32,
+        a: f32,
+    }
+
+    #[inline]
+    fn clamp01(v: f32) -> f32 {
+        if v <= 0.0 {
+            0.0
+        } else if v >= 1.0 {
+            1.0
+        } else {
+            v
+        }
+    }
+
+    #[inline]
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t
+    }
+
+    #[inline]
+    fn read_rgb_vtx(bytes: &[u8], off: usize) -> Option<RgbVtx> {
+        if off + 12 > bytes.len() {
+            return None;
+        }
+        let x = f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+        let y = f32::from_le_bytes([
+            bytes[off + 4],
+            bytes[off + 5],
+            bytes[off + 6],
+            bytes[off + 7],
+        ]);
+        Some(RgbVtx {
+            x,
+            y,
+            r: (bytes[off + 8] as f32) / 255.0,
+            g: (bytes[off + 9] as f32) / 255.0,
+            b: (bytes[off + 10] as f32) / 255.0,
+            a: (bytes[off + 11] as f32) / 255.0,
+        })
+    }
+
+    #[inline]
+    fn push_rgb_vtx(out: &mut Vec<u8>, v: RgbVtx) {
+        out.extend_from_slice(&v.x.to_le_bytes());
+        out.extend_from_slice(&v.y.to_le_bytes());
+        out.push((clamp01(v.r) * 255.0 + 0.5) as u8);
+        out.push((clamp01(v.g) * 255.0 + 0.5) as u8);
+        out.push((clamp01(v.b) * 255.0 + 0.5) as u8);
+        out.push((clamp01(v.a) * 255.0 + 0.5) as u8);
+    }
+
+    #[inline]
+    fn interp_rgb(a: RgbVtx, b: RgbVtx, t: f32) -> RgbVtx {
+        RgbVtx {
+            x: lerp(a.x, b.x, t),
+            y: lerp(a.y, b.y, t),
+            r: lerp(a.r, b.r, t),
+            g: lerp(a.g, b.g, t),
+            b: lerp(a.b, b.b, t),
+            a: lerp(a.a, b.a, t),
+        }
+    }
+
+    #[inline]
+    fn scissor_to_ndc(scissor: ScissorRect, vp_w: u32, vp_h: u32) -> Option<(f32, f32, f32, f32)> {
+        if vp_w == 0 || vp_h == 0 {
+            return None;
+        }
+        let x0 = scissor.x.min(vp_w) as f32;
+        let y0 = scissor.y.min(vp_h) as f32;
+        let x1 = scissor.x.saturating_add(scissor.width).min(vp_w) as f32;
+        let y1 = scissor.y.saturating_add(scissor.height).min(vp_h) as f32;
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let w = vp_w as f32;
+        let h = vp_h as f32;
+        let left = (x0 / w) * 2.0 - 1.0;
+        let right = (x1 / w) * 2.0 - 1.0;
+        let top = 1.0 - (y0 / h) * 2.0;
+        let bottom = 1.0 - (y1 / h) * 2.0;
+        Some((left, right, bottom, top))
+    }
+
+    fn clip_poly_edge(input: &[RgbVtx], edge: u8, bound: f32, out: &mut Vec<RgbVtx>) {
+        out.clear();
+        if input.is_empty() {
+            return;
+        }
+
+        let mut prev = input[input.len() - 1];
+        let mut prev_in = match edge {
+            0 => prev.x >= bound,
+            1 => prev.x <= bound,
+            2 => prev.y >= bound,
+            _ => prev.y <= bound,
+        };
+
+        for &cur in input {
+            let cur_in = match edge {
+                0 => cur.x >= bound,
+                1 => cur.x <= bound,
+                2 => cur.y >= bound,
+                _ => cur.y <= bound,
+            };
+
+            if cur_in != prev_in {
+                let denom = match edge {
+                    0 | 1 => cur.x - prev.x,
+                    _ => cur.y - prev.y,
+                };
+                if denom.abs() > 1e-6 {
+                    let t = match edge {
+                        0 | 1 => (bound - prev.x) / denom,
+                        _ => (bound - prev.y) / denom,
+                    };
+                    out.push(interp_rgb(prev, cur, t));
+                }
+            }
+
+            if cur_in {
+                out.push(cur);
+            }
+
+            prev = cur;
+            prev_in = cur_in;
+        }
+    }
+
+    fn clip_rgb_triangles_to_scissor(
+        src: &[u8],
+        scissor: ScissorRect,
+        vp_w: u32,
+        vp_h: u32,
+    ) -> Vec<u8> {
+        const VTX_SIZE: usize = 12;
+        const TRI_SIZE: usize = VTX_SIZE * 3;
+
+        let Some((left, right, bottom, top)) = scissor_to_ndc(scissor, vp_w, vp_h) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::with_capacity(src.len());
+        let usable = src.len() - (src.len() % TRI_SIZE);
+        let mut poly_a: Vec<RgbVtx> = Vec::with_capacity(8);
+        let mut poly_b: Vec<RgbVtx> = Vec::with_capacity(8);
+
+        let mut off = 0usize;
+        while off + TRI_SIZE <= usable {
+            let Some(v0) = read_rgb_vtx(src, off) else {
+                break;
+            };
+            let Some(v1) = read_rgb_vtx(src, off + VTX_SIZE) else {
+                break;
+            };
+            let Some(v2) = read_rgb_vtx(src, off + (2 * VTX_SIZE)) else {
+                break;
+            };
+            off += TRI_SIZE;
+
+            poly_a.clear();
+            poly_a.push(v0);
+            poly_a.push(v1);
+            poly_a.push(v2);
+
+            clip_poly_edge(&poly_a, 0, left, &mut poly_b);
+            if poly_b.len() < 3 {
+                continue;
+            }
+            clip_poly_edge(&poly_b, 1, right, &mut poly_a);
+            if poly_a.len() < 3 {
+                continue;
+            }
+            clip_poly_edge(&poly_a, 2, bottom, &mut poly_b);
+            if poly_b.len() < 3 {
+                continue;
+            }
+            clip_poly_edge(&poly_b, 3, top, &mut poly_a);
+            if poly_a.len() < 3 {
+                continue;
+            }
+
+            let base = poly_a[0];
+            for i in 1..(poly_a.len() - 1) {
+                push_rgb_vtx(&mut out, base);
+                push_rgb_vtx(&mut out, poly_a[i]);
+                push_rgb_vtx(&mut out, poly_a[i + 1]);
+            }
+        }
+
+        out
     }
 
     #[inline]
@@ -1010,6 +1221,34 @@ pub mod cabi {
             min_filter: minf,
             mag_filter: magf,
         };
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_set_scissor(
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        st.cur_scissor = if width == 0 || height == 0 {
+            None
+        } else {
+            Some(ScissorRect {
+                x,
+                y,
+                width,
+                height,
+            })
+        };
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_clear_scissor() -> i32 {
+        let mut st = GFX_CABI_STATE.lock();
+        st.cur_scissor = None;
         0
     }
 
@@ -1501,12 +1740,26 @@ pub mod cabi {
             ));
             return -3;
         }
+
+        let clipped_owned;
+        let clipped = if let Some(scissor) = st.cur_scissor {
+            let vp_w = st.swapchain_desc.extent.width;
+            let vp_h = st.swapchain_desc.extent.height;
+            clipped_owned = clip_rgb_triangles_to_scissor(bytes, scissor, vp_w, vp_h);
+            clipped_owned.as_slice()
+        } else {
+            bytes
+        };
+        if clipped.is_empty() {
+            return 0;
+        }
+
         st.frame_rgb_draws = st.frame_rgb_draws.saturating_add(1);
-        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(usable);
+        st.frame_draw_bytes = st.frame_draw_bytes.saturating_add(clipped.len());
         let blend = st.cur_blend;
         let mut off = 0usize;
-        while off < usable {
-            let rem = usable - off;
+        while off < clipped.len() {
+            let rem = clipped.len() - off;
             let chunk = core::cmp::min(MAX_CMDSTREAM_DRAW_BYTES, rem);
             let chunk = chunk - (chunk % VTX_SIZE);
             if chunk == 0 {
@@ -1514,7 +1767,7 @@ pub mod cabi {
             }
             let blob_offset = st.frame_rgb_blob.len();
             st.frame_rgb_blob
-                .extend_from_slice(&bytes[off..off + chunk]);
+                .extend_from_slice(&clipped[off..off + chunk]);
             st.frame_draws.push(PendingDraw::Rgb {
                 blob_offset,
                 blob_len: chunk,

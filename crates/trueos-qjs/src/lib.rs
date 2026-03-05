@@ -44,6 +44,10 @@ pub mod browser_task;
 pub mod layout;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/text.rs"]
+pub mod text;
+
+#[cfg(feature = "trueos")]
 #[path = "../app/browser/ui_html.rs"]
 pub mod ui_html;
 
