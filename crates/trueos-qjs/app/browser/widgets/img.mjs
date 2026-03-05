@@ -1,6 +1,7 @@
 import { TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from '../text.mjs';
 import { makeImgPlaceholderSvg, makeNeonOrbSvg } from '../svgs.mjs';
 import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
+import { USE_DIRECT_CMD_BACKEND } from '../ui.mjs';
 function decodeSvgDataUri(src) {
     const s = String(src ?? '');
     if (!s.startsWith('data:image/svg+xml'))
@@ -51,7 +52,10 @@ export function renderImg(opts) {
                 res = null;
             }
             if (res && typeof res.then === 'function') {
-                res.then(() => requestRerender?.()).catch(() => void 0);
+                res.then(() => {
+                    if (!USE_DIRECT_CMD_BACKEND)
+                        requestRerender?.();
+                }).catch(() => void 0);
             }
             svgG.__key = key;
         }

@@ -12,6 +12,7 @@ export const TRACE_YOGA_LIFECYCLE = true;
 export const USE_CURSOR_PLANE_TICK = true;
 export const CURSOR_PLANE_TICK_MS = 50;
 export const GLOBAL_SCROLL_DIRTY_KEY = '__scroll__';
+export const GLOBAL_MENU_DIRTY_KEY = '__menu__';
 
 export const RT_GLOBAL = globalThis;
 export const RT_WINDOW = (typeof window === 'object' && window)
