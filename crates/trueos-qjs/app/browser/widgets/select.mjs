@@ -1,6 +1,6 @@
 import { Container, Graphics, Rectangle } from 'pixi.js';
 import { makeThemedText, TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
-import { clearContainerEvents, getOrCreateText } from '../pixiReuse.mjs';
+import { clearContainerEvents, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function getOrInitSelectState(map, key, initSelectedIndex) {
     const existing = map.get(key);
     if (existing)

@@ -48,7 +48,7 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_set_sampler(wrap_u: u32, wrap_v: u32, min_filter: u32, mag_filter: u32) -> i32;
     fn trueos_cabi_gfx_present_owner_get() -> u32;
 }
-static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0x000000);
+static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0xFFFFFF);
 static CMD_STREAM_VIEW_W: AtomicU32 = AtomicU32::new(1280);
 static CMD_STREAM_VIEW_H: AtomicU32 = AtomicU32::new(800);
 static CMD_STREAM_BLEND_MODE: AtomicU32 = AtomicU32::new(0);
@@ -116,7 +116,7 @@ static CMD_STREAM_TEXT_BATCH_RUNS: Mutex<Vec<CmdStreamTextBatchRun>> = Mutex::ne
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
 const CMD_STREAM_DEFAULT_PMA: u32 = 0;
-const CMD_STREAM_DEFAULT_BLEND_ENABLED: u32 = 1;
+const CMD_STREAM_DEFAULT_BLEND_ENABLED: u32 = 0;
 const CMD_STREAM_DEFAULT_WRAP_U: u32 = 0;
 const CMD_STREAM_DEFAULT_WRAP_V: u32 = 0;
 const CMD_STREAM_DEFAULT_MIN_FILTER: u32 = 1;
