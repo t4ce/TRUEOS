@@ -3,7 +3,7 @@ description: Afer code changes
 applyTo: '**'
 ---
 cargo fmt
-timeout 125 make run
+timeout 125 make run (> never pipe to a file)
 
 afterwards you can see in terminal the logs
 

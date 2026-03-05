@@ -788,6 +788,12 @@ export function renderDirectCmdFrame(opts = {}) {
     const menuText = [];
     const recordsDrawn = drawRecordsItems(verts, records, viewportW, viewportH, worldToViewportX, worldToViewportY, scrollDeltaY, scrollDeltaByDomain);
 
+    // Failsafe: make direct mode visibly alive even when record generation is
+    // temporarily empty/misaligned. This is a strict 1px black viewport frame.
+    if (verts.length === 0) {
+        pushBorderPx(verts, 0, 0, viewportW, viewportH, 1, 0, 0, 0, 255, viewportW, viewportH);
+    }
+
     // Context menus are rendered as an alpha overlay in direct mode.
     const menuDiag = drawCursorMenus(overlayVerts, menuText, browserContext, viewportW, viewportH, onMenuAction);
 
