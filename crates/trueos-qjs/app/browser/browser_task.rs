@@ -127,6 +127,7 @@ pub async fn boot_browser() {
 
         // Fresh path: install only the Rust layout drawer API for JS usage.
         qjs::layout::install_layout_api(ctx);
+        qjs::text::install_text_api(ctx);
 
         let init_filename = b"<browser-init>\0";
         let html_lit = js_single_quoted_literal(qjs::ui_html::UI_HTML);
@@ -139,7 +140,6 @@ pub async fn boot_browser() {
         init_src.push_str(";\n");
         init_src.push_str(
             r#"
-const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;

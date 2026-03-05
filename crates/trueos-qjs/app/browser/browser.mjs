@@ -1,14 +1,10 @@
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 
-const HTML = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>TRUEOS Browser</title></head>
-<body>
-  <div>one extra block node</div>
-  <footer><p>Pure HTML demo - browser default styling only</p></footer>
-</body>
-</html>`;
+const G = (typeof globalThis !== 'undefined') ? globalThis : this;
+const HTML = (typeof G.__trueosUiHtml === 'string' && G.__trueosUiHtml.length > 0)
+  ? G.__trueosUiHtml
+  : '<!DOCTYPE html><html><body><div>empty ui_html</div></body></html>';
 
 const PAD = 8;
 const NODE_H = 28;
@@ -55,6 +51,10 @@ function blockChildren(node) {
   return kids.filter((k) => k && k.kind === 'block');
 }
 
+function isScrollableTag(tag) {
+  return tag === 'scrollable';
+}
+
 function makeYogaTree(node, allBlocks, depth = 0) {
   const yn = Yoga.Node.create();
   yn.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
@@ -84,7 +84,7 @@ function makeYogaTree(node, allBlocks, depth = 0) {
 }
 
 function computeRects(blocks) {
-  const ordered = blocks.slice().sort((a, b) => (a.depth | 0) - (b.depth | 0));
+  const ordered = blocks;
   const out = [];
   for (let i = 0; i < ordered.length; i++) {
     const entry = ordered[i];
@@ -98,7 +98,8 @@ function computeRects(blocks) {
     const y = Number(yn.getComputedTop() || 0) + insetY;
     const w = Math.max(2, Number(yn.getComputedWidth() || 0) - (insetX * 2));
     const h = Math.max(2, Number(yn.getComputedHeight() || 0) - (insetY * 2));
-    out.push(x, y, w, h);
+    const scrollable = isScrollableTag(tag) ? 1 : 0;
+    out.push(x, y, w, h, depth, scrollable);
   }
   return out;
 }
@@ -111,8 +112,6 @@ function applyViewportConstraints(vw, vh) {
   if (typeof yogaRoot.setWidth === 'function') yogaRoot.setWidth(vw);
   if (typeof yogaRoot.setHeight === 'function') yogaRoot.setHeight(vh);
 
-  // Backend Yoga is minimal and does not implement stretch semantics yet,
-  // so propagate a concrete width per depth level from the viewport.
   for (let i = 0; i < blocks.length; i++) {
     const entry = blocks[i];
     if (!entry || !entry.yoga) continue;
