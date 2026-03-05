@@ -3011,6 +3011,10 @@ impl GfxDevice for VirglGfxBackend {
             let _ = self
                 .gpu
                 .resource_flush(self.scanout_res, self.width, self.height);
+            // Experiment: inverse ordering vs prior attempt to check host-specific latching.
+            let _ = self
+                .gpu
+                .transfer_to_host_2d(self.scanout_res, self.width, self.height);
         }
 
         self.completed_fence = fence;

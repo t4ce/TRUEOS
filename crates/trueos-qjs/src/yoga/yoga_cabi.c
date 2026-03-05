@@ -118,7 +118,11 @@ static uint32_t alloc_config(void) {
     return YG_INVALID_IDX;
 }
 
-static uint32_t alloc_node(void) {
+static uint32_t alloc_node(uint32_t cfg_idx) {
+    bool use_web_defaults = false;
+    if (cfg_idx != YG_INVALID_IDX && cfg_idx < YG_MAX_CONFIGS && g_configs[cfg_idx].used) {
+        use_web_defaults = g_configs[cfg_idx].use_web_defaults;
+    }
     for (uint32_t i = 0; i < YG_MAX_NODES; i++) {
         if (!g_nodes[i].used) {
             g_nodes[i].used = true;
@@ -129,7 +133,8 @@ static uint32_t alloc_node(void) {
             g_nodes[i].prev_sibling = YG_INVALID_IDX;
             g_nodes[i].child_count = 0;
 
-            g_nodes[i].flex_direction = FLEX_DIRECTION_COLUMN;
+            // Match Yoga's useWebDefaults behavior for implemented fields.
+            g_nodes[i].flex_direction = use_web_defaults ? FLEX_DIRECTION_ROW : FLEX_DIRECTION_COLUMN;
             g_nodes[i].position_type = POSITION_TYPE_RELATIVE;
 
             g_nodes[i].width = -1.0f;
@@ -382,8 +387,8 @@ void YGConfigSetUseWebDefaults(YGConfigRef config, bool enabled) {
 }
 
 YGNodeRef YGNodeNewWithConfig(YGConfigRef config) {
-    (void)config;
-    uint32_t idx = alloc_node();
+    uint32_t cfg_idx = cfg_ref_to_idx(config);
+    uint32_t idx = alloc_node(cfg_idx);
     if (idx == YG_INVALID_IDX) {
         return (YGNodeRef)0;
     }
