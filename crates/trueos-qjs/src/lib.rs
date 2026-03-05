@@ -32,6 +32,14 @@ pub mod browser_navigator;
 pub mod browser_webgpu;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_canvas.rs"]
+pub mod browser_canvas;
+
+#[cfg(feature = "trueos")]
+#[path = "../app/browser/browser_task.rs"]
+pub mod browser_task;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
@@ -56,16 +64,10 @@ pub mod workers;
 pub mod qjs_diag;
 
 #[cfg(feature = "trueos")]
-pub mod pixi;
-
-#[cfg(feature = "trueos")]
 pub mod threejs;
 
 #[cfg(feature = "trueos")]
 pub mod wgpu;
-
-#[cfg(feature = "trueos")]
-pub use pixi::hex as stream_gfx_smoke;
 
 #[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]
