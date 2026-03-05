@@ -1,5 +1,4 @@
 import { clearGraphics, getOrCreateGraphics } from '../pixiReuse.mjs';
-import { USE_DIRECT_CMD_BACKEND } from '../ui.mjs';
 function stripUnsupportedSvgText(svg) {
     // Pixi's SVG parser warns that <text> is unsupported.
     return String(svg)
@@ -41,7 +40,7 @@ export function applyYogaDefaultsSvg(yogaNode, node, Yoga) {
     yogaNode.setMinHeight(Math.min(80, h));
 }
 export function renderSvgElement(opts) {
-    const { svgMarkup, container, w, h, requestRerender } = opts;
+    const { svgMarkup, container, w, h } = opts;
     const svgString = stripUnsupportedSvgText(svgMarkup);
     const svgG = getOrCreateGraphics(container, '__svg');
     // Re-render only when the markup changes.
@@ -63,10 +62,7 @@ export function renderSvgElement(opts) {
                 res = null;
             }
             if (res && typeof res.then === 'function') {
-                res.then(() => {
-                    if (!USE_DIRECT_CMD_BACKEND)
-                        requestRerender?.();
-                }).catch(() => void 0);
+                res.then(() => void 0).catch(() => void 0);
             }
             svgG.__svgString = svgString;
             svgG.__w = w;

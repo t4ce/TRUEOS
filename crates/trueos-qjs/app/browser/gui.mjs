@@ -30,7 +30,6 @@ import {
     SCROLLBAR_PAD,
     SCROLLBAR_W,
     USER_POINTER_ID,
-    USE_DIRECT_CMD_BACKEND,
     TRACE_POSITION_FLOW,
     TRACE_YOGA_LIFECYCLE,
     USE_CURSOR_PLANE_TICK,
@@ -906,7 +905,7 @@ export async function startGui() {
     rootEl?.appendChild?.(app.canvas);
 
     const startCursorPlaneTick = () => {
-        if (!(USE_DIRECT_CMD_BACKEND && USE_CURSOR_PLANE_TICK))
+        if (!USE_CURSOR_PLANE_TICK)
             return;
         if (typeof globalThis.__trueosCursorPlaneTimer !== 'number') {
             globalThis.__trueosCursorPlaneTimer = setInterval(() => {
@@ -1124,13 +1123,11 @@ export async function startGui() {
         // Some interactions (e.g. hover/active fills) mutate Graphics directly; ensure we present.
         requestPresent();
     });
-    const sceneRoot = new Container();
     const overlayUiRoot = new Container();
     overlayUiRoot.eventMode = 'static';
     // Overlay sits above the scene, but must not steal input.
     const overlayRoot = new Container();
     overlayRoot.eventMode = 'none';
-    app.stage.addChild(sceneRoot);
     app.stage.addChild(overlayUiRoot);
     app.stage.addChild(overlayRoot);
     const scrollbarG = new Graphics();
@@ -1244,15 +1241,13 @@ export async function startGui() {
         const hasMenuDirty = dirtyWidgetKeys.has(GLOBAL_MENU_DIRTY_KEY);
         const singleDirtyKey = dirtyWidgetKeys.size === 1 ? Array.from(dirtyWidgetKeys)[0] : null;
         const hasIframeScrollDirty = typeof singleDirtyKey === 'string' && singleDirtyKey.length > 0 && uiState.iframeScroll.has(singleDirtyKey);
-        const scrollOnlyDirectPaint = USE_DIRECT_CMD_BACKEND
-            && !forceFullRepaint
+        const scrollOnlyDirectPaint = !forceFullRepaint
             && dirtyWidgetKeys.size === 1
             && hasScrollDirty
             && Array.isArray(lastDirectSnapshot)
             && lastDirectSnapshot.length > 0;
 
-        const menuOnlyDirectPaint = USE_DIRECT_CMD_BACKEND
-            && !forceFullRepaint
+        const menuOnlyDirectPaint = !forceFullRepaint
             && dirtyWidgetKeys.size === 1
             && hasMenuDirty
             && Array.isArray(lastDirectSnapshot)
@@ -1293,56 +1288,52 @@ export async function startGui() {
         const directSnapshotWithScrollbars = Array.isArray(directSnapshot)
             ? withScrollbars(directSnapshot)
             : directSnapshot;
+        // Manual render (ticker is stopped).
+        const records = directSnapshotWithScrollbars;
+        posTraceFrame++;
+        if (TRACE_POSITION_FLOW) {
+            const yoga = summarizeLayoutAbs(lastLayout);
+            const snap = summarizeItems(records);
+            const noisy = posTraceFrame <= 3 || (posTraceFrame % 30) === 1;
+            const clustered = (snap.total > 0 && (snap.nearOrigin / snap.total) > 0.6)
+                || (yoga.sized > 0 && (yoga.nearOrigin / yoga.sized) > 0.6);
+            if (noisy || clustered) {
+                console.log(`[pos-trace] frame=${posTraceFrame} src=records yogaSized=${yoga.sized}/${yoga.total} yogaNear0=${yoga.nearOrigin} yogaBBox=${yoga.minX.toFixed(1)},${yoga.minY.toFixed(1)}..${yoga.maxX.toFixed(1)},${yoga.maxY.toFixed(1)} rec=${snap.total} recNear0=${snap.nearOrigin} recBBox=${snap.minX.toFixed(1)},${snap.minY.toFixed(1)}..${snap.maxX.toFixed(1)},${snap.maxY.toFixed(1)}`);
+                if (yoga.samples.length > 0)
+                    console.log(`[pos-trace:yoga-samples] ${yoga.samples.join(' | ')}`);
+                if (yoga.zeroSamples.length > 0)
+                    console.log(`[pos-trace:yoga-zero] ${yoga.zeroSamples.join(' | ')}`);
+                if (snap.samples.length > 0)
+                    console.log(`[pos-trace:record-samples] ${snap.samples.join(' | ')}`);
+            }
+        }
+        const rendered = renderDirectCmdFrame({
+            records,
+            viewportW: app.renderer.width,
+            viewportH: app.renderer.height,
+            worldW: app.screen.width,
+            worldH: app.screen.height,
+            scrollY: uiState.scroll.y,
+            scrollDeltaY: 0,
+            scrollDeltaByDomain: {},
+            clearRgb: 0xFFFFFF,
+            browserContext,
+            getCursorColor,
+            onMenuAction: applyContextMenuAction,
+        });
+        if (!rendered) {
+            app.renderer.render(app.stage);
+        }
         try {
-            console.log(`[richui-paint] sceneChildren=${sceneRoot.children.length} overlayChildren=${overlayRoot.children.length} hoverRects=${uiState.hoverRects.length} layoutNodes=${countLayoutNodes(lastLayout)}`);
+            const recordCount = Array.isArray(records) ? records.length : 0;
+            console.log(`[richui-paint] backend=direct records=${recordCount} overlayChildren=${overlayRoot.children.length} hoverRects=${uiState.hoverRects.length} layoutNodes=${countLayoutNodes(lastLayout)}`);
         }
         catch {
             // Debug logging should never affect paint.
         }
-        // Manual render (ticker is stopped).
-        if (USE_DIRECT_CMD_BACKEND) {
-            const records = directSnapshotWithScrollbars;
-            posTraceFrame++;
-            if (TRACE_POSITION_FLOW) {
-                const yoga = summarizeLayoutAbs(lastLayout);
-                const snap = summarizeItems(records);
-                const noisy = posTraceFrame <= 3 || (posTraceFrame % 30) === 1;
-                const clustered = (snap.total > 0 && (snap.nearOrigin / snap.total) > 0.6)
-                    || (yoga.sized > 0 && (yoga.nearOrigin / yoga.sized) > 0.6);
-                if (noisy || clustered) {
-                    console.log(`[pos-trace] frame=${posTraceFrame} src=records yogaSized=${yoga.sized}/${yoga.total} yogaNear0=${yoga.nearOrigin} yogaBBox=${yoga.minX.toFixed(1)},${yoga.minY.toFixed(1)}..${yoga.maxX.toFixed(1)},${yoga.maxY.toFixed(1)} rec=${snap.total} recNear0=${snap.nearOrigin} recBBox=${snap.minX.toFixed(1)},${snap.minY.toFixed(1)}..${snap.maxX.toFixed(1)},${snap.maxY.toFixed(1)}`);
-                    if (yoga.samples.length > 0)
-                        console.log(`[pos-trace:yoga-samples] ${yoga.samples.join(' | ')}`);
-                    if (yoga.zeroSamples.length > 0)
-                        console.log(`[pos-trace:yoga-zero] ${yoga.zeroSamples.join(' | ')}`);
-                    if (snap.samples.length > 0)
-                        console.log(`[pos-trace:record-samples] ${snap.samples.join(' | ')}`);
-                }
-            }
-            const rendered = renderDirectCmdFrame({
-                records,
-                viewportW: app.renderer.width,
-                viewportH: app.renderer.height,
-                worldW: app.screen.width,
-                worldH: app.screen.height,
-                scrollY: uiState.scroll.y,
-                scrollDeltaY: 0,
-                scrollDeltaByDomain: {},
-                clearRgb: 0xFFFFFF,
-                browserContext,
-                getCursorColor,
-                onMenuAction: applyContextMenuAction,
-            });
-            if (!rendered) {
-                app.renderer.render(app.stage);
-            }
-            lastDirectSnapshot = Array.isArray(records) ? records.map((it) => ({ ...(it || {}) })) : null;
-            lastDirectSnapshotScrollY = uiState.scroll.y;
-            lastDirectSnapshotScrollByDomain = captureScrollByDomain();
-        }
-        else {
-            app.renderer.render(app.stage);
-        }
+        lastDirectSnapshot = Array.isArray(records) ? records.map((it) => ({ ...(it || {}) })) : null;
+        lastDirectSnapshotScrollY = uiState.scroll.y;
+        lastDirectSnapshotScrollByDomain = captureScrollByDomain();
         dirtyWidgetKeys.clear();
         forceFullRepaint = false;
     };
@@ -1386,27 +1377,21 @@ export async function startGui() {
         presentScheduled = true;
         requestAnimationFrame(() => {
             presentScheduled = false;
-            if (USE_DIRECT_CMD_BACKEND) {
-                // In direct mode, avoid Pixi stage presents because they can race/overdraw
-                // the cmd-stream output during bring-up and cause transient text artifacts.
-                // Cursor visuals are handled by the cursor-plane tick.
-                if (!USE_CURSOR_PLANE_TICK) {
-                    try {
-                        renderCursorPlaneFrame({
-                            viewportW: app.renderer.width,
-                            viewportH: app.renderer.height,
-                            browserContext,
-                            getCursorColor,
-                        });
-                    }
-                    catch {
-                        // Keep present path resilient.
-                    }
+            // Avoid Pixi stage presents because they can race/overdraw
+            // cmd-stream output during bring-up and cause transient text artifacts.
+            // Cursor visuals are handled by the cursor-plane tick.
+            if (!USE_CURSOR_PLANE_TICK) {
+                try {
+                    renderCursorPlaneFrame({
+                        viewportW: app.renderer.width,
+                        viewportH: app.renderer.height,
+                        browserContext,
+                        getCursorColor,
+                    });
                 }
-                return;
-            }
-            else {
-                app.renderer.render(app.stage);
+                catch {
+                    // Keep present path resilient.
+                }
             }
         });
     };
@@ -1656,7 +1641,7 @@ export async function startGui() {
     app.ticker.add(() => {
         updateUserCursorOverlays();
     });
-    if (USE_DIRECT_CMD_BACKEND && USE_CURSOR_PLANE_TICK) {
+    if (USE_CURSOR_PLANE_TICK) {
         if (typeof globalThis.__trueosCursorUiSyncTimer !== 'number') {
             globalThis.__trueosCursorUiSyncTimer = setInterval(() => {
                 try {
