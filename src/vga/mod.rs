@@ -1033,15 +1033,15 @@ fn build_font_cache_large() -> FontCacheLarge {
         width = width.clamp(1, BANNER_CELL_W as i32);
         let width = width as u8;
 
-        let cell_h = BANNER_CELL_H as i32;
+        let _cell_h = BANNER_CELL_H as i32;
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
 
         if glyph_w > 0 && glyph_h > 0 {
             let x0 = (-metrics.xmin).max(0);
-            // let y0 = (cell_h - glyph_h) / 2 - metrics.ymin - 1;
-            // Align purely by centering the bounding box:
-            let y0 = (cell_h - glyph_h) / 2;
+            // Baseline anchor only: height-centering biases shorter lowercase
+            // glyphs downward compared to uppercase.
+            let y0 = -metrics.ymin - 1;
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {

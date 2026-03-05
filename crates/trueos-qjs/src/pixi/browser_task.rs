@@ -1,11 +1,13 @@
 #![cfg(feature = "trueos")]
 
+use alloc::vec::Vec;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
+use crate::pixi::browser_canvas::SIMPLE_DOM_CANVAS_SHIM_JS;
 
 unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
@@ -122,7 +124,9 @@ pub async fn boot_browser() {
         qjs::js_free_value(ctx, global);
 
         let init_filename = b"<pixi-browser-init>\0";
-        let init_script = br#"
+        let mut init_script = Vec::new();
+        init_script.extend_from_slice(SIMPLE_DOM_CANVAS_SHIM_JS);
+        init_script.extend_from_slice(br#"
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 
 if (!G.window) G.window = G;
@@ -174,7 +178,6 @@ if (!G.requestAnimationFrame) {
 if (!G.cancelAnimationFrame) G.cancelAnimationFrame = () => {};
 
 const __trueosWebGpuState = {
-    enabled: false,
     preferredCanvasFormat: 'bgra8unorm',
     backendName: 'trueos-cmd-stream',
     nextId: 1,
@@ -514,6 +517,60 @@ if (typeof G.__trueosMakeGpuQueue !== 'function') {
                     buffer.__data.set(srcAll.subarray(so, srcEnd), bo);
                 }
             },
+            copyExternalImageToTexture(source, destination, copySize) {
+                const tex = destination && destination.texture;
+                if (!tex) return;
+
+                const srcObj = source && source.source ? source.source : source;
+                if (!srcObj) return;
+
+                const sizeObj = copySize || {};
+                const w = Math.max(
+                    0,
+                    Number(
+                        sizeObj.width
+                        ?? (Array.isArray(sizeObj) ? sizeObj[0] : undefined)
+                        ?? srcObj.width
+                        ?? srcObj.videoWidth
+                        ?? srcObj.naturalWidth
+                        ?? 0
+                    ) | 0
+                );
+                const h = Math.max(
+                    0,
+                    Number(
+                        sizeObj.height
+                        ?? (Array.isArray(sizeObj) ? sizeObj[1] : undefined)
+                        ?? srcObj.height
+                        ?? srcObj.videoHeight
+                        ?? srcObj.naturalHeight
+                        ?? 0
+                    ) | 0
+                );
+                if (w <= 0 || h <= 0) return;
+
+                const origin = destination && destination.origin ? destination.origin : null;
+                const ox = Math.max(0, Number(origin && origin.x ? origin.x : 0) | 0);
+                const oy = Math.max(0, Number(origin && origin.y ? origin.y : 0) | 0);
+
+                // Fallback path: accept plain RGBA-backed objects and copy row-wise.
+                const srcBytes = (srcObj.__rgbas && srcObj.__rgbas.rgba instanceof Uint8Array)
+                    ? srcObj.__rgbas.rgba
+                    : (srcObj.__data instanceof Uint8Array)
+                        ? srcObj.__data
+                        : (srcObj.data instanceof Uint8Array)
+                            ? srcObj.data
+                            : (srcObj.data instanceof Uint8ClampedArray)
+                                ? new Uint8Array(srcObj.data.buffer, srcObj.data.byteOffset, srcObj.data.byteLength)
+                                : null;
+
+                if (!(srcBytes instanceof Uint8Array)) return;
+
+                const bpr = Math.max(w * 4, Math.min(srcBytes.byteLength, ((srcObj.width || w) | 0) * 4));
+                if (typeof G.__trueosUploadLinearRgbaToTexture === 'function') {
+                    G.__trueosUploadLinearRgbaToTexture(tex, srcBytes, bpr, w, h, ox, oy);
+                }
+            },
             writeTexture() {},
             async onSubmittedWorkDone() { return; },
         };
@@ -664,7 +721,6 @@ function __trueosMakeNavigatorGpu() {
             return new Set();
         },
         async requestAdapter(opts = {}) {
-            if (!__trueosWebGpuState.enabled) return null;
             return __trueosMakeGpuAdapter(opts || {});
         },
     };
@@ -672,319 +728,7 @@ function __trueosMakeNavigatorGpu() {
 
 __trueosInstallGpuConstants(G);
 
-function __trueosInstallWebGlGlobals(T) {
-    if (typeof T.WebGLRenderingContext === 'undefined') {
-        T.WebGLRenderingContext = function WebGLRenderingContext() {};
-    }
-    if (typeof T.WebGL2RenderingContext === 'undefined') {
-        T.WebGL2RenderingContext = function WebGL2RenderingContext() {};
-    }
-}
-
-function __trueosMakeWebGlContext(canvas, isWebGl2) {
-    const gl = {
-        canvas,
-        // Common constants used by capability checks.
-        MAX_TEXTURE_IMAGE_UNITS: 0x8872,
-        MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8B4D,
-        MAX_TEXTURE_SIZE: 0x0D33,
-        MAX_CUBE_MAP_TEXTURE_SIZE: 0x851C,
-        MAX_RENDERBUFFER_SIZE: 0x84E8,
-        MAX_VERTEX_ATTRIBS: 0x8869,
-        MAX_VERTEX_UNIFORM_VECTORS: 0x8DFB,
-        MAX_VARYING_VECTORS: 0x8DFC,
-        MAX_FRAGMENT_UNIFORM_VECTORS: 0x8DFD,
-        MAX_VIEWPORT_DIMS: 0x0D3A,
-        ALIASED_LINE_WIDTH_RANGE: 0x846E,
-        UNMASKED_VENDOR_WEBGL: 0x9245,
-        UNMASKED_RENDERER_WEBGL: 0x9246,
-        VERSION: 0x1F02,
-        SHADING_LANGUAGE_VERSION: 0x8B8C,
-        VENDOR: 0x1F00,
-        RENDERER: 0x1F01,
-        FRAGMENT_SHADER: 0x8B30,
-        HIGH_FLOAT: 0x8DF2,
-        COMPILE_STATUS: 0x8B81,
-        // Misc constants some code may touch.
-        BLEND: 0x0BE2,
-        DEPTH_TEST: 0x0B71,
-        CULL_FACE: 0x0B44,
-        POLYGON_OFFSET_FILL: 0x8037,
-        CW: 0x0900,
-        CCW: 0x0901,
-        FUNC_ADD: 0x8006,
-        TEXTURE0: 0x84C0,
-        TEXTURE_2D: 0x0DE1,
-        RGBA: 0x1908,
-        UNSIGNED_BYTE: 0x1401,
-        FRAMEBUFFER: 0x8D40,
-        COLOR_BUFFER_BIT: 0x00004000,
-        DEPTH_BUFFER_BIT: 0x00000100,
-        TRIANGLES: 0x0004,
-        UNSIGNED_SHORT: 0x1403,
-        UNSIGNED_INT: 0x1405,
-        FLOAT: 0x1406,
-        BYTE: 0x1400,
-        SHORT: 0x1402,
-        HALF_FLOAT: 0x140B,
-        RGBA8: 0x8058,
-        STENCIL_INDEX8: 0x8D48,
-        DEPTH_COMPONENT: 0x1902,
-        DEPTH_STENCIL: 0x84F9,
-        DEPTH_COMPONENT16: 0x81A5,
-        DEPTH_COMPONENT24: 0x81A6,
-        DEPTH24_STENCIL8: 0x88F0,
-        DEPTH_COMPONENT32F: 0x8CAC,
-        DEPTH32F_STENCIL8: 0x8CAD,
-        R8: 0x8229,
-        R8_SNORM: 0x8F94,
-        R8UI: 0x8232,
-        R8I: 0x8231,
-        R16UI: 0x8234,
-        R16I: 0x8233,
-        R16F: 0x822D,
-        RG8: 0x822B,
-        RG8_SNORM: 0x8F95,
-        RG8UI: 0x8238,
-        RG8I: 0x8237,
-        R32UI: 0x8236,
-        R32I: 0x8235,
-        R32F: 0x822E,
-        RG16UI: 0x823A,
-        RG16I: 0x8239,
-        RG16F: 0x822F,
-        RGBA8_SNORM: 0x8F97,
-        RGBA8UI: 0x8D7C,
-        RGBA8I: 0x8D8E,
-        RGB9_E5: 0x8C3D,
-        RGB10_A2: 0x8059,
-        R11F_G11F_B10F: 0x8C3A,
-        RG32UI: 0x823C,
-        RG32I: 0x823B,
-        RG32F: 0x8230,
-        RGBA16UI: 0x8D76,
-        RGBA16I: 0x8D88,
-        RGBA16F: 0x881A,
-        RGBA32UI: 0x8D70,
-        RGBA32I: 0x8D82,
-        RGBA32F: 0x8814,
-        UNPACK_FLIP_Y_WEBGL: 0x9240,
-        UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241,
-        UNPACK_ALIGNMENT: 0x0CF5,
-        // Capability probes.
-        getContextAttributes() {
-            return {
-                alpha: true,
-                antialias: false,
-                depth: true,
-                stencil: true,
-                premultipliedAlpha: true,
-                preserveDrawingBuffer: false,
-            };
-        },
-        isContextLost() { return false; },
-        getParameter(p) {
-            switch (p) {
-                case this.MAX_TEXTURE_IMAGE_UNITS:
-                case this.MAX_COMBINED_TEXTURE_IMAGE_UNITS:
-                    return 16;
-                case this.MAX_TEXTURE_SIZE:
-                case this.MAX_CUBE_MAP_TEXTURE_SIZE:
-                case this.MAX_RENDERBUFFER_SIZE:
-                    return 8192;
-                case this.MAX_VERTEX_ATTRIBS:
-                    return 16;
-                case this.MAX_VERTEX_UNIFORM_VECTORS:
-                case this.MAX_VARYING_VECTORS:
-                case this.MAX_FRAGMENT_UNIFORM_VECTORS:
-                    return 1024;
-                case this.MAX_VIEWPORT_DIMS:
-                    return [8192, 8192];
-                case this.ALIASED_LINE_WIDTH_RANGE:
-                    return [1, 1];
-                case this.VERSION:
-                    return isWebGl2 ? 'WebGL 2.0 (TRUEOS stub)' : 'WebGL 1.0 (TRUEOS stub)';
-                case this.SHADING_LANGUAGE_VERSION:
-                    return isWebGl2 ? 'WebGL GLSL ES 3.00 (TRUEOS stub)' : 'WebGL GLSL ES 1.00 (TRUEOS stub)';
-                case this.VENDOR:
-                case this.UNMASKED_VENDOR_WEBGL:
-                    return 'TRUEOS';
-                case this.RENDERER:
-                case this.UNMASKED_RENDERER_WEBGL:
-                    return 'TRUEOS WebGL probe stub';
-                default:
-                    return 0;
-            }
-        },
-        getSupportedExtensions() { return []; },
-        getShaderPrecisionFormat() {
-            return { rangeMin: 127, rangeMax: 127, precision: 23 };
-        },
-        getExtension(name) {
-            const n = String(name || '').toUpperCase();
-            if (n === 'WEBGL_LOSE_CONTEXT') {
-                return {
-                    loseContext() {},
-                    restoreContext() {},
-                };
-            }
-            if (n === 'EXT_TEXTURE_FILTER_ANISOTROPIC' || n === 'WEBKIT_EXT_TEXTURE_FILTER_ANISOTROPIC' || n === 'MOZ_EXT_TEXTURE_FILTER_ANISOTROPIC') {
-                return {
-                    MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84FF,
-                    TEXTURE_MAX_ANISOTROPY_EXT: 0x84FE,
-                };
-            }
-            return null;
-        },
-        // No-op API surface to satisfy probes and defensive calls.
-        createTexture() { return {}; },
-        deleteTexture() {},
-        bindTexture() {},
-        texImage2D() {},
-        texSubImage2D() {},
-        compressedTexImage2D() {},
-        texParameteri() {},
-        pixelStorei() {},
-        activeTexture() {},
-        generateMipmap() {},
-        createSampler() { return {}; },
-        samplerParameteri() {},
-        bindSampler() {},
-        createFramebuffer() { return {}; },
-        bindFramebuffer() {},
-        createBuffer() { return {}; },
-        bindBuffer() {},
-        bufferData() {},
-        bufferSubData() {},
-        createProgram() { return {}; },
-        createShader() { return {}; },
-        deleteShader() {},
-        shaderSource() {},
-        compileShader() {},
-        getShaderParameter() { return true; },
-        getShaderInfoLog() { return ''; },
-        attachShader() {},
-        linkProgram() {},
-        getProgramParameter() { return true; },
-        getProgramInfoLog() { return ''; },
-        useProgram() {},
-        getAttribLocation() { return 0; },
-        getUniformLocation() { return {}; },
-        uniform1f() {},
-        uniform1i() {},
-        uniform2f() {},
-        uniform3f() {},
-        uniform4f() {},
-        uniformMatrix3fv() {},
-        uniformMatrix4fv() {},
-        enable() {},
-        disable() {},
-        blendFunc() {},
-        blendFuncSeparate() {},
-        blendEquationSeparate() {},
-        depthMask() {},
-        frontFace() {},
-        polygonOffset() {},
-        viewport() {},
-        clearColor() {},
-        clear() {},
-        drawArrays() {},
-        drawElements() {},
-        createVertexArray() { return {}; },
-        bindVertexArray() {},
-        vertexAttribPointer() {},
-        enableVertexAttribArray() {},
-        disableVertexAttribArray() {},
-        readPixels() {},
-    };
-    return gl;
-}
-
-__trueosInstallWebGlGlobals(G);
-
-const mkNode = () => ({
-  style: {},
-  children: [],
-  parentNode: null,
-  ownerDocument: null,
-  eventMode: 'none',
-  appendChild(ch) { this.children.push(ch); ch.parentNode = this; return ch; },
-  removeChild(ch) { this.children = this.children.filter((x) => x !== ch); ch.parentNode = null; return ch; },
-  addEventListener() {},
-  removeEventListener() {},
-  dispatchEvent() { return true; },
-  setAttribute() {},
-  getAttribute() { return null; },
-  contains(node) { if (node === this) return true; for (const c of this.children) { if (c && typeof c.contains === 'function' && c.contains(node)) return true; } return false; },
-  getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, width: this.width || 0, height: this.height || 0 }; },
-});
-
-if (!G.document) {
-  const doc = mkNode();
-  doc.ownerDocument = doc;
-  doc.documentElement = mkNode();
-  doc.head = mkNode();
-  doc.body = mkNode();
-  doc.documentElement.ownerDocument = doc;
-  doc.head.ownerDocument = doc;
-  doc.body.ownerDocument = doc;
-  doc.documentElement.appendChild(doc.head);
-  doc.documentElement.appendChild(doc.body);
-
-  const mkCanvas = () => {
-    const c = mkNode();
-    c.tagName = 'CANVAS';
-    c.width = G.window.innerWidth | 0;
-    c.height = G.window.innerHeight | 0;
-        let gpuCtx = null;
-        let webglCtx = null;
-        let webgl2Ctx = null;
-    c.getContext = (kind) => {
-            const k = String(kind || '').toLowerCase();
-            if (k === 'webgpu') {
-                if (!gpuCtx) gpuCtx = __trueosMakeGpuCanvasContext(c);
-                return gpuCtx;
-            }
-            if (k === 'webgl2') {
-                if (!webgl2Ctx) webgl2Ctx = __trueosMakeWebGlContext(c, true);
-                return webgl2Ctx;
-            }
-            if (k === 'webgl' || k === 'experimental-webgl') {
-                if (!webglCtx) webglCtx = __trueosMakeWebGlContext(c, false);
-                return webglCtx;
-            }
-                        if (k !== '2d') return null;
-                        if (typeof G.__trueosMakeCanvas2dContext === 'function') {
-                                return G.__trueosMakeCanvas2dContext();
-                        }
-                        return {
-                                font: '16px sans-serif',
-                                measureText: (s) => ({ width: (String(s).length || 0) * 8 }),
-                                clearRect() {},
-                                fillRect() {},
-                                beginPath() {},
-                                moveTo() {},
-                                lineTo() {},
-                                stroke() {},
-                                fill() {},
-                        };
-    };
-    return c;
-  };
-
-  doc.createElement = (tag) => {
-    const t = String(tag || '').toLowerCase();
-    const n = t === 'canvas' ? mkCanvas() : mkNode();
-    n.tagName = String(tag || '').toUpperCase();
-    n.ownerDocument = doc;
-    return n;
-  };
-  doc.getElementById = () => null;
-  doc.addEventListener = () => {};
-  doc.removeEventListener = () => {};
-  doc.dispatchEvent = () => true;
-  G.document = doc;
-}
+__trueosInstallSimpleDomCanvas(G, __trueosMakeGpuCanvasContext);
 
 if (!G.navigator) {
     let nav = null;
@@ -1084,11 +828,11 @@ if (!G.fetch) {
 }
 
 await import('/qjs/browser/main.mjs');
-"#;
+"#);
 
         if !eval_or_log(
             ctx,
-            init_script,
+            &init_script,
             init_filename.as_ptr() as *const c_char,
             qjs::JS_EVAL_TYPE_MODULE,
             "browser-init",

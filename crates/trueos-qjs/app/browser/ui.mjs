@@ -3,10 +3,16 @@ import * as parse5 from 'parse5';
 import { INPUT_HTML } from './input_html.mjs';
 import { BLOCK_TAGS } from './htmlDefaults.mjs';
 
+const SIMPLE_BRINGUP_HTML = `<!doctype html>
+<html>
+    <body>
+        <h1>Hello world</h1>
+    </body>
+</html>`;
+
 export const SCROLLBAR_PAD = 6;
 export const SCROLLBAR_W = 10;
 export const USER_POINTER_ID = 1;
-export const USE_DIRECT_CMD_BACKEND = true;
 export const TRACE_POSITION_FLOW = true;
 export const TRACE_YOGA_LIFECYCLE = true;
 export const USE_CURSOR_PLANE_TICK = true;
@@ -586,9 +592,11 @@ function logRichHtmlCoverage(body, renderNodes) {
 }
 
 export function buildDefaultRenderNodes() {
-    const html = INPUT_HTML;
+    // Bring-up scene: keep this tiny while stabilizing direct-cmd rendering.
+    // Rich demo HTML is still available in INPUT_HTML for easy switch-back.
+    const html = SIMPLE_BRINGUP_HTML;
     try {
-        console.log(`[richui-html] len=${html.length} marker=${html.includes('Tree (Details + Checkbox)') ? 'rich' : 'small'}`);
+        console.log(`[richui-html] len=${html.length} marker=${html.includes('Hello world') ? 'bringup-simple' : 'rich'}`);
     }
     catch {
         // Debug logging should never affect startup.

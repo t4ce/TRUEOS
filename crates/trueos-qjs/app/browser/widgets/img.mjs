@@ -1,7 +1,6 @@
 import { TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from '../text.mjs';
 import { makeImgPlaceholderSvg, makeNeonOrbSvg } from '../svgs.mjs';
 import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
-import { USE_DIRECT_CMD_BACKEND } from '../ui.mjs';
 function decodeSvgDataUri(src) {
     const s = String(src ?? '');
     if (!s.startsWith('data:image/svg+xml'))
@@ -31,7 +30,7 @@ function stripUnsupportedSvgText(svg) {
         .replace(/<\s*text\b[^>]*>[\s\S]*?<\s*\/\s*text\s*>/gi, '');
 }
 export function renderImg(opts) {
-    const { node, container, graphics: g, w, h, theme, requestRerender } = opts;
+    const { node, container, graphics: g, w, h, theme } = opts;
     const alt = node.attrs?.alt ?? '';
     const src = node.attrs?.src ?? '';
     const hasSrc = src.trim().length > 0;
@@ -52,10 +51,7 @@ export function renderImg(opts) {
                 res = null;
             }
             if (res && typeof res.then === 'function') {
-                res.then(() => {
-                    if (!USE_DIRECT_CMD_BACKEND)
-                        requestRerender?.();
-                }).catch(() => void 0);
+                res.then(() => void 0).catch(() => void 0);
             }
             svgG.__key = key;
         }
