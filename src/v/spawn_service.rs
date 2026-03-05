@@ -542,7 +542,7 @@ async fn webgpu_mesh_task() {
                 }
                 let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
                 single_submitted = true;
-                let _ = trueos_qjs::pixi::smoke::preload_pixi_cdn_once().await;
+                // Pixi smoke preload was removed from Rust module wiring.
             }
             swapped = true;
             hold_start_ticks = now_ticks;
@@ -563,14 +563,12 @@ fn spawn_wgpu_text(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_webgpu_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(trueos_qjs::pixi::smoke::boot_pixi_scene_smoke_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
+    let _ = spawner;
+    SpawnAttempt::Skipped
 }
 
 fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(trueos_qjs::pixi::boot_browser()) {
+    match spawner.spawn(trueos_qjs::browser_task::boot_browser()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
