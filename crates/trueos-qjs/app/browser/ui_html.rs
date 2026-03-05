@@ -1,10 +1,224 @@
 #![cfg(feature = "trueos")]
 
-pub const UI_HTML: &str = r#"<!DOCTYPE html>
-<html lang=\"en\">
-<head><meta charset=\"utf-8\"><title>TRUEOS Browser</title></head>
+pub const UI_HTML: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TRUEOS Browser</title></head>
+    <meta charset="UTF-8">
+    <title>HTML Only Visual Elements</title>
+</head>
 <body>
-  <div>one extra block node</div>
-  <footer><p>Pure HTML demo - browser default styling only</p></footer>
+
+<h1>HTML Without CSS or JavaScript</h1>
+
+<h2>Tree (Details + Checkbox)</h2>
+
+<details>
+    <summary><input type="checkbox"> Project</summary>
+    <div>
+        <p>A node can contain arbitrary HTML when expanded.</p>
+
+        <details>
+            <summary><input type="checkbox"> src</summary>
+            <div>
+                <details>
+                    <summary><input type="checkbox"> main.ts</summary>
+                    <div></div>
+                </details>
+
+                <details>
+                    <summary><input type="checkbox"> widgets</summary>
+                    <div>
+                        <details>
+                            <summary><input type="checkbox"> color.ts</summary>
+                            <div></div>
+                        </details>
+                        <details>
+                            <summary><input type="checkbox"> number.ts</summary>
+                            <div></div>
+                        </details>
+                    </div>
+                </details>
+            </div>
+        </details>
+
+        <details>
+            <summary><input type="checkbox"> package.json</summary>
+            <div></div>
+        </details>
+    </div>
+</details>
+
+<hr>
+<details>
+<color></color>
+</details>
+
+<p>
+    <svg width="240" height="140" viewBox="0 0 100 60">
+        <rect x="1" y="1" width="98" height="58" rx="8" fill="#F6F6F6" stroke="#222" stroke-width="2" />
+        <circle cx="30" cy="30" r="12" fill="#16A34A" />
+        <path d="M55 40 L72 20 L90 40" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+
+    <canvas width="240" height="140"></canvas>
+</p>
+
+<p>
+    <iframe width="600" height="600" srcdoc="<!DOCTYPE html><html><body><h2>Inside iframe</h2><p><input type='text' value='Nested input'></p><h2>Dialog</h2><dialog><p>Floating dialog (drag the border/background).</p><p><label>Dialog input: <input type='text' value='Drag outside me'></label></p><p><button type='button'>OK</button><button type='button'>Cancel</button></p></dialog></body></html>"></iframe>
+</p>
+<p>
+    <!-- RGBA channel spinners are now internal to the <color> widget. -->
+</p>
+
+<h2>Buttons and Inputs</h2>
+
+<p>
+    <search value="Search..." width="420"></search>
+</p>
+
+<p>
+    <select>
+        <option selected>One</option>
+        <option>Two</option>
+        <option>Three</option>
+        <option>Four</option>
+        <option>Five</option>
+    </select>
+</p>
+
+<h2>Date/Time Inputs</h2>
+
+<p><label>Time: <input type="time" value="12:34:56"></label></p>
+<p><label>Date (simplified): <input type="date" value="2026-02-01"></label></p>
+<p><label>Month: <input type="month" value="2026-02"></label></p>
+<p><label>Week (simplified): <input type="week" value="2026-W06"></label></p>
+<p><label>Datetime-local (simplified): <input type="datetime-local" value="2026-02-01T12:34:56"></label></p>
+
+<details>
+<form>
+    <p>
+        <label>
+            Name:
+            <input type="text" name="name">
+        </label>
+    </p>
+
+    <p>
+        <label>
+            Password:
+            <input type="password" name="password">
+        </label>
+    </p>
+
+    <p>
+        <button type="submit">Submit</button>
+        <button type="reset">Reset</button>
+        <button type="button">A Much Longer Button Label To See How Centering And Wrapping Looks</button>
+    </p>
+</form>
+</details>
+
+<hr>
+
+<h2>Checkboxes and Radio Buttons</h2>
+<details>
+<form>
+    <p>
+        <label>
+            <input type="checkbox" name="subscribe">
+            Subscribe to newsletter
+        </label>
+    </p>
+
+    <p>
+        Favorite color:
+        <label><input type="radio" name="color"> Red</label>
+        <label><input type="radio" name="color"> Blue</label>
+        <label><input type="radio" name="color"> Green</label>
+    </p>
+</form>
+</details>
+<hr>
+
+<h2>Progress and Meter</h2>
+<details>
+<p>Download progress:</p>
+<progress value="60" max="100"></progress>
+
+<p>Skill level:</p>
+<meter value="0.7">70%</meter>
+
+<p>Range slider:</p>
+<slider value="0.7">70%</slider>
+
+<hr>
+</details>
+<h2>Expandable Content</h2>
+
+<details>
+    <summary>Click to expand</summary>
+    <p>This text is hidden until you open it.</p>
+</details>
+
+<hr>
+
+<h2>Dialog</h2>
+
+<dialog>
+    <p>Floating dialog (drag the border/background).</p>
+    <p>
+        <label>
+            Dialog input:
+            <input type="text" value="Drag outside me">
+        </label>
+    </p>
+    <p>
+        <button type="button">OK</button>
+        <button type="button">Cancel</button>
+    </p>
+</dialog>
+
+<hr>
+
+<form>
+<h2>Table</h2>
+
+<table border="1">
+    <tr>
+        <th>Item</th>
+        <th>Quantity</th>
+    </tr>
+    <tr>
+        <td>Apples</td>
+        <td>3</td>
+    </tr>
+    <tr>
+        <td>Oranges</td>
+        <td>5</td>
+    </tr>
+</table>
+</form>
+
+<hr>
+
+<h2>Text Input + Textarea</h2>
+
+<p>
+    <input type="text" name="bottomText" value="Single line">
+</p>
+
+<p>
+    <textarea name="bottomArea">Multiline (for now rendered like an input)</textarea>
+</p>
+
+    <img
+        width="240"
+        height="240">
+
+<footer>
+    <p>Pure HTML demo — browser default styling only</p>
+</footer>
+
 </body>
-</html>"#;
+</html>
+"##;
