@@ -2,39 +2,30 @@ import { Application, Container, Graphics } from 'pixi.js';
 import Yoga from 'yoga-layout';
 import * as browserContext from 'trueos:browser_context';
 import { defaultTheme } from './theme.mjs';
-// SVG generation/parsing helpers live in widget modules.
-import { makeThemedText, TEXT_BASELINE_NUDGE_Y, WRAP_EPSILON_PX } from './text.mjs';
-import { clearGraphics, getOrCreateContainer, getOrCreateGraphics, getOrCreateText } from './pixiReuse.mjs';
 import { renderCursorPlaneFrame, renderDirectCmdFrame } from './cmd_backend.mjs';
 import { clampWrappedLines, getCaretIndexFromPoint, wrapFieldTextWithIndices } from './widgets/textField.mjs';
-import { renderProgressOrMeter } from './widgets/progressMeter.mjs';
 import { applyYogaDefaultsProgressOrMeter } from './widgets/progressMeter.mjs';
-import { applyYogaDefaultsSlider, createYogaNodeForSliderLabel, renderSlider, renderSliderLabel, getOrInitSliderState as widgetGetOrInitSliderState, } from './widgets/slider.mjs';
-import { getEffectiveDetailsChildren, renderSummary } from './widgets/detailsSummary.mjs';
+import { applyYogaDefaultsSlider, createYogaNodeForSliderLabel, getOrInitSliderState as widgetGetOrInitSliderState, } from './widgets/slider.mjs';
+import { getEffectiveDetailsChildren } from './widgets/detailsSummary.mjs';
 import { applyYogaDefaultsDetails, applyYogaDefaultsSummary } from './widgets/detailsSummary.mjs';
-import { renderHr } from './widgets/hr.mjs';
 import { applyYogaDefaultsHr } from './widgets/hr.mjs';
-import { renderButton } from './widgets/button.mjs';
 import { applyYogaDefaultsButton } from './widgets/button.mjs';
-import { renderCell, renderTable } from './widgets/table.mjs';
 import { applyYogaDefaultsCell, applyYogaDefaultsTable, applyYogaDefaultsTr } from './widgets/table.mjs';
 import { isHeadingTag } from './widgets/headings.mjs';
 import { applyYogaDefaultsHeading } from './widgets/headings.mjs';
-import { renderImg } from './widgets/img.mjs';
 import { applyYogaDefaultsImg } from './widgets/img.mjs';
-import { applyYogaDefaultsSvg, renderSvgElement } from './widgets/svgElement.mjs';
-import { applyYogaDefaultsCanvas, renderCanvasElement } from './widgets/canvasElement.mjs';
-import { applyYogaDefaultsIframe, renderIframePlaceholder } from './widgets/iframe.mjs';
-import { applyYogaDefaultsInput, renderInput } from './widgets/input.mjs';
-import { renderTextarea } from './widgets/textarea.mjs';
+import { applyYogaDefaultsSvg } from './widgets/svgElement.mjs';
+import { applyYogaDefaultsCanvas } from './widgets/canvasElement.mjs';
+import { applyYogaDefaultsIframe } from './widgets/iframe.mjs';
+import { applyYogaDefaultsInput } from './widgets/input.mjs';
 import { applyYogaDefaultsTextarea } from './widgets/textarea.mjs';
 import { applyYogaDefaultsBarrow } from './widgets/barrow.mjs';
-import { applyYogaDefaultsSearchButton, applyYogaDefaultsSearchRow, renderSearchButton } from './widgets/search.mjs';
-import { applyYogaDefaultsDialog, getOrInitDialogState, renderDialog } from './widgets/dialog.mjs';
-import { applyYogaDefaultsNumber, getOrInitNumberState, renderNumberSpinner } from './widgets/number.mjs';
-import { applyYogaDefaultsColor, renderColorPicker, sampleColorPickerAtLocal } from './widgets/color.mjs';
-import { applyYogaDefaultsSelect, getOrInitSelectState, renderSelect, renderSelectPopup } from './widgets/select.mjs';
-import { applyYogaDefaultsTemporalInput, closeAllTemporalPopups, renderTemporalInput, renderTemporalPopups, } from './widgets/temporal.mjs';
+import { applyYogaDefaultsSearchButton, applyYogaDefaultsSearchRow } from './widgets/search.mjs';
+import { applyYogaDefaultsDialog, getOrInitDialogState } from './widgets/dialog.mjs';
+import { applyYogaDefaultsNumber } from './widgets/number.mjs';
+import { applyYogaDefaultsColor, sampleColorPickerAtLocal } from './widgets/color.mjs';
+import { applyYogaDefaultsSelect, getOrInitSelectState } from './widgets/select.mjs';
+import { applyYogaDefaultsTemporalInput, closeAllTemporalPopups } from './widgets/temporal.mjs';
 import {
     SCROLLBAR_PAD,
     SCROLLBAR_W,
@@ -45,12 +36,12 @@ import {
     USE_CURSOR_PLANE_TICK,
     CURSOR_PLANE_TICK_MS,
     GLOBAL_SCROLL_DIRTY_KEY,
+    GLOBAL_MENU_DIRTY_KEY,
     RT_GLOBAL,
     RT_WINDOW,
     RT_DOCUMENT,
     RT_HAS_WINDOW_RESIZE,
     RT_EVENT_TARGET,
-    IS_TRUEOS_QJS_RUNTIME,
     uiState,
     getCursorColor,
     getEffectivePointerId,
@@ -60,7 +51,6 @@ import {
     countLayoutNodes,
     normalizeWhitespace,
     getOrInitInputState,
-    collectRadioGroups,
     buildDefaultRenderNodes,
 } from './ui.mjs';
 
@@ -79,173 +69,262 @@ function getRenderMeasure(theme) {
     renderMeasureCtx.font = `${theme.fontSize}px ${theme.fontFamily}`;
     return (s) => renderMeasureCtx.measureText(s).width;
 }
-// Retained-mode: cache LayoutBox containers per scene root so we can update in place.
-const retainedNodeCache = new WeakMap();
 const ROOT_SCROLL_DOMAIN = 'iframe:root';
-function wouldCreateCycle(parent, child) {
-    // Adding `child` under `parent` would create a cycle if `parent` is already in
-    // the ancestry chain of `child`.
-    let p = parent;
-    while (p) {
-        if (p === child)
-            return true;
-        p = p.parent;
-    }
-    return false;
-}
-function ensureChildAt(parent, child, index) {
-    // Guard against accidental cycles; adding a container to itself blows the stack.
-    if (child === parent)
-        return;
-    if (wouldCreateCycle(parent, child))
-        return;
-    if (child.parent !== parent) {
-        // addChildAt allows inserting at the end (index == children.length).
-        const insertAt = Math.max(0, Math.min(index, parent.children.length));
-        parent.addChildAt(child, insertAt);
-        return;
-    }
-    // setChildIndex requires 0..children.length-1 (end is length-1, not length).
-    const max = Math.max(0, parent.children.length - 1);
-    const target = Math.max(0, Math.min(index, max));
-    const cur = parent.getChildIndex(child);
-    if (cur !== target)
-        parent.setChildIndex(child, target);
-}
-function ensureChildAtAny(parent, child, index) {
-    // Same as ensureChildAt but for Graphics/Text/Mesh.
-    if (child === parent)
-        return;
-    if (wouldCreateCycle(parent, child))
-        return;
-    if (child.parent !== parent) {
-        const insertAt = Math.max(0, Math.min(index, parent.children.length));
-        parent.addChildAt(child, insertAt);
-        return;
-    }
-    const max = Math.max(0, parent.children.length - 1);
-    const target = Math.max(0, Math.min(index, max));
-    const cur = parent.getChildIndex(child);
-    if (cur !== target)
-        parent.setChildIndex(child, target);
-}
 let requestRerender = null;
 let requestPaint = null;
 let requestPresent = null;
 
-function collectPixiSnapshotItems(roots, viewportW, viewportH, maxItems = 480) {
+function collectLayoutSnapshotRecords(root, viewportW, viewportH, maxItems = 1200) {
     const out = [];
+    if (!root || typeof root !== 'object')
+        return out;
+    uiState.fieldBounds.clear();
+    uiState.sliderBounds.clear();
+    uiState.dialogDragBounds.clear();
+    uiState.hoverRects.length = 0;
+    uiState.hoverHandlers.clear();
+    uiState.iframeRects.length = 0;
     const stack = [];
-    for (let i = 0; i < roots.length; i++) {
-        const r = roots[i];
-        if (r)
-            stack.push({ node: r, depth: 0 });
+    const intersectClip = (a, b) => {
+        if (!a)
+            return b;
+        if (!b)
+            return a;
+        const x0 = Math.max(Number(a.x || 0), Number(b.x || 0));
+        const y0 = Math.max(Number(a.y || 0), Number(b.y || 0));
+        const x1 = Math.min(Number(a.x || 0) + Number(a.w || 0), Number(b.x || 0) + Number(b.w || 0));
+        const y1 = Math.min(Number(a.y || 0) + Number(a.h || 0), Number(b.y || 0) + Number(b.h || 0));
+        return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+    };
+    const subtreeHeight = (node) => {
+        let max = 0;
+        const walk = (n, ay) => {
+            if (!n || typeof n !== 'object')
+                return;
+            const ny = ay + Number(n.y || 0);
+            const nh = Number(n.height || 0);
+            max = Math.max(max, ny + nh);
+            const kids = Array.isArray(n.children) ? n.children : [];
+            for (let i = 0; i < kids.length; i++) {
+                walk(kids[i], ny);
+            }
+        };
+        const kids = Array.isArray(node?.children) ? node.children : [];
+        for (let i = 0; i < kids.length; i++) {
+            walk(kids[i], 0);
+        }
+        return max;
+    };
+    const kids = Array.isArray(root.children) ? root.children : [];
+    for (let i = kids.length - 1; i >= 0; i--) {
+        stack.push({
+            node: kids[i],
+            ax: Number(root.x || 0),
+            ay: Number(root.y || 0),
+            depth: 0,
+            parentLabel: 'root',
+            scrollDomain: '',
+            scrollY: 0,
+            clip: { x: 0, y: 0, w: viewportW, h: viewportH },
+        });
     }
 
     while (stack.length > 0 && out.length < maxItems) {
         const cur = stack.pop();
         const n = cur?.node;
-        const depth = Number(cur?.depth || 0) | 0;
         if (!n || typeof n !== 'object')
             continue;
-        if (n.visible === false)
-            continue;
-        const alpha = Number(n.worldAlpha ?? n.alpha ?? 1);
-        if (!(alpha > 0.001))
-            continue;
+        const ax = Number(cur?.ax || 0);
+        const ay = Number(cur?.ay || 0);
+        const x = ax + Number(n.x || 0);
+        const y = ay + Number(n.y || 0) - Number(cur?.scrollY || 0);
+        const w = Number(n.width || 0);
+        const h = Number(n.height || 0);
+        const depth = Number(cur?.depth || 0) | 0;
+        const key = typeof n.key === 'string' ? n.key : null;
+        const tag = String(n.tagName || '').toLowerCase();
+        const clip = cur?.clip || null;
 
-        const kids = Array.isArray(n.children) ? n.children : [];
-        for (let i = kids.length - 1; i >= 0; i--) {
-            stack.push({ node: kids[i], depth: depth + 1 });
-        }
-
-        // Prefer concrete leaf drawables instead of aggregate container bounds.
-        if (kids.length > 0)
-            continue;
-
-        if (typeof n.getBounds !== 'function')
-            continue;
-        let b = null;
-        try {
-            b = n.getBounds();
-        }
-        catch {
-            b = null;
-        }
-        if (!b)
-            continue;
-
-        const x = Number(b.x || 0);
-        const y = Number(b.y || 0);
-        const w = Number(b.width || 0);
-        const h = Number(b.height || 0);
-        if (!(w > 1 && h > 1))
-            continue;
-
-        const offRight = x > viewportW + 12;
-        const offBottom = y > viewportH + 12;
-        const offLeft = (x + w) < -12;
-        const offTop = (y + h) < -12;
+        const cX0 = clip ? Number(clip.x || 0) : 0;
+        const cY0 = clip ? Number(clip.y || 0) : 0;
+        const cX1 = clip ? (cX0 + Number(clip.w || 0)) : viewportW;
+        const cY1 = clip ? (cY0 + Number(clip.h || 0)) : viewportH;
+        const offRight = x > cX1 + 12;
+        const offBottom = y > cY1 + 12;
+        const offLeft = (x + w) < cX0 - 12;
+        const offTop = (y + h) < cY0 - 12;
         if (offRight || offBottom || offLeft || offTop)
             continue;
 
-        const label = String(n.label || n.cursor || n.constructor?.name || 'node');
-        const ll = label.toLowerCase();
-        if (ll.includes('__background') || ll.includes('__contentroot') || ll.includes('__overlayroot') || ll.includes('__children')) {
-            continue;
-        }
-        let isText = false;
-        let text = '';
-        let fontSize = 12;
-        let color = 0x202020;
-        if (typeof n.text === 'string' && n.text.length > 0) {
-            isText = true;
-            text = String(n.text);
-            const fs = Number(n.style?.fontSize ?? n._style?.fontSize ?? 12);
-            if (Number.isFinite(fs) && fs > 0) fontSize = fs;
-            const fill = n.style?.fill ?? n._style?.fill;
-            if (typeof fill === 'number') {
-                color = Number(fill) >>> 0;
+        if (n.kind === 'block' && w > 1 && h > 1) {
+            const rx = clip ? Math.max(x, cX0) : x;
+            const ry = clip ? Math.max(y, cY0) : y;
+            const rw = clip ? Math.max(0, Math.min(x + w, cX1) - rx) : w;
+            const rh = clip ? Math.max(0, Math.min(y + h, cY1) - ry) : h;
+            if (rw > 1 && rh > 1) {
+                out.push({
+                    x: rx,
+                    y: ry,
+                    w: rw,
+                    h: rh,
+                    depth,
+                    alpha: 1,
+                    label: String(tag || 'block'),
+                    scrollWithGlobal: false,
+                    scrollDomain: String(cur?.scrollDomain || ''),
+                });
+            }
+
+            if (key && (tag === 'input' || tag === 'textarea')) {
+                if (tag === 'input') {
+                    getOrInitInputState(key, n.attrs);
+                }
+                else if (!uiState.inputs.has(key)) {
+                    uiState.inputs.set(key, { value: String(n.attrs?.value ?? '') });
+                }
+                const innerLeft = 8;
+                const innerTop = tag === 'textarea' ? 8 : Math.max(4, Math.floor(h * 0.2));
+                const innerWidth = Math.max(0, w - (innerLeft * 2));
+                const maxLines = tag === 'textarea' ? Math.max(1, Math.floor((h - innerTop * 2) / (defaultTheme.fontSize * 1.25))) : 1;
+                const type = String(n.attrs?.type ?? '').toLowerCase();
+                uiState.fieldBounds.set(key, {
+                    x,
+                    y,
+                    innerLeft,
+                    innerTop,
+                    innerWidth,
+                    maxLines,
+                    isPassword: type === 'password',
+                });
+                uiState.hoverRects.push({ key, kind: tag, cursor: 'text', x, y, w, h });
+            }
+
+            if (key && tag === 'select') {
+                const initIdx = Number(n.attrs?.['data-selected-index'] ?? '0');
+                getOrInitSelectState(uiState.selects, key, Number.isFinite(initIdx) ? initIdx : 0);
+            }
+
+            if (key && tag === 'slider') {
+                const innerPad = Math.max(8, Math.floor(h * 0.24));
+                uiState.sliderBounds.set(key, { x, y, w, h, innerPad });
+                uiState.hoverRects.push({ key, kind: 'slider', cursor: 'pointer', x, y, w, h });
+            }
+
+            if (key && tag === 'iframe') {
+                uiState.iframeRects.push({ key, x, y, w, h });
+                const contentH = Math.max(h, subtreeHeight(n));
+                const prev = uiState.iframeScroll.get(key) || {
+                    y: 0,
+                    contentHeight: contentH,
+                    viewportHeight: h,
+                    draggingPointerId: null,
+                    dragOffsetY: 0,
+                    track: { x: 0, y: 0, w: SCROLLBAR_W, h: 0 },
+                    thumb: { x: 0, y: 0, w: SCROLLBAR_W, h: 0 },
+                    key,
+                };
+                prev.key = key;
+                prev.viewportHeight = h;
+                prev.contentHeight = contentH;
+                const maxScroll = Math.max(0, contentH - h);
+                prev.y = Math.max(0, Math.min(maxScroll, Number(prev.y || 0)));
+                const pad = 3;
+                const trackW = Math.max(6, Math.min(SCROLLBAR_W, Math.floor(w * 0.06)));
+                const trackX = Math.max(x + 1, x + w - trackW - pad);
+                const trackY = y + pad;
+                const trackH = Math.max(8, h - pad * 2);
+                const thumbRatio = Math.max(0.20, Math.min(1.0, h / Math.max(h, contentH)));
+                const thumbH = maxScroll <= 0 ? trackH : Math.max(trackH * 0.20, trackH * thumbRatio);
+                const travel = Math.max(0, trackH - thumbH);
+                const ratio = maxScroll <= 0 ? 0 : prev.y / maxScroll;
+                const thumbY = trackY + travel * ratio;
+                prev.track = { x: trackX, y: trackY, w: trackW, h: trackH };
+                prev.thumb = { x: trackX, y: thumbY, w: trackW, h: thumbH };
+                out.push({
+                    x: trackX,
+                    y: trackY,
+                    w: trackW,
+                    h: trackH,
+                    depth: depth + 1,
+                    alpha: 0.08,
+                    label: 'iframe-scrollbar-track',
+                    scrollWithGlobal: false,
+                    scrollDomain: String(cur?.scrollDomain || ''),
+                });
+                out.push({
+                    x: trackX,
+                    y: thumbY,
+                    w: trackW,
+                    h: thumbH,
+                    depth: depth + 1,
+                    alpha: 0.35,
+                    label: 'iframe-scrollbar-thumb',
+                    scrollWithGlobal: false,
+                    scrollDomain: String(cur?.scrollDomain || ''),
+                });
+                uiState.iframeScroll.set(key, prev);
+            }
+
+            if (key && (tag === 'button' || tag === 'select' || tag === 'summary' || tag === 'searchbutton' || tag === 'color' || tag === 'number' || tag === 'dialog')) {
+                uiState.hoverRects.push({ key, kind: tag, cursor: 'pointer', x, y, w, h });
+            }
+
+            if (key && tag === 'dialog') {
+                getOrInitDialogState(uiState.dialogs, key);
+                uiState.dialogDragBounds.set(key, {
+                    minX: 0,
+                    maxX: Math.max(0, viewportW - w),
+                    minY: 0,
+                    maxY: Math.max(0, viewportH - h),
+                });
             }
         }
-        out.push({ x, y, w, h, depth, alpha, label, isText, text, fontSize, color });
-    }
+        else if (n.kind === 'text') {
+            const txt = String(n.text || '');
+            if (txt.length > 0) {
+                out.push({
+                    x,
+                    y,
+                    w: Math.max(1, w),
+                    h: Math.max(1, h),
+                    depth,
+                    alpha: 1,
+                    label: String(cur?.parentLabel || 'text'),
+                    isText: true,
+                    text: txt,
+                    fontSize: Number(defaultTheme.fontSize || 12),
+                    color: Number(defaultTheme.text || 0x202020) >>> 0,
+                    scrollWithGlobal: false,
+                    scrollDomain: String(cur?.scrollDomain || ''),
+                });
+            }
+        }
 
-    return out;
-}
-
-function buildDirectBackendLayoutFromItems(items, viewportW, viewportH) {
-    const outChildren = [];
-    if (Array.isArray(items)) {
-        for (let i = 0; i < items.length; i++) {
-            const it = items[i] || {};
-            if (it.isText)
-                continue;
-            const w = Number(it.w || 0);
-            const h = Number(it.h || 0);
-            if (!(w > 1 && h > 1))
-                continue;
-            outChildren.push({
-                kind: 'block',
-                key: `direct:${i}`,
-                tagName: String(it.label || 'block'),
-                x: Number(it.x || 0),
-                y: Number(it.y || 0),
-                width: w,
-                height: h,
-                children: [],
+        const childList = Array.isArray(n.children) ? n.children : [];
+        const parentLabel = n.kind === 'block' ? String(n.tagName || 'block') : String(cur?.parentLabel || 'text');
+        let childScrollDomain = String(cur?.scrollDomain || '');
+        let childScrollY = Number(cur?.scrollY || 0);
+        let childClip = clip;
+        if (key && tag === 'iframe') {
+            childScrollDomain = `iframe:${key}`;
+            childScrollY = Number(uiState.iframeScroll.get(key)?.y || 0);
+            childClip = intersectClip(clip, { x, y, w, h });
+        }
+        for (let i = childList.length - 1; i >= 0; i--) {
+            stack.push({
+                node: childList[i],
+                ax: x,
+                ay: y,
+                depth: depth + 1,
+                parentLabel,
+                scrollDomain: childScrollDomain,
+                scrollY: childScrollY,
+                clip: childClip,
             });
         }
     }
-    return {
-        kind: 'block',
-        tagName: 'root',
-        x: 0,
-        y: 0,
-        width: Math.max(1, Number(viewportW || 1) | 0),
-        height: Math.max(1, Number(viewportH || 1) | 0),
-        children: outChildren,
-    };
+
+    return out;
 }
 
 function summarizeLayoutAbs(root, maxSamples = 8) {
@@ -464,7 +543,12 @@ function applyContextMenuAction(ownerPid, label) {
     catch {
         // Fallback: leave legacy menu state untouched.
     }
-    requestPaint?.();
+    if (label === 'Paste' && focusedKey) {
+        requestPaint?.(focusedKey);
+    }
+    else {
+        requestPaint?.(GLOBAL_MENU_DIRTY_KEY);
+    }
     return true;
 }
 
@@ -812,972 +896,6 @@ async function buildLayoutTree(renderNodes, viewportWidth, viewportHeight) {
     rootYoga.freeRecursive?.();
     return box;
 }
-function renderToPixi(app, box, sceneRoot, opts = {}) {
-    const fullRepaint = opts?.fullRepaint !== false;
-    const dirtyKeys = opts?.dirtyKeys instanceof Set ? opts.dirtyKeys : null;
-    const theme = defaultTheme;
-    const stage = sceneRoot ?? app.stage;
-    // Stable scene structure:
-    // [background][contentRoot][dialogRoot][overlayRoot]
-    const background = getOrCreateGraphics(stage, '__background');
-    const contentRoot = getOrCreateContainer(stage, '__contentRoot');
-    const dialogRoot = getOrCreateContainer(stage, '__dialogRoot');
-    const overlayRoot = getOrCreateContainer(stage, '__overlayRoot');
-    ensureChildAtAny(stage, background, 0);
-    ensureChildAt(stage, contentRoot, 1);
-    ensureChildAt(stage, dialogRoot, 2);
-    ensureChildAt(stage, overlayRoot, 3);
-    // Overlays are built immediate-mode; only clear on full repaint.
-    if (fullRepaint) {
-        overlayRoot.removeChildren();
-    }
-    const selectPopups = [];
-    const temporalPopups = [];
-    const radioGroups = collectRadioGroups(box);
-    if (fullRepaint) {
-        uiState.fieldBounds.clear();
-        uiState.sliderBounds.clear();
-        uiState.dialogDragBounds.clear();
-        uiState.hoverRects.length = 0;
-        uiState.hoverHandlers.clear();
-        uiState.iframeRects.length = 0;
-    }
-    const nodeCache = retainedNodeCache.get(stage) ?? new Map();
-    retainedNodeCache.set(stage, nodeCache);
-    const usedNodeKeys = new Set();
-    const computeContentHeightForBox = (root) => {
-        let max = 0;
-        const walk = (n, ax, ay) => {
-            // Ignore floating dialogs; they are overlays.
-            if (n.kind === 'block' && n.tagName === 'dialog')
-                return;
-            const nx = ax + n.x;
-            const ny = ay + n.y;
-            max = Math.max(max, ny + n.height);
-            for (const c of n.children ?? [])
-                walk(c, nx, ny);
-        };
-        for (const c of root.children ?? [])
-            walk(c, 0, 0);
-        return max;
-    };
-    const activeDragKeys = new Set();
-    for (const d of uiState.textDrags.values())
-        activeDragKeys.add(d.key);
-    const measure = getRenderMeasure(theme);
-    const directSnapshot = [];
-    const pushDirectSnapshot = (item) => {
-        if (!fullRepaint)
-            return;
-        if (!item)
-            return;
-        if (directSnapshot.length >= 1200)
-            return;
-        directSnapshot.push(item);
-    };
-    function clamp(n, lo, hi) {
-        return Math.max(lo, Math.min(hi, n));
-    }
-    const firstDraggingPointerForKey = (key) => {
-        for (const [pid, d] of uiState.textDrags.entries()) {
-            if (d.key === key)
-                return pid;
-        }
-        return null;
-    };
-    const focusedPidForKey = (key) => {
-        // If multiple pointers focus the same key, prefer the keyboard owner.
-        const kb = uiState.keyboardOwnerPointerId;
-        if (uiState.focusedKeyByPointer.get(kb) === key)
-            return kb;
-        for (const [pid, k] of uiState.focusedKeyByPointer.entries()) {
-            if (k === key)
-                return pid;
-        }
-        return null;
-    };
-    // SVG strings are centralized in src/svgs.ts
-    // Background fill.
-    clearGraphics(background);
-    background.rect(0, 0, app.renderer.width, app.renderer.height);
-    background.fill(theme.background);
-    // All normal document content lives in this container, which is translated for global scrolling.
-    contentRoot.position.set(0, -uiState.scroll.y);
-    const dirtySubtree = new WeakMap();
-    const hasKey = (k) => typeof k === 'string' && k.length > 0;
-    const computeDirtySubtree = (node) => {
-        if (fullRepaint)
-            return true;
-        const own = hasKey(node?.key) && dirtyKeys?.has(node.key);
-        let child = false;
-        const kids = Array.isArray(node?.children) ? node.children : [];
-        for (let i = 0; i < kids.length; i++) {
-            if (computeDirtySubtree(kids[i]))
-                child = true;
-        }
-        const d = !!(own || child);
-        dirtySubtree.set(node, d);
-        return d;
-    };
-    computeDirtySubtree(box);
-    const purgePerKeyCaches = (key) => {
-        if (!hasKey(key))
-            return;
-        uiState.fieldBounds.delete(key);
-        uiState.sliderBounds.delete(key);
-        uiState.dialogDragBounds.delete(key);
-        uiState.hoverHandlers.delete(key);
-        uiState.hoverRects = uiState.hoverRects.filter((r) => r?.key !== key);
-        uiState.iframeRects = uiState.iframeRects.filter((r) => r?.key !== key);
-    };
-    const requestPaintForNode = (nodeKey) => () => {
-        if (hasKey(nodeKey)) {
-            requestPaint?.(nodeKey);
-            return;
-        }
-        // Keyless hover/active updates should never force a full scene rebuild.
-        requestPresent?.();
-    };
-
-    function drawNode(node, parent, textCtx, absX = 0, absY = 0, dialogSink, dialogClampRect, path, orderIndex, scrollDomain = ROOT_SCROLL_DOMAIN) {
-        if (!fullRepaint && dirtySubtree.get(node) !== true) {
-            return;
-        }
-        // IMPORTANT: LayoutBox.key can be an empty string in some helper nodes.
-        // Treat empty keys as missing to avoid collisions that can create container cycles.
-        const stableBlockKey = node.kind === 'block'
-            ? node.key && node.key.length > 0
-                ? node.key
-                : `${path}:${node.tagName ?? 'block'}`
-            : '';
-        const cacheKey = node.kind === 'block' ? `b:${stableBlockKey}` : `t:${path}`;
-        let container = nodeCache.get(cacheKey);
-        if (!container || wouldCreateCycle(parent, container)) {
-            // If the cached container would create a cycle under this parent, it means
-            // the key was reused incorrectly (or the node moved) in a way that would
-            // reparent an ancestor into its own subtree. Create a fresh container.
-            container = new Container();
-            container.label = cacheKey;
-            nodeCache.set(cacheKey, container);
-        }
-        usedNodeKeys.add(cacheKey);
-        ensureChildAt(parent, container, orderIndex);
-        // Use a dedicated child-root so widget internals don't interleave with layout children.
-        const childrenRoot = getOrCreateContainer(container, '__children');
-        // Put layout children above the base graphics, but allow widgets to add overlays above.
-        ensureChildAt(container, childrenRoot, 1);
-        container.position.set(node.x, node.y);
-        const nodeOwnDirty = fullRepaint || (hasKey(node.key) && dirtyKeys?.has(node.key));
-        if (!fullRepaint && nodeOwnDirty && hasKey(node.key)) {
-            purgePerKeyCaches(node.key);
-        }
-        // Pixel-align 1px rules so symmetric margins look symmetric.
-        if (node.kind === 'block' && node.tagName === 'hr') {
-            container.position.set(Math.round(node.x), Math.round(node.y));
-        }
-        // Floating dialogs override their position from UI state, but are clamped to the
-        // visible area of their containing stacking context (viewport, iframe content, or parent dialog).
-        if (node.kind === 'block' && node.tagName === 'dialog' && node.key) {
-            const st = getOrInitDialogState(uiState.dialogs, node.key);
-            const dw = Math.max(0, node.width);
-            const dh = Math.max(0, node.height);
-            const minX = dialogClampRect.x;
-            const minY = dialogClampRect.y;
-            const maxX = Math.max(minX, dialogClampRect.x + dialogClampRect.w - dw);
-            const maxY = Math.max(minY, dialogClampRect.y + dialogClampRect.h - dh);
-            // Persist the clamp bounds so pointermove can use them during drags.
-            uiState.dialogDragBounds.set(node.key, { minX, minY, maxX, maxY });
-            st.x = Math.max(minX, Math.min(maxX, st.x));
-            st.y = Math.max(minY, Math.min(maxY, st.y));
-            container.position.set(st.x, st.y);
-        }
-        const nodeAbsX = absX + container.position.x;
-        const nodeAbsY = absY + container.position.y;
-        if (node.kind === 'block') {
-            let nextTextCtx = textCtx;
-            if (node.tagName === 'h1' ||
-                node.tagName === 'h2' ||
-                node.tagName === 'h3' ||
-                node.tagName === 'summary' ||
-                node.tagName === 'th') {
-                nextTextCtx = { bold: true };
-            }
-            const g = getOrCreateGraphics(container, '__g');
-            if (nodeOwnDirty) {
-                clearGraphics(g);
-            }
-            // Make sure the base graphics stays behind everything else.
-            ensureChildAtAny(container, g, 0);
-            g.zIndex = -10;
-            let w = Math.max(0, node.width);
-            let h = Math.max(0, node.height);
-            if (w > 1 && h > 1) {
-                pushDirectSnapshot({
-                    x: nodeAbsX,
-                    y: nodeAbsY,
-                    w,
-                    h,
-                    depth: Math.max(0, Number(path.split('.').length - 1) | 0),
-                    alpha: 1,
-                    label: String(node.tagName || 'block'),
-                    isText: false,
-                    scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
-                    scrollDomain: String(scrollDomain || ''),
-                });
-            }
-            let overlayLabel = null;
-            // Headings: snap to whole pixels so the 1px border doesn't land on half pixels
-            // (which can look like a faint extra 1px row outside the top edge).
-            if (node.tagName === 'h1' || node.tagName === 'h2' || node.tagName === 'h3') {
-                container.position.set(Math.round(node.x), Math.round(node.y));
-                w = Math.round(w);
-                h = Math.round(h);
-            }
-            if (node.tagName === 'hr') {
-                if (nodeOwnDirty) {
-                    renderHr({ graphics: g, w, theme });
-                }
-            }
-            else if (node.tagName === 'barrow') {
-                // Layout-only wrapper for [label][bar]. No visuals.
-            }
-            else if (node.tagName === 'searchrow') {
-                // Layout-only wrapper for [search icon button][input]. No visuals.
-            }
-            else if (node.tagName === 'searchbutton') {
-                if (nodeOwnDirty) {
-                    renderSearchButton({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    theme,
-                    uiState,
-                    getPointerId: getEffectivePointerId,
-                    focusInputKey: node.attrs?.['data-focus-key'],
-                    requestPaint: requestPaintForNode(node.key),
-                    });
-                }
-            }
-            else if (node.tagName === 'progress' || node.tagName === 'meter') {
-                if (nodeOwnDirty) {
-                    renderProgressOrMeter({ node, graphics: g, w, h, theme });
-                }
-            }
-            else if (node.tagName === 'sliderlabel') {
-                if (nodeOwnDirty) {
-                    renderSliderLabel({
-                    node,
-                    container,
-                    theme,
-                    sliderStates: uiState.sliders,
-                    });
-                }
-            }
-            else if (node.tagName === 'slider') {
-                if (nodeOwnDirty) {
-                    renderSlider({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    absX: nodeAbsX,
-                    absY: nodeAbsY,
-                    theme,
-                    sliderStates: uiState.sliders,
-                    sliderBounds: uiState.sliderBounds,
-                    sliderDrags: uiState.sliderDrags,
-                    requestPaint: requestPaintForNode(node.key),
-                    getPointerId: getEffectivePointerId,
-                    });
-                }
-            }
-            else if (node.tagName === 'timeinput' ||
-                node.tagName === 'dateinput' ||
-                node.tagName === 'monthinput' ||
-                node.tagName === 'weekinput' ||
-                node.tagName === 'datetimelocalinput') {
-                if (nodeOwnDirty) {
-                    renderTemporalInput({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    absX: nodeAbsX,
-                    absY: nodeAbsY,
-                    theme,
-                    uiState,
-                    getPointerId: getEffectivePointerId,
-                    getCursorColor,
-                    temporalStates: uiState.temporals,
-                    yearSliderOwners: uiState.temporalYearOwners,
-                    getOrInitInputValue: (k, attrs) => getOrInitInputState(k, attrs),
-                    requestPaint: requestPaintForNode(node.key),
-                    popupSink: temporalPopups,
-                    });
-                }
-            }
-            else if (node.tagName === 'input') {
-                const key = node.key;
-                const focusPid = key != null ? focusedPidForKey(key) : null;
-                const isKeyboardFocused = key != null && uiState.focusedKeyByPointer.get(uiState.keyboardOwnerPointerId) === key;
-                const caretPointerId = key == null
-                    ? null
-                    : isKeyboardFocused
-                        ? uiState.keyboardOwnerPointerId
-                        : activeDragKeys.has(key)
-                            ? firstDraggingPointerForKey(key)
-                            : null;
-                const showCaret = caretPointerId != null;
-                const focusColor = focusPid != null ? getCursorColor(focusPid) : null;
-                if (nodeOwnDirty) {
-                    renderInput({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    absX: nodeAbsX,
-                    absY: nodeAbsY,
-                    theme,
-                    textMeasure: measure,
-                    uiState,
-                    getOrInitInputState,
-                    clamp,
-                    radioGroups,
-                    textDrags: uiState.textDrags,
-                    requestPaint: requestPaintForNode(node.key),
-                    showCaret,
-                    caretPointerId,
-                    focusColor: focusColor ?? undefined,
-                    getCursorColor,
-                    getPointerId: getEffectivePointerId,
-                    });
-                }
-            }
-            else if (node.tagName === 'textarea') {
-                const key = node.key;
-                const focusPid = key != null ? focusedPidForKey(key) : null;
-                const isKeyboardFocused = key != null && uiState.focusedKeyByPointer.get(uiState.keyboardOwnerPointerId) === key;
-                const caretPointerId = key == null
-                    ? null
-                    : isKeyboardFocused
-                        ? uiState.keyboardOwnerPointerId
-                        : activeDragKeys.has(key)
-                            ? firstDraggingPointerForKey(key)
-                            : null;
-                const showCaret = caretPointerId != null;
-                const focusColor = focusPid != null ? getCursorColor(focusPid) : null;
-                if (nodeOwnDirty) {
-                    renderTextarea({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    absX: nodeAbsX,
-                    absY: nodeAbsY,
-                    theme,
-                    textMeasure: measure,
-                    uiState,
-                    getOrInitInputState,
-                    clamp,
-                    textDrags: uiState.textDrags,
-                    requestPaint: requestPaintForNode(node.key),
-                    showCaret,
-                    caretPointerId,
-                    focusColor: focusColor ?? undefined,
-                    getCursorColor,
-                    getPointerId: getEffectivePointerId,
-                    });
-                }
-            }
-            else if (node.tagName === 'select') {
-                // Ensure state exists so it persists across rerenders.
-                if (node.key) {
-                    const initIdx = Number(node.attrs?.['data-selected-index'] ?? '0');
-                    getOrInitSelectState(uiState.selects, node.key, Number.isFinite(initIdx) ? initIdx : 0);
-                }
-                if (nodeOwnDirty) {
-                    renderSelect({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    absX: nodeAbsX,
-                    absY: nodeAbsY,
-                    theme,
-                    selectStates: uiState.selects,
-                    uiState,
-                    getPointerId: getEffectivePointerId,
-                    getCursorColor,
-                    requestPaint: requestPaintForNode(node.key),
-                    popupSink: selectPopups,
-                    });
-                }
-            }
-            else if (node.tagName === 'summary') {
-                if (node.key) {
-                    uiState.hoverRects.push({ key: node.key, kind: 'summary', cursor: 'pointer', x: nodeAbsX, y: nodeAbsY, w, h });
-                }
-                if (nodeOwnDirty) {
-                    renderSummary({
-                    node,
-                    container,
-                    w,
-                    h,
-                    theme,
-                    detailsOpen: uiState.detailsOpen,
-                    requestRerender,
-                    });
-                }
-            }
-            else if (node.tagName === 'dialog') {
-                if (nodeOwnDirty) {
-                    renderDialog({
-                    node,
-                    container,
-                    w,
-                    h,
-                    theme,
-                    selectedBy: uiState.dialogSelectedBy,
-                    getCursorColor,
-                    dialogStates: uiState.dialogs,
-                    dialogDrags: uiState.dialogDrags,
-                    bringToFront: (k) => {
-                        uiState.dialogZ.set(k, uiState.dialogZCounter++);
-                    },
-                    requestPaint: requestPaintForNode(node.key),
-                    getPointerId: getEffectivePointerId,
-                    });
-                }
-            }
-            else if (node.tagName === 'img') {
-                if (nodeOwnDirty) {
-                    renderImg({ node, container, graphics: g, w, h, theme, requestRerender });
-                }
-            }
-            else if (node.tagName === 'svg') {
-                const svgMarkup = node.attrs?.['data-svg'] ?? '';
-                // Reuse the same Graphics container; svg rendering adds its own Graphics.
-                if (nodeOwnDirty) {
-                    renderSvgElement({ svgMarkup, container, w, h, requestRerender });
-                }
-            }
-            else if (node.tagName === 'canvas') {
-                if (nodeOwnDirty) {
-                    renderCanvasElement({ node, container, graphics: g, w, h, theme });
-                }
-            }
-            else if (node.tagName === 'iframe') {
-                if (nodeOwnDirty) {
-                    renderIframePlaceholder({ node, container, graphics: g, w, h, theme });
-                }
-            }
-            else if (node.tagName === 'color') {
-                uiState.color.bounds = { x: nodeAbsX, y: nodeAbsY, w: Math.max(0, w), h: Math.max(0, h) };
-                if (nodeOwnDirty) {
-                    renderColorPicker({
-                    node,
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    theme,
-                    rgb: uiState.color.rgb,
-                    setRgb: (rgb) => {
-                        uiState.color.rgb = rgb;
-                    },
-                    alpha: uiState.color.a,
-                    setAlpha: (a) => {
-                        uiState.color.a = Math.max(0, Math.min(255, Math.round(a)));
-                    },
-                    pick: uiState.color.pick,
-                    setPick: (p) => {
-                        uiState.color.pick = p;
-                    },
-                    requestPaint: requestPaintForNode(node.key),
-                    getPointerId: getEffectivePointerId,
-                    setDraggingPointerId: (pid) => {
-                        uiState.color.draggingPointerId = pid;
-                    },
-                    });
-                }
-            }
-            else if (node.tagName === 'number') {
-                const key = node.key;
-                const ch = String(node.attrs?.channel ?? '').toLowerCase();
-                const isCh = ch === 'r' || ch === 'g' || ch === 'b' || ch === 'a';
-                if (key) {
-                    if (nodeOwnDirty) {
-                        renderNumberSpinner({
-                        node,
-                        container,
-                        graphics: g,
-                        w,
-                        h,
-                        theme,
-                        getValue: () => {
-                            if (isCh) {
-                                if (ch === 'a')
-                                    return uiState.color.a ?? 255;
-                                return uiState.color.rgb[ch] ?? 0;
-                            }
-                            return getOrInitNumberState(uiState.numbers, key, node.attrs).value;
-                        },
-                        setValue: (n) => {
-                            if (isCh) {
-                                if (ch === 'a')
-                                    uiState.color.a = Math.max(0, Math.min(255, Math.round(n)));
-                                else
-                                    uiState.color.rgb[ch] = Math.max(0, Math.min(255, Math.round(n)));
-                            }
-                            else {
-                                getOrInitNumberState(uiState.numbers, key, node.attrs).value = n;
-                            }
-                        },
-                        requestPaint: requestPaintForNode(node.key),
-                        numberHolds: uiState.numberHolds,
-                        getPointerId: getEffectivePointerId,
-                        });
-                    }
-                }
-            }
-            else if (node.tagName === 'button') {
-                if (node.key) {
-                    uiState.hoverRects.push({ key: node.key, kind: 'button', cursor: 'pointer', x: nodeAbsX, y: nodeAbsY, w, h });
-                }
-                if (nodeOwnDirty) {
-                    renderButton({
-                    container,
-                    graphics: g,
-                    w,
-                    h,
-                    theme,
-                    registerHoverHandlers: node.key
-                        ? (handlers) => {
-                            uiState.hoverHandlers.set(node.key, handlers);
-                        }
-                        : undefined,
-                    });
-                }
-            }
-            else if (isHeadingTag(node.tagName)) {
-                // Headings should not get the generic 1px element border.
-            }
-            else if (node.tagName === 'table') {
-                if (nodeOwnDirty) {
-                    renderTable({ graphics: g, w, h, boxBorder: theme.boxBorder });
-                }
-            }
-            else if (node.tagName === 'td' || node.tagName === 'th') {
-                if (nodeOwnDirty) {
-                    renderCell({ nodeTag: node.tagName, graphics: g, w, h, theme });
-                }
-            }
-            else {
-                if (nodeOwnDirty) {
-                    // Default block border: draw fully inside the box so it doesn't "bleed"
-                    // into the outside margin area (which looks like an extra 1px row above).
-                    const bw = Math.max(0, Math.round(w));
-                    const bh = Math.max(0, Math.round(h));
-                    g.rect(0, 0, bw, bh);
-                    g.stroke({ width: 1, color: theme.boxBorder, alignment: 0 });
-                }
-            }
-            if (overlayLabel)
-                container.addChild(overlayLabel);
-            // Iframe: clip all nested content to the frame rect.
-            // (This is the first step toward a true nested scene.)
-            let iframeContentRoot = null;
-            let iframeScrollRoot = null;
-            const isRootIframe = node.tagName === 'iframe' && String(node.attrs?.['data-root'] ?? '') === '1';
-            if (node.tagName === 'iframe' && !isRootIframe) {
-                // Chrome is drawn into `g` by renderIframePlaceholder; scroll applies only to content.
-                const IFRAME_CHROME_TOP = 34;
-                const IFRAME_PAD_X = 8;
-                const IFRAME_PAD_BOTTOM = 8;
-                // Track iframe rect for wheel routing.
-                if (node.key) {
-                    uiState.iframeRects.push({ key: node.key, x: nodeAbsX, y: nodeAbsY, w: Math.max(0, w), h: Math.max(0, h) });
-                }
-                iframeContentRoot = getOrCreateContainer(container, '__iframeContentRoot');
-                iframeContentRoot.position.set(0, 0);
-                // Mask only the content area (keep header fixed).
-                const contentMask = getOrCreateGraphics(container, '__iframeContentMask');
-                clearGraphics(contentMask);
-                const maskX = 0;
-                const maskY = IFRAME_CHROME_TOP;
-                const maskW = Math.max(0, w);
-                const maskH = Math.max(0, h - IFRAME_CHROME_TOP);
-                contentMask.rect(maskX, maskY, maskW, maskH);
-                contentMask.fill(0xffffff);
-                contentMask.alpha = 0;
-                iframeContentRoot.mask = contentMask;
-                // Per-iframe scroll state.
-                const iframeKey = node.key ?? '';
-                const st = uiState.iframeScroll.get(iframeKey) ??
-                    {
-                        key: iframeKey,
-                        y: 0,
-                        contentHeight: 0,
-                        viewportHeight: 0,
-                        draggingPointerId: null,
-                        dragOffsetY: 0,
-                        track: { x: 0, y: 0, w: SCROLLBAR_W, h: 0 },
-                        thumb: { x: 0, y: 0, w: SCROLLBAR_W, h: 0 },
-                        rect: { x: nodeAbsX, y: nodeAbsY, w: Math.max(0, w), h: Math.max(0, h) },
-                    };
-                st.key = iframeKey;
-                st.rect = { x: nodeAbsX, y: nodeAbsY, w: Math.max(0, w), h: Math.max(0, h) };
-                // Compute content height from layout subtree (relative), then clamp scroll.
-                st.contentHeight = computeContentHeightForBox(node);
-                st.viewportHeight = Math.max(0, h - IFRAME_CHROME_TOP - IFRAME_PAD_BOTTOM);
-                const maxScroll = Math.max(0, st.contentHeight - st.viewportHeight);
-                st.y = Math.max(0, Math.min(st.y, maxScroll));
-                // Scroll root (translated).
-                iframeScrollRoot = getOrCreateContainer(iframeContentRoot, '__iframeScrollRoot');
-                iframeScrollRoot.position.set(0, -st.y);
-                // Draw iframe-local scrollbar.
-                const scrollbar = getOrCreateGraphics(container, '__iframeScrollbar');
-                clearGraphics(scrollbar);
-                scrollbar.eventMode = 'static';
-                // Place it inside the iframe content area.
-                const pad = SCROLLBAR_PAD;
-                const trackW = SCROLLBAR_W;
-                const trackX = Math.max(0, w - trackW - pad);
-                const trackY = IFRAME_CHROME_TOP + pad;
-                const trackH = Math.max(0, (h - IFRAME_CHROME_TOP) - pad * 2);
-                const show = maxScroll > 0.5 && trackH > 1;
-                scrollbar.visible = show;
-                if (show) {
-                    const minThumbH = 24;
-                    const thumbH = Math.max(minThumbH, ((st.viewportHeight || 1) / Math.max(1, st.contentHeight)) * trackH);
-                    const travel = Math.max(1, trackH - thumbH);
-                    const ratio = maxScroll <= 0 ? 0 : st.y / maxScroll;
-                    const thumbY = trackY + travel * ratio;
-                    st.track = { x: nodeAbsX + trackX, y: nodeAbsY + trackY, w: trackW, h: trackH };
-                    st.thumb = { x: nodeAbsX + trackX, y: nodeAbsY + thumbY, w: trackW, h: thumbH };
-                    // Keep direct-cmd output in sync with existing iframe scrollbar visuals.
-                    pushDirectSnapshot({
-                        x: st.track.x,
-                        y: st.track.y,
-                        w: st.track.w,
-                        h: st.track.h,
-                        depth: Math.max(0, Number(path.split('.').length - 1) | 0),
-                        alpha: 0.06,
-                        label: 'scrollbar-track',
-                        scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
-                        scrollDomain: String(scrollDomain || ''),
-                    });
-                    pushDirectSnapshot({
-                        x: st.thumb.x,
-                        y: st.thumb.y,
-                        w: st.thumb.w,
-                        h: st.thumb.h,
-                        depth: Math.max(0, Number(path.split('.').length - 1) | 0),
-                        alpha: 0.25,
-                        label: 'scrollbar-thumb',
-                        scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
-                        scrollDomain: String(scrollDomain || ''),
-                    });
-                    scrollbar.rect(trackX, trackY, trackW, trackH);
-                    scrollbar.fill({ color: 0x000000, alpha: 0.06 });
-                    scrollbar.rect(trackX, thumbY, trackW, thumbH);
-                    scrollbar.fill({ color: 0x000000, alpha: 0.25 });
-                    scrollbar.on('pointerdown', (ev) => {
-                        if (ev?.button === 2)
-                            return;
-                        const pid = getEffectivePointerId(ev);
-                        if (pid <= 0)
-                            return;
-                        const gx = ev.global?.x ?? 0;
-                        const gy = ev.global?.y ?? 0;
-                        const hitTrack = gx >= st.track.x && gx <= st.track.x + st.track.w && gy >= st.track.y && gy <= st.track.y + st.track.h;
-                        if (!hitTrack)
-                            return;
-                        const hitThumb = gx >= st.thumb.x && gx <= st.thumb.x + st.thumb.w && gy >= st.thumb.y && gy <= st.thumb.y + st.thumb.h;
-                        if (hitThumb) {
-                            st.draggingPointerId = pid;
-                            st.dragOffsetY = gy - st.thumb.y;
-                            uiState.iframeScroll.set(iframeKey, st);
-                            ev.stopPropagation?.();
-                            return;
-                        }
-                        // Track click: jump thumb and start dragging.
-                        const travel2 = Math.max(1, st.track.h - st.thumb.h);
-                        const targetTop = Math.max(st.track.y, Math.min(st.track.y + travel2, gy - st.thumb.h / 2));
-                        const ratio2 = (targetTop - st.track.y) / travel2;
-                        st.y = Math.max(0, Math.min(maxScroll, ratio2 * maxScroll));
-                        st.draggingPointerId = pid;
-                        st.dragOffsetY = gy - targetTop;
-                        uiState.iframeScroll.set(iframeKey, st);
-                        requestPaint?.(iframeKey || null);
-                        ev.stopPropagation?.();
-                    });
-                }
-                else {
-                    st.track = { x: 0, y: 0, w: trackW, h: 0 };
-                    st.thumb = { x: 0, y: 0, w: trackW, h: 0 };
-                }
-                uiState.iframeScroll.set(iframeKey, st);
-            }
-            // Dialog stacking model:
-            // - Dialogs are hoisted out of normal flow drawing into an overlay list.
-            // - The overlay list is per stacking context: root or the nearest ancestor dialog.
-            // This makes dialogs float above later siblings even when nested inside other elements,
-            // while still letting dialogs nest inside dialogs.
-            const localDialogs = [];
-            const childSink = node.tagName === 'dialog' || (node.tagName === 'iframe' && !isRootIframe) ? localDialogs : dialogSink;
-            // Dialog clamp rect for this stacking context.
-            let childDialogClampRect = dialogClampRect;
-            if (node.tagName === 'dialog') {
-                // Nested dialogs are constrained to the parent dialog box.
-                childDialogClampRect = { x: 0, y: 0, w: Math.max(0, w), h: Math.max(0, h) };
-            }
-            else if (node.tagName === 'iframe' && !isRootIframe) {
-                // Dialogs inside iframes are constrained to the iframe content viewport.
-                const iframeKey = node.key ?? '';
-                const st = uiState.iframeScroll.get(iframeKey);
-                const scrollY = st ? st.y : 0;
-                const IFRAME_CHROME_TOP = 34;
-                childDialogClampRect = {
-                    x: 0,
-                    y: IFRAME_CHROME_TOP + scrollY,
-                    w: Math.max(0, w),
-                    h: Math.max(0, h - IFRAME_CHROME_TOP),
-                };
-            }
-            const childParent = iframeScrollRoot ?? iframeContentRoot ?? childrenRoot;
-            const childAbsX = nodeAbsX + (iframeContentRoot?.position.x ?? 0);
-            const childAbsY = nodeAbsY + (iframeContentRoot?.position.y ?? 0) + (iframeScrollRoot?.position.y ?? 0);
-            const childScrollDomain = (node.tagName === 'iframe' && !isRootIframe)
-                ? `iframe:${String(node.key || path)}`
-                : scrollDomain;
-            let childOrder = 0;
-            for (let ci = 0; ci < (node.children ?? []).length; ci++) {
-                const child = (node.children ?? [])[ci];
-                if (child.kind === 'block' && child.tagName === 'dialog') {
-                    childSink.push(child);
-                }
-                else {
-                    drawNode(child, childParent, nextTextCtx, childAbsX, childAbsY, childSink, childDialogClampRect, `${path}.${ci}`, childOrder++, childScrollDomain);
-                }
-            }
-            if ((node.tagName === 'dialog' || (node.tagName === 'iframe' && !isRootIframe)) && localDialogs.length > 0) {
-                localDialogs.sort((a, b) => {
-                    const az = a.key ? uiState.dialogZ.get(a.key) ?? 0 : 0;
-                    const bz = b.key ? uiState.dialogZ.get(b.key) ?? 0 : 0;
-                    return az - bz;
-                });
-                for (const dlg of localDialogs) {
-                    const dlgKey = dlg.key && dlg.key.length > 0 ? dlg.key : `${path}.dlg.${childOrder}`;
-                    drawNode(dlg, childParent, nextTextCtx, childAbsX, childAbsY, localDialogs, childDialogClampRect, `${path}.dlg.${dlgKey}`, childOrder++, childScrollDomain);
-                }
-            }
-        }
-        else {
-            const t = getOrCreateText(container, '__text', (tt) => {
-                tt.style = {
-                    fontFamily: theme.fontFamily,
-                    fontSize: theme.fontSize,
-                    fill: theme.text,
-                    fontWeight: textCtx.bold ? '700' : '400',
-                    wordWrap: true,
-                    wordWrapWidth: 0,
-                };
-            });
-            if (nodeOwnDirty) {
-                t.text = node.text ?? '';
-                t.style.fontFamily = theme.fontFamily;
-                t.style.fontSize = theme.fontSize;
-                t.style.fill = theme.text;
-                t.style.fontWeight = textCtx.bold ? '700' : '400';
-                t.style.wordWrap = true;
-                t.style.wordWrapWidth = Math.max(0, Math.ceil(node.width) + WRAP_EPSILON_PX);
-                t.position.set(0, TEXT_BASELINE_NUDGE_Y);
-            }
-            const tw = Math.max(1, Number(t.width || node.width || 0));
-            const th = Math.max(1, Number(t.height || node.height || theme.fontSize || 12));
-            pushDirectSnapshot({
-                x: nodeAbsX,
-                y: nodeAbsY + TEXT_BASELINE_NUDGE_Y,
-                w: tw,
-                h: th,
-                depth: Math.max(0, Number(path.split('.').length - 1) | 0),
-                alpha: 1,
-                label: 'text',
-                isText: true,
-                text: String(node.text ?? ''),
-                fontSize: Number(theme.fontSize || 12),
-                color: Number(theme.text || 0x202020) >>> 0,
-                scrollWithGlobal: scrollDomain === ROOT_SCROLL_DOMAIN,
-                scrollDomain: String(scrollDomain || ''),
-            });
-        }
-    }
-    const baseTextCtx = { bold: false };
-    const stageClampRect = { x: 0, y: 0, w: app.renderer.width, h: app.renderer.height };
-    const rootDialogs = [];
-    let rootOrder = 0;
-    for (let i = 0; i < box.children.length; i++) {
-        const child = box.children[i];
-        if (child.kind === 'block' && child.tagName === 'dialog')
-            rootDialogs.push(child);
-        else
-            drawNode(child, contentRoot, baseTextCtx, 0, contentRoot.position.y, rootDialogs, stageClampRect, `root.${i}`, rootOrder++, ROOT_SCROLL_DOMAIN);
-    }
-    if (rootDialogs.length > 0) {
-        rootDialogs.sort((a, b) => {
-            const az = a.key ? uiState.dialogZ.get(a.key) ?? 0 : 0;
-            const bz = b.key ? uiState.dialogZ.get(b.key) ?? 0 : 0;
-            return az - bz;
-        });
-        let dlgOrder = 0;
-        for (const dlg of rootDialogs) {
-            const dlgKey = dlg.key && dlg.key.length > 0 ? dlg.key : `rootdlg.${dlgOrder}`;
-            drawNode(dlg, dialogRoot, baseTextCtx, 0, 0, rootDialogs, stageClampRect, `dlg.${dlgKey}`, dlgOrder++, '');
-        }
-    }
-    // Draw temporal picker popups before <select> popups so time pickers can contribute
-    // nested <select> dropdowns and have those rendered above.
-    if (temporalPopups.length > 0) {
-        renderTemporalPopups({
-            popups: temporalPopups,
-            stage: overlayRoot,
-            theme,
-            viewportW: app.renderer.width,
-            viewportH: app.renderer.height,
-            temporalStates: uiState.temporals,
-            getOrInitInputValue: (k, attrs) => getOrInitInputState(k, attrs),
-            sliders: uiState.sliders,
-            sliderBounds: uiState.sliderBounds,
-            sliderDrags: uiState.sliderDrags,
-            selects: uiState.selects,
-            selectPopups,
-            uiFocus: uiState,
-            getPointerId: getEffectivePointerId,
-            getCursorColor,
-            requestPaint,
-        });
-    }
-    // Draw <select> popups last so they appear above later siblings.
-    if (selectPopups.length > 0) {
-        for (const p of selectPopups) {
-            renderSelectPopup({
-                popup: p,
-                stage: overlayRoot,
-                theme,
-                selectStates: uiState.selects,
-                uiState,
-                getPointerId: getEffectivePointerId,
-                requestPaint,
-                viewportW: app.renderer.width,
-                viewportH: app.renderer.height,
-            });
-        }
-    }
-    // Context menu overlay (authoritative state comes from browser_context).
-    const menuCursorIds = [1, 2, 3, 4];
-    for (const ownerPid of menuCursorIds) {
-        let isOpen = false;
-        let menuX = 0;
-        let menuY = 0;
-        try {
-            isOpen = !!browserContext.isContextMenuOpen(ownerPid);
-            if (isOpen) {
-                menuX = Number(browserContext.getContextMenuX(ownerPid) ?? 0) || 0;
-                menuY = Number(browserContext.getContextMenuY(ownerPid) ?? 0) || 0;
-            }
-        }
-        catch {
-            isOpen = false;
-        }
-        if (!isOpen)
-            continue;
-        const menu = new Container();
-        menu.eventMode = 'static';
-        menu.cursor = 'default';
-        menu.position.set(menuX, menuY);
-        const itemW = 140;
-        const itemH = 28;
-        const pad = 6;
-        const labels = ['Copy', 'Paste', 'Close'];
-        const bg = new Graphics();
-        bg.rect(0, 0, itemW + pad * 2, labels.length * itemH + pad * 2);
-        bg.fill(0xffffff);
-        // Owner-colored 2px border.
-        const borderInset = 1;
-        bg.rect(borderInset, borderInset, itemW + pad * 2 - borderInset * 2, labels.length * itemH + pad * 2 - borderInset * 2);
-        bg.stroke({ width: 2, color: getCursorColor(ownerPid), alignment: 0 });
-        menu.addChild(bg);
-        labels.forEach((label, i) => {
-            const y = pad + i * itemH;
-            const hit = new Container();
-            hit.eventMode = 'static';
-            hit.cursor = 'pointer';
-            hit.position.set(pad, y);
-            const gg = new Graphics();
-            gg.rect(0, 0, itemW, itemH);
-            gg.fill(0xffffff);
-            hit.addChild(gg);
-            const tt = makeThemedText({
-                text: label,
-                fontFamily: theme.fontFamily,
-                fontSize: theme.fontSize,
-                fill: theme.text,
-            });
-            tt.position.set(8, Math.max(0, (itemH - tt.height) / 2) + TEXT_BASELINE_NUDGE_Y);
-            hit.addChild(tt);
-            const isOwnerEvent = (ev) => getEffectivePointerId(ev) === ownerPid;
-            hit.on('pointerover', (ev) => {
-                if (!isOwnerEvent(ev))
-                    return;
-                gg.clear();
-                gg.rect(0, 0, itemW, itemH);
-                gg.fill(0xf2f2f2);
-            });
-            hit.on('pointerout', (ev) => {
-                if (!isOwnerEvent(ev))
-                    return;
-                gg.clear();
-                gg.rect(0, 0, itemW, itemH);
-                gg.fill(0xffffff);
-            });
-            hit.on('pointerdown', (ev) => {
-                if (!isOwnerEvent(ev))
-                    return;
-                ev.stopPropagation?.();
-                applyContextMenuAction(ownerPid, label);
-            });
-            menu.addChild(hit);
-        });
-        overlayRoot.addChild(menu);
-    }
-    if (fullRepaint) {
-        // Prune cached layout node containers that weren't visited this paint.
-        for (const [k, c] of nodeCache.entries()) {
-            if (usedNodeKeys.has(k))
-                continue;
-            try {
-                c.removeFromParent();
-                c.destroy?.({ children: true });
-            }
-            catch {
-                // Best-effort.
-            }
-            nodeCache.delete(k);
-        }
-    }
-    // Retained-mode renderer: we keep a stable scene graph rooted at `stage`.
-    // Do not clear or re-add `stage` (it may be `sceneRoot` itself).
-    globalThis.__trueosDirectSnapshot = directSnapshot;
-    return directSnapshot;
-}
 export async function startGui() {
     const rootEl = RT_DOCUMENT?.getElementById?.('app') ?? RT_DOCUMENT?.body;
     const app = new Application();
@@ -1815,7 +933,6 @@ export async function startGui() {
     app.canvas.addEventListener('wheel', (e) => {
         const x = e.offsetX ?? 0;
         const y = e.offsetY ?? 0;
-        let handled = false;
         // Deepest iframe under pointer wins.
         let iframeKey = null;
         for (let i = uiState.iframeRects.length - 1; i >= 0; i--) {
@@ -1833,19 +950,11 @@ export async function startGui() {
                     st.y = Math.max(0, Math.min(maxScroll, st.y + e.deltaY));
                     uiState.iframeScroll.set(iframeKey, st);
                     requestPaint?.(iframeKey || null);
-                    e.preventDefault();
-                    handled = true;
                 }
             }
+            e.preventDefault();
+            return;
         }
-        if (handled)
-            return;
-        const maxScroll = Math.max(0, uiState.scroll.contentHeight - uiState.scroll.viewportHeight);
-        if (maxScroll <= 0)
-            return;
-        uiState.scroll.y = Math.max(0, Math.min(maxScroll, uiState.scroll.y + e.deltaY));
-        requestPaint?.(GLOBAL_SCROLL_DIRTY_KEY);
-        e.preventDefault();
     }, { passive: false });
     // Make sure the stage participates in hit testing.
     app.stage.eventMode = 'static';
@@ -1869,7 +978,7 @@ export async function startGui() {
                     console.log(`[context-menu] open-fail pid=${menuPid} x=${Math.round(gx)} y=${Math.round(gy)} err=${String(err)}`);
                 }
             }
-            requestPaint?.();
+            requestPaint?.(GLOBAL_MENU_DIRTY_KEY);
             ev.preventDefault?.();
             return;
         }
@@ -1881,13 +990,112 @@ export async function startGui() {
                 // Keep legacy local input path alive.
             }
         }
+        if (ev?.button === 0 && pid > 0) {
+            // Local fallback interaction mapping for direct-only record path.
+            let hitSlider = null;
+            const sliderEntries = Array.from(uiState.sliderBounds.entries());
+            for (let i = sliderEntries.length - 1; i >= 0; i--) {
+                const [k, b] = sliderEntries[i];
+                if (gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h) {
+                    hitSlider = { key: k, b };
+                    break;
+                }
+            }
+            if (hitSlider) {
+                uiState.sliderDrags.set(pid, { key: hitSlider.key });
+                const localX = gx - hitSlider.b.x;
+                const innerW = Math.max(1, hitSlider.b.w - hitSlider.b.innerPad * 2);
+                const r = (localX - hitSlider.b.innerPad) / innerW;
+                const st = widgetGetOrInitSliderState(uiState.sliders, hitSlider.key, undefined);
+                st.value = Math.max(0, Math.min(1, r));
+                requestPaint?.(hitSlider.key);
+            }
+
+            let hitField = null;
+            const fieldEntries = Array.from(uiState.fieldBounds.entries());
+            for (let i = fieldEntries.length - 1; i >= 0; i--) {
+                const [k, b] = fieldEntries[i];
+                const bw = Math.max(1, b.innerWidth + b.innerLeft * 2);
+                const bh = Math.max(1, b.innerTop * 2 + Math.max(1, b.maxLines) * dragLineHeight);
+                if (gx >= b.x && gx <= b.x + bw && gy >= b.y && gy <= b.y + bh) {
+                    hitField = { key: k, b };
+                    break;
+                }
+            }
+            if (hitField) {
+                uiState.focusedKeyByPointer.set(pid, hitField.key);
+                uiState.keyboardOwnerPointerId = pid;
+                const st = uiState.inputs.get(hitField.key);
+                if (st && typeof st.value === 'string') {
+                    const shown = hitField.b.isPassword ? '•'.repeat(st.value.length) : st.value;
+                    const lines = clampWrappedLines(wrapFieldTextWithIndices(shown, Math.max(0, hitField.b.innerWidth), dragMeasure), hitField.b.maxLines);
+                    const localX = gx - hitField.b.x - hitField.b.innerLeft;
+                    const localY = gy - hitField.b.y - hitField.b.innerTop;
+                    const idx = getCaretIndexFromPoint({
+                        fullText: shown,
+                        lines,
+                        localX,
+                        localY,
+                        lineHeight: dragLineHeight,
+                        measure: dragMeasure,
+                    });
+                    if (!st.selections)
+                        st.selections = new Map();
+                    st.selections.set(pid, { start: idx, end: idx });
+                    uiState.textDrags.set(pid, { key: hitField.key, anchor: idx });
+                }
+                requestPaint?.(hitField.key);
+            }
+
+            let hitSelect = null;
+            for (let i = uiState.hoverRects.length - 1; i >= 0; i--) {
+                const r = uiState.hoverRects[i];
+                if (r?.kind !== 'select')
+                    continue;
+                if (gx >= r.x && gx <= r.x + r.w && gy >= r.y && gy <= r.y + r.h) {
+                    hitSelect = r;
+                    break;
+                }
+            }
+            if (hitSelect && typeof hitSelect.key === 'string') {
+                const st = uiState.selects.get(hitSelect.key);
+                if (st) {
+                    st.open = !st.open;
+                    requestPaint?.(hitSelect.key);
+                }
+            }
+
+            let hitDialog = null;
+            for (let i = uiState.hoverRects.length - 1; i >= 0; i--) {
+                const r = uiState.hoverRects[i];
+                if (r?.kind !== 'dialog')
+                    continue;
+                if (gx >= r.x && gx <= r.x + r.w && gy >= r.y && gy <= r.y + Math.min(36, r.h)) {
+                    hitDialog = r;
+                    break;
+                }
+            }
+            if (hitDialog && typeof hitDialog.key === 'string') {
+                const ds = getOrInitDialogState(uiState.dialogs, hitDialog.key);
+                uiState.dialogDrags.set(pid, {
+                    key: hitDialog.key,
+                    startGX: gx,
+                    startGY: gy,
+                    originX: Number(ds.x || 0),
+                    originY: Number(ds.y || 0),
+                });
+                uiState.dialogSelectedBy.set(hitDialog.key, pid);
+                uiState.dialogZ.set(hitDialog.key, uiState.dialogZCounter++);
+                requestPaint?.(hitDialog.key);
+            }
+        }
         // Left click closes only THIS pointer's menu (clicks from other pointers don't dismiss it).
         if (ev?.button !== 2) {
             if (menuPid > 0) {
                 try {
                     if (browserContext.isContextMenuOpen(menuPid)) {
                         browserContext.closeContextMenu(menuPid);
-                        requestPaint?.();
+                        requestPaint?.(GLOBAL_MENU_DIRTY_KEY);
                     }
                 }
                 catch {
@@ -2023,32 +1231,7 @@ export async function startGui() {
         const out = [];
         for (let i = 0; i < base.length; i++) {
             const it = base[i] || {};
-            const ll = String(it.label || '').toLowerCase();
-            if (ll.includes('scrollbar-track') || ll.includes('scrollbar-thumb'))
-                continue;
             out.push(it);
-        }
-        if (uiState.scroll.track.h > 0 && uiState.scroll.thumb.h > 0) {
-            out.push({
-                x: uiState.scroll.track.x,
-                y: uiState.scroll.track.y,
-                w: uiState.scroll.track.w,
-                h: uiState.scroll.track.h,
-                depth: 0,
-                alpha: 0.06,
-                label: 'scrollbar-track',
-                scrollWithGlobal: false,
-            });
-            out.push({
-                x: uiState.scroll.thumb.x,
-                y: uiState.scroll.thumb.y,
-                w: uiState.scroll.thumb.w,
-                h: uiState.scroll.thumb.h,
-                depth: 0,
-                alpha: 0.25,
-                label: 'scrollbar-thumb',
-                scrollWithGlobal: false,
-            });
         }
         return out;
     };
@@ -2058,30 +1241,37 @@ export async function startGui() {
             return;
         clampScroll();
         const hasScrollDirty = dirtyWidgetKeys.has(GLOBAL_SCROLL_DIRTY_KEY);
+        const hasMenuDirty = dirtyWidgetKeys.has(GLOBAL_MENU_DIRTY_KEY);
         const singleDirtyKey = dirtyWidgetKeys.size === 1 ? Array.from(dirtyWidgetKeys)[0] : null;
         const hasIframeScrollDirty = typeof singleDirtyKey === 'string' && singleDirtyKey.length > 0 && uiState.iframeScroll.has(singleDirtyKey);
         const scrollOnlyDirectPaint = USE_DIRECT_CMD_BACKEND
             && !forceFullRepaint
             && dirtyWidgetKeys.size === 1
-            && (hasScrollDirty || hasIframeScrollDirty)
+            && hasScrollDirty
             && Array.isArray(lastDirectSnapshot)
             && lastDirectSnapshot.length > 0;
 
-        if (scrollOnlyDirectPaint) {
+        const menuOnlyDirectPaint = USE_DIRECT_CMD_BACKEND
+            && !forceFullRepaint
+            && dirtyWidgetKeys.size === 1
+            && hasMenuDirty
+            && Array.isArray(lastDirectSnapshot)
+            && lastDirectSnapshot.length > 0;
+
+        if (scrollOnlyDirectPaint || menuOnlyDirectPaint) {
             updateScrollbarVisuals();
-            const pixiItems = withScrollbars(lastDirectSnapshot);
-            const backendLayout = buildDirectBackendLayoutFromItems(pixiItems, app.renderer.width, app.renderer.height);
+            const records = withScrollbars(lastDirectSnapshot);
             const nowScrollByDomain = captureScrollByDomain();
             const deltaByDomain = computeScrollDeltaByDomain(lastDirectSnapshotScrollByDomain, nowScrollByDomain);
+            const deltaY = menuOnlyDirectPaint ? 0 : (uiState.scroll.y - lastDirectSnapshotScrollY);
             const rendered = renderDirectCmdFrame({
-                layout: backendLayout,
-                pixiItems,
+                records,
                 viewportW: app.renderer.width,
                 viewportH: app.renderer.height,
                 worldW: app.screen.width,
                 worldH: app.screen.height,
                 scrollY: uiState.scroll.y,
-                scrollDeltaY: uiState.scroll.y - lastDirectSnapshotScrollY,
+                scrollDeltaY: deltaY,
                 scrollDeltaByDomain: deltaByDomain,
                 clearRgb: 0xFFFFFF,
                 browserContext,
@@ -2098,18 +1288,8 @@ export async function startGui() {
             return;
         }
 
-        const incrementalWidgetPaint = USE_DIRECT_CMD_BACKEND && !forceFullRepaint && dirtyWidgetKeys.size > 0;
-        const directSnapshot = renderToPixi(app, lastLayout, sceneRoot, {
-            fullRepaint: !incrementalWidgetPaint,
-            dirtyKeys: dirtyWidgetKeys,
-        });
+        const directSnapshot = collectLayoutSnapshotRecords(lastLayout, app.renderer.width, app.renderer.height);
         updateScrollbarVisuals();
-        if (incrementalWidgetPaint) {
-            app.renderer.render(app.stage);
-            dirtyWidgetKeys.clear();
-            forceFullRepaint = false;
-            return;
-        }
         const directSnapshotWithScrollbars = Array.isArray(directSnapshot)
             ? withScrollbars(directSnapshot)
             : directSnapshot;
@@ -2121,37 +1301,26 @@ export async function startGui() {
         }
         // Manual render (ticker is stopped).
         if (USE_DIRECT_CMD_BACKEND) {
-            const hasDirectBlocks = Array.isArray(directSnapshotWithScrollbars)
-                && directSnapshotWithScrollbars.some((it) => !it?.isText && Number(it?.w || 0) > 2 && Number(it?.h || 0) > 2);
-            const usingYogaSnapshot = !!hasDirectBlocks;
-            const pixiItems = usingYogaSnapshot
-                ? directSnapshotWithScrollbars
-                : collectPixiSnapshotItems([sceneRoot, overlayUiRoot, overlayRoot], app.renderer.width, app.renderer.height);
-            const backendLayout = buildDirectBackendLayoutFromItems(pixiItems, app.renderer.width, app.renderer.height);
+            const records = directSnapshotWithScrollbars;
             posTraceFrame++;
             if (TRACE_POSITION_FLOW) {
                 const yoga = summarizeLayoutAbs(lastLayout);
-                const snap = summarizeItems(pixiItems);
-                const backend = summarizeLayoutAbs(backendLayout);
+                const snap = summarizeItems(records);
                 const noisy = posTraceFrame <= 3 || (posTraceFrame % 30) === 1;
                 const clustered = (snap.total > 0 && (snap.nearOrigin / snap.total) > 0.6)
-                    || (backend.sized > 0 && (backend.nearOrigin / backend.sized) > 0.6);
+                    || (yoga.sized > 0 && (yoga.nearOrigin / yoga.sized) > 0.6);
                 if (noisy || clustered) {
-                    console.log(`[pos-trace] frame=${posTraceFrame} src=${usingYogaSnapshot ? 'yoga-snapshot' : 'pixi-bounds'} yogaSized=${yoga.sized}/${yoga.total} yogaNear0=${yoga.nearOrigin} yogaBBox=${yoga.minX.toFixed(1)},${yoga.minY.toFixed(1)}..${yoga.maxX.toFixed(1)},${yoga.maxY.toFixed(1)} snap=${snap.total} snapNear0=${snap.nearOrigin} snapBBox=${snap.minX.toFixed(1)},${snap.minY.toFixed(1)}..${snap.maxX.toFixed(1)},${snap.maxY.toFixed(1)} backendSized=${backend.sized}/${backend.total} backendNear0=${backend.nearOrigin} backendBBox=${backend.minX.toFixed(1)},${backend.minY.toFixed(1)}..${backend.maxX.toFixed(1)},${backend.maxY.toFixed(1)}`);
+                    console.log(`[pos-trace] frame=${posTraceFrame} src=records yogaSized=${yoga.sized}/${yoga.total} yogaNear0=${yoga.nearOrigin} yogaBBox=${yoga.minX.toFixed(1)},${yoga.minY.toFixed(1)}..${yoga.maxX.toFixed(1)},${yoga.maxY.toFixed(1)} rec=${snap.total} recNear0=${snap.nearOrigin} recBBox=${snap.minX.toFixed(1)},${snap.minY.toFixed(1)}..${snap.maxX.toFixed(1)},${snap.maxY.toFixed(1)}`);
                     if (yoga.samples.length > 0)
                         console.log(`[pos-trace:yoga-samples] ${yoga.samples.join(' | ')}`);
                     if (yoga.zeroSamples.length > 0)
                         console.log(`[pos-trace:yoga-zero] ${yoga.zeroSamples.join(' | ')}`);
                     if (snap.samples.length > 0)
-                        console.log(`[pos-trace:snapshot-samples] ${snap.samples.join(' | ')}`);
-                    if (backend.samples.length > 0)
-                        console.log(`[pos-trace:backend-samples] ${backend.samples.join(' | ')}`);
+                        console.log(`[pos-trace:record-samples] ${snap.samples.join(' | ')}`);
                 }
             }
             const rendered = renderDirectCmdFrame({
-                layout: backendLayout,
-                pixiItems,
-                allowFit: !usingYogaSnapshot,
+                records,
                 viewportW: app.renderer.width,
                 viewportH: app.renderer.height,
                 worldW: app.screen.width,
@@ -2167,7 +1336,7 @@ export async function startGui() {
             if (!rendered) {
                 app.renderer.render(app.stage);
             }
-            lastDirectSnapshot = Array.isArray(pixiItems) ? pixiItems.map((it) => ({ ...(it || {}) })) : null;
+            lastDirectSnapshot = Array.isArray(records) ? records.map((it) => ({ ...(it || {}) })) : null;
             lastDirectSnapshotScrollY = uiState.scroll.y;
             lastDirectSnapshotScrollByDomain = captureScrollByDomain();
         }
@@ -2198,8 +1367,15 @@ export async function startGui() {
         forceFullRepaint = true;
         paint();
     };
+    let rerenderScheduled = false;
     requestRerender = () => {
-        void rerender();
+        if (rerenderScheduled)
+            return;
+        rerenderScheduled = true;
+        requestAnimationFrame(() => {
+            rerenderScheduled = false;
+            void rerender();
+        });
     };
     // Coalesce paints to at most once per frame.
     let paintScheduled = false;
@@ -2211,13 +1387,10 @@ export async function startGui() {
         requestAnimationFrame(() => {
             presentScheduled = false;
             if (USE_DIRECT_CMD_BACKEND) {
-                // In direct mode, requestPresent is typically triggered by cursor/hover churn.
-                // Avoid full scene rebuilds here; cursor-plane tick owns cursor updates.
-                if (USE_CURSOR_PLANE_TICK) {
-                    // Present retained Graphics mutations (hover/active fills) without rebuilding scene.
-                    app.renderer.render(app.stage);
-                }
-                else {
+                // In direct mode, avoid Pixi stage presents because they can race/overdraw
+                // the cmd-stream output during bring-up and cause transient text artifacts.
+                // Cursor visuals are handled by the cursor-plane tick.
+                if (!USE_CURSOR_PLANE_TICK) {
                     try {
                         renderCursorPlaneFrame({
                             viewportW: app.renderer.width,
@@ -2230,6 +1403,7 @@ export async function startGui() {
                         // Keep present path resilient.
                     }
                 }
+                return;
             }
             else {
                 app.renderer.render(app.stage);
@@ -2252,24 +1426,6 @@ export async function startGui() {
         });
     };
     await rerender();
-
-    // Debug bootstrap: open one context menu at startup so direct-menu rendering
-    // can be validated without requiring an initial right-click.
-    if (!globalThis.__trueosBootMenuOpened) {
-        globalThis.__trueosBootMenuOpened = true;
-        const bootPid = USER_POINTER_ID;
-        const cx = Math.max(0, (Number(app.renderer.width || 0) * 0.5) | 0);
-        const cy = Math.max(0, (Number(app.renderer.height || 0) * 0.5) | 0);
-        try {
-            browserContext.setActiveCursor?.(bootPid);
-            browserContext.openContextMenu(bootPid, cx, cy, null);
-            console.log(`[context-menu] boot-open pid=${bootPid} x=${cx} y=${cy} ok=${browserContext.isContextMenuOpen?.(bootPid) ? 1 : 0}`);
-            requestPaint?.();
-        }
-        catch (err) {
-            console.log(`[context-menu] boot-open-fail pid=${bootPid} err=${String(err)}`);
-        }
-    }
 
     // Start cursor-plane updates only after the first full scene paint.
     // This avoids brief startup flicker while text atlas and base frame settle.
@@ -2440,7 +1596,7 @@ export async function startGui() {
                             if (button === 2) {
                                 // Mirror stage right-click behavior for kernel-fed cursors.
                                 browserContext.openContextMenu(pid, pos.x, pos.y, null);
-                                requestPaint?.();
+                                requestPaint?.(GLOBAL_MENU_DIRTY_KEY);
                             }
                             else {
                                 browserContext.routePointerDown(pid, pos.x, pos.y, null, button);

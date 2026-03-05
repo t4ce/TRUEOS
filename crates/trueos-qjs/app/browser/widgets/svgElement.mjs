@@ -1,4 +1,5 @@
 import { clearGraphics, getOrCreateGraphics } from '../pixiReuse.mjs';
+import { USE_DIRECT_CMD_BACKEND } from '../ui.mjs';
 function stripUnsupportedSvgText(svg) {
     // Pixi's SVG parser warns that <text> is unsupported.
     return String(svg)
@@ -62,7 +63,10 @@ export function renderSvgElement(opts) {
                 res = null;
             }
             if (res && typeof res.then === 'function') {
-                res.then(() => requestRerender?.()).catch(() => void 0);
+                res.then(() => {
+                    if (!USE_DIRECT_CMD_BACKEND)
+                        requestRerender?.();
+                }).catch(() => void 0);
             }
             svgG.__svgString = svgString;
             svgG.__w = w;

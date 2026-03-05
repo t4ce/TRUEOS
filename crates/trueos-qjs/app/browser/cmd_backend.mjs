@@ -251,7 +251,7 @@ function scrollDeltaForItem(item, scrollDeltaByDomain, fallbackDeltaY) {
     return Number(fallbackDeltaY || 0);
 }
 
-function drawPixiSnapshotItems(verts, items, viewportW, viewportH, scaleX = 1, scaleY = 1, scrollDeltaY = 0, scrollDeltaByDomain = null) {
+function drawRecordsItems(verts, items, viewportW, viewportH, scaleX = 1, scaleY = 1, scrollDeltaY = 0, scrollDeltaByDomain = null) {
     if (!Array.isArray(items) || items.length === 0) return 0;
     let drew = 0;
     const cullPad = 2;
@@ -267,49 +267,9 @@ function drawPixiSnapshotItems(verts, items, viewportW, viewportH, scaleX = 1, s
         if (!(w > 1 && h > 1)) continue;
         if (x > viewportW + cullPad || y > viewportH + cullPad || (x + w) < -cullPad || (y + h) < -cullPad) continue;
 
-        const label = String(it.label || '');
-        const ll = label.toLowerCase();
-        const kind = classifySurface(label);
-        const palette = paletteForSurface(kind);
-        const depth = Math.max(0, Number(it.depth || 0));
         const alpha = Math.max(0.1, Math.min(1, Number(it.alpha == null ? 1 : it.alpha)));
-        const frameCoverage = (w * h) / Math.max(1, viewportW * viewportH);
-        const isNearViewportOrigin = x <= (viewportW * 0.03) && y <= (viewportH * 0.03);
-        const isRootFrameLike = ll.includes('iframe') || ll.includes('root') || ll.includes('stage');
-        const suppressChrome = isNearViewportOrigin && frameCoverage >= 0.70 && (depth <= 1 || isRootFrameLike);
-
-        const drawFlat = kind === 'scrollbar';
-
-        // Base fill gets slightly cooler with depth to improve stacking readability.
-        const depthMix = Math.min(0.28, depth * 0.035);
-        const fillRgb = mixRgb(palette.fill, 0xe7edf5, depthMix);
-        const fillAlpha = suppressChrome
-            ? clampU8(Math.round(255 * alpha))
-            : clampU8(Math.round(228 * alpha));
-        pushRectPx(verts, x, y, x + w, y + h, fillRgb.r, fillRgb.g, fillRgb.b, fillAlpha, viewportW, viewportH);
-
-        if (!suppressChrome && !drawFlat) {
-            // Top sheen strip simulates subtle sprite-like highlight.
-            const topH = Math.max(2, Math.min(10, Math.round(h * 0.24)));
-            pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 1 + topH, 255, 255, 255, clampU8(Math.round(18 * alpha)), viewportW, viewportH);
-        }
-
-        if (!suppressChrome && !drawFlat) {
-            // Accent edge helps popup/dialog/select boundaries read clearly.
-            const accent = splitRgb(palette.accent);
-            pushRectPx(verts, x + 1, y + 1, x + w - 1, y + 2, accent.r, accent.g, accent.b, clampU8(Math.round(130 * alpha)), viewportW, viewportH);
-        }
-
-        if (!suppressChrome && !drawFlat) {
-            const stroke = splitRgb(palette.stroke);
-            const borderW = kind === 'dialog' || kind === 'select' || kind === 'temporal' ? 2 : 1;
-            pushBorderPx(verts, x, y, x + w, y + h, borderW, stroke.r, stroke.g, stroke.b, clampU8(Math.round(235 * alpha)), viewportW, viewportH);
-        }
-
-        // Widget detail pass: bring control semantics to life in direct-cmd mode.
-        if (!suppressChrome && !drawFlat) {
-            drawWidgetDetail(verts, label, x, y, w, h, alpha, viewportW, viewportH);
-        }
+        const fillAlpha = clampU8(Math.round(255 * alpha));
+        pushRectPx(verts, x, y, x + w, y + h, 248, 250, 252, fillAlpha, viewportW, viewportH);
         drew++;
     }
     return drew;
@@ -323,7 +283,7 @@ function ensureDirectAtlasTex(cmd) {
     return id;
 }
 
-function drawPixiSnapshotText(cmd, atlasTex, items, scaleX = 1, scaleY = 1, viewportW = 0, viewportH = 0, scrollDeltaY = 0, scrollDeltaByDomain = null) {
+function drawRecordsText(cmd, atlasTex, items, scaleX = 1, scaleY = 1, viewportW = 0, viewportH = 0, scrollDeltaY = 0, scrollDeltaByDomain = null) {
     if (!cmd || atlasTex <= 0 || typeof cmd.drawAtlasText !== 'function') return 0;
     if (!Array.isArray(items) || items.length === 0) return 0;
     let n = 0;
@@ -352,29 +312,26 @@ function drawPixiSnapshotText(cmd, atlasTex, items, scaleX = 1, scaleY = 1, view
     return n;
 }
 
-function countLayout(layout) {
+function countRecords(items) {
+    const list = Array.isArray(items) ? items : [];
     let blockCount = 0;
     let textCount = 0;
     let sizedBlocks = 0;
     let zeroBlocks = 0;
-
-    const walk = (n) => {
-        if (!n || typeof n !== 'object') return;
-        if (n.kind === 'block') {
-            blockCount++;
-            const w = Number(n.width || 0);
-            const h = Number(n.height || 0);
-            if (w > 2 && h > 2) sizedBlocks++;
-            else zeroBlocks++;
+    for (let i = 0; i < list.length; i++) {
+        const it = list[i] || {};
+        if (it.isText) {
+            textCount++;
+            continue;
         }
-        if (n.kind === 'text') textCount++;
-        const c = Array.isArray(n.children) ? n.children : [];
-        for (let i = 0; i < c.length; i++) walk(c[i]);
-    };
-
-    const kids = Array.isArray(layout && layout.children) ? layout.children : [];
-    for (let i = 0; i < kids.length; i++) walk(kids[i]);
-
+        blockCount++;
+        const w = Number(it.w || 0);
+        const h = Number(it.h || 0);
+        if (w > 2 && h > 2)
+            sizedBlocks++;
+        else
+            zeroBlocks++;
+    }
     return { blockCount, textCount, sizedBlocks, zeroBlocks };
 }
 
@@ -809,9 +766,6 @@ export function renderDirectCmdFrame(opts = {}) {
         return false;
     }
 
-    const layout = opts.layout || null;
-    if (!layout) return false;
-
     const viewportW = Math.max(1, Number(opts.viewportW || 1) | 0);
     const viewportH = Math.max(1, Number(opts.viewportH || 1) | 0);
     const worldW = Math.max(1, Number(opts.worldW || viewportW) || viewportW);
@@ -825,14 +779,14 @@ export function renderDirectCmdFrame(opts = {}) {
         : null;
     const clearRgb = (opts.clearRgb == null) ? 0xFFFFFF : (Number(opts.clearRgb) >>> 0);
     const browserContext = opts.browserContext || null;
-    const pixiItems = Array.isArray(opts.pixiItems) ? opts.pixiItems : [];
+    const records = Array.isArray(opts.records) ? opts.records : [];
     const onMenuAction = typeof opts.onMenuAction === 'function' ? opts.onMenuAction : null;
 
-    const counts = countLayout(layout);
+    const counts = countRecords(records);
     const verts = [];
     const overlayVerts = [];
     const menuText = [];
-    const pixiDrawn = drawPixiSnapshotItems(verts, pixiItems, viewportW, viewportH, worldToViewportX, worldToViewportY, scrollDeltaY, scrollDeltaByDomain);
+    const recordsDrawn = drawRecordsItems(verts, records, viewportW, viewportH, worldToViewportX, worldToViewportY, scrollDeltaY, scrollDeltaByDomain);
 
     // Context menus are rendered as an alpha overlay in direct mode.
     const menuDiag = drawCursorMenus(overlayVerts, menuText, browserContext, viewportW, viewportH, onMenuAction);
@@ -843,7 +797,7 @@ export function renderDirectCmdFrame(opts = {}) {
     const bytes = packVertices12(verts);
     const overlayBytes = packVertices12(overlayVerts);
     try {
-        console.log(`[direct-backend] blocks=${counts.blockCount} sized=${counts.sizedBlocks} zero=${counts.zeroBlocks} text=${counts.textCount} pixi=${pixiItems.length}/${pixiDrawn} verts=${verts.length} bytes=${bytes ? bytes.byteLength : 0} scrollY=${scrollY} dY=${scrollDeltaY.toFixed(1)} vp=${viewportW}x${viewportH}`);
+        console.log(`[direct-backend] blocks=${counts.blockCount} sized=${counts.sizedBlocks} zero=${counts.zeroBlocks} text=${counts.textCount} records=${records.length}/${recordsDrawn} verts=${verts.length} bytes=${bytes ? bytes.byteLength : 0} scrollY=${scrollY} dY=${scrollDeltaY.toFixed(1)} vp=${viewportW}x${viewportH}`);
         const menuDiagSeq = nextDirectMenuDiagSeq();
         if (menuDiag.open > 0 || menuDiagSeq <= 3 || (menuDiagSeq % 30) === 0) {
             console.log(`[direct-menu] seq=${menuDiagSeq} scanned=${menuDiag.scanned} open=${menuDiag.open} drawn=${menuDiag.drawn} overlayVerts=${overlayVerts.length} overlayBytes=${overlayBytes ? overlayBytes.byteLength : 0} menuText=${menuText.length} stMissing=${menuDiag.stMissing} apiMissing=${menuDiag.apiMissing}`);
@@ -870,7 +824,7 @@ export function renderDirectCmdFrame(opts = {}) {
     const atlasTex = ensureDirectAtlasTex(cmd);
     if (typeof cmd.setBlendEnabled === 'function') cmd.setBlendEnabled(true);
     if (typeof cmd.setBlendMode === 'function') cmd.setBlendMode(0);
-    const textDrawn = drawPixiSnapshotText(cmd, atlasTex, pixiItems, worldToViewportX, worldToViewportY, viewportW, viewportH, scrollDeltaY, scrollDeltaByDomain);
+    const textDrawn = drawRecordsText(cmd, atlasTex, records, worldToViewportX, worldToViewportY, viewportW, viewportH, scrollDeltaY, scrollDeltaByDomain);
     if (atlasTex > 0 && typeof cmd.drawAtlasText === 'function') {
         for (let i = 0; i < menuText.length; i++) {
             const row = menuText[i] || {};
