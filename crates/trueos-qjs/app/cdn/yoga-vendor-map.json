@@ -1,8 +1,0 @@
-{
-  "root": "https://esm.sh/yoga-layout@3.2.1?bundle",
-  "total": 2,
-  "modules": {
-    "https://esm.sh/yoga-layout@3.2.1?bundle": "e885ce03d8e64d3d",
-    "https://esm.sh/yoga-layout@3.2.1/node/yoga-layout.bundle.mjs": "fde6b9a19a6f2d59"
-  }
-}

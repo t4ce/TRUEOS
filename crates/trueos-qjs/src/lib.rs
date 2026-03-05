@@ -40,6 +40,14 @@ pub mod browser_canvas;
 pub mod browser_task;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/layout.rs"]
+pub mod layout;
+
+#[cfg(feature = "trueos")]
+#[path = "../app/browser/ui_html.rs"]
+pub mod ui_html;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]

@@ -8,9 +8,8 @@ export const SCROLLBAR_W = 10;
 export const USER_POINTER_ID = 1;
 export const TRACE_POSITION_FLOW = true;
 export const TRACE_YOGA_LIFECYCLE = true;
-// WebGPU bring-up mode: present only Pixi's stage output (clean white background)
-// and verify the native WebGPU present path first.
-export const USE_WEBGPU_NATIVE_PAINT = true;
+// Force direct backend mode for deterministic custom gfx rendering.
+export const USE_WEBGPU_NATIVE_PAINT = false;
 // Cursor-plane can overdraw with an opaque clear in bring-up; keep it off here.
 export const USE_CURSOR_PLANE_TICK = !USE_WEBGPU_NATIVE_PAINT;
 export const CURSOR_PLANE_TICK_MS = 50;
