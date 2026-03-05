@@ -1,6 +1,6 @@
 import { Rectangle } from 'pixi.js';
 import { TEXT_BASELINE_NUDGE_Y } from '../text.mjs';
-import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../pixiReuse.mjs';
+import { clearGraphics, getOrCreateGraphics, getOrCreateText } from '../../pixi/architecture/pixiReuse.mjs';
 export function getOrInitNumberState(map, key, attrs) {
     const existing = map.get(key);
     if (existing)

@@ -1033,15 +1033,18 @@ fn build_font_cache_large() -> FontCacheLarge {
         width = width.clamp(1, BANNER_CELL_W as i32);
         let width = width as u8;
 
-        let _cell_h = BANNER_CELL_H as i32;
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
-
         if glyph_w > 0 && glyph_h > 0 {
+            // Atlas consumers sample from the left edge of each cell using
+            // [cell_x, cell_x + glyph_w), so glyph coverage must start at x=0.
             let x0 = (-metrics.xmin).max(0);
-            // Baseline anchor only: height-centering biases shorter lowercase
-            // glyphs downward compared to uppercase.
-            let y0 = -metrics.ymin - 1;
+            // Metric anchor without extra upward trim to avoid top clipping.
+            let mut y0 = -metrics.ymin;
+            // Cap-height polish: uppercase can look 1px too low at this scale.
+            if ch.is_ascii_uppercase() && y0 > 0 {
+                y0 -= 1;
+            }
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {

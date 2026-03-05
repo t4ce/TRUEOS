@@ -1,4 +1,4 @@
-import { clearGraphics, getOrCreateGraphics } from '../pixiReuse.mjs';
+import { clearGraphics, getOrCreateGraphics } from '../../pixi/architecture/pixiReuse.mjs';
 function stripUnsupportedSvgText(svg) {
     // Pixi's SVG parser warns that <text> is unsupported.
     return String(svg)
