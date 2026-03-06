@@ -166,6 +166,48 @@ fn push_filled_rect(
     push_rect(out, x, y, x + w, y + h, r, g, b, a, viewport_w, viewport_h);
 }
 
+fn push_diag_gradient_rect_rgba(
+    out: &mut Vec<u8>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    c0: (u8, u8, u8, u8),
+    c1: (u8, u8, u8, u8),
+    viewport_w: f32,
+    viewport_h: f32,
+) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+
+    let x0 = x;
+    let y0 = y;
+    let x1 = x + w;
+    let y1 = y + h;
+
+    let ax = to_ndc_x(x0, viewport_w);
+    let ay = to_ndc_y(y1, viewport_h);
+    let bx = to_ndc_x(x1, viewport_w);
+    let by = to_ndc_y(y1, viewport_h);
+    let cx = to_ndc_x(x1, viewport_w);
+    let cy = to_ndc_y(y0, viewport_h);
+    let dx = to_ndc_x(x0, viewport_w);
+    let dy = to_ndc_y(y0, viewport_h);
+
+    let (r0, g0, b0, a0) = c0;
+    let (r1, g1, b1, a1) = c1;
+
+    // Two triangles with per-vertex colors produce a smooth diagonal tint.
+    push_vtx(out, ax, ay, r0, g0, b0, a0);
+    push_vtx(out, bx, by, r1, g1, b1, a1);
+    push_vtx(out, cx, cy, r1, g1, b1, a1);
+
+    push_vtx(out, ax, ay, r0, g0, b0, a0);
+    push_vtx(out, cx, cy, r1, g1, b1, a1);
+    push_vtx(out, dx, dy, r0, g0, b0, a0);
+}
+
 unsafe extern "C" fn qjs_draw_layout_rects(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -276,6 +318,20 @@ unsafe extern "C" fn qjs_draw_layout_rects(
             2 => {
                 // Scrollbar thumb: gray filled rectangle.
                 push_filled_rect(&mut bytes, xf, yf, wf, hf, 160, 160, 160, 255, viewport_w, viewport_h);
+            }
+            5 => {
+                // Button tint: subtle diagonal two-value gradient.
+                push_diag_gradient_rect_rgba(
+                    &mut bytes,
+                    xf,
+                    yf,
+                    wf,
+                    hf,
+                    (236, 241, 252, 190),
+                    (219, 228, 246, 190),
+                    viewport_w,
+                    viewport_h,
+                );
             }
             3 => {
                 // Widget-update pulse: warm highlight border.
@@ -411,11 +467,9 @@ unsafe extern "C" fn qjs_draw_cursor_plane(
 
         let mut x = 0.0f64;
         let mut y = 0.0f64;
-        let mut s = 0.0f64;
         let mut c = 0.0f64;
         let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
         let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
-        let _ = qjs::JS_ToFloat64(ctx, &mut s as *mut f64, vs);
         let _ = qjs::JS_ToFloat64(ctx, &mut c as *mut f64, vc);
 
         qjs::js_free_value(ctx, vx);
@@ -425,67 +479,38 @@ unsafe extern "C" fn qjs_draw_cursor_plane(
 
         let xf = x as f32;
         let yf = y as f32;
-        let size = (s as f32).max(4.0);
         let color = if c.is_finite() { c as u32 } else { 0x111111 };
         let r = ((color >> 16) & 0xFF) as u8;
         let g = ((color >> 8) & 0xFF) as u8;
         let b = (color & 0xFF) as u8;
 
-        let half = size * 0.5;
-        let stem_w = (size * 0.28).max(2.0);
-        let stem_h = (size * 1.20).max(size + 2.0);
-
-        // Fast cursor-plane glyph: one vertical stem and one cap, then an outline.
+        // Draw a small centered cross: 3px tick per arm, 1px thickness.
+        let cx = xf;
+        let cy = yf;
+        let arm = 3.0f32;
+        let line = 1.0f32;
         push_filled_rect(
             &mut bytes,
-            xf,
-            yf,
-            stem_w,
-            stem_h,
+            cx - arm,
+            cy,
+            (arm * 2.0) + 1.0,
+            line,
             r,
             g,
             b,
-            230,
-            viewport_w,
-            viewport_h,
-        );
-        push_filled_rect(
-            &mut bytes,
-            xf,
-            yf,
-            half,
-            stem_w,
-            r,
-            g,
-            b,
-            230,
-            viewport_w,
-            viewport_h,
-        );
-        push_border_rect_rgba(
-            &mut bytes,
-            xf,
-            yf,
-            stem_w,
-            stem_h,
-            1.0,
-            0,
-            0,
-            0,
             255,
             viewport_w,
             viewport_h,
         );
-        push_border_rect_rgba(
+        push_filled_rect(
             &mut bytes,
-            xf,
-            yf,
-            half,
-            stem_w,
-            1.0,
-            0,
-            0,
-            0,
+            cx,
+            cy - arm,
+            line,
+            (arm * 2.0) + 1.0,
+            r,
+            g,
+            b,
             255,
             viewport_w,
             viewport_h,
