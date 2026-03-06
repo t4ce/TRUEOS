@@ -4,18 +4,6 @@ use core::ffi::c_char;
 
 use crate as qjs;
 
-unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
-}
-
-#[inline]
-fn log_str(s: &str) {
-    if s.is_empty() {
-        return;
-    }
-    unsafe { trueos_cabi_write(1, s.as_ptr(), s.len()) };
-}
-
 unsafe extern "C" fn qjs_draw_text(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -37,16 +25,14 @@ unsafe extern "C" fn qjs_draw_text(
         return qjs::JSValue::undefined();
     }
 
-    let text_ptr = qjs::js_to_cstring(ctx, args[0]);
+    let mut text_len: usize = 0;
+    let text_ptr = qjs::JS_ToCStringLen2(ctx, &mut text_len as *mut usize, args[0], 0);
     if text_ptr.is_null() {
         return qjs::JSValue::undefined();
     }
 
-    // Foundation step: expose a stable text-widget entrypoint.
-    // Raster text rendering will be wired behind this API in follow-up patches.
-    let _ = x;
-    let _ = y;
-    log_str("qjs-text: draw text\n");
+    let text = core::slice::from_raw_parts(text_ptr as *const u8, text_len);
+    let _ = qjs::cmd_stream::draw_text_widget(text, x as f32, y as f32);
 
     qjs::JS_FreeCString(ctx, text_ptr);
     qjs::JSValue::undefined()

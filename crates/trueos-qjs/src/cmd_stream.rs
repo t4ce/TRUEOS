@@ -113,6 +113,7 @@ struct CmdStreamTextBatchRun {
 }
 
 static CMD_STREAM_TEXT_BATCH_RUNS: Mutex<Vec<CmdStreamTextBatchRun>> = Mutex::new(Vec::new());
+static CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID: AtomicU32 = AtomicU32::new(0);
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
 const CMD_STREAM_DEFAULT_PMA: u32 = 0;
@@ -457,6 +458,214 @@ fn cmd_stream_flush_text_batches() {
             unsafe { trueos_cabi_gfx_draw_tex_triangles_no_present(run.tex_id, run.verts.as_ptr(), run.verts.len()) };
     }
     runs.clear();
+}
+
+fn cmd_stream_draw_atlas_text_impl(
+    tex_id: u32,
+    kind: u32,
+    x_f: f64,
+    y_f: f64,
+    text: &[u8],
+    px_h: f64,
+    rgb_f: f64,
+    alpha_f: f64,
+) -> bool {
+    if tex_id == 0 || text.is_empty() {
+        return false;
+    }
+
+    cmd_stream_refresh_atlas_tex_if_needed(tex_id, kind);
+    let Some(atlas) = cmd_stream_select_atlas(kind) else {
+        return false;
+    };
+
+    let draw_log_n = CMD_STREAM_TEXT_DRAW_LOGS.fetch_add(1, Ordering::Relaxed);
+    if CMD_STREAM_VERBOSE_TEXT_LOGS && draw_log_n < 24 {
+        let preview = if let Ok(s) = core::str::from_utf8(text) {
+            s
+        } else {
+            "<non-utf8>"
+        };
+        let msg = alloc::format!(
+            "cmd-stream: draw-text tex={} x={} y={} len={} text=\"{}\"\n",
+            tex_id,
+            x_f as i32,
+            y_f as i32,
+            text.len(),
+            preview
+        );
+        log_str(msg.as_str());
+    }
+
+    let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
+    let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
+    let w = view_w as f32;
+    let h = view_h as f32;
+    let grid_w = atlas.grid_w.max(1);
+    let _ = px_h;
+    let scale = 1.0f32;
+    let rgb = ((rgb_f as i64).max(0) as u32) & 0x00FF_FFFF;
+    let r = ((rgb >> 16) & 0xFF) as u8;
+    let g = ((rgb >> 8) & 0xFF) as u8;
+    let b = (rgb & 0xFF) as u8;
+    let a = ((alpha_f as i64).clamp(0, 255)) as u8;
+    let px_h_bits = (px_h as f32).to_bits();
+    let origin_x_ndc = (2.0 * ((x_f as f32) / w)) - 1.0;
+    let origin_y_ndc = 1.0 - (2.0 * ((y_f as f32) / h));
+
+    let verts = cmd_stream_text_cache_get(kind, view_w, view_h, px_h_bits, rgb, a, text)
+        .unwrap_or_else(|| {
+            let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+            let mut pen_x = 0.0f32;
+            let pen_y = 0.0f32;
+            let mut out = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+            let atlas_w_f = (atlas.width.max(1)) as f32;
+            let atlas_h_f = (atlas.height.max(1)) as f32;
+            let atlas_cell_h_u = atlas.cell_h as usize;
+            let meta_kind = cmd_stream_atlas_meta_kind(kind);
+            let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
+            let meta_table = meta_guard.as_ref();
+
+            for &ch in text.iter() {
+                if ch == b'\n' {
+                    pen_x = 0.0;
+                    continue;
+                }
+                if ch == b' ' {
+                    pen_x += (atlas.cell_w as f32) * scale * 0.6;
+                    continue;
+                }
+                if let Some(table) = meta_table
+                    && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
+                {
+                    let x0 = pen_x;
+                    let y0 = pen_y;
+                    let x1 = pen_x + gm.glyph_w_px * scale;
+                    let y1 = pen_y + (atlas_cell_h_u as f32).max(1.0) * scale;
+                    let nx0 = 2.0 * (x0 / w);
+                    let ny0 = -(2.0 * (y0 / h));
+                    let nx1 = 2.0 * (x1 / w);
+                    let ny1 = -(2.0 * (y1 / h));
+
+                    cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
+                    cmd_stream_push_tex_vtx(&mut out, nx1, ny1, gm.u1, gm.v1, r, g, b, a);
+                    cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
+                    cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
+                    cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
+                    cmd_stream_push_tex_vtx(&mut out, nx0, ny0, gm.u0, gm.v0, r, g, b, a);
+                    pen_x += gm.advance_px * scale;
+                    continue;
+                }
+
+                let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+                if slot == u16::MAX {
+                    slot = fallback;
+                }
+                let glyph_w_u = atlas
+                    .widths
+                    .get(slot as usize)
+                    .copied()
+                    .unwrap_or(atlas.cell_w as u8) as usize;
+                let glyph_h_u = atlas_cell_h_u.max(1);
+
+                let sx = (slot as u32) % grid_w;
+                let sy = (slot as u32) / grid_w;
+                let px0 = (sx as f32) * (atlas.cell_w as f32);
+                let py0 = (sy as f32) * (atlas.cell_h as f32);
+                let px1 = px0 + (glyph_w_u as f32);
+                let py1 = py0 + (glyph_h_u as f32);
+
+                let u0 = px0 / atlas_w_f;
+                let v0 = py0 / atlas_h_f;
+                let u1 = px1 / atlas_w_f;
+                let v1 = py1 / atlas_h_f;
+
+                let x0 = pen_x;
+                let y0 = pen_y;
+                let x1 = pen_x + (glyph_w_u as f32) * scale;
+                let y1 = pen_y + (glyph_h_u as f32) * scale;
+                let nx0 = 2.0 * (x0 / w);
+                let ny0 = -(2.0 * (y0 / h));
+                let nx1 = 2.0 * (x1 / w);
+                let ny1 = -(2.0 * (y1 / h));
+
+                cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut out, nx1, ny1, u1, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
+                cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
+                pen_x += (glyph_w_u as f32 * scale) + ((glyph_h_u as f32) * scale * 0.08);
+            }
+
+            let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
+            cmd_stream_text_cache_put(CmdStreamTextMeshCacheEntry {
+                kind,
+                view_w,
+                view_h,
+                px_h_bits,
+                rgb,
+                alpha: a,
+                text: text.to_vec(),
+                verts: cached.clone(),
+            });
+            cached
+        });
+
+    if verts.is_empty() {
+        return false;
+    }
+    cmd_stream_enqueue_text_batch(tex_id, verts.as_ref(), origin_x_ndc, origin_y_ndc);
+    true
+}
+
+pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
+    if text.is_empty() || !cmd_stream_owner_is_pixi() {
+        return false;
+    }
+
+    let kind = 1u32;
+    let tex_id = {
+        let cached = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire);
+        if cached != 0 {
+            cached
+        } else {
+            let Some(atlas) = cmd_stream_select_atlas(kind) else {
+                return false;
+            };
+            let id = cmd_stream_alloc_tex_id();
+            if !cmd_stream_upload_atlas_to_tex(id, atlas) {
+                cmd_stream_release_tex_id(id);
+                return false;
+            }
+            cmd_stream_mark_atlas_tex(id, kind);
+            let _ = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.compare_exchange(
+                0,
+                id,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire)
+        }
+    };
+
+    cmd_stream_clear_text_batches();
+    let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
+    let _ = unsafe { trueos_cabi_gfx_begin_frame(clear) };
+    cmd_stream_reset_frame_state_defaults();
+    let ok = cmd_stream_draw_atlas_text_impl(
+        tex_id,
+        kind,
+        x as f64,
+        y as f64,
+        text,
+        26.0,
+        0x101010 as f64,
+        255.0,
+    );
+    cmd_stream_flush_text_batches();
+    let _ = unsafe { trueos_cabi_gfx_end_frame() };
+    ok
 }
 
 #[inline]
