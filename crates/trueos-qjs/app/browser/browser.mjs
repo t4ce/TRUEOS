@@ -7,7 +7,9 @@ const HTML = (typeof G.__trueosUiHtml === 'string' && G.__trueosUiHtml.length > 
   : '<!DOCTYPE html><html><body><div>empty ui_html</div></body></html>';
 
 const PAD = 8;
-const NODE_H = 28;
+const NODE_H = 16;
+const INDENT_PER_DEPTH = 10;
+const MAX_INDENT = 80;
 
 function isElement(node) {
   return !!node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
@@ -19,31 +21,33 @@ function getBody(doc) {
   return (html.childNodes || []).find((n) => isElement(n) && (n.tagName || n.nodeName) === 'body') || null;
 }
 
-function collectBlockNodes(node, out) {
+function isStructuralTag(tag) {
+  return tag === 'body' || tag === 'html' || tag === 'head' || tag === '#document' || tag === '#document-fragment';
+}
+
+function collectBlockTree(node, out) {
   if (!isElement(node)) return;
   const tag = String(node.tagName || node.nodeName || '').toLowerCase();
-  if (tag && tag !== 'body' && tag !== 'html' && tag !== 'head' && tag !== '#document' && tag !== '#document-fragment') {
-    out.push({ kind: 'block', tagName: tag, children: [] });
-  }
+  const children = [];
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
   for (let i = 0; i < kids.length; i++) {
-    collectBlockNodes(kids[i], out);
+    collectBlockTree(kids[i], children);
   }
+
+  if (isStructuralTag(tag)) {
+    for (let i = 0; i < children.length; i++) out.push(children[i]);
+    return;
+  }
+
+  out.push({ kind: 'block', tagName: tag, children });
 }
 
 function makeTreeFromHtml() {
   const doc = parse5.parse(HTML);
   const body = getBody(doc) || doc;
-  const flat = [];
-  collectBlockNodes(body, flat);
-  const root = { kind: 'block', tagName: 'root', children: [] };
-  let parent = root;
-  for (let i = 0; i < flat.length; i++) {
-    const node = flat[i];
-    parent.children.push(node);
-    parent = node;
-  }
-  return root;
+  const children = [];
+  collectBlockTree(body, children);
+  return { kind: 'block', tagName: 'root', children };
 }
 
 function blockChildren(node) {
@@ -63,8 +67,8 @@ function makeYogaTree(node, allBlocks, depth = 0) {
   if (typeof yn.setWidthPercent === 'function') yn.setWidthPercent(100);
   yn.setPadding(Yoga.EDGE_LEFT, depth === 0 ? PAD : 0);
   yn.setPadding(Yoga.EDGE_RIGHT, depth === 0 ? PAD : 0);
-  yn.setPadding(Yoga.EDGE_TOP, 4);
-  yn.setPadding(Yoga.EDGE_BOTTOM, 4);
+  yn.setPadding(Yoga.EDGE_TOP, 0);
+  yn.setPadding(Yoga.EDGE_BOTTOM, 0);
   yn.setMinHeight(NODE_H);
 
   allBlocks.push({ node, yoga: yn, depth });
@@ -77,7 +81,7 @@ function makeYogaTree(node, allBlocks, depth = 0) {
 
   for (let i = 0; i < kids.length; i++) {
     const child = makeYogaTree(kids[i], allBlocks, depth + 1);
-    if (i > 0 && typeof child.setMargin === 'function') child.setMargin(Yoga.EDGE_TOP, 8);
+    if (i > 0 && typeof child.setMargin === 'function') child.setMargin(Yoga.EDGE_TOP, 1);
     yn.insertChild(child, yn.getChildCount());
   }
   return yn;
@@ -86,18 +90,29 @@ function makeYogaTree(node, allBlocks, depth = 0) {
 function computeRects(blocks) {
   const ordered = blocks;
   const out = [];
+  const absXByDepth = [];
+  const absYByDepth = [];
   for (let i = 0; i < ordered.length; i++) {
     const entry = ordered[i];
     const tag = String(entry && entry.node && entry.node.tagName || '').toLowerCase();
-    if (tag === 'root') continue;
     const depth = Math.max(0, Number(entry.depth || 0));
-    const insetX = Math.min(40, depth * 10);
-    const insetY = Math.min(16, depth * 3);
     const yn = entry.yoga;
-    const x = Number(yn.getComputedLeft() || 0) + insetX;
-    const y = Number(yn.getComputedTop() || 0) + insetY;
-    const w = Math.max(2, Number(yn.getComputedWidth() || 0) - (insetX * 2));
-    const h = Math.max(2, Number(yn.getComputedHeight() || 0) - (insetY * 2));
+    const localX = Number(yn.getComputedLeft() || 0);
+    const localY = Number(yn.getComputedTop() || 0);
+    const parentX = depth > 0 ? Number(absXByDepth[depth - 1] || 0) : 0;
+    const parentY = depth > 0 ? Number(absYByDepth[depth - 1] || 0) : 0;
+    const absX = parentX + localX;
+    const absY = parentY + localY;
+    absXByDepth[depth] = absX;
+    absYByDepth[depth] = absY;
+
+    if (tag === 'root') continue;
+
+    const indent = Math.min(MAX_INDENT, depth * INDENT_PER_DEPTH);
+    const x = absX + indent;
+    const y = absY;
+    const w = Math.max(2, Number(yn.getComputedWidth() || 0) - indent);
+    const h = Math.max(2, Number(yn.getComputedHeight() || 0));
     const scrollable = isScrollableTag(tag) ? 1 : 0;
     out.push(x, y, w, h, depth, scrollable);
   }
@@ -117,8 +132,8 @@ function applyViewportConstraints(vw, vh) {
     if (!entry || !entry.yoga) continue;
     if ((entry.node && entry.node.tagName) === 'root') continue;
     const depth = Math.max(0, Number(entry.depth || 0));
-    const insetX = Math.min(40, depth * 10);
-    const width = Math.max(2, vw - (PAD * 2) - (insetX * 2));
+    const indent = Math.min(MAX_INDENT, depth * INDENT_PER_DEPTH);
+    const width = Math.max(2, vw - (PAD * 2) - indent);
     if (typeof entry.yoga.setWidth === 'function') entry.yoga.setWidth(width);
   }
 }
