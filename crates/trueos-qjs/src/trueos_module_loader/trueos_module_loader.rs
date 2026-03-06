@@ -24,7 +24,6 @@ unsafe extern "C" {
 
 include!("../../../../src/surface/cabi_codes.rs");
 
-
 #[inline]
 fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
@@ -132,7 +131,8 @@ unsafe fn load_native_module(
         return core::ptr::null_mut();
     }
 
-    let browser_context_mod = unsafe { crate::browser_context::try_create_native_module(ctx, module_name) };
+    let browser_context_mod =
+        unsafe { crate::browser_context::try_create_native_module(ctx, module_name) };
     if !browser_context_mod.is_null() {
         return browser_context_mod;
     }
@@ -157,6 +157,11 @@ unsafe fn load_native_module(
     let three_mod = unsafe { crate::threejs::try_create_native_module(ctx, module_name) };
     if !three_mod.is_null() {
         return three_mod;
+    }
+
+    let workers_mod = unsafe { crate::workers::try_create_native_module(ctx, module_name) };
+    if !workers_mod.is_null() {
+        return workers_mod;
     }
 
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }

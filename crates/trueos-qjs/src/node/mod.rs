@@ -260,12 +260,7 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext) {
     set_console_fn!("time", console_time, 1);
     set_console_fn!("timeEnd", console_time_end, 1);
 
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"console\0".as_ptr() as *const c_char,
-        console,
-    );
+    let _ = qjs::JS_SetPropertyStr(ctx, global, b"console\0".as_ptr() as *const c_char, console);
     qjs::js_free_value(ctx, global);
 }
 
@@ -283,18 +278,24 @@ unsafe fn locale_profile_from_arg0(
     argv: *const qjs::JSValueConst,
 ) -> &'static trueos_weather::lang::IntlLocaleProfile {
     if argv.is_null() || argc <= 0 {
-        return trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE);
+        return trueos_weather::lang::intl_locale_profile(
+            trueos_weather::lang::DEFAULT_INTL_LOCALE,
+        );
     }
     let args = core::slice::from_raw_parts(argv, argc as usize);
     let mut len: usize = 0;
     let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
     if cstr.is_null() {
-        return trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE);
+        return trueos_weather::lang::intl_locale_profile(
+            trueos_weather::lang::DEFAULT_INTL_LOCALE,
+        );
     }
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
     let profile = match core::str::from_utf8(bytes) {
         Ok(s) => trueos_weather::lang::intl_locale_profile(s),
-        Err(_) => trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE),
+        Err(_) => {
+            trueos_weather::lang::intl_locale_profile(trueos_weather::lang::DEFAULT_INTL_LOCALE)
+        }
     };
     qjs::JS_FreeCString(ctx, cstr);
     profile
@@ -460,7 +461,11 @@ unsafe extern "C" fn intl_get_canonical_locales(
         return out;
     }
     let profile = locale_profile_from_arg0(ctx, argc, argv);
-    let locale = qjs::JS_NewStringLen(ctx, profile.code.as_ptr() as *const c_char, profile.code.len());
+    let locale = qjs::JS_NewStringLen(
+        ctx,
+        profile.code.as_ptr() as *const c_char,
+        profile.code.len(),
+    );
     let _ = qjs::JS_SetPropertyUint32(ctx, out, 0, locale);
     out
 }

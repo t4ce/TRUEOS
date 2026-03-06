@@ -26,8 +26,10 @@ unsafe extern "C" {
         eq_alpha: u32,
     ) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
-    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
-        -> i32;
+    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_draw_tex_triangles_no_present(
         tex_id: u32,
         vtx_ptr: *const u8,
@@ -45,7 +47,12 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
-    fn trueos_cabi_gfx_set_sampler(wrap_u: u32, wrap_v: u32, min_filter: u32, mag_filter: u32) -> i32;
+    fn trueos_cabi_gfx_set_sampler(
+        wrap_u: u32,
+        wrap_v: u32,
+        min_filter: u32,
+        mag_filter: u32,
+    ) -> i32;
     fn trueos_cabi_gfx_present_owner_get() -> u32;
 }
 static CMD_STREAM_CLEAR_RGB: AtomicU32 = AtomicU32::new(0xFFFFFF);
@@ -143,7 +150,8 @@ fn cmd_stream_apply_blend_mode(mode: u32, pma: bool) {
             if pma {
                 let _ = unsafe { trueos_cabi_gfx_set_blend(1, 1, 0x0303, 1, 0x0303, 0, 0) };
             } else {
-                let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
+                let _ =
+                    unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
             }
         }
     }
@@ -335,7 +343,13 @@ fn cmd_stream_upload_atlas_to_tex(tex_id: u32, atlas: qjs::FontAtlasView<'static
         rgba.push(255);
     }
     let rc = unsafe {
-        trueos_cabi_gfx_upload_texture_rgba(tex_id, atlas.width, atlas.height, rgba.as_ptr(), rgba.len())
+        trueos_cabi_gfx_upload_texture_rgba(
+            tex_id,
+            atlas.width,
+            atlas.height,
+            rgba.as_ptr(),
+            rgba.len(),
+        )
     };
     rc == 0
 }
@@ -423,17 +437,14 @@ fn cmd_stream_push_tex_vertices_with_origin(
 }
 
 #[inline]
-fn cmd_stream_enqueue_text_batch(
-    tex_id: u32,
-    verts: &[u8],
-    origin_x_ndc: f32,
-    origin_y_ndc: f32,
-) {
+fn cmd_stream_enqueue_text_batch(tex_id: u32, verts: &[u8], origin_x_ndc: f32, origin_y_ndc: f32) {
     if tex_id == 0 || verts.is_empty() {
         return;
     }
     let mut runs = CMD_STREAM_TEXT_BATCH_RUNS.lock();
-    if let Some(last) = runs.last_mut() && last.tex_id == tex_id {
+    if let Some(last) = runs.last_mut()
+        && last.tex_id == tex_id
+    {
         cmd_stream_push_tex_vertices_with_origin(
             &mut last.verts,
             verts,
@@ -454,8 +465,13 @@ fn cmd_stream_flush_text_batches() {
         if run.tex_id == 0 || run.verts.is_empty() {
             continue;
         }
-        let _ =
-            unsafe { trueos_cabi_gfx_draw_tex_triangles_no_present(run.tex_id, run.verts.as_ptr(), run.verts.len()) };
+        let _ = unsafe {
+            trueos_cabi_gfx_draw_tex_triangles_no_present(
+                run.tex_id,
+                run.verts.as_ptr(),
+                run.verts.len(),
+            )
+        };
     }
     runs.clear();
 }
@@ -678,13 +694,7 @@ pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
     ok
 }
 
-pub fn draw_text_widget_in_frame(
-    text: &[u8],
-    x: f32,
-    y: f32,
-    view_w: u32,
-    view_h: u32,
-) -> bool {
+pub fn draw_text_widget_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
     if text.is_empty() || !cmd_stream_owner_is_pixi() {
         return false;
     }
@@ -1195,7 +1205,8 @@ pub(crate) unsafe fn try_create_native_module(
             let mut len: usize = 0;
             let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[1]);
             if !ptr.is_null() && len > 0 {
-                let _ = trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr as *const u8, len);
+                let _ =
+                    trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, ptr as *const u8, len);
             }
             qjs::JSValue::undefined()
         }
@@ -1375,7 +1386,8 @@ pub(crate) unsafe fn try_create_native_module(
                 let ptr = qjs::JS_GetArrayBuffer(ctx, &mut len as *mut usize, args[2]);
                 if !ptr.is_null() && len >= need {
                     uploaded = true;
-                    let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr as *const u8, need);
+                    let _ =
+                        trueos_cabi_gfx_upload_texture_rgba(tex_id, w, h, ptr as *const u8, need);
                 }
             }
             if !uploaded {
@@ -1584,7 +1596,11 @@ pub(crate) unsafe fn try_create_native_module(
             {
                 let first = text[0];
                 let fallback_slot = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-                let mut slot = atlas.index.get(first as usize).copied().unwrap_or(fallback_slot);
+                let mut slot = atlas
+                    .index
+                    .get(first as usize)
+                    .copied()
+                    .unwrap_or(fallback_slot);
                 if slot == u16::MAX {
                     slot = fallback_slot;
                 }
@@ -1615,7 +1631,11 @@ pub(crate) unsafe fn try_create_native_module(
                         }
                     }
                 }
-                let glyph_w = atlas.widths.get(slot as usize).copied().unwrap_or(atlas.cell_w as u8);
+                let glyph_w = atlas
+                    .widths
+                    .get(slot as usize)
+                    .copied()
+                    .unwrap_or(atlas.cell_w as u8);
                 let msg = alloc::format!(
                     "cmd-stream: atlas-trace ch={} slot={} tex={} cell={}x{} gw={} nz={}/{} a=[{},{}]\n",
                     first,
@@ -1649,106 +1669,105 @@ pub(crate) unsafe fn try_create_native_module(
             let origin_x_ndc = (2.0 * ((x_f as f32) / w)) - 1.0;
             let origin_y_ndc = 1.0 - (2.0 * ((y_f as f32) / h));
 
-            let verts = cmd_stream_text_cache_get(
-                kind, view_w, view_h, px_h_bits, rgb, a, text,
-            )
-            .unwrap_or_else(|| {
-                let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-                let mut pen_x = 0.0f32;
-                let pen_y = 0.0f32;
-                let mut out = Vec::with_capacity(text.len().saturating_mul(6 * 20));
-                let atlas_w_f = (atlas.width.max(1)) as f32;
-                let atlas_h_f = (atlas.height.max(1)) as f32;
-                let atlas_cell_h_u = atlas.cell_h as usize;
-                let meta_kind = cmd_stream_atlas_meta_kind(kind);
-                let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
-                let meta_table = meta_guard.as_ref();
+            let verts = cmd_stream_text_cache_get(kind, view_w, view_h, px_h_bits, rgb, a, text)
+                .unwrap_or_else(|| {
+                    let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+                    let mut pen_x = 0.0f32;
+                    let pen_y = 0.0f32;
+                    let mut out = Vec::with_capacity(text.len().saturating_mul(6 * 20));
+                    let atlas_w_f = (atlas.width.max(1)) as f32;
+                    let atlas_h_f = (atlas.height.max(1)) as f32;
+                    let atlas_cell_h_u = atlas.cell_h as usize;
+                    let meta_kind = cmd_stream_atlas_meta_kind(kind);
+                    let meta_guard = cmd_stream_atlas_meta_get_or_build(meta_kind, atlas);
+                    let meta_table = meta_guard.as_ref();
 
-                for &ch in text.iter() {
-                    if ch == b'\n' {
-                        pen_x = 0.0;
-                        continue;
-                    }
-                    if ch == b' ' {
-                        pen_x += (atlas.cell_w as f32) * scale * 0.6;
-                        continue;
-                    }
-                    if let Some(table) = meta_table
-                        && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
-                    {
+                    for &ch in text.iter() {
+                        if ch == b'\n' {
+                            pen_x = 0.0;
+                            continue;
+                        }
+                        if ch == b' ' {
+                            pen_x += (atlas.cell_w as f32) * scale * 0.6;
+                            continue;
+                        }
+                        if let Some(table) = meta_table
+                            && let Some(gm) = cmd_stream_atlas_meta_lookup(table, ch)
+                        {
+                            let x0 = pen_x;
+                            let y0 = pen_y;
+                            let x1 = pen_x + gm.glyph_w_px * scale;
+                            let y1 = pen_y + (atlas_cell_h_u as f32).max(1.0) * scale;
+                            let nx0 = 2.0 * (x0 / w);
+                            let ny0 = -(2.0 * (y0 / h));
+                            let nx1 = 2.0 * (x1 / w);
+                            let ny1 = -(2.0 * (y1 / h));
+
+                            cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
+                            cmd_stream_push_tex_vtx(&mut out, nx1, ny1, gm.u1, gm.v1, r, g, b, a);
+                            cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
+                            cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
+                            cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
+                            cmd_stream_push_tex_vtx(&mut out, nx0, ny0, gm.u0, gm.v0, r, g, b, a);
+                            pen_x += gm.advance_px * scale;
+                            continue;
+                        }
+                        // Fallback to direct atlas math if the meta table is unavailable.
+                        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+                        if slot == u16::MAX {
+                            slot = fallback;
+                        }
+                        let glyph_w_u = atlas
+                            .widths
+                            .get(slot as usize)
+                            .copied()
+                            .unwrap_or(atlas.cell_w as u8)
+                            as usize;
+                        let glyph_h_u = atlas_cell_h_u.max(1);
+
+                        let sx = (slot as u32) % grid_w;
+                        let sy = (slot as u32) / grid_w;
+                        let px0 = (sx as f32) * (atlas.cell_w as f32);
+                        let py0 = (sy as f32) * (atlas.cell_h as f32);
+                        let px1 = px0 + (glyph_w_u as f32);
+                        let py1 = py0 + (glyph_h_u as f32);
+
+                        let u0 = px0 / atlas_w_f;
+                        let v0 = py0 / atlas_h_f;
+                        let u1 = px1 / atlas_w_f;
+                        let v1 = py1 / atlas_h_f;
+
                         let x0 = pen_x;
                         let y0 = pen_y;
-                        let x1 = pen_x + gm.glyph_w_px * scale;
-                        let y1 = pen_y + (atlas_cell_h_u as f32).max(1.0) * scale;
+                        let x1 = pen_x + (glyph_w_u as f32) * scale;
+                        let y1 = pen_y + (glyph_h_u as f32) * scale;
                         let nx0 = 2.0 * (x0 / w);
                         let ny0 = -(2.0 * (y0 / h));
                         let nx1 = 2.0 * (x1 / w);
                         let ny1 = -(2.0 * (y1 / h));
 
-                        cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
-                        cmd_stream_push_tex_vtx(&mut out, nx1, ny1, gm.u1, gm.v1, r, g, b, a);
-                        cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
-                        cmd_stream_push_tex_vtx(&mut out, nx0, ny1, gm.u0, gm.v1, r, g, b, a);
-                        cmd_stream_push_tex_vtx(&mut out, nx1, ny0, gm.u1, gm.v0, r, g, b, a);
-                        cmd_stream_push_tex_vtx(&mut out, nx0, ny0, gm.u0, gm.v0, r, g, b, a);
-                        pen_x += gm.advance_px * scale;
-                        continue;
+                        cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
+                        cmd_stream_push_tex_vtx(&mut out, nx1, ny1, u1, v1, r, g, b, a);
+                        cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
+                        cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
+                        cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
+                        cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
+                        pen_x += glyph_w_u as f32 * scale;
                     }
-                    // Fallback to direct atlas math if the meta table is unavailable.
-                    let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
-                    if slot == u16::MAX {
-                        slot = fallback;
-                    }
-                    let glyph_w_u = atlas
-                        .widths
-                        .get(slot as usize)
-                        .copied()
-                        .unwrap_or(atlas.cell_w as u8) as usize;
-                    let glyph_h_u = atlas_cell_h_u.max(1);
 
-                    let sx = (slot as u32) % grid_w;
-                    let sy = (slot as u32) / grid_w;
-                    let px0 = (sx as f32) * (atlas.cell_w as f32);
-                    let py0 = (sy as f32) * (atlas.cell_h as f32);
-                    let px1 = px0 + (glyph_w_u as f32);
-                    let py1 = py0 + (glyph_h_u as f32);
-
-                    let u0 = px0 / atlas_w_f;
-                    let v0 = py0 / atlas_h_f;
-                    let u1 = px1 / atlas_w_f;
-                    let v1 = py1 / atlas_h_f;
-
-                    let x0 = pen_x;
-                    let y0 = pen_y;
-                    let x1 = pen_x + (glyph_w_u as f32) * scale;
-                    let y1 = pen_y + (glyph_h_u as f32) * scale;
-                    let nx0 = 2.0 * (x0 / w);
-                    let ny0 = -(2.0 * (y0 / h));
-                    let nx1 = 2.0 * (x1 / w);
-                    let ny1 = -(2.0 * (y1 / h));
-
-                    cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
-                    cmd_stream_push_tex_vtx(&mut out, nx1, ny1, u1, v1, r, g, b, a);
-                    cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
-                    cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
-                    cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
-                    cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
-                    pen_x += glyph_w_u as f32 * scale;
-                }
-
-                let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
-                cmd_stream_text_cache_put(CmdStreamTextMeshCacheEntry {
-                    kind,
-                    view_w,
-                    view_h,
-                    px_h_bits,
-                    rgb,
-                    alpha: a,
-                    text: text.to_vec(),
-                    verts: cached.clone(),
+                    let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
+                    cmd_stream_text_cache_put(CmdStreamTextMeshCacheEntry {
+                        kind,
+                        view_w,
+                        view_h,
+                        px_h_bits,
+                        rgb,
+                        alpha: a,
+                        text: text.to_vec(),
+                        verts: cached.clone(),
+                    });
+                    cached
                 });
-                cached
-            });
 
             if verts.is_empty() {
                 qjs::JS_FreeCString(ctx, text_c);
@@ -1786,13 +1805,21 @@ pub(crate) unsafe fn try_create_native_module(
             export_fn!("setBlendEnabled", qjs_cmd_stream_set_blend_enabled, 1);
             export_fn!("setSampler", qjs_cmd_stream_set_sampler, 4);
             export_fn!("setBlendMode", qjs_cmd_stream_set_blend_mode, 1);
-            export_fn!("setPremultipliedAlpha", qjs_cmd_stream_set_premultiplied_alpha, 1);
+            export_fn!(
+                "setPremultipliedAlpha",
+                qjs_cmd_stream_set_premultiplied_alpha,
+                1
+            );
             export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
             export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
             export_fn!("destroyTexture", qjs_cmd_stream_destroy_texture, 1);
             export_fn!("createAtlasTexture", qjs_cmd_stream_create_atlas_texture, 1);
             export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
-            export_fn!("cursorDrawTrianglesU8", qjs_cmd_stream_cursor_draw_triangles_u8, 1);
+            export_fn!(
+                "cursorDrawTrianglesU8",
+                qjs_cmd_stream_cursor_draw_triangles_u8,
+                1
+            );
             export_fn!(
                 "drawTexturedTrianglesU8",
                 qjs_cmd_stream_draw_textured_triangles_u8,
@@ -1841,4 +1868,3 @@ pub(crate) unsafe fn try_create_native_module(
 
     core::ptr::null_mut()
 }
-

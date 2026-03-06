@@ -677,4 +677,3 @@ pub unsafe extern "C" fn mktime(tm: *mut Tm) -> i64 {
         None => -1,
     }
 }
-

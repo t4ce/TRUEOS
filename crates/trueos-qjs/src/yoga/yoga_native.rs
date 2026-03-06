@@ -20,7 +20,12 @@ fn js_f64(ctx: *mut qjs::JSContext, v: f64) -> qjs::JSValue {
 }
 
 #[inline]
-unsafe fn arg_f64(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> f64 {
+unsafe fn arg_f64(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    idx: usize,
+) -> f64 {
     if argc <= 0 || argv.is_null() || idx >= argc as usize {
         return 0.0;
     }
@@ -30,12 +35,22 @@ unsafe fn arg_f64(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValue
 }
 
 #[inline]
-unsafe fn arg_i32(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> i32 {
+unsafe fn arg_i32(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    idx: usize,
+) -> i32 {
     unsafe { arg_f64(ctx, argc, argv, idx) as i32 }
 }
 
 #[inline]
-unsafe fn arg_u32(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> u32 {
+unsafe fn arg_u32(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    idx: usize,
+) -> u32 {
     let v = unsafe { arg_f64(ctx, argc, argv, idx) };
     if !v.is_finite() || v <= 0.0 {
         return 0;
@@ -44,20 +59,25 @@ unsafe fn arg_u32(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValue
 }
 
 #[inline]
-unsafe fn arg_bool(ctx: *mut qjs::JSContext, argc: i32, argv: *const qjs::JSValueConst, idx: usize) -> bool {
+unsafe fn arg_bool(
+    ctx: *mut qjs::JSContext,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+    idx: usize,
+) -> bool {
     unsafe { arg_f64(ctx, argc, argv, idx) != 0.0 }
 }
 
 #[cfg(feature = "yoga-native")]
 mod backend {
     pub(crate) use crate::yoga::ffi::{
-        config_create, config_free, config_set_use_web_defaults, node_calculate_layout, node_create,
-        node_free_recursive, node_get_child_count, node_get_computed_height, node_get_computed_left,
-        node_get_computed_top, node_get_computed_width, node_insert_child, node_set_align_items,
-        node_set_align_self, node_set_flex_direction, node_set_flex_grow, node_set_flex_shrink,
-        node_set_flex_wrap, node_set_height, node_set_justify_content, node_set_margin,
-        node_set_min_height, node_set_min_width, node_set_padding, node_set_position,
-        node_set_position_type, node_set_width,
+        config_create, config_free, config_set_use_web_defaults, node_calculate_layout,
+        node_create, node_free_recursive, node_get_child_count, node_get_computed_height,
+        node_get_computed_left, node_get_computed_top, node_get_computed_width, node_insert_child,
+        node_set_align_items, node_set_align_self, node_set_flex_direction, node_set_flex_grow,
+        node_set_flex_shrink, node_set_flex_wrap, node_set_height, node_set_justify_content,
+        node_set_margin, node_set_min_height, node_set_min_width, node_set_padding,
+        node_set_position, node_set_position_type, node_set_width,
     };
 }
 
@@ -455,7 +475,10 @@ pub(crate) unsafe fn try_create_native_module(
         qjs::JSValue::undefined()
     }
 
-    unsafe extern "C" fn yoga_module_init(ctx: *mut qjs::JSContext, m: *mut qjs::JSModuleDef) -> i32 {
+    unsafe extern "C" fn yoga_module_init(
+        ctx: *mut qjs::JSContext,
+        m: *mut qjs::JSModuleDef,
+    ) -> i32 {
         macro_rules! export_fn {
             ($name:literal, $func:expr, $argc:expr) => {{
                 let k = concat!($name, "\0");
@@ -477,14 +500,23 @@ pub(crate) unsafe fn try_create_native_module(
             ($name:literal, $value:expr) => {{
                 let k = concat!($name, "\0");
                 let _ = unsafe {
-                    qjs::JS_SetModuleExport(ctx, m, k.as_ptr() as *const c_char, js_i32(ctx, $value))
+                    qjs::JS_SetModuleExport(
+                        ctx,
+                        m,
+                        k.as_ptr() as *const c_char,
+                        js_i32(ctx, $value),
+                    )
                 };
             }};
         }
 
         export_fn!("configCreate", yoga_config_create, 0);
         export_fn!("configFree", yoga_config_free, 1);
-        export_fn!("configSetUseWebDefaults", yoga_config_set_use_web_defaults, 2);
+        export_fn!(
+            "configSetUseWebDefaults",
+            yoga_config_set_use_web_defaults,
+            2
+        );
         export_fn!("nodeCreate", yoga_node_create, 1);
         export_fn!("nodeFreeRecursive", yoga_node_free_recursive, 1);
         export_fn!("nodeInsertChild", yoga_node_insert_child, 3);
