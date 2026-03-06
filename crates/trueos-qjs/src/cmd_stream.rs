@@ -668,6 +668,61 @@ pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
     ok
 }
 
+pub fn draw_text_widget_in_frame(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if text.is_empty() || !cmd_stream_owner_is_pixi() {
+        return false;
+    }
+
+    let kind = 1u32;
+    let tex_id = {
+        let cached = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire);
+        if cached != 0 {
+            cached
+        } else {
+            let Some(atlas) = cmd_stream_select_atlas(kind) else {
+                return false;
+            };
+            let id = cmd_stream_alloc_tex_id();
+            if !cmd_stream_upload_atlas_to_tex(id, atlas) {
+                cmd_stream_release_tex_id(id);
+                return false;
+            }
+            cmd_stream_mark_atlas_tex(id, kind);
+            let _ = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.compare_exchange(
+                0,
+                id,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire)
+        }
+    };
+
+    CMD_STREAM_VIEW_W.store(view_w.max(1), Ordering::Relaxed);
+    CMD_STREAM_VIEW_H.store(view_h.max(1), Ordering::Relaxed);
+
+    cmd_stream_clear_text_batches();
+    cmd_stream_reset_frame_state_defaults();
+    let ok = cmd_stream_draw_atlas_text_impl(
+        tex_id,
+        kind,
+        x as f64,
+        y as f64,
+        text,
+        16.0,
+        0x101010 as f64,
+        255.0,
+    );
+    cmd_stream_flush_text_batches();
+    ok
+}
+
 #[inline]
 fn cmd_stream_text_cache_get(
     kind: u32,

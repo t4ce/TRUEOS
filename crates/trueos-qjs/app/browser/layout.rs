@@ -9,8 +9,14 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
+    fn trueos_cabi_gfx_cursor_begin_frame() -> i32;
+    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
+        -> i32;
+    fn trueos_cabi_gfx_cursor_end_frame() -> i32;
     fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_gfx_clear_scissor() -> i32;
+    fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
+    fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
 }
 
 #[inline]
@@ -303,9 +309,261 @@ unsafe extern "C" fn qjs_draw_layout_rects(
     }
 
     let _ = trueos_cabi_gfx_clear_scissor();
+
+    // Optional inline text payload: [x, y, text, x, y, text, ...]
+    if argc >= 4 {
+        let text_entries = args[3];
+        let text_len_val = qjs::JS_GetPropertyStr(ctx, text_entries, LENGTH_KEY.as_ptr() as *const c_char);
+        let mut text_len_f = 0.0f64;
+        let _ = qjs::JS_ToFloat64(ctx, &mut text_len_f as *mut f64, text_len_val);
+        qjs::js_free_value(ctx, text_len_val);
+        let text_len = if text_len_f.is_finite() && text_len_f > 0.0 {
+            text_len_f as u32
+        } else {
+            0
+        };
+
+        let view_w_u = viewport_w.max(1.0) as u32;
+        let view_h_u = viewport_h.max(1.0) as u32;
+        let mut ti = 0u32;
+        while ti + 2 < text_len {
+            let vx = qjs::JS_GetPropertyUint32(ctx, text_entries, ti + 0);
+            let vy = qjs::JS_GetPropertyUint32(ctx, text_entries, ti + 1);
+            let vt = qjs::JS_GetPropertyUint32(ctx, text_entries, ti + 2);
+
+            let mut x = 0.0f64;
+            let mut y = 0.0f64;
+            let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
+            let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
+            qjs::js_free_value(ctx, vx);
+            qjs::js_free_value(ctx, vy);
+
+            let mut text_n = 0usize;
+            let text_c = qjs::JS_ToCStringLen2(ctx, &mut text_n as *mut usize, vt, 0);
+            qjs::js_free_value(ctx, vt);
+            if !text_c.is_null() && text_n > 0 {
+                let text = core::slice::from_raw_parts(text_c as *const u8, text_n);
+                let _ = qjs::cmd_stream::draw_text_widget_in_frame(
+                    text,
+                    x as f32,
+                    y as f32,
+                    view_w_u,
+                    view_h_u,
+                );
+                qjs::JS_FreeCString(ctx, text_c);
+            } else if !text_c.is_null() {
+                qjs::JS_FreeCString(ctx, text_c);
+            }
+
+            ti += 3;
+        }
+    }
+
     let _ = trueos_cabi_gfx_end_frame();
 
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_draw_cursor_plane(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 3 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let entries = args[0];
+
+    let mut vw = 0.0f64;
+    let mut vh = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut vw as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut vh as *mut f64, args[2]) != 0
+    {
+        return qjs::JSValue::undefined();
+    }
+
+    let viewport_w = (vw as f32).max(1.0);
+    let viewport_h = (vh as f32).max(1.0);
+
+    static LENGTH_KEY: &[u8] = b"length\0";
+    let len_val = qjs::JS_GetPropertyStr(ctx, entries, LENGTH_KEY.as_ptr() as *const c_char);
+    let mut len_f = 0.0f64;
+    let _ = qjs::JS_ToFloat64(ctx, &mut len_f as *mut f64, len_val);
+    qjs::js_free_value(ctx, len_val);
+    let len = if len_f.is_finite() && len_f > 0.0 {
+        len_f as u32
+    } else {
+        0
+    };
+
+    let mut bytes = Vec::with_capacity(12 * 32);
+    let _ = trueos_cabi_gfx_cursor_begin_frame();
+
+    let mut i = 0u32;
+    while i + 3 < len {
+        let vx = qjs::JS_GetPropertyUint32(ctx, entries, i + 0);
+        let vy = qjs::JS_GetPropertyUint32(ctx, entries, i + 1);
+        let vs = qjs::JS_GetPropertyUint32(ctx, entries, i + 2);
+        let vc = qjs::JS_GetPropertyUint32(ctx, entries, i + 3);
+
+        let mut x = 0.0f64;
+        let mut y = 0.0f64;
+        let mut s = 0.0f64;
+        let mut c = 0.0f64;
+        let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
+        let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
+        let _ = qjs::JS_ToFloat64(ctx, &mut s as *mut f64, vs);
+        let _ = qjs::JS_ToFloat64(ctx, &mut c as *mut f64, vc);
+
+        qjs::js_free_value(ctx, vx);
+        qjs::js_free_value(ctx, vy);
+        qjs::js_free_value(ctx, vs);
+        qjs::js_free_value(ctx, vc);
+
+        let xf = x as f32;
+        let yf = y as f32;
+        let size = (s as f32).max(4.0);
+        let color = if c.is_finite() { c as u32 } else { 0x111111 };
+        let r = ((color >> 16) & 0xFF) as u8;
+        let g = ((color >> 8) & 0xFF) as u8;
+        let b = (color & 0xFF) as u8;
+
+        let half = size * 0.5;
+        let stem_w = (size * 0.28).max(2.0);
+        let stem_h = (size * 1.20).max(size + 2.0);
+
+        // Fast cursor-plane glyph: one vertical stem and one cap, then an outline.
+        push_filled_rect(
+            &mut bytes,
+            xf,
+            yf,
+            stem_w,
+            stem_h,
+            r,
+            g,
+            b,
+            230,
+            viewport_w,
+            viewport_h,
+        );
+        push_filled_rect(
+            &mut bytes,
+            xf,
+            yf,
+            half,
+            stem_w,
+            r,
+            g,
+            b,
+            230,
+            viewport_w,
+            viewport_h,
+        );
+        push_border_rect_rgba(
+            &mut bytes,
+            xf,
+            yf,
+            stem_w,
+            stem_h,
+            1.0,
+            0,
+            0,
+            0,
+            255,
+            viewport_w,
+            viewport_h,
+        );
+        push_border_rect_rgba(
+            &mut bytes,
+            xf,
+            yf,
+            half,
+            stem_w,
+            1.0,
+            0,
+            0,
+            0,
+            255,
+            viewport_w,
+            viewport_h,
+        );
+    
+        i += 4;
+    }
+
+    if !bytes.is_empty() {
+        let _ = trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
+    }
+    let _ = trueos_cabi_gfx_cursor_end_frame();
+
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_read_cursor_state(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut cursor_id_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut cursor_id_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let cursor_id = if cursor_id_f.is_finite() && cursor_id_f >= 1.0 {
+        cursor_id_f as u32
+    } else {
+        0
+    };
+    if cursor_id == 0 {
+        return qjs::JSValue::undefined();
+    }
+
+    let mut x = 0i32;
+    let mut y = 0i32;
+    let mut buttons = 0u32;
+    let pos_rc = trueos_cabi_input_cursor_pos(cursor_id, &mut x as *mut i32, &mut y as *mut i32);
+    let _ = trueos_cabi_input_cursor_buttons(cursor_id, &mut buttons as *mut u32);
+
+    let obj = qjs::JS_NewObject(ctx);
+    static K_OK: &[u8] = b"ok\0";
+    static K_X: &[u8] = b"x\0";
+    static K_Y: &[u8] = b"y\0";
+    static K_BUTTONS: &[u8] = b"buttons\0";
+
+    let ok = if pos_rc == 0 { 1 } else { 0 };
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        K_OK.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, ok as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        K_X.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, x as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        K_Y.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, y as f64),
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        K_BUTTONS.as_ptr() as *const c_char,
+        qjs::JS_NewFloat64(ctx, buttons as f64),
+    );
+    obj
 }
 
 pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
@@ -315,6 +573,10 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
 
     static NAME: &[u8] = b"__trueosDrawLayoutRects\0";
     static FN_NAME: &[u8] = b"__trueosDrawLayoutRects\0";
+    static CURSOR_NAME: &[u8] = b"__trueosDrawCursorPlane\0";
+    static CURSOR_FN_NAME: &[u8] = b"__trueosDrawCursorPlane\0";
+    static CURSOR_STATE_NAME: &[u8] = b"__trueosReadCursorState\0";
+    static CURSOR_STATE_FN_NAME: &[u8] = b"__trueosReadCursorState\0";
 
     let global = qjs::JS_GetGlobalObject(ctx);
     let func = qjs::JS_NewCFunction2(
@@ -326,5 +588,35 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         0,
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, NAME.as_ptr() as *const c_char, func);
+
+    let cursor_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_draw_cursor_plane),
+        CURSOR_FN_NAME.as_ptr() as *const c_char,
+        3,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        CURSOR_NAME.as_ptr() as *const c_char,
+        cursor_func,
+    );
+
+    let cursor_state_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_read_cursor_state),
+        CURSOR_STATE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        CURSOR_STATE_NAME.as_ptr() as *const c_char,
+        cursor_state_func,
+    );
     qjs::js_free_value(ctx, global);
 }
