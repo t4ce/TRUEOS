@@ -51,7 +51,11 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
             continue;
         }
         if rc < 0 {
-            let ctx = if !job_ctx.is_null() { job_ctx } else { fallback_ctx };
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
             if !ctx.is_null() {
                 qjs::qjs_diag::dump_last_exception(ctx, "browser pending-job");
             }
@@ -126,15 +130,16 @@ pub async fn boot_browser() {
         let ctx = vm.ctx_ptr();
         qjs::node::install_globals(ctx);
 
+        // Build normalized-command window icons once so they're ready for widget usage.
+        qjs::svg::init_window_svgs_once();
+
         // Fresh path: install only the Rust layout drawer API for JS usage.
         qjs::layout::install_layout_api(ctx);
 
         let init_filename = b"<browser-init>\0";
         let html_lit = js_single_quoted_literal(qjs::ui_html::UI_HTML);
         let mut init_src = String::new();
-        init_src.push_str(
-            "\nconst G = (typeof globalThis !== 'undefined') ? globalThis : this;\n",
-        );
+        init_src.push_str("\nconst G = (typeof globalThis !== 'undefined') ? globalThis : this;\n");
         init_src.push_str("G.__trueosUiHtml = ");
         init_src.push_str(&html_lit);
         init_src.push_str(";\n");
@@ -142,11 +147,7 @@ pub async fn boot_browser() {
         let _ = write!(&mut init_src, "{}", qjs::default_theme::NODE_H);
         init_src.push_str(";\n");
         init_src.push_str("G.__trueosThemeHierarchyIndent = ");
-        let _ = write!(
-            &mut init_src,
-            "{}",
-            qjs::default_theme::HIERARCHY_INDENT
-        );
+        let _ = write!(&mut init_src, "{}", qjs::default_theme::HIERARCHY_INDENT);
         init_src.push_str(";\n");
         init_src.push_str("G.__trueosThemeCursorSize = 12;\n");
         init_src.push_str("G.__trueosThemeIframeMinW = ");
@@ -175,7 +176,7 @@ import('/qjs/browser/browser.mjs').catch((e) => {
                 );
         if !eval_or_log(
             ctx,
-                        init_src.as_bytes(),
+            init_src.as_bytes(),
             init_filename.as_ptr() as *const c_char,
             qjs::JS_EVAL_TYPE_GLOBAL,
             "browser init",

@@ -10,8 +10,10 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
     fn trueos_cabi_gfx_cursor_begin_frame() -> i32;
-    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize)
-        -> i32;
+    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
+        vtx_ptr: *const u8,
+        vtx_len: usize,
+    ) -> i32;
     fn trueos_cabi_gfx_cursor_end_frame() -> i32;
     fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_gfx_clear_scissor() -> i32;
@@ -20,7 +22,24 @@ unsafe extern "C" {
 }
 
 #[inline]
-fn intersect_rect(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
+fn window_icon_kind_from_f64(v: f64) -> qjs::svg::WindowIconKind {
+    let n = if v.is_finite() { v as i32 } else { 0 };
+    match n {
+        1 => qjs::svg::WindowIconKind::Minimize,
+        2 => qjs::svg::WindowIconKind::Maximize,
+        3 => qjs::svg::WindowIconKind::ArrowLeft,
+        4 => qjs::svg::WindowIconKind::ArrowRight,
+        5 => qjs::svg::WindowIconKind::ArrowUp,
+        6 => qjs::svg::WindowIconKind::ArrowDown,
+        _ => qjs::svg::WindowIconKind::Close,
+    }
+}
+
+#[inline]
+fn intersect_rect(
+    a: (f32, f32, f32, f32),
+    b: (f32, f32, f32, f32),
+) -> Option<(f32, f32, f32, f32)> {
     let x0 = a.0.max(b.0);
     let y0 = a.1.max(b.1);
     let x1 = a.2.min(b.2);
@@ -223,7 +242,9 @@ unsafe extern "C" fn qjs_draw_layout_rects(
 
     let mut vw = 0.0f64;
     let mut vh = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut vw as *mut f64, args[1]) != 0 || qjs::JS_ToFloat64(ctx, &mut vh as *mut f64, args[2]) != 0 {
+    if qjs::JS_ToFloat64(ctx, &mut vw as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut vh as *mut f64, args[2]) != 0
+    {
         return qjs::JSValue::undefined();
     }
 
@@ -288,6 +309,7 @@ unsafe extern "C" fn qjs_draw_layout_rects(
             0
         };
         let is_scrollable = scrollable_f.is_finite() && scrollable_f >= 0.5;
+        let raw_color_fill = scrollable_f.is_finite() && scrollable_f <= -0.5;
         let style = if style_f.is_finite() && style_f >= 0.0 {
             style_f as u32
         } else {
@@ -314,36 +336,59 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         }
 
         bytes.clear();
-        match style {
-            2 => {
-                // Scrollbar thumb: gray filled rectangle.
-                push_filled_rect(&mut bytes, xf, yf, wf, hf, 160, 160, 160, 255, viewport_w, viewport_h);
-            }
-            5 => {
-                // Button tint: subtle diagonal two-value gradient.
-                push_diag_gradient_rect_rgba(
-                    &mut bytes,
-                    xf,
-                    yf,
-                    wf,
-                    hf,
-                    (236, 241, 252, 190),
-                    (219, 228, 246, 190),
-                    viewport_w,
-                    viewport_h,
-                );
-            }
-            3 => {
-                // Widget-update pulse: warm highlight border.
-                push_border_rect_rgba(&mut bytes, xf, yf, wf, hf, 2.0, 255, 180, 60, 230, viewport_w, viewport_h);
-            }
-            4 => {
-                // Alternate phase for pulse rhythm.
-                push_border_rect_rgba(&mut bytes, xf, yf, wf, hf, 2.0, 255, 225, 150, 230, viewport_w, viewport_h);
-            }
-            _ => {
-                // Default node and scrollbar frame: black 1px border.
-                push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
+        if raw_color_fill {
+            let rgba = style;
+            let r = ((rgba >> 16) & 0xFF) as u8;
+            let g = ((rgba >> 8) & 0xFF) as u8;
+            let b = (rgba & 0xFF) as u8;
+            let a = ((rgba >> 24) & 0xFF) as u8;
+            push_filled_rect(
+                &mut bytes, xf, yf, wf, hf, r, g, b, a, viewport_w, viewport_h,
+            );
+        } else {
+            match style {
+                2 => {
+                    // Scrollbar thumb: gray filled rectangle.
+                    push_filled_rect(
+                        &mut bytes, xf, yf, wf, hf, 160, 160, 160, 255, viewport_w, viewport_h,
+                    );
+                }
+                6 => {
+                    // Icon pixel fill: darker tint for titlebar controls.
+                    push_filled_rect(
+                        &mut bytes, xf, yf, wf, hf, 24, 24, 24, 255, viewport_w, viewport_h,
+                    );
+                }
+                5 => {
+                    // Button tint: subtle diagonal two-value gradient.
+                    push_diag_gradient_rect_rgba(
+                        &mut bytes,
+                        xf,
+                        yf,
+                        wf,
+                        hf,
+                        (236, 241, 252, 190),
+                        (219, 228, 246, 190),
+                        viewport_w,
+                        viewport_h,
+                    );
+                }
+                3 => {
+                    // Widget-update pulse: warm highlight border.
+                    push_border_rect_rgba(
+                        &mut bytes, xf, yf, wf, hf, 2.0, 255, 180, 60, 230, viewport_w, viewport_h,
+                    );
+                }
+                4 => {
+                    // Alternate phase for pulse rhythm.
+                    push_border_rect_rgba(
+                        &mut bytes, xf, yf, wf, hf, 2.0, 255, 225, 150, 230, viewport_w, viewport_h,
+                    );
+                }
+                _ => {
+                    // Default node and scrollbar frame: black 1px border.
+                    push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
+                }
             }
         }
         if !bytes.is_empty() {
@@ -369,7 +414,8 @@ unsafe extern "C" fn qjs_draw_layout_rects(
     // Optional inline text payload: [x, y, text, x, y, text, ...]
     if argc >= 4 {
         let text_entries = args[3];
-        let text_len_val = qjs::JS_GetPropertyStr(ctx, text_entries, LENGTH_KEY.as_ptr() as *const c_char);
+        let text_len_val =
+            qjs::JS_GetPropertyStr(ctx, text_entries, LENGTH_KEY.as_ptr() as *const c_char);
         let mut text_len_f = 0.0f64;
         let _ = qjs::JS_ToFloat64(ctx, &mut text_len_f as *mut f64, text_len_val);
         qjs::js_free_value(ctx, text_len_val);
@@ -400,11 +446,7 @@ unsafe extern "C" fn qjs_draw_layout_rects(
             if !text_c.is_null() && text_n > 0 {
                 let text = core::slice::from_raw_parts(text_c as *const u8, text_n);
                 let _ = qjs::cmd_stream::draw_text_widget_in_frame(
-                    text,
-                    x as f32,
-                    y as f32,
-                    view_w_u,
-                    view_h_u,
+                    text, x as f32, y as f32, view_w_u, view_h_u,
                 );
                 qjs::JS_FreeCString(ctx, text_c);
             } else if !text_c.is_null() {
@@ -418,6 +460,171 @@ unsafe extern "C" fn qjs_draw_layout_rects(
     let _ = trueos_cabi_gfx_end_frame();
 
     qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn qjs_read_window_svg_cmds(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut kind_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut kind_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let kind = window_icon_kind_from_f64(kind_f);
+
+    let out = qjs::JS_NewArray(ctx);
+    let mut wrote = false;
+    let _ = qjs::svg::with_window_svg(kind, |icon| {
+        wrote = true;
+        let mut i: u32 = 0;
+        let _ =
+            qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, icon.width() as f64));
+        i += 1;
+        let _ =
+            qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, icon.height() as f64));
+        i += 1;
+
+        let cmds = icon.cmds();
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds.len() as f64));
+        i += 1;
+
+        for cmd in cmds {
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.x0 as f64));
+            i += 1;
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.y0 as f64));
+            i += 1;
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.x1 as f64));
+            i += 1;
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.y1 as f64));
+            i += 1;
+            let _ = qjs::JS_SetPropertyUint32(
+                ctx,
+                out,
+                i,
+                qjs::JS_NewFloat64(ctx, cmd.thickness_px as f64),
+            );
+            i += 1;
+            let _ = qjs::JS_SetPropertyUint32(
+                ctx,
+                out,
+                i,
+                qjs::JS_NewFloat64(ctx, cmd.color_rgba as f64),
+            );
+            i += 1;
+        }
+    });
+
+    if wrote {
+        out
+    } else {
+        qjs::js_free_value(ctx, out);
+        qjs::JSValue::undefined()
+    }
+}
+
+unsafe extern "C" fn qjs_import_svg_asset(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 4 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut asset_id_f = 0.0f64;
+    let mut width_f = 0.0f64;
+    let mut height_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut asset_id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut width_f as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut height_f as *mut f64, args[2]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let flat = args[3];
+    static LENGTH_KEY: &[u8] = b"length\0";
+    let len_val = qjs::JS_GetPropertyStr(ctx, flat, LENGTH_KEY.as_ptr() as *const c_char);
+    let mut len_f = 0.0f64;
+    let _ = qjs::JS_ToFloat64(ctx, &mut len_f as *mut f64, len_val);
+    qjs::js_free_value(ctx, len_val);
+    let len = if len_f.is_finite() && len_f > 0.0 {
+        len_f as u32
+    } else {
+        0
+    };
+
+    let mut cmds = alloc::vec::Vec::with_capacity(len as usize);
+    for i in 0..len {
+        let v = qjs::JS_GetPropertyUint32(ctx, flat, i);
+        let mut f = 0.0f64;
+        let _ = qjs::JS_ToFloat64(ctx, &mut f as *mut f64, v);
+        qjs::js_free_value(ctx, v);
+        cmds.push(f);
+    }
+
+    let ok = qjs::svg::import_svg_from_flat(
+        asset_id_f as u32,
+        width_f.max(1.0) as u32,
+        height_f.max(1.0) as u32,
+        &cmds,
+    );
+    qjs::JS_NewFloat64(ctx, if ok { 1.0 } else { 0.0 })
+}
+
+unsafe extern "C" fn qjs_read_svg_pixels(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut asset_id_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut asset_id_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let asset_id = asset_id_f as u32;
+    if asset_id == 0 {
+        return qjs::JSValue::undefined();
+    }
+
+    let out = qjs::JS_NewArray(ctx);
+    let mut wrote = false;
+    let _ = qjs::svg::with_imported_svg(asset_id, |svg| {
+        wrote = true;
+        let mut i: u32 = 0;
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, svg.width() as f64));
+        i += 1;
+        let _ =
+            qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, svg.height() as f64));
+        i += 1;
+        let px = svg.pixels_rgba();
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, px.len() as f64));
+        i += 1;
+        for p in px {
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, *p as f64));
+            i += 1;
+        }
+    });
+
+    if wrote {
+        out
+    } else {
+        qjs::js_free_value(ctx, out);
+        qjs::JSValue::undefined()
+    }
 }
 
 unsafe extern "C" fn qjs_draw_cursor_plane(
@@ -515,7 +722,7 @@ unsafe extern "C" fn qjs_draw_cursor_plane(
             viewport_w,
             viewport_h,
         );
-    
+
         i += 4;
     }
 
@@ -602,6 +809,12 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static CURSOR_FN_NAME: &[u8] = b"__trueosDrawCursorPlane\0";
     static CURSOR_STATE_NAME: &[u8] = b"__trueosReadCursorState\0";
     static CURSOR_STATE_FN_NAME: &[u8] = b"__trueosReadCursorState\0";
+    static ICON_CMDS_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
+    static ICON_CMDS_FN_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
+    static SVG_IMPORT_NAME: &[u8] = b"__trueosImportSvgAsset\0";
+    static SVG_IMPORT_FN_NAME: &[u8] = b"__trueosImportSvgAsset\0";
+    static SVG_PIXELS_NAME: &[u8] = b"__trueosReadSvgPixels\0";
+    static SVG_PIXELS_FN_NAME: &[u8] = b"__trueosReadSvgPixels\0";
 
     let global = qjs::JS_GetGlobalObject(ctx);
     let func = qjs::JS_NewCFunction2(
@@ -642,6 +855,51 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         CURSOR_STATE_NAME.as_ptr() as *const c_char,
         cursor_state_func,
+    );
+
+    let icon_cmds_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_read_window_svg_cmds),
+        ICON_CMDS_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        ICON_CMDS_NAME.as_ptr() as *const c_char,
+        icon_cmds_func,
+    );
+
+    let svg_import_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_import_svg_asset),
+        SVG_IMPORT_FN_NAME.as_ptr() as *const c_char,
+        4,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        SVG_IMPORT_NAME.as_ptr() as *const c_char,
+        svg_import_func,
+    );
+
+    let svg_pixels_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_read_svg_pixels),
+        SVG_PIXELS_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        SVG_PIXELS_NAME.as_ptr() as *const c_char,
+        svg_pixels_func,
     );
     qjs::js_free_value(ctx, global);
 }

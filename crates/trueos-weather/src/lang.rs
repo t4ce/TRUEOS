@@ -297,7 +297,9 @@ pub fn normalized_language_code(code: &str) -> &str {
 
 #[inline]
 fn base_language(code: &str) -> &str {
-    code.split(['-', '_']).next().unwrap_or(DEFAULT_LANGUAGE_CODE)
+    code.split(['-', '_'])
+        .next()
+        .unwrap_or(DEFAULT_LANGUAGE_CODE)
 }
 
 #[inline]

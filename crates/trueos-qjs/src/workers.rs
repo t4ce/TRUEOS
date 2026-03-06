@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
-use core::ffi::{c_char, c_int};
+use core::ffi::{CStr, c_char, c_int};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
@@ -874,4 +874,46 @@ pub unsafe fn install_worker_threads_exports(
     }
 
     0
+}
+
+#[inline]
+pub(crate) unsafe fn try_create_native_module(
+    ctx: *mut qjs::JSContext,
+    module_name: *const c_char,
+) -> *mut qjs::JSModuleDef {
+    if ctx.is_null() || module_name.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    let name = unsafe { CStr::from_ptr(module_name).to_bytes() };
+    if name != b"worker_threads" && name != b"node:worker_threads" {
+        return core::ptr::null_mut();
+    }
+
+    unsafe extern "C" fn worker_threads_module_init(
+        ctx: *mut qjs::JSContext,
+        m: *mut qjs::JSModuleDef,
+    ) -> c_int {
+        unsafe { install_worker_threads_exports(ctx, m) }
+    }
+
+    let m = unsafe { qjs::JS_NewCModule(ctx, module_name, Some(worker_threads_module_init)) };
+    if m.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    macro_rules! add_export {
+        ($name:literal) => {{
+            let k = concat!($name, "\0");
+            let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, k.as_ptr() as *const c_char) };
+        }};
+    }
+
+    add_export!("Worker");
+    add_export!("isMainThread");
+    add_export!("parentPort");
+    add_export!("threadId");
+    add_export!("workerData");
+
+    m
 }

@@ -87,7 +87,9 @@ pub fn config_create() -> u32 {
 }
 
 pub fn config_set_use_web_defaults(handle: u32, enabled: bool) {
-    let _ = with_config(handle, |cfg| unsafe { YGConfigSetUseWebDefaults(cfg, enabled) });
+    let _ = with_config(handle, |cfg| unsafe {
+        YGConfigSetUseWebDefaults(cfg, enabled)
+    });
 }
 
 pub fn config_free(handle: u32) {
@@ -161,7 +163,9 @@ pub fn node_get_child_count(handle: u32) -> u32 {
 }
 
 pub fn node_calculate_layout(handle: u32, width: f32, height: f32, direction: i32) {
-    let _ = with_node(handle, |n| unsafe { YGNodeCalculateLayout(n, width, height, direction) });
+    let _ = with_node(handle, |n| unsafe {
+        YGNodeCalculateLayout(n, width, height, direction)
+    });
 }
 
 pub fn node_set_flex_direction(handle: u32, v: i32) {
