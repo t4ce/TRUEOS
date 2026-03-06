@@ -1,24 +1,60 @@
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
+import { renderHtmlAppWindowWidget } from './widgets/htmlAppWindowWidget.mjs';
+import { renderScrollbarWidget } from './widgets/scrollbarWidget.mjs';
+import { renderCheckboxWidget } from './widgets/checkboxWidget.mjs';
+import { renderSummaryWidget } from './widgets/summaryWidget.mjs';
+import { renderDialogWidget } from './widgets/dialogWidget.mjs';
+import { renderButtonWidget } from './widgets/buttonWidget.mjs';
+import {
+  applyYogaDefaultsTemporalInput,
+  isTemporalTag,
+  renderTemporalWidget,
+  temporalDisplayText,
+  temporalTagForInputType,
+} from './widgets/tempo.mjs';
 
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 const HTML = G.__trueosUiHtml;
-const IFRAME_ROOT_ID = 'root/iframe[0]';
-// Keep in sync with htmlDefaults.ts TEXT_LEVEL_SEMANTICS_TAGS.
-const TEXT_LEVEL_SEMANTICS_TAGS = new Set([
-  'a', 'em', 'strong', 'small', 's', 'cite', 'q', 'dfn', 'abbr',
-  'ruby', 'rt', 'rp', 'data', 'time', 'code', 'var', 'samp', 'kbd',
-  'sub', 'sup', 'i', 'b', 'u', 'mark', 'bdi', 'bdo', 'span', 'br', 'wbr',
+const HTML_APP_WINDOW_ROOT_ID = 'root/html_app_window[0]';
+// Tags that emit inline text runs through the native text lane.
+const INLINE_TEXT_TAGS = new Set([
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'p', 'button',
+  'timeinput', 'dateinput', 'monthinput', 'weekinput', 'datetimelocalinput',
 ]);
+const HEADING_TEXT_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 const blockNodeById = new Map();
+const detailsOpenById = new Map();
 
-function iframeMinWidthPx() {
-  return Math.max(1, Number(G.__trueosThemeIframeMinW || 16));
+function htmlAppWindowMinWidthPx() {
+  return Math.max(1, Number(G.__trueosThemeHtmlAppWindowMinW || 16));
 }
 
-function isInIframeSubtree(nodeId) {
+function isInHtmlAppWindowSubtree(nodeId) {
   const id = String(nodeId || '');
-  return id === IFRAME_ROOT_ID || id.startsWith(`${IFRAME_ROOT_ID}/`);
+  return id === HTML_APP_WINDOW_ROOT_ID || id.startsWith(`${HTML_APP_WINDOW_ROOT_ID}/`);
+}
+
+function htmlAppWindowAncestorId(nodeId) {
+  const id = String(nodeId || '');
+  if (!id) return '';
+  const parts = id.split('/');
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (!parts[i].startsWith('html_app_window[')) continue;
+    const ancestor = parts.slice(0, i + 1).join('/');
+    if (ancestor) return ancestor;
+  }
+  return '';
+}
+
+function isDialogOverlayNode(nodeId, tag) {
+  return String(tag || '').toLowerCase() === 'dialog' && isInHtmlAppWindowSubtree(nodeId);
+}
+
+function isDialogSubtreeId(nodeId) {
+  const id = String(nodeId || '');
+  return id.includes('/dialog[');
 }
 
 function isElement(node) {
@@ -58,6 +94,29 @@ function nodeTextPreview(node, maxChars = 120) {
   return `${joined.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+function nodeTextContent(node) {
+  const parts = [];
+  collectNodeText(node, parts);
+  return collapseInlineWhitespace(parts.join(''));
+}
+
+function checkboxLabelText(inputNode) {
+  if (!inputNode || !inputNode.parentNode) return '';
+  // For `<summary><input ...> Label</summary>` and `<label><input ...> Label</label>`,
+  // use the parent's text content and skip tiny placeholders.
+  return nodeTextPreview(inputNode.parentNode, 120);
+}
+
+function summaryLabelText(summaryNode) {
+  if (!summaryNode) return '';
+  return nodeTextPreview(summaryNode, 120);
+}
+
+function buttonLabelText(buttonNode) {
+  if (!buttonNode) return '';
+  return nodeTextPreview(buttonNode, 160);
+}
+
 function getBody(doc) {
   const html = (doc.childNodes || []).find((n) => isElement(n) && (n.tagName || n.nodeName) === 'html');
   if (!html) return null;
@@ -68,9 +127,34 @@ function isStructuralTag(tag) {
   return tag === 'body' || tag === 'html' || tag === 'head' || tag === '#document' || tag === '#document-fragment';
 }
 
+function getAttr(node, name) {
+  if (!node || !Array.isArray(node.attrs)) return '';
+  const n = String(name || '').toLowerCase();
+  for (let i = 0; i < node.attrs.length; i++) {
+    const a = node.attrs[i];
+    if (!a || String(a.name || '').toLowerCase() !== n) continue;
+    return String(a.value || '');
+  }
+  return '';
+}
+
+function classifyTag(node, rawTag) {
+  const tag = String(rawTag || '').toLowerCase();
+  if (tag === 'iframe') return 'html_app_window';
+  if (tag === 'input') {
+    const t = String(getAttr(node, 'type') || '').toLowerCase();
+    const temporal = temporalTagForInputType(t);
+    if (temporal) return temporal;
+    if (t === 'checkbox') return 'checkbox';
+    if (t === 'button' || t === 'submit' || t === 'reset') return 'button';
+  }
+  return tag;
+}
+
 function collectBlockTree(node, out) {
   if (!isElement(node)) return;
-  const tag = String(node.tagName || node.nodeName || '').toLowerCase();
+  const rawTag = String(node.tagName || node.nodeName || '').toLowerCase();
+  const tag = classifyTag(node, rawTag);
   const children = [];
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
   for (let i = 0; i < kids.length; i++) {
@@ -88,12 +172,12 @@ function collectBlockTree(node, out) {
 function makeTreeFromHtml() {
   const doc = parse5.parse(HTML);
   const body = getBody(doc) || doc;
-  const iframeChildren = [];
-  collectBlockTree(body, iframeChildren);
-  const iframe = { kind: 'block', tagName: 'iframe', children: iframeChildren, id: '' };
+  const appWindowChildren = [];
+  collectBlockTree(body, appWindowChildren);
+  const appWindow = { kind: 'block', tagName: 'html_app_window', children: appWindowChildren, id: '' };
   // Synthetic root-level sibling widget lane.
   const rootScrollbar = { kind: 'block', tagName: 'scrollbar', children: [], id: '' };
-  const root = { kind: 'block', tagName: 'root', children: [iframe, rootScrollbar], id: 'root' };
+  const root = { kind: 'block', tagName: 'root', children: [appWindow, rootScrollbar], id: 'root' };
   assignBlockIds(root, 'root');
   return root;
 }
@@ -116,21 +200,82 @@ function blockChildren(node) {
 }
 
 function isScrollableTag(tag) {
-  return tag === 'scrollable' || tag === 'iframe';
+  return tag === 'scrollable' || tag === 'html_app_window';
 }
 
 function isScrollbarTag(tag) {
   return tag === 'scrollbar';
 }
 
+function isCompactWidgetTag(tag) {
+  return tag === 'checkbox';
+}
+
+function isButtonTag(tag) {
+  return tag === 'button';
+}
+
+function defaultDetailsOpen(node) {
+  if (!node || !node.srcNode) return false;
+  // Default is collapsed; opt in to open with data-open="true"/"1"/"open".
+  const v = String(getAttr(node.srcNode, 'data-open') || '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'open';
+}
+
+function isDetailsOpen(node) {
+  if (!node || String(node.tagName || '').toLowerCase() !== 'details') return true;
+  const id = String(node.id || '');
+  if (!id) return defaultDetailsOpen(node);
+  if (detailsOpenById.has(id)) return detailsOpenById.get(id) !== false;
+  const open = defaultDetailsOpen(node);
+  detailsOpenById.set(id, open);
+  return open;
+}
+
+function visibleChildrenForNode(node) {
+  const kids = blockChildren(node);
+  const tag = String(node && node.tagName || '').toLowerCase();
+  if (tag !== 'details') return kids;
+
+  const open = isDetailsOpen(node);
+  if (open) return kids;
+
+  // Closed details keeps only summary child (or first child if summary is absent).
+  for (let i = 0; i < kids.length; i++) {
+    if (String(kids[i].tagName || '').toLowerCase() === 'summary') return [kids[i]];
+  }
+  return kids.length > 0 ? [kids[0]] : [];
+}
+
+function resolveDetailsId(blockId) {
+  const id = String(blockId || '');
+  if (!id) return '';
+  const node = blockNodeById.get(id);
+  const tag = String(node && node.tagName || '').toLowerCase();
+  if (tag === 'details') return id;
+  if (tag === 'summary') {
+    const slash = id.lastIndexOf('/');
+    if (slash > 0) {
+      const parentId = id.slice(0, slash);
+      const parent = blockNodeById.get(parentId);
+      if (String(parent && parent.tagName || '').toLowerCase() === 'details') return parentId;
+    }
+  }
+  return '';
+}
+
 function makeYogaTree(node, allBlocks, depth = 0) {
   const tag = String(node && node.tagName || '').toLowerCase();
+  const isHeading = HEADING_TEXT_TAGS.has(tag);
+  const isCompact = isCompactWidgetTag(tag);
+  const isButton = isButtonTag(tag);
+  const isTemporal = isTemporalTag(tag);
   const nodeId = String(node && node.id || '');
   const yn = Yoga.Node.create();
   yn.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
   yn.setAlignItems(Yoga.ALIGN_STRETCH);
   if (typeof yn.setAlignSelf === 'function') yn.setAlignSelf(Yoga.ALIGN_STRETCH);
-  if (depth > 0 && typeof yn.setWidthPercent === 'function') yn.setWidthPercent(100);
+  if (!isHeading && !isCompact && !isButton && !isTemporal && depth > 0 && typeof yn.setWidthPercent === 'function') yn.setWidthPercent(100);
   yn.setPadding(Yoga.EDGE_LEFT, 0);
   yn.setPadding(Yoga.EDGE_RIGHT, 0);
   yn.setPadding(Yoga.EDGE_TOP, 0);
@@ -142,15 +287,44 @@ function makeYogaTree(node, allBlocks, depth = 0) {
   } else {
     const minNodeSize = Math.max(1, Number(G.__trueosThemeNodeH || 16));
     yn.setMinHeight(minNodeSize);
-    const minWidth = isInIframeSubtree(nodeId)
-      ? Math.max(minNodeSize, iframeMinWidthPx())
+    let minWidth = isInHtmlAppWindowSubtree(nodeId)
+      ? Math.max(minNodeSize, htmlAppWindowMinWidthPx())
       : minNodeSize;
+    if (isHeading) {
+      const txt = nodeTextContent(node && node.srcNode ? node.srcNode : null);
+      const headingTextWidth = Math.max(minNodeSize, txt.length * 16);
+      minWidth = headingTextWidth;
+      if (typeof yn.setAlignSelf === 'function') yn.setAlignSelf(Yoga.ALIGN_FLEX_START);
+      if (typeof yn.setWidth === 'function') yn.setWidth(headingTextWidth);
+    }
     if (typeof yn.setMinWidth === 'function') yn.setMinWidth(minWidth);
+    if (isCompact) {
+      const box = Math.max(8, Math.min(14, minNodeSize - 2));
+      if (typeof yn.setAlignSelf === 'function') yn.setAlignSelf(Yoga.ALIGN_FLEX_START);
+      if (typeof yn.setWidth === 'function') yn.setWidth(box);
+      if (typeof yn.setMinWidth === 'function') yn.setMinWidth(box);
+      if (typeof yn.setHeight === 'function') yn.setHeight(box);
+      if (typeof yn.setMinHeight === 'function') yn.setMinHeight(box);
+    }
+    if (isButton) {
+      const txt = buttonLabelText(node && node.srcNode ? node.srcNode : null);
+      const padX = 12;
+      const btnW = Math.max(32, txt.length * 8 + padX * 2);
+      const btnH = Math.max(minNodeSize + 4, 16);
+      if (typeof yn.setAlignSelf === 'function') yn.setAlignSelf(Yoga.ALIGN_FLEX_START);
+      if (typeof yn.setWidth === 'function') yn.setWidth(btnW);
+      if (typeof yn.setMinWidth === 'function') yn.setMinWidth(btnW);
+      if (typeof yn.setHeight === 'function') yn.setHeight(btnH);
+      if (typeof yn.setMinHeight === 'function') yn.setMinHeight(btnH);
+    }
+    if (isTemporal) {
+      applyYogaDefaultsTemporalInput(yn, Yoga, tag, node && node.srcNode ? node.srcNode : null);
+    }
   }
 
   allBlocks.push({ node, yoga: yn, depth });
 
-  const kids = blockChildren(node);
+  const kids = visibleChildrenForNode(node);
   if (kids.length <= 0) {
     yn.setHeight(Math.max(1, Number(G.__trueosThemeNodeH || 16)));
     return yn;
@@ -174,9 +348,11 @@ function computeRects(blocks) {
   const ordered = blocks;
   const out = [];
   const rectEntries = [];
+  const rectById = new Map();
   const absXByDepth = [];
   const absYByDepth = [];
   const scrollByDepth = [];
+  const overlayCancelByDepth = [];
   for (let i = 0; i < ordered.length; i++) {
     const entry = ordered[i];
     const tag = String(entry && entry.node && entry.node.tagName || '').toLowerCase();
@@ -186,12 +362,19 @@ function computeRects(blocks) {
     const localX = Number(yn.getComputedLeft() || 0);
     const localY = Number(yn.getComputedTop() || 0);
     const inheritedScrollY = depth > 0 ? Number(scrollByDepth[depth - 1] || 0) : 0;
+    const inheritedOverlayCancel = depth > 0 ? Number(overlayCancelByDepth[depth - 1] || 0) : 0;
     const parentX = depth > 0 ? Number(absXByDepth[depth - 1] || 0) : 0;
     const parentY = depth > 0 ? Number(absYByDepth[depth - 1] || 0) : 0;
+    let overlayCancel = inheritedOverlayCancel;
+    if (isDialogOverlayNode(nodeId, tag) && overlayCancel <= 0) {
+      const ownerAppWindowId = htmlAppWindowAncestorId(nodeId);
+      if (ownerAppWindowId) overlayCancel = Math.max(0, Number(scrollOffsetFor(ownerAppWindowId) || 0));
+    }
     const absX = parentX + localX;
-    const absY = parentY + localY - inheritedScrollY;
+    const absY = parentY + localY - inheritedScrollY + overlayCancel;
     absXByDepth[depth] = absX;
     absYByDepth[depth] = absY;
+    overlayCancelByDepth[depth] = overlayCancel;
 
     const selfScrollY = isScrollableTag(tag) ? scrollOffsetFor(nodeId) : 0;
     scrollByDepth[depth] = inheritedScrollY + selfScrollY;
@@ -199,16 +382,37 @@ function computeRects(blocks) {
     if (tag === 'root') continue;
 
     const drawIndent = Math.max(0, depth - 1) * Math.max(0, Number(G.__trueosThemeHierarchyIndent || 8));
-    const x = absX + drawIndent;
-    const y = absY;
-    const minRectW = isInIframeSubtree(nodeId) ? iframeMinWidthPx() : 2;
-    const w = Math.max(minRectW, Number(yn.getComputedWidth() || 0) - drawIndent);
-    const h = Math.max(2, Number(yn.getComputedHeight() || 0));
+    let x = absX + drawIndent;
+    let y = absY;
+    const minRectW = isInHtmlAppWindowSubtree(nodeId) ? htmlAppWindowMinWidthPx() : 2;
+    let w = Math.max(minRectW, Number(yn.getComputedWidth() || 0) - drawIndent);
+    let h = Math.max(2, Number(yn.getComputedHeight() || 0));
+    let drawDepth = depth;
+    if (isDialogOverlayNode(nodeId, tag)) {
+      const ownerAppWindowId = htmlAppWindowAncestorId(nodeId);
+      const owner = ownerAppWindowId ? rectById.get(ownerAppWindowId) : null;
+      if (owner) {
+        const margin = 8;
+        const innerW = Math.max(24, Number(owner.w || 0) - margin * 2);
+        const innerH = Math.max(24, Number(owner.h || 0) - margin * 2);
+        w = Math.min(w, innerW);
+        h = Math.min(h, innerH);
+        x = Math.round(Number(owner.x || 0) + margin);
+        y = Math.round(Number(owner.y || 0) + margin);
+        // Keep subtree anchored to the floating dialog origin.
+        absXByDepth[depth] = x - drawIndent;
+        absYByDepth[depth] = y;
+      }
+      // Overlay dialogs render above the normal app-window content lane.
+      drawDepth = Math.max(depth, 32);
+    }
     const scrollable = isScrollableTag(tag) ? 1 : 0;
     if (!isScrollbarTag(tag)) {
-      out.push(x, y, w, h, depth, scrollable, 0);
+      out.push(x, y, w, h, drawDepth, scrollable, 0);
     }
-    rectEntries.push({ id: nodeId, tag, x, y, w, h, depth, scrollable });
+    const rectEntry = { id: nodeId, tag, x, y, w, h, depth: drawDepth, scrollable };
+    rectEntries.push(rectEntry);
+    rectById.set(nodeId, rectEntry);
   }
   return { packed: out, entries: rectEntries };
 }
@@ -218,7 +422,7 @@ const blocks = [];
 const yogaRoot = makeYogaTree(logicalRoot, blocks, 0);
 const widgetByTag = new Map();
 const lastRectsById = new Map();
-const debugScroll = { timer: null, lastTs: 0, phase: 0, iframeId: '' };
+const debugScroll = { timer: null, lastTs: 0, phase: 0, appWindowId: '' };
 const widgetPulseById = new Map();
 const cursorPlane = {
   pointers: new Map(),
@@ -382,36 +586,38 @@ function collectCurrentRects() {
   return out;
 }
 
-function iframeMetrics(iframeId, rectEntries, selfScrollbarId = '') {
-  let iframeRect = null;
+function appWindowMetrics(appWindowId, rectEntries, selfScrollbarId = '') {
+  let appWindowRect = null;
   for (let i = 0; i < rectEntries.length; i++) {
     const r = rectEntries[i];
     if (!r) continue;
-    if (String(r.id || '') === iframeId && String(r.tag || '') === 'iframe') {
-      iframeRect = r;
+    if (String(r.id || '') === appWindowId && String(r.tag || '') === 'html_app_window') {
+      appWindowRect = r;
       break;
     }
   }
-  if (!iframeRect) return null;
+  if (!appWindowRect) return null;
 
-  const iframeScrollY = Math.max(0, Number(scrollOffsetFor(iframeId) || 0));
-  const viewportH = Math.max(1, Number(iframeRect.h || 0));
-  let contentBottom = Number(iframeRect.y || 0) + viewportH;
+  const appWindowScrollY = Math.max(0, Number(scrollOffsetFor(appWindowId) || 0));
+  const viewportH = Math.max(1, Number(appWindowRect.h || 0));
+  let contentBottom = Number(appWindowRect.y || 0) + viewportH;
   for (let i = 0; i < rectEntries.length; i++) {
     const c = rectEntries[i];
     if (!c) continue;
     const cid = String(c.id || '');
-    if (!cid || cid === selfScrollbarId || cid === iframeId) continue;
-    if (!cid.startsWith(`${iframeId}/`)) continue;
+    if (!cid || cid === selfScrollbarId || cid === appWindowId) continue;
+    if (!cid.startsWith(`${appWindowId}/`)) continue;
+    if (isDialogSubtreeId(cid)) continue;
     if (String(c.tag || '') === 'scrollbar') continue;
-    const b = Number(c.y || 0) + Number(c.h || 0) + iframeScrollY;
+    const b = Number(c.y || 0) + Number(c.h || 0) + appWindowScrollY;
     if (b > contentBottom) contentBottom = b;
   }
 
-  const contentH = Math.max(viewportH, contentBottom - Number(iframeRect.y || 0));
+  const contentH = Math.max(viewportH, contentBottom - Number(appWindowRect.y || 0));
   const maxScroll = Math.max(0, contentH - viewportH);
-  return { iframeRect, viewportH, contentH, maxScroll, scrollY: Math.min(maxScroll, iframeScrollY) };
+  return { appWindowRect, viewportH, contentH, maxScroll, scrollY: Math.min(maxScroll, appWindowScrollY) };
 }
+
 
 function applyViewportConstraints(vw, vh) {
   if (typeof yogaRoot.setWidth === 'function') yogaRoot.setWidth(vw);
@@ -426,8 +632,8 @@ function applyViewportConstraints(vw, vh) {
     if (Number(entry.depth || 0) === 1 && typeof entry.yoga.setWidth === 'function') {
       entry.yoga.setWidth(vw);
     }
-    // The synthetic iframe is our viewport container; keep it bounded to window height.
-    if (tag === 'iframe' && typeof entry.yoga.setHeight === 'function') {
+    // The synthetic html_app_window is our viewport container; keep it bounded to window height.
+    if (tag === 'html_app_window' && typeof entry.yoga.setHeight === 'function') {
       entry.yoga.setHeight(vh);
       if (typeof entry.yoga.setMinHeight === 'function') entry.yoga.setMinHeight(vh);
       if (typeof entry.yoga.setMaxHeight === 'function') entry.yoga.setMaxHeight(vh);
@@ -470,18 +676,53 @@ function collectInlineSemanticTextRuns(rectsById) {
   for (const rect of rectsById.values()) {
     if (!rect) continue;
     const tag = String(rect.tag || '').toLowerCase();
-    if (!TEXT_LEVEL_SEMANTICS_TAGS.has(tag)) continue;
-    if (tag === 'br' || tag === 'wbr') continue;
+    if (!INLINE_TEXT_TAGS.has(tag)) continue;
     const id = String(rect.id || '');
     if (!id) continue;
     const node = blockNodeById.get(id);
     if (!node || !node.srcNode) continue;
-    const text = nodeTextPreview(node.srcNode);
+    let text = '';
+    if (isTemporalTag(tag)) text = temporalDisplayText(tag, node.srcNode);
+    else text = nodeTextPreview(node.srcNode);
     if (!text) continue;
-    const x = Math.round(Number(rect.x || 0) + 2);
+    const insetX = tag === 'button' ? 8 : 2;
+    const x = Math.round(Number(rect.x || 0) + insetX);
     const y = Math.round(Number(rect.y || 0) + 2);
     packed.push(x, y, text);
   }
+
+  // Checkbox text lane: place label text 16px to the right of each checkbox.
+  for (const rect of rectsById.values()) {
+    if (!rect) continue;
+    const tag = String(rect.tag || '').toLowerCase();
+    if (tag !== 'checkbox') continue;
+    const id = String(rect.id || '');
+    if (!id) continue;
+    const node = blockNodeById.get(id);
+    if (!node || !node.srcNode) continue;
+    const text = checkboxLabelText(node.srcNode);
+    if (!text) continue;
+    const x = Math.round(Number(rect.x || 0) + Number(rect.w || 0) + 16);
+    const y = Math.round(Number(rect.y || 0));
+    packed.push(x, y, text);
+  }
+
+  // Summary text lane: place summary label text 16px to the right of disclosure box.
+  for (const rect of rectsById.values()) {
+    if (!rect) continue;
+    const tag = String(rect.tag || '').toLowerCase();
+    if (tag !== 'summary') continue;
+    const id = String(rect.id || '');
+    if (!id) continue;
+    const node = blockNodeById.get(id);
+    if (!node || !node.srcNode) continue;
+    const text = summaryLabelText(node.srcNode);
+    if (!text) continue;
+    const x = Math.round(Number(rect.x || 0) + 16);
+    const y = Math.round(Number(rect.y || 0));
+    packed.push(x, y, text);
+  }
+
   return packed;
 }
 
@@ -553,52 +794,6 @@ function collectPulsePackedRects(rectEntries, nowMs) {
   return packed;
 }
 
-function renderIframeWidget(rect, ctx) {
-  // Reserved widget hook for iframe container-specific paint work.
-  return [];
-}
-
-function renderScrollbarWidget(rect, ctx) {
-  if (!rect || String(rect.tag || '') !== 'scrollbar') return [];
-  if (!ctx || ctx.mode !== 'collect' || !Array.isArray(ctx.rectEntries)) return [];
-
-  const selfId = String(rect.id || '');
-  if (!selfId) return [];
-  const slash = selfId.lastIndexOf('/');
-  if (slash <= 0) return [];
-  const parentId = selfId.slice(0, slash);
-  const iframeId = `${parentId}/iframe[0]`;
-  const metrics = iframeMetrics(iframeId, ctx.rectEntries, selfId);
-  if (!metrics) return [];
-  const { iframeRect, viewportH, contentH, maxScroll, scrollY: clampedScroll } = metrics;
-
-  const barW = Math.max(4, Number(G.__trueosThemeScrollbarW || 8));
-  const x = Math.round(Number(iframeRect.x || 0));
-  const y = Math.round(Number(iframeRect.y || 0));
-  const w = Math.max(4, Math.round(Math.min(barW, Number(iframeRect.w || 0))));
-  const h = Math.max(4, Math.round(Number(iframeRect.h || 0)));
-
-  // 1px border + 1px inner gap.
-  const innerX = x + 2;
-  const innerY = y + 2;
-  const innerW = Math.max(1, w - 4);
-  const innerH = Math.max(1, h - 4);
-
-  // Thumb height scales linearly with viewport/content, clamped to 20% minimum.
-  const ratio = maxScroll <= 0 ? 1 : (viewportH / Math.max(viewportH, contentH));
-  const thumbRatio = Math.max(0.2, Math.min(1, ratio));
-  const thumbH = maxScroll <= 0 ? innerH : Math.max(1, Math.round(innerH * thumbRatio));
-  const thumbTravel = Math.max(0, innerH - thumbH);
-  const thumbOff = maxScroll <= 0 ? 0 : Math.round((clampedScroll / maxScroll) * thumbTravel);
-  const thumbY = innerY + thumbOff;
-
-  const frameDepth = Math.max(0, Number(rect.depth || 0) + 1);
-  return [
-    x, y, w, h, frameDepth, 0, 1,
-    innerX, thumbY, innerW, thumbH, frameDepth + 1, 0, 2,
-  ];
-}
-
 function stopDebugAutoScroll() {
   if (debugScroll.timer) {
     clearInterval(debugScroll.timer);
@@ -613,9 +808,9 @@ function startDebugAutoScroll(opts) {
   const repaint = cfg.repaint === true;
   const intervalMs = Math.max(16, Number(cfg.intervalMs || 50));
   const cyclesPerSec = Math.max(0.03, Number(cfg.cyclesPerSec || 0.06));
-  const iframeId = String(cfg.iframeId || findFirstBlockIdByTag('iframe') || '');
-  if (!iframeId) return false;
-  debugScroll.iframeId = iframeId;
+  const appWindowId = String(cfg.appWindowId || findFirstBlockIdByTag('html_app_window') || '');
+  if (!appWindowId) return false;
+  debugScroll.appWindowId = appWindowId;
   debugScroll.phase = 0;
 
   debugScroll.timer = setInterval(() => {
@@ -624,18 +819,18 @@ function startDebugAutoScroll(opts) {
     const dt = Math.max(0.001, (now - last) / 1000);
     debugScroll.lastTs = now;
 
-    const metrics = iframeMetrics(iframeId, collectCurrentRects());
+    const metrics = appWindowMetrics(appWindowId, collectCurrentRects());
     if (!metrics) return;
     const maxScroll = Math.max(0, Number(metrics.maxScroll || 0));
     if (maxScroll <= 0) {
-      setScrollInternal(iframeId, 0, repaint);
+      setScrollInternal(appWindowId, 0, repaint);
       return;
     }
 
     debugScroll.phase += dt * cyclesPerSec * Math.PI * 2;
     const wave01 = (Math.sin(debugScroll.phase) + 1) * 0.5;
     const target = wave01 * maxScroll;
-    setScrollInternal(iframeId, target, repaint);
+    setScrollInternal(appWindowId, target, repaint);
   }, intervalMs);
   return true;
 }
@@ -779,10 +974,43 @@ G.__trueosBrowser = {
     stopDebugAutoScroll();
     return true;
   },
+  getDetailsOpen(blockId) {
+    const id = resolveDetailsId(blockId);
+    if (!id) return true;
+    if (detailsOpenById.has(id)) return detailsOpenById.get(id) !== false;
+    const node = blockNodeById.get(id);
+    return defaultDetailsOpen(node);
+  },
+  setDetailsOpen(blockId, open) {
+    const id = resolveDetailsId(blockId);
+    if (!id) return false;
+    detailsOpenById.set(id, open !== false);
+    relayoutAndPaint();
+    return true;
+  },
+  toggleDetails(blockId) {
+    const id = resolveDetailsId(blockId);
+    if (!id) return false;
+    const cur = detailsOpenById.has(id)
+      ? (detailsOpenById.get(id) !== false)
+      : defaultDetailsOpen(blockNodeById.get(id));
+    detailsOpenById.set(id, !cur);
+    relayoutAndPaint();
+    return !cur;
+  },
 };
 
-G.__trueosBrowser.registerWidget('iframe', renderIframeWidget);
+G.__trueosBrowser.registerWidget('html_app_window', renderHtmlAppWindowWidget);
 G.__trueosBrowser.registerWidget('scrollbar', renderScrollbarWidget);
+G.__trueosBrowser.registerWidget('checkbox', renderCheckboxWidget);
+G.__trueosBrowser.registerWidget('summary', renderSummaryWidget);
+G.__trueosBrowser.registerWidget('dialog', renderDialogWidget);
+G.__trueosBrowser.registerWidget('button', renderButtonWidget);
+G.__trueosBrowser.registerWidget('timeinput', renderTemporalWidget);
+G.__trueosBrowser.registerWidget('dateinput', renderTemporalWidget);
+G.__trueosBrowser.registerWidget('monthinput', renderTemporalWidget);
+G.__trueosBrowser.registerWidget('weekinput', renderTemporalWidget);
+G.__trueosBrowser.registerWidget('datetimelocalinput', renderTemporalWidget);
 
 const DEBUG_AUTOSCROLL_BOOT = true;
 

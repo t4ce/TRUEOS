@@ -274,7 +274,7 @@ fn cmd_stream_build_atlas_meta(atlas: qjs::FontAtlasView<'static>) -> CmdStreamA
             u1: px1 / aw,
             v1: py1 / ah,
             glyph_w_px,
-            advance_px: glyph_w_px + (cell_h_f * 0.08),
+            advance_px: glyph_w_px,
         });
     }
 
@@ -460,6 +460,15 @@ fn cmd_stream_flush_text_batches() {
     runs.clear();
 }
 
+#[inline]
+fn cmd_stream_enable_alpha_text_blend() {
+    // Text atlas quads need standard alpha blending to avoid opaque glyph boxes.
+    CMD_STREAM_BLEND_MODE.store(0, Ordering::Relaxed);
+    CMD_STREAM_PMA.store(0, Ordering::Relaxed);
+    CMD_STREAM_BLEND_ENABLED.store(1, Ordering::Relaxed);
+    cmd_stream_apply_blend_mode(0, false);
+}
+
 fn cmd_stream_draw_atlas_text_impl(
     tex_id: u32,
     kind: u32,
@@ -595,7 +604,7 @@ fn cmd_stream_draw_atlas_text_impl(
                 cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
                 cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
                 cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
-                pen_x += (glyph_w_u as f32 * scale) + ((glyph_h_u as f32) * scale * 0.08);
+                pen_x += glyph_w_u as f32 * scale;
             }
 
             let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
@@ -653,6 +662,7 @@ pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
     let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
     let _ = unsafe { trueos_cabi_gfx_begin_frame(clear) };
     cmd_stream_reset_frame_state_defaults();
+    cmd_stream_enable_alpha_text_blend();
     let ok = cmd_stream_draw_atlas_text_impl(
         tex_id,
         kind,
@@ -709,6 +719,7 @@ pub fn draw_text_widget_in_frame(
 
     cmd_stream_clear_text_batches();
     cmd_stream_reset_frame_state_defaults();
+    cmd_stream_enable_alpha_text_blend();
     let ok = cmd_stream_draw_atlas_text_impl(
         tex_id,
         kind,
@@ -1722,7 +1733,7 @@ pub(crate) unsafe fn try_create_native_module(
                     cmd_stream_push_tex_vtx(&mut out, nx0, ny1, u0, v1, r, g, b, a);
                     cmd_stream_push_tex_vtx(&mut out, nx1, ny0, u1, v0, r, g, b, a);
                     cmd_stream_push_tex_vtx(&mut out, nx0, ny0, u0, v0, r, g, b, a);
-                    pen_x += (glyph_w_u as f32 * scale) + ((glyph_h_u as f32) * scale * 0.08);
+                    pen_x += glyph_w_u as f32 * scale;
                 }
 
                 let cached: Arc<[u8]> = Arc::from(out.into_boxed_slice());
