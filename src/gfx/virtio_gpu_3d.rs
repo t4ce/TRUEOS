@@ -1303,6 +1303,7 @@ DCL OUT[0], COLOR\n\
     1: END\n";
 
 // Bring-up toggles for deterministic texture diagnostics.
+const VIRGL_DRAW_DIAGNOSTICS_LOGS: bool = false;
 const VIRGL_DEBUG_TEXTURE_ID_RAW: u32 = 0x00D3_B600;
 const VIRGL_FORCE_DEBUG_TEXTURE: bool = false;
 // Correctness-first switch: force per-draw vertex conversion/upload and bypass
@@ -2866,7 +2867,7 @@ impl GfxDevice for VirglGfxBackend {
                             (img_raw, img.virgl_res, img.virgl_view, samp_handle)
                         };
 
-                        if frame_no % 100 == 0 {
+                        if VIRGL_DRAW_DIAGNOSTICS_LOGS && frame_no % 100 == 0 {
                             crate::log!(
                                 "virgl-diag: frame={} img={} res={} view={} samp_state={} sampler=({:?},{:?},{:?},{:?})\n",
                                 frame_no,
@@ -2933,7 +2934,7 @@ impl GfxDevice for VirglGfxBackend {
                         }
                     }
 
-                    if frame_no <= 5 || (frame_no % 100) == 0 {
+                    if VIRGL_DRAW_DIAGNOSTICS_LOGS && (frame_no <= 5 || (frame_no % 100) == 0) {
                         if let Some((
                             min_x,
                             max_x,

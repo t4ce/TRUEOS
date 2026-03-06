@@ -109,10 +109,26 @@ fn push_border_rect(
     if w <= 1.0 || h <= 1.0 {
         return;
     }
-    let r = 0u8;
-    let g = 0u8;
-    let b = 0u8;
-    let a = 255u8;
+    push_border_rect_rgba(out, x, y, w, h, bw, 0, 0, 0, 255, viewport_w, viewport_h);
+}
+
+fn push_border_rect_rgba(
+    out: &mut Vec<u8>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    bw: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    viewport_w: f32,
+    viewport_h: f32,
+) {
+    if w <= 1.0 || h <= 1.0 {
+        return;
+    }
 
     let x0 = x;
     let y0 = y;
@@ -123,6 +139,25 @@ fn push_border_rect(
     push_rect(out, x0, y1 - bw, x1, y1, r, g, b, a, viewport_w, viewport_h);
     push_rect(out, x0, y0, x0 + bw, y1, r, g, b, a, viewport_w, viewport_h);
     push_rect(out, x1 - bw, y0, x1, y1, r, g, b, a, viewport_w, viewport_h);
+}
+
+fn push_filled_rect(
+    out: &mut Vec<u8>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    viewport_w: f32,
+    viewport_h: f32,
+) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    push_rect(out, x, y, x + w, y + h, r, g, b, a, viewport_w, viewport_h);
 }
 
 unsafe extern "C" fn qjs_draw_layout_rects(
@@ -158,18 +193,19 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         0
     };
 
-    let mut bytes = Vec::with_capacity(12 * 6);
+    let mut bytes = Vec::with_capacity(12 * 8);
     let mut clip_stack: Vec<(u32, (f32, f32, f32, f32))> = Vec::new();
 
     let _ = trueos_cabi_gfx_begin_frame(0xFFFFFF);
     let mut i = 0u32;
-    while i + 5 < len {
+    while i + 6 < len {
         let vx = qjs::JS_GetPropertyUint32(ctx, rects, i + 0);
         let vy = qjs::JS_GetPropertyUint32(ctx, rects, i + 1);
         let vw2 = qjs::JS_GetPropertyUint32(ctx, rects, i + 2);
         let vh2 = qjs::JS_GetPropertyUint32(ctx, rects, i + 3);
         let vd = qjs::JS_GetPropertyUint32(ctx, rects, i + 4);
         let vs = qjs::JS_GetPropertyUint32(ctx, rects, i + 5);
+        let vsty = qjs::JS_GetPropertyUint32(ctx, rects, i + 6);
 
         let mut x = 0.0f64;
         let mut y = 0.0f64;
@@ -177,12 +213,14 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         let mut h = 0.0f64;
         let mut depth_f = 0.0f64;
         let mut scrollable_f = 0.0f64;
+        let mut style_f = 0.0f64;
         let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
         let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
         let _ = qjs::JS_ToFloat64(ctx, &mut w as *mut f64, vw2);
         let _ = qjs::JS_ToFloat64(ctx, &mut h as *mut f64, vh2);
         let _ = qjs::JS_ToFloat64(ctx, &mut depth_f as *mut f64, vd);
         let _ = qjs::JS_ToFloat64(ctx, &mut scrollable_f as *mut f64, vs);
+        let _ = qjs::JS_ToFloat64(ctx, &mut style_f as *mut f64, vsty);
 
         qjs::js_free_value(ctx, vx);
         qjs::js_free_value(ctx, vy);
@@ -190,6 +228,7 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         qjs::js_free_value(ctx, vh2);
         qjs::js_free_value(ctx, vd);
         qjs::js_free_value(ctx, vs);
+        qjs::js_free_value(ctx, vsty);
 
         let xf = x as f32;
         let yf = y as f32;
@@ -201,6 +240,11 @@ unsafe extern "C" fn qjs_draw_layout_rects(
             0
         };
         let is_scrollable = scrollable_f.is_finite() && scrollable_f >= 0.5;
+        let style = if style_f.is_finite() && style_f >= 0.0 {
+            style_f as u32
+        } else {
+            0
+        };
 
         while let Some((d, _)) = clip_stack.last().copied() {
             if d >= depth {
@@ -222,7 +266,24 @@ unsafe extern "C" fn qjs_draw_layout_rects(
         }
 
         bytes.clear();
-        push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
+        match style {
+            2 => {
+                // Scrollbar thumb: gray filled rectangle.
+                push_filled_rect(&mut bytes, xf, yf, wf, hf, 160, 160, 160, 255, viewport_w, viewport_h);
+            }
+            3 => {
+                // Widget-update pulse: warm highlight border.
+                push_border_rect_rgba(&mut bytes, xf, yf, wf, hf, 2.0, 255, 180, 60, 230, viewport_w, viewport_h);
+            }
+            4 => {
+                // Alternate phase for pulse rhythm.
+                push_border_rect_rgba(&mut bytes, xf, yf, wf, hf, 2.0, 255, 225, 150, 230, viewport_w, viewport_h);
+            }
+            _ => {
+                // Default node and scrollbar frame: black 1px border.
+                push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
+            }
+        }
         if !bytes.is_empty() {
             let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
         }
@@ -238,7 +299,7 @@ unsafe extern "C" fn qjs_draw_layout_rects(
             }
         }
 
-        i += 6;
+        i += 7;
     }
 
     let _ = trueos_cabi_gfx_clear_scissor();
