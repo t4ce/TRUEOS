@@ -171,9 +171,7 @@ async fn gfx_virgl_ready_task() {
             if crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY) {
                 return;
             }
-            if crate::gfx::is_virgl_present_cached()
-                && (crate::gfx::is_virgl_active() || crate::gfx::switch_to_virgl())
-            {
+            if virgl_ready_or_switched() {
                 return;
             }
             Timer::after(EmbassyDuration::from_millis(25)).await;
@@ -271,6 +269,25 @@ fn task_start_delay(spec: &TaskSpec) -> Option<(u64, &'static AtomicU64)> {
     }
 }
 
+#[inline]
+fn virgl_ready_or_switched() -> bool {
+    #[cfg(feature = "gfx_virgl")]
+    {
+        if crate::gfx::is_virgl_active() {
+            return true;
+        }
+        if crate::gfx::is_virgl_present_cached() {
+            return crate::gfx::switch_to_virgl();
+        }
+        false
+    }
+
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        false
+    }
+}
+
 struct MeshTex2d {
     positions: &'static [(f32, f32)],
     uvs: &'static [(f32, f32)],
@@ -336,15 +353,16 @@ async fn webgpu_mesh_task() {
     {
         // Boot ordering can race: spawn-service may start this task before
         // virtio-gpu enumeration/bring-up is fully observable.
-        let mut ready = false;
-        for _ in 0..200 {
-            if crate::gfx::is_virgl_present_cached()
-                && (crate::gfx::is_virgl_active() || crate::gfx::switch_to_virgl())
-            {
-                ready = true;
-                break;
+        let mut ready = crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY)
+            || virgl_ready_or_switched();
+        if !ready {
+            for _ in 0..200 {
+                if virgl_ready_or_switched() {
+                    ready = true;
+                    break;
+                }
+                Timer::after(EmbassyDuration::from_millis(25)).await;
             }
-            Timer::after(EmbassyDuration::from_millis(25)).await;
         }
         if !ready {
             crate::log!("webgpu-text: virgl not ready (timeout)\n");
