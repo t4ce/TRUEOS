@@ -52,6 +52,10 @@ pub mod text;
 pub mod ui_html;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/default_theme.rs"]
+pub mod default_theme;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
