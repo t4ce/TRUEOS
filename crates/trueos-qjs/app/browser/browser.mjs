@@ -2,11 +2,7 @@ import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
-const HTML = (typeof G.__trueosUiHtml === 'string' && G.__trueosUiHtml.length > 0)
-  ? G.__trueosUiHtml
-  : '<!DOCTYPE html><html><body><div>empty ui_html</div></body></html>';
-
-const NODE_H = 16;
+const HTML = G.__trueosUiHtml;
 
 function isElement(node) {
   return !!node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
@@ -66,13 +62,13 @@ function makeYogaTree(node, allBlocks, depth = 0) {
   yn.setPadding(Yoga.EDGE_RIGHT, 0);
   yn.setPadding(Yoga.EDGE_TOP, 0);
   yn.setPadding(Yoga.EDGE_BOTTOM, 0);
-  yn.setMinHeight(NODE_H);
+  yn.setMinHeight(Math.max(1, Number(G.__trueosThemeNodeH || 16)));
 
   allBlocks.push({ node, yoga: yn, depth });
 
   const kids = blockChildren(node);
   if (kids.length <= 0) {
-    yn.setHeight(NODE_H);
+    yn.setHeight(Math.max(1, Number(G.__trueosThemeNodeH || 16)));
     return yn;
   }
 
@@ -105,9 +101,10 @@ function computeRects(blocks) {
 
     if (tag === 'root') continue;
 
-    const x = absX;
+    const drawIndent = Math.max(0, depth - 1) * Math.max(0, Number(G.__trueosThemeHierarchyIndent || 8));
+    const x = absX + drawIndent;
     const y = absY;
-    const w = Math.max(2, Number(yn.getComputedWidth() || 0));
+    const w = Math.max(2, Number(yn.getComputedWidth() || 0) - drawIndent);
     const h = Math.max(2, Number(yn.getComputedHeight() || 0));
     const scrollable = isScrollableTag(tag) ? 1 : 0;
     out.push(x, y, w, h, depth, scrollable);
@@ -127,7 +124,10 @@ function applyViewportConstraints(vw, vh) {
     const entry = blocks[i];
     if (!entry || !entry.yoga) continue;
     if ((entry.node && entry.node.tagName) === 'root') continue;
-    if (typeof entry.yoga.setWidth === 'function') entry.yoga.setWidth(vw);
+    // Document-level width source: only direct children of the synthetic root.
+    if (Number(entry.depth || 0) === 1 && typeof entry.yoga.setWidth === 'function') {
+      entry.yoga.setWidth(vw);
+    }
   }
 }
 

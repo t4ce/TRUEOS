@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use core::ffi::c_char;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -137,6 +138,16 @@ pub async fn boot_browser() {
         );
         init_src.push_str("G.__trueosUiHtml = ");
         init_src.push_str(&html_lit);
+        init_src.push_str(";\n");
+        init_src.push_str("G.__trueosThemeNodeH = ");
+        let _ = write!(&mut init_src, "{}", qjs::default_theme::NODE_H);
+        init_src.push_str(";\n");
+        init_src.push_str("G.__trueosThemeHierarchyIndent = ");
+        let _ = write!(
+            &mut init_src,
+            "{}",
+            qjs::default_theme::HIERARCHY_INDENT
+        );
         init_src.push_str(";\n");
         init_src.push_str(
             r#"
