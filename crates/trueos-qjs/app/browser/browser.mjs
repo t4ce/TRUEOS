@@ -6,10 +6,7 @@ const HTML = (typeof G.__trueosUiHtml === 'string' && G.__trueosUiHtml.length > 
   ? G.__trueosUiHtml
   : '<!DOCTYPE html><html><body><div>empty ui_html</div></body></html>';
 
-const PAD = 8;
 const NODE_H = 16;
-const INDENT_PER_DEPTH = 10;
-const MAX_INDENT = 80;
 
 function isElement(node) {
   return !!node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
@@ -64,9 +61,9 @@ function makeYogaTree(node, allBlocks, depth = 0) {
   yn.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
   yn.setAlignItems(Yoga.ALIGN_STRETCH);
   if (typeof yn.setAlignSelf === 'function') yn.setAlignSelf(Yoga.ALIGN_STRETCH);
-  if (typeof yn.setWidthPercent === 'function') yn.setWidthPercent(100);
-  yn.setPadding(Yoga.EDGE_LEFT, depth === 0 ? PAD : 0);
-  yn.setPadding(Yoga.EDGE_RIGHT, depth === 0 ? PAD : 0);
+  if (depth > 0 && typeof yn.setWidthPercent === 'function') yn.setWidthPercent(100);
+  yn.setPadding(Yoga.EDGE_LEFT, 0);
+  yn.setPadding(Yoga.EDGE_RIGHT, 0);
   yn.setPadding(Yoga.EDGE_TOP, 0);
   yn.setPadding(Yoga.EDGE_BOTTOM, 0);
   yn.setMinHeight(NODE_H);
@@ -108,10 +105,9 @@ function computeRects(blocks) {
 
     if (tag === 'root') continue;
 
-    const indent = Math.min(MAX_INDENT, depth * INDENT_PER_DEPTH);
-    const x = absX + indent;
+    const x = absX;
     const y = absY;
-    const w = Math.max(2, Number(yn.getComputedWidth() || 0) - indent);
+    const w = Math.max(2, Number(yn.getComputedWidth() || 0));
     const h = Math.max(2, Number(yn.getComputedHeight() || 0));
     const scrollable = isScrollableTag(tag) ? 1 : 0;
     out.push(x, y, w, h, depth, scrollable);
@@ -131,10 +127,7 @@ function applyViewportConstraints(vw, vh) {
     const entry = blocks[i];
     if (!entry || !entry.yoga) continue;
     if ((entry.node && entry.node.tagName) === 'root') continue;
-    const depth = Math.max(0, Number(entry.depth || 0));
-    const indent = Math.min(MAX_INDENT, depth * INDENT_PER_DEPTH);
-    const width = Math.max(2, vw - (PAD * 2) - indent);
-    if (typeof entry.yoga.setWidth === 'function') entry.yoga.setWidth(width);
+    if (typeof entry.yoga.setWidth === 'function') entry.yoga.setWidth(vw);
   }
 }
 
@@ -151,7 +144,6 @@ function render() {
   }
 }
 
-render();
 if (typeof (globalThis.window || globalThis).addEventListener === 'function') {
   (globalThis.window || globalThis).addEventListener('resize', render);
 }
