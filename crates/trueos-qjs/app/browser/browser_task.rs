@@ -149,6 +149,9 @@ pub async fn boot_browser() {
             qjs::default_theme::HIERARCHY_INDENT
         );
         init_src.push_str(";\n");
+        init_src.push_str("G.__trueosThemeIframeMinW = ");
+        let _ = write!(&mut init_src, "{}", qjs::default_theme::IFRAME_MIN_W);
+        init_src.push_str(";\n");
         init_src.push_str(
             r#"
 if (!G.window) G.window = G;

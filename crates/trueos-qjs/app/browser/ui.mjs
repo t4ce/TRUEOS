@@ -1,16 +1,14 @@
 import * as browserContext from 'trueos:browser_context';
 
-export const USE_WEBGPU_NATIVE_PAINT = false;
-export const USE_CURSOR_PLANE_TICK = !USE_WEBGPU_NATIVE_PAINT;
 export const CURSOR_PLANE_TICK_MS = 50;
 export const USER_POINTER_ID = 1;
 
 // Keep in sync with cmd_backend direct-cursor defaults.
 export const DEFAULT_FOUR_CURSORS = [
-  { id: 1, color: 0x111111, posX: 0.31, posY: 0.58 },
-  { id: 2, color: 0x2563eb, posX: 0.36, posY: 0.54 },
-  { id: 3, color: 0x16a34a, posX: 0.42, posY: 0.62 },
-  { id: 4, color: 0xdc2626, posX: 0.47, posY: 0.57 },
+  { id: 1, color: 0x111111, posX: 0.31*1280, posY: 0.58*800 },
+  { id: 2, color: 0x2563eb, posX: 0.36*1280, posY: 0.54*800 },
+  { id: 3, color: 0x16a34a, posX: 0.42*1280, posY: 0.62*800 },
+  { id: 4, color: 0xdc2626, posX: 0.47*1280, posY: 0.57*800 },
 ];
 
 export const cursorPlaneState = {
@@ -27,24 +25,6 @@ export const cursorPlaneState = {
   kernelButtonsByPointer: new Map(),
   hoverTiltByPointer: new Map(),
 };
-
-export function seedDefaultFourCursorPositions(viewportW = 1280, viewportH = 800) {
-  const vw = Math.max(1, Number(viewportW) || 1280);
-  const vh = Math.max(1, Number(viewportH) || 800);
-  for (let i = 0; i < DEFAULT_FOUR_CURSORS.length; i++) {
-    const c = DEFAULT_FOUR_CURSORS[i];
-    const id = Number(c.id) || 0;
-    if (id <= 0) continue;
-    const x = Math.max(0, vw * Number(c.posX || 0));
-    const y = Math.max(0, vh * Number(c.posY || 0));
-    cursorPlaneState.userCursorPos.set(id, { x, y });
-    if (!cursorPlaneState.cursorColors.has(id)) {
-      cursorPlaneState.cursorColors.set(id, Number(c.color) >>> 0);
-    }
-  }
-}
-
-seedDefaultFourCursorPositions();
 
 // Derive a lightweight card-tilt transform from cursor position over a rect.
 export function computeHoverTilt(x, y, w, h, cursorX, cursorY, maxTiltDeg = 6) {
