@@ -4,6 +4,13 @@ import Yoga from 'yoga-layout';
 const G = (typeof globalThis !== 'undefined') ? globalThis : this;
 const HTML = G.__trueosUiHtml;
 const IFRAME_ROOT_ID = 'root/iframe[0]';
+// Keep in sync with htmlDefaults.ts TEXT_LEVEL_SEMANTICS_TAGS.
+const TEXT_LEVEL_SEMANTICS_TAGS = new Set([
+  'a', 'em', 'strong', 'small', 's', 'cite', 'q', 'dfn', 'abbr',
+  'ruby', 'rt', 'rp', 'data', 'time', 'code', 'var', 'samp', 'kbd',
+  'sub', 'sup', 'i', 'b', 'u', 'mark', 'bdi', 'bdo', 'span', 'br', 'wbr',
+]);
+const blockNodeById = new Map();
 
 function iframeMinWidthPx() {
   return Math.max(1, Number(G.__trueosThemeIframeMinW || 16));
@@ -16,6 +23,39 @@ function isInIframeSubtree(nodeId) {
 
 function isElement(node) {
   return !!node && typeof node === 'object' && typeof node.nodeName === 'string' && Array.isArray(node.childNodes);
+}
+
+function isTextNode(node) {
+  return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
+}
+
+function collapseInlineWhitespace(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim();
+}
+
+function collectNodeText(node, out) {
+  if (!node) return;
+  if (isTextNode(node)) {
+    if (node.value) out.push(node.value);
+    return;
+  }
+  if (!isElement(node)) return;
+  const tag = String(node.tagName || node.nodeName || '').toLowerCase();
+  if (tag === 'br' || tag === 'wbr') {
+    out.push(' ');
+    return;
+  }
+  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i++) collectNodeText(kids[i], out);
+}
+
+function nodeTextPreview(node, maxChars = 120) {
+  const parts = [];
+  collectNodeText(node, parts);
+  const joined = collapseInlineWhitespace(parts.join(''));
+  if (!joined) return '';
+  if (joined.length <= maxChars) return joined;
+  return `${joined.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
 function getBody(doc) {
@@ -42,7 +82,7 @@ function collectBlockTree(node, out) {
     return;
   }
 
-  out.push({ kind: 'block', tagName: tag, children, id: '' });
+  out.push({ kind: 'block', tagName: tag, children, id: '', srcNode: node });
 }
 
 function makeTreeFromHtml() {
@@ -61,6 +101,7 @@ function makeTreeFromHtml() {
 function assignBlockIds(node, path) {
   if (!node || node.kind !== 'block') return;
   node.id = path;
+  blockNodeById.set(path, node);
   const kids = blockChildren(node);
   for (let i = 0; i < kids.length; i++) {
     const child = kids[i];
@@ -179,10 +220,110 @@ const widgetByTag = new Map();
 const lastRectsById = new Map();
 const debugScroll = { timer: null, lastTs: 0, phase: 0, iframeId: '' };
 const widgetPulseById = new Map();
+const cursorPlane = {
+  pointers: new Map(),
+  timer: null,
+  enabled: true,
+  maxPointers: 4,
+  followKernelCount: 1,
+};
 let pulseTicker = null;
 const WIDGET_PULSE_MS = 500;
 let viewportW = 1280;
 let viewportH = 800;
+
+function cursorGlyphSizePx() {
+  return Math.max(6, Number(G.__trueosThemeCursorSize || 12));
+}
+
+function cursorColorForId(id) {
+  const palette = [0x111111, 0x2563eb, 0x16a34a, 0xdc2626, 0x0ea5e9, 0xf59e0b];
+  return palette[Math.max(0, Number(id || 0) - 1) % palette.length];
+}
+
+function seedCursorPlaneDefaults(vw, vh) {
+  if (cursorPlane.pointers.size > 0) return;
+  const seeds = [
+    { id: 1, x: 0.31, y: 0.58 },
+    { id: 2, x: 0.36, y: 0.54 },
+    { id: 3, x: 0.42, y: 0.62 },
+    { id: 4, x: 0.47, y: 0.57 },
+  ];
+  for (let i = 0; i < seeds.length; i++) {
+    const s = seeds[i];
+    cursorPlane.pointers.set(s.id, {
+      x: Math.max(0, Number(vw) * s.x),
+      y: Math.max(0, Number(vh) * s.y),
+      color: cursorColorForId(s.id),
+      visible: true,
+    });
+  }
+}
+
+function collectCursorPlanePacked(vw, vh) {
+  const packed = [];
+  const size = cursorGlyphSizePx();
+  for (const [id, p] of cursorPlane.pointers.entries()) {
+    if (!p || p.visible === false) continue;
+    const x = Math.max(0, Math.min(Number(vw) - 1, Number(p.x || 0)));
+    const y = Math.max(0, Math.min(Number(vh) - 1, Number(p.y || 0)));
+    const color = Number(p.color != null ? p.color : cursorColorForId(id)) >>> 0;
+    packed.push(x, y, size, color);
+  }
+  return packed;
+}
+
+function paintCursorPlaneOnly() {
+  if (!cursorPlane.enabled) return false;
+  if (typeof G.__trueosDrawCursorPlane !== 'function') return false;
+  const packed = collectCursorPlanePacked(viewportW, viewportH);
+  G.__trueosDrawCursorPlane(packed, viewportW, viewportH);
+  return true;
+}
+
+function refreshCursorPlaneFromKernel(maxPointers = cursorPlane.maxPointers) {
+  if (typeof G.__trueosReadCursorState !== 'function') return 0;
+  const max = Math.max(
+    1,
+    Math.min(
+      Number(maxPointers || 0) | 0,
+      Number(cursorPlane.followKernelCount || 0) | 0,
+    ),
+  );
+  let updated = 0;
+  for (let id = 1; id <= max; id++) {
+    const s = G.__trueosReadCursorState(id);
+    if (!s || Number(s.ok || 0) < 1) continue;
+    const prev = cursorPlane.pointers.get(id);
+    const nx = Math.max(0, Math.min(viewportW - 1, Number(s.x || 0)));
+    const ny = Math.max(0, Math.min(viewportH - 1, Number(s.y || 0)));
+    if (!prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1) {
+      cursorPlane.pointers.set(id, {
+        x: nx,
+        y: ny,
+        color: Number(prev && prev.color != null ? prev.color : cursorColorForId(id)) >>> 0,
+        visible: true,
+      });
+      updated += 1;
+    }
+  }
+  return updated;
+}
+
+function stopCursorPlaneTicker() {
+  if (cursorPlane.timer) {
+    clearInterval(cursorPlane.timer);
+    cursorPlane.timer = null;
+  }
+}
+
+function ensureCursorPlaneTicker() {
+  if (cursorPlane.timer) return;
+  cursorPlane.timer = setInterval(() => {
+    const changed = refreshCursorPlaneFromKernel(cursorPlane.maxPointers);
+    if (changed > 0) paintCursorPlaneOnly();
+  }, 16);
+}
 
 function hasActivePulse(nowMs) {
   for (const pulse of widgetPulseById.values()) {
@@ -300,6 +441,7 @@ function computeViewport() {
   const vh = Math.max(1, Number(W.innerHeight || 800));
   viewportW = vw;
   viewportH = vh;
+  seedCursorPlaneDefaults(vw, vh);
   return { vw, vh };
 }
 
@@ -317,8 +459,30 @@ function relayout(vw, vh) {
 
 function paintLayout(packedRects, vw, vh) {
   if (typeof G.__trueosDrawLayoutRects === 'function') {
-    G.__trueosDrawLayoutRects(packedRects, vw, vh);
+    const inlineTextRuns = collectInlineSemanticTextRuns(lastRectsById);
+    G.__trueosDrawLayoutRects(packedRects, vw, vh, inlineTextRuns);
   }
+}
+
+function collectInlineSemanticTextRuns(rectsById) {
+  const packed = [];
+  if (!rectsById || typeof rectsById.values !== 'function') return packed;
+  for (const rect of rectsById.values()) {
+    if (!rect) continue;
+    const tag = String(rect.tag || '').toLowerCase();
+    if (!TEXT_LEVEL_SEMANTICS_TAGS.has(tag)) continue;
+    if (tag === 'br' || tag === 'wbr') continue;
+    const id = String(rect.id || '');
+    if (!id) continue;
+    const node = blockNodeById.get(id);
+    if (!node || !node.srcNode) continue;
+    const text = nodeTextPreview(node.srcNode);
+    if (!text) continue;
+    const x = Math.round(Number(rect.x || 0) + 2);
+    const y = Math.round(Number(rect.y || 0) + 2);
+    packed.push(x, y, text);
+  }
+  return packed;
 }
 
 function paintWidgets(rectEntries, vw, vh) {
@@ -486,6 +650,8 @@ function relayoutAndPaint() {
   if (pulseRects.length > 0) combinedRects = combinedRects.concat(pulseRects);
   paintLayout(combinedRects, vw, vh);
   paintWidgets(rects.entries, vw, vh);
+  paintCursorPlaneOnly();
+  return true;
 }
 
 function paintWidgetNow(blockId) {
@@ -558,6 +724,44 @@ G.__trueosBrowser = {
   widgetDidUpdate(blockId) {
     return markWidgetUpdated(blockId);
   },
+  setCursorPlaneEnabled(enabled) {
+    cursorPlane.enabled = enabled !== false;
+    if (cursorPlane.enabled) {
+      ensureCursorPlaneTicker();
+      paintCursorPlaneOnly();
+    } else {
+      stopCursorPlaneTicker();
+    }
+    return cursorPlane.enabled;
+  },
+  setCursorKernelFollowCount(count) {
+    cursorPlane.followKernelCount = Math.max(0, Math.min(cursorPlane.maxPointers, Number(count || 0) | 0));
+    return cursorPlane.followKernelCount;
+  },
+  setCursorPointer(pointerId, x, y, color) {
+    const id = Math.max(1, Number(pointerId || 0) | 0);
+    cursorPlane.pointers.set(id, {
+      x: Math.max(0, Math.min(viewportW - 1, Number(x || 0))),
+      y: Math.max(0, Math.min(viewportH - 1, Number(y || 0))),
+      color: Number(color != null ? color : cursorColorForId(id)) >>> 0,
+      visible: true,
+    });
+    return paintCursorPlaneOnly();
+  },
+  clearCursorPointer(pointerId) {
+    const id = Math.max(1, Number(pointerId || 0) | 0);
+    const ok = cursorPlane.pointers.delete(id);
+    paintCursorPlaneOnly();
+    return ok;
+  },
+  refreshCursorPlane(maxPointers) {
+    const changed = refreshCursorPlaneFromKernel(maxPointers);
+    if (changed > 0) paintCursorPlaneOnly();
+    return changed;
+  },
+  repaintCursorPlane() {
+    return paintCursorPlaneOnly();
+  },
   widgetTagDidUpdate(tagName) {
     const tag = String(tagName || '').toLowerCase();
     if (!tag) return 0;
@@ -587,6 +791,7 @@ if (typeof (globalThis.window || globalThis).addEventListener === 'function') {
 }
 
 relayoutAndPaint();
+ensureCursorPlaneTicker();
 
 if (DEBUG_AUTOSCROLL_BOOT) {
   // Visual debug lane: keep default API logic-only, but show movement on boot.

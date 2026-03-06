@@ -128,7 +128,6 @@ pub async fn boot_browser() {
 
         // Fresh path: install only the Rust layout drawer API for JS usage.
         qjs::layout::install_layout_api(ctx);
-        qjs::text::install_text_api(ctx);
 
         let init_filename = b"<browser-init>\0";
         let html_lit = js_single_quoted_literal(qjs::ui_html::UI_HTML);
@@ -149,6 +148,7 @@ pub async fn boot_browser() {
             qjs::default_theme::HIERARCHY_INDENT
         );
         init_src.push_str(";\n");
+        init_src.push_str("G.__trueosThemeCursorSize = 12;\n");
         init_src.push_str("G.__trueosThemeIframeMinW = ");
         let _ = write!(&mut init_src, "{}", qjs::default_theme::IFRAME_MIN_W);
         init_src.push_str(";\n");
