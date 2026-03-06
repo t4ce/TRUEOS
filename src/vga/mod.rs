@@ -1031,7 +1031,7 @@ fn build_font_cache_large() -> FontCacheLarge {
         let mut cell = [0u8; BANNER_CELL_W * BANNER_CELL_H];
         let mut width = (metrics.advance_width + 0.5) as i32;
         width = width.clamp(1, BANNER_CELL_W as i32);
-        let width = width as u8;
+        let mut max_ink_x: i32 = -1;
 
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
@@ -1040,11 +1040,7 @@ fn build_font_cache_large() -> FontCacheLarge {
             // [cell_x, cell_x + glyph_w), so glyph coverage must start at x=0.
             let x0 = (-metrics.xmin).max(0);
             // Metric anchor without extra upward trim to avoid top clipping.
-            let mut y0 = -metrics.ymin;
-            // Cap-height polish: uppercase can look 1px too low at this scale.
-            if ch.is_ascii_uppercase() && y0 > 0 {
-                y0 -= 1;
-            }
+            let y0 = -metrics.ymin;
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {
@@ -1068,10 +1064,16 @@ fn build_font_cache_large() -> FontCacheLarge {
                     if alpha > existing {
                         cell[dst_idx] = alpha;
                     }
+                    max_ink_x = max_ink_x.max(cx as i32);
                 }
             }
         }
 
+        if max_ink_x >= 0 {
+            width = width.max(max_ink_x + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        let width = width as u8;
         let slot = glyphs.len() as u16;
         glyphs.push(GlyphCellLarge { alpha: cell, width });
         if (ch as u32) <= 0xFF {

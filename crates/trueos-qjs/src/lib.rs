@@ -52,6 +52,10 @@ pub mod ui_html;
 pub mod default_theme;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/svg.rs"]
+pub mod svg;
+
+#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
