@@ -410,10 +410,8 @@ async fn webgpu_mesh_task() {
         a: 255,
     }; 6 * 96];
 
-    const MSG: &[u8] = b"TRUEOS WEBGPU TEXT";
+    const MSG: &[u8] = b"TRUE OS \xA7";
     let mut n = 0usize;
-    let mut pen_x = -0.92f32;
-    let pen_y = 0.10f32;
     let (fb_w, fb_h) = crate::limine::framebuffer_response()
         .and_then(|resp| resp.framebuffers().next())
         .map(|fb| (fb.width() as f32, fb.height() as f32))
@@ -425,15 +423,51 @@ async fn webgpu_mesh_task() {
     let atlas_h = atlas.height as f32;
     let grid_w = atlas.grid_w.max(1);
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    for &ch in MSG {
-        if ch == b' ' {
-            pen_x += atlas.cell_w as f32 * 0.45 * px_to_ndc_x;
-            continue;
-        }
+    let space_adv_px = atlas.cell_w as f32 * 0.45;
+
+    let glyph_slot = |ch: u8| {
         let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
         if slot == u16::MAX {
             slot = fallback;
         }
+        slot
+    };
+
+    // Measure text bounds first so the single line can be centered in both axes.
+    let mut measure_pen_px = 0.0f32;
+    let mut first_px: Option<f32> = None;
+    let mut last_px = 0.0f32;
+    for &ch in MSG {
+        if ch == b' ' {
+            measure_pen_px += space_adv_px;
+            continue;
+        }
+        let slot = glyph_slot(ch);
+        let glyph_w_px = atlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8) as f32;
+        if first_px.is_none() {
+            first_px = Some(measure_pen_px);
+        }
+        last_px = measure_pen_px + glyph_w_px;
+        measure_pen_px += glyph_w_px * 1.10;
+    }
+    let text_w_ndc = if first_px.is_some() {
+        (last_px - first_px.unwrap_or(0.0)) * px_to_ndc_x
+    } else {
+        0.0
+    };
+    let mut pen_x = -0.5f32 * text_w_ndc;
+    let pen_y = -0.5f32 * glyph_h_ndc;
+
+    for &ch in MSG {
+        if ch == b' ' {
+            pen_x += space_adv_px * px_to_ndc_x;
+            continue;
+        }
+        let slot = glyph_slot(ch);
         let glyph_w_px = atlas
             .widths
             .get(slot as usize)
