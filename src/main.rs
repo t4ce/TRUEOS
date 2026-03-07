@@ -136,6 +136,8 @@ pub extern "C" fn kmain() -> ! {
     percpu::init_bsp();
     pci::dma::init_from_limine();
     pci::enumerate_impl();
+    #[cfg(feature = "gfx_intel")]
+    gfx::intel::init_once();
     vga::init(limine::framebuffer_response());
     vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);

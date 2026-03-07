@@ -1,4 +1,6 @@
 pub mod backends;
+#[cfg(feature = "gfx_intel")]
+pub mod intel;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 pub mod webgpu_font;
