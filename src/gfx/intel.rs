@@ -229,6 +229,105 @@ fn centered_triangle() -> [RgbVertex; 3] {
     ]
 }
 
+fn ndc_to_pixel(v: f32, extent: usize) -> i32 {
+    if extent <= 1 {
+        return 0;
+    }
+    let max = (extent - 1) as f32;
+    let p = ((v * 0.5) + 0.5) * max;
+    p.round() as i32
+}
+
+fn edge2(ax2: i32, ay2: i32, bx2: i32, by2: i32, px2: i32, py2: i32) -> i64 {
+    let apx = (px2 - ax2) as i64;
+    let apy = (py2 - ay2) as i64;
+    let abx = (bx2 - ax2) as i64;
+    let aby = (by2 - ay2) as i64;
+    apx * aby - apy * abx
+}
+
+fn draw_centered_triangle_limine_fallback() -> bool {
+    use ::limine::framebuffer::MemoryModel;
+
+    let Some(resp) = crate::limine::framebuffer_response() else {
+        return false;
+    };
+    let Some(fb) = resp.framebuffers().next() else {
+        return false;
+    };
+    if fb.memory_model() != MemoryModel::RGB || fb.bpp() != 32 {
+        return false;
+    }
+
+    let width = fb.width() as usize;
+    let height = fb.height() as usize;
+    if width == 0 || height == 0 {
+        return false;
+    }
+
+    let pitch = fb.pitch() as usize;
+    let addr = fb.addr();
+
+    let clear = 0x00101018u32;
+    for y in 0..height {
+        let row_ptr = unsafe { addr.add(y.saturating_mul(pitch)) as *mut u32 };
+        let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, width) };
+        row.fill(clear);
+    }
+
+    let tri = centered_triangle();
+    let p0x = ndc_to_pixel(tri[0].x, width);
+    let p0y = ndc_to_pixel(tri[0].y, height);
+    let p1x = ndc_to_pixel(tri[1].x, width);
+    let p1y = ndc_to_pixel(tri[1].y, height);
+    let p2x = ndc_to_pixel(tri[2].x, width);
+    let p2y = ndc_to_pixel(tri[2].y, height);
+
+    let min_x = p0x
+        .min(p1x.min(p2x))
+        .clamp(0, (width as i32).saturating_sub(1));
+    let max_x = p0x
+        .max(p1x.max(p2x))
+        .clamp(0, (width as i32).saturating_sub(1));
+    let min_y = p0y
+        .min(p1y.min(p2y))
+        .clamp(0, (height as i32).saturating_sub(1));
+    let max_y = p0y
+        .max(p1y.max(p2y))
+        .clamp(0, (height as i32).saturating_sub(1));
+
+    let p0x2 = p0x.saturating_mul(2).saturating_add(1);
+    let p0y2 = p0y.saturating_mul(2).saturating_add(1);
+    let p1x2 = p1x.saturating_mul(2).saturating_add(1);
+    let p1y2 = p1y.saturating_mul(2).saturating_add(1);
+    let p2x2 = p2x.saturating_mul(2).saturating_add(1);
+    let p2y2 = p2y.saturating_mul(2).saturating_add(1);
+
+    let area2 = edge2(p0x2, p0y2, p1x2, p1y2, p2x2, p2y2);
+    if area2 == 0 {
+        return false;
+    }
+    let sign = if area2 > 0 { 1i64 } else { -1i64 };
+
+    let fill = 0x004ABCFFu32;
+    for y in min_y..=max_y {
+        let row_ptr = unsafe { addr.add((y as usize).saturating_mul(pitch)) as *mut u32 };
+        let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, width) };
+        let py2 = y.saturating_mul(2).saturating_add(1);
+        for x in min_x..=max_x {
+            let px2 = x.saturating_mul(2).saturating_add(1);
+            let w0 = sign * edge2(p1x2, p1y2, p2x2, p2y2, px2, py2);
+            let w1 = sign * edge2(p2x2, p2y2, p0x2, p0y2, px2, py2);
+            let w2 = sign * edge2(p0x2, p0y2, p1x2, p1y2, px2, py2);
+            if w0 >= 0 && w1 >= 0 && w2 >= 0 {
+                row[x as usize] = fill;
+            }
+        }
+    }
+
+    true
+}
+
 #[embassy_executor::task]
 pub async fn centered_triangle_demo_task() {
     if !has_claimed_device() {
@@ -257,8 +356,24 @@ pub async fn centered_triangle_demo_task() {
             crate::log!("gfx-intel-demo: draw retry rc={} tries={}\n", rc, tries);
         }
 
+        if rc == -3 && tries >= 8 {
+            if draw_centered_triangle_limine_fallback() {
+                crate::log!("gfx-intel-demo: fallback triangle rasterized via Limine fb\n");
+            } else {
+                crate::log!("gfx-intel-demo: fallback rasterizer unavailable\n");
+            }
+            return;
+        }
+
         if tries >= 200 {
-            crate::log!("gfx-intel-demo: giving up after {} retries\n", tries);
+            if draw_centered_triangle_limine_fallback() {
+                crate::log!(
+                    "gfx-intel-demo: fallback triangle rasterized after {} retries\n",
+                    tries
+                );
+            } else {
+                crate::log!("gfx-intel-demo: giving up after {} retries\n", tries);
+            }
             return;
         }
 
