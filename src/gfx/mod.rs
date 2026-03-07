@@ -179,6 +179,17 @@ pub fn init(framebuffers: Option<&'static ::limine::response::FramebufferRespons
         // because a seemingly harmless init is a contract here:
         // that takes our eyeballs
         let backend = backends::Backend::init_auto(framebuffers);
+        let backend_name = match &backend {
+            #[cfg(feature = "gfx_virgl")]
+            backends::Backend::Virgl(_) => "virgl",
+            #[cfg(feature = "gfx_intel")]
+            backends::Backend::Intel(_) => "intel",
+            backends::Backend::None(_) => "none",
+        };
+        crate::log!("gfx: backend={}\n", backend_name);
+        if !matches!(&backend, backends::Backend::None(_)) {
+            crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
+        }
         #[cfg(feature = "gfx_virgl")]
         if matches!(&backend, backends::Backend::Virgl(_)) {
             crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
@@ -283,6 +294,7 @@ pub fn switch_to_virgl() -> bool {
     with_system(|sys| {
         sys.backend = b;
         bump_backend_epoch();
+        crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
         crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
         crate::log!("gfx: switch_to_virgl: ok epoch={}\n", backend_epoch());
         true
@@ -292,8 +304,10 @@ pub fn switch_to_virgl() -> bool {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BackendKind {
-    #[cfg(feature = "gfx_intel")]
+    #[cfg(feature = "gfx_virgl")]
     Virgl,
+    #[cfg(feature = "gfx_intel")]
+    Intel,
     None,
 }
 
@@ -301,6 +315,8 @@ pub fn backend_kind() -> Option<BackendKind> {
     with_system(|sys| match &sys.backend {
         #[cfg(feature = "gfx_virgl")]
         backends::Backend::Virgl(_) => BackendKind::Virgl,
+        #[cfg(feature = "gfx_intel")]
+        backends::Backend::Intel(_) => BackendKind::Intel,
         backends::Backend::None(_) => BackendKind::None,
     })
 }
@@ -314,8 +330,12 @@ pub fn toggle_backend() -> BackendKind {
     };
 
     match kind {
+        #[cfg(feature = "gfx_intel")]
+        BackendKind::Intel => BackendKind::Intel,
+        #[cfg(feature = "gfx_virgl")]
         BackendKind::Virgl => BackendKind::Virgl,
         BackendKind::None => {
+            #[cfg(feature = "gfx_virgl")]
             if switch_to_virgl() {
                 return BackendKind::Virgl;
             }

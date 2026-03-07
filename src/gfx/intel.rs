@@ -200,6 +200,11 @@ pub fn has_claimed_device() -> bool {
     !DEVICES.lock().is_empty()
 }
 
+#[inline]
+pub fn first_claimed_device() -> Option<IntelGfxInfo> {
+    *FIRST_DEVICE.lock()
+}
+
 fn centered_triangle() -> [RgbVertex; 3] {
     [
         RgbVertex {
