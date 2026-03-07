@@ -369,6 +369,45 @@ function getAttr(node, name) {
   return '';
 }
 
+function hasAttr(node, name) {
+  if (!node || !Array.isArray(node.attrs)) return false;
+  const n = String(name || '').toLowerCase();
+  for (let i = 0; i < node.attrs.length; i++) {
+    const a = node.attrs[i];
+    if (!a) continue;
+    if (String(a.name || '').toLowerCase() === n) return true;
+  }
+  return false;
+}
+
+function setAttr(node, name, value = '') {
+  if (!node) return false;
+  if (!Array.isArray(node.attrs)) node.attrs = [];
+  const n = String(name || '').toLowerCase();
+  for (let i = 0; i < node.attrs.length; i++) {
+    const a = node.attrs[i];
+    if (!a) continue;
+    if (String(a.name || '').toLowerCase() !== n) continue;
+    a.value = String(value || '');
+    return true;
+  }
+  node.attrs.push({ name: n, value: String(value || '') });
+  return true;
+}
+
+function removeAttr(node, name) {
+  if (!node || !Array.isArray(node.attrs)) return false;
+  const n = String(name || '').toLowerCase();
+  for (let i = 0; i < node.attrs.length; i++) {
+    const a = node.attrs[i];
+    if (!a) continue;
+    if (String(a.name || '').toLowerCase() !== n) continue;
+    node.attrs.splice(i, 1);
+    return true;
+  }
+  return false;
+}
+
 function attrPx(node, name, fallback) {
   const raw = Number(getAttr(node, name));
   if (Number.isFinite(raw) && raw > 0) return raw;
@@ -2407,6 +2446,246 @@ function paintCursorPlaneOnly() {
   return true;
 }
 
+const pointerInput = {
+  byId: new Map(),
+};
+
+function isPointInRect(x, y, rect) {
+  if (!rect) return false;
+  const rx = Number(rect.x || 0);
+  const ry = Number(rect.y || 0);
+  const rw = Math.max(1, Number(rect.w || 1));
+  const rh = Math.max(1, Number(rect.h || 1));
+  return x >= rx && y >= ry && x <= rx + rw && y <= ry + rh;
+}
+
+function findTopInteractiveRectAtGlobal(globalX, globalY) {
+  const gx = Number(globalX || 0);
+  const gy = Number(globalY || 0);
+  let best = null;
+  for (const rect of lastRectsById.values()) {
+    if (!rect) continue;
+    if (!isPointInRect(gx, gy, rect)) continue;
+    if (!best || Number(rect.depth || 0) > Number(best.depth || 0)) {
+      best = rect;
+    }
+  }
+  return best;
+}
+
+function findScrollbarDragTarget(globalX, globalY) {
+  const gx = Number(globalX || 0);
+  const gy = Number(globalY || 0);
+  const rectEntries = collectCurrentRects();
+  for (let i = 0; i < rectEntries.length; i++) {
+    const rect = rectEntries[i];
+    if (!rect) continue;
+    if (String(rect.tag || '').toLowerCase() !== 'html_app_window') continue;
+    const appWindowId = String(rect.id || '');
+    if (!appWindowId) continue;
+    const metrics = appWindowMetrics(appWindowId, rectEntries);
+    if (!metrics) continue;
+
+    const { appWindowRect, viewportH, contentH, maxScroll, scrollY } = metrics;
+    const barW = Math.max(4, Number(G.__trueosThemeScrollbarW || 8));
+    const x = Math.round(Number(appWindowRect.x || 0));
+    const y = Math.round(Number(appWindowRect.y || 0));
+    const w = Math.max(4, Math.round(Math.min(barW, Number(appWindowRect.w || 0))));
+    const h = Math.max(4, Math.round(Number(appWindowRect.h || 0)));
+    const innerY = y + 2;
+    const innerH = Math.max(1, h - 4);
+    const ratio = maxScroll <= 0 ? 1 : (viewportH / Math.max(viewportH, contentH));
+    const thumbRatio = Math.max(0.2, Math.min(1, ratio));
+    const thumbH = maxScroll <= 0 ? innerH : Math.max(1, Math.round(innerH * thumbRatio));
+    const thumbTravel = Math.max(0, innerH - thumbH);
+    const thumbOff = maxScroll <= 0 ? 0 : Math.round((scrollY / Math.max(1e-6, maxScroll)) * thumbTravel);
+    const thumbY = innerY + thumbOff;
+
+    if (gx < x || gx > x + w || gy < thumbY || gy > thumbY + thumbH) continue;
+    return {
+      appWindowId,
+      innerY,
+      thumbH,
+      thumbTravel,
+      maxScroll,
+      startScrollY: scrollY,
+      startY: gy,
+    };
+  }
+  return null;
+}
+
+function applySelectIndex(selectNode, nextIndex) {
+  if (!selectNode || !Array.isArray(selectNode.childNodes)) return false;
+  let idx = 0;
+  let changed = false;
+  const kids = selectNode.childNodes;
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i];
+    if (!isElement(k)) continue;
+    if (String(k.tagName || k.nodeName || '').toLowerCase() !== 'option') continue;
+    if (idx === nextIndex) {
+      if (!hasAttr(k, 'selected')) {
+        setAttr(k, 'selected', '');
+        changed = true;
+      }
+    } else if (hasAttr(k, 'selected')) {
+      removeAttr(k, 'selected');
+      changed = true;
+    }
+    idx += 1;
+  }
+  return changed;
+}
+
+function handlePointerPrimaryPress(globalX, globalY) {
+  const gx = Number(globalX || 0);
+  const gy = Number(globalY || 0);
+
+  const statusId = findStatusbarItemAtGlobal(gx, gy);
+  if (statusId) {
+    minimizedHtmlAppWindowById.set(statusId, false);
+    relayoutAndPaint();
+    return;
+  }
+
+  const rect = findTopInteractiveRectAtGlobal(gx, gy);
+  if (!rect) return;
+  const id = String(rect.id || '');
+  const node = blockNodeById.get(id);
+  const tag = String(rect.tag || '').toLowerCase();
+
+  if (tag === 'summary' || tag === 'details') {
+    const did = resolveDetailsId(id);
+    if (did) {
+      const cur = detailsOpenById.has(did)
+        ? (detailsOpenById.get(did) !== false)
+        : defaultDetailsOpen(blockNodeById.get(did));
+      detailsOpenById.set(did, !cur);
+      relayoutAndPaint();
+      return;
+    }
+  }
+
+  if (!node || !node.srcNode) return;
+  const src = node.srcNode;
+
+  if (tag === 'checkbox') {
+    const next = !hasAttr(src, 'checked');
+    if (next) setAttr(src, 'checked', ''); else removeAttr(src, 'checked');
+    relayoutAndPaint();
+    return;
+  }
+
+  if (tag === 'radio') {
+    const groupName = String(getAttr(src, 'name') || '');
+    for (const entry of blockNodeById.values()) {
+      if (!entry || !entry.srcNode) continue;
+      if (String(entry.tagName || '').toLowerCase() !== 'radio') continue;
+      const other = entry.srcNode;
+      if (groupName && String(getAttr(other, 'name') || '') !== groupName) continue;
+      if (!groupName && entry !== node) continue;
+      if (other === src) setAttr(other, 'checked', ''); else removeAttr(other, 'checked');
+    }
+    relayoutAndPaint();
+    return;
+  }
+
+  if (tag === 'select') {
+    const options = selectOptionTexts(src);
+    if (options.length > 0) {
+      const rowH = 16;
+      const headerH = 18;
+      const localY = gy - Number(rect.y || 0);
+      let nextIdx = selectSelectedIndex(src);
+      if (localY >= headerH) {
+        const candidate = Math.floor((localY - headerH) / rowH);
+        nextIdx = Math.max(0, Math.min(options.length - 1, candidate));
+      } else {
+        nextIdx = (Math.max(0, nextIdx) + 1) % options.length;
+      }
+      if (applySelectIndex(src, nextIdx)) relayoutAndPaint();
+    }
+    return;
+  }
+}
+
+function applyPointerDrag(state, globalY) {
+  if (!state || !state.drag) return;
+  if (state.drag.kind !== 'scrollbar') return;
+
+  const gy = Number(globalY || 0);
+  const d = state.drag;
+  let nextScroll = Number(d.startScrollY || 0);
+  if (Number(d.thumbTravel || 0) > 0 && Number(d.maxScroll || 0) > 0) {
+    const thumbTop = gy - Number(d.dragYOffset || 0);
+    const t = (thumbTop - Number(d.innerY || 0)) / Math.max(1e-6, Number(d.thumbTravel || 0));
+    nextScroll = Math.max(0, Math.min(Number(d.maxScroll || 0), t * Number(d.maxScroll || 0)));
+  }
+  setScrollInternal(String(d.appWindowId || ''), nextScroll, true);
+}
+
+function routePointerPhase(globalX, globalY, phase) {
+  if (!G.__trueosBrowser || typeof G.__trueosBrowser.routePointerToIframe !== 'function') return;
+  try {
+    G.__trueosBrowser.routePointerToIframe(globalX, globalY, phase);
+  } catch (_) {}
+}
+
+function routeWheel(globalX, globalY, wheel) {
+  if (!wheel) return;
+  if (!G.__trueosBrowser || typeof G.__trueosBrowser.routeWheelToIframe !== 'function') return;
+  const step = Number(wheel || 0) * -32;
+  try {
+    G.__trueosBrowser.routeWheelToIframe(globalX, globalY, step);
+  } catch (_) {}
+}
+
+function processCursorEvent(id, x, y, buttons, wheel, flags) {
+  const pid = Math.max(1, Number(id || 0) | 0);
+  const nx = Math.max(0, Math.min(viewportW - 1, Number(x || 0)));
+  const ny = Math.max(0, Math.min(viewportH - 1, Number(y || 0)));
+  const btn = Number(buttons || 0) >>> 0;
+
+  const prev = pointerInput.byId.get(pid) || { x: nx, y: ny, buttons: 0, drag: null };
+  const wasPrimaryDown = (Number(prev.buttons || 0) & 1) !== 0;
+  const isPrimaryDown = (btn & 1) !== 0;
+
+  if (!wasPrimaryDown && isPrimaryDown) {
+    const dragTarget = findScrollbarDragTarget(nx, ny);
+    if (dragTarget) {
+      dragTarget.kind = 'scrollbar';
+      dragTarget.dragYOffset = ny - (Number(dragTarget.innerY || 0)
+        + Math.round((Number(dragTarget.thumbTravel || 0) * Number(dragTarget.startScrollY || 0))
+        / Math.max(1e-6, Number(dragTarget.maxScroll || 1))));
+      prev.drag = dragTarget;
+    } else {
+      prev.drag = null;
+    }
+    handlePointerPrimaryPress(nx, ny);
+    routePointerPhase(nx, ny, 'down');
+  } else if (wasPrimaryDown && isPrimaryDown) {
+    applyPointerDrag(prev, ny);
+    routePointerPhase(nx, ny, 'move');
+  } else if (wasPrimaryDown && !isPrimaryDown) {
+    prev.drag = null;
+    routePointerPhase(nx, ny, 'up');
+  } else if ((Number(flags || 0) & (1 << 0)) !== 0) {
+    routePointerPhase(nx, ny, 'move');
+  }
+
+  if (Number(wheel || 0) !== 0 || (Number(flags || 0) & (1 << 1)) !== 0) {
+    routeWheel(nx, ny, wheel);
+  }
+
+  pointerInput.byId.set(pid, {
+    x: nx,
+    y: ny,
+    buttons: btn,
+    drag: prev.drag || null,
+  });
+}
+
 function refreshCursorPlaneFromKernel(maxPointers = cursorPlane.maxPointers) {
   if (typeof G.__trueosReadCursorEventsSince === 'function') {
     const packed = G.__trueosReadCursorEventsSince(Number(cursorPlane.readSeq || 0));
@@ -2422,27 +2701,30 @@ function refreshCursorPlaneFromKernel(maxPointers = cursorPlane.maxPointers) {
       let updated = 0;
       let p = 3;
       for (let i = 0; i < wrote; i++) {
-        if (p + 4 >= packed.length) break;
+        if (p + 5 >= packed.length) break;
         const id = Math.max(1, Number(packed[p + 0] || 0) | 0);
         const nxNorm = Math.max(0, Math.min(1, Number(packed[p + 1] || 0)));
         const nyNorm = Math.max(0, Math.min(1, Number(packed[p + 2] || 0)));
         const buttons = Number(packed[p + 3] || 0) >>> 0;
-        p += 5;
+        const wheel = Number(packed[p + 4] || 0) | 0;
+        const flags = Number(packed[p + 5] || 0) >>> 0;
+        p += 6;
 
         if (id > Math.max(1, Number(maxPointers || 0) | 0)) continue;
         const nx = Math.max(0, Math.min(viewportW - 1, nxNorm * Math.max(1, viewportW - 1)));
         const ny = Math.max(0, Math.min(viewportH - 1, nyNorm * Math.max(1, viewportH - 1)));
         const prev = cursorPlane.pointers.get(id);
-        if (!prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1) {
-          cursorPlane.pointers.set(id, {
-            x: nx,
-            y: ny,
-            color: Number(prev && prev.color != null ? prev.color : cursorColorForId(id)) >>> 0,
-            visible: true,
-            buttons,
-          });
-          updated += 1;
-        }
+        const moved = !prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1;
+        const buttonChanged = !prev || Number(prev.buttons || 0) !== buttons;
+        if (moved || buttonChanged || wheel !== 0 || flags !== 0) updated += 1;
+        cursorPlane.pointers.set(id, {
+          x: nx,
+          y: ny,
+          color: Number(prev && prev.color != null ? prev.color : cursorColorForId(id)) >>> 0,
+          visible: true,
+          buttons,
+        });
+        processCursorEvent(id, nx, ny, buttons, wheel, flags);
       }
       return updated;
     }
@@ -2463,13 +2745,18 @@ function refreshCursorPlaneFromKernel(maxPointers = cursorPlane.maxPointers) {
     const prev = cursorPlane.pointers.get(id);
     const nx = Math.max(0, Math.min(viewportW - 1, Number(s.x || 0)));
     const ny = Math.max(0, Math.min(viewportH - 1, Number(s.y || 0)));
-    if (!prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1) {
+    const buttons = Number(s.buttons || 0) >>> 0;
+    const moved = !prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1;
+    const buttonChanged = !prev || Number(prev.buttons || 0) !== buttons;
+    if (moved || buttonChanged) {
       cursorPlane.pointers.set(id, {
         x: nx,
         y: ny,
         color: Number(prev && prev.color != null ? prev.color : cursorColorForId(id)) >>> 0,
         visible: true,
+        buttons,
       });
+      processCursorEvent(id, nx, ny, buttons, 0, moved ? (1 << 0) : (1 << 2));
       updated += 1;
     }
   }
