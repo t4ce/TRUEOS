@@ -9,16 +9,17 @@ unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
-    fn trueos_cabi_gfx_cursor_begin_frame() -> i32;
-    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
-        vtx_ptr: *const u8,
-        vtx_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_cursor_end_frame() -> i32;
     fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
     fn trueos_cabi_gfx_clear_scissor() -> i32;
     fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
     fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
+    fn trueos_cabi_input_read_cursor_events_since(
+        read_seq: u64,
+        out: *mut qjs::trueos_shims::TrueosHidCursorEvent,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32;
 }
 
 #[inline]
@@ -31,6 +32,7 @@ fn window_icon_kind_from_f64(v: f64) -> qjs::svg::WindowIconKind {
         4 => qjs::svg::WindowIconKind::ArrowRight,
         5 => qjs::svg::WindowIconKind::ArrowUp,
         6 => qjs::svg::WindowIconKind::ArrowDown,
+        7 => qjs::svg::WindowIconKind::RadioSelected,
         _ => qjs::svg::WindowIconKind::Close,
     }
 }
@@ -385,6 +387,38 @@ unsafe extern "C" fn qjs_draw_layout_rects(
                         &mut bytes, xf, yf, wf, hf, 2.0, 255, 225, 150, 230, viewport_w, viewport_h,
                     );
                 }
+                7 => {
+                    // Horizontal rule: a centered 1px line spanning the available width.
+                    let h_i = (hf as i32).max(1);
+                    let line_y = (yf as i32 + (h_i - 1) / 2) as f32;
+                    push_filled_rect(
+                        &mut bytes,
+                        xf,
+                        line_y,
+                        wf,
+                        1.0,
+                        0,
+                        0,
+                        0,
+                        255,
+                        viewport_w,
+                        viewport_h,
+                    );
+                }
+                8 => {
+                    // Dialog fill: translucent white-to-gray diagonal linear gradient.
+                    push_diag_gradient_rect_rgba(
+                        &mut bytes,
+                        xf,
+                        yf,
+                        wf,
+                        hf,
+                        (255, 255, 255, 128),
+                        (196, 196, 196, 128),
+                        viewport_w,
+                        viewport_h,
+                    );
+                }
                 _ => {
                     // Default node and scrollbar frame: black 1px border.
                     push_border_rect(&mut bytes, xf, yf, wf, hf, 1.0, viewport_w, viewport_h);
@@ -628,109 +662,13 @@ unsafe extern "C" fn qjs_read_svg_pixels(
 }
 
 unsafe extern "C" fn qjs_draw_cursor_plane(
-    ctx: *mut qjs::JSContext,
+    _ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
-    argc: i32,
-    argv: *const qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    if argc < 3 || argv.is_null() {
-        return qjs::JSValue::undefined();
-    }
-
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let entries = args[0];
-
-    let mut vw = 0.0f64;
-    let mut vh = 0.0f64;
-    if qjs::JS_ToFloat64(ctx, &mut vw as *mut f64, args[1]) != 0
-        || qjs::JS_ToFloat64(ctx, &mut vh as *mut f64, args[2]) != 0
-    {
-        return qjs::JSValue::undefined();
-    }
-
-    let viewport_w = (vw as f32).max(1.0);
-    let viewport_h = (vh as f32).max(1.0);
-
-    static LENGTH_KEY: &[u8] = b"length\0";
-    let len_val = qjs::JS_GetPropertyStr(ctx, entries, LENGTH_KEY.as_ptr() as *const c_char);
-    let mut len_f = 0.0f64;
-    let _ = qjs::JS_ToFloat64(ctx, &mut len_f as *mut f64, len_val);
-    qjs::js_free_value(ctx, len_val);
-    let len = if len_f.is_finite() && len_f > 0.0 {
-        len_f as u32
-    } else {
-        0
-    };
-
-    let mut bytes = Vec::with_capacity(12 * 32);
-    let _ = trueos_cabi_gfx_cursor_begin_frame();
-
-    let mut i = 0u32;
-    while i + 3 < len {
-        let vx = qjs::JS_GetPropertyUint32(ctx, entries, i + 0);
-        let vy = qjs::JS_GetPropertyUint32(ctx, entries, i + 1);
-        let vs = qjs::JS_GetPropertyUint32(ctx, entries, i + 2);
-        let vc = qjs::JS_GetPropertyUint32(ctx, entries, i + 3);
-
-        let mut x = 0.0f64;
-        let mut y = 0.0f64;
-        let mut c = 0.0f64;
-        let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
-        let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
-        let _ = qjs::JS_ToFloat64(ctx, &mut c as *mut f64, vc);
-
-        qjs::js_free_value(ctx, vx);
-        qjs::js_free_value(ctx, vy);
-        qjs::js_free_value(ctx, vs);
-        qjs::js_free_value(ctx, vc);
-
-        let xf = x as f32;
-        let yf = y as f32;
-        let color = if c.is_finite() { c as u32 } else { 0x111111 };
-        let r = ((color >> 16) & 0xFF) as u8;
-        let g = ((color >> 8) & 0xFF) as u8;
-        let b = (color & 0xFF) as u8;
-
-        // Draw a small centered cross: 3px tick per arm, 1px thickness.
-        let cx = xf;
-        let cy = yf;
-        let arm = 3.0f32;
-        let line = 1.0f32;
-        push_filled_rect(
-            &mut bytes,
-            cx - arm,
-            cy,
-            (arm * 2.0) + 1.0,
-            line,
-            r,
-            g,
-            b,
-            255,
-            viewport_w,
-            viewport_h,
-        );
-        push_filled_rect(
-            &mut bytes,
-            cx,
-            cy - arm,
-            line,
-            (arm * 2.0) + 1.0,
-            r,
-            g,
-            b,
-            255,
-            viewport_w,
-            viewport_h,
-        );
-
-        i += 4;
-    }
-
-    if !bytes.is_empty() {
-        let _ = trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
-    }
-    let _ = trueos_cabi_gfx_cursor_end_frame();
-
+    // Cursor-plane drawing is intentionally disabled. Position/state is provided
+    // via `qjs_read_cursor_state` only.
     qjs::JSValue::undefined()
 }
 
@@ -798,6 +736,70 @@ unsafe extern "C" fn qjs_read_cursor_state(
     obj
 }
 
+unsafe extern "C" fn qjs_read_cursor_events_since(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 1 || argv.is_null() {
+        return qjs::JSValue::undefined();
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut read_seq_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut read_seq_f as *mut f64, args[0]) != 0 {
+        return qjs::JSValue::undefined();
+    }
+    let read_seq = if read_seq_f.is_finite() && read_seq_f >= 0.0 {
+        read_seq_f as u64
+    } else {
+        0
+    };
+
+    const CAP: usize = 32;
+    let mut events = [qjs::trueos_shims::TrueosHidCursorEvent::default(); CAP];
+    let mut next_seq = read_seq;
+    let mut dropped = 0u32;
+    let wrote = trueos_cabi_input_read_cursor_events_since(
+        read_seq,
+        events.as_mut_ptr(),
+        CAP as u32,
+        &mut next_seq as *mut u64,
+        &mut dropped as *mut u32,
+    ) as usize;
+
+    let out = qjs::JS_NewArray(ctx);
+    let mut i = 0u32;
+    let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, next_seq as f64));
+    i += 1;
+    let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, dropped as f64));
+    i += 1;
+    let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, wrote as f64));
+    i += 1;
+
+    let count = core::cmp::min(wrote, CAP);
+    for ev in events.iter().take(count) {
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.slot_id as f64));
+        i += 1;
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.x));
+        i += 1;
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.y));
+        i += 1;
+        let _ = qjs::JS_SetPropertyUint32(
+            ctx,
+            out,
+            i,
+            qjs::JS_NewFloat64(ctx, ev.buttons_down as f64),
+        );
+        i += 1;
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.flags as f64));
+        i += 1;
+    }
+
+    out
+}
+
 pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -805,10 +807,10 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
 
     static NAME: &[u8] = b"__trueosDrawLayoutRects\0";
     static FN_NAME: &[u8] = b"__trueosDrawLayoutRects\0";
-    static CURSOR_NAME: &[u8] = b"__trueosDrawCursorPlane\0";
-    static CURSOR_FN_NAME: &[u8] = b"__trueosDrawCursorPlane\0";
     static CURSOR_STATE_NAME: &[u8] = b"__trueosReadCursorState\0";
     static CURSOR_STATE_FN_NAME: &[u8] = b"__trueosReadCursorState\0";
+    static CURSOR_EVENTS_NAME: &[u8] = b"__trueosReadCursorEventsSince\0";
+    static CURSOR_EVENTS_FN_NAME: &[u8] = b"__trueosReadCursorEventsSince\0";
     static ICON_CMDS_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static ICON_CMDS_FN_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static SVG_IMPORT_NAME: &[u8] = b"__trueosImportSvgAsset\0";
@@ -827,20 +829,8 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     );
     let _ = qjs::JS_SetPropertyStr(ctx, global, NAME.as_ptr() as *const c_char, func);
 
-    let cursor_func = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_draw_cursor_plane),
-        CURSOR_FN_NAME.as_ptr() as *const c_char,
-        3,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        CURSOR_NAME.as_ptr() as *const c_char,
-        cursor_func,
-    );
+    // Keep cursor-state read API but do not expose the old custom cursor-plane
+    // draw hook.
 
     let cursor_state_func = qjs::JS_NewCFunction2(
         ctx,
@@ -855,6 +845,21 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         CURSOR_STATE_NAME.as_ptr() as *const c_char,
         cursor_state_func,
+    );
+
+    let cursor_events_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_read_cursor_events_since),
+        CURSOR_EVENTS_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        CURSOR_EVENTS_NAME.as_ptr() as *const c_char,
+        cursor_events_func,
     );
 
     let icon_cmds_func = qjs::JS_NewCFunction2(
