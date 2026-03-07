@@ -263,33 +263,10 @@ fn spawn_gfx_vga_swap_forward_task(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn build_default_cursor_shape_bgra(width: usize, height: usize) -> alloc::vec::Vec<u8> {
-    let mut data = alloc::vec![0u8; width.saturating_mul(height).saturating_mul(4)];
-    let set_px = |buf: &mut [u8], x: usize, y: usize, b: u8, g: u8, r: u8, a: u8| {
-        let idx = y.saturating_mul(width).saturating_add(x).saturating_mul(4);
-        if idx + 3 >= buf.len() {
-            return;
-        }
-        buf[idx] = b;
-        buf[idx + 1] = g;
-        buf[idx + 2] = r;
-        buf[idx + 3] = a;
-    };
-
-    let solid_h = height.min(20);
-    for y in 0..solid_h {
-        let max_x = ((y / 2) + 1).min(width.saturating_sub(1));
-        for x in 0..=max_x {
-            set_px(&mut data, x, y, 255, 255, 255, 255);
-        }
-    }
-    for y in 12..height.min(24) {
-        for x in 4..width.min(9) {
-            set_px(&mut data, x, y, 255, 255, 255, 255);
-        }
-    }
-
-    data
+fn build_default_cursor_shape_argb_le(width: usize, height: usize) -> alloc::vec::Vec<u8> {
+    // Diagnostic-solid cursor: all bytes 0xFF. This is guaranteed opaque under
+    // any reasonable channel interpretation and isolates transport issues.
+    alloc::vec![0xFFu8; width.saturating_mul(height).saturating_mul(4)]
 }
 
 #[embassy_executor::task]
@@ -304,7 +281,8 @@ async fn gfx_hw_cursor_task() {
         // virtio-gpu cursor plane expects a 64x64 ARGB/BGRA cursor image.
         const CURSOR_W: u32 = 64;
         const CURSOR_H: u32 = 64;
-        let cursor_pixels = build_default_cursor_shape_bgra(CURSOR_W as usize, CURSOR_H as usize);
+        let cursor_pixels =
+            build_default_cursor_shape_argb_le(CURSOR_W as usize, CURSOR_H as usize);
         let mut read_seq: u64 = 0;
         let mut dropped_total: u64 = 0;
         let mut cursor_ready = false;
@@ -322,7 +300,7 @@ async fn gfx_hw_cursor_task() {
                 match init {
                     Some(Ok(())) => {
                         cursor_ready = true;
-                        let _ = crate::gfx::with_context(|ctx| {
+                        let centered = crate::gfx::with_context(|ctx| {
                             let extent = ctx.swapchain_desc().extent;
                             if extent.width == 0 || extent.height == 0 {
                                 return Err(trueos_gfx_core::Error::Invalid);
@@ -331,6 +309,12 @@ async fn gfx_hw_cursor_task() {
                             let cy = (extent.height / 2) as i32;
                             ctx.hw_cursor_move(cx, cy)
                         });
+                        if !matches!(centered, Some(Ok(()))) {
+                            crate::log!("gfx-hw-cursor: initial move failed (will retry)\n");
+                            cursor_ready = false;
+                            Timer::after(EmbassyDuration::from_millis(60)).await;
+                            continue;
+                        }
                         crate::log!("gfx-hw-cursor: enabled\n");
                     }
                     Some(Err(trueos_gfx_core::Error::Unsupported)) => {
@@ -377,6 +361,7 @@ async fn gfx_hw_cursor_task() {
                 });
 
                 if !matches!(moved, Some(Ok(()))) {
+                    crate::log!("gfx-hw-cursor: move failed (reinit)\n");
                     cursor_ready = false;
                 }
             }
@@ -987,7 +972,6 @@ const WGPU_TEXT_ENABLED: bool = true;
 const GFX_MATMUL_DEMO_ENABLED: bool = true;
 
 static TASKS: &[TaskSpec] = &[
-    // Core background services (always-on / request-driven)
     TaskSpec {
         name: "vga-font-cache",
         disabled: false,
@@ -1002,7 +986,6 @@ static TASKS: &[TaskSpec] = &[
         started: &TRUEOSFS_MOUNT_SERVICE_STARTED,
         spawn: spawn_trueosfs_mount_service,
     },
-    // Network producers (may no-op if no NIC exists)
     TaskSpec {
         name: "net-poll-tasks",
         disabled: false,
@@ -1017,7 +1000,6 @@ static TASKS: &[TaskSpec] = &[
         started: &NET_SERVICE_STARTED,
         spawn: spawn_net_service,
     },
-    // Network consumers
     TaskSpec {
         name: "tls-socket-service",
         disabled: false,
@@ -1034,14 +1016,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ai-tcp-bridge",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &AI_TCP_BRIDGE_STARTED,
         spawn: spawn_ai_tcp_bridge,
     },
     TaskSpec {
         name: "ai-qjs-repl",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &AI_QJS_REPL_STARTED,
         spawn: spawn_ai_qjs_repl,
@@ -1055,15 +1037,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ftp-server",
-        disabled: false,
+        disabled: true,
         required: NET_AND_ROOT_READY,
         started: &FTP_SERVER_STARTED,
         spawn: spawn_ftp_server,
     },
-    // USB core + peripherals
     TaskSpec {
         name: "tga",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &TGA_TASK_STARTED,
         spawn: spawn_tga_task,
@@ -1112,7 +1093,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "gfx-matmul-demo",
-        disabled: !GFX_MATMUL_DEMO_ENABLED,
+        disabled: true,
         required: crate::v::readiness::GFX_VIRGL_READY,
         started: &GFX_MATMUL_DEMO_STARTED,
         spawn: spawn_gfx_matmul_demo,
@@ -1140,28 +1121,28 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "uac-event-drain",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::UAC_ATTACHED,
         started: &UAC_EVENT_DRAIN_STARTED,
         spawn: spawn_uac_event_drain,
     },
     TaskSpec {
         name: "uac-song",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::UAC_ATTACHED,
         started: &UAC_SONG_STARTED,
         spawn: spawn_uac_song,
     },
     TaskSpec {
         name: "vleds-mux",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &VLEDS_MUX_STARTED,
         spawn: spawn_vleds_mux,
     },
     TaskSpec {
         name: "vleds-cycle",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &VLEDS_CYCLE_STARTED,
         spawn: spawn_vleds_cycle,
@@ -1180,7 +1161,6 @@ static TASKS: &[TaskSpec] = &[
         started: &PIANO_DRAIN_STARTED,
         spawn: spawn_piano_drain,
     },
-    // Boot-time gated tasks
     TaskSpec {
         name: "boot-ws-smoke",
         disabled: true,
@@ -1190,14 +1170,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "boot-netbench",
-        disabled: !BOOT_NETBENCH_ENABLED,
+        disabled: true,
         required: 0,
         started: &BOOT_NETBENCH_STARTED,
         spawn: spawn_boot_netbench,
     },
     TaskSpec {
         name: "uart-shell",
-        disabled: false,
+        disabled: true,
         required: 0,
         started: &UART_SHELL_STARTED,
         spawn: spawn_uart_shell,
@@ -1214,7 +1194,6 @@ static TASKS: &[TaskSpec] = &[
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
-        // Poll quickly until we have started everything; then back off.
         loop {
             let ready = crate::v::readiness::mask();
             let mut pending = 0usize;
@@ -1270,12 +1249,10 @@ pub async fn spawn_service_task(spawner: Spawner) {
                         );
                     }
                     SpawnAttempt::Skipped => {
-                        // Not applicable right now (e.g. no NIC). Allow re-attempt later.
                         spec.started.store(false, Ordering::Release);
                         pending += 1;
                     }
                     SpawnAttempt::Failed(e) => {
-                        // Allow retry.
                         spec.started.store(false, Ordering::Release);
                         pending += 1;
                         crate::log!(
@@ -1287,9 +1264,6 @@ pub async fn spawn_service_task(spawner: Spawner) {
                     }
                 }
             }
-
-            // If we made progress, poll again quickly so chains of dependent tasks start promptly.
-            // If nothing changed, back off to reduce idle overhead.
             let sleep_ms = if started_any {
                 10
             } else if pending == 0 {
