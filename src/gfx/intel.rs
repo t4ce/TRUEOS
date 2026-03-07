@@ -235,7 +235,7 @@ fn ndc_to_pixel(v: f32, extent: usize) -> i32 {
     }
     let max = (extent - 1) as f32;
     let p = ((v * 0.5) + 0.5) * max;
-    p.round() as i32
+    libm::roundf(p) as i32
 }
 
 fn edge2(ax2: i32, ay2: i32, bx2: i32, by2: i32, px2: i32, py2: i32) -> i64 {
