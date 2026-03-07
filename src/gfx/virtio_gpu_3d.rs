@@ -1380,6 +1380,21 @@ impl VirtioGpu3d {
 
         let used = queue.used_elem(queue.last_used_idx % queue.size);
         queue.last_used_idx = queue.last_used_idx.wrapping_add(1);
+
+        if queue_label == "cursorq" {
+            let n = CURSORQ_WIRE_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n < 32 {
+                let req_type = unsafe { *(req.virt() as *const u32) };
+                let resp_type = unsafe { *(resp.virt() as *const u32) };
+                crate::log!(
+                    "virtio-gpu3d: cursorq wire req=0x{:08X} used_len={} resp=0x{:08X}\n",
+                    req_type,
+                    used.len,
+                    resp_type
+                );
+            }
+        }
+
         if used.id != 0 {
             crate::log!(
                 "virtio-gpu3d: {} used id={} (expected 0)\n",
@@ -1490,6 +1505,7 @@ static VIRGL_TEX_DEBUG_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
+static CURSORQ_WIRE_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
@@ -3202,9 +3218,10 @@ impl VirglGfxBackend {
         };
 
         if recreate {
-            let bytes = need.max(4096);
+            let bytes = need;
             let backing = DmaRegion::alloc(bytes, 4096).ok_or(Error::OutOfMemory)?;
             let resource_id = alloc_res_id();
+            // Virtio-gpu cursor resource format is A8R8G8B8 (little-endian BGRA bytes).
             if !self
                 .gpu
                 .resource_create_2d(resource_id, VIRGL_FORMAT_B8G8R8A8_UNORM, width, height)
@@ -3243,6 +3260,7 @@ impl VirglGfxBackend {
             core::ptr::copy_nonoverlapping(pixels_bgra.as_ptr(), plane.backing.virt(), need);
         }
 
+        // Canonical upload path for 2D cursor resource: transfer then flush.
         if !self.gpu.transfer_to_host_2d(resource_id, width, height) {
             return Err(Error::Unsupported);
         }
