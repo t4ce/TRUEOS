@@ -1881,10 +1881,6 @@ pub mod cabi {
             mut draws,
             mut rgb_src,
             mut tex_src,
-            cursor_cache_valid,
-            cursor_cache_draws,
-            cursor_cache_rgb_blob,
-            cursor_cache_tex_blob,
         ) = {
             let mut st = GFX_CABI_STATE.lock();
             let out = (
@@ -1897,10 +1893,6 @@ pub mod cabi {
                 core::mem::take(&mut st.frame_draws),
                 core::mem::take(&mut st.frame_rgb_blob),
                 core::mem::take(&mut st.frame_tex_blob),
-                st.cursor_cache_valid,
-                st.cursor_cache_draws.clone(),
-                st.cursor_cache_rgb_blob.clone(),
-                st.cursor_cache_tex_blob.clone(),
             );
             st.frame_active = false;
             out
@@ -1908,63 +1900,6 @@ pub mod cabi {
         if !was_active {
             crate::globalog::log(format_args!("gfx-cabi: end without active frame\n"));
             return -3;
-        }
-
-        if cursor_cache_valid {
-            let mut append_draw_stream =
-                |src_draws: &[PendingDraw], src_rgb: &[u8], src_tex: &[u8]| {
-                    for d in src_draws.iter() {
-                        match *d {
-                            PendingDraw::Rgb {
-                                blob_offset,
-                                blob_len,
-                                blend,
-                            } => {
-                                let start = blob_offset;
-                                let end = start.saturating_add(blob_len);
-                                if end > src_rgb.len() {
-                                    continue;
-                                }
-                                let new_off = rgb_src.len();
-                                rgb_src.extend_from_slice(&src_rgb[start..end]);
-                                draws.push(PendingDraw::Rgb {
-                                    blob_offset: new_off,
-                                    blob_len,
-                                    blend,
-                                });
-                            }
-                            PendingDraw::Tex {
-                                tex_id,
-                                image,
-                                sampler,
-                                blob_offset,
-                                blob_len,
-                                blend,
-                            } => {
-                                let start = blob_offset;
-                                let end = start.saturating_add(blob_len);
-                                if end > src_tex.len() {
-                                    continue;
-                                }
-                                let new_off = tex_src.len();
-                                tex_src.extend_from_slice(&src_tex[start..end]);
-                                draws.push(PendingDraw::Tex {
-                                    tex_id,
-                                    image,
-                                    sampler,
-                                    blob_offset: new_off,
-                                    blob_len,
-                                    blend,
-                                });
-                            }
-                        }
-                    }
-                };
-            append_draw_stream(
-                cursor_cache_draws.as_slice(),
-                cursor_cache_rgb_blob.as_slice(),
-                cursor_cache_tex_blob.as_slice(),
-            );
         }
 
         let Some(ret) = crate::gfx::with_context(|ctx| {
@@ -2444,16 +2379,9 @@ pub mod cabi {
             return -3;
         }
 
-        let (base_valid, base_clear_rgb, base_draws, base_rgb_src, base_tex_src) = {
-            let st = GFX_CABI_STATE.lock();
-            (
-                st.base_cache_valid,
-                st.base_cache_clear_rgb,
-                st.base_cache_draws.clone(),
-                st.base_cache_rgb_blob.clone(),
-                st.base_cache_tex_blob.clone(),
-            )
-        };
+        let cursor_cache_draws = cursor_draws.clone();
+        let cursor_cache_rgb_blob = cursor_rgb_src.clone();
+        let cursor_cache_tex_blob = cursor_tex_src.clone();
 
         let Some(ret) = crate::gfx::with_context(|ctx| {
             let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
@@ -2486,72 +2414,11 @@ pub mod cabi {
                 },
             }
 
-            let mut draws: Vec<PendingDraw> = Vec::new();
-            let mut rgb_src: Vec<u8> = Vec::new();
-            let mut tex_src: Vec<u8> = Vec::new();
-
-            let mut append_draw_stream =
-                |src_draws: &[PendingDraw], src_rgb: &[u8], src_tex: &[u8]| {
-                    for d in src_draws.iter() {
-                        match *d {
-                            PendingDraw::Rgb {
-                                blob_offset,
-                                blob_len,
-                                blend,
-                            } => {
-                                let start = blob_offset;
-                                let end = start.saturating_add(blob_len);
-                                if end > src_rgb.len() {
-                                    continue;
-                                }
-                                let new_off = rgb_src.len();
-                                rgb_src.extend_from_slice(&src_rgb[start..end]);
-                                draws.push(PendingDraw::Rgb {
-                                    blob_offset: new_off,
-                                    blob_len,
-                                    blend,
-                                });
-                            }
-                            PendingDraw::Tex {
-                                tex_id,
-                                image,
-                                sampler,
-                                blob_offset,
-                                blob_len,
-                                blend,
-                            } => {
-                                let start = blob_offset;
-                                let end = start.saturating_add(blob_len);
-                                if end > src_tex.len() {
-                                    continue;
-                                }
-                                let new_off = tex_src.len();
-                                tex_src.extend_from_slice(&src_tex[start..end]);
-                                draws.push(PendingDraw::Tex {
-                                    tex_id,
-                                    image,
-                                    sampler,
-                                    blob_offset: new_off,
-                                    blob_len,
-                                    blend,
-                                });
-                            }
-                        }
-                    }
-                };
-
-            if base_valid {
-                append_draw_stream(
-                    base_draws.as_slice(),
-                    base_rgb_src.as_slice(),
-                    base_tex_src.as_slice(),
-                );
-            }
-            append_draw_stream(
-                cursor_draws.as_slice(),
-                cursor_rgb_src.as_slice(),
-                cursor_tex_src.as_slice(),
-            );
+            // Cursor pass is an overlay update: submit only cursor draws and avoid
+            // CPU-side re-assembly of the cached base scene on each cursor tick.
+            let draws = cursor_draws;
+            let rgb_src = cursor_rgb_src;
+            let tex_src = cursor_tex_src;
 
             let mut draw_idx = 0usize;
             let mut first_pass = true;
@@ -2676,11 +2543,6 @@ pub mod cabi {
                 let mut cmds: Vec<Command> = Vec::new();
                 if first_pass && need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
-                }
-                if first_pass && base_valid {
-                    cmds.push(Command::ClearColor {
-                        rgb: base_clear_rgb,
-                    });
                 }
 
                 let mut last_blend: Option<BlendDesc> = None;
@@ -2820,9 +2682,9 @@ pub mod cabi {
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
             st.cursor_cache_valid = true;
-            st.cursor_cache_draws = cursor_draws.clone();
-            st.cursor_cache_rgb_blob = cursor_rgb_src.clone();
-            st.cursor_cache_tex_blob = cursor_tex_src.clone();
+            st.cursor_cache_draws = cursor_cache_draws;
+            st.cursor_cache_rgb_blob = cursor_cache_rgb_blob;
+            st.cursor_cache_tex_blob = cursor_cache_tex_blob;
         }
 
         ret
