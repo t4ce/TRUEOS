@@ -2,15 +2,13 @@
 
 pub const UI_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>TRUEOS Browser</title></head>
+<head>
     <meta charset="UTF-8">
     <title>HTML Only Visual Elements</title>
 </head>
 <body>
 
 <h1>HTML Without CSS or JavaScript</h1>
-
-<h2>Tree (Details + Checkbox)</h2>
 
 <details>
     <summary><input type="checkbox"> Project</summary>
@@ -66,9 +64,6 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 <p>
     <iframe width="600" height="600" srcdoc="<!DOCTYPE html><html><body><h2>Inside iframe</h2><p><input type='text' value='Nested input'></p><h2>Dialog</h2><dialog><p>Floating dialog (drag the border/background).</p><p><label>Dialog input: <input type='text' value='Drag outside me'></label></p><p><button type='button'>OK</button><button type='button'>Cancel</button></p></dialog></body></html>"></iframe>
 </p>
-<p>
-    <!-- RGBA channel spinners are now internal to the <color> widget. -->
-</p>
 
 <h2>Buttons and Inputs</h2>
 
@@ -93,6 +88,10 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 <p><label>Month: <input type="month" value="2026-02"></label></p>
 <p><label>Week (simplified): <input type="week" value="2026-W06"></label></p>
 <p><label>Datetime-local (simplified): <input type="datetime-local" value="2026-02-01T12:34:56"></label></p>
+
+<h2>Tree (Details + Checkbox)</h2>
+<p>(JONAS BAETHKE HALLO TEXT OKAY FRAGE GUT PROBE DREI NEUN)</p>
+<p>[{abcdefghijklmnopqrstuvwxyz0123456789 +-;:*/?!$§</p>
 
 <details>
 <form>
@@ -161,8 +160,6 @@ pub const UI_HTML: &str = r##"<!DOCTYPE html>
 </details>
 
 <hr>
-
-<h2>Dialog</h2>
 
 <dialog>
     <p>Floating dialog (drag the border/background).</p>

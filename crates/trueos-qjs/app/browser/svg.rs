@@ -16,6 +16,7 @@ pub enum WindowIconKind {
     ArrowRight,
     ArrowUp,
     ArrowDown,
+    RadioSelected,
 }
 
 #[derive(Clone, Copy)]
@@ -271,7 +272,7 @@ fn fill_circle_norm(dst: &mut [u32], w: u32, h: u32, cx: f32, cy: f32, r: f32, r
 }
 
 static WINDOW_SVGS_INIT: Once<()> = Once::new();
-static WINDOW_SVGS: Mutex<Option<[SvgIconBuffer; 7]>> = Mutex::new(None);
+static WINDOW_SVGS: Mutex<Option<[SvgIconBuffer; 8]>> = Mutex::new(None);
 static IMPORTED_SVGS: Mutex<BTreeMap<u32, SvgImportedAsset>> = Mutex::new(BTreeMap::new());
 
 pub fn init_window_svgs_once() {
@@ -312,6 +313,27 @@ pub fn init_window_svgs_once() {
         arrow_down.line_norm(0.78, 0.36, 0.50, 0.66, 2, 0xFF202020);
         arrow_down.rasterize_once();
 
+        let mut radio_selected = SvgIconBuffer::new(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE);
+        let segs = 24usize;
+        let outer_r = 0.30f32;
+        let inner_r = 0.10f32;
+        for i in 0..segs {
+            let a0 = (i as f32) * core::f32::consts::TAU / (segs as f32);
+            let a1 = ((i + 1) as f32) * core::f32::consts::TAU / (segs as f32);
+            let ox0 = 0.5 + outer_r * libm::cosf(a0);
+            let oy0 = 0.5 + outer_r * libm::sinf(a0);
+            let ox1 = 0.5 + outer_r * libm::cosf(a1);
+            let oy1 = 0.5 + outer_r * libm::sinf(a1);
+            radio_selected.line_norm(ox0, oy0, ox1, oy1, 2, 0xFF202020);
+
+            let ix0 = 0.5 + inner_r * libm::cosf(a0);
+            let iy0 = 0.5 + inner_r * libm::sinf(a0);
+            let ix1 = 0.5 + inner_r * libm::cosf(a1);
+            let iy1 = 0.5 + inner_r * libm::sinf(a1);
+            radio_selected.line_norm(ix0, iy0, ix1, iy1, 2, 0xFF202020);
+        }
+        radio_selected.rasterize_once();
+
         *WINDOW_SVGS.lock() = Some([
             close,
             minimize,
@@ -320,11 +342,12 @@ pub fn init_window_svgs_once() {
             arrow_right,
             arrow_up,
             arrow_down,
+            radio_selected,
         ]);
     });
 }
 
-pub fn with_window_svgs<R>(f: impl FnOnce(&[SvgIconBuffer; 7]) -> R) -> Option<R> {
+pub fn with_window_svgs<R>(f: impl FnOnce(&[SvgIconBuffer; 8]) -> R) -> Option<R> {
     init_window_svgs_once();
     let guard = WINDOW_SVGS.lock();
     guard.as_ref().map(f)
@@ -340,6 +363,7 @@ pub fn with_window_svg<R>(kind: WindowIconKind, f: impl FnOnce(&SvgIconBuffer) -
             WindowIconKind::ArrowRight => 4,
             WindowIconKind::ArrowUp => 5,
             WindowIconKind::ArrowDown => 6,
+            WindowIconKind::RadioSelected => 7,
         };
         f(&icons[idx])
     })

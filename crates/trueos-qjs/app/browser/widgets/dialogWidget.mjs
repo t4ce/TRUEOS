@@ -8,9 +8,8 @@ export function renderDialogWidget(rect, ctx) {
   const h = Math.max(8, Math.round(Number(rect.h || 0)));
   const depth = Math.max(0, Number(rect.depth || 0));
 
-  // A simple floating-window affordance: title bar fill inside the dialog frame.
-  const titleH = Math.max(4, Math.min(14, h - 2));
+  // Fill dialog interior with a translucent diagonal background gradient.
   return [
-    x + 1, y + 1, Math.max(1, w - 2), titleH, depth + 1, 0, 2,
+    x + 1, y + 1, Math.max(1, w - 2), Math.max(1, h - 2), depth + 1, 0, 8,
   ];
 }

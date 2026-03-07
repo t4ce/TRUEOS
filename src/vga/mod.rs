@@ -850,13 +850,20 @@ fn build_font_cache_small() -> FontCacheSmall {
         let mut cell = [0u8; FONT_CELL_W * FONT_CELL_H];
 
         let cell_w = FONT_CELL_W as i32;
-        let cell_h = FONT_CELL_H as i32;
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
 
         if glyph_w > 0 && glyph_h > 0 {
             let x0 = (cell_w - glyph_w) / 2 - metrics.xmin;
-            let y0 = (cell_h - glyph_h) / 2 - metrics.ymin - 1;
+            // At 6px scale some ASCII caps/digits land below baseline due
+            // raster overshoot (negative ymin), which makes them render lower.
+            let ymin = if (ch.is_ascii_uppercase() || ch.is_ascii_digit()) && metrics.ymin < 0 {
+                0
+            } else {
+                metrics.ymin
+            };
+            // Use the same metric anchor model as large font cache.
+            let y0 = -ymin;
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {
@@ -1033,14 +1040,48 @@ fn build_font_cache_large() -> FontCacheLarge {
         width = width.clamp(1, BANNER_CELL_W as i32);
         let mut max_ink_x: i32 = -1;
 
+        let cell_h = BANNER_CELL_H as i32;
         let glyph_w = metrics.width as i32;
         let glyph_h = metrics.height as i32;
         if glyph_w > 0 && glyph_h > 0 {
             // Atlas consumers sample from the left edge of each cell using
             // [cell_x, cell_x + glyph_w), so glyph coverage must start at x=0.
-            let x0 = (-metrics.xmin).max(0);
-            // Metric anchor without extra upward trim to avoid top clipping.
-            let y0 = -metrics.ymin;
+            let mut x0 = (-metrics.xmin).max(0);
+
+            // Center by actual ink rows (alpha>0), not full raster box. This
+            // avoids clipping bottom-heavy glyphs like '§' and better centers
+            // compact symbols such as '+' and '-'.
+            let mut ink_min_x = glyph_w;
+            let mut ink_max_x = -1i32;
+            let mut ink_min_y = glyph_h;
+            let mut ink_max_y = -1i32;
+            for y in 0..metrics.height {
+                let row_off = y * metrics.width;
+                for x in 0..metrics.width {
+                    if bitmap[row_off + x] != 0 {
+                        let xx = x as i32;
+                        let yy = y as i32;
+                        ink_min_x = ink_min_x.min(xx);
+                        ink_max_x = ink_max_x.max(xx);
+                        ink_min_y = ink_min_y.min(yy);
+                        ink_max_y = ink_max_y.max(yy);
+                    }
+                }
+            }
+            let mut y0 = if ink_max_y >= ink_min_y {
+                let ink_h = ink_max_y - ink_min_y + 1;
+                (cell_h - ink_h) / 2 - ink_min_y
+            } else {
+                (cell_h - glyph_h) / 2
+            };
+
+            // Fine-tune a few capitals at this raster size to match expected
+            // visual centering in their atlas cells.
+            match ch {
+                '(' | ')' => y0 -= 1,
+                'J' => x0 -= 3,
+                _ => {}
+            }
 
             for y in 0..metrics.height {
                 for x in 0..metrics.width {
@@ -1071,6 +1112,31 @@ fn build_font_cache_large() -> FontCacheLarge {
 
         if max_ink_x >= 0 {
             width = width.max(max_ink_x + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        // Keep one trailing empty column for J so it does not look cramped.
+        if ch == 'J' {
+            width = (width + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        // C visually benefits from one extra trailing empty column.
+        if ch == 'C' {
+            width = (width + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        // V also needs one trailing column for visual spacing.
+        if ch == 'V' {
+            width = (width + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        // O needs one trailing empty column in the large atlas.
+        if ch == 'O' {
+            width = (width + 1).clamp(1, BANNER_CELL_W as i32);
+        }
+
+        // N should reserve one less trailing column.
+        if ch == 'N' {
+            width = (width - 1).clamp(1, BANNER_CELL_W as i32);
         }
 
         let width = width as u8;

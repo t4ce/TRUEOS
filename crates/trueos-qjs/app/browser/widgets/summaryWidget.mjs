@@ -72,13 +72,40 @@ function paintIconPixels(out, icon, x, y, size, depth) {
   }
 }
 
+function paintChevronFallback(out, x, y, size, open, depth) {
+  const s = Math.max(8, Number(size || 16) | 0);
+  const t = Math.max(2, Math.round(s / 6));
+  const mid = Math.round(s / 2);
+
+  if (open) {
+    // Down chevron built from two diagonal strokes.
+    for (let i = 0; i <= mid; i++) {
+      out.push(
+        x + i, y + i, t, t, depth, 0, 6,
+        x + (s - 1) - i, y + i, t, t, depth, 0, 6,
+      );
+    }
+  } else {
+    // Right chevron built from two diagonal strokes.
+    for (let i = 0; i <= mid; i++) {
+      out.push(
+        x + i, y + i, t, t, depth, 0, 6,
+        x + i, y + (s - 1) - i, t, t, depth, 0, 6,
+      );
+    }
+  }
+}
+
 export function renderSummaryWidget(rect, ctx) {
   if (!rect || String(rect.tag || '') !== 'summary') return [];
   if (!ctx || ctx.mode !== 'collect') return [];
 
   const x = Math.round(Number(rect.x || 0));
   const y = Math.round(Number(rect.y || 0));
-  const size = Math.max(8, Math.min(14, Math.round(Math.min(Number(rect.h || 0), 14))));
+  const h = Math.max(0, Math.round(Number(rect.h || 0)));
+  const size = 16;
+  const iconX = x + 2;
+  const iconY = y + Math.max(0, Math.round((h - size) / 2));
   const depth = Math.max(0, Number(rect.depth || 0) + 1);
 
   const detailsOpen = !!(
@@ -91,11 +118,11 @@ export function renderSummaryWidget(rect, ctx) {
   const arrowKind = detailsOpen ? 6 : 4;
   const icon = readIconCmds(arrowKind);
   const out = [];
-  paintIconPixels(out, icon, x + 1, y + 1, Math.max(8, size - 2), depth);
+  paintIconPixels(out, icon, iconX, iconY, size, depth);
 
-  // Fallback if icon API is unavailable.
+  // Fallback if icon API is unavailable: draw a simple chevron arrow.
   if (out.length <= 0) {
-    out.push(x + 2, y + 2, Math.max(1, size - 4), Math.max(1, size - 4), depth, 0, 2);
+    paintChevronFallback(out, iconX, iconY, size, detailsOpen, depth);
   }
   return out;
 }

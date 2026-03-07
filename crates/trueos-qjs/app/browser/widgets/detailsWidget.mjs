@@ -1,29 +1,13 @@
-const iconCmdCache = new Map();
-
-export const HTML_APP_WINDOW_CONTENT_INSET = Object.freeze({
-  left: 2,
-  top: 2,
-  right: 2,
-  bottom: 2,
-});
-
 function readIconCmds(kind) {
-  if (iconCmdCache.has(kind)) return iconCmdCache.get(kind);
   const fn = globalThis.__trueosReadWindowSvgCmds;
-  if (typeof fn !== 'function') {
-    iconCmdCache.set(kind, null);
-    return null;
-  }
+  if (typeof fn !== 'function') return null;
   let raw = null;
   try {
     raw = fn(kind);
   } catch (_) {
     raw = null;
   }
-  if (!Array.isArray(raw) || raw.length < 3) {
-    iconCmdCache.set(kind, null);
-    return null;
-  }
+  if (!Array.isArray(raw) || raw.length < 3) return null;
 
   const w = Math.max(1, Number(raw[0] || 32));
   const h = Math.max(1, Number(raw[1] || 32));
@@ -41,9 +25,7 @@ function readIconCmds(kind) {
     });
     p += 6;
   }
-  const out = { w, h, cmds };
-  iconCmdCache.set(kind, out);
-  return out;
+  return { w, h, cmds };
 }
 
 function paintIconPixels(out, icon, x, y, size, depth) {
@@ -90,32 +72,31 @@ function paintIconPixels(out, icon, x, y, size, depth) {
   }
 }
 
-export function renderHtmlAppWindowWidget(rect, ctx) {
-  if (!rect || String(rect.tag || '') !== 'html_app_window') return [];
+export function renderDetailsWidget(rect, ctx) {
+  if (!rect || String(rect.tag || '').toLowerCase() !== 'details') return [];
   if (!ctx || ctx.mode !== 'collect') return [];
+  if (typeof ctx.getSourceNodeById !== 'function') return [];
+
+  const srcNode = ctx.getSourceNodeById(String(rect.id || ''));
+  if (!srcNode || !Array.isArray(srcNode.childNodes)) return [];
 
   const x = Math.round(Number(rect.x || 0));
   const y = Math.round(Number(rect.y || 0));
-  const w = Math.max(16, Math.round(Number(rect.w || 0)));
-  const h = Math.max(16, Math.round(Number(rect.h || 0)));
-  const depth = Math.max(0, Number(rect.depth || 0));
-
-  const btnSize = 12;
-  const gap = 2;
-  const margin = 2;
-  const topY = y + margin;
-  const totalW = btnSize * 3 + gap * 2;
-  const startX = x + Math.max(0, w - totalW - margin);
-  if (h < btnSize + margin * 2) return [];
+  const h = Math.max(0, Math.round(Number(rect.h || 0)));
+  const size = 16;
+  const iconX = x + 2;
+  const iconY = y + Math.max(0, Math.round((h - size) / 2));
+  const depth = Math.max(0, Number(rect.depth || 0) + 1);
+  const open = !!(
+    globalThis.__trueosBrowser
+    && typeof globalThis.__trueosBrowser.getDetailsOpen === 'function'
+    && globalThis.__trueosBrowser.getDetailsOpen(String(rect.id || ''))
+  );
 
   const out = [];
-  for (let i = 0; i < 3; i++) {
-    const bx = startX + i * (btnSize + gap);
-    // Button surface tint.
-    out.push(bx, topY, btnSize, btnSize, depth + 2, 0, 5);
-    // Icon pixels from svg.rs commands.
-    const icon = readIconCmds(i);
-    paintIconPixels(out, icon, bx + 1, topY + 1, btnSize - 2, depth + 3);
-  }
+  // Arrow icons are exposed via svg.rs kind ids: right=4, down=6.
+  const arrowKind = open ? 6 : 4;
+  const icon = readIconCmds(arrowKind);
+  paintIconPixels(out, icon, iconX, iconY, size, depth);
   return out;
 }
