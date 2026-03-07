@@ -2291,6 +2291,8 @@ const cursorPlane = {
   enabled: true,
   maxPointers: 4,
   followKernelCount: 1,
+  readSeq: 0,
+  droppedEvents: 0,
 };
 let pulseTicker = null;
 const WIDGET_PULSE_MS = 500;
@@ -2406,6 +2408,46 @@ function paintCursorPlaneOnly() {
 }
 
 function refreshCursorPlaneFromKernel(maxPointers = cursorPlane.maxPointers) {
+  if (typeof G.__trueosReadCursorEventsSince === 'function') {
+    const packed = G.__trueosReadCursorEventsSince(Number(cursorPlane.readSeq || 0));
+    if (Array.isArray(packed) && packed.length >= 3) {
+      const nextSeq = Number(packed[0] || 0);
+      const dropped = Number(packed[1] || 0);
+      const wrote = Math.max(0, Number(packed[2] || 0) | 0);
+      if (Number.isFinite(nextSeq) && nextSeq >= 0) cursorPlane.readSeq = nextSeq;
+      if (Number.isFinite(dropped) && dropped > 0) {
+        cursorPlane.droppedEvents = (Number(cursorPlane.droppedEvents || 0) + dropped) >>> 0;
+      }
+
+      let updated = 0;
+      let p = 3;
+      for (let i = 0; i < wrote; i++) {
+        if (p + 4 >= packed.length) break;
+        const id = Math.max(1, Number(packed[p + 0] || 0) | 0);
+        const nxNorm = Math.max(0, Math.min(1, Number(packed[p + 1] || 0)));
+        const nyNorm = Math.max(0, Math.min(1, Number(packed[p + 2] || 0)));
+        const buttons = Number(packed[p + 3] || 0) >>> 0;
+        p += 5;
+
+        if (id > Math.max(1, Number(maxPointers || 0) | 0)) continue;
+        const nx = Math.max(0, Math.min(viewportW - 1, nxNorm * Math.max(1, viewportW - 1)));
+        const ny = Math.max(0, Math.min(viewportH - 1, nyNorm * Math.max(1, viewportH - 1)));
+        const prev = cursorPlane.pointers.get(id);
+        if (!prev || Math.abs(nx - Number(prev.x || 0)) >= 1 || Math.abs(ny - Number(prev.y || 0)) >= 1) {
+          cursorPlane.pointers.set(id, {
+            x: nx,
+            y: ny,
+            color: Number(prev && prev.color != null ? prev.color : cursorColorForId(id)) >>> 0,
+            visible: true,
+            buttons,
+          });
+          updated += 1;
+        }
+      }
+      return updated;
+    }
+  }
+
   if (typeof G.__trueosReadCursorState !== 'function') return 0;
   const max = Math.max(
     1,
