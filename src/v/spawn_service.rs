@@ -48,10 +48,12 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VGA_SWAP_FORWARD_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
 static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_INTEL_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -256,6 +258,136 @@ async fn gfx_vga_swap_forward_task() {
 
 fn spawn_gfx_vga_swap_forward_task(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(gfx_vga_swap_forward_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn build_default_cursor_shape_bgra(width: usize, height: usize) -> alloc::vec::Vec<u8> {
+    let mut data = alloc::vec![0u8; width.saturating_mul(height).saturating_mul(4)];
+    let set_px = |buf: &mut [u8], x: usize, y: usize, b: u8, g: u8, r: u8, a: u8| {
+        let idx = y.saturating_mul(width).saturating_add(x).saturating_mul(4);
+        if idx + 3 >= buf.len() {
+            return;
+        }
+        buf[idx] = b;
+        buf[idx + 1] = g;
+        buf[idx + 2] = r;
+        buf[idx + 3] = a;
+    };
+
+    let solid_h = height.min(20);
+    for y in 0..solid_h {
+        let max_x = ((y / 2) + 1).min(width.saturating_sub(1));
+        for x in 0..=max_x {
+            set_px(&mut data, x, y, 255, 255, 255, 255);
+        }
+    }
+    for y in 12..height.min(24) {
+        for x in 4..width.min(9) {
+            set_px(&mut data, x, y, 255, 255, 255, 255);
+        }
+    }
+
+    data
+}
+
+#[embassy_executor::task]
+async fn gfx_hw_cursor_task() {
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        return;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    {
+        // virtio-gpu cursor plane expects a 64x64 ARGB/BGRA cursor image.
+        const CURSOR_W: u32 = 64;
+        const CURSOR_H: u32 = 64;
+        let cursor_pixels = build_default_cursor_shape_bgra(CURSOR_W as usize, CURSOR_H as usize);
+        let mut read_seq: u64 = 0;
+        let mut dropped_total: u64 = 0;
+        let mut cursor_ready = false;
+        let mut events = [crate::usb::hid::TrueosHidCursorEvent::default(); 32];
+
+        loop {
+            if !cursor_ready {
+                let init = crate::gfx::with_context(|ctx| {
+                    if !ctx.hw_cursor_supported() {
+                        return Err(trueos_gfx_core::Error::Unsupported);
+                    }
+                    ctx.hw_cursor_define_bgra(CURSOR_W, CURSOR_H, 0, 0, cursor_pixels.as_slice())
+                });
+
+                match init {
+                    Some(Ok(())) => {
+                        cursor_ready = true;
+                        let _ = crate::gfx::with_context(|ctx| {
+                            let extent = ctx.swapchain_desc().extent;
+                            if extent.width == 0 || extent.height == 0 {
+                                return Err(trueos_gfx_core::Error::Invalid);
+                            }
+                            let cx = (extent.width / 2) as i32;
+                            let cy = (extent.height / 2) as i32;
+                            ctx.hw_cursor_move(cx, cy)
+                        });
+                        crate::log!("gfx-hw-cursor: enabled\n");
+                    }
+                    Some(Err(trueos_gfx_core::Error::Unsupported)) => {
+                        crate::log!("gfx-hw-cursor: unsupported (no hardware cursor queue)\n");
+                        return;
+                    }
+                    Some(Err(_)) | None => {
+                        Timer::after(EmbassyDuration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+            }
+
+            let (next_seq, dropped, wrote) =
+                crate::usb::hid::read_cursor_events_since(read_seq, &mut events);
+            read_seq = next_seq;
+            if dropped != 0 {
+                dropped_total = dropped_total.saturating_add(dropped as u64);
+                if (dropped_total % 128) == 0 {
+                    crate::log!("gfx-hw-cursor: dropped events total={}\n", dropped_total);
+                }
+            }
+
+            if wrote > 0 {
+                let evt = events[wrote - 1];
+                let moved = crate::gfx::with_context(|ctx| {
+                    let extent = ctx.swapchain_desc().extent;
+                    if extent.width == 0 || extent.height == 0 {
+                        return Err(trueos_gfx_core::Error::Invalid);
+                    }
+                    let nx = if evt.x.is_finite() {
+                        evt.x.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let ny = if evt.y.is_finite() {
+                        evt.y.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let x = libm::round(nx * (extent.width.saturating_sub(1) as f64)) as i32;
+                    let y = libm::round(ny * (extent.height.saturating_sub(1) as f64)) as i32;
+                    ctx.hw_cursor_move(x, y)
+                });
+
+                if !matches!(moved, Some(Ok(()))) {
+                    cursor_ready = false;
+                }
+            }
+
+            Timer::after(EmbassyDuration::from_millis(4)).await;
+        }
+    }
+}
+
+fn spawn_gfx_hw_cursor_task(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(gfx_hw_cursor_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -723,6 +855,22 @@ fn spawn_gfx_matmul_demo(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_gfx_intel_triangle_demo(spawner: Spawner) -> SpawnAttempt {
+    #[cfg(not(feature = "gfx_intel"))]
+    {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    }
+
+    #[cfg(feature = "gfx_intel")]
+    {
+        match spawner.spawn(crate::gfx::intel::centered_triangle_demo_task()) {
+            Ok(()) => SpawnAttempt::Spawned,
+            Err(e) => SpawnAttempt::Failed(e),
+        }
+    }
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     for info in crate::usb::xhci::xhc_list().iter().copied() {
         // reads from hardware into dma buffs
@@ -935,6 +1083,13 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_gfx_vga_swap_forward_task,
     },
     TaskSpec {
+        name: "gfx-hw-cursor",
+        disabled: false,
+        required: crate::v::readiness::GFX_VIRGL_READY,
+        started: &GFX_HW_CURSOR_STARTED,
+        spawn: spawn_gfx_hw_cursor_task,
+    },
+    TaskSpec {
         name: "wgpu_text",
         disabled: !WGPU_TEXT_ENABLED,
         required: crate::v::readiness::GFX_VIRGL_READY,
@@ -961,6 +1116,13 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::GFX_VIRGL_READY,
         started: &GFX_MATMUL_DEMO_STARTED,
         spawn: spawn_gfx_matmul_demo,
+    },
+    TaskSpec {
+        name: "gfx-intel-triangle-demo",
+        disabled: false,
+        required: crate::v::readiness::GFX_INTEL_CLAIMED,
+        started: &GFX_INTEL_TRIANGLE_DEMO_STARTED,
+        spawn: spawn_gfx_intel_triangle_demo,
     },
     TaskSpec {
         name: "usb-controller-tasks",

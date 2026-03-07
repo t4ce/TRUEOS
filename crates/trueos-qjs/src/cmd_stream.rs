@@ -14,8 +14,6 @@ unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
-    fn trueos_cabi_gfx_cursor_begin_frame() -> i32;
-    fn trueos_cabi_gfx_cursor_end_frame() -> i32;
     fn trueos_cabi_gfx_set_blend(
         enabled: u32,
         src_rgb: u32,
@@ -26,16 +24,7 @@ unsafe extern "C" {
         eq_alpha: u32,
     ) -> i32;
     fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
-    fn trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(
-        vtx_ptr: *const u8,
-        vtx_len: usize,
-    ) -> i32;
     fn trueos_cabi_gfx_draw_tex_triangles_no_present(
-        tex_id: u32,
-        vtx_ptr: *const u8,
-        vtx_len: usize,
-    ) -> i32;
-    fn trueos_cabi_gfx_cursor_draw_tex_triangles_no_present(
         tex_id: u32,
         vtx_ptr: *const u8,
         vtx_len: usize,
