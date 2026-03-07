@@ -69,7 +69,7 @@ static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
-static GFX_VIRGL_READY_DELAY_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
+static GFX_BACKEND_READY_DELAY_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 // --- spawn wrappers (keep per-task logic out of main.rs) ---
 
@@ -162,6 +162,10 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 async fn gfx_virgl_ready_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
 
+    if crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+        return;
+    }
+
     #[cfg(not(feature = "gfx_virgl"))]
     {
         return;
@@ -170,15 +174,20 @@ async fn gfx_virgl_ready_task() {
     #[cfg(feature = "gfx_virgl")]
     {
         for _ in 0..400 {
+            if crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+                return;
+            }
             if crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY) {
+                crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
                 return;
             }
             if virgl_ready_or_switched() {
+                crate::v::readiness::set(crate::v::readiness::GFX_BACKEND_READY);
                 return;
             }
             Timer::after(EmbassyDuration::from_millis(25)).await;
         }
-        crate::log!("gfx-virgl-ready: timeout\n");
+        crate::log!("gfx-backend-ready: timeout\n");
     }
 }
 
@@ -381,7 +390,7 @@ fn spawn_gfx_hw_cursor_task(spawner: Spawner) -> SpawnAttempt {
 #[inline]
 fn task_start_delay(spec: &TaskSpec) -> Option<(u64, &'static AtomicU64)> {
     match spec.name {
-        "gfx-virgl-ready" => Some((2500, &GFX_VIRGL_READY_DELAY_DEADLINE_TICKS)),
+        "gfx-backend-ready" => Some((2500, &GFX_BACKEND_READY_DELAY_DEADLINE_TICKS)),
         _ => None,
     }
 }
@@ -461,30 +470,27 @@ fn emit_mesh_tex(
 #[embassy_executor::task]
 async fn webgpu_mesh_task() {
     crate::gfx::init(crate::limine::framebuffer_response());
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        crate::log!("webgpu-text: gfx_virgl feature disabled\n");
-        return;
-    }
-    #[cfg(feature = "gfx_virgl")]
-    {
-        // Boot ordering can race: spawn-service may start this task before
-        // virtio-gpu enumeration/bring-up is fully observable.
-        let mut ready = crate::v::readiness::is_set(crate::v::readiness::GFX_VIRGL_READY)
-            || virgl_ready_or_switched();
-        if !ready {
-            for _ in 0..200 {
+
+    let mut ready = crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY);
+    if !ready {
+        for _ in 0..200 {
+            #[cfg(feature = "gfx_virgl")]
+            {
                 if virgl_ready_or_switched() {
                     ready = true;
                     break;
                 }
-                Timer::after(EmbassyDuration::from_millis(25)).await;
             }
+            if crate::v::readiness::is_set(crate::v::readiness::GFX_BACKEND_READY) {
+                ready = true;
+                break;
+            }
+            Timer::after(EmbassyDuration::from_millis(25)).await;
         }
-        if !ready {
-            crate::log!("webgpu-text: virgl not ready (timeout)\n");
-            return;
-        }
+    }
+    if !ready {
+        crate::log!("webgpu-text: no active gfx backend (timeout)\n");
+        return;
     }
 
     // Reserve presenter ownership for the text demo so forward-task doesn't
@@ -1050,7 +1056,7 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_tga_task,
     },
     TaskSpec {
-        name: "gfx-virgl-ready",
+        name: "gfx-backend-ready",
         disabled: false,
         required: 0,
         started: &GFX_VIRGL_READY_TASK_STARTED,
@@ -1059,21 +1065,21 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "gfx-vga-swap-forward",
         disabled: false,
-        required: crate::v::readiness::GFX_VIRGL_READY,
+        required: crate::v::readiness::GFX_BACKEND_READY,
         started: &GFX_VGA_SWAP_FORWARD_STARTED,
         spawn: spawn_gfx_vga_swap_forward_task,
     },
     TaskSpec {
         name: "gfx-hw-cursor",
         disabled: false,
-        required: crate::v::readiness::GFX_VIRGL_READY,
+        required: crate::v::readiness::GFX_BACKEND_READY,
         started: &GFX_HW_CURSOR_STARTED,
         spawn: spawn_gfx_hw_cursor_task,
     },
     TaskSpec {
         name: "wgpu_text",
         disabled: !WGPU_TEXT_ENABLED,
-        required: crate::v::readiness::GFX_VIRGL_READY,
+        required: crate::v::readiness::GFX_BACKEND_READY,
         started: &WGPU_TEXT_STARTED,
         spawn: spawn_wgpu_text,
     },

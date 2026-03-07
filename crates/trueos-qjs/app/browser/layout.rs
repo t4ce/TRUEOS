@@ -793,6 +793,8 @@ unsafe extern "C" fn qjs_read_cursor_events_since(
             qjs::JS_NewFloat64(ctx, ev.buttons_down as f64),
         );
         i += 1;
+        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.wheel as f64));
+        i += 1;
         let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, ev.flags as f64));
         i += 1;
     }
