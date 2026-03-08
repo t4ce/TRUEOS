@@ -32,8 +32,16 @@ pub mod ui_html;
 pub mod svg;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/browser/icon.rs"]
+pub(crate) mod icon;
+
+#[cfg(feature = "trueos")]
 #[path = "../app/browser/scene.rs"]
 pub mod scene;
+
+#[cfg(feature = "trueos")]
+#[path = "../app/browser/lyon.rs"]
+pub mod browser_lyon;
 
 #[cfg(feature = "trueos")]
 pub mod cmd_stream;
