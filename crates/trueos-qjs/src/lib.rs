@@ -16,26 +16,6 @@ pub mod async_fs;
 pub mod trueos_module_loader;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/browser.rs"]
-pub mod browser;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/browser_context.rs"]
-pub mod browser_context;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/browser_navigator.rs"]
-pub mod browser_navigator;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/browser_webgpu.rs"]
-pub mod browser_webgpu;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/browser_canvas.rs"]
-pub mod browser_canvas;
-
-#[cfg(feature = "trueos")]
 #[path = "../app/browser/browser_task.rs"]
 pub mod browser_task;
 
@@ -48,12 +28,12 @@ pub mod layout;
 pub mod ui_html;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/default_theme.rs"]
-pub mod default_theme;
-
-#[cfg(feature = "trueos")]
 #[path = "../app/browser/svg.rs"]
 pub mod svg;
+
+#[cfg(feature = "trueos")]
+#[path = "../app/browser/scene.rs"]
+pub mod scene;
 
 #[cfg(feature = "trueos")]
 pub mod cmd_stream;

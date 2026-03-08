@@ -2,6 +2,8 @@ pub mod backends;
 pub mod cursor;
 #[cfg(feature = "gfx_intel")]
 pub mod intel;
+pub mod loadscreen;
+pub mod text;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
 pub mod webgpu_font;
