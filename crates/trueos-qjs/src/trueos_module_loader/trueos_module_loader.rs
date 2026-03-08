@@ -131,24 +131,6 @@ unsafe fn load_native_module(
         return core::ptr::null_mut();
     }
 
-    let browser_context_mod =
-        unsafe { crate::browser_context::try_create_native_module(ctx, module_name) };
-    if !browser_context_mod.is_null() {
-        return browser_context_mod;
-    }
-
-    let browser_navigator_mod =
-        unsafe { crate::browser_navigator::try_create_native_module(ctx, module_name) };
-    if !browser_navigator_mod.is_null() {
-        return browser_navigator_mod;
-    }
-
-    let browser_webgpu_mod =
-        unsafe { crate::browser_webgpu::try_create_native_module(ctx, module_name) };
-    if !browser_webgpu_mod.is_null() {
-        return browser_webgpu_mod;
-    }
-
     let yoga_mod = unsafe { crate::yoga::try_create_native_module(ctx, module_name) };
     if !yoga_mod.is_null() {
         return yoga_mod;
