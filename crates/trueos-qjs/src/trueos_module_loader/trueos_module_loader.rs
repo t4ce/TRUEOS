@@ -586,8 +586,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"node:path"
             || spec == b"trueos:lightningcss"
             || spec == b"lightningcss-native"
-            || spec == b"trueos:lyon"
-            || spec == b"lyon-native"
         {
             log_normalized(spec);
             return js_strdup(ctx, spec);

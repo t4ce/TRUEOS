@@ -9,3 +9,6 @@ path = "src/lib.rs"
 [features]
 default = []
 alloc = []
+
+[dependencies]
+libm = { version = "0.2", default-features = false }
