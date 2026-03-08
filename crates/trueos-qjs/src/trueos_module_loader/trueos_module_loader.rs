@@ -151,11 +151,6 @@ unsafe fn load_native_module(
         return lightningcss_mod;
     }
 
-    let lyon_mod = unsafe { crate::lyon_native::try_create_native_module(ctx, module_name) };
-    if !lyon_mod.is_null() {
-        return lyon_mod;
-    }
-
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
 }
 

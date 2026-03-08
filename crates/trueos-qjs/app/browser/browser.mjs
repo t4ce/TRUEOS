@@ -1,7 +1,6 @@
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 import * as lightningcss from 'trueos:lightningcss';
-import * as lyon from 'trueos:lyon';
 import { createFpsOverlay } from './fps.mjs';
 import { INDENT, LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
 
@@ -19,172 +18,7 @@ let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
 let cachedCssObjects = [];
-let lyonRoundRectRuns = [];
-let cachedLyonDemo = null;
-let cachedLyonMeshes = null;
 const fpsOverlay = createFpsOverlay();
-
-function getLyonDemo() {
-  if (cachedLyonDemo) return cachedLyonDemo;
-  if (!lyon || lyon.isAvailable !== true || typeof lyon.demoShapes !== 'function') {
-    return null;
-  }
-  try {
-    const d = lyon.demoShapes();
-    cachedLyonDemo = d && d.ok === true ? d : null;
-  } catch (_) {
-    cachedLyonDemo = null;
-  }
-  return cachedLyonDemo;
-}
-
-function getLyonMeshes() {
-  if (cachedLyonMeshes) return cachedLyonMeshes;
-  if (!lyon || lyon.isAvailable !== true) return null;
-
-  if (typeof lyon.demoMeshes === 'function') {
-    try {
-      const m = lyon.demoMeshes();
-      if (m && m.ok === true && Array.isArray(m.meshes) && m.meshes.length > 0) {
-        cachedLyonMeshes = m;
-        return m;
-      }
-    } catch (_) {}
-  }
-
-  const demo = getLyonDemo();
-  if (!demo || demo.triangleTessOk !== true) return null;
-  const verts = Array.isArray(demo.triangleVertices) ? demo.triangleVertices : [];
-  const idx = Array.isArray(demo.triangleIndices) ? demo.triangleIndices : [];
-  if (((verts.length / 2) | 0) <= 0 || idx.length < 3) return null;
-
-  cachedLyonMeshes = {
-    ok: true,
-    meshCount: 1,
-    meshes: [{
-      name: 'roundRectThin',
-      vertices: verts,
-      indices: idx,
-      vertexCount: (verts.length / 2) | 0,
-      indexCount: idx.length | 0,
-      triangleCount: (idx.length / 3) | 0,
-    }],
-  };
-  return cachedLyonMeshes;
-}
-
-function rebuildLyonRuns(vw, vh) {
-  lyonRoundRectRuns.length = 0;
-  const meshDemo = getLyonMeshes();
-  if (!meshDemo || meshDemo.ok !== true || !Array.isArray(meshDemo.meshes)) return;
-
-  // Packet format per mesh:
-  // [x, y, scale, r, g, b, a, vertex_count, index_count, ...verts_xy, ...indices]
-  const pushMesh = (x, y, scale, color, verts, idx) => {
-    const vcount = (verts.length / 2) | 0;
-    const icount = idx.length | 0;
-    if (vcount <= 0 || icount < 3) return;
-    lyonRoundRectRuns.push(x, y, scale, color[0], color[1], color[2], color[3], vcount, icount);
-    for (let i = 0; i < vcount * 2; i++) {
-      lyonRoundRectRuns.push(Number(verts[i] || 0));
-    }
-    for (let i = 0; i < icount; i++) {
-      lyonRoundRectRuns.push(Number(idx[i] || 0));
-    }
-  };
-
-  const palette = [
-    [20, 120, 230, 255],
-    [16, 170, 120, 255],
-    [210, 130, 24, 255],
-    [180, 70, 140, 255],
-  ];
-  const scales = [3.8, 2.4, 1.9, 1.6];
-  const anchorX = Math.max(530, Math.round(vw * 0.56));
-  const anchorY = Math.max(72, Math.round(vh * 0.14));
-  const cols = 2;
-  const slotX = 200;
-  const slotY = 120;
-
-  for (let i = 0; i < meshDemo.meshes.length; i++) {
-    const m = meshDemo.meshes[i];
-    const verts = Array.isArray(m && m.vertices) ? m.vertices : [];
-    const idx = Array.isArray(m && m.indices) ? m.indices : [];
-    if (((verts.length / 2) | 0) <= 0 || idx.length < 3) continue;
-
-    const col = i % cols;
-    const row = (i / cols) | 0;
-    const x = anchorX + (col * slotX);
-    const y = anchorY + (row * slotY);
-    const color = palette[i % palette.length];
-    const scale = scales[i % scales.length];
-    pushMesh(x, y, scale, color, verts, idx);
-  }
-}
-
-function appendLyonDemoLines(out) {
-  out.push('/* DEMOS (lyon) */');
-
-  const catalogFn = G.__trueosLyonCatalogLines;
-  if (typeof catalogFn === 'function') {
-    let catalog = null;
-    try {
-      catalog = catalogFn();
-    } catch (_) {
-      catalog = null;
-    }
-    if (Array.isArray(catalog)) {
-      for (let i = 0; i < catalog.length; i++) {
-        out.push(String(catalog[i] || ''));
-      }
-    }
-  }
-
-  // One-shot probe: ask lyon to build/tessellate a rounded-rect path and report results.
-  if (!lyon || lyon.isAvailable !== true || typeof lyon.demoShapes !== 'function') {
-    out.push('lyon backend unavailable');
-    out.push('');
-    return;
-  }
-
-  const demo = getLyonDemo();
-  if (!demo) {
-    out.push(`lyon demo failed: ${String((demo && demo.error) || 'unknown error')}`);
-    out.push('');
-    return;
-  }
-
-  out.push('Live Demo Metrics');
-  out.push(`${INDENT}path: rounded rectangle (44x28), radius=6, stroke=1`);
-  const meshDemo = getLyonMeshes();
-  if (meshDemo && meshDemo.ok === true && Array.isArray(meshDemo.meshes)) {
-    out.push(`${INDENT}mesh demo: count=${Number(meshDemo.meshCount || meshDemo.meshes.length || 0) | 0}`);
-    for (let i = 0; i < meshDemo.meshes.length; i++) {
-      const m = meshDemo.meshes[i] || {};
-      const name = String(m.name || `mesh${i}`);
-      const v = Number(m.vertexCount || 0) | 0;
-      const idx = Number(m.indexCount || 0) | 0;
-      const tris = Number(m.triangleCount || 0) | 0;
-      out.push(`${INDENT}${name}: verts=${v} idx=${idx} tris=${tris}`);
-    }
-  } else if (meshDemo && meshDemo.ok === false) {
-    out.push(`${INDENT}mesh demo failed: ${String(meshDemo.error || 'unknown')}`);
-  }
-  if (demo.triangleTessOk === true) {
-    const verts = Number(demo.triangleTessVertices || 0) | 0;
-    const idx = Number(demo.triangleTessIndices || 0) | 0;
-    const tris = Number(demo.triangleTessTriangles || 0) | 0;
-    out.push(`${INDENT}tess result: verts=${verts} idx=${idx} tris=${tris}`);
-  } else {
-    out.push(`${INDENT}tess failed: ${String(demo.triangleTessError || 'unknown')}`);
-  }
-
-  out.push(`${INDENT}line: len=${Number(demo.lineLength || 0).toFixed(2)} left=${Number(demo.lineLeftLen || 0).toFixed(2)} right=${Number(demo.lineRightLen || 0).toFixed(2)}`);
-  out.push(`${INDENT}quad: len=${Number(demo.quadLength || 0).toFixed(2)} approx=${Number(demo.quadApproxLength || 0).toFixed(2)} baseline=${Number(demo.quadBaselineLen || 0).toFixed(2)}`);
-  out.push(`${INDENT}cubic: approx=${Number(demo.cubicApproxLength || 0).toFixed(2)} baseline=${Number(demo.cubicBaselineLen || 0).toFixed(2)}`);
-  out.push(`${INDENT}triangle: area=${Number(demo.triangleArea || 0).toFixed(2)} signed=${Number(demo.triangleSignedArea || 0).toFixed(2)}`);
-  out.push('');
-}
 
 function computeViewport() {
   const W = G.window || G;
@@ -450,8 +284,6 @@ function formatHtmlToLines(html) {
   const cssObjects = [];
   const kids = Array.isArray(doc && doc.childNodes) ? doc.childNodes : [];
 
-  appendLyonDemoLines(out);
-
   for (let i = 0; i < kids.length; i++) {
     const k = kids[i];
     if (!k) continue;
@@ -539,7 +371,6 @@ function ensureDoc(vw) {
 
 function paint() {
   const { vw, vh } = computeViewport();
-  rebuildLyonRuns(vw, vh);
   const doc = ensureDoc(vw);
   const maxScroll = Math.max(0, Math.round(Number(doc.contentH || vh) - vh));
   if (scrollY > maxScroll) scrollY = maxScroll;
@@ -558,7 +389,7 @@ function paint() {
   fpsOverlay.appendRuns(textRuns, vw);
 
   if (typeof G.__trueosDrawLayoutRects === 'function') {
-    G.__trueosDrawLayoutRects([], vw, vh, textRuns, lyonRoundRectRuns);
+    G.__trueosDrawLayoutRects([], vw, vh, textRuns);
   }
   return true;
 }
