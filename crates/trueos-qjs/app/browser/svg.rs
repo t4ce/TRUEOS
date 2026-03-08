@@ -20,7 +20,10 @@ pub enum WindowIconKind {
     RadioSelected,
 }
 
+#[cfg(feature = "usvg-native")]
 type ParsedSvgTree = usvg::Tree;
+#[cfg(not(feature = "usvg-native"))]
+type ParsedSvgTree = ();
 
 pub struct SvgIconBuffer {
     width: u32,
@@ -154,8 +157,17 @@ fn color_from_f64(v: f64) -> u32 {
 }
 
 fn parse_usvg_tree(svg_source: &str) -> Option<ParsedSvgTree> {
-    let opts = usvg::Options::default();
-    usvg::Tree::from_str(svg_source, &opts).ok()
+    #[cfg(feature = "usvg-native")]
+    {
+        let opts = usvg::Options::default();
+        return usvg::Tree::from_str(svg_source, &opts).ok();
+    }
+
+    #[cfg(not(feature = "usvg-native"))]
+    {
+        let _ = svg_source;
+        None
+    }
 }
 
 fn push_line(cmds: &mut Vec<f64>, x0: f64, y0: f64, x1: f64, y1: f64, thickness: f64, color: u32) {

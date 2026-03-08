@@ -156,6 +156,14 @@ impl Path {
         }
     }
 
+    /// Best-effort existence check against the current TRUEOSFS root.
+    ///
+    /// Mirrors `std::path::Path::exists()` behavior by collapsing all backend
+    /// errors into `false`.
+    pub fn exists(&self) -> bool {
+        crate::surface::std::fs::exists(self).unwrap_or(false)
+    }
+
     fn trim_trailing_slash(&self) -> &str {
         let s = self.as_str();
         if s.len() > 1 {

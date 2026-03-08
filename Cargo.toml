@@ -66,3 +66,8 @@ trueos-limloader = { path = "crates/trueos-limloader" }
 [patch.crates-io]
 num-traits = { path = "vendor/num-traits-0.2.19" }
 usvg = { path = "vendor/usvg-0.45.1" }
+imagesize = { path = "vendor/imagesize-0.13.0" }
+kurbo = { path = "vendor/kurbo-0.11.3" }
+svgtypes = { path = "vendor/svgtypes-0.15.3" }
+xmlwriter = { path = "vendor/xmlwriter-0.1.0" }
+crc32fast = { path = "vendor/crc32fast-1.5.0" }

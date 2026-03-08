@@ -21,6 +21,35 @@ let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
 let cachedCssObjects = [];
+let lyonRoundRectRuns = [];
+
+function rebuildLyonRoundRectRuns(demo) {
+  lyonRoundRectRuns = [];
+  const verts = Array.isArray(demo && demo.triangleVertices) ? demo.triangleVertices : [];
+  const idx = Array.isArray(demo && demo.triangleIndices) ? demo.triangleIndices : [];
+  if (verts.length < 6 || idx.length < 3) return;
+
+  // Draw near the demo header so the tessellated rounded-rect is visible.
+  const ox = 220;
+  const oy = 30;
+  // Keep tessellated 1px stroke at 1px on screen.
+  const s = 1;
+  const r = 20;
+  const g = 20;
+  const b = 20;
+  const a = 220;
+
+  for (let i = 0; i + 2 < idx.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      const vi = Number(idx[i + k] || 0) | 0;
+      const p = vi * 2;
+      if (p + 1 >= verts.length) continue;
+      const x = Number(verts[p + 0] || 0);
+      const y = Number(verts[p + 1] || 0);
+      lyonRoundRectRuns.push(ox + (x * s), oy + (y * s), r, g, b, a);
+    }
+  }
+}
 
 function fmtNum(v) {
   const n = Number(v);
@@ -50,10 +79,15 @@ function appendLyonDemoLines(out) {
     return;
   }
 
-  out.push(`line length(0,0 -> 40,30): ${fmtNum(demo.lineLength)} px`);
-  out.push(`triangle area[(0,0),(24,0),(10,18)]: ${fmtNum(demo.triangleArea)} px^2`);
-  out.push(`quad@t=0.5: (${fmtNum(demo.quadMidX)}, ${fmtNum(demo.quadMidY)})`);
-  out.push(`cubic@t=0.5: (${fmtNum(demo.cubicMidX)}, ${fmtNum(demo.cubicMidY)})`);
+  rebuildLyonRoundRectRuns(demo);
+
+  out.push('rounded rect border (1px):');
+  if (demo.triangleTessOk === true) {
+    out.push(`${INDENT}tess stroke verts/idx/tris: ${fmtNum(demo.triangleTessVertices)} / ${fmtNum(demo.triangleTessIndices)} / ${fmtNum(demo.triangleTessTriangles)}`);
+  } else {
+    out.push(`${INDENT}tess stroke failed: ${String(demo.triangleTessError || 'unknown')}`);
+  }
+  out.push(`${INDENT}shape: rounded rectangle 44x28, radius 6, stroke 1px`);
   out.push('');
 }
 
@@ -426,7 +460,7 @@ function paint() {
   }
 
   if (typeof G.__trueosDrawLayoutRects === 'function') {
-    G.__trueosDrawLayoutRects([], vw, vh, textRuns);
+    G.__trueosDrawLayoutRects([], vw, vh, textRuns, lyonRoundRectRuns);
   }
   return true;
 }
