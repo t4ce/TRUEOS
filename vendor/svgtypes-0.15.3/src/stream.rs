@@ -1,6 +1,8 @@
 // Copyright 2018 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::borrow::ToOwned;
+
 use crate::Error;
 
 /// Extension methods for XML-subset only operations.
@@ -169,7 +171,7 @@ impl<'a> Stream<'a> {
     }
 
     #[inline]
-    pub fn chars(&self) -> std::str::Chars<'a> {
+    pub fn chars(&self) -> core::str::Chars<'a> {
         self.text[self.pos..].chars()
     }
 
@@ -349,14 +351,14 @@ impl<'a> Stream<'a> {
         }
 
         if !self.starts_with(text) {
-            let len = std::cmp::min(text.len(), self.text.len() - self.pos);
+            let len = core::cmp::min(text.len(), self.text.len() - self.pos);
             // Collect chars and do not slice a string,
             // because the `len` can be on the char boundary.
             // Which lead to a panic.
             let actual = self.text[self.pos..].chars().take(len).collect();
 
             // Assume that all input `text` are valid UTF-8 strings, so unwrap is safe.
-            let expected = std::str::from_utf8(text).unwrap().to_owned();
+            let expected = core::str::from_utf8(text).unwrap().to_owned();
 
             return Err(Error::InvalidString(
                 vec![actual, expected],

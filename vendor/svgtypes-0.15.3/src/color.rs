@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::{colors, ByteExt, Error, Stream};
+use kurbo::common::FloatFuncs;
 
 /// Representation of the [`<color>`] type.
 ///
@@ -75,7 +76,7 @@ impl Color {
     }
 }
 
-impl std::str::FromStr for Color {
+impl core::str::FromStr for Color {
     type Err = Error;
 
     /// Parses [CSS3](https://www.w3.org/TR/css-color-3/) `Color` from a string.
@@ -304,7 +305,7 @@ fn f64_bound(min: f64, val: f64, max: f64) -> f64 {
 #[rustfmt::skip]
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use core::str::FromStr;
     use crate::Color;
 
     macro_rules! test {

@@ -1,7 +1,8 @@
 // Copyright 2021 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::HashMap;
+use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
+use alloc::collections::BTreeMap as HashMap;
 
 use roxmltree::Error;
 use simplecss::Declaration;

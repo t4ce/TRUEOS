@@ -1,8 +1,10 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::sync::Arc;
+use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::sync::Arc;
 
+use kurbo::common::FloatFuncs;
 use strict_num::NonZeroPositiveF32;
 use svgtypes::Length;
 use tiny_skia_path::Point;
@@ -411,7 +413,7 @@ fn calc_curves_angle(
 }
 
 fn calc_angle(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, x4: f32, y4: f32) -> f32 {
-    use std::f32::consts::*;
+    use core::f32::consts::*;
 
     fn normalize(rad: f32) -> f32 {
         let v = rad % (PI * 2.0);

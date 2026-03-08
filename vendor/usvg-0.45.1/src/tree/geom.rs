@@ -1,24 +1,31 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use strict_num::ApproxEqUlps;
+use crate::ApproxEqUlps;
 use svgtypes::{Align, AspectRatio};
 pub use tiny_skia_path::{NonZeroRect, Rect, Size, Transform};
 
 /// Approximate zero equality comparisons.
 pub trait ApproxZeroUlps: ApproxEqUlps {
+    /// ULP counter type for the current float type.
+    type Ulps;
+
     /// Checks if the number is approximately zero.
-    fn approx_zero_ulps(&self, ulps: <Self::Flt as strict_num::Ulps>::U) -> bool;
+    fn approx_zero_ulps(&self, ulps: Self::Ulps) -> bool;
 }
 
 impl ApproxZeroUlps for f32 {
+    type Ulps = i32;
+
     fn approx_zero_ulps(&self, ulps: i32) -> bool {
         self.approx_eq_ulps(&0.0, ulps)
     }
 }
 
 impl ApproxZeroUlps for f64 {
-    fn approx_zero_ulps(&self, ulps: i64) -> bool {
+    type Ulps = i32;
+
+    fn approx_zero_ulps(&self, ulps: i32) -> bool {
         self.approx_eq_ulps(&0.0, ulps)
     }
 }

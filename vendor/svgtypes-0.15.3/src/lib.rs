@@ -55,14 +55,10 @@ None.
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 #![deny(missing_copy_implementations)]
-#![allow(internal_features)]
-#![feature(prelude_import)]
+#![no_std]
 
+#[macro_use]
 extern crate alloc;
-
-#[prelude_import]
-#[allow(unused)]
-use alloc::prelude::rust_2021::*;
 
 macro_rules! matches {
     ($expression:expr, $($pattern:tt)+) => {
