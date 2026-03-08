@@ -12,6 +12,16 @@ pub use complex::Complex;
 pub mod matrix;
 pub use matrix::{Matrix, Vector};
 
+#[inline]
+pub fn sin_f32(x: f32) -> f32 {
+    libm::sinf(x)
+}
+
+#[inline]
+pub fn cos_f32(x: f32) -> f32 {
+    libm::cosf(x)
+}
+
 pub(crate) mod ascii_tree;
 
 #[cfg(any(feature = "alloc", test))]

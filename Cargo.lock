@@ -20,6 +20,7 @@ dependencies = [
  "libm",
  "limine",
  "log",
+ "lyon_geom",
  "lyon_tessellation",
  "memchr",
  "miniz_oxide",
@@ -953,9 +954,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lyon_geom"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e260b6de923e6e47adfedf6243013a7a874684165a6a277594ee3906021b2343"
+checksum = "4336502e29e32af93cf2dad2214ed6003c17ceb5bd499df77b1de663b9042b92"
 dependencies = [
  "arrayvec",
  "euclid",
@@ -1689,6 +1690,9 @@ version = "0.1.0"
 [[package]]
 name = "trueos-math"
 version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "trueos-qjs"
