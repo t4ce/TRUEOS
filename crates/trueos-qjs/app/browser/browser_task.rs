@@ -119,6 +119,7 @@ pub async fn boot_browser() {
                 qjs::node::install_globals(ctx);
                 qjs::svg::init_window_svgs_once();
                 qjs::layout::install_layout_api(ctx);
+                qjs::browser_lyon::install_lyon_api(ctx);
 
                 if !install_globals(ctx) {
                         trueos_cabi_gfx_present_owner_set(0);

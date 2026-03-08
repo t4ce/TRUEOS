@@ -47,7 +47,6 @@ static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-static GFX_VGA_SWAP_FORWARD_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
 static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
@@ -194,80 +193,6 @@ async fn gfx_virgl_ready_task() {
 
 fn spawn_gfx_virgl_ready_task(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(gfx_virgl_ready_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-#[embassy_executor::task]
-async fn gfx_vga_swap_forward_task() {
-    #[cfg(not(feature = "gfx_virgl"))]
-    {
-        return;
-    }
-
-    #[cfg(feature = "gfx_virgl")]
-    {
-        const TEX_ID: u32 = 2;
-        let mut last_rc: i32 = 0;
-        let mut stage: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
-        let mut stage_w: usize = 0;
-        let mut stage_h: usize = 0;
-
-        loop {
-            if !matches!(
-                crate::gfx::present_owner(),
-                crate::gfx::PresentOwner::Forward
-            ) {
-                Timer::after(EmbassyDuration::from_millis(16)).await;
-                continue;
-            }
-
-            let copied = crate::gfx::with_cpu_backbuffer_mut(|pixels, w, h| {
-                let need = w.saturating_mul(h);
-                if need == 0 || pixels.len() < need {
-                    return false;
-                }
-                if stage.len() != need {
-                    stage.resize(need, 0);
-                }
-                stage[..need].copy_from_slice(&pixels[..need]);
-                stage_w = w;
-                stage_h = h;
-                true
-            })
-            .unwrap_or(false);
-            if !copied {
-                Timer::after(EmbassyDuration::from_millis(16)).await;
-                continue;
-            }
-
-            let data_len = stage.len().saturating_mul(core::mem::size_of::<u32>());
-            let rc = unsafe {
-                crate::surface::io::cabi::trueos_cabi_gfx_present_rgba(
-                    TEX_ID,
-                    stage_w as u32,
-                    stage_h as u32,
-                    stage.as_ptr() as *const u8,
-                    data_len,
-                    0xFFFFFF,
-                )
-            };
-
-            if rc != 0 && rc != last_rc {
-                crate::log!("gfx-vga-swap-forward: present rc={}\n", rc);
-                last_rc = rc;
-            } else if rc == 0 {
-                last_rc = 0;
-            }
-
-            Timer::after(EmbassyDuration::from_millis(16)).await;
-        }
-    }
-}
-
-fn spawn_gfx_vga_swap_forward_task(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(gfx_vga_swap_forward_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -667,13 +592,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &GFX_VIRGL_READY_TASK_STARTED,
         spawn: spawn_gfx_virgl_ready_task,
-    },
-    TaskSpec {
-        name: "gfx-vga-swap-forward",
-        disabled: false,
-        required: crate::v::readiness::GFX_BACKEND_READY,
-        started: &GFX_VGA_SWAP_FORWARD_STARTED,
-        spawn: spawn_gfx_vga_swap_forward_task,
     },
     TaskSpec {
         name: "gfx-virgl-cursor-overlay",

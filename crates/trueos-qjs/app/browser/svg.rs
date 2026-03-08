@@ -221,11 +221,16 @@ fn make_icon(svg_source: &str, mut line_cmds: Vec<f64>) -> SvgIconBuffer {
     }
 }
 
+#[inline]
+fn make_icon_from_def(def: crate::icon::WindowIconDef) -> SvgIconBuffer {
+    make_icon(def.svg_source, def.line_cmds.to_vec())
+}
+
 fn make_radio_selected_icon() -> SvgIconBuffer {
     let mut cmds = Vec::new();
-    let segs = 24usize;
-    let outer_r = 0.30f32;
-    let inner_r = 0.10f32;
+    let segs = crate::icon::RADIO_SELECTED_SEGS;
+    let outer_r = crate::icon::RADIO_SELECTED_OUTER_R;
+    let inner_r = crate::icon::RADIO_SELECTED_INNER_R;
 
     for i in 0..segs {
         let a0 = (i as f32) * core::f32::consts::TAU / (segs as f32);
@@ -242,7 +247,7 @@ fn make_radio_selected_icon() -> SvgIconBuffer {
             ox1 as f64,
             oy1 as f64,
             2.0,
-            0xFF202020u32,
+            crate::icon::ICON_STROKE_RGBA,
         );
 
         let ix0 = 0.5 + inner_r * libm::cosf(a0);
@@ -256,14 +261,11 @@ fn make_radio_selected_icon() -> SvgIconBuffer {
             ix1 as f64,
             iy1 as f64,
             2.0,
-            0xFF202020u32,
+            crate::icon::ICON_STROKE_RGBA,
         );
     }
 
-    make_icon(
-        r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><circle cx='16' cy='16' r='9' fill='none' stroke='#202020' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='none' stroke='#202020' stroke-width='2'/></svg>"#,
-        cmds,
-    )
+    make_icon(crate::icon::RADIO_SELECTED_SVG, cmds)
 }
 
 static WINDOW_SVGS_INIT: Once<()> = Once::new();
@@ -272,130 +274,13 @@ static IMPORTED_SVGS: Mutex<BTreeMap<u32, SvgImportedAsset>> = Mutex::new(BTreeM
 
 pub fn init_window_svgs_once() {
     WINDOW_SVGS_INIT.call_once(|| {
-        let close = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M7 7L25 25M25 7L7 25' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![
-                0.22,
-                0.22,
-                0.78,
-                0.78,
-                2.0,
-                0xFF202020u32 as f64,
-                0.78,
-                0.22,
-                0.22,
-                0.78,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
-
-        let minimize = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M6 20L26 20' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![0.20, 0.62, 0.80, 0.62, 2.0, 0xFF202020u32 as f64],
-        );
-
-        let maximize = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><rect x='8' y='8' width='16' height='16' fill='none' stroke='#202020' stroke-width='2'/></svg>"#,
-            vec![
-                0.24,
-                0.26,
-                0.76,
-                0.26,
-                2.0,
-                0xFF202020u32 as f64,
-                0.76,
-                0.26,
-                0.76,
-                0.74,
-                2.0,
-                0xFF202020u32 as f64,
-                0.76,
-                0.74,
-                0.24,
-                0.74,
-                2.0,
-                0xFF202020u32 as f64,
-                0.24,
-                0.74,
-                0.24,
-                0.26,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
-
-        let arrow_left = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M22 8L11 16L22 24' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![
-                0.70,
-                0.24,
-                0.36,
-                0.50,
-                2.0,
-                0xFF202020u32 as f64,
-                0.70,
-                0.76,
-                0.36,
-                0.50,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
-
-        let arrow_right = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M10 8L21 16L10 24' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![
-                0.30,
-                0.24,
-                0.64,
-                0.50,
-                2.0,
-                0xFF202020u32 as f64,
-                0.30,
-                0.76,
-                0.64,
-                0.50,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
-
-        let arrow_up = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M7 21L16 11L25 21' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![
-                0.22,
-                0.64,
-                0.50,
-                0.34,
-                2.0,
-                0xFF202020u32 as f64,
-                0.78,
-                0.64,
-                0.50,
-                0.34,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
-
-        let arrow_down = make_icon(
-            r#"<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><path d='M7 11L16 21L25 11' stroke='#202020' stroke-width='2' fill='none'/></svg>"#,
-            vec![
-                0.22,
-                0.36,
-                0.50,
-                0.66,
-                2.0,
-                0xFF202020u32 as f64,
-                0.78,
-                0.36,
-                0.50,
-                0.66,
-                2.0,
-                0xFF202020u32 as f64,
-            ],
-        );
+        let close = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[0]);
+        let minimize = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[1]);
+        let maximize = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[2]);
+        let arrow_left = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[3]);
+        let arrow_right = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[4]);
+        let arrow_up = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[5]);
+        let arrow_down = make_icon_from_def(crate::icon::WINDOW_ICON_DEFS[6]);
 
         let radio_selected = make_radio_selected_icon();
 

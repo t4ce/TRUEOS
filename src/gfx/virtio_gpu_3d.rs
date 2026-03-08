@@ -57,6 +57,12 @@ const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0207;
 
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const CTRL_RESP_OK_NODATA: [u32; 1] = [VIRTIO_GPU_RESP_OK_NODATA];
+const CTRL_RESP_OK_QUERY: [u32; 3] = [
+    VIRTIO_GPU_RESP_OK_NODATA,
+    VIRTIO_GPU_RESP_OK_DISPLAY_INFO,
+    VIRTIO_GPU_RESP_OK_EDID,
+];
 
 // Control queue request buffer capacity for inline submit_3d payloads.
 // Keep this modest but above typical UI frame bursts.
@@ -935,12 +941,28 @@ impl VirtioGpu3d {
             return None;
         }
         let info = unsafe { &*(self.resp.virt() as *const RespDisplayInfo) };
+        let mut first_mode: Option<(u32, u32, u32, u32, u32)> = None;
         for (i, m) in info.pmodes.iter().enumerate() {
+            if first_mode.is_none() && m.r.width != 0 && m.r.height != 0 {
+                first_mode = Some((i as u32, m.r.width, m.r.height, m.enabled, m.flags));
+            }
             if m.enabled != 0 && m.r.width != 0 && m.r.height != 0 {
                 return Some((i as u32, m.r.width, m.r.height));
             }
         }
-        Some((0, 1024, 768))
+        if let Some((i, w, h, enabled, flags)) = first_mode {
+            crate::log!(
+                "virgl: get_display_info no enabled scanout (first mode id={} {}x{} enabled={} flags=0x{:08X})\n",
+                i,
+                w,
+                h,
+                enabled,
+                flags
+            );
+        } else {
+            crate::log!("virgl: get_display_info no scanout modes reported\n");
+        }
+        None
     }
 
     pub fn get_edid(&mut self, scanout_id: u32, out: &mut [u8]) -> Option<usize> {
@@ -1294,7 +1316,16 @@ impl VirtioGpu3d {
             core::ptr::write_bytes(self.resp.virt(), 0, self.resp.len());
         }
 
-        if !self.ctrl_submit_desc_chain(req_bytes.len()) {
+        if !Self::submit_desc_chain_on(
+            self.notify,
+            self.notify_mult,
+            &mut self.ctrlq,
+            &self.req,
+            &self.resp,
+            req_bytes.len(),
+            "ctrlq",
+            Some(&CTRL_RESP_OK_QUERY),
+        ) {
             return None;
         }
         let resp_hdr = unsafe { &*(self.resp.virt() as *const CtrlHdr) };
@@ -1322,7 +1353,7 @@ impl VirtioGpu3d {
             &self.resp,
             req_bytes.len(),
             "cursorq",
-            false,
+            None,
         )
     }
 
@@ -1335,7 +1366,7 @@ impl VirtioGpu3d {
             &self.resp,
             req_len,
             "ctrlq",
-            true,
+            Some(&CTRL_RESP_OK_NODATA),
         )
     }
 
@@ -1347,7 +1378,7 @@ impl VirtioGpu3d {
         resp: &DmaRegion,
         req_len: usize,
         queue_label: &str,
-        validate_resp_hdr: bool,
+        expected_resp_types: Option<&[u32]>,
     ) -> bool {
         // Fixed descriptor pair (0 -> req, 1 -> resp). Single outstanding.
         unsafe {
@@ -1404,18 +1435,18 @@ impl VirtioGpu3d {
             return false;
         }
 
-        if !validate_resp_hdr {
+        let Some(expected) = expected_resp_types else {
             return true;
-        }
+        };
 
         let resp_hdr = unsafe { &*(resp.virt() as *const CtrlHdr) };
-        let ok = resp_hdr.type_ == VIRTIO_GPU_RESP_OK_NODATA
-            || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_DISPLAY_INFO
-            || resp_hdr.type_ == VIRTIO_GPU_RESP_OK_EDID;
+        let ok = expected.contains(&resp_hdr.type_);
         if !ok {
+            let req_type = unsafe { *(req.virt() as *const u32) };
             crate::log!(
-                "virtio-gpu3d: {} bad resp type=0x{:08X} req_len={}\n",
+                "virtio-gpu3d: {} bad resp req=0x{:08X} type=0x{:08X} req_len={}\n",
                 queue_label,
+                req_type,
                 resp_hdr.type_,
                 req_len
             );
@@ -1773,7 +1804,22 @@ impl VirglGfxBackend {
         _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
-        let (scanout_id, disp_w, disp_h) = gpu.get_display_info()?;
+        let mut display = None;
+        for attempt in 1..=10u32 {
+            if let Some(mode) = gpu.get_display_info() {
+                display = Some(mode);
+                break;
+            }
+            if attempt == 1 || attempt == 10 || (attempt % 3) == 0 {
+                crate::log!(
+                    "virgl-backend: waiting for enabled scanout (attempt {}/{})\n",
+                    attempt,
+                    10
+                );
+            }
+            let _ = wait::spin_until_timeout_no_exec(20, || false);
+        }
+        let (scanout_id, disp_w, disp_h) = display?;
 
         // Best-effort refresh estimation via EDID.
         let refresh_millihz = {
@@ -1834,6 +1880,15 @@ impl VirglGfxBackend {
         }
         if !gpu.set_scanout(scanout_id, scanout_res, present_w, present_h) {
             crate::log!("virgl-backend: set_scanout failed\n");
+            return None;
+        }
+        // Bringup guardrail: ensure the scanout upload path works immediately after scanout bind.
+        if !gpu.transfer_to_host_2d(scanout_res, present_w, present_h) {
+            crate::log!("virgl-backend: initial transfer_to_host_2d failed\n");
+            return None;
+        }
+        if !gpu.resource_flush(scanout_res, present_w, present_h) {
+            crate::log!("virgl-backend: initial resource_flush failed\n");
             return None;
         }
 
