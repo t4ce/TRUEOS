@@ -1,7 +1,7 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 use svgtypes::Length;
 use tiny_skia_path::Path;

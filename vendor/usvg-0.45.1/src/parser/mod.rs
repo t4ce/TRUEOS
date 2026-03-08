@@ -1,6 +1,7 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::{boxed::Box, string::String, vec::Vec};
 mod clippath;
 mod converter;
 mod filter;
@@ -52,8 +53,8 @@ impl From<roxmltree::Error> for Error {
     }
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match *self {
             Error::NotAnUtf8Str => {
                 write!(f, "provided data has not an UTF-8 encoding")
@@ -74,7 +75,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 pub(crate) trait OptionLog {
     fn log_none<F: FnOnce()>(self, f: F) -> Self;
@@ -97,10 +98,10 @@ impl crate::Tree {
     pub fn from_data(data: &[u8], opt: &Options) -> Result<Self, Error> {
         if data.starts_with(&[0x1f, 0x8b]) {
             let data = decompress_svgz(data)?;
-            let text = std::str::from_utf8(&data).map_err(|_| Error::NotAnUtf8Str)?;
+            let text = core::str::from_utf8(&data).map_err(|_| Error::NotAnUtf8Str)?;
             Self::from_str(text, opt)
         } else {
-            let text = std::str::from_utf8(data).map_err(|_| Error::NotAnUtf8Str)?;
+            let text = core::str::from_utf8(data).map_err(|_| Error::NotAnUtf8Str)?;
             Self::from_str(text, opt)
         }
     }

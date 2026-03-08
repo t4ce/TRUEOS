@@ -1,6 +1,7 @@
 // Copyright 2024 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::parser::OptionLog;
 use rustybuzz::ttf_parser;
 
@@ -16,22 +17,22 @@ impl Builder<'_> {
 
 impl ttf_parser::OutlineBuilder for Builder<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
-        use std::fmt::Write;
+        use core::fmt::Write;
         write!(self.0, "M {} {} ", x, y).unwrap()
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        use std::fmt::Write;
+        use core::fmt::Write;
         write!(self.0, "L {} {} ", x, y).unwrap()
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        use std::fmt::Write;
+        use core::fmt::Write;
         write!(self.0, "Q {} {} {} {} ", x1, y1, x, y).unwrap()
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        use std::fmt::Write;
+        use core::fmt::Write;
         write!(self.0, "C {} {} {} {} {} {} ", x1, y1, x2, y2, x, y).unwrap()
     }
 

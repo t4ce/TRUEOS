@@ -1,7 +1,8 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::sync::Arc;
+use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::sync::Arc;
 
 use strict_num::NonZeroPositiveF32;
 pub use svgtypes::FontFamily;

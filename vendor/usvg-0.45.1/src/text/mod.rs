@@ -1,7 +1,8 @@
 // Copyright 2024 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::sync::Arc;
+use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::sync::Arc;
 
 use fontdb::{Database, ID};
 use svgtypes::FontFamily;
@@ -189,8 +190,8 @@ impl FontResolver<'_> {
     }
 }
 
-impl std::fmt::Debug for FontResolver<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for FontResolver<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("FontResolver { .. }")
     }
 }

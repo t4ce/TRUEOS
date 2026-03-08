@@ -1,6 +1,7 @@
 // Copyright 2019 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::{boxed::Box, string::String, vec::Vec};
 use svgtypes::{Length, LengthUnit as Unit};
 
 use super::converter;

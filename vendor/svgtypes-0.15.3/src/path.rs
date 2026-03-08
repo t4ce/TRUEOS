@@ -1,6 +1,8 @@
 // Copyright 2021 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::vec::Vec;
+
 use crate::{Error, Stream};
 
 /// Representation of a path segment.

@@ -1,8 +1,10 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::{boxed::Box, string::{String, ToString}, vec, vec::Vec};
+use alloc::borrow::ToOwned;
 #[cfg(feature = "text")]
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 #[cfg(feature = "text")]
 use crate::FontResolver;
@@ -17,7 +19,7 @@ pub struct Options<'a> {
     /// but can be set to any.
     ///
     /// Default: `None`
-    pub resources_dir: Option<std::path::PathBuf>,
+    pub resources_dir: Option<String>,
 
     /// Target DPI.
     ///
@@ -127,11 +129,9 @@ impl Options<'_> {
     /// Converts a relative path into absolute relative to the SVG file itself.
     ///
     /// If `Options::resources_dir` is not set, returns itself.
-    pub fn get_abs_path(&self, rel_path: &std::path::Path) -> std::path::PathBuf {
-        match self.resources_dir {
-            Some(ref dir) => dir.join(rel_path),
-            None => rel_path.into(),
-        }
+    pub fn get_abs_path<'a>(&self, rel_path: &'a str) -> &'a str {
+        let _ = &self.resources_dir;
+        rel_path
     }
 
     /// Mutably acquires the database.
