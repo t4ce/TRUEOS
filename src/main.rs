@@ -33,6 +33,8 @@ mod tga;
 mod time;
 mod turbo;
 mod usb;
+#[path = "tst/usvg_smoke.rs"]
+mod usvg_smoke;
 mod v;
 mod vga;
 mod wait;

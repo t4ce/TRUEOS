@@ -1800,6 +1800,7 @@ pub mod cabi {
         st.frame_draws.clear();
         st.frame_rgb_blob.clear();
         st.frame_tex_blob.clear();
+        st.cur_scissor = None;
         let seq = st.frame_seq;
         if seq <= 10 || seq.is_multiple_of(20) {
             crate::globalog::log(format_args!(

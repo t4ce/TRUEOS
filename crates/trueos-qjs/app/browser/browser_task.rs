@@ -117,7 +117,6 @@ pub async fn boot_browser() {
         let rt = vm.rt_ptr();
 
                 qjs::node::install_globals(ctx);
-                qjs::svg::init_window_svgs_once();
                 qjs::layout::install_layout_api(ctx);
 
                 if !install_globals(ctx) {

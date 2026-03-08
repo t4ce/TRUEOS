@@ -54,13 +54,13 @@ fn rotate_quadrant(p: (f32, f32), q: u32) -> (f32, f32) {
 
 fn build_arrow_path(rotation_quadrants: u32) -> Path {
     let base = [
-        (4.0, 9.0),
-        (16.0, 9.0),
-        (16.0, 5.0),
-        (28.0, 16.0),
-        (16.0, 27.0),
-        (16.0, 23.0),
-        (4.0, 23.0),
+        (8.0, 14.0),
+        (18.0, 14.0),
+        (18.0, 8.0),
+        (26.0, 16.0),
+        (18.0, 24.0),
+        (18.0, 18.0),
+        (8.0, 18.0),
     ];
     let mut builder = Path::builder();
     let p0 = rotate_quadrant(base[0], rotation_quadrants);
@@ -74,23 +74,53 @@ fn build_arrow_path(rotation_quadrants: u32) -> Path {
 }
 
 fn build_plus_path() -> Path {
+    let base = [
+        (0.0, 0.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+        (1.0, 0.0),
+        (2.0, 0.0),
+        (2.0, -1.0),
+        (1.0, -1.0),
+        (1.0, -2.0),
+        (0.0, -2.0),
+        (0.0, -1.0),
+        (-1.0, -1.0),
+        (-1.0, 0.0),
+    ];
+
+    let scale = 5.0f32;
+    let cx = 16.0f32;
+    let cy = 16.0f32;
+    let ux = 0.5f32;
+    let uy = -0.5f32;
+
     let mut builder = Path::builder();
-    builder.begin(point(16.0, 5.0));
-    builder.line_to(point(16.0, 27.0));
-    builder.end(false);
-
-    builder.begin(point(5.0, 16.0));
-    builder.line_to(point(27.0, 16.0));
-    builder.end(false);
-
+    let p0 = base[0];
+    builder.begin(point(cx + (p0.0 - ux) * scale, cy + (p0.1 - uy) * scale));
+    for p in &base[1..] {
+        builder.line_to(point(cx + (p.0 - ux) * scale, cy + (p.1 - uy) * scale));
+    }
+    builder.end(true);
     builder.build()
 }
 
 fn build_minus_path() -> Path {
+    let base = [(2.0, 0.0), (2.0, -1.0), (-1.0, -1.0), (-1.0, 0.0)];
+
+    let scale = 5.0f32;
+    let cx = 16.0f32;
+    let cy = 16.0f32;
+    let ux = 0.5f32;
+    let uy = -0.5f32;
+
     let mut builder = Path::builder();
-    builder.begin(point(5.0, 16.0));
-    builder.line_to(point(27.0, 16.0));
-    builder.end(false);
+    let p0 = base[0];
+    builder.begin(point(cx + (p0.0 - ux) * scale, cy + (p0.1 - uy) * scale));
+    for p in &base[1..] {
+        builder.line_to(point(cx + (p.0 - ux) * scale, cy + (p.1 - uy) * scale));
+    }
+    builder.end(true);
     builder.build()
 }
 
@@ -139,18 +169,11 @@ fn build_regular_polygon_path(sides: usize) -> Path {
     builder.build()
 }
 
-fn build_cell_inner_border_path() -> Path {
-    let mut builder = Path::builder();
-    // 1px stroke centered on this contour stays inside the 32x32 cell.
-    builder.begin(point(0.5, 0.5));
-    builder.line_to(point(31.5, 0.5));
-    builder.line_to(point(31.5, 31.5));
-    builder.line_to(point(0.5, 31.5));
-    builder.end(true);
-    builder.build()
-}
-
 fn build_cached_icons() -> Vec<CachedIcon> {
+    const SHADOW_DX: f32 = 1.0;
+    const SHADOW_DY: f32 = 1.0;
+    const SHADOW_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.22];
+
     let paths = [
         build_arrow_path(0),
         build_arrow_path(1),
@@ -165,55 +188,70 @@ fn build_cached_icons() -> Vec<CachedIcon> {
         build_regular_polygon_path(6),
         build_regular_polygon_path(8),
     ];
-    let cell_border = build_cell_inner_border_path();
-    let flat_color = [0.0, 0.0, 0.0, 1.0];
+    let palette = [
+        [0.0, 0.0, 0.0, 1.0],
+        [0.85, 0.18, 0.18, 1.0],
+        [0.12, 0.62, 0.22, 1.0],
+        [0.12, 0.32, 0.85, 1.0],
+        [0.95, 0.55, 0.12, 1.0],
+    ];
 
-    let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len());
+    let mut base_geometries: Vec<(Vec<[f32; 2]>, Vec<u16>)> = Vec::with_capacity(paths.len());
     for (i, path) in paths.iter().enumerate() {
         let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
         let mut tessellator = StrokeTessellator::new();
 
         let icon_res = tessellator.tessellate_path(
             path,
-            &StrokeOptions::default().with_line_width(3.0),
+            &StrokeOptions::default().with_line_width(2.0),
             &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| {
                 let p = vertex.position().to_array();
                 MyVertex {
                     position: [p[0], p[1]],
-                    color: flat_color,
+                    color: [0.0, 0.0, 0.0, 1.0],
                 }
             }),
         );
 
         if icon_res.is_err() {
             crate::log!("lyon-demo: tessellation failed at icon={}\n", i);
-            out.push(CachedIcon {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-            });
+            base_geometries.push((Vec::new(), Vec::new()));
             continue;
         }
 
-        let border_res = tessellator.tessellate_path(
-            &cell_border,
-            &StrokeOptions::default().with_line_width(1.0),
-            &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| {
-                let p = vertex.position().to_array();
-                MyVertex {
-                    position: [p[0], p[1]],
-                    color: flat_color,
-                }
-            }),
-        );
-
-        if border_res.is_err() {
-            crate::log!("lyon-demo: border tessellation failed at icon={}\n", i);
+        let mut positions: Vec<[f32; 2]> = Vec::with_capacity(geometry.vertices.len());
+        for v in &geometry.vertices {
+            positions.push(v.position);
         }
+        base_geometries.push((positions, geometry.indices));
+    }
 
-        out.push(CachedIcon {
-            vertices: geometry.vertices,
-            indices: geometry.indices,
-        });
+    let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len() * palette.len());
+    for color in palette {
+        for (positions, base_indices) in &base_geometries {
+            let mut baked_vertices: Vec<MyVertex> = Vec::with_capacity(positions.len() * 2);
+            for &p in positions {
+                baked_vertices.push(MyVertex {
+                    position: [p[0] + SHADOW_DX, p[1] + SHADOW_DY],
+                    color: SHADOW_COLOR,
+                });
+            }
+            for &p in positions {
+                baked_vertices.push(MyVertex { color, position: p });
+            }
+
+            let index_offset = positions.len() as u16;
+            let mut baked_indices: Vec<u16> = Vec::with_capacity(base_indices.len() * 2);
+            baked_indices.extend_from_slice(base_indices);
+            for &idx in base_indices {
+                baked_indices.push(idx + index_offset);
+            }
+
+            out.push(CachedIcon {
+                vertices: baked_vertices,
+                indices: baked_indices,
+            });
+        }
     }
     out
 }
@@ -228,15 +266,16 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
     const CELL_PX: f32 = 32.0;
     let icons = cached_icons();
     let cols = core::cmp::max(1usize, (view_w as usize) / (CELL_PX as usize));
-    let mut rgb_blob: Vec<u8> = Vec::new();
     let mut total_vertices = 0usize;
     let mut total_indices = 0usize;
+    let mut first_draw_err: i32 = 0;
 
     for (i, icon) in icons.iter().enumerate() {
         let col = i % cols;
         let row = i / cols;
         let ox = (col as f32) * CELL_PX;
         let oy = (row as f32) * CELL_PX;
+        let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
 
         total_vertices = total_vertices.saturating_add(icon.vertices.len());
         total_indices = total_indices.saturating_add(icon.indices.len());
@@ -247,8 +286,26 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
                     position: [v.position[0] + ox, v.position[1] + oy],
                     color: v.color,
                 };
-                push_rgb_vtx(&mut rgb_blob, &vv, fb_w, fb_h);
+                push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
             }
+        }
+
+        let draw_rc = unsafe {
+            crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+                icon_blob.as_ptr(),
+                icon_blob.len(),
+            )
+        };
+        if draw_rc != 0 {
+            if first_draw_err == 0 {
+                first_draw_err = draw_rc;
+            }
+            crate::log!(
+                "lyon-demo: submit rc draw={} icon={} bytes={}\n",
+                draw_rc,
+                i,
+                icon_blob.len()
+            );
         }
     }
 
@@ -259,18 +316,5 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
         total_indices
     );
 
-    let draw_rc = unsafe {
-        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
-            rgb_blob.as_ptr(),
-            rgb_blob.len(),
-        )
-    };
-    if draw_rc != 0 {
-        crate::log!(
-            "lyon-demo: submit rc draw={} bytes={}\n",
-            draw_rc,
-            rgb_blob.len()
-        );
-    }
-    draw_rc == 0
+    first_draw_err == 0
 }
