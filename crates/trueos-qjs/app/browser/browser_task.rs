@@ -1,44 +1,17 @@
 #![cfg(feature = "trueos")]
-
 use alloc::string::String;
 use core::ffi::c_char;
-use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
-
 use embassy_time::{Duration as EmbassyDuration, Timer};
-
 use crate as qjs;
 
+mod helpers;
+
 unsafe extern "C" {
-    fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_gfx_present_owner_set(owner: u32);
 }
 
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-
-#[inline]
-fn log_str(s: &str) {
-    if s.is_empty() {
-        return;
-    }
-    unsafe { trueos_cabi_write(1, s.as_ptr(), s.len()) };
-}
-
-fn js_single_quoted_literal(src: &str) -> String {
-    let mut out = String::with_capacity(src.len() + 32);
-    out.push('\'');
-    for ch in src.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\'' => out.push_str("\\'"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('\'');
-    out
-}
 
 unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
     if rt.is_null() {
@@ -86,105 +59,90 @@ unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -
     true
 }
 
-unsafe fn eval_or_log(
-    ctx: *mut qjs::JSContext,
-    src: &[u8],
-    filename: *const c_char,
-    flags: i32,
-    label: &str,
-) -> bool {
-    let val = qjs::js_eval_bytes(ctx, src, filename, flags);
-    if val.is_exception() {
-        log_str("qjs-browser: ");
-        log_str(label);
-        log_str(" JS_Eval exception\n");
-        qjs::qjs_diag::dump_last_exception(ctx, "browser eval");
-        return false;
-    }
-    qjs::js_free_value(ctx, val);
-    true
-}
-
-#[embassy_executor::task]
-pub async fn boot_browser() {
-    if BROWSER_TASK_STARTED.swap(true, Ordering::SeqCst) {
-        log_str("qjs-browser: already running\n");
-        return;
-    }
-
-    unsafe { trueos_cabi_gfx_present_owner_set(1) };
-    log_str("qjs-browser: starting fresh browser.mjs path\n");
-
-    unsafe {
-        let vm = match qjs::vm::QjsVm::new_node() {
-            Some(vm) => vm,
-            None => {
-                log_str("qjs-browser: JS runtime init failed\n");
-                trueos_cabi_gfx_present_owner_set(0);
-                BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-                return;
-            }
-        };
-
-        let rt = vm.rt_ptr();
-        let ctx = vm.ctx_ptr();
-        qjs::node::install_globals(ctx);
-
-        // Build normalized-command window icons once so they're ready for widget usage.
-        qjs::svg::init_window_svgs_once();
-
-        // Fresh path: install only the Rust layout drawer API for JS usage.
-        qjs::layout::install_layout_api(ctx);
-
-        let init_filename = b"<browser-init>\0";
-        let html_lit = js_single_quoted_literal(qjs::ui_html::UI_HTML);
-        let mut init_src = String::new();
-        init_src.push_str("\nconst G = (typeof globalThis !== 'undefined') ? globalThis : this;\n");
-        init_src.push_str("G.__trueosUiHtml = ");
-        init_src.push_str(&html_lit);
-        init_src.push_str(";\n");
-        init_src.push_str("G.__trueosThemeNodeH = ");
-        let _ = write!(&mut init_src, "{}", qjs::default_theme::NODE_H);
-        init_src.push_str(";\n");
-        init_src.push_str("G.__trueosThemeHierarchyIndent = ");
-        let _ = write!(&mut init_src, "{}", qjs::default_theme::HIERARCHY_INDENT);
-        init_src.push_str(";\n");
-        init_src.push_str("G.__trueosThemeCursorSize = 12;\n");
-        init_src.push_str("G.__trueosThemeIframeMinW = ");
-        let _ = write!(&mut init_src, "{}", qjs::default_theme::IFRAME_MIN_W);
-        init_src.push_str(";\n");
-        init_src.push_str(
-            r#"
+unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
+    let init_filename = b"<browser-globals>\0";
+    let html_lit = helpers::js_single_quoted_literal(qjs::ui_html::UI_HTML);
+    let mut init_src = String::new();
+    init_src.push_str("\nconst G = (typeof globalThis !== 'undefined') ? globalThis : this;\n");
+    init_src.push_str("G.__trueosUiHtml = ");
+    init_src.push_str(&html_lit);
+    init_src.push_str(";\n");
+    init_src.push_str(
+        r#"
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
 if (typeof G.addEventListener !== 'function') G.addEventListener = () => {};
 if (typeof G.removeEventListener !== 'function') G.removeEventListener = () => {};
 if (typeof G.requestAnimationFrame !== 'function') {
-  G.requestAnimationFrame = (cb) => {
-    try { if (typeof cb === 'function') cb(Date.now()); } catch (_) {}
-    return 1;
-  };
+    G.requestAnimationFrame = (cb) => {
+        try { if (typeof cb === 'function') cb(Date.now()); } catch (_) {}
+        return 1;
+    };
 }
 if (typeof G.cancelAnimationFrame !== 'function') G.cancelAnimationFrame = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;
 if (typeof G.clearTimeout !== 'function') G.clearTimeout = () => {};
-import('/qjs/browser/browser2.mjs').catch((e) => {
-    try { console.log('[browser2.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
-});
 "#,
-                );
-        if !eval_or_log(
-            ctx,
-            init_src.as_bytes(),
-            init_filename.as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-            "browser init",
-        ) {
-            trueos_cabi_gfx_present_owner_set(0);
-            BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
-            return;
-        }
+    );
+
+    helpers::eval_or_log(
+        ctx,
+        init_src.as_bytes(),
+        init_filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+        "browser globals",
+    )
+}
+
+#[embassy_executor::task]
+pub async fn boot_browser() {
+    if BROWSER_TASK_STARTED.swap(true, Ordering::SeqCst) {
+        qjs::trueos_shims::log_info("qjs-browser: already running\n");
+        return;
+    }
+    unsafe { trueos_cabi_gfx_present_owner_set(1) };
+    qjs::trueos_shims::log_info("qjs-browser: starting browser2 bootstrap\n");
+    unsafe {
+        let vm = match qjs::vm::QjsVm::new_node() {
+            Some(vm) => vm,
+            None => {
+                qjs::trueos_shims::log_info("qjs-browser: JS runtime init failed\n");
+                trueos_cabi_gfx_present_owner_set(0);
+                BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        let ctx = vm.ctx_ptr();
+        let rt = vm.rt_ptr();
+
+                qjs::node::install_globals(ctx);
+                qjs::svg::init_window_svgs_once();
+                qjs::layout::install_layout_api(ctx);
+
+                if !install_globals(ctx) {
+                        trueos_cabi_gfx_present_owner_set(0);
+                        BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+                        return;
+                }
+
+                let import_filename = b"<browser-init>\0";
+                let import_src = br#"
+        import('/qjs/browser/browser.mjs').catch((e) => {
+            try { console.log('[browser.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
+        });
+        "#;
+                if !helpers::eval_or_log(
+                    ctx,
+                    import_src,
+                    import_filename.as_ptr() as *const c_char,
+                    qjs::JS_EVAL_TYPE_GLOBAL,
+                    "browser init",
+                ) {
+                    trueos_cabi_gfx_present_owner_set(0);
+                    BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+                    return;
+                }
 
         loop {
             if !pump_runtime_once(rt, ctx) {
@@ -192,8 +150,7 @@ import('/qjs/browser/browser2.mjs').catch((e) => {
             }
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
-
-        log_str("qjs-browser: stopped\n");
+        qjs::trueos_shims::log_info("qjs-browser: stopped\n");
         trueos_cabi_gfx_present_owner_set(0);
         BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
     }

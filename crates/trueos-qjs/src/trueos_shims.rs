@@ -108,6 +108,24 @@ fn log_bytes(bytes: &[u8]) {
 }
 
 #[inline]
+pub fn write_log_stream(stream: u32, s: &str) {
+    if s.is_empty() {
+        return;
+    }
+    unsafe { trueos_cabi_write(stream, s.as_ptr(), s.len()) }
+}
+
+#[inline]
+pub fn log_info(s: &str) {
+    write_log_stream(1, s);
+}
+
+#[inline]
+pub fn log_error(s: &str) {
+    write_log_stream(2, s);
+}
+
+#[inline]
 fn log_str(s: &str) {
     log_bytes(s.as_bytes())
 }
