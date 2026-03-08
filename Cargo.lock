@@ -951,26 +951,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
-name = "lyon"
-version = "1.0.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbcb7d54d54c8937364c9d41902d066656817dce1e03a44e5533afebd1ef4352"
-dependencies = [
- "lyon_algorithms",
- "lyon_tessellation",
-]
-
-[[package]]
-name = "lyon_algorithms"
-version = "1.0.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4c0829e28c4f336396f250d850c3987e16ce6db057ffe047ce0dd54aab6b647"
-dependencies = [
- "lyon_path",
- "num-traits",
-]
-
-[[package]]
 name = "lyon_geom"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1718,7 +1698,8 @@ dependencies = [
  "embassy-time",
  "embassy-time-driver",
  "libm",
- "lyon",
+ "lyon_geom",
+ "lyon_tessellation",
  "spin 0.10.0",
  "trueos-math",
  "trueos-weather",
@@ -1995,5 +1976,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
+name = "crc32fast"
+version = "1.5.0"
+
+[[patch.unused]]
+name = "imagesize"
+version = "0.13.0"
+
+[[patch.unused]]
+name = "kurbo"
+version = "0.11.3"
+
+[[patch.unused]]
+name = "svgtypes"
+version = "0.15.3"
+
+[[patch.unused]]
 name = "usvg"
 version = "0.45.1"
+
+[[patch.unused]]
+name = "xmlwriter"
+version = "0.1.0"
