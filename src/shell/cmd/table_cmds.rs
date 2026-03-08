@@ -4,6 +4,175 @@ use crate::shell::table::{Table, TableColumn};
 use acpi::sdt::fadt::Fadt;
 use acpi::sdt::madt::Madt;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::fmt::Write;
+
+#[derive(Clone, Copy)]
+struct PciBarDecoded {
+    kind: &'static str,
+    width: &'static str,
+    prefetch: &'static str,
+    base: u64,
+    is_64: bool,
+}
+
+struct PciBarRow {
+    addr: String,
+    vid: String,
+    pid: String,
+    bar: String,
+    kind: &'static str,
+    width: &'static str,
+    prefetch: &'static str,
+    base: String,
+    size: String,
+    raw: String,
+}
+
+#[inline]
+fn ensure_pci_devices_enumerated() {
+    let mut len: usize = 0;
+    crate::pci::with_devices(|list| {
+        len = list.len();
+    });
+    if len == 0 {
+        crate::pci::enumerate_impl();
+    }
+}
+
+#[inline]
+fn decode_pci_bar(bar_lo: u32, bar_hi: Option<u32>) -> PciBarDecoded {
+    if bar_lo == 0 || bar_lo == 0xFFFF_FFFF {
+        return PciBarDecoded {
+            kind: "None",
+            width: "-",
+            prefetch: "-",
+            base: 0,
+            is_64: false,
+        };
+    }
+
+    if (bar_lo & 0x1) != 0 {
+        let base = (bar_lo & !0x3) as u64;
+        return PciBarDecoded {
+            kind: "IO",
+            width: "-",
+            prefetch: "-",
+            base,
+            is_64: false,
+        };
+    }
+
+    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    let prefetch = if (bar_lo & 0x8) != 0 { "Y" } else { "N" };
+    let base = if is_64 {
+        (((bar_hi.unwrap_or(0) as u64) << 32) | (bar_lo as u64)) & !0xFu64
+    } else {
+        (bar_lo as u64) & !0xFu64
+    };
+
+    PciBarDecoded {
+        kind: "MMIO",
+        width: if is_64 { "64" } else { "32" },
+        prefetch,
+        base,
+        is_64,
+    }
+}
+
+#[inline]
+fn format_bar_raw(bar_lo: u32, bar_hi: Option<u32>) -> String {
+    if let Some(hi) = bar_hi {
+        alloc::format!("0x{:08X}:{:08X}", hi, bar_lo)
+    } else {
+        alloc::format!("0x{:08X}", bar_lo)
+    }
+}
+
+fn pci_bar_rows() -> Vec<PciBarRow> {
+    let mut rows: Vec<PciBarRow> = Vec::new();
+
+    crate::pci::with_devices(|list| {
+        for dev in list.iter() {
+            let addr = alloc::format!("{:02X}:{:02X}.{}", dev.bus, dev.slot, dev.function);
+            let vid = alloc::format!("{:04X}", dev.vendor);
+            let pid = alloc::format!("{:04X}", dev.device);
+
+            let mut bar_idx: u8 = 0;
+            while bar_idx < 6 {
+                let (bar_lo, bar_hi) =
+                    crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, bar_idx);
+                let decoded = decode_pci_bar(bar_lo, bar_hi);
+                let size = if decoded.kind == "None" {
+                    String::from("-")
+                } else if let Some(sz) =
+                    crate::pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar_idx)
+                {
+                    alloc::format!("0x{:X}", sz)
+                } else {
+                    String::from("-")
+                };
+                let base = if decoded.kind == "None" {
+                    String::from("-")
+                } else {
+                    alloc::format!("0x{:016X}", decoded.base)
+                };
+
+                rows.push(PciBarRow {
+                    addr: addr.clone(),
+                    vid: vid.clone(),
+                    pid: pid.clone(),
+                    bar: alloc::format!("BAR{}", bar_idx),
+                    kind: decoded.kind,
+                    width: decoded.width,
+                    prefetch: decoded.prefetch,
+                    base,
+                    size,
+                    raw: format_bar_raw(bar_lo, bar_hi),
+                });
+
+                bar_idx += if decoded.is_64 { 2 } else { 1 };
+            }
+        }
+    });
+
+    rows
+}
+
+fn write_pci_bar_dump(out: &mut String) {
+    writeln!(out, "=== PCI BARs ===").unwrap();
+    writeln!(
+        out,
+        "{:10}  {:6}  {:6}  {:4}  {:5}  {:2}  {:1}  {:18}  {:12}  {:19}",
+        "Address", "VID", "PID", "BAR", "Kind", "W", "P", "Base", "Size", "Raw"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "{:-<10}  {:-<6}  {:-<6}  {:-<4}  {:-<5}  {:-<2}  {:-<1}  {:-<18}  {:-<12}  {:-<19}",
+        "", "", "", "", "", "", "", "", "", ""
+    )
+    .unwrap();
+
+    for row in pci_bar_rows() {
+        let _ = writeln!(
+            out,
+            "{:10}  {:6}  {:6}  {:4}  {:5}  {:2}  {:1}  {:18}  {:12}  {:19}",
+            row.addr,
+            row.vid,
+            row.pid,
+            row.bar,
+            row.kind,
+            row.width,
+            row.prefetch,
+            row.base,
+            row.size,
+            row.raw
+        );
+    }
+
+    writeln!(out).unwrap();
+}
 
 pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>) -> CommandAction {
     let term_width = (*ctx.term_cols).saturating_sub(2);
@@ -26,6 +195,7 @@ pub(crate) fn cmd_tlb(ctx: &mut ShellCommandCtx<'_>, _: Option<&ParsedArgs<'_>>)
         t.print_header(ctx.io);
 
         t.print_row(ctx.io, ["tlb.pci", "List PCI devices"]);
+        t.print_row(ctx.io, ["tlb.pci.bar", "List PCI BAR windows"]);
         t.print_row(ctx.io, ["tlb.mem", "List memory map"]);
         t.print_row(ctx.io, ["tlb.cpu", "List CPU cores"]);
         t.print_row(ctx.io, ["tlb.acpi", "List ACPI tables"]);
@@ -46,13 +216,7 @@ pub(crate) fn cmd_tlb_pci(
     ctx: &mut ShellCommandCtx<'_>,
     _: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
-    let mut len: usize = 0;
-    crate::pci::with_devices(|list| {
-        len = list.len();
-    });
-    if len == 0 {
-        crate::pci::enumerate_impl();
-    }
+    ensure_pci_devices_enumerated();
 
     let db = if crate::v::readiness::is_set(crate::v::readiness::TRUEOSFS_ROOT_MOUNTED) {
         crate::pci::pciids::load_sanitized_from_root_blocking()
@@ -113,6 +277,82 @@ pub(crate) fn cmd_tlb_pci(
             t.print_row(ctx.io, &[name, addr, vid, did]);
         }
     });
+
+    CommandAction::None
+}
+
+pub(crate) fn cmd_tlb_pci_bar(
+    ctx: &mut ShellCommandCtx<'_>,
+    _: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    ensure_pci_devices_enumerated();
+
+    let term_width = (*ctx.term_cols).saturating_sub(2);
+    // Overhead (all columns except raw): 10+6+6+4+5+2+1+18+12 + 10*2 spacing = 84.
+    let raw_width = term_width.saturating_sub(84).max(19);
+
+    let cols = [
+        TableColumn {
+            header: "Address",
+            width: 10,
+        },
+        TableColumn {
+            header: "VID",
+            width: 6,
+        },
+        TableColumn {
+            header: "PID",
+            width: 6,
+        },
+        TableColumn {
+            header: "BAR",
+            width: 4,
+        },
+        TableColumn {
+            header: "Kind",
+            width: 5,
+        },
+        TableColumn {
+            header: "W",
+            width: 2,
+        },
+        TableColumn {
+            header: "P",
+            width: 1,
+        },
+        TableColumn {
+            header: "Base",
+            width: 18,
+        },
+        TableColumn {
+            header: "Size",
+            width: 12,
+        },
+        TableColumn {
+            header: "Raw",
+            width: raw_width,
+        },
+    ];
+    let t = Table::new(&cols);
+    t.print_header(ctx.io);
+
+    for row in pci_bar_rows() {
+        t.print_row(
+            ctx.io,
+            &[
+                row.addr,
+                row.vid,
+                row.pid,
+                row.bar,
+                row.kind.to_string(),
+                row.width.to_string(),
+                row.prefetch.to_string(),
+                row.base,
+                row.size,
+                row.raw,
+            ],
+        );
+    }
 
     CommandAction::None
 }
@@ -696,7 +936,6 @@ pub(crate) fn cmd_tlb_dump(
     ctx: &mut ShellCommandCtx<'_>,
     _: Option<&ParsedArgs<'_>>,
 ) -> CommandAction {
-    use core::fmt::Write;
     let mut out = String::new();
 
     // 1. Memory
@@ -722,13 +961,7 @@ pub(crate) fn cmd_tlb_dump(
 
     // 2. PCI
     writeln!(out, "=== PCI Devices ===").unwrap();
-    let mut len: usize = 0;
-    crate::pci::with_devices(|list| {
-        len = list.len();
-    });
-    if len == 0 {
-        crate::pci::enumerate_impl();
-    }
+    ensure_pci_devices_enumerated();
 
     let db = crate::pci::pciids::load_sanitized_from_root_blocking()
         .ok()
@@ -774,6 +1007,9 @@ pub(crate) fn cmd_tlb_dump(
         }
     });
     writeln!(out).unwrap();
+
+    // 2b. PCI BARs
+    write_pci_bar_dump(&mut out);
 
     // 3. CPU
     writeln!(out, "=== CPU Cores ===").unwrap();

@@ -1635,7 +1635,12 @@ fn admin_selftest_read(
 }
 
 fn is_nvme(dev: &crate::pci::PciDevice) -> bool {
-    dev.class == 0x01 && dev.subclass == 0x08 && dev.prog_if == 0x02
+    // Standard NVMe match: Mass Storage / NVM / NVMHCI.
+    let class_match = dev.class == 0x01 && dev.subclass == 0x08 && dev.prog_if == 0x02;
+    // Explicitly claim Samsung SM961/PM961/SM963 controller family when enumerated,
+    // even if firmware reports a non-standard programming interface.
+    let samsung_sm961_family = dev.vendor == 0x144D && dev.device == 0xA804;
+    class_match || samsung_sm961_family
 }
 
 fn io_selftest_read(
