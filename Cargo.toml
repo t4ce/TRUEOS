@@ -35,14 +35,14 @@ twoway = { version = "0.2", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
 log = { version = "0.4", default-features = false }
-trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos", "yoga-native"] }
+trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos", "yoga-native", "lyon-native"] }
 trueos-gfx-core = { path = "crates/trueos-gfx-core", features = ["alloc"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "logging", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 sha2 = { version = "0.10", default-features = false }
-embedded-websocket = { version = "0.9.3", default-features = false }
+embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
@@ -62,3 +62,7 @@ debug = false
 
 [build-dependencies]
 trueos-limloader = { path = "crates/trueos-limloader" }
+
+[patch.crates-io]
+num-traits = { path = "vendor/num-traits-0.2.19" }
+usvg = { path = "vendor/usvg-0.45.1" }

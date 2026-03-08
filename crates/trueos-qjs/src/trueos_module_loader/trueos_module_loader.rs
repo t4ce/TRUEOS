@@ -164,6 +164,16 @@ unsafe fn load_native_module(
         return workers_mod;
     }
 
+    let lightningcss_mod = unsafe { crate::lightningcss_native::try_create_native_module(ctx, module_name) };
+    if !lightningcss_mod.is_null() {
+        return lightningcss_mod;
+    }
+
+    let lyon_mod = unsafe { crate::lyon_native::try_create_native_module(ctx, module_name) };
+    if !lyon_mod.is_null() {
+        return lyon_mod;
+    }
+
     unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
 }
 
@@ -597,6 +607,10 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"node:worker_threads"
             || spec == b"path"
             || spec == b"node:path"
+            || spec == b"trueos:lightningcss"
+            || spec == b"lightningcss-native"
+            || spec == b"trueos:lyon"
+            || spec == b"lyon-native"
         {
             log_normalized(spec);
             return js_strdup(ctx, spec);

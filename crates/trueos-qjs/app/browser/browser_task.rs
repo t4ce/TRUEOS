@@ -169,8 +169,8 @@ if (typeof G.requestAnimationFrame !== 'function') {
 if (typeof G.cancelAnimationFrame !== 'function') G.cancelAnimationFrame = () => {};
 if (typeof G.setTimeout !== 'function') G.setTimeout = () => 1;
 if (typeof G.clearTimeout !== 'function') G.clearTimeout = () => {};
-import('/qjs/browser/browser.mjs').catch((e) => {
-  try { console.log('[browser.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
+import('/qjs/browser/browser2.mjs').catch((e) => {
+    try { console.log('[browser2.mjs] import failed', String(e && e.stack ? e.stack : e)); } catch (_) {}
 });
 "#,
                 );

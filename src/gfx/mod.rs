@@ -1,4 +1,5 @@
 pub mod backends;
+pub mod cursor;
 #[cfg(feature = "gfx_intel")]
 pub mod intel;
 #[cfg(feature = "gfx_virgl")]
@@ -246,6 +247,11 @@ pub fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> Option<R> {
     };
 
     Some(f(&mut guard))
+}
+
+#[inline]
+pub fn cursor_overlay_tick() -> i32 {
+    cursor::cursor_overlay_tick()
 }
 
 pub fn with_context<R>(f: impl FnOnce(&mut dyn GfxContext) -> R) -> Option<R> {

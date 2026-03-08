@@ -86,6 +86,12 @@ pub mod threejs;
 pub mod wgpu;
 
 #[cfg(feature = "trueos")]
+pub mod lightningcss_native;
+
+#[cfg(feature = "trueos")]
+pub mod lyon_native;
+
+#[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]
 pub struct FontAtlasView<'a> {
     pub alpha: &'a [u8],

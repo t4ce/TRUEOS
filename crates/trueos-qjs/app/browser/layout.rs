@@ -525,33 +525,30 @@ unsafe extern "C" fn qjs_read_window_svg_cmds(
             qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, icon.height() as f64));
         i += 1;
 
-        let cmds = icon.cmds();
-        let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds.len() as f64));
+        let cmds = icon.line_cmds();
+        let _ = qjs::JS_SetPropertyUint32(
+            ctx,
+            out,
+            i,
+            qjs::JS_NewFloat64(ctx, (cmds.len() / 6) as f64),
+        );
         i += 1;
 
-        for cmd in cmds {
-            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.x0 as f64));
+        let mut ci = 0usize;
+        while ci + 5 < cmds.len() {
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci]));
             i += 1;
-            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.y0 as f64));
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci + 1]));
             i += 1;
-            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.x1 as f64));
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci + 2]));
             i += 1;
-            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmd.y1 as f64));
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci + 3]));
             i += 1;
-            let _ = qjs::JS_SetPropertyUint32(
-                ctx,
-                out,
-                i,
-                qjs::JS_NewFloat64(ctx, cmd.thickness_px as f64),
-            );
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci + 4]));
             i += 1;
-            let _ = qjs::JS_SetPropertyUint32(
-                ctx,
-                out,
-                i,
-                qjs::JS_NewFloat64(ctx, cmd.color_rgba as f64),
-            );
+            let _ = qjs::JS_SetPropertyUint32(ctx, out, i, qjs::JS_NewFloat64(ctx, cmds[ci + 5]));
             i += 1;
+            ci += 6;
         }
     });
 

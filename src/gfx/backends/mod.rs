@@ -10,6 +10,8 @@ mod intel;
 use crate::gfx::virtio_gpu_3d;
 #[cfg(feature = "gfx_intel")]
 use intel::IntelGfxBackend;
+#[cfg(feature = "gfx_intel")]
+mod intel_cmd;
 
 pub enum Backend {
     #[cfg(feature = "gfx_virgl")]

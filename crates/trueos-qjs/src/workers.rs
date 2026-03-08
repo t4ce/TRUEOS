@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::format;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_int};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -41,6 +42,7 @@ static CORE_SPAWNERS: Mutex<BTreeMap<u32, embassy_executor::SendSpawner>> =
 static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static WARNED_SINGLE_CORE_FALLBACK: AtomicBool = AtomicBool::new(false);
+static LOGGED_WORKER_API_USE: AtomicBool = AtomicBool::new(false);
 
 static WORKERS: Mutex<BTreeMap<u32, WorkerState>> = Mutex::new(BTreeMap::new());
 
@@ -100,7 +102,16 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     CORE_KINDS.lock().insert(cpu_slot, core_kind);
 }
 
-fn pick_spawner_affinity_first() -> Option<embassy_executor::SendSpawner> {
+#[inline]
+fn core_kind_name(kind: u8) -> &'static str {
+    match kind {
+        CORE_KIND_PERF => "perf",
+        CORE_KIND_EFF => "eff",
+        _ => "unknown",
+    }
+}
+
+fn pick_spawner_affinity_first() -> Option<(u32, u8, embassy_executor::SendSpawner)> {
     // Prefer performance cores if any are registered; otherwise fall back to all cores.
     let map = CORE_SPAWNERS.lock();
     if map.is_empty() {
@@ -109,18 +120,19 @@ fn pick_spawner_affinity_first() -> Option<embassy_executor::SendSpawner> {
 
     let kinds = CORE_KINDS.lock();
 
-    let mut bsp: Option<embassy_executor::SendSpawner> = None;
-    let mut perf: Vec<embassy_executor::SendSpawner> = Vec::new();
-    let mut any: Vec<embassy_executor::SendSpawner> = Vec::new();
+    let mut bsp: Option<(u32, u8, embassy_executor::SendSpawner)> = None;
+    let mut perf: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
+    let mut any: Vec<(u32, u8, embassy_executor::SendSpawner)> = Vec::new();
     for (slot, sp) in map.iter() {
+        let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
         // Policy: never schedule QJS workers on the BSP (slot 0).
         if *slot == 0 {
-            bsp = Some(sp.clone());
+            bsp = Some((*slot, kind, sp.clone()));
             continue;
         }
-        any.push(sp.clone());
-        if kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF {
-            perf.push(sp.clone());
+        any.push((*slot, kind, sp.clone()));
+        if kind == CORE_KIND_PERF {
+            perf.push((*slot, kind, sp.clone()));
         }
     }
 
@@ -177,8 +189,20 @@ pub fn spawn_eval(code_utf8: &[u8]) -> Result<u32, i32> {
         .lock()
         .insert(worker_id, WorkerState::new(code_utf8.to_vec()));
 
-    let spawner = pick_spawner_affinity_first().ok_or(-2)?;
-    spawner.spawn(worker_task(worker_id)).map_err(|_| -2)?;
+    if !LOGGED_WORKER_API_USE.swap(true, Ordering::AcqRel) {
+        log_str("qjs-worker: Worker API path used; worker spawn requested\n");
+    }
+
+    let (slot, kind, spawner) = pick_spawner_affinity_first().ok_or(-2)?;
+    log_str(&format!(
+        "qjs-worker: worker#{} created; scheduled slot={} kind={}\n",
+        worker_id,
+        slot,
+        core_kind_name(kind)
+    ));
+    spawner
+        .spawn(worker_task(worker_id, slot, kind))
+        .map_err(|_| -2)?;
     Ok(worker_id)
 }
 
@@ -397,7 +421,14 @@ fn mark_exited(worker_id: u32) {
 }
 
 #[embassy_executor::task]
-async fn worker_task(worker_id: u32) {
+async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
+    log_str(&format!(
+        "qjs-worker: worker#{} executor start slot={} kind={}\n",
+        worker_id,
+        scheduled_slot,
+        core_kind_name(scheduled_kind)
+    ));
+
     // Each worker owns its own QuickJS VM.
     let Some(vm) = (unsafe { qjs::vm::QjsVm::new_node() }) else {
         log_str("qjs-worker: failed to create VM\n");

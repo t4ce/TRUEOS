@@ -16,6 +16,8 @@ pub struct IntelGfxInfo {
     pub function: u8,
     pub bar_phys: u64,
     pub bar_size: u64,
+    pub aperture_bar_phys: u64,
+    pub aperture_bar_size: u64,
     pub mmio_base: NonNull<u8>,
     pub mmio_len: usize,
     pub cmd_scratch_phys: u64,
@@ -68,6 +70,90 @@ fn register_intel(mut info: IntelGfxInfo) {
     let _ = list.push(info);
 }
 
+fn log_intel_bar_inventory(bus: u8, slot: u8, function: u8) {
+    // Header type 0 uses BAR0..BAR5. Log each decoded BAR once at claim-time.
+    let mut idx = 0u8;
+    while idx < 6 {
+        let (raw_lo, raw_hi) = crate::pci::read_bar_raw(bus, slot, function, idx);
+        if raw_lo == 0 || raw_lo == 0xFFFF_FFFF {
+            crate::log!(
+                "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} raw=0x{:08X} unassigned\n",
+                idx,
+                bus,
+                slot,
+                function,
+                raw_lo
+            );
+            idx += 1;
+            continue;
+        }
+
+        if (raw_lo & 0x1) != 0 {
+            let io_base = (raw_lo & !0x3) as u64;
+            crate::log!(
+                "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} kind=io raw=0x{:08X} base=0x{:X}\n",
+                idx,
+                bus,
+                slot,
+                function,
+                raw_lo,
+                io_base
+            );
+            idx += 1;
+            continue;
+        }
+
+        let is_64 = ((raw_lo >> 1) & 0x3) == 0x2;
+        let prefetch = ((raw_lo >> 3) & 0x1) != 0;
+        let mut base = (raw_lo & 0xFFFF_FFF0) as u64;
+        if is_64 {
+            base |= (raw_hi.unwrap_or(0) as u64) << 32;
+        }
+        let size = crate::pci::bar_size_bytes(bus, slot, function, idx).unwrap_or(0);
+        crate::log!(
+            "gfx-intel: BAR{} bdf={:02X}:{:02X}.{} kind=mmio{} prefetch={} raw=0x{:08X} raw_hi=0x{:08X} base=0x{:X} size=0x{:X}\n",
+            idx,
+            bus,
+            slot,
+            function,
+            if is_64 { "64" } else { "32" },
+            if prefetch { 1 } else { 0 },
+            raw_lo,
+            raw_hi.unwrap_or(0),
+            base,
+            size
+        );
+
+        if is_64 {
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+}
+
+fn decode_mmio_bar(bus: u8, slot: u8, function: u8, index: u8) -> Option<(u64, u64)> {
+    let (bar_lo, bar_hi) = crate::pci::read_bar_raw(bus, slot, function, index);
+    if bar_lo == 0 || bar_lo == 0xFFFF_FFFF {
+        return None;
+    }
+    if (bar_lo & 0x1) != 0 {
+        return None;
+    }
+
+    let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
+    let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
+    if is_64 {
+        base |= (bar_hi.unwrap_or(0) as u64) << 32;
+    }
+    if base == 0 {
+        return None;
+    }
+
+    let size = crate::pci::bar_size_bytes(bus, slot, function, index).unwrap_or(0);
+    Some((base, size))
+}
+
 #[inline]
 fn is_intel_display(dev: &crate::pci::PciDevice) -> bool {
     dev.vendor == INTEL_VENDOR_ID && dev.class == PCI_CLASS_DISPLAY
@@ -90,26 +176,11 @@ pub fn init_once() {
             }
             did_match = true;
 
+            log_intel_bar_inventory(dev.bus, dev.slot, dev.function);
+
             crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
 
-            let (bar_lo, bar_hi) = crate::pci::read_bar0_raw(dev.bus, dev.slot, dev.function);
-            if (bar_lo & 0x1) != 0 {
-                crate::log!(
-                    "gfx-intel: IO BAR unsupported for {:02X}:{:02X}.{}\n",
-                    dev.bus,
-                    dev.slot,
-                    dev.function
-                );
-                continue;
-            }
-
-            let is_64 = ((bar_lo >> 1) & 0x3) == 0x2;
-            let mut base = (bar_lo & 0xFFFF_FFF0) as u64;
-            if is_64 {
-                base |= (bar_hi.unwrap_or(0) as u64) << 32;
-            }
-
-            if base == 0 {
+            let Some((base, bar_size)) = decode_mmio_bar(dev.bus, dev.slot, dev.function, 0) else {
                 crate::log!(
                     "gfx-intel: BAR0 not assigned at {:02X}:{:02X}.{}\n",
                     dev.bus,
@@ -117,10 +188,11 @@ pub fn init_once() {
                     dev.function
                 );
                 continue;
-            }
+            };
 
-            let bar_size =
-                crate::pci::bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+            let (aperture_bar_phys, aperture_bar_size) =
+                decode_mmio_bar(dev.bus, dev.slot, dev.function, 2).unwrap_or((0, 0));
+
             let mut mmio_len = if bar_size == 0 {
                 0x20_000usize
             } else {
@@ -155,12 +227,14 @@ pub fn init_once() {
             }
 
             crate::log!(
-                "gfx-intel: claimed {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} mmio=0x{:X} scratch=0x{:X}\n",
+                "gfx-intel: claimed {:02X}:{:02X}.{} bar0=0x{:X} size=0x{:X} bar2=0x{:X} bar2_size=0x{:X} mmio=0x{:X} scratch=0x{:X}\n",
                 dev.bus,
                 dev.slot,
                 dev.function,
                 base,
                 bar_size,
+                aperture_bar_phys,
+                aperture_bar_size,
                 mmio_base.as_ptr() as usize,
                 cmd_scratch_phys
             );
@@ -171,6 +245,8 @@ pub fn init_once() {
                 function: dev.function,
                 bar_phys: base,
                 bar_size,
+                aperture_bar_phys,
+                aperture_bar_size,
                 mmio_base,
                 mmio_len,
                 cmd_scratch_phys,

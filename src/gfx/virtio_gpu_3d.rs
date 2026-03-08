@@ -3267,20 +3267,34 @@ impl VirglGfxBackend {
         if !self.gpu.resource_flush(resource_id, width, height) {
             return Err(Error::Unsupported);
         }
-        if !self
-            .gpu
-            .update_cursor(self.scanout_id, resource_id, hot_x, hot_y, 0, 0)
-        {
+        if !self.gpu.update_cursor(
+            self.scanout_id,
+            resource_id,
+            hot_x,
+            hot_y,
+            hot_x as i32,
+            hot_y as i32,
+        ) {
             return Err(Error::Unsupported);
         }
         Ok(())
     }
 
     fn move_hw_cursor(&mut self, x: i32, y: i32) -> GfxResult<()> {
-        if self.cursor_plane.is_none() {
+        let Some(plane) = self.cursor_plane.as_ref() else {
             return Err(Error::Invalid);
-        }
-        if !self.gpu.move_cursor(self.scanout_id, x, y) {
+        };
+
+        // UPDATE_CURSOR includes both image binding and position; this is more
+        // reliable than MOVE_CURSOR on some virgl hosts.
+        if !self.gpu.update_cursor(
+            self.scanout_id,
+            plane.resource_id,
+            plane.hot_x,
+            plane.hot_y,
+            x,
+            y,
+        ) {
             return Err(Error::Unsupported);
         }
         Ok(())

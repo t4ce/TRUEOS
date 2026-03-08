@@ -140,35 +140,6 @@ pub(crate) fn cmd_hv(
     CommandAction::None
 }
 
-pub(crate) fn cmd_gfx(
-    ctx: &mut ShellCommandCtx<'_>,
-    _args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let next = match crate::gfx::present_owner() {
-        crate::gfx::PresentOwner::Forward => crate::gfx::PresentOwner::Pixi,
-        crate::gfx::PresentOwner::Pixi => crate::gfx::PresentOwner::Forward,
-    };
-    crate::gfx::set_present_owner(next);
-    let owner = match next {
-        crate::gfx::PresentOwner::Forward => "forward",
-        crate::gfx::PresentOwner::Pixi => "pixi",
-    };
-    ctx.io.write_fmt(format_args!("gfx: owner={}\r\n", owner));
-    CommandAction::None
-}
-
-pub(crate) fn cmd_gfx_status(
-    ctx: &mut ShellCommandCtx<'_>,
-    _args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let owner = match crate::gfx::present_owner() {
-        crate::gfx::PresentOwner::Forward => "forward",
-        crate::gfx::PresentOwner::Pixi => "pixi",
-    };
-    ctx.io.write_fmt(format_args!("gfx: owner={}\r\n", owner));
-    CommandAction::None
-}
-
 fn smp_state_name(st: u8) -> &'static str {
     match st {
         crate::smp::STATE_IDLE => "idle",

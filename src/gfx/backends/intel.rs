@@ -1,12 +1,12 @@
+use crate::gfx::backends::intel_cmd::{IntelCmd, RingMmio};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ptr::NonNull;
 
 use trueos_gfx_core::{
-    BlendDesc, BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps, Error,
-    Extent2D, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode,
-    MappedRange, PipelineDesc, PipelineId, Result, SamplerDesc, SamplerFilter, SamplerWrap,
-    ShaderDesc, ShaderId, SwapchainDesc, TexCoordFormat, Viewport,
+    BufferDesc, BufferId, Command, CommandBuffer, DeviceCaps, Error, Extent2D, FenceId, GfxDevice,
+    GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange, PipelineDesc, PipelineId,
+    Result, ShaderDesc, ShaderId, SwapchainDesc,
 };
 
 pub struct IntelGfxBackend {
@@ -16,8 +16,8 @@ pub struct IntelGfxBackend {
     buffers: Vec<Option<SwBuffer>>,
     pipelines: Vec<Option<PipelineDesc>>,
     images: Vec<Option<SwImage>>,
-    state: DrawState,
     cursor: Option<HwCursorState>,
+    cmd: Option<IntelCmd>,
 }
 
 const CURSOR_W: usize = 64;
@@ -58,46 +58,9 @@ struct SwImage {
     data: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
-struct DrawState {
-    viewport: Option<Viewport>,
-    pipeline: Option<PipelineId>,
-    vertex_buffer: Option<(BufferId, usize)>,
-    image: Option<ImageId>,
-    sampler: SamplerDesc,
-    blend: BlendDesc,
-}
-
-impl Default for DrawState {
-    fn default() -> Self {
-        Self {
-            viewport: None,
-            pipeline: None,
-            vertex_buffer: None,
-            image: None,
-            sampler: SamplerDesc::default_2d(),
-            blend: BlendDesc::disabled(),
-        }
-    }
-}
-
 struct FramebufferTarget {
-    addr: *mut u8,
-    pitch: usize,
     width: usize,
     height: usize,
-}
-
-#[derive(Clone, Copy)]
-struct SwVertex {
-    x: f32,
-    y: f32,
-    u: f32,
-    v: f32,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
 }
 
 impl IntelGfxBackend {
@@ -117,11 +80,31 @@ impl IntelGfxBackend {
             },
         };
 
-        crate::log!("gfx: using intel backend (software-raster path)\n");
+        crate::log!("gfx: using intel backend (no software raster path)\n");
 
         let cursor = Self::init_hw_cursor_state();
         if cursor.is_none() {
             crate::log!("gfx-intel: hw cursor init unavailable\n");
+        }
+
+        let cmd = crate::gfx::intel::first_claimed_device().and_then(|info| {
+            let mmio = RingMmio {
+                base: info.mmio_base,
+                len: info.mmio_len,
+            };
+            let mut eng = IntelCmd::new(
+                mmio,
+                info.cmd_scratch_phys,
+                info.cmd_scratch_virt,
+                info.cmd_scratch_len,
+            )?;
+            if eng.init_ring().is_err() {
+                return None;
+            }
+            Some(eng)
+        });
+        if cmd.is_none() {
+            crate::log!("gfx-intel: command streamer init unavailable\n");
         }
 
         Some(Self {
@@ -131,8 +114,8 @@ impl IntelGfxBackend {
             buffers: Vec::new(),
             pipelines: Vec::new(),
             images: Vec::new(),
-            state: DrawState::default(),
             cursor,
+            cmd,
         })
     }
 
@@ -242,8 +225,6 @@ impl IntelGfxBackend {
     }
 
     fn current_fb(&self) -> Option<FramebufferTarget> {
-        use ::limine::framebuffer::MemoryModel;
-
         let fb = self
             .framebuffers
             .and_then(|r| r.framebuffers().next())
@@ -251,420 +232,11 @@ impl IntelGfxBackend {
                 crate::limine::framebuffer_response().and_then(|r| r.framebuffers().next())
             })?;
 
-        if fb.memory_model() != MemoryModel::RGB || fb.bpp() != 32 {
-            return None;
-        }
-
         Some(FramebufferTarget {
-            addr: fb.addr(),
-            pitch: fb.pitch() as usize,
             width: fb.width() as usize,
             height: fb.height() as usize,
         })
     }
-
-    fn viewport_or_full(&self, fb: &FramebufferTarget) -> Viewport {
-        self.state.viewport.unwrap_or(Viewport {
-            x: 0,
-            y: 0,
-            width: fb.width as i32,
-            height: fb.height as i32,
-        })
-    }
-
-    fn fill_fb(&self, fb: &FramebufferTarget, rgb: u32) {
-        for y in 0..fb.height {
-            let row_ptr = unsafe { fb.addr.add(y.saturating_mul(fb.pitch)) as *mut u32 };
-            let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, fb.width) };
-            row.fill(rgb & 0x00FF_FFFF);
-        }
-    }
-
-    fn clear_rect(&self, fb: &FramebufferTarget, rgb: u32, x: u32, y: u32, w: u32, h: u32) {
-        if w == 0 || h == 0 {
-            return;
-        }
-        let min_x = (x as usize).min(fb.width);
-        let min_y = (y as usize).min(fb.height);
-        let max_x = min_x.saturating_add(w as usize).min(fb.width);
-        let max_y = min_y.saturating_add(h as usize).min(fb.height);
-        if min_x >= max_x || min_y >= max_y {
-            return;
-        }
-
-        for yy in min_y..max_y {
-            let row_ptr = unsafe { fb.addr.add(yy.saturating_mul(fb.pitch)) as *mut u32 };
-            let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, fb.width) };
-            row[min_x..max_x].fill(rgb & 0x00FF_FFFF);
-        }
-    }
-
-    fn draw(&mut self, fb: &FramebufferTarget, vertex_count: u32, first_vertex: u32) -> Result<()> {
-        let Some(pipeline_id) = self.state.pipeline else {
-            return Err(Error::Invalid);
-        };
-        let Some((vbuf_id, vb_offset)) = self.state.vertex_buffer else {
-            return Err(Error::Invalid);
-        };
-        let Some(pipeline) = self.pipeline_ref(pipeline_id) else {
-            return Err(Error::NotFound);
-        };
-        let Some(vbuf) = self.buffer_ref(vbuf_id) else {
-            return Err(Error::NotFound);
-        };
-
-        let vp = self.viewport_or_full(fb);
-        if vp.width <= 0 || vp.height <= 0 {
-            return Ok(());
-        }
-
-        let is_textured = matches!(
-            pipeline.vertex_layout.texcoord_format,
-            TexCoordFormat::UvF32
-        );
-        let bound_image = self.state.image.and_then(|id| self.image_ref(id));
-
-        let mut i = 0u32;
-        while i + 2 < vertex_count {
-            let a = self.read_vertex(vbuf, pipeline, first_vertex + i, vb_offset)?;
-            let b = self.read_vertex(vbuf, pipeline, first_vertex + i + 1, vb_offset)?;
-            let c = self.read_vertex(vbuf, pipeline, first_vertex + i + 2, vb_offset)?;
-            self.raster_triangle(fb, vp, a, b, c, is_textured, bound_image)?;
-            i = i.saturating_add(3);
-        }
-
-        Ok(())
-    }
-
-    fn read_vertex(
-        &self,
-        vbuf: &SwBuffer,
-        pipeline: &PipelineDesc,
-        index: u32,
-        vb_offset: usize,
-    ) -> Result<SwVertex> {
-        let layout = pipeline.vertex_layout;
-        let stride = layout.stride as usize;
-        if stride == 0 {
-            return Err(Error::Invalid);
-        }
-
-        let base = vb_offset.saturating_add((index as usize).saturating_mul(stride));
-        if base.saturating_add(stride) > vbuf.data.len() {
-            return Err(Error::Invalid);
-        }
-
-        let read_f32 = |off: usize| -> Result<f32> {
-            let p = base.saturating_add(off);
-            if p.saturating_add(4) > vbuf.data.len() {
-                return Err(Error::Invalid);
-            }
-            let b = &vbuf.data[p..p + 4];
-            Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        };
-
-        let pos_off = layout.pos_offset as usize;
-        let x = read_f32(pos_off)?;
-        let y = read_f32(pos_off.saturating_add(4))?;
-
-        let col_off = base.saturating_add(layout.color_offset as usize);
-        if col_off >= vbuf.data.len() {
-            return Err(Error::Invalid);
-        }
-
-        let (r, g, b, a) = match layout.color_format {
-            ColorFormat::RgbU8 => {
-                if col_off.saturating_add(3) > vbuf.data.len() {
-                    return Err(Error::Invalid);
-                }
-                (
-                    vbuf.data[col_off] as f32,
-                    vbuf.data[col_off + 1] as f32,
-                    vbuf.data[col_off + 2] as f32,
-                    255.0,
-                )
-            }
-            ColorFormat::RgbaU8 => {
-                if col_off.saturating_add(4) > vbuf.data.len() {
-                    return Err(Error::Invalid);
-                }
-                (
-                    vbuf.data[col_off] as f32,
-                    vbuf.data[col_off + 1] as f32,
-                    vbuf.data[col_off + 2] as f32,
-                    vbuf.data[col_off + 3] as f32,
-                )
-            }
-        };
-
-        let (u, v) = match layout.texcoord_format {
-            TexCoordFormat::None => (0.0, 0.0),
-            TexCoordFormat::UvF32 => {
-                let uv_off = layout.texcoord_offset as usize;
-                (read_f32(uv_off)?, read_f32(uv_off.saturating_add(4))?)
-            }
-        };
-
-        Ok(SwVertex {
-            x,
-            y,
-            u,
-            v,
-            r,
-            g,
-            b,
-            a,
-        })
-    }
-
-    fn raster_triangle(
-        &self,
-        fb: &FramebufferTarget,
-        vp: Viewport,
-        v0: SwVertex,
-        v1: SwVertex,
-        v2: SwVertex,
-        textured: bool,
-        image: Option<&SwImage>,
-    ) -> Result<()> {
-        let to_px = |x: f32, y: f32| -> (f32, f32) {
-            let w = (vp.width - 1).max(1) as f32;
-            let h = (vp.height - 1).max(1) as f32;
-            let sx = vp.x as f32 + libm::roundf(((x * 0.5) + 0.5) * w);
-            let sy = vp.y as f32 + libm::roundf(((y * 0.5) + 0.5) * h);
-            (sx, sy)
-        };
-
-        let (x0, y0) = to_px(v0.x, v0.y);
-        let (x1, y1) = to_px(v1.x, v1.y);
-        let (x2, y2) = to_px(v2.x, v2.y);
-
-        let min_x = (libm::floorf(x0.min(x1.min(x2))) as i32).max(0);
-        let min_y = (libm::floorf(y0.min(y1.min(y2))) as i32).max(0);
-        let max_x =
-            (libm::ceilf(x0.max(x1.max(x2))) as i32).min((fb.width as i32).saturating_sub(1));
-        let max_y =
-            (libm::ceilf(y0.max(y1.max(y2))) as i32).min((fb.height as i32).saturating_sub(1));
-
-        if min_x > max_x || min_y > max_y {
-            return Ok(());
-        }
-
-        let edge = |ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32| -> f32 {
-            (px - ax) * (by - ay) - (py - ay) * (bx - ax)
-        };
-
-        let area = edge(x0, y0, x1, y1, x2, y2);
-        if area == 0.0 {
-            return Ok(());
-        }
-
-        for y in min_y..=max_y {
-            let row_ptr = unsafe { fb.addr.add((y as usize).saturating_mul(fb.pitch)) as *mut u32 };
-            let row = unsafe { core::slice::from_raw_parts_mut(row_ptr, fb.width) };
-
-            for x in min_x..=max_x {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-
-                let w0 = edge(x1, y1, x2, y2, px, py);
-                let w1 = edge(x2, y2, x0, y0, px, py);
-                let w2 = edge(x0, y0, x1, y1, px, py);
-
-                let inside = if area > 0.0 {
-                    w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
-                } else {
-                    w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0
-                };
-                if !inside {
-                    continue;
-                }
-
-                let l0 = w0 / area;
-                let l1 = w1 / area;
-                let l2 = w2 / area;
-
-                let mut src_r = l0 * v0.r + l1 * v1.r + l2 * v2.r;
-                let mut src_g = l0 * v0.g + l1 * v1.g + l2 * v2.g;
-                let mut src_b = l0 * v0.b + l1 * v1.b + l2 * v2.b;
-                let mut src_a = l0 * v0.a + l1 * v1.a + l2 * v2.a;
-
-                if textured {
-                    let Some(img) = image else {
-                        continue;
-                    };
-                    let u = l0 * v0.u + l1 * v1.u + l2 * v2.u;
-                    let v = l0 * v0.v + l1 * v1.v + l2 * v2.v;
-                    let (tr, tg, tb, ta) = sample_texture(img, u, v, self.state.sampler);
-                    src_r = tr * src_r / 255.0;
-                    src_g = tg * src_g / 255.0;
-                    src_b = tb * src_b / 255.0;
-                    src_a = ta * src_a / 255.0;
-                }
-
-                let src_r = src_r.clamp(0.0, 255.0);
-                let src_g = src_g.clamp(0.0, 255.0);
-                let src_b = src_b.clamp(0.0, 255.0);
-                let src_a = src_a.clamp(0.0, 255.0);
-
-                let dst = row[x as usize] & 0x00FF_FFFF;
-                let dst_r = ((dst >> 16) & 0xFF) as f32;
-                let dst_g = ((dst >> 8) & 0xFF) as f32;
-                let dst_b = (dst & 0xFF) as f32;
-
-                let (out_r, out_g, out_b) = if self.state.blend.enabled {
-                    blend_rgb(
-                        self.state.blend,
-                        src_r,
-                        src_g,
-                        src_b,
-                        src_a,
-                        dst_r,
-                        dst_g,
-                        dst_b,
-                    )
-                } else {
-                    (src_r, src_g, src_b)
-                };
-
-                let out = ((out_r as u32) << 16) | ((out_g as u32) << 8) | (out_b as u32);
-                row[x as usize] = out & 0x00FF_FFFF;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[inline]
-fn wrap_coord(v: f32, wrap: SamplerWrap) -> f32 {
-    match wrap {
-        SamplerWrap::ClampToEdge => v.clamp(0.0, 1.0),
-        SamplerWrap::Repeat => {
-            let mut t = v - libm::floorf(v);
-            if t < 0.0 {
-                t += 1.0;
-            }
-            t
-        }
-    }
-}
-
-#[inline]
-fn sample_texel(img: &SwImage, x: usize, y: usize) -> (f32, f32, f32, f32) {
-    let xx = x.min((img.width.saturating_sub(1)) as usize);
-    let yy = y.min((img.height.saturating_sub(1)) as usize);
-    let off = yy
-        .saturating_mul(img.width as usize)
-        .saturating_add(xx)
-        .saturating_mul(4);
-    if off.saturating_add(4) > img.data.len() {
-        return (255.0, 255.0, 255.0, 255.0);
-    }
-    let r = img.data[off] as f32;
-    let g = img.data[off + 1] as f32;
-    let b = img.data[off + 2] as f32;
-    let a = if img.format == ImageFormat::Rgbx8888 {
-        255.0
-    } else {
-        img.data[off + 3] as f32
-    };
-    (r, g, b, a)
-}
-
-fn sample_texture(img: &SwImage, u: f32, v: f32, sampler: SamplerDesc) -> (f32, f32, f32, f32) {
-    let uu = wrap_coord(u, sampler.wrap_s);
-    let vv = wrap_coord(v, sampler.wrap_t);
-
-    let w = img.width.max(1) as f32;
-    let h = img.height.max(1) as f32;
-    let x = uu * (w - 1.0);
-    let y = vv * (h - 1.0);
-
-    match sampler.mag_filter {
-        SamplerFilter::Nearest => {
-            let tx = libm::roundf(x).clamp(0.0, w - 1.0) as usize;
-            let ty = libm::roundf(y).clamp(0.0, h - 1.0) as usize;
-            sample_texel(img, tx, ty)
-        }
-        SamplerFilter::Linear => {
-            let x0f = libm::floorf(x).clamp(0.0, w - 1.0);
-            let y0f = libm::floorf(y).clamp(0.0, h - 1.0);
-            let x1f = (x0f + 1.0).min(w - 1.0);
-            let y1f = (y0f + 1.0).min(h - 1.0);
-
-            let x0 = x0f as usize;
-            let y0 = y0f as usize;
-            let x1 = x1f as usize;
-            let y1 = y1f as usize;
-
-            let tx = (x - x0f).clamp(0.0, 1.0);
-            let ty = (y - y0f).clamp(0.0, 1.0);
-
-            let c00 = sample_texel(img, x0, y0);
-            let c10 = sample_texel(img, x1, y0);
-            let c01 = sample_texel(img, x0, y1);
-            let c11 = sample_texel(img, x1, y1);
-
-            let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-            let i0 = (
-                lerp(c00.0, c10.0, tx),
-                lerp(c00.1, c10.1, tx),
-                lerp(c00.2, c10.2, tx),
-                lerp(c00.3, c10.3, tx),
-            );
-            let i1 = (
-                lerp(c01.0, c11.0, tx),
-                lerp(c01.1, c11.1, tx),
-                lerp(c01.2, c11.2, tx),
-                lerp(c01.3, c11.3, tx),
-            );
-
-            (
-                lerp(i0.0, i1.0, ty),
-                lerp(i0.1, i1.1, ty),
-                lerp(i0.2, i1.2, ty),
-                lerp(i0.3, i1.3, ty),
-            )
-        }
-    }
-}
-
-#[inline]
-fn factor_value(factor: trueos_gfx_core::BlendFactor, src_c: f32, src_a: f32, dst_c: f32) -> f32 {
-    match factor {
-        trueos_gfx_core::BlendFactor::Zero => 0.0,
-        trueos_gfx_core::BlendFactor::One => 1.0,
-        trueos_gfx_core::BlendFactor::SrcAlpha => (src_a / 255.0).clamp(0.0, 1.0),
-        trueos_gfx_core::BlendFactor::OneMinusSrcAlpha => 1.0 - (src_a / 255.0).clamp(0.0, 1.0),
-        trueos_gfx_core::BlendFactor::DstColor => (dst_c / 255.0).clamp(0.0, 1.0),
-        trueos_gfx_core::BlendFactor::OneMinusSrcColor => 1.0 - (src_c / 255.0).clamp(0.0, 1.0),
-    }
-}
-
-fn blend_rgb(
-    blend: BlendDesc,
-    src_r: f32,
-    src_g: f32,
-    src_b: f32,
-    src_a: f32,
-    dst_r: f32,
-    dst_g: f32,
-    dst_b: f32,
-) -> (f32, f32, f32) {
-    let sf_r = factor_value(blend.src, src_r, src_a, dst_r);
-    let sf_g = factor_value(blend.src, src_g, src_a, dst_g);
-    let sf_b = factor_value(blend.src, src_b, src_a, dst_b);
-
-    let df_r = factor_value(blend.dst, src_r, src_a, dst_r);
-    let df_g = factor_value(blend.dst, src_g, src_a, dst_g);
-    let df_b = factor_value(blend.dst, src_b, src_a, dst_b);
-
-    (
-        (src_r * sf_r + dst_r * df_r).clamp(0.0, 255.0),
-        (src_g * sf_g + dst_g * df_g).clamp(0.0, 255.0),
-        (src_b * sf_b + dst_b * df_b).clamp(0.0, 255.0),
-    )
 }
 
 impl GfxDevice for IntelGfxBackend {
@@ -786,50 +358,57 @@ impl GfxDevice for IntelGfxBackend {
         let Some(fb) = self.current_fb() else {
             return Err(Error::Unsupported);
         };
+        if fb.width == 0 || fb.height == 0 {
+            return Err(Error::Unsupported);
+        }
 
         for cmd in cmds.commands {
             match *cmd {
-                Command::ClearColor { rgb } => self.fill_fb(&fb, rgb),
+                Command::ClearColor { rgb: _ } => {}
                 Command::ClearRect {
-                    rgb,
-                    x,
-                    y,
-                    width,
-                    height,
-                } => self.clear_rect(&fb, rgb, x, y, width, height),
+                    rgb: _,
+                    x: _,
+                    y: _,
+                    width: _,
+                    height: _,
+                } => {}
                 Command::BindPipeline(id) => {
                     if self.pipeline_ref(id).is_none() {
                         return Err(Error::NotFound);
                     }
-                    self.state.pipeline = Some(id);
                 }
                 Command::BindVertexBuffer { buffer, offset } => {
                     if self.buffer_ref(buffer).is_none() {
                         return Err(Error::NotFound);
                     }
-                    let off = usize::try_from(offset).map_err(|_| Error::Invalid)?;
-                    self.state.vertex_buffer = Some((buffer, off));
+                    let _ = usize::try_from(offset).map_err(|_| Error::Invalid)?;
                 }
                 Command::BindImage(id) => {
                     if self.image_ref(id).is_none() {
                         return Err(Error::NotFound);
                     }
-                    self.state.image = Some(id);
                 }
-                Command::SetSampler(s) => self.state.sampler = s,
-                Command::SetBlend(b) => self.state.blend = b,
-                Command::SetViewport(vp) => self.state.viewport = Some(vp),
+                Command::SetSampler(_s) => {}
+                Command::SetBlend(_b) => {}
+                Command::SetViewport(_vp) => {}
                 Command::Draw {
-                    vertex_count,
-                    first_vertex,
-                } => {
-                    self.draw(&fb, vertex_count, first_vertex)?;
-                }
-                Command::Present => {
-                    // Immediate-mode software renderer writes directly to scanout.
-                }
+                    vertex_count: _,
+                    first_vertex: _,
+                } => {}
+                Command::Present => {}
             }
         }
+
+        let Some(engine) = self.cmd.as_mut() else {
+            return Err(Error::Unsupported);
+        };
+        engine.begin_batch();
+        // Command-streamer proof path: emit work + flush + end + kick every submit.
+        // This is the minimum non-stub execution path before full 3D packet programming.
+        engine.emit_noop()?;
+        engine.emit_cache_flush()?;
+        engine.emit_batch_end()?;
+        engine.submit_batch()?;
 
         let id = FenceId::from_raw(self.fence_seq);
         self.fence_seq = self.fence_seq.wrapping_add(1).max(1);
