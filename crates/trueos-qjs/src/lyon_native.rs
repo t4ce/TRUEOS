@@ -3,25 +3,24 @@
 extern crate alloc;
 
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 
 use crate as qjs;
 
-#[cfg(feature = "lyon-native")]
-use libm::sqrtf;
-#[cfg(feature = "lyon-native")]
-use lyon_geom::{point, CubicBezierSegment, LineSegment, Point, QuadraticBezierSegment};
-#[cfg(feature = "lyon-native")]
-use lyon_tessellation::geometry_builder::simple_builder;
-#[cfg(feature = "lyon-native")]
-use lyon_tessellation::math::point as tess_point;
-#[cfg(feature = "lyon-native")]
-use lyon_tessellation::path::Path;
-#[cfg(feature = "lyon-native")]
-use lyon_tessellation::path::builder::BorderRadii;
-#[cfg(feature = "lyon-native")]
-use lyon_tessellation::{StrokeOptions, StrokeTessellator, VertexBuffers};
+unsafe extern "C" {
+    fn trueos_cabi_lyon_is_available() -> u32;
+    fn trueos_cabi_lyon_demo_mesh_count() -> u32;
+    fn trueos_cabi_lyon_demo_mesh_name_len(index: u32) -> usize;
+    fn trueos_cabi_lyon_demo_mesh_name_copy(index: u32, out_ptr: *mut u8, out_len: usize) -> usize;
+    fn trueos_cabi_lyon_demo_mesh_vertex_count(index: u32) -> u32;
+    fn trueos_cabi_lyon_demo_mesh_index_count(index: u32) -> u32;
+    fn trueos_cabi_lyon_demo_mesh_copy_vertices(index: u32, out_ptr: *mut f32, out_len: usize)
+    -> usize;
+    fn trueos_cabi_lyon_demo_mesh_copy_indices(index: u32, out_ptr: *mut u16, out_len: usize)
+    -> usize;
+}
 
 #[inline]
 fn js_bool(v: bool) -> qjs::JSValue {
@@ -74,92 +73,193 @@ fn js_str(ctx: *mut qjs::JSContext, s: &str) -> qjs::JSValue {
 }
 
 #[inline]
-unsafe fn set_prop_str(ctx: *mut qjs::JSContext, obj: qjs::JSValueConst, key: &str, val: qjs::JSValue) {
+unsafe fn set_prop_str(
+    ctx: *mut qjs::JSContext,
+    obj: qjs::JSValueConst,
+    key: &str,
+    val: qjs::JSValue,
+) {
     let mut keyz = String::from(key);
     keyz.push('\0');
     let _ = unsafe { qjs::JS_SetPropertyStr(ctx, obj, keyz.as_ptr() as *const c_char, val) };
 }
 
-fn triangle_area(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f64 {
-    let area2 = a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1);
-    (0.5f32 * area2.abs()) as f64
+struct DemoMeshData {
+    name: String,
+    vertices: Vec<f32>,
+    indices: Vec<u16>,
 }
 
-#[cfg(feature = "lyon-native")]
-fn triangle_signed_area(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f64 {
-    let area2 = a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1);
-    (0.5f32 * area2) as f64
+fn read_mesh_name(index: u32) -> Option<String> {
+    let name_len = unsafe { trueos_cabi_lyon_demo_mesh_name_len(index) };
+    if name_len == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; name_len];
+    let wrote = unsafe { trueos_cabi_lyon_demo_mesh_name_copy(index, buf.as_mut_ptr(), buf.len()) };
+    if wrote == 0 {
+        return None;
+    }
+    buf.truncate(wrote);
+    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-#[cfg(feature = "lyon-native")]
-fn point_distance(a: Point<f32>, b: Point<f32>) -> f64 {
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    sqrtf(dx * dx + dy * dy) as f64
+fn read_demo_mesh(index: u32) -> Option<DemoMeshData> {
+    let vcount = unsafe { trueos_cabi_lyon_demo_mesh_vertex_count(index) } as usize;
+    let icount = unsafe { trueos_cabi_lyon_demo_mesh_index_count(index) } as usize;
+    if vcount == 0 || icount < 3 {
+        return None;
+    }
+
+    let mut vertices = vec![0.0f32; vcount.saturating_mul(2)];
+    let mut indices = vec![0u16; icount];
+
+    let v_written = unsafe {
+        trueos_cabi_lyon_demo_mesh_copy_vertices(index, vertices.as_mut_ptr(), vertices.len())
+    };
+    let i_written = unsafe {
+        trueos_cabi_lyon_demo_mesh_copy_indices(index, indices.as_mut_ptr(), indices.len())
+    };
+    if v_written == 0 || i_written < 3 {
+        return None;
+    }
+
+    vertices.truncate(v_written);
+    indices.truncate(i_written);
+
+    let name = read_mesh_name(index).unwrap_or_else(|| String::from("mesh"));
+    Some(DemoMeshData {
+        name,
+        vertices,
+        indices,
+    })
 }
 
-#[cfg(feature = "lyon-native")]
-fn approx_quad_length(quad: &QuadraticBezierSegment<f32>, steps: u32) -> f64 {
+fn read_demo_meshes() -> Vec<DemoMeshData> {
+    let count = unsafe { trueos_cabi_lyon_demo_mesh_count() } as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut i = 0u32;
+    while (i as usize) < count {
+        if let Some(m) = read_demo_mesh(i) {
+            out.push(m);
+        }
+        i += 1;
+    }
+    out
+}
+
+#[inline]
+fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    libm::sqrt(dx * dx + dy * dy)
+}
+
+#[inline]
+fn quad_sample(t: f64, p0: (f64, f64), p1: (f64, f64), p2: (f64, f64)) -> (f64, f64) {
+    let u = 1.0 - t;
+    (
+        u * u * p0.0 + 2.0 * u * t * p1.0 + t * t * p2.0,
+        u * u * p0.1 + 2.0 * u * t * p1.1 + t * t * p2.1,
+    )
+}
+
+#[inline]
+fn cubic_sample(
+    t: f64,
+    p0: (f64, f64),
+    p1: (f64, f64),
+    p2: (f64, f64),
+    p3: (f64, f64),
+) -> (f64, f64) {
+    let u = 1.0 - t;
+    let u2 = u * u;
+    let t2 = t * t;
+    (
+        u2 * u * p0.0 + 3.0 * u2 * t * p1.0 + 3.0 * u * t2 * p2.0 + t2 * t * p3.0,
+        u2 * u * p0.1 + 3.0 * u2 * t * p1.1 + 3.0 * u * t2 * p2.1 + t2 * t * p3.1,
+    )
+}
+
+fn approx_len(mut sample: impl FnMut(f64) -> (f64, f64), steps: u32) -> f64 {
     let n = if steps < 2 { 2 } else { steps };
-    let mut acc = 0.0f64;
-    let mut prev = quad.sample(0.0);
+    let mut acc = 0.0;
+    let mut prev = sample(0.0);
     let mut i = 1u32;
     while i <= n {
-        let t = (i as f32) / (n as f32);
-        let p = quad.sample(t);
-        acc += point_distance(prev, p);
+        let t = (i as f64) / (n as f64);
+        let p = sample(t);
+        acc += dist(prev, p);
         prev = p;
         i += 1;
     }
     acc
 }
 
-#[cfg(feature = "lyon-native")]
-fn approx_cubic_length(cubic: &CubicBezierSegment<f32>, steps: u32) -> f64 {
-    let n = if steps < 2 { 2 } else { steps };
-    let mut acc = 0.0f64;
-    let mut prev = cubic.sample(0.0);
-    let mut i = 1u32;
-    while i <= n {
-        let t = (i as f32) / (n as f32);
-        let p = cubic.sample(t);
-        acc += point_distance(prev, p);
-        prev = p;
+unsafe extern "C" fn qjs_lyon_demo_meshes(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: i32,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let out = unsafe { qjs::JS_NewObject(ctx) };
+    if out.is_exception() {
+        return out;
+    }
+
+    let available = unsafe { trueos_cabi_lyon_is_available() != 0 };
+    if !available {
+        unsafe { set_prop_str(ctx, out, "ok", js_bool(false)) };
+        unsafe { set_prop_str(ctx, out, "error", js_str(ctx, "lyon backend disabled")) };
+        return out;
+    }
+
+    let meshes = read_demo_meshes();
+    if meshes.is_empty() {
+        unsafe { set_prop_str(ctx, out, "ok", js_bool(false)) };
+        unsafe { set_prop_str(ctx, out, "error", js_str(ctx, "no demo meshes")) };
+        return out;
+    }
+
+    let arr = unsafe { qjs::JS_NewArray(ctx) };
+    if arr.is_exception() {
+        unsafe { set_prop_str(ctx, out, "ok", js_bool(false)) };
+        unsafe { set_prop_str(ctx, out, "error", js_str(ctx, "mesh-array alloc failed")) };
+        return out;
+    }
+
+    let mut i = 0u32;
+    while (i as usize) < meshes.len() {
+        let msrc = &meshes[i as usize];
+        let m = unsafe { qjs::JS_NewObject(ctx) };
+        if !m.is_exception() {
+            unsafe {
+                set_prop_str(ctx, m, "name", js_str(ctx, msrc.name.as_str()));
+                set_prop_str(ctx, m, "vertices", js_f32_array(ctx, msrc.vertices.as_slice()));
+                set_prop_str(ctx, m, "indices", js_u16_array(ctx, msrc.indices.as_slice()));
+                set_prop_str(
+                    ctx,
+                    m,
+                    "vertexCount",
+                    js_num(ctx, (msrc.vertices.len() / 2) as f64),
+                );
+                set_prop_str(ctx, m, "indexCount", js_num(ctx, msrc.indices.len() as f64));
+                set_prop_str(
+                    ctx,
+                    m,
+                    "triangleCount",
+                    js_num(ctx, (msrc.indices.len() / 3) as f64),
+                );
+            }
+            let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, i, m) };
+        }
         i += 1;
     }
-    acc
-}
 
-#[cfg(feature = "lyon-native")]
-fn tessellate_round_rect_border_mesh() -> Result<(Vec<f32>, Vec<u16>), &'static str> {
-    let mut builder = Path::builder();
-    builder.add_rounded_rectangle(
-        &lyon_tessellation::path::math::Box2D::new(tess_point(0.0, 0.0), tess_point(44.0, 28.0)),
-        &BorderRadii::new(6.0),
-        lyon_tessellation::path::Winding::Positive,
-    );
-    let path = builder.build();
-
-    let mut geometry: VertexBuffers<lyon_tessellation::math::Point, u16> = VertexBuffers::new();
-    let mut tess = StrokeTessellator::new();
-    let opts = StrokeOptions::default().with_line_width(1.0);
-    if tess
-        .tessellate_path(&path, &opts, &mut simple_builder(&mut geometry))
-        .is_err()
-    {
-        return Err("round-rect stroke tessellation failed");
-    }
-
-    let mut verts_xy = Vec::with_capacity(geometry.vertices.len() * 2);
-    let mut vi = 0usize;
-    while vi < geometry.vertices.len() {
-        let p = geometry.vertices[vi];
-        verts_xy.push(p.x);
-        verts_xy.push(p.y);
-        vi += 1;
-    }
-
-    Ok((verts_xy, geometry.indices))
+    unsafe { set_prop_str(ctx, out, "ok", js_bool(true)) };
+    unsafe { set_prop_str(ctx, out, "meshCount", js_num(ctx, meshes.len() as f64)) };
+    unsafe { set_prop_str(ctx, out, "meshes", arr) };
+    out
 }
 
 unsafe extern "C" fn qjs_lyon_demo_shapes(
@@ -173,118 +273,139 @@ unsafe extern "C" fn qjs_lyon_demo_shapes(
         return out;
     }
 
-    #[cfg(feature = "lyon-native")]
-    {
-        let line = LineSegment {
-            from: point(0.0, 0.0),
-            to: point(40.0, 30.0),
-        };
-        let line_len = line.length() as f64;
-        let line_mid = line.sample(0.5);
-        let line_q1 = line.sample(0.25);
-        let line_q3 = line.sample(0.75);
-        let (line_l, line_r) = line.split(0.5);
-
-        let quad = QuadraticBezierSegment {
-            from: point(0.0, 0.0),
-            ctrl: point(20.0, 36.0),
-            to: point(44.0, 2.0),
-        };
-        let quad_q1 = quad.sample(0.25);
-        let quad_mid = quad.sample(0.5);
-        let quad_q3 = quad.sample(0.75);
-        let quad_len = quad.length() as f64;
-        let quad_len_approx = approx_quad_length(&quad, 20);
-        let quad_base_len = quad.baseline().length() as f64;
-        let (quad_l, quad_r) = quad.split(0.5);
-        let quad_l_len = quad_l.length() as f64;
-        let quad_r_len = quad_r.length() as f64;
-
-        let cubic = CubicBezierSegment {
-            from: point(0.0, 0.0),
-            ctrl1: point(12.0, 34.0),
-            ctrl2: point(38.0, -12.0),
-            to: point(60.0, 10.0),
-        };
-        let cubic_q1 = cubic.sample(0.25);
-        let cubic_mid = cubic.sample(0.5);
-        let cubic_q3 = cubic.sample(0.75);
-        let cubic_base_len = cubic.baseline().length() as f64;
-        let cubic_len_approx = approx_cubic_length(&cubic, 32);
-        let (cubic_l, cubic_r) = cubic.split(0.5);
-        let cubic_l_len_approx = approx_cubic_length(&cubic_l, 16);
-        let cubic_r_len_approx = approx_cubic_length(&cubic_r, 16);
-
-        let tri_area = triangle_area((0.0, 0.0), (24.0, 0.0), (10.0, 18.0));
-        let tri_signed = triangle_signed_area((0.0, 0.0), (24.0, 0.0), (10.0, 18.0));
-        let tri_tess = tessellate_round_rect_border_mesh();
-
-        unsafe { set_prop_str(ctx, out, "ok", js_bool(true)) };
-        unsafe { set_prop_str(ctx, out, "lineLength", js_num(ctx, line_len)) };
-        unsafe { set_prop_str(ctx, out, "lineMidX", js_num(ctx, line_mid.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineMidY", js_num(ctx, line_mid.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineQ1X", js_num(ctx, line_q1.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineQ1Y", js_num(ctx, line_q1.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineQ3X", js_num(ctx, line_q3.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineQ3Y", js_num(ctx, line_q3.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineLeftLen", js_num(ctx, line_l.length() as f64)) };
-        unsafe { set_prop_str(ctx, out, "lineRightLen", js_num(ctx, line_r.length() as f64)) };
-
-        unsafe { set_prop_str(ctx, out, "triangleArea", js_num(ctx, tri_area)) };
-        unsafe { set_prop_str(ctx, out, "triangleSignedArea", js_num(ctx, tri_signed)) };
-        match tri_tess {
-            Ok((verts_xy, idx)) => {
-                let verts = verts_xy.len() / 2;
-                unsafe { set_prop_str(ctx, out, "triangleTessOk", js_bool(true)) };
-                unsafe { set_prop_str(ctx, out, "triangleTessVertices", js_num(ctx, verts as f64)) };
-                unsafe { set_prop_str(ctx, out, "triangleTessIndices", js_num(ctx, idx.len() as f64)) };
-                unsafe {
-                    set_prop_str(
-                        ctx,
-                        out,
-                        "triangleTessTriangles",
-                        js_num(ctx, (idx.len() / 3) as f64),
-                    )
-                };
-                let verts_arr = unsafe { js_f32_array(ctx, &verts_xy) };
-                unsafe { set_prop_str(ctx, out, "triangleVertices", verts_arr) };
-                let idx_arr = unsafe { js_u16_array(ctx, &idx) };
-                unsafe { set_prop_str(ctx, out, "triangleIndices", idx_arr) };
-            }
-            Err(msg) => {
-                unsafe { set_prop_str(ctx, out, "triangleTessOk", js_bool(false)) };
-                unsafe { set_prop_str(ctx, out, "triangleTessError", js_str(ctx, msg)) };
-            }
-        }
-
-        unsafe { set_prop_str(ctx, out, "quadLength", js_num(ctx, quad_len)) };
-        unsafe { set_prop_str(ctx, out, "quadApproxLength", js_num(ctx, quad_len_approx)) };
-        unsafe { set_prop_str(ctx, out, "quadBaselineLen", js_num(ctx, quad_base_len)) };
-        unsafe { set_prop_str(ctx, out, "quadMidX", js_num(ctx, quad_mid.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadMidY", js_num(ctx, quad_mid.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadQ1X", js_num(ctx, quad_q1.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadQ1Y", js_num(ctx, quad_q1.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadQ3X", js_num(ctx, quad_q3.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadQ3Y", js_num(ctx, quad_q3.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "quadLeftLen", js_num(ctx, quad_l_len)) };
-        unsafe { set_prop_str(ctx, out, "quadRightLen", js_num(ctx, quad_r_len)) };
-
-        unsafe { set_prop_str(ctx, out, "cubicApproxLength", js_num(ctx, cubic_len_approx)) };
-        unsafe { set_prop_str(ctx, out, "cubicBaselineLen", js_num(ctx, cubic_base_len)) };
-        unsafe { set_prop_str(ctx, out, "cubicMidX", js_num(ctx, cubic_mid.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicMidY", js_num(ctx, cubic_mid.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicQ1X", js_num(ctx, cubic_q1.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicQ1Y", js_num(ctx, cubic_q1.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicQ3X", js_num(ctx, cubic_q3.x as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicQ3Y", js_num(ctx, cubic_q3.y as f64)) };
-        unsafe { set_prop_str(ctx, out, "cubicLeftApproxLen", js_num(ctx, cubic_l_len_approx)) };
-        unsafe { set_prop_str(ctx, out, "cubicRightApproxLen", js_num(ctx, cubic_r_len_approx)) };
-    }
-
-    #[cfg(not(feature = "lyon-native"))]
-    {
+    let available = unsafe { trueos_cabi_lyon_is_available() != 0 };
+    if !available {
         unsafe { set_prop_str(ctx, out, "ok", js_bool(false)) };
         unsafe { set_prop_str(ctx, out, "error", js_str(ctx, "lyon backend disabled")) };
+        return out;
+    }
+
+    let p0 = (0.0, 0.0);
+    let p1 = (40.0, 30.0);
+    let line_len = dist(p0, p1);
+    let line_q1 = (10.0, 7.5);
+    let line_mid = (20.0, 15.0);
+    let line_q3 = (30.0, 22.5);
+
+    let q0 = (0.0, 0.0);
+    let q1 = (20.0, 36.0);
+    let q2 = (44.0, 2.0);
+    let quad_q1 = quad_sample(0.25, q0, q1, q2);
+    let quad_mid = quad_sample(0.5, q0, q1, q2);
+    let quad_q3 = quad_sample(0.75, q0, q1, q2);
+    let quad_len = approx_len(|t| quad_sample(t, q0, q1, q2), 32);
+    let quad_base = dist(q0, q2);
+
+    let c0 = (0.0, 0.0);
+    let c1 = (12.0, 34.0);
+    let c2 = (38.0, -12.0);
+    let c3 = (60.0, 10.0);
+    let cubic_q1 = cubic_sample(0.25, c0, c1, c2, c3);
+    let cubic_mid = cubic_sample(0.5, c0, c1, c2, c3);
+    let cubic_q3 = cubic_sample(0.75, c0, c1, c2, c3);
+    let cubic_len = approx_len(|t| cubic_sample(t, c0, c1, c2, c3), 48);
+    let cubic_base = dist(c0, c3);
+
+    let tri_area = 216.0f64;
+    let tri_signed = 216.0f64;
+
+    unsafe { set_prop_str(ctx, out, "ok", js_bool(true)) };
+    unsafe { set_prop_str(ctx, out, "lineLength", js_num(ctx, line_len)) };
+    unsafe { set_prop_str(ctx, out, "lineMidX", js_num(ctx, line_mid.0)) };
+    unsafe { set_prop_str(ctx, out, "lineMidY", js_num(ctx, line_mid.1)) };
+    unsafe { set_prop_str(ctx, out, "lineQ1X", js_num(ctx, line_q1.0)) };
+    unsafe { set_prop_str(ctx, out, "lineQ1Y", js_num(ctx, line_q1.1)) };
+    unsafe { set_prop_str(ctx, out, "lineQ3X", js_num(ctx, line_q3.0)) };
+    unsafe { set_prop_str(ctx, out, "lineQ3Y", js_num(ctx, line_q3.1)) };
+    unsafe { set_prop_str(ctx, out, "lineLeftLen", js_num(ctx, line_len * 0.5)) };
+    unsafe { set_prop_str(ctx, out, "lineRightLen", js_num(ctx, line_len * 0.5)) };
+
+    unsafe { set_prop_str(ctx, out, "quadLength", js_num(ctx, quad_len)) };
+    unsafe { set_prop_str(ctx, out, "quadApproxLength", js_num(ctx, quad_len)) };
+    unsafe { set_prop_str(ctx, out, "quadBaselineLen", js_num(ctx, quad_base)) };
+    unsafe { set_prop_str(ctx, out, "quadMidX", js_num(ctx, quad_mid.0)) };
+    unsafe { set_prop_str(ctx, out, "quadMidY", js_num(ctx, quad_mid.1)) };
+    unsafe { set_prop_str(ctx, out, "quadQ1X", js_num(ctx, quad_q1.0)) };
+    unsafe { set_prop_str(ctx, out, "quadQ1Y", js_num(ctx, quad_q1.1)) };
+    unsafe { set_prop_str(ctx, out, "quadQ3X", js_num(ctx, quad_q3.0)) };
+    unsafe { set_prop_str(ctx, out, "quadQ3Y", js_num(ctx, quad_q3.1)) };
+    unsafe { set_prop_str(ctx, out, "quadLeftLen", js_num(ctx, quad_len * 0.5)) };
+    unsafe { set_prop_str(ctx, out, "quadRightLen", js_num(ctx, quad_len * 0.5)) };
+
+    unsafe { set_prop_str(ctx, out, "cubicApproxLength", js_num(ctx, cubic_len)) };
+    unsafe { set_prop_str(ctx, out, "cubicBaselineLen", js_num(ctx, cubic_base)) };
+    unsafe { set_prop_str(ctx, out, "cubicMidX", js_num(ctx, cubic_mid.0)) };
+    unsafe { set_prop_str(ctx, out, "cubicMidY", js_num(ctx, cubic_mid.1)) };
+    unsafe { set_prop_str(ctx, out, "cubicQ1X", js_num(ctx, cubic_q1.0)) };
+    unsafe { set_prop_str(ctx, out, "cubicQ1Y", js_num(ctx, cubic_q1.1)) };
+    unsafe { set_prop_str(ctx, out, "cubicQ3X", js_num(ctx, cubic_q3.0)) };
+    unsafe { set_prop_str(ctx, out, "cubicQ3Y", js_num(ctx, cubic_q3.1)) };
+    unsafe { set_prop_str(ctx, out, "cubicLeftApproxLen", js_num(ctx, cubic_len * 0.5)) };
+    unsafe { set_prop_str(ctx, out, "cubicRightApproxLen", js_num(ctx, cubic_len * 0.5)) };
+
+    unsafe { set_prop_str(ctx, out, "triangleArea", js_num(ctx, tri_area)) };
+    unsafe { set_prop_str(ctx, out, "triangleSignedArea", js_num(ctx, tri_signed)) };
+
+    let meshes = read_demo_meshes();
+    if let Some(first) = meshes.first() {
+        unsafe { set_prop_str(ctx, out, "triangleTessOk", js_bool(true)) };
+        unsafe {
+            set_prop_str(
+                ctx,
+                out,
+                "triangleTessVertices",
+                js_num(ctx, (first.vertices.len() / 2) as f64),
+            )
+        };
+        unsafe {
+            set_prop_str(
+                ctx,
+                out,
+                "triangleTessIndices",
+                js_num(ctx, first.indices.len() as f64),
+            )
+        };
+        unsafe {
+            set_prop_str(
+                ctx,
+                out,
+                "triangleTessTriangles",
+                js_num(ctx, (first.indices.len() / 3) as f64),
+            )
+        };
+        let verts_arr = unsafe { js_f32_array(ctx, first.vertices.as_slice()) };
+        unsafe { set_prop_str(ctx, out, "triangleVertices", verts_arr) };
+        let idx_arr = unsafe { js_u16_array(ctx, first.indices.as_slice()) };
+        unsafe { set_prop_str(ctx, out, "triangleIndices", idx_arr) };
+
+        let arr = unsafe { qjs::JS_NewArray(ctx) };
+        if !arr.is_exception() {
+            let mut i = 0u32;
+            while (i as usize) < meshes.len() {
+                let msrc = &meshes[i as usize];
+                let m = unsafe { qjs::JS_NewObject(ctx) };
+                if !m.is_exception() {
+                    unsafe {
+                        set_prop_str(ctx, m, "name", js_str(ctx, msrc.name.as_str()));
+                        set_prop_str(ctx, m, "vertices", js_f32_array(ctx, msrc.vertices.as_slice()));
+                        set_prop_str(ctx, m, "indices", js_u16_array(ctx, msrc.indices.as_slice()));
+                        set_prop_str(ctx, m, "vertexCount", js_num(ctx, (msrc.vertices.len() / 2) as f64));
+                        set_prop_str(ctx, m, "indexCount", js_num(ctx, msrc.indices.len() as f64));
+                        set_prop_str(ctx, m, "triangleCount", js_num(ctx, (msrc.indices.len() / 3) as f64));
+                    }
+                    let _ = unsafe { qjs::JS_SetPropertyUint32(ctx, arr, i, m) };
+                }
+                i += 1;
+            }
+            unsafe { set_prop_str(ctx, out, "demoMeshesOk", js_bool(true)) };
+            unsafe { set_prop_str(ctx, out, "demoMeshCount", js_num(ctx, meshes.len() as f64)) };
+            unsafe { set_prop_str(ctx, out, "demoMeshes", arr) };
+        }
+    } else {
+        unsafe { set_prop_str(ctx, out, "triangleTessOk", js_bool(false)) };
+        unsafe { set_prop_str(ctx, out, "triangleTessError", js_str(ctx, "no demo meshes")) };
+        unsafe { set_prop_str(ctx, out, "demoMeshesOk", js_bool(false)) };
+        unsafe { set_prop_str(ctx, out, "demoMeshesError", js_str(ctx, "no demo meshes")) };
     }
 
     out
@@ -315,14 +436,30 @@ pub(crate) unsafe fn try_create_native_module(
                 0,
             )
         };
-        let _ = unsafe { qjs::JS_SetModuleExport(ctx, m, demo_name.as_ptr() as *const c_char, demo_fn) };
+        let _ = unsafe {
+            qjs::JS_SetModuleExport(ctx, m, demo_name.as_ptr() as *const c_char, demo_fn)
+        };
+
+        let meshes_name = b"demoMeshes\0";
+        let meshes_fn = unsafe {
+            qjs::JS_NewCFunction2(
+                ctx,
+                Some(qjs_lyon_demo_meshes),
+                meshes_name.as_ptr() as *const c_char,
+                0,
+                qjs::JS_CFUNC_GENERIC,
+                0,
+            )
+        };
+        let _ = unsafe {
+            qjs::JS_SetModuleExport(ctx, m, meshes_name.as_ptr() as *const c_char, meshes_fn)
+        };
 
         let avail_name = b"isAvailable\0";
-        #[cfg(feature = "lyon-native")]
-        let avail = js_bool(true);
-        #[cfg(not(feature = "lyon-native"))]
-        let avail = js_bool(false);
-        let _ = unsafe { qjs::JS_SetModuleExport(ctx, m, avail_name.as_ptr() as *const c_char, avail) };
+        let avail = js_bool(unsafe { trueos_cabi_lyon_is_available() != 0 });
+        let _ = unsafe {
+            qjs::JS_SetModuleExport(ctx, m, avail_name.as_ptr() as *const c_char, avail)
+        };
         0
     }
 
@@ -332,6 +469,7 @@ pub(crate) unsafe fn try_create_native_module(
     }
 
     let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"demoShapes\0".as_ptr() as *const c_char) };
+    let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"demoMeshes\0".as_ptr() as *const c_char) };
     let _ = unsafe { qjs::JS_AddModuleExport(ctx, m, b"isAvailable\0".as_ptr() as *const c_char) };
     m
 }

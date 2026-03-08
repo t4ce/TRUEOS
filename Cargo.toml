@@ -49,6 +49,7 @@ trueos-fs = { path = "crates/trueos-fs" }
 trueos-v = { path = "crates/trueos-v" }
 trueos-tetris = { path = "crates/trueos-tetris" }
 trueos-weather = { path = "crates/trueos-weather" }
+lyon_tessellation = { version = "1.0.16", default-features = false }
 
 [profile.dev]
 panic = "abort"

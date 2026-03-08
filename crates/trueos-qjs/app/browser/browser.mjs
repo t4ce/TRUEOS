@@ -21,6 +21,7 @@ let scrollY = 0;
 let cachedCssObjects = [];
 let lyonRoundRectRuns = [];
 let cachedLyonDemo = null;
+let cachedLyonMeshes = null;
 const fpsOverlay = createFpsOverlay();
 
 function getLyonDemo() {
@@ -37,20 +38,52 @@ function getLyonDemo() {
   return cachedLyonDemo;
 }
 
-function rebuildLyonRuns(vw, vh) {
-  lyonRoundRectRuns.length = 0;
-  const demo = getLyonDemo();
-  if (!demo || demo.triangleTessOk !== true) return;
+function getLyonMeshes() {
+  if (cachedLyonMeshes) return cachedLyonMeshes;
+  if (!lyon || lyon.isAvailable !== true) return null;
 
+  if (typeof lyon.demoMeshes === 'function') {
+    try {
+      const m = lyon.demoMeshes();
+      if (m && m.ok === true && Array.isArray(m.meshes) && m.meshes.length > 0) {
+        cachedLyonMeshes = m;
+        return m;
+      }
+    } catch (_) {}
+  }
+
+  const demo = getLyonDemo();
+  if (!demo || demo.triangleTessOk !== true) return null;
   const verts = Array.isArray(demo.triangleVertices) ? demo.triangleVertices : [];
   const idx = Array.isArray(demo.triangleIndices) ? demo.triangleIndices : [];
-  const vcount = (verts.length / 2) | 0;
-  const icount = idx.length | 0;
-  if (vcount <= 0 || icount < 3) return;
+  if (((verts.length / 2) | 0) <= 0 || idx.length < 3) return null;
+
+  cachedLyonMeshes = {
+    ok: true,
+    meshCount: 1,
+    meshes: [{
+      name: 'roundRectThin',
+      vertices: verts,
+      indices: idx,
+      vertexCount: (verts.length / 2) | 0,
+      indexCount: idx.length | 0,
+      triangleCount: (idx.length / 3) | 0,
+    }],
+  };
+  return cachedLyonMeshes;
+}
+
+function rebuildLyonRuns(vw, vh) {
+  lyonRoundRectRuns.length = 0;
+  const meshDemo = getLyonMeshes();
+  if (!meshDemo || meshDemo.ok !== true || !Array.isArray(meshDemo.meshes)) return;
 
   // Packet format per mesh:
   // [x, y, scale, r, g, b, a, vertex_count, index_count, ...verts_xy, ...indices]
-  const pushMesh = (x, y, scale, color) => {
+  const pushMesh = (x, y, scale, color, verts, idx) => {
+    const vcount = (verts.length / 2) | 0;
+    const icount = idx.length | 0;
+    if (vcount <= 0 || icount < 3) return;
     lyonRoundRectRuns.push(x, y, scale, color[0], color[1], color[2], color[3], vcount, icount);
     for (let i = 0; i < vcount * 2; i++) {
       lyonRoundRectRuns.push(Number(verts[i] || 0));
@@ -60,10 +93,33 @@ function rebuildLyonRuns(vw, vh) {
     }
   };
 
+  const palette = [
+    [20, 120, 230, 255],
+    [16, 170, 120, 255],
+    [210, 130, 24, 255],
+    [180, 70, 140, 255],
+  ];
+  const scales = [3.8, 2.4, 1.9, 1.6];
   const anchorX = Math.max(530, Math.round(vw * 0.56));
   const anchorY = Math.max(72, Math.round(vh * 0.14));
-  pushMesh(anchorX, anchorY, 4.0, [20, 120, 230, 255]);
-  pushMesh(anchorX + 220, anchorY + 24, 2.4, [16, 170, 120, 255]);
+  const cols = 2;
+  const slotX = 200;
+  const slotY = 120;
+
+  for (let i = 0; i < meshDemo.meshes.length; i++) {
+    const m = meshDemo.meshes[i];
+    const verts = Array.isArray(m && m.vertices) ? m.vertices : [];
+    const idx = Array.isArray(m && m.indices) ? m.indices : [];
+    if (((verts.length / 2) | 0) <= 0 || idx.length < 3) continue;
+
+    const col = i % cols;
+    const row = (i / cols) | 0;
+    const x = anchorX + (col * slotX);
+    const y = anchorY + (row * slotY);
+    const color = palette[i % palette.length];
+    const scale = scales[i % scales.length];
+    pushMesh(x, y, scale, color, verts, idx);
+  }
 }
 
 function appendLyonDemoLines(out) {
@@ -100,6 +156,20 @@ function appendLyonDemoLines(out) {
 
   out.push('Live Demo Metrics');
   out.push(`${INDENT}path: rounded rectangle (44x28), radius=6, stroke=1`);
+  const meshDemo = getLyonMeshes();
+  if (meshDemo && meshDemo.ok === true && Array.isArray(meshDemo.meshes)) {
+    out.push(`${INDENT}mesh demo: count=${Number(meshDemo.meshCount || meshDemo.meshes.length || 0) | 0}`);
+    for (let i = 0; i < meshDemo.meshes.length; i++) {
+      const m = meshDemo.meshes[i] || {};
+      const name = String(m.name || `mesh${i}`);
+      const v = Number(m.vertexCount || 0) | 0;
+      const idx = Number(m.indexCount || 0) | 0;
+      const tris = Number(m.triangleCount || 0) | 0;
+      out.push(`${INDENT}${name}: verts=${v} idx=${idx} tris=${tris}`);
+    }
+  } else if (meshDemo && meshDemo.ok === false) {
+    out.push(`${INDENT}mesh demo failed: ${String(meshDemo.error || 'unknown')}`);
+  }
   if (demo.triangleTessOk === true) {
     const verts = Number(demo.triangleTessVertices || 0) | 0;
     const idx = Number(demo.triangleTessIndices || 0) | 0;
