@@ -3,7 +3,6 @@ pub mod cursor;
 #[cfg(feature = "gfx_intel")]
 pub mod intel;
 pub mod loadscreen;
-pub mod lyon_native;
 pub mod text;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;

@@ -40,10 +40,6 @@ pub(crate) mod icon;
 pub mod scene;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/lyon.rs"]
-pub mod browser_lyon;
-
-#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]
@@ -75,9 +71,6 @@ pub mod wgpu;
 
 #[cfg(feature = "trueos")]
 pub mod lightningcss_native;
-
-#[cfg(feature = "trueos")]
-pub mod lyon_native;
 
 #[cfg(feature = "trueos")]
 #[derive(Clone, Copy)]
