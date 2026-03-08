@@ -445,6 +445,70 @@ unsafe extern "C" fn qjs_draw_layout_rects(
 
     let _ = trueos_cabi_gfx_clear_scissor();
 
+    // Optional raw triangle payload: [x, y, r, g, b, a, ...] in viewport pixels.
+    // This is drawn in the same frame before text overlays.
+    if argc >= 5 {
+        let tris = args[4];
+        let tri_len_val = qjs::JS_GetPropertyStr(ctx, tris, LENGTH_KEY.as_ptr() as *const c_char);
+        let mut tri_len_f = 0.0f64;
+        let _ = qjs::JS_ToFloat64(ctx, &mut tri_len_f as *mut f64, tri_len_val);
+        qjs::js_free_value(ctx, tri_len_val);
+        let tri_len = if tri_len_f.is_finite() && tri_len_f > 0.0 {
+            tri_len_f as u32
+        } else {
+            0
+        };
+
+        bytes.clear();
+        let mut t = 0u32;
+        while t + 5 < tri_len {
+            let vx = qjs::JS_GetPropertyUint32(ctx, tris, t + 0);
+            let vy = qjs::JS_GetPropertyUint32(ctx, tris, t + 1);
+            let vr = qjs::JS_GetPropertyUint32(ctx, tris, t + 2);
+            let vg = qjs::JS_GetPropertyUint32(ctx, tris, t + 3);
+            let vb = qjs::JS_GetPropertyUint32(ctx, tris, t + 4);
+            let va = qjs::JS_GetPropertyUint32(ctx, tris, t + 5);
+
+            let mut x = 0.0f64;
+            let mut y = 0.0f64;
+            let mut r = 0.0f64;
+            let mut g = 0.0f64;
+            let mut b = 0.0f64;
+            let mut a = 0.0f64;
+            let _ = qjs::JS_ToFloat64(ctx, &mut x as *mut f64, vx);
+            let _ = qjs::JS_ToFloat64(ctx, &mut y as *mut f64, vy);
+            let _ = qjs::JS_ToFloat64(ctx, &mut r as *mut f64, vr);
+            let _ = qjs::JS_ToFloat64(ctx, &mut g as *mut f64, vg);
+            let _ = qjs::JS_ToFloat64(ctx, &mut b as *mut f64, vb);
+            let _ = qjs::JS_ToFloat64(ctx, &mut a as *mut f64, va);
+
+            qjs::js_free_value(ctx, vx);
+            qjs::js_free_value(ctx, vy);
+            qjs::js_free_value(ctx, vr);
+            qjs::js_free_value(ctx, vg);
+            qjs::js_free_value(ctx, vb);
+            qjs::js_free_value(ctx, va);
+
+            let x_ndc = to_ndc_x(x as f32, viewport_w);
+            let y_ndc = to_ndc_y(y as f32, viewport_h);
+            push_vtx(
+                &mut bytes,
+                x_ndc,
+                y_ndc,
+                clamp_u8(r as i32),
+                clamp_u8(g as i32),
+                clamp_u8(b as i32),
+                clamp_u8(a as i32),
+            );
+
+            t += 6;
+        }
+
+        if !bytes.is_empty() {
+            let _ = trueos_cabi_gfx_draw_rgb_triangles_no_present(bytes.as_ptr(), bytes.len());
+        }
+    }
+
     // Optional inline text payload: [x, y, text, x, y, text, ...]
     if argc >= 4 {
         let text_entries = args[3];

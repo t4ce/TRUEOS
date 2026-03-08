@@ -73,11 +73,6 @@ version = "0.3"
 default-features = false
 features = ["alloc"]
 
-[dependencies.flate2]
-version = "1.0"
-features = ["rust_backend"]
-default-features = false
-
 [dependencies.fontdb]
 version = "0.23.0"
 optional = true
@@ -89,6 +84,7 @@ version = "0.13"
 [dependencies.kurbo]
 version = "0.11"
 default-features = false
+features = ["libm"]
 
 [dependencies.log]
 version = "0.4"
@@ -126,6 +122,7 @@ default-features = false
 [dependencies.tiny-skia-path]
 version = "0.11.4"
 default-features = false
+features = ["no-std-float"]
 
 [dependencies.unicode-bidi]
 version = "0.3"
