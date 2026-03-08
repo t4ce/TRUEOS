@@ -1,10 +1,12 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use std::str::FromStr;
-use std::sync::Arc;
+use alloc::{boxed::Box, format, string::{String, ToString}, vec::Vec};
+use alloc::collections::{BTreeMap as HashMap, BTreeSet as HashSet};
+use core::hash::{Hash, Hasher};
+use core::str::FromStr;
+use alloc::sync::Arc;
+use siphasher::sip::SipHasher13;
 
 #[cfg(feature = "text")]
 use fontdb::Database;
@@ -160,7 +162,7 @@ impl Cache {
 
 // TODO: is there a simpler way?
 fn string_hash(s: &str) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = SipHasher13::new();
     s.hash(&mut h);
     h.finish()
 }

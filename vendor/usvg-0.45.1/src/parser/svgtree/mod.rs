@@ -1,9 +1,10 @@
 // Copyright 2021 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::HashMap;
-use std::num::NonZeroU32;
-use std::str::FromStr;
+use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::collections::BTreeMap as HashMap;
+use core::num::NonZeroU32;
+use core::str::FromStr;
 
 #[rustfmt::skip] mod names;
 mod parse;
@@ -73,8 +74,8 @@ impl<'input> Document<'input> {
     }
 }
 
-impl std::fmt::Debug for Document<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl core::fmt::Debug for Document<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         if !self.root().has_children() {
             return write!(f, "Document []");
         }
@@ -93,8 +94,8 @@ impl std::fmt::Debug for Document<'_> {
         fn print_children(
             parent: SvgNode,
             depth: usize,
-            f: &mut std::fmt::Formatter,
-        ) -> Result<(), std::fmt::Error> {
+            f: &mut core::fmt::Formatter,
+        ) -> Result<(), core::fmt::Error> {
             for child in parent.children() {
                 if child.is_element() {
                     writeln_indented!(depth, f, "Element {{");
@@ -144,7 +145,7 @@ impl ShortRange {
     }
 
     #[inline]
-    fn to_urange(self) -> std::ops::Range<usize> {
+    fn to_urange(self) -> core::ops::Range<usize> {
         self.start as usize..self.end as usize
     }
 }
@@ -208,8 +209,8 @@ pub struct Attribute<'input> {
     pub important: bool,
 }
 
-impl std::fmt::Debug for Attribute<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl core::fmt::Debug for Attribute<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         write!(
             f,
             "Attribute {{ name: {:?}, value: {}, important: {} }}",
@@ -231,7 +232,7 @@ impl Eq for SvgNode<'_, '_> {}
 impl PartialEq for SvgNode<'_, '_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && std::ptr::eq(self.doc, other.doc) && std::ptr::eq(self.d, other.d)
+        self.id == other.id && core::ptr::eq(self.doc, other.doc) && core::ptr::eq(self.d, other.d)
     }
 }
 
@@ -480,8 +481,8 @@ impl<'a, 'input: 'a> SvgNode<'a, 'input> {
     }
 }
 
-impl std::fmt::Debug for SvgNode<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl core::fmt::Debug for SvgNode<'_, '_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         match self.d.kind {
             NodeKind::Root => write!(f, "Root"),
             NodeKind::Element { .. } => {

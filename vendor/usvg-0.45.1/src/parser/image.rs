@@ -1,7 +1,8 @@
 // Copyright 2018 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::sync::Arc;
+use alloc::{boxed::Box, format, string::{String, ToString}, vec::Vec};
+use alloc::sync::Arc;
 
 use svgtypes::{AspectRatio, Length};
 
@@ -84,38 +85,15 @@ impl ImageHrefResolver<'_> {
     /// [Options::resources_dir](crate::Options::resources_dir).
     pub fn default_string_resolver() -> ImageHrefStringResolverFn<'static> {
         Box::new(move |href: &str, opts: &Options| {
-            let path = opts.get_abs_path(std::path::Path::new(href));
-
-            if path.exists() {
-                let data = match std::fs::read(&path) {
-                    Ok(data) => data,
-                    Err(_) => {
-                        log::warn!("Failed to load '{}'. Skipped.", href);
-                        return None;
-                    }
-                };
-
-                match get_image_file_format(&path, &data) {
-                    Some(ImageFormat::JPEG) => Some(ImageKind::JPEG(Arc::new(data))),
-                    Some(ImageFormat::PNG) => Some(ImageKind::PNG(Arc::new(data))),
-                    Some(ImageFormat::GIF) => Some(ImageKind::GIF(Arc::new(data))),
-                    Some(ImageFormat::WEBP) => Some(ImageKind::WEBP(Arc::new(data))),
-                    Some(ImageFormat::SVG) => load_sub_svg(&data, opts),
-                    _ => {
-                        log::warn!("'{}' is not a PNG, JPEG, GIF, WebP or SVG(Z) image.", href);
-                        None
-                    }
-                }
-            } else {
-                log::warn!("'{}' is not a path to an image.", href);
-                None
-            }
+            let _ = opts.get_abs_path(href);
+            log::warn!("external image paths are disabled in no_std build: '{}'", href);
+            None
         })
     }
 }
 
-impl std::fmt::Debug for ImageHrefResolver<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for ImageHrefResolver<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("ImageHrefResolver { .. }")
     }
 }
@@ -271,7 +249,7 @@ pub(crate) fn convert_inner(
         // </g>
 
         let mut g2 = Group::empty();
-        std::mem::swap(&mut g.id, &mut g2.id);
+        core::mem::swap(&mut g.id, &mut g2.id);
         g2.abs_transform = parent.abs_transform;
         g2.clip_path = Some(Arc::new(clip));
         g2.children.push(Node::Group(Box::new(g)));
@@ -303,15 +281,6 @@ pub(crate) fn get_href_data(href: &str, state: &converter::State) -> Option<Imag
 
 /// Checks that file has a PNG, a GIF, a JPEG or a WebP magic bytes.
 /// Or an SVG(Z) extension.
-fn get_image_file_format(path: &std::path::Path, data: &[u8]) -> Option<ImageFormat> {
-    let ext = path.extension().and_then(|e| e.to_str())?.to_lowercase();
-    if ext == "svg" || ext == "svgz" {
-        return Some(ImageFormat::SVG);
-    }
-
-    get_image_data_format(data)
-}
-
 /// Checks that file has a PNG, a GIF, a JPEG or a WebP magic bytes.
 fn get_image_data_format(data: &[u8]) -> Option<ImageFormat> {
     match imagesize::image_type(data).ok()? {

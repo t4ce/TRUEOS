@@ -147,14 +147,14 @@ impl EId {
     }
 }
 
-impl std::fmt::Debug for EId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for EId {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 
-impl std::fmt::Display for EId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Display for EId {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
@@ -645,14 +645,14 @@ impl AId {
     }
 }
 
-impl std::fmt::Debug for AId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for AId {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 
-impl std::fmt::Display for AId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Display for AId {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
@@ -687,7 +687,7 @@ impl<V: PartialEq> Map<V> {
 
 #[inline]
 fn hash(x: &str, key: u64) -> u64 {
-    use std::hash::Hasher;
+    use core::hash::Hasher;
 
     let mut hasher = siphasher::sip::SipHasher13::new_with_keys(0, key);
     hasher.write(x.as_bytes());

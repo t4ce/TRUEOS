@@ -50,11 +50,15 @@ and can focus just on the rendering part.
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_copy_implementations)]
+#![no_std]
+
+extern crate alloc;
 
 mod parser;
 #[cfg(feature = "text")]
 mod text;
 mod tree;
+#[cfg(feature = "writer")]
 mod writer;
 
 pub use parser::*;
@@ -67,5 +71,7 @@ pub use roxmltree;
 #[cfg(feature = "text")]
 pub use fontdb;
 
+#[cfg(feature = "writer")]
 pub use writer::WriteOptions;
+#[cfg(feature = "writer")]
 pub use xmlwriter::Indent;

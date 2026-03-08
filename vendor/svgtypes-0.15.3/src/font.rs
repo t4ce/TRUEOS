@@ -1,9 +1,12 @@
 // Copyright 2024 the SVG Types Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use crate::stream::{ByteExt, Stream};
 use crate::Error;
-use std::fmt::Display;
+use core::fmt::Display;
 
 /// Parses a list of font families and generic families from a string.
 pub fn parse_font_families(text: &str) -> Result<Vec<FontFamily>, Error> {
@@ -36,7 +39,7 @@ pub enum FontFamily {
 }
 
 impl Display for FontFamily {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let str = match self {
             FontFamily::Monospace => "monospace".to_string(),
             FontFamily::Serif => "serif".to_string(),

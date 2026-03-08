@@ -3,6 +3,7 @@
 
 #![allow(clippy::comparison_chain)]
 
+use alloc::{boxed::Box, string::String, vec::Vec};
 use roxmltree::Error;
 
 use super::{AId, Document, EId, NodeId, NodeKind, SvgNode};

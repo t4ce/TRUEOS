@@ -1,13 +1,39 @@
 // Copyright 2019 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::{boxed::Box, string::String, vec::Vec};
 pub mod filter;
 mod geom;
 mod text;
 
-use std::sync::Arc;
+use alloc::sync::Arc;
 
-pub use strict_num::{self, ApproxEqUlps, NonZeroPositiveF32, NormalizedF32, PositiveF32};
+pub use strict_num::{self, NonZeroPositiveF32, NormalizedF32, PositiveF32};
+
+pub trait ApproxEqUlps {
+    fn approx_eq_ulps(&self, other: &Self, ulps: i32) -> bool;
+
+    #[inline]
+    fn approx_ne_ulps(&self, other: &Self, ulps: i32) -> bool {
+        !self.approx_eq_ulps(other, ulps)
+    }
+}
+
+impl ApproxEqUlps for f32 {
+    #[inline]
+    fn approx_eq_ulps(&self, other: &Self, ulps: i32) -> bool {
+        let eps = ulps.max(1) as f32 * f32::EPSILON * 8.0;
+        (*self - *other).abs() <= eps
+    }
+}
+
+impl ApproxEqUlps for f64 {
+    #[inline]
+    fn approx_eq_ulps(&self, other: &Self, ulps: i32) -> bool {
+        let eps = ulps.max(1) as f64 * f64::EPSILON * 8.0;
+        (*self - *other).abs() <= eps
+    }
+}
 
 pub use tiny_skia_path;
 
@@ -118,7 +144,7 @@ impl Default for ShapeRendering {
     }
 }
 
-impl std::str::FromStr for ShapeRendering {
+impl core::str::FromStr for ShapeRendering {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -148,7 +174,7 @@ impl Default for TextRendering {
     }
 }
 
-impl std::str::FromStr for TextRendering {
+impl core::str::FromStr for TextRendering {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -182,7 +208,7 @@ impl Default for ImageRendering {
     }
 }
 
-impl std::str::FromStr for ImageRendering {
+impl core::str::FromStr for ImageRendering {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -318,7 +344,7 @@ impl LinearGradient {
     }
 }
 
-impl std::ops::Deref for LinearGradient {
+impl core::ops::Deref for LinearGradient {
     type Target = BaseGradient;
 
     fn deref(&self) -> &Self::Target {
@@ -366,7 +392,7 @@ impl RadialGradient {
     }
 }
 
-impl std::ops::Deref for RadialGradient {
+impl core::ops::Deref for RadialGradient {
     type Target = BaseGradient;
 
     fn deref(&self) -> &Self::Target {
@@ -1455,8 +1481,8 @@ impl ImageKind {
     }
 }
 
-impl std::fmt::Debug for ImageKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for ImageKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             ImageKind::JPEG(_) => f.write_str("ImageKind::JPEG(..)"),
             ImageKind::PNG(_) => f.write_str("ImageKind::PNG(..)"),

@@ -3,6 +3,7 @@
 
 //! SVG filter types.
 
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use strict_num::PositiveF32;
 
 use crate::{BlendMode, Color, Group, NonEmptyString, NonZeroF32, NonZeroRect, Opacity};

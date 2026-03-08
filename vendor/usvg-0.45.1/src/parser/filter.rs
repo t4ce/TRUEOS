@@ -3,9 +3,11 @@
 
 //! A collection of SVG filters.
 
-use std::collections::HashSet;
-use std::str::FromStr;
-use std::sync::Arc;
+use alloc::{boxed::Box, format, string::{String, ToString}, vec, vec::Vec};
+use alloc::collections::BTreeSet as HashSet;
+use core::str::FromStr;
+use alloc::sync::Arc;
+use kurbo::common::FloatFuncs;
 
 use strict_num::PositiveF32;
 use svgtypes::{AspectRatio, Length, LengthUnit as Unit};
