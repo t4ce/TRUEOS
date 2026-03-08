@@ -20,10 +20,69 @@ let cursorReadSeq = 0;
 let scrollY = 0;
 let cachedCssObjects = [];
 let lyonRoundRectRuns = [];
+let cachedLyonDemo = null;
 const fpsOverlay = createFpsOverlay();
+
+function getLyonDemo() {
+  if (cachedLyonDemo) return cachedLyonDemo;
+  if (!lyon || lyon.isAvailable !== true || typeof lyon.demoShapes !== 'function') {
+    return null;
+  }
+  try {
+    const d = lyon.demoShapes();
+    cachedLyonDemo = d && d.ok === true ? d : null;
+  } catch (_) {
+    cachedLyonDemo = null;
+  }
+  return cachedLyonDemo;
+}
+
+function rebuildLyonRuns(vw, vh) {
+  lyonRoundRectRuns.length = 0;
+  const demo = getLyonDemo();
+  if (!demo || demo.triangleTessOk !== true) return;
+
+  const verts = Array.isArray(demo.triangleVertices) ? demo.triangleVertices : [];
+  const idx = Array.isArray(demo.triangleIndices) ? demo.triangleIndices : [];
+  const vcount = (verts.length / 2) | 0;
+  const icount = idx.length | 0;
+  if (vcount <= 0 || icount < 3) return;
+
+  // Packet format per mesh:
+  // [x, y, scale, r, g, b, a, vertex_count, index_count, ...verts_xy, ...indices]
+  const pushMesh = (x, y, scale, color) => {
+    lyonRoundRectRuns.push(x, y, scale, color[0], color[1], color[2], color[3], vcount, icount);
+    for (let i = 0; i < vcount * 2; i++) {
+      lyonRoundRectRuns.push(Number(verts[i] || 0));
+    }
+    for (let i = 0; i < icount; i++) {
+      lyonRoundRectRuns.push(Number(idx[i] || 0));
+    }
+  };
+
+  const anchorX = Math.max(530, Math.round(vw * 0.56));
+  const anchorY = Math.max(72, Math.round(vh * 0.14));
+  pushMesh(anchorX, anchorY, 4.0, [20, 120, 230, 255]);
+  pushMesh(anchorX + 220, anchorY + 24, 2.4, [16, 170, 120, 255]);
+}
 
 function appendLyonDemoLines(out) {
   out.push('/* DEMOS (lyon) */');
+
+  const catalogFn = G.__trueosLyonCatalogLines;
+  if (typeof catalogFn === 'function') {
+    let catalog = null;
+    try {
+      catalog = catalogFn();
+    } catch (_) {
+      catalog = null;
+    }
+    if (Array.isArray(catalog)) {
+      for (let i = 0; i < catalog.length; i++) {
+        out.push(String(catalog[i] || ''));
+      }
+    }
+  }
 
   // One-shot probe: ask lyon to build/tessellate a rounded-rect path and report results.
   if (!lyon || lyon.isAvailable !== true || typeof lyon.demoShapes !== 'function') {
@@ -32,23 +91,15 @@ function appendLyonDemoLines(out) {
     return;
   }
 
-  let demo = null;
-  try {
-    demo = lyon.demoShapes();
-  } catch (err) {
-    const msg = (err && err.message) ? String(err.message) : String(err || 'demo call failed');
-    out.push(`lyon call failed: ${msg}`);
-    out.push('');
-    return;
-  }
-
-  if (!demo || demo.ok !== true) {
+  const demo = getLyonDemo();
+  if (!demo) {
     out.push(`lyon demo failed: ${String((demo && demo.error) || 'unknown error')}`);
     out.push('');
     return;
   }
 
-  out.push('path: rounded rectangle (44x28), radius=6, stroke=1');
+  out.push('Live Demo Metrics');
+  out.push(`${INDENT}path: rounded rectangle (44x28), radius=6, stroke=1`);
   if (demo.triangleTessOk === true) {
     const verts = Number(demo.triangleTessVertices || 0) | 0;
     const idx = Number(demo.triangleTessIndices || 0) | 0;
@@ -58,7 +109,10 @@ function appendLyonDemoLines(out) {
     out.push(`${INDENT}tess failed: ${String(demo.triangleTessError || 'unknown')}`);
   }
 
-  out.push(`${INDENT}extra: lineLen=${Number(demo.lineLength || 0).toFixed(2)} quadLen=${Number(demo.quadLength || 0).toFixed(2)} cubicApprox=${Number(demo.cubicApproxLength || 0).toFixed(2)}`);
+  out.push(`${INDENT}line: len=${Number(demo.lineLength || 0).toFixed(2)} left=${Number(demo.lineLeftLen || 0).toFixed(2)} right=${Number(demo.lineRightLen || 0).toFixed(2)}`);
+  out.push(`${INDENT}quad: len=${Number(demo.quadLength || 0).toFixed(2)} approx=${Number(demo.quadApproxLength || 0).toFixed(2)} baseline=${Number(demo.quadBaselineLen || 0).toFixed(2)}`);
+  out.push(`${INDENT}cubic: approx=${Number(demo.cubicApproxLength || 0).toFixed(2)} baseline=${Number(demo.cubicBaselineLen || 0).toFixed(2)}`);
+  out.push(`${INDENT}triangle: area=${Number(demo.triangleArea || 0).toFixed(2)} signed=${Number(demo.triangleSignedArea || 0).toFixed(2)}`);
   out.push('');
 }
 
@@ -415,6 +469,7 @@ function ensureDoc(vw) {
 
 function paint() {
   const { vw, vh } = computeViewport();
+  rebuildLyonRuns(vw, vh);
   const doc = ensureDoc(vw);
   const maxScroll = Math.max(0, Math.round(Number(doc.contentH || vh) - vh));
   if (scrollY > maxScroll) scrollY = maxScroll;

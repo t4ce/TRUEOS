@@ -88,7 +88,6 @@ struct CmdStreamAtlasGlyphMetaTable {
     grid_h: u32,
     index_len: usize,
     widths_len: usize,
-    fallback_slot: u16,
     slots_by_char: [u16; 256],
     glyphs: Vec<CmdStreamAtlasGlyphMeta>,
 }
@@ -284,7 +283,6 @@ fn cmd_stream_build_atlas_meta(atlas: qjs::FontAtlasView<'static>) -> CmdStreamA
         grid_h: atlas.grid_h,
         index_len: atlas.index.len(),
         widths_len: atlas.widths.len(),
-        fallback_slot,
         slots_by_char,
         glyphs,
     }
@@ -783,91 +781,6 @@ fn log_bytes(bytes: &[u8]) {
 #[inline]
 fn log_str(s: &str) {
     log_bytes(s.as_bytes());
-}
-
-#[inline]
-fn log_nl() {
-    log_bytes(b"\n");
-}
-
-fn log_usize_dec(v: usize) {
-    if v == 0 {
-        log_str("0");
-        return;
-    }
-    let mut n = v as u64;
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    while n != 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    log_bytes(&buf[i..]);
-}
-
-fn log_cstr_or_null(ptr: *const c_char) {
-    if ptr.is_null() {
-        log_str("<null>");
-        return;
-    }
-    let bytes = unsafe { CStr::from_ptr(ptr).to_bytes() };
-    log_bytes(bytes);
-}
-
-#[inline]
-fn qjs_loader_trace_enabled() -> bool {
-    false
-}
-
-#[inline]
-pub(super) fn trace_bytes(bytes: &[u8]) {
-    if qjs_loader_trace_enabled() {
-        log_bytes(bytes);
-    }
-}
-
-#[inline]
-pub(super) fn trace_str(s: &str) {
-    if qjs_loader_trace_enabled() {
-        log_str(s);
-    }
-}
-
-#[inline]
-pub(super) fn trace_nl() {
-    if qjs_loader_trace_enabled() {
-        log_nl();
-    }
-}
-
-#[inline]
-pub(super) fn trace_usize_dec(v: usize) {
-    if qjs_loader_trace_enabled() {
-        log_usize_dec(v);
-    }
-}
-
-#[inline]
-fn trace_cstr_or_null(ptr: *const c_char) {
-    if qjs_loader_trace_enabled() {
-        log_cstr_or_null(ptr);
-    }
-}
-
-fn log_normalized(out: &[u8]) {
-    trace_str("qjs: normalize out=");
-    trace_bytes(out);
-    trace_nl();
-}
-
-#[inline]
-unsafe fn throw_error(ctx: *mut qjs::JSContext, msg: &[u8]) {
-    if ctx.is_null() {
-        return;
-    }
-    let s = qjs::JS_NewStringLen(ctx, msg.as_ptr() as *const c_char, msg.len());
-    let _ = qjs::JS_Throw(ctx, s);
 }
 
 #[inline]
