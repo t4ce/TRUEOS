@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::str::FromStr;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 
 use super::converter;

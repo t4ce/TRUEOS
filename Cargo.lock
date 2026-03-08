@@ -44,6 +44,7 @@ dependencies = [
  "twoway",
  "unicode-normalization",
  "unicode-segmentation",
+ "usvg",
  "webpki-roots",
  "x86_64",
  "zeroize",

@@ -28,14 +28,6 @@ pub mod layout;
 pub mod ui_html;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/svg.rs"]
-pub mod svg;
-
-#[cfg(feature = "trueos")]
-#[path = "../app/browser/icon.rs"]
-pub(crate) mod icon;
-
-#[cfg(feature = "trueos")]
 #[path = "../app/browser/scene.rs"]
 pub mod scene;
 
