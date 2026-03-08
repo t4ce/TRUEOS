@@ -85,21 +85,6 @@ sudo udevadm trigger --subsystem-match=block --subsystem-match=usb
 sudo udevadm trigger --name-match=nvme2n1p1
 ls -l /dev/nvme2n1p1
 
-## LAN bridge for QEMU (rerunnable)
-UPLINK=enp5s0
-WIRED_CON="Kabelgebundene Verbindung 1"
-BR=br0
-TAP=tap0
-SLAVE_CON="$BR-$UPLINK"   # -> br0-enp5s0
-nmcli -t -f NAME con show | grep -Fxq "$BR" \
-  || sudo nmcli con add type bridge ifname "$BR" con-name "$BR" ipv4.method auto ipv6.method ignore
-sudo nmcli con mod "$BR" bridge.stp no bridge.forward-delay 0
-nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
-  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
-sudo nmcli con mod "$WIRED_CON" connection.autoconnect no 2>/dev/null || true
-sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
-sudo nmcli con up "$SLAVE_CON"
-sudo nmcli con up br0
 
 # Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
 # (otherwise br0 may present a different MAC than $UPLINK)
@@ -139,19 +124,40 @@ ls -l /dev/vfio || true
 lspci -nnk -s 06:00.0
 '
 
-
 # dummy (no persist across reboot)
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
-
-
 
 # at reboot
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
 sudo ip link set tap0 master br0
 sudo ip link set tap0 up
-
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=usb
+
+## LAN bridge for QEMU (rerunnable)
+UPLINK=enp5s0
+WIRED_CON="Kabelgebundene Verbindung 1"
+BR=br0
+TAP=tap0
+SLAVE_CON="$BR-$UPLINK"   # -> br0-enp5s0
+nmcli -t -f NAME con show | grep -Fxq "$BR" \
+  || sudo nmcli con add type bridge ifname "$BR" con-name "$BR" ipv4.method auto ipv6.method ignore
+sudo nmcli con mod "$BR" bridge.stp no bridge.forward-delay 0
+nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
+  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
+sudo nmcli con mod "$WIRED_CON" connection.autoconnect no 2>/dev/null || true
+sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
+sudo nmcli con up "$SLAVE_CON"
+sudo nmcli con up br0
+
+sudo modprobe tun
+if ! ip link show tap0 >/dev/null 2>&1; then
+  sudo ip tuntap add dev tap0 mode tap user "$USER" group "$(id -gn)"
+fi
+sudo ip link set tap0 master br0
+sudo ip link set tap0 up
+ip -d link show tap0
+bridge link show | grep -E 'tap0|br0'

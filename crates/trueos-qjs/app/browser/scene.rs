@@ -73,7 +73,10 @@ unsafe extern "C" fn draw_html(
         0
     };
 
-    let _ = trueos_cabi_gfx_begin_frame(0xF4F4F4);
+    let begin_rc = trueos_cabi_gfx_begin_frame(0xF4F4F4);
+    if begin_rc != 0 {
+        return qjs::JSValue::undefined();
+    }
 
     let mut i = 0u32;
     while i + 2 < runs_len {
@@ -107,7 +110,7 @@ unsafe extern "C" fn draw_html(
         i += 3;
     }
 
-    let _ = trueos_cabi_gfx_end_frame();
+    let _end_rc = trueos_cabi_gfx_end_frame();
     qjs::JSValue::undefined()
 }
 
