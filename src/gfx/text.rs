@@ -227,8 +227,12 @@ pub fn draw_atlas_text(text: &[u8], x: f32, y: f32) -> bool {
         .map(|fb| (fb.width() as u32, fb.height() as u32))
         .unwrap_or((1024, 768));
 
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
+    let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xFFFFFF) };
+    if begin_rc != 0 {
+        return false;
+    }
+
     let ok = draw_atlas_text_in_frame(text, x, y, view_w, view_h);
-    let _ = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-    ok
+    let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+    ok && end_rc == 0
 }

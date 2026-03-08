@@ -43,7 +43,22 @@ pub async fn gfx_loadscreen_task() {
         .unwrap_or((1024.0, 768.0));
     let (text_x, text_y) = centered_text_origin(MSG, fb_w, fb_h);
     crate::log!("GFX Loadscreen\n");
-    let _ = crate::gfx::text::draw_atlas_text(MSG, text_x, text_y);
+
+    // Allow any in-flight startup frame teardown to finish before first splash draw.
+    Timer::after(EmbassyDuration::from_millis(16)).await;
+
+    let mut drawn = false;
+    for _ in 0..24 {
+        if crate::gfx::text::draw_atlas_text(MSG, text_x, text_y) {
+            drawn = true;
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(16)).await;
+    }
+    if !drawn {
+        crate::log!("gfx-loadscreen: initial text draw timed out\n");
+    }
+
     Timer::after(EmbassyDuration::from_millis(3000)).await;
     crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
