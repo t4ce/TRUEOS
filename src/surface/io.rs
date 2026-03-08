@@ -847,6 +847,7 @@ pub mod cabi {
         cursor_rgb_blob: Vec<u8>,
         cursor_tex_blob: Vec<u8>,
         base_cache_valid: bool,
+        base_cache_updated_at_ticks: u64,
         base_cache_clear_rgb: u32,
         base_cache_draws: Vec<PendingDraw>,
         base_cache_rgb_blob: Vec<u8>,
@@ -935,6 +936,7 @@ pub mod cabi {
                 cursor_rgb_blob: Vec::new(),
                 cursor_tex_blob: Vec::new(),
                 base_cache_valid: false,
+                base_cache_updated_at_ticks: 0,
                 base_cache_clear_rgb: 0x00ff_ffff,
                 base_cache_draws: Vec::new(),
                 base_cache_rgb_blob: Vec::new(),
@@ -1013,6 +1015,84 @@ pub mod cabi {
         out.push((clamp01(v.g) * 255.0 + 0.5) as u8);
         out.push((clamp01(v.b) * 255.0 + 0.5) as u8);
         out.push((clamp01(v.a) * 255.0 + 0.5) as u8);
+    }
+
+    const CURSOR_TICK_SUPPRESS_AFTER_BASE_MS: u64 = 24;
+
+    fn append_kernel_cursor_overlay_draws(
+        draws: &mut Vec<PendingDraw>,
+        rgb_blob: &mut Vec<u8>,
+        vp_w: u32,
+        vp_h: u32,
+    ) {
+        let blob_offset = rgb_blob.len();
+        crate::surface::cursor::append_kernel_cursor_overlay_rgb(rgb_blob, vp_w, vp_h);
+
+        let blob_len = rgb_blob.len().saturating_sub(blob_offset);
+        if blob_len == 0 {
+            return;
+        }
+
+        draws.push(PendingDraw::Rgb {
+            blob_offset,
+            blob_len,
+            blend: BlendDesc::straight_alpha(),
+        });
+    }
+
+    // Internal kernel-side cursor refresh path. This keeps cursor motion alive
+    // even when app/UI rendering is on-demand and no new base frames are submitted.
+    pub fn kernel_cursor_overlay_tick() -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        let now_ticks = embassy_time_driver::now();
+        let suppress_ticks = ((embassy_time_driver::TICK_HZ as u64)
+            .saturating_mul(CURSOR_TICK_SUPPRESS_AFTER_BASE_MS)
+            .saturating_add(999))
+            / 1000;
+
+        let should_tick = {
+            let st = GFX_CABI_STATE.lock();
+            st.base_cache_valid
+                && !st.frame_active
+                && !st.cursor_frame_active
+                && now_ticks.saturating_sub(st.base_cache_updated_at_ticks) >= suppress_ticks
+        };
+        if !should_tick {
+            return 0;
+        }
+
+        let Some((vp_w, vp_h)) = crate::gfx::with_context(|ctx| {
+            let e = ctx.swapchain_desc().extent;
+            (e.width, e.height)
+        }) else {
+            return -12;
+        };
+
+        let mut draws: Vec<PendingDraw> = Vec::new();
+        let mut rgb_blob: Vec<u8> = Vec::new();
+        append_kernel_cursor_overlay_draws(&mut draws, &mut rgb_blob, vp_w, vp_h);
+        if draws.is_empty() || rgb_blob.is_empty() {
+            return 0;
+        }
+
+        let rc_begin = unsafe { trueos_cabi_gfx_cursor_begin_frame() };
+        if rc_begin != 0 {
+            return rc_begin;
+        }
+
+        // Straight-alpha for the overlay markers.
+        let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
+
+        let rc_draw = unsafe {
+            trueos_cabi_gfx_cursor_draw_rgb_triangles_no_present(rgb_blob.as_ptr(), rgb_blob.len())
+        };
+        if rc_draw != 0 {
+            let _ = unsafe { trueos_cabi_gfx_cursor_end_frame() };
+            return rc_draw;
+        }
+
+        unsafe { trueos_cabi_gfx_cursor_end_frame() }
     }
 
     #[inline]
@@ -1871,17 +1951,7 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
-        let (
-            seq,
-            rgb_draws,
-            tex_draws,
-            draw_bytes,
-            was_active,
-            clear_rgb,
-            mut draws,
-            mut rgb_src,
-            mut tex_src,
-        ) = {
+        let (seq, rgb_draws, tex_draws, draw_bytes, was_active, clear_rgb, draws, rgb_src, tex_src) = {
             let mut st = GFX_CABI_STATE.lock();
             let out = (
                 st.frame_seq,
@@ -1908,6 +1978,17 @@ pub mod cabi {
                 None => return -1,
             };
             let swap = ctx.swapchain_desc();
+            // Compose cursor into app-driven presents to avoid one-frame cursor blink
+            // between end_frame and the async cursor overlay tick.
+            let mut submit_draws = draws.clone();
+            let mut submit_rgb_src = rgb_src.clone();
+            let mut submit_tex_src = tex_src.clone();
+            append_kernel_cursor_overlay_draws(
+                &mut submit_draws,
+                &mut submit_rgb_src,
+                swap.extent.width,
+                swap.extent.height,
+            );
             let vp = Viewport {
                 x: 0,
                 y: 0,
@@ -1936,12 +2017,12 @@ pub mod cabi {
             let mut draw_idx = 0usize;
             let mut first_pass = true;
 
-            while draw_idx < draws.len() {
+            while draw_idx < submit_draws.len() {
                 let start = draw_idx;
                 let mut pass_bytes = 0usize;
                 let mut pass_kind: u8 = 0; // 1=rgb, 2=tex
-                while draw_idx < draws.len() {
-                    let (kind, add) = match &draws[draw_idx] {
+                while draw_idx < submit_draws.len() {
+                    let (kind, add) = match &submit_draws[draw_idx] {
                         PendingDraw::Rgb { blob_len, .. } => (1u8, blob_len - (blob_len % 12)),
                         PendingDraw::Tex { blob_len, .. } => (2u8, blob_len - (blob_len % 20)),
                     };
@@ -1966,7 +2047,7 @@ pub mod cabi {
                 let mut rgb_blob: Vec<u8> = Vec::new();
                 let mut tex_blob: Vec<u8> = Vec::new();
 
-                for draw in draws[start..draw_idx].iter() {
+                for draw in submit_draws[start..draw_idx].iter() {
                     match draw {
                         PendingDraw::Rgb {
                             blob_offset,
@@ -1980,12 +2061,12 @@ pub mod cabi {
                             }
                             let start = *blob_offset;
                             let end = start.saturating_add(usable);
-                            if end > rgb_src.len() {
+                            if end > submit_rgb_src.len() {
                                 continue;
                             }
                             let vcount = (usable / VTX_SIZE) as u32;
                             let off = rgb_blob.len() as u64;
-                            rgb_blob.extend_from_slice(&rgb_src[start..end]);
+                            rgb_blob.extend_from_slice(&submit_rgb_src[start..end]);
                             plans.push(Plan::Rgb {
                                 offset: off,
                                 vcount,
@@ -2007,12 +2088,12 @@ pub mod cabi {
                             }
                             let start = *blob_offset;
                             let end = start.saturating_add(usable);
-                            if end > tex_src.len() {
+                            if end > submit_tex_src.len() {
                                 continue;
                             }
                             let vcount = (usable / VTX_SIZE) as u32;
                             let off = tex_blob.len() as u64;
-                            tex_blob.extend_from_slice(&tex_src[start..end]);
+                            tex_blob.extend_from_slice(&submit_tex_src[start..end]);
                             plans.push(Plan::Tex {
                                 tex_id: *tex_id,
                                 image: *image,
@@ -2053,7 +2134,7 @@ pub mod cabi {
                     tex_res = Some((pipeline, vbuf));
                 }
 
-                let is_last_pass = draw_idx >= draws.len();
+                let is_last_pass = draw_idx >= submit_draws.len();
                 let mut cmds: Vec<Command> = Vec::new();
                 if first_pass && need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
@@ -2214,6 +2295,7 @@ pub mod cabi {
         if ret == 0 {
             let mut st = GFX_CABI_STATE.lock();
             st.base_cache_valid = true;
+            st.base_cache_updated_at_ticks = embassy_time_driver::now();
             st.base_cache_clear_rgb = clear_rgb;
             st.base_cache_draws = draws.clone();
             st.base_cache_rgb_blob = rgb_src.clone();
@@ -2363,7 +2445,18 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_cursor_end_frame() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
-        let (_seq, was_active, cursor_draws, cursor_rgb_src, cursor_tex_src) = {
+        let (
+            _seq,
+            was_active,
+            cursor_draws,
+            cursor_rgb_src,
+            cursor_tex_src,
+            base_cache_valid,
+            base_cache_clear_rgb,
+            base_cache_draws,
+            base_cache_rgb_blob,
+            base_cache_tex_blob,
+        ) = {
             let mut st = GFX_CABI_STATE.lock();
             let out = (
                 st.cursor_frame_seq,
@@ -2371,6 +2464,11 @@ pub mod cabi {
                 core::mem::take(&mut st.cursor_draws),
                 core::mem::take(&mut st.cursor_rgb_blob),
                 core::mem::take(&mut st.cursor_tex_blob),
+                st.base_cache_valid,
+                st.base_cache_clear_rgb,
+                st.base_cache_draws.clone(),
+                st.base_cache_rgb_blob.clone(),
+                st.base_cache_tex_blob.clone(),
             );
             st.cursor_frame_active = false;
             out
@@ -2378,10 +2476,50 @@ pub mod cabi {
         if !was_active {
             return -3;
         }
+        if !base_cache_valid {
+            return -13;
+        }
 
         let cursor_cache_draws = cursor_draws.clone();
         let cursor_cache_rgb_blob = cursor_rgb_src.clone();
         let cursor_cache_tex_blob = cursor_tex_src.clone();
+
+        // Rebuild a healthy frame from cached app content first, then append cursor overlay.
+        let mut draws = base_cache_draws;
+        let mut rgb_src = base_cache_rgb_blob;
+        let mut tex_src = base_cache_tex_blob;
+        let rgb_off = rgb_src.len();
+        let tex_off = tex_src.len();
+        rgb_src.extend_from_slice(cursor_rgb_src.as_slice());
+        tex_src.extend_from_slice(cursor_tex_src.as_slice());
+        for d in cursor_draws {
+            match d {
+                PendingDraw::Rgb {
+                    blob_offset,
+                    blob_len,
+                    blend,
+                } => draws.push(PendingDraw::Rgb {
+                    blob_offset: blob_offset.saturating_add(rgb_off),
+                    blob_len,
+                    blend,
+                }),
+                PendingDraw::Tex {
+                    tex_id,
+                    image,
+                    sampler,
+                    blob_offset,
+                    blob_len,
+                    blend,
+                } => draws.push(PendingDraw::Tex {
+                    tex_id,
+                    image,
+                    sampler,
+                    blob_offset: blob_offset.saturating_add(tex_off),
+                    blob_len,
+                    blend,
+                }),
+            }
+        }
 
         let Some(ret) = crate::gfx::with_context(|ctx| {
             let (_p, _v, need_set_viewport) = match ensure_gfx_resources(ctx, 0) {
@@ -2413,12 +2551,6 @@ pub mod cabi {
                     blend: BlendDesc,
                 },
             }
-
-            // Cursor pass is an overlay update: submit only cursor draws and avoid
-            // CPU-side re-assembly of the cached base scene on each cursor tick.
-            let draws = cursor_draws;
-            let rgb_src = cursor_rgb_src;
-            let tex_src = cursor_tex_src;
 
             let mut draw_idx = 0usize;
             let mut first_pass = true;
@@ -2544,6 +2676,11 @@ pub mod cabi {
                 if first_pass && need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
                 }
+                if first_pass {
+                    cmds.push(Command::ClearColor {
+                        rgb: base_cache_clear_rgb,
+                    });
+                }
 
                 let mut last_blend: Option<BlendDesc> = None;
 
@@ -2655,6 +2792,9 @@ pub mod cabi {
                 if need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
                 }
+                cmds.push(Command::ClearColor {
+                    rgb: base_cache_clear_rgb,
+                });
                 cmds.push(Command::Present);
                 if !check_submit_budget(
                     rgb_src.len().saturating_add(tex_src.len()),
@@ -2872,43 +3012,14 @@ pub mod cabi {
         cursor_id: u32,
         out_buttons_down: *mut u32,
     ) -> i32 {
-        if out_buttons_down.is_null() {
-            return -1;
-        }
-        if cursor_id == 0 {
-            return -1;
-        }
-
-        let idx = (cursor_id - 1) as usize;
-        let mice = crate::usb::hid::mouse_cursor_snapshot_with_buttons();
-        let tablets = crate::usb::hid::tablet_cursor_snapshot();
-
-        if idx < mice.len() {
-            *out_buttons_down = mice[idx].2;
-            return 0;
-        }
-
-        let tidx = idx - mice.len();
-        if tidx < tablets.len() {
-            *out_buttons_down = 0;
-            return 0;
-        }
-
-        1
+        crate::surface::cursor::input_cursor_buttons(cursor_id, out_buttons_down)
     }
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_input_pop_cursor_event(
         out: *mut crate::usb::hid::TrueosHidCursorEvent,
     ) -> i32 {
-        if out.is_null() {
-            return -1;
-        }
-        let Some(ev) = crate::usb::hid::pop_cursor_event() else {
-            return 0;
-        };
-        *out = ev;
-        1
+        crate::surface::cursor::input_pop_cursor_event(out)
     }
 
     #[unsafe(no_mangle)]
@@ -2919,26 +3030,13 @@ pub mod cabi {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32 {
-        if out_next_seq.is_null() || out_dropped.is_null() {
-            return 0;
-        }
-
-        let cap = out_cap as usize;
-        if cap == 0 || out.is_null() {
-            let mut none: [crate::usb::hid::TrueosHidCursorEvent; 0] = [];
-            let (next_seq, dropped, _wrote) =
-                crate::usb::hid::read_cursor_events_since(read_seq, &mut none);
-            *out_next_seq = next_seq;
-            *out_dropped = dropped;
-            return 0;
-        }
-
-        let out_slice = core::slice::from_raw_parts_mut(out, cap);
-        let (next_seq, dropped, wrote) =
-            crate::usb::hid::read_cursor_events_since(read_seq, out_slice);
-        *out_next_seq = next_seq;
-        *out_dropped = dropped;
-        wrote as u32
+        crate::surface::cursor::input_read_cursor_events_since(
+            read_seq,
+            out,
+            out_cap,
+            out_next_seq,
+            out_dropped,
+        )
     }
 }
 

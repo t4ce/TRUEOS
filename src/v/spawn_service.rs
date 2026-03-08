@@ -48,6 +48,7 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VGA_SWAP_FORWARD_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
 static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -272,10 +273,77 @@ fn spawn_gfx_vga_swap_forward_task(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn build_default_cursor_shape_argb_le(width: usize, height: usize) -> alloc::vec::Vec<u8> {
-    // Diagnostic-solid cursor: all bytes 0xFF. This is guaranteed opaque under
-    // any reasonable channel interpretation and isolates transport issues.
-    alloc::vec![0xFFu8; width.saturating_mul(height).saturating_mul(4)]
+#[embassy_executor::task]
+async fn gfx_virgl_cursor_overlay_task() {
+    #[cfg(not(feature = "gfx_virgl"))]
+    {
+        return;
+    }
+
+    #[cfg(feature = "gfx_virgl")]
+    {
+        loop {
+            if !crate::gfx::is_virgl_active() {
+                Timer::after(EmbassyDuration::from_millis(16)).await;
+                continue;
+            }
+
+            let _ = crate::gfx::cursor_overlay_tick();
+
+            Timer::after(EmbassyDuration::from_millis(16)).await;
+        }
+    }
+}
+
+fn spawn_gfx_virgl_cursor_overlay_task(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(gfx_virgl_cursor_overlay_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn build_default_cursor_shape_bgra(width: usize, height: usize) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec![0u8; width.saturating_mul(height).saturating_mul(4)];
+    if width == 0 || height == 0 {
+        return out;
+    }
+
+    // High-contrast cursor marker: black outer ring + white inner disk.
+    let cx = (width / 2) as i32;
+    let cy = (height / 2) as i32;
+    let radius = 6i32;
+    let ring = 2i32;
+
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let dx = x - cx;
+            let dy = y - cy;
+            let d2 = dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy));
+            let r2 = radius.saturating_mul(radius);
+            let r_inner = radius.saturating_sub(ring);
+            let r_inner2 = r_inner.saturating_mul(r_inner);
+            let off = ((y as usize)
+                .saturating_mul(width)
+                .saturating_add(x as usize))
+            .saturating_mul(4);
+
+            if d2 <= r2 && d2 >= r_inner2 {
+                // Opaque black ring.
+                out[off] = 0;
+                out[off + 1] = 0;
+                out[off + 2] = 0;
+                out[off + 3] = 255;
+            } else if d2 < r_inner2 {
+                // Opaque white center.
+                out[off] = 255;
+                out[off + 1] = 255;
+                out[off + 2] = 255;
+                out[off + 3] = 255;
+            }
+        }
+    }
+
+    out
 }
 
 #[embassy_executor::task]
@@ -290,8 +358,9 @@ async fn gfx_hw_cursor_task() {
         // virtio-gpu cursor plane expects a 64x64 ARGB/BGRA cursor image.
         const CURSOR_W: u32 = 64;
         const CURSOR_H: u32 = 64;
-        let cursor_pixels =
-            build_default_cursor_shape_argb_le(CURSOR_W as usize, CURSOR_H as usize);
+        let cursor_pixels = build_default_cursor_shape_bgra(CURSOR_W as usize, CURSOR_H as usize);
+        let hot_x = CURSOR_W / 2;
+        let hot_y = CURSOR_H / 2;
         let mut read_seq: u64 = 0;
         let mut dropped_total: u64 = 0;
         let mut cursor_ready = false;
@@ -303,7 +372,13 @@ async fn gfx_hw_cursor_task() {
                     if !ctx.hw_cursor_supported() {
                         return Err(trueos_gfx_core::Error::Unsupported);
                     }
-                    ctx.hw_cursor_define_bgra(CURSOR_W, CURSOR_H, 0, 0, cursor_pixels.as_slice())
+                    ctx.hw_cursor_define_bgra(
+                        CURSOR_W,
+                        CURSOR_H,
+                        hot_x,
+                        hot_y,
+                        cursor_pixels.as_slice(),
+                    )
                 });
 
                 match init {
@@ -1070,8 +1145,15 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_gfx_vga_swap_forward_task,
     },
     TaskSpec {
-        name: "gfx-hw-cursor",
+        name: "gfx-virgl-cursor-overlay",
         disabled: false,
+        required: crate::v::readiness::GFX_BACKEND_READY,
+        started: &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
+        spawn: spawn_gfx_virgl_cursor_overlay_task,
+    },
+    TaskSpec {
+        name: "gfx-hw-cursor",
+        disabled: true,
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &GFX_HW_CURSOR_STARTED,
         spawn: spawn_gfx_hw_cursor_task,
@@ -1183,7 +1265,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "uart-shell",
-        disabled: true,
+        disabled: false,
         required: 0,
         started: &UART_SHELL_STARTED,
         spawn: spawn_uart_shell,
