@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{boxed::Box, string::String, vec::Vec};
+use kurbo::common::FloatFuncs;
 use svgtypes::{Length, LengthUnit as Unit};
 
 use super::converter;
