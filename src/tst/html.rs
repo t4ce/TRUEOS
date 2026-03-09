@@ -10,6 +10,50 @@ use crate::v::net::VNet;
 use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::https;
 
+fn is_redirect_status(status: u16) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+fn header_get_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    let mut i = 0;
+    while i < headers.len() {
+        let line_start = i;
+        while i < headers.len() && headers[i] != b'\n' {
+            i += 1;
+        }
+        let mut line = &headers[line_start..i];
+        if i < headers.len() && headers[i] == b'\n' {
+            i += 1;
+        }
+        if let Some((&b'\r', rest)) = line.split_last() {
+            line = rest;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            continue;
+        };
+        let (k, mut v) = line.split_at(colon);
+        v = v.get(1..).unwrap_or(&[]);
+        if k.len() != name.len() {
+            continue;
+        }
+        if !k
+            .iter()
+            .zip(name.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            continue;
+        }
+        while !v.is_empty() && (v[0] == b' ' || v[0] == b'\t') {
+            v = &v[1..];
+        }
+        return Some(v);
+    }
+    None
+}
+
 fn parse_http_status(buf: &[u8]) -> Option<u16> {
     // Expect: HTTP/1.1 200 ...\r\n
     if !buf.starts_with(b"HTTP/") {
@@ -39,6 +83,16 @@ struct ParsedHttpUrl {
     host: HString<96>,
     port: u16,
     path: HString<160>,
+}
+
+#[derive(Clone, Debug)]
+enum HttpPlainFetchError {
+    BadUrl,
+    TimedOut,
+    DnsFailed,
+    HttpStatus,
+    Redirect(String),
+    ResponseTooLarge,
 }
 
 fn parse_http_url(url: &str) -> Result<ParsedHttpUrl, &'static str> {
@@ -108,6 +162,32 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
+fn redirect_url_from_location_http(current: &ParsedHttpUrl, headers: &[u8]) -> Option<String> {
+    let loc = header_get_value(headers, b"location")?;
+    let loc = core::str::from_utf8(loc).ok()?.trim();
+    if loc.is_empty() {
+        return None;
+    }
+
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return Some(String::from(loc));
+    }
+
+    if loc.starts_with('/') {
+        if current.port == 80 {
+            return Some(alloc::format!("http://{}{}", current.host, loc));
+        }
+        return Some(alloc::format!(
+            "http://{}:{}{}",
+            current.host,
+            current.port,
+            loc
+        ));
+    }
+
+    None
+}
+
 fn build_best_effort_attempts(url: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let trimmed = url.trim();
@@ -135,8 +215,8 @@ fn bytes_to_string_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(bytes.as_slice()).into_owned()
 }
 
-async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, &'static str> {
-    let parsed = parse_http_url(url)?;
+async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError> {
+    let parsed = parse_http_url(url).map_err(|_| HttpPlainFetchError::BadUrl)?;
 
     let ready = crate::v::readiness::wait_for_timeout(
         crate::v::readiness::NET_CONFIGURED,
@@ -148,7 +228,7 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, &'static str> {
     }
 
     let Ok(ip) = dns::resolve_ipv4_primary(parsed.host.as_str(), DnsConfig::default()).await else {
-        return Err("dns failed");
+        return Err(HttpPlainFetchError::DnsFailed);
     };
 
     let net = loop {
@@ -233,8 +313,15 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, &'static str> {
                         let hdr_end = find_http_header_end(&rx);
                         let body_off = hdr_end.unwrap_or(0);
                         let status = parse_http_status(&rx).unwrap_or(0);
+                        if is_redirect_status(status)
+                            && let Some(hdr_end) = hdr_end
+                            && let Some(next) =
+                                redirect_url_from_location_http(&parsed, &rx[..hdr_end])
+                        {
+                            return Err(HttpPlainFetchError::Redirect(next));
+                        }
                         if status >= 400 {
-                            return Err("http status error");
+                            return Err(HttpPlainFetchError::HttpStatus);
                         }
 
                         let body = if body_off <= rx.len() {
@@ -243,7 +330,7 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, &'static str> {
                             Vec::new()
                         };
                         if truncated {
-                            return Err("response too large");
+                            return Err(HttpPlainFetchError::ResponseTooLarge);
                         }
 
                         return Ok(body);
@@ -259,11 +346,65 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, &'static str> {
             if let Some(h) = tcp_handle {
                 let _ = net.submit(api::Command::Close { handle: h });
             }
-            return Err("timed out");
+            return Err(HttpPlainFetchError::TimedOut);
         }
 
         Timer::after(EmbassyDuration::from_millis(50)).await;
     }
+}
+
+async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'static str> {
+    const MAX_REDIRECTS: usize = 5;
+    let mut current_url = String::from(url);
+    let mut saw_timeout = false;
+
+    for hop in 0..=MAX_REDIRECTS {
+        if current_url.starts_with("https://") {
+            match https::fetch_https_body_async(current_url.as_str(), 12_000, 2 * 1024 * 1024).await
+            {
+                Ok(body) => return Ok(body),
+                Err(https::FetchError::Redirect { url, .. }) => {
+                    if hop >= MAX_REDIRECTS {
+                        return Err("too many redirects");
+                    }
+                    current_url = url;
+                    continue;
+                }
+                Err(https::FetchError::ConnectTimeout)
+                | Err(https::FetchError::DnsTimeout)
+                | Err(https::FetchError::TlsTimeout)
+                | Err(https::FetchError::BodyTimeout) => {
+                    saw_timeout = true;
+                    break;
+                }
+                Err(_) => break,
+            }
+        } else if current_url.starts_with("http://") {
+            match fetch_http_plain_body(current_url.as_str()).await {
+                Ok(body) => return Ok(body),
+                Err(HttpPlainFetchError::Redirect(url)) => {
+                    if hop >= MAX_REDIRECTS {
+                        return Err("too many redirects");
+                    }
+                    current_url = url;
+                    continue;
+                }
+                Err(HttpPlainFetchError::TimedOut) => {
+                    saw_timeout = true;
+                    break;
+                }
+                Err(_) => break,
+            }
+        } else {
+            break;
+        }
+    }
+
+    if saw_timeout {
+        return Err("timed out");
+    }
+
+    Err("all attempts failed")
 }
 
 pub async fn fetch_html_best_effort(url: HString<256>) -> Result<String, &'static str> {
@@ -275,21 +416,7 @@ pub async fn fetch_html_best_effort(url: HString<256>) -> Result<String, &'stati
     let mut saw_timeout = false;
 
     for attempt in attempts.iter() {
-        if attempt.starts_with("https://") {
-            match https::fetch_https_body_async(attempt.as_str(), 12_000, 2 * 1024 * 1024).await {
-                Ok(body) => return Ok(bytes_to_string_lossy(body)),
-                Err(crate::v::net::https::FetchError::ConnectTimeout)
-                | Err(crate::v::net::https::FetchError::DnsTimeout)
-                | Err(crate::v::net::https::FetchError::TlsTimeout)
-                | Err(crate::v::net::https::FetchError::BodyTimeout) => {
-                    saw_timeout = true;
-                }
-                Err(_) => {}
-            }
-            continue;
-        }
-
-        match fetch_http_plain_body(attempt.as_str()).await {
+        match fetch_html_attempt_with_redirects(attempt.as_str()).await {
             Ok(body) => return Ok(bytes_to_string_lossy(body)),
             Err("timed out") => {
                 saw_timeout = true;

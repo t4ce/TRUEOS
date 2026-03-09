@@ -52,6 +52,7 @@ trueos-weather = { path = "crates/trueos-weather" }
 lyon_geom = { version = "1.0.19", default-features = false }
 lyon_tessellation = { version = "1.0.16", default-features = false }
 usvg = { version = "0.45.1", default-features = false }
+parry2d = { version = "0.25", default-features = false, features = ["dim2", "f32"] }
 
 [profile.dev]
 panic = "abort"

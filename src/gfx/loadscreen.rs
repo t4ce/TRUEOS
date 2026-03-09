@@ -48,6 +48,6 @@ pub async fn gfx_loadscreen_task() {
     let _ =
         crate::gfx::text::draw_atlas_text_in_frame(MSG, text_x, text_y, fb_w as u32, fb_h as u32);
     unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-    Timer::after(EmbassyDuration::from_millis(1000)).await;
+    Timer::after(EmbassyDuration::from_millis(10000)).await;
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }
