@@ -11,6 +11,7 @@ use crate as qjs;
 unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
+    fn trueos_cabi_ntp_current_unix_seconds() -> u64;
 }
 
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -56,7 +57,45 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     ensure_global_console(ctx);
     ensure_global_timers(ctx);
     ensure_global_intl(ctx);
-        ensure_global_fetch(ctx);
+    ensure_global_fetch(ctx);
+    ensure_global_kernel_time(ctx);
+}
+
+unsafe extern "C" fn trueos_ntp_unix_seconds_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let secs = trueos_cabi_ntp_current_unix_seconds();
+    qjs::JS_NewFloat64(ctx, secs as f64)
+}
+
+unsafe fn ensure_global_kernel_time(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_ntp_unix_seconds_js),
+        b"__trueosNtpUnixSeconds\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosNtpUnixSeconds\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    qjs::js_free_value(ctx, global);
 }
 
 #[inline]
