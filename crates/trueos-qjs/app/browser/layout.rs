@@ -4,11 +4,6 @@ use core::ffi::c_char;
 use crate as qjs;
 
 unsafe extern "C" {
-    fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
-    fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
-    fn trueos_cabi_gfx_end_frame() -> i32;
-    fn trueos_cabi_gfx_set_scissor(x: u32, y: u32, width: u32, height: u32) -> i32;
-    fn trueos_cabi_gfx_clear_scissor() -> i32;
     fn trueos_cabi_input_cursor_pos(cursor_id: u32, out_x: *mut i32, out_y: *mut i32) -> i32;
     fn trueos_cabi_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32;
     fn trueos_cabi_input_read_cursor_events_since(
@@ -357,8 +352,6 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static SVG_IMPORT_FN_NAME: &[u8] = b"__trueosImportSvgAsset\0";
     static SVG_PIXELS_NAME: &[u8] = b"__trueosReadSvgPixels\0";
     static SVG_PIXELS_FN_NAME: &[u8] = b"__trueosReadSvgPixels\0";
-
-    qjs::scene::install_scene_api(ctx);
 
     let global = qjs::JS_GetGlobalObject(ctx);
 

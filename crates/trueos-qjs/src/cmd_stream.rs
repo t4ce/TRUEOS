@@ -637,28 +637,8 @@ pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
     }
 
     let kind = 1u32;
-    let tex_id = {
-        let cached = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire);
-        if cached != 0 {
-            cached
-        } else {
-            let Some(atlas) = cmd_stream_select_atlas(kind) else {
-                return false;
-            };
-            let id = cmd_stream_alloc_tex_id();
-            if !cmd_stream_upload_atlas_to_tex(id, atlas) {
-                cmd_stream_release_tex_id(id);
-                return false;
-            }
-            cmd_stream_mark_atlas_tex(id, kind);
-            let _ = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.compare_exchange(
-                0,
-                id,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-            CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire)
-        }
+    let Some(tex_id) = cmd_stream_ensure_atlas_tex(kind) else {
+        return false;
     };
 
     cmd_stream_clear_text_batches();
@@ -681,34 +661,48 @@ pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
     ok
 }
 
-pub fn draw_text_widget_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
+#[inline]
+fn cmd_stream_ensure_atlas_tex(kind: u32) -> Option<u32> {
+    let cached = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire);
+    if cached != 0 {
+        return Some(cached);
+    }
+
+    let atlas = cmd_stream_select_atlas(kind)?;
+    let id = cmd_stream_alloc_tex_id();
+    if !cmd_stream_upload_atlas_to_tex(id, atlas) {
+        cmd_stream_release_tex_id(id);
+        return None;
+    }
+    cmd_stream_mark_atlas_tex(id, kind);
+    let _ = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.compare_exchange(
+        0,
+        id,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+    Some(CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire))
+}
+
+// Direct atlas-path text draw for in-frame callers.
+// This reuses the same implementation path as qjs_cmd_stream_draw_atlas_text.
+pub fn draw_atlas_text_in_frame(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    kind: u32,
+    px_h: f64,
+    rgb: u32,
+    alpha: u8,
+) -> bool {
     if text.is_empty() || !cmd_stream_owner_is_pixi() {
         return false;
     }
 
-    let kind = 1u32;
-    let tex_id = {
-        let cached = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire);
-        if cached != 0 {
-            cached
-        } else {
-            let Some(atlas) = cmd_stream_select_atlas(kind) else {
-                return false;
-            };
-            let id = cmd_stream_alloc_tex_id();
-            if !cmd_stream_upload_atlas_to_tex(id, atlas) {
-                cmd_stream_release_tex_id(id);
-                return false;
-            }
-            cmd_stream_mark_atlas_tex(id, kind);
-            let _ = CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.compare_exchange(
-                0,
-                id,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-            CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire)
-        }
+    let Some(tex_id) = cmd_stream_ensure_atlas_tex(kind) else {
+        return false;
     };
 
     CMD_STREAM_VIEW_W.store(view_w.max(1), Ordering::Relaxed);
@@ -723,12 +717,16 @@ pub fn draw_text_widget_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_
         x as f64,
         y as f64,
         text,
-        16.0,
-        0x101010 as f64,
-        255.0,
+        px_h,
+        rgb as f64,
+        alpha as f64,
     );
     cmd_stream_flush_text_batches();
     ok
+}
+
+pub fn draw_text_widget_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
+    draw_atlas_text_in_frame(text, x, y, view_w, view_h, 1, 16.0, 0x101010, 255)
 }
 
 #[inline]

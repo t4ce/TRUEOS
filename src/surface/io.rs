@@ -1791,6 +1791,9 @@ pub mod cabi {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         let mut st = GFX_CABI_STATE.lock();
+        // Keep CABI epoch aligned at frame start so first-use texture upload does not
+        // treat initial bootstrap as a backend switch and invalidate this frame.
+        st.epoch = crate::gfx::backend_epoch();
         st.frame_seq = st.frame_seq.wrapping_add(1);
         st.frame_active = true;
         st.frame_clear_rgb = clear_rgb;
