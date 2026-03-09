@@ -35,7 +35,6 @@ fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
 
 #[embassy_executor::task]
 pub async fn gfx_loadscreen_task() {
-    crate::gfx::set_present_owner(crate::gfx::PresentOwner::Pixi);
     const MSG: &[u8] = b"TRUE OS \xA7";
     let (fb_w, fb_h) = crate::limine::framebuffer_response()
         .and_then(|resp| resp.framebuffers().next())
@@ -50,6 +49,5 @@ pub async fn gfx_loadscreen_task() {
         crate::gfx::text::draw_atlas_text_in_frame(MSG, text_x, text_y, fb_w as u32, fb_h as u32);
     unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
     Timer::after(EmbassyDuration::from_millis(1000)).await;
-    crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }

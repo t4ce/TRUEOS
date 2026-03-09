@@ -390,10 +390,6 @@ fn cmd_stream_push_tex_vtx(
     out.push(a);
 }
 
-#[inline]
-fn cmd_stream_owner_is_pixi() -> bool {
-    unsafe { trueos_cabi_gfx_present_owner_get() == 1 }
-}
 
 #[inline]
 fn cmd_stream_clear_text_batches() {
@@ -632,7 +628,7 @@ fn cmd_stream_draw_atlas_text_impl(
 }
 
 pub fn draw_text_widget(text: &[u8], x: f32, y: f32) -> bool {
-    if text.is_empty() || !cmd_stream_owner_is_pixi() {
+    if text.is_empty() {
         return false;
     }
 
@@ -697,7 +693,7 @@ pub fn draw_atlas_text_in_frame(
     rgb: u32,
     alpha: u8,
 ) -> bool {
-    if text.is_empty() || !cmd_stream_owner_is_pixi() {
+    if text.is_empty() {
         return false;
     }
 
@@ -797,9 +793,6 @@ pub(crate) unsafe fn try_create_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            if !cmd_stream_owner_is_pixi() {
-                return qjs::JSValue::undefined();
-            }
             cmd_stream_clear_text_batches();
             let clear = CMD_STREAM_CLEAR_RGB.load(Ordering::Relaxed);
             let _ = trueos_cabi_gfx_begin_frame(clear);
@@ -813,9 +806,6 @@ pub(crate) unsafe fn try_create_native_module(
             _argc: i32,
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            if !cmd_stream_owner_is_pixi() {
-                return qjs::JSValue::undefined();
-            }
             cmd_stream_flush_text_batches();
             let _ = trueos_cabi_gfx_end_frame();
             qjs::JSValue::undefined()
@@ -996,9 +986,6 @@ pub(crate) unsafe fn try_create_native_module(
             argc: i32,
             argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            if !cmd_stream_owner_is_pixi() {
-                return qjs::JSValue::undefined();
-            }
             if argv.is_null() || argc < 1 {
                 return qjs::JSValue::undefined();
             }
@@ -1047,9 +1034,6 @@ pub(crate) unsafe fn try_create_native_module(
             argc: i32,
             argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            if !cmd_stream_owner_is_pixi() {
-                return qjs::JSValue::undefined();
-            }
             if argv.is_null() || argc < 2 {
                 return qjs::JSValue::undefined();
             }
@@ -1316,9 +1300,6 @@ pub(crate) unsafe fn try_create_native_module(
             argc: i32,
             argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
-            if !cmd_stream_owner_is_pixi() {
-                return qjs::JSValue::undefined();
-            }
             if argv.is_null() || argc < 5 {
                 return qjs::JSValue::undefined();
             }
