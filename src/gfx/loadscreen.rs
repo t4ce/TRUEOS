@@ -43,35 +43,12 @@ pub async fn gfx_loadscreen_task() {
         .unwrap_or((1024.0, 768.0));
     let (text_x, text_y) = centered_text_origin(MSG, fb_w, fb_h);
     crate::log!("GFX Loadscreen\n");
-
-    let mut drawn = false;
-    for _ in 0..24 {
-        let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
-        if begin_rc != 0 {
-            Timer::after(EmbassyDuration::from_millis(16)).await;
-            continue;
-        }
-
-        let lyon_ok = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
-        let text_ok = crate::gfx::text::draw_atlas_text_in_frame(
-            MSG,
-            text_x,
-            text_y,
-            fb_w as u32,
-            fb_h as u32,
-        );
-        let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-
-        if lyon_ok && text_ok && end_rc == 0 {
-            drawn = true;
-            break;
-        }
-        Timer::after(EmbassyDuration::from_millis(16)).await;
-    }
-    if !drawn {
-        crate::log!("gfx-loadscreen: initial text draw timed out\n");
-    }
-
+    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+    Timer::after(EmbassyDuration::from_millis(16)).await;
+    crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
+    let _ =
+        crate::gfx::text::draw_atlas_text_in_frame(MSG, text_x, text_y, fb_w as u32, fb_h as u32);
+    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
     Timer::after(EmbassyDuration::from_millis(1000)).await;
     crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
