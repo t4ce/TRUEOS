@@ -20,6 +20,10 @@ pub mod trueos_module_loader;
 pub mod browser_task;
 
 #[cfg(feature = "trueos")]
+#[path = "../app/ai/ai_task.rs"]
+pub mod ai_task;
+
+#[cfg(feature = "trueos")]
 #[path = "../app/browser/layout.rs"]
 pub mod layout;
 

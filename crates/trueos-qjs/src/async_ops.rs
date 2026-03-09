@@ -69,6 +69,15 @@ pub unsafe fn start_net_fetch_to_file(url: &[u8], path: &[u8]) -> Result<u32, i3
     async_fs::start_net_fetch_to_file(url, path)
 }
 
+pub unsafe fn start_net_post_json_to_file(
+    url: &[u8],
+    path: &[u8],
+    body_json: &[u8],
+    bearer: Option<&[u8]>,
+) -> Result<u32, i32> {
+    async_fs::start_net_post_json_to_file(url, path, body_json, bearer)
+}
+
 pub unsafe fn register_promise(
     ctx: *mut qjs::JSContext,
     op_id: u32,

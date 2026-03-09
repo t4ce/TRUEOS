@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+// ISO 3166 Country Codes
 const CODES_URL: &str = "https://flagcdn.com/en/codes.json";
 const CODES_PATH: &str = "/flags/codes.json";
 
