@@ -315,6 +315,17 @@ function currentLines() {
   return lines;
 }
 
+function setHtml(nextHtml) {
+  G.__trueosUiHtml = String(nextHtml || '');
+  cachedHtml = '';
+  cacheKey = '';
+  if (cachedDoc) {
+    cachedDoc.lines = null;
+    cachedDoc.baseRuns = null;
+  }
+  return relayoutAndPaint();
+}
+
 function buildBaseRuns(lines, vw, lineH) {
   const baseRuns = [];
 
@@ -458,6 +469,7 @@ function startWheelPump() {
 
 G.__trueosBrowser = {
   relayoutAndPaint,
+  setHtml,
   setScroll(y) {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
     paint();

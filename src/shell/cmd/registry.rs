@@ -594,7 +594,7 @@ pub(crate) fn init_builtin_shell_commands() {
         static NET_NIC_ARGS: [ArgSpec; 1] = [ArgSpec::new("index", ArgType::Rest)];
         static NET_HOSTNAME_ARGS: [ArgSpec; 1] = [ArgSpec::new("name", ArgType::Str)];
         static NET_HTTP_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Str).mandatory()];
-        static NET_HTTPS_ARGS: [ArgSpec; 1] = [ArgSpec::new("host", ArgType::Str)];
+        static SURF_ARGS: [ArgSpec; 1] = [ArgSpec::new("url", ArgType::Rest).mandatory()];
         static FROG_ARGS: [ArgSpec; 1] = [ArgSpec::new("api_key", ArgType::Str).mandatory()];
 
         static QJS_ARGS: [ArgSpec; 1] = [ArgSpec::new("src", ArgType::Rest)];
@@ -623,8 +623,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("net.icmp", &NET_ICMP_ARGS, cmd::cmd_net_icmp);
         let _ = REGSHCMD("net.nic", &NET_NIC_ARGS, cmd::cmd_net_nic);
         let _ = REGSHCMD("net.hostname", &NET_HOSTNAME_ARGS, cmd::cmd_net_hostname);
-        let _ = REGSHCMD("net.http", &NET_HTTP_ARGS, cmd::cmd_net_http);
-        let _ = REGSHCMD("net.https", &NET_HTTPS_ARGS, cmd::cmd_net_https);
+        let _ = REGSHCMD("surf", &SURF_ARGS, cmd::cmd_surf);
         let _ = REGSHCMD("frog", &FROG_ARGS, cmd::cmd_frog);
 
         #[cfg(feature = "dma_nic_fpga")]

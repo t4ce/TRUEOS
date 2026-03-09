@@ -385,8 +385,6 @@ pub(crate) fn cmd_net(
     t.print_row(ctx.io, ["net.icmp", "<target> [index|vid:pid|bb:dd.f]"]);
     t.print_row(ctx.io, ["net.nic", "[index|vid:pid|bb:dd.f]"]);
     t.print_row(ctx.io, ["net.hostname", "[name]"]);
-    t.print_row(ctx.io, ["net.http", "<url>"]);
-    t.print_row(ctx.io, ["net.https", "<host>"]);
 
     CommandAction::None
 }
@@ -758,58 +756,6 @@ pub(crate) fn cmd_net_hostname(
                 .write_fmt(format_args!("net.hostname: {}\r\n", current));
         }
     }
-    CommandAction::None
-}
-
-pub(crate) fn cmd_net_http(
-    ctx: &mut ShellCommandCtx<'_>,
-    args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let url = args.and_then(|a| a.get_str(0)).unwrap_or("");
-    if url.is_empty() {
-        ctx.io
-            .write_str("net.http: usage net.http <host|http://url>\r\n");
-        ctx.io
-            .write_str("net.http: example net.http http://example.com/\r\n");
-        ctx.io
-            .write_str("net.http: note: plaintext HTTP only (no TLS)\r\n");
-        return CommandAction::None;
-    }
-
-    let mut title: heapless::String<{ crate::matrix::TITLE_LEN }> = heapless::String::new();
-    let _ = title.push_str("get ");
-    for ch in url.chars() {
-        if title.push(ch).is_err() {
-            break;
-        }
-    }
-
-    let _ = title;
-    ctx.io
-        .write_str("net.http: disabled (tst module removed)\r\n");
-
-    CommandAction::None
-}
-
-pub(crate) fn cmd_net_https(
-    ctx: &mut ShellCommandCtx<'_>,
-    args: Option<&ParsedArgs<'_>>,
-) -> CommandAction {
-    let host = args.and_then(|a| a.get_str(0)).unwrap_or("");
-
-    let mut title: heapless::String<{ crate::matrix::TITLE_LEN }> = heapless::String::new();
-    let _ = title.push_str("https ");
-    let show_host = if host.is_empty() { "example.com" } else { host };
-    for ch in show_host.chars() {
-        if title.push(ch).is_err() {
-            break;
-        }
-    }
-
-    let _ = title;
-    ctx.io
-        .write_str("net.https: disabled (tst module removed)\r\n");
-
     CommandAction::None
 }
 
