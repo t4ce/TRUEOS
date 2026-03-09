@@ -27,8 +27,8 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const x = Math.round(Number(rowX[i] || DEFAULT_THEME.LEFT_PAD));
-    const y = Math.round(Number(rowY[i] || (i * DEFAULT_THEME.LINE_H)) - Number(scrollY || 0));
+    const x = Math.round(Number(rowX[i] ?? DEFAULT_THEME.LEFT_PAD));
+    const y = Math.round(Number(rowY[i] ?? (i * DEFAULT_THEME.LINE_H)) - Number(scrollY || 0));
     if (y < -DEFAULT_THEME.LINE_H) continue;
     if (y > Number(vh || 0) + DEFAULT_THEME.LINE_H) continue;
     const text = collapseWhitespace(String(row && row.text || ''));

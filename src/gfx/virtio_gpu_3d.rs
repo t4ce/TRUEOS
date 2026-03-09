@@ -2000,7 +2000,6 @@ impl VirglGfxBackend {
         encode_link_shader(&mut init, vs_tex_handle, fs_tex_handle);
 
         // Shared sampler states for 2D textures (sampler views are per-image).
-        // Pixi uses both nearest (pixel-perfect UI) and linear (e.g. stretched gradients).
         encode_create_sampler_state(
             &mut init,
             sampler_state_handle,
@@ -2465,7 +2464,6 @@ impl GfxDevice for VirglGfxBackend {
             self.ctx_id,
             virgl_res,
             PIPE_TEXTURE_2D,
-            // HostImage bytes are RGBA as produced by the WebGL/Pixi shim.
             VIRGL_FORMAT_R8G8B8A8_UNORM,
             PIPE_BIND_SAMPLER_VIEW,
             desc.width,

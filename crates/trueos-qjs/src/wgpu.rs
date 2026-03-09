@@ -1,8 +1,3 @@
-//! WebGPU shim scaffold for TRUEOS QJS integration.
-//!
-//! Goal: expose the object model and core entrypoints Pixi 8-style renderers
-//! expect, while keeping behavior explicit (`Unsupported`) until wired.
-
 #![allow(dead_code)]
 
 extern crate alloc;
@@ -318,7 +313,7 @@ pub fn queue_on_submitted_work_done(_queue: GpuQueue) -> WgpuResult<()> {
     Err(WgpuError::Unsupported)
 }
 
-pub fn list_expected_surface_for_pixi8() -> Vec<&'static str> {
+pub fn list_expected_surface() -> Vec<&'static str> {
     vec![
         "navigator.gpu.requestAdapter",
         "GPUAdapter.requestDevice",
