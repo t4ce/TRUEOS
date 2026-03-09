@@ -135,7 +135,19 @@ impl VNet {
 
     pub fn submit(&self, cmd: api::Command) -> Result<(), ()> {
         let cmd = to_kernel_cmd(cmd)?;
-        self.cmds.push(cmd)
+
+        // Under bursty load, the per-owner command queue can be briefly full.
+        // Retry a few times to avoid silently dropping critical commands like
+        // the first TCP send right after connect.
+        for _ in 0..8 {
+            if self.cmds.push(cmd.clone()).is_ok() {
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+
+        crate::log!("vnet: submit drop owner={}\n", self.owner);
+        Err(())
     }
 
     pub fn pop_event(&self) -> Option<api::Event> {

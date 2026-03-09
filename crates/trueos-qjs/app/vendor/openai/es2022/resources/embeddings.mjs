@@ -1,0 +1,3 @@
+/* esm.sh - openai@6.27.0/resources/embeddings */
+import{APIResource as m}from"../core/resource.mjs";import{loggerFor as d,toFloat32Array as s}from"../internal/utils.mjs";var i=class extends m{create(e,a){let n=!!e.encoding_format,c=n?e.encoding_format:"base64";n&&d(this._client).debug("embeddings/user defined encoding_format:",e.encoding_format);let r=this._client.post("/embeddings",{body:{...e,encoding_format:c},...a});return n?r:(d(this._client).debug("embeddings/decoding base64 embeddings from base64"),r._thenUnwrap(t=>(t&&t.data&&t.data.forEach(o=>{let g=o.embedding;o.embedding=s(g)}),t)))}};export{i as Embeddings};
+//# sourceMappingURL=embeddings.mjs.map

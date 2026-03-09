@@ -34,6 +34,7 @@ dependencies = [
  "sha2",
  "smoltcp",
  "spin 0.10.0",
+ "tiny-skia-path",
  "trueos-fs",
  "trueos-gfx-core",
  "trueos-limloader",
