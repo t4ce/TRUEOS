@@ -31,6 +31,8 @@ mod smp;
 mod surface;
 mod tga;
 mod time;
+#[path = "tst/html.rs"]
+mod tst_html;
 mod turbo;
 mod usb;
 #[path = "tst/usvg_smoke.rs"]
