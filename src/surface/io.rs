@@ -499,6 +499,11 @@ pub mod cabi {
         crate::limine::boot_timestamp_secs().unwrap_or(0)
     }
 
+    #[unsafe(no_mangle)]
+    pub extern "C" fn trueos_cabi_ntp_current_unix_seconds() -> u64 {
+        crate::surface::ntp::current_unix_seconds().unwrap_or(0)
+    }
+
     #[derive(Clone, Copy)]
     struct AllocMeta {
         size: usize,
