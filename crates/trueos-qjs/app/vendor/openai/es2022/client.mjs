@@ -1,13 +1,238 @@
-/* esm.sh - openai@6.27.0/client */
-import __Process$ from "/node/process.mjs";
-import{__classPrivateFieldGet as H,__classPrivateFieldSet as J}from"./internal/tslib.mjs";import{uuid4 as Y}from"./internal/utils/uuid.mjs";import{validatePositiveInteger as Z,isAbsoluteURL as ee,safeJSON as te}from"./internal/utils/values.mjs";import{sleep as re}from"./internal/utils/sleep.mjs";import{castToError as D,isAbortError as se}from"./internal/errors.mjs";import{VERSION as I}from"./version.mjs";var C=()=>typeof window<"u"&&typeof window.document<"u"&&typeof navigator<"u";function K(){return typeof Deno<"u"&&Deno.build!=null?"deno":typeof EdgeRuntime<"u"?"edge":Object.prototype.toString.call(typeof(0,__Process$)<"u"?__Process$:0)==="[object process]"?"node":"unknown"}var G=()=>{let l=K();if(l==="deno")return{"X-Stainless-Lang":"js","X-Stainless-Package-Version":I,"X-Stainless-OS":M(Deno.build.os),"X-Stainless-Arch":L(Deno.build.arch),"X-Stainless-Runtime":"deno","X-Stainless-Runtime-Version":typeof Deno.version=="string"?Deno.version:Deno.version?.deno??"unknown"};if(typeof EdgeRuntime<"u")return{"X-Stainless-Lang":"js","X-Stainless-Package-Version":I,"X-Stainless-OS":"Unknown","X-Stainless-Arch":`other:${EdgeRuntime}`,"X-Stainless-Runtime":"edge","X-Stainless-Runtime-Version":__Process$.version};if(l==="node")return{"X-Stainless-Lang":"js","X-Stainless-Package-Version":I,"X-Stainless-OS":M(__Process$.platform??"unknown"),"X-Stainless-Arch":L(__Process$.arch??"unknown"),"X-Stainless-Runtime":"node","X-Stainless-Runtime-Version":__Process$.version??"unknown"};let e=Q();return e?{"X-Stainless-Lang":"js","X-Stainless-Package-Version":I,"X-Stainless-OS":"Unknown","X-Stainless-Arch":"unknown","X-Stainless-Runtime":`browser:${e.browser}`,"X-Stainless-Runtime-Version":e.version}:{"X-Stainless-Lang":"js","X-Stainless-Package-Version":I,"X-Stainless-OS":"Unknown","X-Stainless-Arch":"unknown","X-Stainless-Runtime":"unknown","X-Stainless-Runtime-Version":"unknown"}};function Q(){if(typeof navigator>"u"||!navigator)return null;let l=[{key:"edge",pattern:/Edge(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/},{key:"ie",pattern:/MSIE(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/},{key:"ie",pattern:/Trident(?:.*rv\:(\d+)\.(\d+)(?:\.(\d+))?)?/},{key:"chrome",pattern:/Chrome(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/},{key:"firefox",pattern:/Firefox(?:\W+(\d+)\.(\d+)(?:\.(\d+))?)?/},{key:"safari",pattern:/(?:Version\W+(\d+)\.(\d+)(?:\.(\d+))?)?(?:\W+Mobile\S*)?\W+Safari/}];for(let{key:e,pattern:t}of l){let r=t.exec(navigator.userAgent);if(r){let n=r[1]||0,u=r[2]||0,h=r[3]||0;return{browser:e,version:`${n}.${u}.${h}`}}}return null}var L=l=>l==="x32"?"x32":l==="x86_64"||l==="x64"?"x64":l==="arm"?"arm":l==="aarch64"||l==="arm64"?"arm64":l?`other:${l}`:"unknown",M=l=>(l=l.toLowerCase(),l.includes("ios")?"iOS":l==="android"?"Android":l==="darwin"?"MacOS":l==="win32"?"Windows":l==="freebsd"?"FreeBSD":l==="openbsd"?"OpenBSD":l==="linux"?"Linux":l?`Other:${l}`:"Unknown"),X,B=()=>X??(X=G());import*as A from"./internal/shims.mjs";var F=({headers:l,body:e})=>({bodyHeaders:{"content-type":"application/json"},body:JSON.stringify(e)});import{stringifyQuery as oe}from"./internal/utils/query.mjs";import{VERSION as ie}from"./version.mjs";import*as i from"./core/error.mjs";import*as V from"./core/pagination.mjs";import*as W from"./core/uploads.mjs";import*as s from"./resources/index.mjs";import{APIPromise as ne}from"./core/api-promise.mjs";import{Batches as ae}from"./resources/batches.mjs";import{Completions as le}from"./resources/completions.mjs";import{Embeddings as ue}from"./resources/embeddings.mjs";import{Files as de}from"./resources/files.mjs";import{Images as he}from"./resources/images.mjs";import{Models as ce}from"./resources/models.mjs";import{Moderations as me}from"./resources/moderations.mjs";import{Videos as fe}from"./resources/videos.mjs";import{Audio as pe}from"./resources/audio/audio.mjs";import{Beta as ge}from"./resources/beta/beta.mjs";import{Chat as ye}from"./resources/chat/chat.mjs";import{Containers as we}from"./resources/containers/containers.mjs";import{Conversations as be}from"./resources/conversations/conversations.mjs";import{Evals as Ee}from"./resources/evals/evals.mjs";import{FineTuning as Ae}from"./resources/fine-tuning/fine-tuning.mjs";import{Graders as Se}from"./resources/graders/graders.mjs";import{Realtime as Ie}from"./resources/realtime/realtime.mjs";import{Responses as Pe}from"./resources/responses/responses.mjs";import{Skills as Re}from"./resources/skills/skills.mjs";import{Uploads as ke}from"./resources/uploads/uploads.mjs";import{VectorStores as ve}from"./resources/vector-stores/vector-stores.mjs";import{Webhooks as Oe}from"./resources/webhooks/webhooks.mjs";import{buildHeaders as O}from"./internal/headers.mjs";import{readEnv as b}from"./internal/utils/env.mjs";import{formatRequestDetails as E,loggerFor as p,parseLogLevel as N}from"./internal/utils/log.mjs";import{isEmptyObj as Te}from"./internal/utils/values.mjs";var T,$,R,j,o=class{constructor({baseURL:e=b("OPENAI_BASE_URL"),apiKey:t=b("OPENAI_API_KEY"),organization:r=b("OPENAI_ORG_ID")??null,project:n=b("OPENAI_PROJECT_ID")??null,webhookSecret:u=b("OPENAI_WEBHOOK_SECRET")??null,...h}={}){if(T.add(this),R.set(this,void 0),this.completions=new s.Completions(this),this.chat=new s.Chat(this),this.embeddings=new s.Embeddings(this),this.files=new s.Files(this),this.images=new s.Images(this),this.audio=new s.Audio(this),this.moderations=new s.Moderations(this),this.models=new s.Models(this),this.fineTuning=new s.FineTuning(this),this.graders=new s.Graders(this),this.vectorStores=new s.VectorStores(this),this.webhooks=new s.Webhooks(this),this.beta=new s.Beta(this),this.batches=new s.Batches(this),this.uploads=new s.Uploads(this),this.responses=new s.Responses(this),this.realtime=new s.Realtime(this),this.conversations=new s.Conversations(this),this.evals=new s.Evals(this),this.containers=new s.Containers(this),this.skills=new s.Skills(this),this.videos=new s.Videos(this),t===void 0)throw new i.OpenAIError("Missing credentials. Please pass an `apiKey`, or set the `OPENAI_API_KEY` environment variable.");let a={apiKey:t,organization:r,project:n,webhookSecret:u,...h,baseURL:e||"https://api.openai.com/v1"};if(!a.dangerouslyAllowBrowser&&C())throw new i.OpenAIError(`It looks like you're running in a browser-like environment.
+/* Minimal OpenAI client for TRUEOS runtime.
+ * Focus: robust `responses.create()` support with small surface area.
+ */
 
-This is disabled by default, as it risks exposing your secret API credentials to attackers.
-If you understand the risks and have appropriate mitigations in place,
-you can set the \`dangerouslyAllowBrowser\` option to \`true\`, e.g.,
+import { readEnv } from "./internal/utils/env.mjs";
+import {
+	APIConnectionError,
+	APIConnectionTimeoutError,
+	APIError,
+	OpenAIError,
+} from "./core/error.mjs";
 
-new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+function isAbsoluteURL(url) {
+	return /^https?:\/\//i.test(String(url || ""));
+}
 
-https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety
-`);this.baseURL=a.baseURL,this.timeout=a.timeout??$.DEFAULT_TIMEOUT,this.logger=a.logger??console;let c="warn";this.logLevel=c,this.logLevel=N(a.logLevel,"ClientOptions.logLevel",this)??N(b("OPENAI_LOG"),"process.env['OPENAI_LOG']",this)??c,this.fetchOptions=a.fetchOptions,this.maxRetries=a.maxRetries??2,this.fetch=a.fetch??A.getDefaultFetch(),J(this,R,F,"f"),this._options=a,this.apiKey=typeof t=="string"?t:"Missing Key",this.organization=r,this.project=n,this.webhookSecret=u}withOptions(e){return new this.constructor({...this._options,baseURL:this.baseURL,maxRetries:this.maxRetries,timeout:this.timeout,logger:this.logger,logLevel:this.logLevel,fetch:this.fetch,fetchOptions:this.fetchOptions,apiKey:this.apiKey,organization:this.organization,project:this.project,webhookSecret:this.webhookSecret,...e})}defaultQuery(){return this._options.defaultQuery}validateHeaders({values:e,nulls:t}){}async authHeaders(e){return O([{Authorization:`Bearer ${this.apiKey}`}])}stringifyQuery(e){return oe(e)}getUserAgent(){return`${this.constructor.name}/JS ${ie}`}defaultIdempotencyKey(){return`stainless-node-retry-${Y()}`}makeStatusError(e,t,r,n){return i.APIError.generate(e,t,r,n)}async _callApiKey(){let e=this._options.apiKey;if(typeof e!="function")return!1;let t;try{t=await e()}catch(r){throw r instanceof i.OpenAIError?r:new i.OpenAIError(`Failed to get token from 'apiKey' function: ${r.message}`,{cause:r})}if(typeof t!="string"||!t)throw new i.OpenAIError(`Expected 'apiKey' function argument to return a string but it returned ${t}`);return this.apiKey=t,!0}buildURL(e,t,r){let n=!H(this,T,"m",j).call(this)&&r||this.baseURL,u=ee(e)?new URL(e):new URL(n+(n.endsWith("/")&&e.startsWith("/")?e.slice(1):e)),h=this.defaultQuery();return Te(h)||(t={...h,...t}),typeof t=="object"&&t&&!Array.isArray(t)&&(u.search=this.stringifyQuery(t)),u.toString()}async prepareOptions(e){await this._callApiKey()}async prepareRequest(e,{url:t,options:r}){}get(e,t){return this.methodRequest("get",e,t)}post(e,t){return this.methodRequest("post",e,t)}patch(e,t){return this.methodRequest("patch",e,t)}put(e,t){return this.methodRequest("put",e,t)}delete(e,t){return this.methodRequest("delete",e,t)}methodRequest(e,t,r){return this.request(Promise.resolve(r).then(n=>({method:e,path:t,...n})))}request(e,t=null){return new ne(this,this.makeRequest(e,t,void 0))}async makeRequest(e,t,r){let n=await e,u=n.maxRetries??this.maxRetries;t==null&&(t=u),await this.prepareOptions(n);let{req:h,url:a,timeout:c}=await this.buildRequest(n,{retryCount:u-t});await this.prepareRequest(h,{url:a,options:n});let m="log_"+(Math.random()*(1<<24)|0).toString(16).padStart(6,"0"),w=r===void 0?"":`, retryOf: ${r}`,f=Date.now();if(p(this).debug(`[${m}] sending request`,E({retryOfRequestLogID:r,method:n.method,url:a,options:n,headers:h.headers})),n.signal?.aborted)throw new i.APIUserAbortError;let k=new AbortController,d=await this.fetchWithTimeout(a,h,c,k).catch(D),S=Date.now();if(d instanceof globalThis.Error){let y=`retrying, ${t} attempts remaining`;if(n.signal?.aborted)throw new i.APIUserAbortError;let g=se(d)||/timed? ?out/i.test(String(d)+("cause"in d?String(d.cause):""));if(t)return p(this).info(`[${m}] connection ${g?"timed out":"failed"} - ${y}`),p(this).debug(`[${m}] connection ${g?"timed out":"failed"} (${y})`,E({retryOfRequestLogID:r,url:a,durationMs:S-f,message:d.message})),this.retryRequest(n,t,r??m);throw p(this).info(`[${m}] connection ${g?"timed out":"failed"} - error; no more retries left`),p(this).debug(`[${m}] connection ${g?"timed out":"failed"} (error; no more retries left)`,E({retryOfRequestLogID:r,url:a,durationMs:S-f,message:d.message})),g?new i.APIConnectionTimeoutError:new i.APIConnectionError({cause:d})}let q=[...d.headers.entries()].filter(([y])=>y==="x-request-id").map(([y,g])=>", "+y+": "+JSON.stringify(g)).join(""),v=`[${m}${w}${q}] ${h.method} ${a} ${d.ok?"succeeded":"failed"} with status ${d.status} in ${S-f}ms`;if(!d.ok){let y=await this.shouldRetry(d);if(t&&y){let P=`retrying, ${t} attempts remaining`;return await A.CancelReadableStream(d.body),p(this).info(`${v} - ${P}`),p(this).debug(`[${m}] response error (${P})`,E({retryOfRequestLogID:r,url:d.url,status:d.status,headers:d.headers,durationMs:S-f})),this.retryRequest(n,t,r??m,d.headers)}let g=y?"error; no more retries left":"error; not retryable";p(this).info(`${v} - ${g}`);let U=await d.text().catch(P=>D(P).message),_=te(U),x=_?void 0:U;throw p(this).debug(`[${m}] response error (${g})`,E({retryOfRequestLogID:r,url:d.url,status:d.status,headers:d.headers,message:x,durationMs:Date.now()-f})),this.makeStatusError(d.status,_,x,d.headers)}return p(this).info(v),p(this).debug(`[${m}] response start`,E({retryOfRequestLogID:r,url:d.url,status:d.status,headers:d.headers,durationMs:S-f})),{response:d,options:n,controller:k,requestLogID:m,retryOfRequestLogID:r,startTime:f}}getAPIList(e,t,r){return this.requestAPIList(t,r&&"then"in r?r.then(n=>({method:"get",path:e,...n})):{method:"get",path:e,...r})}requestAPIList(e,t){let r=this.makeRequest(t,null,void 0);return new V.PagePromise(this,r,e)}async fetchWithTimeout(e,t,r,n){let{signal:u,method:h,...a}=t||{},c=this._makeAbort(n);u&&u.addEventListener("abort",c,{once:!0});let m=setTimeout(c,r),w=globalThis.ReadableStream&&a.body instanceof globalThis.ReadableStream||typeof a.body=="object"&&a.body!==null&&Symbol.asyncIterator in a.body,f={signal:n.signal,...w?{duplex:"half"}:{},method:"GET",...a};h&&(f.method=h.toUpperCase());try{return await this.fetch.call(void 0,e,f)}finally{clearTimeout(m)}}async shouldRetry(e){let t=e.headers.get("x-should-retry");return t==="true"?!0:t==="false"?!1:e.status===408||e.status===409||e.status===429||e.status>=500}async retryRequest(e,t,r,n){let u,h=n?.get("retry-after-ms");if(h){let c=parseFloat(h);Number.isNaN(c)||(u=c)}let a=n?.get("retry-after");if(a&&!u){let c=parseFloat(a);Number.isNaN(c)?u=Date.parse(a)-Date.now():u=c*1e3}if(u===void 0){let c=e.maxRetries??this.maxRetries;u=this.calculateDefaultRetryTimeoutMillis(t,c)}return await re(u),this.makeRequest(e,t-1,r)}calculateDefaultRetryTimeoutMillis(e,t){let u=t-e,h=Math.min(.5*Math.pow(2,u),8),a=1-Math.random()*.25;return h*a*1e3}async buildRequest(e,{retryCount:t=0}={}){let r={...e},{method:n,path:u,query:h,defaultBaseURL:a}=r,c=this.buildURL(u,h,a);"timeout"in r&&Z("timeout",r.timeout),r.timeout=r.timeout??this.timeout;let{bodyHeaders:m,body:w}=this.buildBody({options:r}),f=await this.buildHeaders({options:e,method:n,bodyHeaders:m,retryCount:t});return{req:{method:n,headers:f,...r.signal&&{signal:r.signal},...globalThis.ReadableStream&&w instanceof globalThis.ReadableStream&&{duplex:"half"},...w&&{body:w},...this.fetchOptions??{},...r.fetchOptions??{}},url:c,timeout:r.timeout}}async buildHeaders({options:e,method:t,bodyHeaders:r,retryCount:n}){let u={};this.idempotencyHeader&&t!=="get"&&(e.idempotencyKey||(e.idempotencyKey=this.defaultIdempotencyKey()),u[this.idempotencyHeader]=e.idempotencyKey);let h=O([u,{Accept:"application/json","User-Agent":this.getUserAgent(),"X-Stainless-Retry-Count":String(n),...e.timeout?{"X-Stainless-Timeout":String(Math.trunc(e.timeout/1e3))}:{},...B(),"OpenAI-Organization":this.organization,"OpenAI-Project":this.project},await this.authHeaders(e),this._options.defaultHeaders,r,e.headers]);return this.validateHeaders(h),h.values}_makeAbort(e){return()=>e.abort()}buildBody({options:{body:e,headers:t}}){if(!e)return{bodyHeaders:void 0,body:void 0};let r=O([t]);return ArrayBuffer.isView(e)||e instanceof ArrayBuffer||e instanceof DataView||typeof e=="string"&&r.values.has("content-type")||globalThis.Blob&&e instanceof globalThis.Blob||e instanceof FormData||e instanceof URLSearchParams||globalThis.ReadableStream&&e instanceof globalThis.ReadableStream?{bodyHeaders:void 0,body:e}:typeof e=="object"&&(Symbol.asyncIterator in e||Symbol.iterator in e&&"next"in e&&typeof e.next=="function")?{bodyHeaders:void 0,body:A.ReadableStreamFrom(e)}:typeof e=="object"&&r.values.get("content-type")==="application/x-www-form-urlencoded"?{bodyHeaders:{"content-type":"application/x-www-form-urlencoded"},body:this.stringifyQuery(e)}:H(this,R,"f").call(this,{body:e,headers:r})}};$=o,R=new WeakMap,T=new WeakSet,j=function(){return this.baseURL!=="https://api.openai.com/v1"};o.OpenAI=$;o.DEFAULT_TIMEOUT=6e5;o.OpenAIError=i.OpenAIError;o.APIError=i.APIError;o.APIConnectionError=i.APIConnectionError;o.APIConnectionTimeoutError=i.APIConnectionTimeoutError;o.APIUserAbortError=i.APIUserAbortError;o.NotFoundError=i.NotFoundError;o.ConflictError=i.ConflictError;o.RateLimitError=i.RateLimitError;o.BadRequestError=i.BadRequestError;o.AuthenticationError=i.AuthenticationError;o.InternalServerError=i.InternalServerError;o.PermissionDeniedError=i.PermissionDeniedError;o.UnprocessableEntityError=i.UnprocessableEntityError;o.InvalidWebhookSignatureError=i.InvalidWebhookSignatureError;o.toFile=W.toFile;o.Completions=le;o.Chat=ye;o.Embeddings=ue;o.Files=de;o.Images=he;o.Audio=pe;o.Moderations=me;o.Models=ce;o.FineTuning=Ae;o.Graders=Se;o.VectorStores=ve;o.Webhooks=Oe;o.Beta=ge;o.Batches=ae;o.Uploads=ke;o.Responses=Pe;o.Realtime=Ie;o.Conversations=be;o.Evals=Ee;o.Containers=we;o.Skills=Re;o.Videos=fe;export{o as OpenAI};
-//# sourceMappingURL=client.mjs.map
+function encodeQueryValue(value) {
+	return encodeURIComponent(String(value));
+}
+
+function appendQuery(url, query) {
+	if (!query || typeof query !== "object") return url;
+	const parts = [];
+	for (const [key, value] of Object.entries(query)) {
+		if (value === undefined || value === null) continue;
+		parts.push(`${encodeQueryValue(key)}=${encodeQueryValue(value)}`);
+	}
+	if (parts.length === 0) return url;
+	return `${url}${url.includes("?") ? "&" : "?"}${parts.join("&")}`;
+}
+
+function mergeHeaders(...items) {
+	const out = Object.create(null);
+	for (const item of items) {
+		if (!item) continue;
+		if (item instanceof Headers) {
+			item.forEach((value, key) => {
+				out[String(key).toLowerCase()] = String(value);
+			});
+			continue;
+		}
+		for (const [key, value] of Object.entries(item)) {
+			if (value === undefined || value === null) continue;
+			out[String(key).toLowerCase()] = String(value);
+		}
+	}
+	return out;
+}
+
+function synthesizeOutputText(response) {
+	if (!response || typeof response !== "object") return "";
+	if (typeof response.output_text === "string") return response.output_text;
+	const chunks = [];
+	const output = Array.isArray(response.output) ? response.output : [];
+	for (const item of output) {
+		if (!item || item.type !== "message") continue;
+		const content = Array.isArray(item.content) ? item.content : [];
+		for (const part of content) {
+			if (part && part.type === "output_text" && typeof part.text === "string") {
+				chunks.push(part.text);
+			}
+		}
+	}
+	return chunks.join("");
+}
+
+class OpenAI {
+	static DEFAULT_TIMEOUT = 120000;
+
+	constructor({
+		apiKey = readEnv("OPENAI_API_KEY"),
+		baseURL = readEnv("OPENAI_BASE_URL") || "https://api.openai.com/v1",
+		fetch: fetchImpl = globalThis.fetch,
+		timeout = OpenAI.DEFAULT_TIMEOUT,
+		defaultHeaders,
+		defaultQuery,
+	} = {}) {
+		if (typeof fetchImpl !== "function") {
+			throw new OpenAIError(
+				"`fetch` is not defined as a global; provide `new OpenAI({ fetch })` or polyfill `globalThis.fetch`."
+			);
+		}
+
+		this.fetch = fetchImpl;
+		this.apiKey = apiKey;
+		this.baseURL = String(baseURL || "https://api.openai.com/v1").replace(/\/+$/, "");
+		this.timeout = Number(timeout) > 0 ? Number(timeout) : OpenAI.DEFAULT_TIMEOUT;
+		this._options = {
+			apiKey,
+			baseURL: this.baseURL,
+			fetch: fetchImpl,
+			timeout: this.timeout,
+			defaultHeaders,
+			defaultQuery,
+		};
+
+		this.responses = {
+			create: async (body, options = {}) => {
+				if (!body || typeof body !== "object" || Array.isArray(body)) {
+					throw new OpenAIError("Expected request body to be an object");
+				}
+				const data = await this.post("/responses", { body, ...options });
+				if (typeof data.output_text !== "string") {
+					data.output_text = synthesizeOutputText(data);
+				}
+				return data;
+			},
+		};
+	}
+
+	withOptions(options = {}) {
+		return new OpenAI({ ...this._options, ...options });
+	}
+
+	defaultQuery() {
+		return this._options.defaultQuery;
+	}
+
+	buildURL(path, query = undefined, defaultBaseURL = undefined) {
+		const p = String(path || "");
+		const root = defaultBaseURL || this.baseURL;
+		const url = isAbsoluteURL(p)
+			? p
+			: `${root}${p.startsWith("/") ? "" : "/"}${p}`;
+
+		const mergedQuery = {
+			...(this.defaultQuery() || {}),
+			...(query || {}),
+		};
+		return appendQuery(url, mergedQuery);
+	}
+
+	async authHeaders() {
+		if (typeof this.apiKey === "string" && this.apiKey.length > 0) {
+			return { Authorization: `Bearer ${this.apiKey}` };
+		}
+		return {};
+	}
+
+	async buildRequest(options, { retryCount = 0 } = {}) {
+		const method = String(options.method || "GET").toUpperCase();
+		const timeout = Number(options.timeout) > 0 ? Number(options.timeout) : this.timeout;
+		const url = this.buildURL(options.path || "", options.query, options.defaultBaseURL);
+
+		const headers = mergeHeaders(
+			{
+				Accept: "application/json",
+				"Content-Type": "application/json",
+				"X-Stainless-Retry-Count": String(retryCount),
+			},
+			await this.authHeaders(options),
+			this._options.defaultHeaders,
+			options.headers
+		);
+
+		const req = {
+			method,
+			headers,
+			signal: options.signal,
+		};
+
+		if (options.body !== undefined) {
+			req.body =
+				typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+		}
+
+		return { req, url, timeout };
+	}
+
+	async fetchWithTimeout(url, req, timeoutMs) {
+		if (typeof AbortController !== "function") {
+			return this.fetch(url, req);
+		}
+
+		const controller = new AbortController();
+		const onAbort = () => controller.abort();
+		if (req.signal && typeof req.signal.addEventListener === "function") {
+			req.signal.addEventListener("abort", onAbort, { once: true });
+		}
+
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		try {
+			return await this.fetch(url, { ...req, signal: controller.signal });
+		} catch (err) {
+			if (controller.signal.aborted) {
+				throw new APIConnectionTimeoutError({ message: "Request timed out." });
+			}
+			throw new APIConnectionError({
+				message: err && err.message ? err.message : "Connection error.",
+				cause: err,
+			});
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	async request(options) {
+		const { req, url, timeout } = await this.buildRequest(options);
+		const response = await this.fetchWithTimeout(url, req, timeout);
+
+		const text = await response.text();
+		let parsed;
+		try {
+			parsed = text ? JSON.parse(text) : {};
+		} catch {
+			parsed = text;
+		}
+
+		if (!response.ok) {
+			throw APIError.generate(response.status, parsed, text, response.headers);
+		}
+
+		return parsed;
+	}
+
+	get(path, options = {}) {
+		return this.request({ ...options, method: "GET", path });
+	}
+
+	post(path, options = {}) {
+		return this.request({ ...options, method: "POST", path });
+	}
+
+	patch(path, options = {}) {
+		return this.request({ ...options, method: "PATCH", path });
+	}
+
+	put(path, options = {}) {
+		return this.request({ ...options, method: "PUT", path });
+	}
+
+	delete(path, options = {}) {
+		return this.request({ ...options, method: "DELETE", path });
+	}
+}
+
+export { OpenAI };
+export default OpenAI;

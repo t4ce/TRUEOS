@@ -3046,6 +3046,120 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     op_id
 }
 
+/// TRUEOS C ABI: start async HTTPS POST(JSON) to file.
+///
+/// `bearer_ptr/bearer_len` are optional (pass null/0 for no Authorization header).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start(
+    url_ptr: *const u8,
+    url_len: usize,
+    path_ptr: *const u8,
+    path_len: usize,
+    body_ptr: *const u8,
+    body_len: usize,
+    bearer_ptr: *const u8,
+    bearer_len: usize,
+) -> u32 {
+    if url_ptr.is_null()
+        || url_len == 0
+        || path_ptr.is_null()
+        || path_len == 0
+        || body_ptr.is_null()
+        || body_len == 0
+    {
+        return 0;
+    }
+
+    let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    let path_bytes = core::slice::from_raw_parts(path_ptr, path_len);
+    let body_bytes = core::slice::from_raw_parts(body_ptr, body_len);
+
+    let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+        return 0;
+    };
+    let Ok(path_s) = core::str::from_utf8(path_bytes) else {
+        return 0;
+    };
+    let Ok(body_s) = core::str::from_utf8(body_bytes) else {
+        return 0;
+    };
+
+    let bearer = if bearer_ptr.is_null() || bearer_len == 0 {
+        None
+    } else {
+        let bearer_bytes = core::slice::from_raw_parts(bearer_ptr, bearer_len);
+        let Ok(v) = core::str::from_utf8(bearer_bytes) else {
+            return 0;
+        };
+        Some(String::from(v))
+    };
+
+    let key = match normalize_rel(path_s, false) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+
+    let url = String::from(url_s);
+    let body_json = String::from(body_s);
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
+
+    crate::wait::spawn_local_detached(async move {
+        const TIMEOUT_MS: u32 = 20_000;
+        const MAX_BYTES: usize = 4 * 1024 * 1024;
+
+        let t0 = Instant::now();
+        net_fetch_acquire_slot().await;
+
+        let rc = match post_https_json_async(
+            url.as_str(),
+            body_json,
+            bearer.as_deref(),
+            TIMEOUT_MS,
+            MAX_BYTES,
+        )
+        .await
+        {
+            Ok(bytes) => {
+                if let Some(disk) = crate::v::fs::trueosfs::primary_root_handle() {
+                    match crate::v::fs::trueosfs::file_in_async(
+                        disk,
+                        key.as_str(),
+                        bytes.as_slice(),
+                    )
+                    .await
+                    {
+                        Ok(true) => 0,
+                        Ok(false) => FS_ERR_IO,
+                        Err(e) => block_error_to_code(e),
+                    }
+                } else {
+                    FS_ERR_USBMS_NOT_FOUND
+                }
+            }
+            Err(e) => fetch_error_to_code(e),
+        };
+
+        net_fetch_release_slot();
+
+        let elapsed_ms = t0.elapsed().as_millis();
+        if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
+            *slot = Some(rc);
+        }
+
+        crate::log!(
+            "net-fetch-post: done key={} rc={} ms={}\n",
+            key,
+            rc,
+            elapsed_ms
+        );
+
+        CABI_NET_FETCH_WAIT.notify_all();
+    });
+
+    op_id
+}
+
 /// TRUEOS C ABI: query async HTTPS fetch result.
 ///
 /// Returns:
