@@ -42,6 +42,73 @@ fn push_rgb_vtx(out: &mut Vec<u8>, v: &MyVertex, view_w: f32, view_h: f32) {
     out.push(to_u8(v.color[3]));
 }
 
+pub fn draw_solid_rect_no_present(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    rgba: (u8, u8, u8, u8),
+    view_w: u32,
+    view_h: u32,
+) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return true;
+    }
+
+    let x0 = x;
+    let y0 = y;
+    let x1 = x + w;
+    let y1 = y + h;
+    let c = [
+        rgba.0 as f32 / 255.0,
+        rgba.1 as f32 / 255.0,
+        rgba.2 as f32 / 255.0,
+        rgba.3 as f32 / 255.0,
+    ];
+
+    let tris = [
+        MyVertex {
+            position: [x0, y1],
+            color: c,
+        },
+        MyVertex {
+            position: [x1, y1],
+            color: c,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: c,
+        },
+        MyVertex {
+            position: [x0, y1],
+            color: c,
+        },
+        MyVertex {
+            position: [x1, y0],
+            color: c,
+        },
+        MyVertex {
+            position: [x0, y0],
+            color: c,
+        },
+    ];
+
+    let mut blob: Vec<u8> = Vec::with_capacity(6 * 12);
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    for v in &tris {
+        push_rgb_vtx(&mut blob, v, fb_w, fb_h);
+    }
+
+    let rc = unsafe {
+        crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+            blob.as_ptr(),
+            blob.len(),
+        )
+    };
+    rc == 0
+}
+
 #[inline]
 fn rotate_quadrant(p: (f32, f32), q: u32) -> (f32, f32) {
     let x = p.0 - 16.0;
