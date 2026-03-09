@@ -28,10 +28,6 @@ pub mod layout;
 pub mod ui_html;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/scene.rs"]
-pub mod scene;
-
-#[cfg(feature = "trueos")]
 pub mod cmd_stream;
 
 #[cfg(feature = "trueos")]

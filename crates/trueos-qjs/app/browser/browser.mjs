@@ -3,12 +3,14 @@ import Yoga from 'yoga-layout';
 import { createFpsOverlay } from './fps.mjs';
 import { extractCssRows } from './css.mjs';
 import { renderScene } from './scene.mjs';
+import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
 
 const runtime = resolveRuntime();
 
 const WHEEL_STEP_PX = 32;
 const INDENT_PX = 12;
+const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link']);
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -24,7 +26,6 @@ function resolveRuntime() {
   return {
     host,
     readCursorEventsSince: host.__trueosReadCursorEventsSince,
-    drawLayoutRects: host.__trueosDrawLayoutRects,
   };
 }
 
@@ -47,34 +48,47 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
-function pushRow(rows, text, depth) {
+function pushRow(rows, text, depth, kind = 'text') {
   const t = collapseWhitespace(text);
   if (!t) return;
-  rows.push({ depth: Math.max(0, Number(depth || 0) | 0), text: t });
+  rows.push({ depth: Math.max(0, Number(depth || 0) | 0), text: t, kind: String(kind || 'text') });
 }
 
-function collectRows(node, depth, rows) {
+function shouldOmitElement(tagName) {
+  return OMIT_TAGS.has(String(tagName || '').toLowerCase());
+}
+
+function shouldRenderTagLines(tagName) {
+  const tag = String(tagName || '').toLowerCase();
+  if (tag === 'p') return false;
+  if (TEXT_LEVEL_SEMANTICS_TAGS.includes(tag)) return false;
+  return BLOCK_TAGS.has(tag);
+}
+
+function collectRows(node, depth, rows, parentTag = '') {
   if (!node || typeof node !== 'object') return;
 
   if (isTextNode(node)) {
-    pushRow(rows, node.value, depth);
+    const kind = String(parentTag || '').toLowerCase() === 'title' ? 'title-text' : 'text';
+    pushRow(rows, node.value, depth, kind);
     return;
   }
 
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
-    pushRow(rows, `<${tag}>`, depth);
+    const renderTagLines = !shouldOmitElement(tag) && shouldRenderTagLines(tag);
+    if (renderTagLines) pushRow(rows, `<${tag}>`, depth, 'tag-open');
     const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
     for (let i = 0; i < kids.length; i++) {
-      collectRows(kids[i], depth + 1, rows);
+      collectRows(kids[i], renderTagLines ? depth + 1 : depth, rows, tag);
     }
-    pushRow(rows, `</${tag}>`, depth);
+    if (renderTagLines) pushRow(rows, `</${tag}>`, depth, 'tag-close');
     return;
   }
 
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
   for (let i = 0; i < kids.length; i++) {
-    collectRows(kids[i], depth, rows);
+    collectRows(kids[i], depth, rows, parentTag);
   }
 }
 
@@ -95,6 +109,7 @@ function buildDocFromHtml(html, vw) {
     rows.push({
       depth: Math.max(0, Number(r && r.depth || 0) | 0),
       text: String(r && r.text || ''),
+      kind: 'css',
     });
   }
   runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects)
@@ -105,6 +120,7 @@ function buildDocFromHtml(html, vw) {
   return {
     dom: parsed,
     rows,
+    rowX: layout.rowX,
     rowY: layout.rowY,
     contentH: layout.contentH,
     width: vw,
@@ -120,6 +136,7 @@ function applyYoga(rows, vw) {
   root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
 
   const nodes = [];
+  const rowX = [];
   const rowY = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -127,8 +144,14 @@ function applyYoga(rows, vw) {
     const n = Yoga.Node.create();
     n.setHeight(LINE_H);
     n.setMinHeight(LINE_H);
-    n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
-    n.setMargin(Yoga.EDGE_LEFT, indent);
+    if (r.kind === 'title-text') {
+      // Let Yoga own horizontal centering for title content rows.
+      n.setAlignSelf(Yoga.ALIGN_CENTER);
+      n.setWidth(Math.max(1, Math.round(String(r.text || '').length * 8)));
+    } else {
+      n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
+      n.setMargin(Yoga.EDGE_LEFT, indent);
+    }
     root.insertChild(n, i);
     nodes.push(n);
   }
@@ -136,13 +159,14 @@ function applyYoga(rows, vw) {
   root.calculateLayout(vw, NaN, Yoga.DIRECTION_LTR);
 
   for (let i = 0; i < nodes.length; i++) {
+    rowX.push(Math.round(Number(nodes[i].getComputedLeft() || 0)));
     rowY.push(Math.round(Number(nodes[i].getComputedTop() || 0)));
   }
 
   const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)));
   root.freeRecursive();
 
-  return { rowY, contentH };
+  return { rowX, rowY, contentH };
 }
 
 function ensureDoc(vw) {
@@ -167,7 +191,7 @@ function paint() {
   const overlayRuns = [];
   fpsOverlay.appendRuns(overlayRuns, vw);
 
-  renderScene(doc, vw, vh, scrollY, overlayRuns, runtime.drawLayoutRects);
+  renderScene(doc, vw, vh, scrollY, overlayRuns);
 
   return true;
 }

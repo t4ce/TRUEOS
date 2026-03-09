@@ -1,4 +1,21 @@
-export const INDENT = ' ';
-export const LEFT_PAD = 8;
-export const TOP_PAD = 8;
-export const LINE_H = 16;
+export const DEFAULT_THEME = {
+	INDENT: ' ',
+	LEFT_PAD: 8,
+	TOP_PAD: 8,
+	LINE_H: 16,
+	CLEAR_RGB: 0xF4F4F4,
+	FONT_RGB: 0x101010,
+	FONT_ALPHA: 255,
+	FONT_PX: 16,
+};
+
+export const {
+	INDENT,
+	LEFT_PAD,
+	TOP_PAD,
+	LINE_H,
+	CLEAR_RGB,
+	FONT_RGB,
+	FONT_ALPHA,
+	FONT_PX,
+} = DEFAULT_THEME;
