@@ -1,0 +1,7 @@
+/* esm.sh - openai@6.27.0/internal/utils/path */
+import{OpenAIError as P}from"../../core/error.mjs";function u(c){return c.replace(/[^A-Za-z0-9\-._~!$&'()*+,;=:@]+/g,encodeURIComponent)}var g=Object.freeze(Object.create(null)),y=(c=u)=>function(p,...h){if(p.length===1)return p[0];let i=!1,o=[],s=p.reduce((e,n,r)=>{/[?#]/.test(n)&&(i=!0);let t=h[r],a=(i?encodeURIComponent:c)(""+t);return r!==h.length&&(t==null||typeof t=="object"&&t.toString===Object.getPrototypeOf(Object.getPrototypeOf(t.hasOwnProperty??g)??g)?.toString)&&(a=t+"",o.push({start:e.length+n.length,length:a.length,error:`Value of type ${Object.prototype.toString.call(t).slice(8,-1)} is not a valid path parameter`})),e+n+(r===h.length?"":a)},""),f=s.split(/[?#]/,1)[0],d=/(?<=^|\/)(?:\.|%2e){1,2}(?=\/|$)/gi,l;for(;(l=d.exec(f))!==null;)o.push({start:l.index,length:l[0].length,error:`Value "${l[0]}" can't be safely passed as a path parameter`});if(o.sort((e,n)=>e.start-n.start),o.length>0){let e=0,n=o.reduce((r,t)=>{let a=" ".repeat(t.start-e),O="^".repeat(t.length);return e=t.start+t.length,r+a+O},"");throw new P(`Path parameters result in path with invalid segments:
+${o.map(r=>r.error).join(`
+`)}
+${s}
+${n}`)}return s},m=y(u);export{y as createPathTagFunction,u as encodeURIPath,m as path};
+//# sourceMappingURL=path.mjs.map

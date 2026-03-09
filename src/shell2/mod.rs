@@ -8,6 +8,7 @@ use heapless::String;
 mod interface;
 mod shell2_cmd;
 mod shell2_qjs;
+mod shell2_surf;
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 
 const DEFAULT_PROMPT: &str = "§ ";
@@ -143,7 +144,11 @@ pub async fn task(_spawner: Spawner, io: &'static dyn ShellBackend2) {
 
                         let parse = shell2_cmd::try_parse(submitted);
                         if !parse.handled() {
-                            let _ = shell2_qjs::is_likely_valid(submitted);
+                            if let Some(url) = shell2_surf::try_parse(submitted) {
+                                shell2_surf::prepare_call_with_url(url.as_str());
+                            } else {
+                                let _ = shell2_qjs::is_likely_valid(submitted);
+                            }
                         }
                     }
                     line.clear();

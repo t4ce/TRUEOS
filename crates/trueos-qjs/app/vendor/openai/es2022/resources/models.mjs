@@ -1,0 +1,3 @@
+/* esm.sh - openai@6.27.0/resources/models */
+import{APIResource as s}from"../core/resource.mjs";import{Page as o}from"../core/pagination.mjs";import{path as r}from"../internal/utils/path.mjs";var i=class extends s{retrieve(e,t){return this._client.get(r`/models/${e}`,t)}list(e){return this._client.getAPIList("/models",o,e)}delete(e,t){return this._client.delete(r`/models/${e}`,t)}};export{i as Models};
+//# sourceMappingURL=models.mjs.map
