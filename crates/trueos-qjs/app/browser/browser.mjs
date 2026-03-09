@@ -1,27 +1,35 @@
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
-import * as lightningcss from 'trueos:lightningcss';
 import { createFpsOverlay } from './fps.mjs';
-import { INDENT, LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
+import { extractCssRows } from './css.mjs';
+import { renderScene } from './scene.mjs';
+import { LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
 
-const G = (typeof globalThis !== 'undefined') ? globalThis : this;
-const VOID_TAGS = new Set([
-  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
-  'link', 'meta', 'param', 'source', 'track', 'wbr',
-]);
+const runtime = resolveRuntime();
 
 const WHEEL_STEP_PX = 32;
+const INDENT_PX = 12;
 
 let cachedHtml = '';
-let cacheKey = '';
 let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
-let cachedCssObjects = [];
+
 const fpsOverlay = createFpsOverlay();
 
+function resolveRuntime() {
+  const host = (typeof globalThis !== 'undefined') ? globalThis : this;
+  if (!host.window) host.window = host;
+
+  return {
+    host,
+    readCursorEventsSince: host.__trueosReadCursorEventsSince,
+    drawLayoutRects: host.__trueosDrawLayoutRects,
+  };
+}
+
 function computeViewport() {
-  const W = G.window || G;
+  const W = runtime.host.window || runtime.host;
   const vw = Math.max(1, Number(W.innerWidth || 1280));
   const vh = Math.max(1, Number(W.innerHeight || 800));
   return { vw, vh };
@@ -39,296 +47,71 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
-function attrsToString(node) {
-  if (!node || !Array.isArray(node.attrs) || node.attrs.length <= 0) return '';
-  const out = [];
-  for (let i = 0; i < node.attrs.length; i++) {
-    const a = node.attrs[i];
-    const k = String(a && a.name || '').trim();
-    if (!k) continue;
-    const rawV = String(a && a.value != null ? a.value : '');
-    const v = rawV.replace(/"/g, '&quot;');
-    out.push(v.length > 0 ? `${k}="${v}"` : k);
-  }
-  return out.length > 0 ? ` ${out.join(' ')}` : '';
+function pushRow(rows, text, depth) {
+  const t = collapseWhitespace(text);
+  if (!t) return;
+  rows.push({ depth: Math.max(0, Number(depth || 0) | 0), text: t });
 }
 
-function getAttr(node, name) {
-  if (!node || !Array.isArray(node.attrs)) return '';
-  const key = String(name || '').toLowerCase();
-  for (let i = 0; i < node.attrs.length; i++) {
-    const a = node.attrs[i];
-    if (String(a && a.name || '').toLowerCase() !== key) continue;
-    return String(a && a.value != null ? a.value : '');
-  }
-  return '';
-}
-
-function parseInlineStyleToKernelObject(styleText) {
-  if (!styleText) return null;
-  if (!lightningcss || typeof lightningcss.parseInlineStyle !== 'function') {
-    return null;
-  }
-  const parsed = lightningcss.parseInlineStyle(String(styleText));
-  if (!parsed || parsed.ok !== true) return null;
-  return {
-    kind: 'inline',
-    source: String(styleText),
-    css: String(parsed.css || ''),
-    declarations: Array.isArray(parsed.declarations) ? parsed.declarations : [],
-  };
-}
-
-function parseStylesheetToKernelObject(cssText) {
-  if (!cssText) return null;
-  if (!lightningcss || typeof lightningcss.parseStylesheet !== 'function') {
-    return {
-      kind: 'stylesheet',
-      source: String(cssText),
-      css: String(cssText),
-      declarations: [],
-      parsed: false,
-    };
-  }
-  const parsed = lightningcss.parseStylesheet(String(cssText));
-  if (!parsed || parsed.ok !== true) {
-    return {
-      kind: 'stylesheet',
-      source: String(cssText),
-      css: String(cssText),
-      declarations: [],
-      parsed: false,
-    };
-  }
-  return {
-    kind: 'stylesheet',
-    source: String(cssText),
-    css: String(parsed.css || ''),
-    declarations: [],
-    parsed: true,
-  };
-}
-
-function nodeTextContent(node) {
-  if (!node || typeof node !== 'object') return '';
-  if (isTextNode(node)) return String(node.value || '');
-  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-  let out = '';
-  for (let i = 0; i < kids.length; i++) {
-    out += nodeTextContent(kids[i]);
-  }
-  return out;
-}
-
-function collectCssObjects(node, path, out) {
+function collectRows(node, depth, rows) {
   if (!node || typeof node !== 'object') return;
-  if (isElement(node)) {
-    const tag = String(node.tagName || '').toLowerCase();
-    const styleText = getAttr(node, 'style');
-    const parsed = parseInlineStyleToKernelObject(styleText);
-    if (parsed) {
-      out.push({
-        path,
-        tag,
-        style: parsed,
-      });
-    }
-
-    if (tag === 'style') {
-      const cssText = nodeTextContent(node);
-      const sheet = parseStylesheetToKernelObject(cssText);
-      if (sheet) {
-        out.push({
-          path,
-          tag,
-          style: sheet,
-        });
-      }
-    }
-
-    if (tag === 'link') {
-      const rel = String(getAttr(node, 'rel') || '').toLowerCase();
-      if (rel.includes('stylesheet')) {
-        const href = String(getAttr(node, 'href') || '');
-        out.push({
-          path,
-          tag,
-          style: {
-            kind: 'external',
-            source: href,
-            css: '',
-            declarations: [],
-            parsed: false,
-            unresolved: true,
-          },
-        });
-      }
-    }
-  }
-
-  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-  for (let i = 0; i < kids.length; i++) {
-    collectCssObjects(kids[i], `${path}.${i}`, out);
-  }
-}
-
-function formatCssText(cssText, depth) {
-  const raw = String(cssText || '').trim();
-  if (!raw) return [];
-  const lines = [];
-  let cur = '';
-  let d = Math.max(0, Number(depth || 0) | 0);
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    if (ch === '{') {
-      if (cur.trim()) lines.push(`${INDENT.repeat(d)}${cur.trim()} {`);
-      else lines.push(`${INDENT.repeat(d)}{`);
-      cur = '';
-      d += 1;
-      continue;
-    }
-    if (ch === '}') {
-      if (cur.trim()) lines.push(`${INDENT.repeat(d)}${cur.trim()}`);
-      cur = '';
-      d = Math.max(0, d - 1);
-      lines.push(`${INDENT.repeat(d)}}`);
-      continue;
-    }
-    if (ch === ';') {
-      cur += ';';
-      if (cur.trim()) lines.push(`${INDENT.repeat(d)}${cur.trim()}`);
-      cur = '';
-      continue;
-    }
-    cur += ch;
-  }
-  if (cur.trim()) lines.push(`${INDENT.repeat(d)}${cur.trim()}`);
-  return lines;
-}
-
-function appendCssLines(out, cssObjects) {
-  out.push('');
-  out.push('/* CSS */');
-  if (!Array.isArray(cssObjects) || cssObjects.length <= 0) {
-    out.push('(no styles found)');
-    return;
-  }
-
-  for (let i = 0; i < cssObjects.length; i++) {
-    const it = cssObjects[i];
-    const path = String(it && it.path || '');
-    const tag = String(it && it.tag || '');
-    const style = it && it.style || null;
-    const kind = String(style && style.kind || 'unknown');
-    out.push(`[${i}] ${path} <${tag}> ${kind}`);
-
-    if (kind === 'external') {
-      const href = String(style && style.source || '');
-      out.push(`${INDENT}href: ${href || '(missing href)'}`);
-      continue;
-    }
-
-    const css = String(style && style.css || '');
-    const cssLines = formatCssText(css, 1);
-    if (cssLines.length <= 0) {
-      out.push(`${INDENT}(empty css)`);
-      continue;
-    }
-    for (let j = 0; j < cssLines.length; j++) {
-      out.push(cssLines[j]);
-    }
-  }
-}
-
-function formatNode(node, depth, out) {
-  if (!node) return;
 
   if (isTextNode(node)) {
-    const t = collapseWhitespace(node.value);
-    if (t) out.push(`${INDENT.repeat(depth)}${t}`);
+    pushRow(rows, node.value, depth);
     return;
   }
 
-  if (!isElement(node)) return;
+  if (isElement(node)) {
+    const tag = String(node.tagName || '').toLowerCase();
+    pushRow(rows, `<${tag}>`, depth);
+    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    for (let i = 0; i < kids.length; i++) {
+      collectRows(kids[i], depth + 1, rows);
+    }
+    pushRow(rows, `</${tag}>`, depth);
+    return;
+  }
 
-  const tag = String(node.tagName || '').toLowerCase();
-  if (!tag) return;
-
-  const open = `<${tag}${attrsToString(node)}>`;
-  const close = `</${tag}>`;
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
-
-  if (VOID_TAGS.has(tag)) {
-    out.push(`${INDENT.repeat(depth)}${open}`);
-    return;
-  }
-
-  if (kids.length === 1 && isTextNode(kids[0])) {
-    const inlineText = collapseWhitespace(kids[0].value);
-    if (inlineText) {
-      out.push(`${INDENT.repeat(depth)}${open}${inlineText}${close}`);
-      return;
-    }
-  }
-
-  out.push(`${INDENT.repeat(depth)}${open}`);
   for (let i = 0; i < kids.length; i++) {
-    formatNode(kids[i], depth + 1, out);
+    collectRows(kids[i], depth, rows);
   }
-  out.push(`${INDENT.repeat(depth)}${close}`);
 }
 
-function formatHtmlToLines(html) {
-  const doc = parse5.parse(String(html || ''));
-  const out = [];
-  const cssObjects = [];
-  const kids = Array.isArray(doc && doc.childNodes) ? doc.childNodes : [];
-
-  for (let i = 0; i < kids.length; i++) {
-    const k = kids[i];
-    if (!k) continue;
-    if (String(k.nodeName || '').toLowerCase() === '#documentType') {
-      const name = collapseWhitespace(k.name || 'html') || 'html';
-      out.push(`<!DOCTYPE ${name}>`);
-      continue;
-    }
-    collectCssObjects(k, `root.${i}`, cssObjects);
-    formatNode(k, 0, out);
+function buildDocFromHtml(html, vw) {
+  let parsed;
+  try {
+    parsed = parse5.parse(String(html || ''));
+  } catch (_) {
+    parsed = parse5.parse('');
   }
 
-  if (out.length <= 0) out.push('(empty document)');
-  appendCssLines(out, cssObjects);
-  cachedCssObjects = cssObjects;
-  G.__trueosKernelCssObjects = cssObjects;
-  return out;
-}
-
-function currentLines() {
-  const html = String(G.__trueosUiHtml || '');
-  if (html === cachedHtml && cachedDoc && Array.isArray(cachedDoc.lines)) return cachedDoc.lines;
-  cachedHtml = html;
-  const lines = formatHtmlToLines(html);
-  if (cachedDoc) {
-    cachedDoc.lines = lines;
-    cachedDoc.baseRuns = null;
+  const rows = [];
+  collectRows(parsed, 0, rows);
+  const cssSection = extractCssRows(parsed);
+  const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
+  for (let i = 0; i < cssRows.length; i++) {
+    const r = cssRows[i];
+    rows.push({
+      depth: Math.max(0, Number(r && r.depth || 0) | 0),
+      text: String(r && r.text || ''),
+    });
   }
-  return lines;
+  runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects)
+    ? cssSection.cssObjects
+    : [];
+
+  const layout = applyYoga(rows, vw);
+  return {
+    dom: parsed,
+    rows,
+    rowY: layout.rowY,
+    contentH: layout.contentH,
+    width: vw,
+  };
 }
 
-function setHtml(nextHtml) {
-  G.__trueosUiHtml = String(nextHtml || '');
-  cachedHtml = '';
-  cacheKey = '';
-  if (cachedDoc) {
-    cachedDoc.lines = null;
-    cachedDoc.baseRuns = null;
-  }
-  return relayoutAndPaint();
-}
-
-function buildBaseRuns(lines, vw, lineH) {
-  const baseRuns = [];
-
+function applyYoga(rows, vw) {
   const root = Yoga.Node.create();
   root.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
   root.setAlignItems(Yoga.ALIGN_FLEX_START);
@@ -337,47 +120,42 @@ function buildBaseRuns(lines, vw, lineH) {
   root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
 
   const nodes = [];
-  for (let i = 0; i < lines.length; i++) {
+  const rowY = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const indent = r.depth * INDENT_PX;
     const n = Yoga.Node.create();
-    n.setHeight(lineH);
-    n.setMinHeight(lineH);
-    n.setWidth(Math.max(1, vw - (LEFT_PAD * 2)));
+    n.setHeight(LINE_H);
+    n.setMinHeight(LINE_H);
+    n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
+    n.setMargin(Yoga.EDGE_LEFT, indent);
     root.insertChild(n, i);
     nodes.push(n);
   }
 
   root.calculateLayout(vw, NaN, Yoga.DIRECTION_LTR);
 
-  for (let i = 0; i < lines.length; i++) {
-    const y = Math.round(Number(nodes[i].getComputedTop() || 0)) + 2;
-    const x = Math.round(Number(nodes[i].getComputedLeft() || 0));
-    const t = String(lines[i] || '');
-    if (!t) continue;
-    baseRuns.push(x, y, t);
+  for (let i = 0; i < nodes.length; i++) {
+    rowY.push(Math.round(Number(nodes[i].getComputedTop() || 0)));
   }
 
-  const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)) + 2);
-
+  const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)));
   root.freeRecursive();
-  return { baseRuns, contentH };
+
+  return { rowY, contentH };
 }
 
 function ensureDoc(vw) {
-  const lines = currentLines();
-  const lineH = Math.max(14, Number(LINE_H || 16));
-  const nextKey = `${cachedHtml.length}:${vw}:${lineH}`;
-  if (cachedDoc && cacheKey === nextKey && Array.isArray(cachedDoc.baseRuns)) return cachedDoc;
-
-  const laid = buildBaseRuns(lines, vw, lineH);
-  cachedDoc = {
-    lines,
-    lineH,
-    viewportW: vw,
-    baseRuns: laid.baseRuns,
-    contentH: Math.max(1, Number(laid.contentH || 1)),
-  };
-  cacheKey = nextKey;
+  if (!cachedDoc || cachedDoc.width !== vw) {
+    cachedDoc = buildDocFromHtml(cachedHtml, vw);
+  }
   return cachedDoc;
+}
+
+function setHtml(nextHtml) {
+  cachedHtml = String(nextHtml || '');
+  cachedDoc = null;
+  paint();
 }
 
 function paint() {
@@ -386,28 +164,12 @@ function paint() {
   const maxScroll = Math.max(0, Math.round(Number(doc.contentH || vh) - vh));
   if (scrollY > maxScroll) scrollY = maxScroll;
 
-  const textRuns = [];
-  for (let i = 0; i + 2 < doc.baseRuns.length; i += 3) {
-    const x = Number(doc.baseRuns[i + 0] || 0);
-    const y0 = Number(doc.baseRuns[i + 1] || 0);
-    const t = String(doc.baseRuns[i + 2] || '');
-    if (!t) continue;
-    const y = Math.round(y0 - scrollY);
-    if (y < -doc.lineH || y > vh) continue;
-    textRuns.push(x, y, t);
-  }
+  const overlayRuns = [];
+  fpsOverlay.appendRuns(overlayRuns, vw);
 
-  fpsOverlay.appendRuns(textRuns, vw);
+  renderScene(doc, vw, vh, scrollY, overlayRuns, runtime.drawLayoutRects);
 
-  if (typeof G.__trueosDrawLayoutRects === 'function') {
-    G.__trueosDrawLayoutRects([], vw, vh, textRuns);
-  }
   return true;
-}
-
-function relayoutAndPaint() {
-  cacheKey = '';
-  return paint();
 }
 
 function onWheelDelta(deltaY) {
@@ -423,7 +185,7 @@ function onWheelDelta(deltaY) {
 }
 
 function pumpCursorEvents() {
-  const fn = G.__trueosReadCursorEventsSince;
+  const fn = runtime.readCursorEventsSince;
   if (typeof fn !== 'function') return 0;
 
   let packed = null;
@@ -452,23 +214,24 @@ function pumpCursorEvents() {
 }
 
 function startWheelPump() {
-  if (typeof G.setInterval === 'function') {
+  const host = runtime.host;
+  if (typeof host.setInterval === 'function') {
     try {
-      G.setInterval(pumpCursorEvents, 16);
+      host.setInterval(pumpCursorEvents, 16);
       return;
     } catch (_) {}
   }
-  if (typeof G.requestAnimationFrame === 'function') {
+  if (typeof host.requestAnimationFrame === 'function') {
     const step = () => {
       pumpCursorEvents();
-      try { G.requestAnimationFrame(step); } catch (_) {}
+      try { host.requestAnimationFrame(step); } catch (_) {}
     };
-    try { G.requestAnimationFrame(step); } catch (_) {}
+    try { host.requestAnimationFrame(step); } catch (_) {}
   }
 }
 
-G.__trueosBrowser = {
-  relayoutAndPaint,
+runtime.host.__trueosBrowser = {
+  paint,
   setHtml,
   setScroll(y) {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
@@ -476,9 +239,10 @@ G.__trueosBrowser = {
   },
 };
 
-if (typeof (globalThis.window || globalThis).addEventListener === 'function') {
-  (globalThis.window || globalThis).addEventListener('resize', relayoutAndPaint);
+if (typeof (runtime.host.window || runtime.host).addEventListener === 'function') {
+  (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
 
-relayoutAndPaint();
+setHtml(runtime.host.__trueosUiHtml || '');
+paint();
 startWheelPump();
