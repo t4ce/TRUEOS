@@ -10,7 +10,9 @@ const runtime = resolveRuntime();
 
 const WHEEL_STEP_PX = 32;
 const INDENT_PX = 12;
-const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link']);
+const AUTO_PAINT_MS = 200;
+const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
+const SHOW_CLOSING_TAG_ROWS = false;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -69,7 +71,10 @@ function collectRows(node, depth, rows, parentTag = '') {
   if (!node || typeof node !== 'object') return;
 
   if (isTextNode(node)) {
-    const kind = String(parentTag || '').toLowerCase() === 'title' ? 'title-text' : 'text';
+    const parent = String(parentTag || '').toLowerCase();
+    const kind = parent === 'title'
+      ? 'title-text'
+      : (parent === 'li' ? 'li-text' : 'text');
     pushRow(rows, node.value, depth, kind);
     return;
   }
@@ -77,12 +82,12 @@ function collectRows(node, depth, rows, parentTag = '') {
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
     const renderTagLines = !shouldOmitElement(tag) && shouldRenderTagLines(tag);
-    if (renderTagLines) pushRow(rows, `<${tag}>`, depth, 'tag-open');
+    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `<${tag}>`, depth, 'tag-open');
     const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
     for (let i = 0; i < kids.length; i++) {
       collectRows(kids[i], renderTagLines ? depth + 1 : depth, rows, tag);
     }
-    if (renderTagLines) pushRow(rows, `</${tag}>`, depth, 'tag-close');
+    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `</${tag}>`, depth, 'tag-close');
     return;
   }
 
@@ -258,6 +263,16 @@ function startWheelPump() {
   }
 }
 
+function startAutoPaint() {
+  const host = runtime.host;
+  if (typeof host.setInterval !== 'function') return;
+  try {
+    host.setInterval(() => {
+      paint();
+    }, AUTO_PAINT_MS);
+  } catch (_) {}
+}
+
 runtime.host.__trueosBrowser = {
   paint,
   setHtml,
@@ -274,3 +289,4 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
 setHtml(runtime.host.__trueosUiHtml || '');
 paint();
 startWheelPump();
+startAutoPaint();

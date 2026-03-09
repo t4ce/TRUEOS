@@ -3,9 +3,13 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 use core::sync::atomic::{AtomicU32, Ordering};
+use parry2d::math::Isometry;
+use parry2d::query;
+use parry2d::shape::Ball;
 use spin::Mutex;
 
 use crate as qjs;
@@ -41,6 +45,22 @@ unsafe extern "C" {
         wrap_v: u32,
         min_filter: u32,
         mag_filter: u32,
+    ) -> i32;
+    fn trueos_cabi_gfx_draw_lyon_icon_no_present(
+        icon_id: u32,
+        color_id: u32,
+        small_set: u32,
+        x: f32,
+        y: f32,
+        view_w: u32,
+        view_h: u32,
+    ) -> i32;
+    fn trueos_cabi_gfx_bake_lyon_icon_rgba(
+        icon_id: u32,
+        color_id: u32,
+        small_set: u32,
+        out_ptr: *mut u8,
+        out_len: usize,
     ) -> i32;
     fn trueos_cabi_gfx_present_owner_get() -> u32;
 }
@@ -107,8 +127,28 @@ struct CmdStreamTextBatchRun {
     verts: Vec<u8>,
 }
 
+struct CmdStreamLyonIconTexRecord {
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+    tex_id: u32,
+    side_px: u32,
+}
+
+struct CmdStreamLyonUnitQuadRecord {
+    view_w: u32,
+    view_h: u32,
+    side_px: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+    verts: Arc<[u8]>,
+}
+
 static CMD_STREAM_TEXT_BATCH_RUNS: Mutex<Vec<CmdStreamTextBatchRun>> = Mutex::new(Vec::new());
 static CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID: AtomicU32 = AtomicU32::new(0);
+static CMD_STREAM_LYON_ICON_TEX_RECS: Mutex<Vec<CmdStreamLyonIconTexRecord>> = Mutex::new(Vec::new());
+static CMD_STREAM_LYON_UNIT_QUAD_RECS: Mutex<Vec<CmdStreamLyonUnitQuadRecord>> = Mutex::new(Vec::new());
 
 const CMD_STREAM_DEFAULT_BLEND_MODE: u32 = 0;
 const CMD_STREAM_DEFAULT_PMA: u32 = 0;
@@ -192,6 +232,50 @@ fn cmd_stream_release_tex_id(id: u32) {
     if let Some(pos) = atlas.iter().position(|r| r.tex_id == id) {
         atlas.swap_remove(pos);
     }
+}
+
+#[inline]
+unsafe fn cmd_stream_read_f32_slice_from_value(
+    ctx: *mut qjs::JSContext,
+    value: qjs::JSValueConst,
+) -> Option<(*mut f32, usize, qjs::JSValue)> {
+    let mut byte_off: usize = 0;
+    let mut byte_len: usize = 0;
+    let mut bpe: usize = 0;
+    let ab = qjs::JS_GetTypedArrayBuffer(
+        ctx,
+        value,
+        &mut byte_off as *mut usize,
+        &mut byte_len as *mut usize,
+        &mut bpe as *mut usize,
+    );
+
+    if ab.is_exception() || ab.tag == qjs::JS_TAG_UNDEFINED || ab.tag == qjs::JS_TAG_NULL {
+        if !ab.is_exception() {
+            qjs::js_free_value(ctx, ab);
+        }
+        return None;
+    }
+
+    let mut buf_len: usize = 0;
+    let ptr = qjs::JS_GetArrayBuffer(ctx, &mut buf_len as *mut usize, ab);
+    if ptr.is_null() {
+        qjs::js_free_value(ctx, ab);
+        return None;
+    }
+
+    let usable = core::cmp::min(byte_len, buf_len.saturating_sub(byte_off));
+    if usable < 4 || (byte_off & 3) != 0 {
+        qjs::js_free_value(ctx, ab);
+        return None;
+    }
+    let f32_len = usable / 4;
+    if f32_len == 0 {
+        qjs::js_free_value(ctx, ab);
+        return None;
+    }
+
+    Some((ptr.add(byte_off) as *mut f32, f32_len, ab))
 }
 
 #[inline]
@@ -680,8 +764,6 @@ fn cmd_stream_ensure_atlas_tex(kind: u32) -> Option<u32> {
     Some(CMD_STREAM_WIDGET_TEXT_ATLAS_TEX_ID.load(Ordering::Acquire))
 }
 
-// Direct atlas-path text draw for in-frame callers.
-// This reuses the same implementation path as qjs_cmd_stream_draw_atlas_text.
 pub fn draw_atlas_text_in_frame(
     text: &[u8],
     x: f32,
@@ -721,8 +803,196 @@ pub fn draw_atlas_text_in_frame(
     ok
 }
 
-pub fn draw_text_widget_in_frame(text: &[u8], x: f32, y: f32, view_w: u32, view_h: u32) -> bool {
-    draw_atlas_text_in_frame(text, x, y, view_w, view_h, 1, 16.0, 0x101010, 255)
+pub fn draw_lyon_in_frame(
+    icon_id: u32,
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+    color_id: u32,
+) -> bool {
+    CMD_STREAM_VIEW_W.store(view_w.max(1), Ordering::Relaxed);
+    CMD_STREAM_VIEW_H.store(view_h.max(1), Ordering::Relaxed);
+
+    // Preserve in-frame ordering with queued atlas text, but do not mutate global
+    // frame state here (blend/sampler), since callers may have configured it.
+    let Some((tex_id, side_px)) = cmd_stream_ensure_lyon_icon_tex(icon_id, 0, 1) else {
+        return false;
+    };
+    let (r, g, b) = cmd_stream_lyon_palette_rgb(color_id);
+
+    let view_w_u = view_w.max(1);
+    let view_h_u = view_h.max(1);
+    let view_w_f = view_w_u as f32;
+    let view_h_f = view_h_u as f32;
+    let origin_x_ndc = (2.0 * (x / view_w_f)) - 1.0;
+    let origin_y_ndc = 1.0 - (2.0 * (y / view_h_f));
+
+    let verts = cmd_stream_get_lyon_unit_quad_verts(view_w_u, view_h_u, side_px, r, g, b);
+    cmd_stream_enqueue_text_batch(tex_id, verts.as_ref(), origin_x_ndc, origin_y_ndc);
+    true
+}
+
+#[inline]
+fn cmd_stream_lyon_palette_rgb(color_id: u32) -> (u8, u8, u8) {
+    match (color_id % 5) as usize {
+        0 => (0, 0, 0),
+        1 => (217, 46, 46),
+        2 => (31, 158, 56),
+        3 => (31, 82, 217),
+        _ => (242, 140, 31),
+    }
+}
+
+#[inline]
+fn cmd_stream_ensure_lyon_icon_tex(icon_id: u32, color_id: u32, small_set: u32) -> Option<(u32, u32)> {
+    {
+        let recs = CMD_STREAM_LYON_ICON_TEX_RECS.lock();
+        if let Some(rec) = recs
+            .iter()
+            .find(|r| r.icon_id == icon_id && r.color_id == color_id && r.small_set == small_set)
+        {
+            return Some((rec.tex_id, rec.side_px));
+        }
+    }
+
+    let need = unsafe {
+        trueos_cabi_gfx_bake_lyon_icon_rgba(icon_id, color_id, small_set, core::ptr::null_mut(), 0)
+    };
+    if need <= 0 {
+        return None;
+    }
+    let need = need as usize;
+    if need % 4 != 0 {
+        return None;
+    }
+    let px_count = need / 4;
+    let side = if small_set != 0 { 16usize } else { 32usize };
+    if side.saturating_mul(side) != px_count {
+        return None;
+    }
+
+    let mut rgba = vec![0u8; need];
+    let wrote = unsafe {
+        trueos_cabi_gfx_bake_lyon_icon_rgba(icon_id, color_id, small_set, rgba.as_mut_ptr(), rgba.len())
+    };
+    if wrote != need as i32 {
+        return None;
+    }
+
+    let tex_id = cmd_stream_alloc_tex_id();
+    let rc = unsafe {
+        trueos_cabi_gfx_upload_texture_rgba(
+            tex_id,
+            side as u32,
+            side as u32,
+            rgba.as_ptr(),
+            rgba.len(),
+        )
+    };
+    if rc != 0 {
+        cmd_stream_release_tex_id(tex_id);
+        return None;
+    }
+
+    CMD_STREAM_LYON_ICON_TEX_RECS.lock().push(CmdStreamLyonIconTexRecord {
+        icon_id,
+        color_id,
+        small_set,
+        tex_id,
+        side_px: side as u32,
+    });
+    Some((tex_id, side as u32))
+}
+
+#[inline]
+fn cmd_stream_get_lyon_unit_quad_verts(
+    view_w: u32,
+    view_h: u32,
+    side_px: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+) -> Arc<[u8]> {
+    {
+        let recs = CMD_STREAM_LYON_UNIT_QUAD_RECS.lock();
+        if let Some(rec) = recs.iter().find(|rec| {
+            rec.view_w == view_w
+                && rec.view_h == view_h
+                && rec.side_px == side_px
+                && rec.r == r
+                && rec.g == g
+                && rec.b == b
+        }) {
+            return rec.verts.clone();
+        }
+    }
+
+    let vw = view_w.max(1) as f32;
+    let vh = view_h.max(1) as f32;
+    let side = side_px.max(1) as f32;
+    let dx = 2.0 * (side / vw);
+    let dy = 2.0 * (side / vh);
+
+    let mut verts = Vec::with_capacity(6 * 20);
+    // Local quad in NDC delta-space with top-left origin at (0, 0).
+    cmd_stream_push_tex_vtx(&mut verts, 0.0, -dy, 0.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, dx, -dy, 1.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, dx, 0.0, 1.0, 0.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, 0.0, -dy, 0.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, dx, 0.0, 1.0, 0.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, 0.0, 0.0, 0.0, 0.0, r, g, b, 255);
+
+    let out: Arc<[u8]> = Arc::from(verts.into_boxed_slice());
+    let mut recs = CMD_STREAM_LYON_UNIT_QUAD_RECS.lock();
+    recs.push(CmdStreamLyonUnitQuadRecord {
+        view_w,
+        view_h,
+        side_px,
+        r,
+        g,
+        b,
+        verts: out.clone(),
+    });
+    if recs.len() > 64 {
+        let excess = recs.len() - 64;
+        recs.drain(0..excess);
+    }
+    out
+}
+
+#[inline]
+fn cmd_stream_draw_tex_quad_no_present(
+    tex_id: u32,
+    x: f32,
+    y: f32,
+    w_px: f32,
+    h_px: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+) -> bool {
+    if tex_id == 0 || w_px <= 0.0 || h_px <= 0.0 {
+        return false;
+    }
+    let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+    let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+
+    let nx0 = (2.0 * (x / view_w)) - 1.0;
+    let ny0 = 1.0 - (2.0 * (y / view_h));
+    let nx1 = (2.0 * ((x + w_px) / view_w)) - 1.0;
+    let ny1 = 1.0 - (2.0 * ((y + h_px) / view_h));
+
+    let mut verts = Vec::with_capacity(6 * 20);
+    cmd_stream_push_tex_vtx(&mut verts, nx0, ny1, 0.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, nx1, ny1, 1.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, nx1, ny0, 1.0, 0.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, nx0, ny1, 0.0, 1.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, nx1, ny0, 1.0, 0.0, r, g, b, 255);
+    cmd_stream_push_tex_vtx(&mut verts, nx0, ny0, 0.0, 0.0, r, g, b, 255);
+
+    let rc = unsafe { trueos_cabi_gfx_draw_tex_triangles_no_present(tex_id, verts.as_ptr(), verts.len()) };
+    rc == 0
 }
 
 #[inline]
@@ -1555,6 +1825,171 @@ pub(crate) unsafe fn try_create_native_module(
             qjs::JSValue::undefined()
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_draw_lyon_icon_in_frame(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 3 {
+                return qjs::JSValue::undefined();
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+
+            let mut icon_id_f: f64 = 0.0;
+            let mut x_f: f64 = 0.0;
+            let mut y_f: f64 = 0.0;
+            if qjs::JS_ToFloat64(ctx, &mut icon_id_f as *mut f64, args[0]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[1]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[2]) != 0
+            {
+                return qjs::JSValue::undefined();
+            }
+
+            let mut color_id_f: f64 = 0.0;
+            if argc >= 4 {
+                let _ = qjs::JS_ToFloat64(ctx, &mut color_id_f as *mut f64, args[3]);
+            }
+
+            let icon_id = (icon_id_f as i64).max(0) as u32;
+            let color_id = (color_id_f as i64).max(0) as u32;
+            let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1);
+            let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1);
+
+            let _ = draw_lyon_in_frame(
+                icon_id,
+                x_f as f32,
+                y_f as f32,
+                view_w,
+                view_h,
+                color_id,
+            );
+            qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_step_icon_collisions(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            if argv.is_null() || argc < 5 {
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            }
+            let args = core::slice::from_raw_parts(argv, argc as usize);
+
+            let Some((pos_ptr, pos_len, pos_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[0]) else {
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            };
+            let Some((vel_ptr, vel_len, vel_ab)) = cmd_stream_read_f32_slice_from_value(ctx, args[1]) else {
+                qjs::js_free_value(ctx, pos_ab);
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            };
+
+            let mut dt_ms_f: f64 = 16.0;
+            let mut icon_size_f: f64 = 16.0;
+            let mut restitution_f: f64 = 0.82;
+            if qjs::JS_ToFloat64(ctx, &mut dt_ms_f as *mut f64, args[2]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut icon_size_f as *mut f64, args[3]) != 0
+                || qjs::JS_ToFloat64(ctx, &mut restitution_f as *mut f64, args[4]) != 0
+            {
+                qjs::js_free_value(ctx, vel_ab);
+                qjs::js_free_value(ctx, pos_ab);
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            }
+
+            let icon_size = (icon_size_f as f32).max(1.0);
+            let radius = (icon_size * 0.5).max(0.5);
+            let dt = ((dt_ms_f as f32) / 1000.0).clamp(0.0, 0.05);
+            let restitution = (restitution_f as f32).clamp(0.0, 1.0);
+            let n = core::cmp::min(pos_len, vel_len) / 2;
+            if n < 2 {
+                qjs::js_free_value(ctx, vel_ab);
+                qjs::js_free_value(ctx, pos_ab);
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            }
+
+            let pos = core::slice::from_raw_parts_mut(pos_ptr, n * 2);
+            let vel = core::slice::from_raw_parts_mut(vel_ptr, n * 2);
+            let view_w = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+            let view_h = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+
+            for i in 0..n {
+                let b = i * 2;
+                pos[b] += vel[b] * dt;
+                pos[b + 1] += vel[b + 1] * dt;
+
+                if pos[b] < 0.0 {
+                    pos[b] = 0.0;
+                    vel[b] = vel[b].abs() * restitution;
+                } else if pos[b] + icon_size > view_w {
+                    pos[b] = (view_w - icon_size).max(0.0);
+                    vel[b] = -vel[b].abs() * restitution;
+                }
+
+                if pos[b + 1] < 0.0 {
+                    pos[b + 1] = 0.0;
+                    vel[b + 1] = vel[b + 1].abs() * restitution;
+                } else if pos[b + 1] + icon_size > view_h {
+                    pos[b + 1] = (view_h - icon_size).max(0.0);
+                    vel[b + 1] = -vel[b + 1].abs() * restitution;
+                }
+            }
+
+            let shape = Ball::new(radius);
+            let mut contacts = 0u32;
+            for i in 0..n {
+                let ib = i * 2;
+                let ci_x = pos[ib] + radius;
+                let ci_y = pos[ib + 1] + radius;
+                let pi = Isometry::translation(ci_x, ci_y);
+
+                for j in (i + 1)..n {
+                    let jb = j * 2;
+                    let cj_x = pos[jb] + radius;
+                    let cj_y = pos[jb + 1] + radius;
+                    let pj = Isometry::translation(cj_x, cj_y);
+
+                    let Ok(Some(c)) = query::contact(&pi, &shape, &pj, &shape, 0.0) else {
+                        continue;
+                    };
+
+                    if c.dist >= 0.0 {
+                        continue;
+                    }
+                    contacts = contacts.saturating_add(1);
+
+                    let nrm = c.normal1.into_inner();
+                    let nx = nrm.x;
+                    let ny = nrm.y;
+
+                    let rvx = vel[jb] - vel[ib];
+                    let rvy = vel[jb + 1] - vel[ib + 1];
+                    let rel = (rvx * nx) + (rvy * ny);
+                    if rel < 0.0 {
+                        let impulse = -((1.0 + restitution) * rel) * 0.5;
+                        vel[ib] -= impulse * nx;
+                        vel[ib + 1] -= impulse * ny;
+                        vel[jb] += impulse * nx;
+                        vel[jb + 1] += impulse * ny;
+                    }
+
+                    let penetration = (-c.dist).max(0.0);
+                    if penetration > 0.0 {
+                        let corr = (penetration * 0.5) + 0.01;
+                        pos[ib] -= corr * nx;
+                        pos[ib + 1] -= corr * ny;
+                        pos[jb] += corr * nx;
+                        pos[jb + 1] += corr * ny;
+                    }
+                }
+            }
+
+            qjs::js_free_value(ctx, vel_ab);
+            qjs::js_free_value(ctx, pos_ab);
+            qjs::JS_NewFloat64(ctx, contacts as f64)
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_module_init(
             ctx: *mut qjs::JSContext,
             m: *mut qjs::JSModuleDef,
@@ -1608,6 +2043,16 @@ pub(crate) unsafe fn try_create_native_module(
                 2
             );
             export_fn!("drawAtlasText", qjs_cmd_stream_draw_atlas_text, 8);
+            export_fn!(
+                "drawLyonIconInFrame",
+                qjs_cmd_stream_draw_lyon_icon_in_frame,
+                4
+            );
+            export_fn!(
+                "stepIconCollisions",
+                qjs_cmd_stream_step_icon_collisions,
+                5
+            );
             0
         }
 
@@ -1640,6 +2085,8 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("drawTexturedTrianglesU8");
         add_export!("cursorDrawTexturedTrianglesU8");
         add_export!("drawAtlasText");
+        add_export!("drawLyonIconInFrame");
+        add_export!("stepIconCollisions");
         return m;
     }
 

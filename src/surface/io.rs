@@ -806,7 +806,7 @@ pub mod cabi {
     // Shared draw chunk budget used by cmd-stream draw capture paths.
     const MAX_CMDSTREAM_DRAW_BYTES: usize = 64 * 1024;
     // Conservative pre-submit guard to avoid submit_3d request overflow.
-    const MAX_EST_SUBMIT_BYTES: usize = 240 * 1024;
+    const MAX_EST_SUBMIT_BYTES: usize = 512 * 1024;
     static SUBMIT_BUDGET_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
 
