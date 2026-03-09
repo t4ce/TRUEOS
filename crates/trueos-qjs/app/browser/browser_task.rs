@@ -3,6 +3,7 @@ use alloc::string::String;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 use crate as qjs;
 
 mod helpers;
@@ -12,6 +13,35 @@ unsafe extern "C" {
 }
 
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
+static PENDING_HTML: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn queue_set_html(next_html: String) -> bool {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    *PENDING_HTML.lock() = Some(next_html);
+    true
+}
+
+unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
+    let Some(next_html) = PENDING_HTML.lock().take() else {
+        return;
+    };
+
+    let html_lit = helpers::js_single_quoted_literal(next_html.as_str());
+    let mut src = String::new();
+    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;const __h=");
+    src.push_str(&html_lit);
+    src.push_str(";if(__g.__trueosBrowser&&typeof __g.__trueosBrowser.setHtml==='function'){__g.__trueosBrowser.setHtml(__h);}else{__g.__trueosUiHtml=__h;}})();");
+    let filename = b"<browser-set-html>\0";
+    let _ = helpers::eval_or_log(
+        ctx,
+        src.as_bytes(),
+        filename.as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+        "browser setHtml",
+    );
+}
 
 unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
     if rt.is_null() {
@@ -144,6 +174,7 @@ pub async fn boot_browser() {
                 }
 
         loop {
+            apply_pending_html(ctx);
             if !pump_runtime_once(rt, ctx) {
                 break;
             }

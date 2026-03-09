@@ -1,45 +1,12 @@
 #![cfg(feature = "trueos")]
 use core::ffi::CStr;
 use core::ffi::c_char;
-use alloc::vec::Vec;
 
 use crate as qjs;
 
 unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
-    fn trueos_cabi_gfx_draw_rgb_triangles_no_present(vtx_ptr: *const u8, vtx_len: usize) -> i32;
-}
-
-#[inline]
-fn to_ndc_x(x: f32, viewport_w: f32) -> f32 {
-    ((x / viewport_w) * 2.0) - 1.0
-}
-
-#[inline]
-fn to_ndc_y(y: f32, viewport_h: f32) -> f32 {
-    1.0 - ((y / viewport_h) * 2.0)
-}
-
-#[inline]
-fn push_rgb_vtx(out: &mut Vec<u8>, x_px: f32, y_px: f32, rgba: (u8, u8, u8, u8), vw: f32, vh: f32) {
-    let x = to_ndc_x(x_px, vw);
-    let y = to_ndc_y(y_px, vh);
-    out.extend_from_slice(&x.to_le_bytes());
-    out.extend_from_slice(&y.to_le_bytes());
-    out.push(rgba.0);
-    out.push(rgba.1);
-    out.push(rgba.2);
-    out.push(rgba.3);
-}
-
-#[inline]
-unsafe fn js_num_at(ctx: *mut qjs::JSContext, arr: qjs::JSValueConst, idx: u32) -> Option<f64> {
-    let v = qjs::JS_GetPropertyUint32(ctx, arr, idx);
-    let mut out = 0.0f64;
-    let ok = qjs::JS_ToFloat64(ctx, &mut out as *mut f64, v) == 0;
-    qjs::js_free_value(ctx, v);
-    if ok { Some(out) } else { None }
 }
 
 unsafe extern "C" fn draw_html(

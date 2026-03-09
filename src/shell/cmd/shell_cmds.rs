@@ -1,3 +1,7 @@
+use alloc::string::String;
+use embassy_executor::task;
+use heapless::String as HString;
+
 use crate::shell::CommandAction;
 use crate::shell::cmd::registry::{ParsedArgs, ShellCommandCtx};
 use core::fmt::Write;
@@ -254,5 +258,64 @@ pub(crate) fn cmd_qjs(
     // (Other execution paths still exist for internal callers like the AI bridge.)
     CommandAction::Qjs {
         src: heapless::String::new(),
+    }
+}
+
+pub(crate) fn cmd_surf(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let Some(raw) = args.and_then(|a| a.get_str(0)) else {
+        ctx.io.write_str("surf: usage surf <url>\r\n");
+        return CommandAction::None;
+    };
+
+    let mut trimmed = raw.trim();
+    if trimmed.len() >= 2 {
+        let b = trimmed.as_bytes();
+        let first = b[0];
+        let last = b[b.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            trimmed = &trimmed[1..trimmed.len() - 1];
+            trimmed = trimmed.trim();
+        }
+    }
+    if trimmed.is_empty() {
+        ctx.io.write_str("surf: usage surf <url>\r\n");
+        return CommandAction::None;
+    }
+
+    let mut url: HString<256> = HString::new();
+    for ch in trimmed.chars() {
+        if url.push(ch).is_err() {
+            ctx.io.write_str("surf: url too long (max 256 chars)\r\n");
+            return CommandAction::None;
+        }
+    }
+
+    if ctx.spawner.spawn(surf_job(url)).is_err() {
+        ctx.io.write_str("surf: spawn failed\r\n");
+        return CommandAction::None;
+    }
+
+    ctx.io.write_str("surf: started\r\n");
+    CommandAction::None
+}
+
+#[task]
+async fn surf_job(url: HString<256>) {
+    match crate::tst_html::fetch_html_best_effort(url).await {
+        Ok(html) => {
+            if !trueos_qjs::browser_task::queue_set_html(String::from(html.as_str())) {
+                crate::log!("surf: browser not running\n");
+            }
+        }
+        Err(e) => {
+            if e == "timed out" {
+                crate::log!("surf: download timed out\n");
+            } else {
+                crate::log!("surf: fetch failed: {}\n", e);
+            }
+        }
     }
 }
