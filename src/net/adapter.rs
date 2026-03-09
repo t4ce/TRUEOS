@@ -152,6 +152,7 @@ const NET_POLL_SLEEP_US: u64 = 100;
 const NET_SERVICE_SLEEP_US: u64 = 100;
 const NET_LOG_RX_TAP: bool = false;
 const NET_LOG_TX_TAP: bool = false;
+const NET_LOG_TCP_FLOW: bool = true;
 const NET_LOG_ARP_RX: bool = false;
 const NET_LOG_DHCP_VERBOSE: bool = false;
 const NET_LOG_IPV6_RA: bool = false;
@@ -645,9 +646,18 @@ fn pop_command() -> Option<(&'static str, NetCommand)> {
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
+    let is_tcp_signal = matches!(
+        event,
+        NetEvent::TcpData { .. } | NetEvent::TcpEstablished { .. } | NetEvent::Closed { .. }
+    );
+
     let guard = APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
-        entry.events.push(event).is_ok()
+        let ok = entry.events.push(event).is_ok();
+        if !ok && is_tcp_signal {
+            crate::log!("net: event drop owner={} (tcp-signal)\n", target);
+        }
+        ok
     } else {
         false
     }
@@ -2269,6 +2279,13 @@ impl NetService {
         }
 
         if total_sent != 0 {
+            crate::log!(
+                "net: sendtcp flush owner={} handle={} sent={} queued_left={}\n",
+                owner,
+                handle.0,
+                total_sent,
+                self.records[idx].tcp_tx.len()
+            );
             let _ = push_event(
                 owner,
                 NetEvent::TcpSent {
@@ -3212,6 +3229,16 @@ impl NetService {
             },
             NetCommand::OpenTcpConnect { remote } => match self.open_tcp_connect(owner, remote) {
                 Ok(handle) => {
+                    crate::log!(
+                        "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
+                        owner,
+                        remote.addr[0],
+                        remote.addr[1],
+                        remote.addr[2],
+                        remote.addr[3],
+                        remote.port,
+                        handle.0
+                    );
                     let _ = push_event(
                         owner,
                         NetEvent::Opened {
@@ -3302,6 +3329,14 @@ impl NetService {
                         let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                         return;
                     }
+                    if data.starts_with(b"GET ") {
+                        crate::log!(
+                            "net: sendtcp cmd owner={} handle={} bytes={}\n",
+                            owner,
+                            handle.0,
+                            data.len()
+                        );
+                    }
                     // Don't drop on backpressure; queue and flush when the socket becomes writable.
                     // This is especially important for TLS handshakes (ClientHello) right after connect.
                     self.records[idx].tcp_tx.extend(data);
@@ -3383,6 +3418,9 @@ impl NetService {
 
         let mut should_remove = false;
         let mut state: tcp::State;
+        let mut rx_bytes_this_poll = 0usize;
+        let mut rx_events_this_poll = 0usize;
+        let mut rx_event_drops_this_poll = 0usize;
 
         {
             let socket = self.sockets.get_mut::<tcp::Socket>(socket_handle);
@@ -3409,7 +3447,22 @@ impl NetService {
                         break;
                     }
                     let data = buf[..len].to_vec();
-                    let _ = push_event(owner, NetEvent::TcpData { handle, data });
+                    let queued = push_event(owner, NetEvent::TcpData { handle, data });
+                    rx_bytes_this_poll = rx_bytes_this_poll.saturating_add(len);
+                    if queued {
+                        rx_events_this_poll = rx_events_this_poll.saturating_add(1);
+                    } else {
+                        rx_event_drops_this_poll = rx_event_drops_this_poll.saturating_add(1);
+                    }
+                    if NET_LOG_TCP_FLOW {
+                        crate::log!(
+                            "net: tcp rx owner={} handle={} len={} queued={}\n",
+                            owner,
+                            handle.0,
+                            len,
+                            queued
+                        );
+                    }
                 }
             }
 
@@ -3421,6 +3474,16 @@ impl NetService {
             // Convert CLOSE-WAIT into an orderly local close so we eventually emit
             // `NetEvent::Closed`.
             if socket.state() == tcp::State::CloseWait {
+                if NET_LOG_TCP_FLOW {
+                    crate::log!(
+                        "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",
+                        owner,
+                        handle.0,
+                        rx_bytes_this_poll,
+                        rx_events_this_poll,
+                        rx_event_drops_this_poll
+                    );
+                }
                 socket.close();
                 state = socket.state();
             }

@@ -8,7 +8,8 @@ const LI_ICON_X_SHIFT = 2;
 const LI_ICON_SIZE = 16;
 const LI_ICON_XY_NUDGE = -2;
 const LI_TEXT_X_OFFSET = 14;
-const STRESS_ICON_TEST = true;
+
+const STRESS_ICON_TEST = false;
 const STRESS_ICON_COUNT = 1000;
 const STRESS_ICON_SHAPES = 12;
 const STRESS_ICON_PALETTES = 5;

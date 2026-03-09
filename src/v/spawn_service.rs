@@ -38,6 +38,7 @@ static TRUEOSFS_MOUNT_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_POLL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TLS_SOCKET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+static NTP_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_TCP_BRIDGE_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_QJS_REPL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -112,6 +113,13 @@ fn spawn_net_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::net::tls_socket::tls_socket_service_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::surface::ntp::ntp_sync_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -537,6 +545,13 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::NET_GATEWAY_REACHABLE,
         started: &TLS_SOCKET_SERVICE_STARTED,
         spawn: spawn_tls_socket_service,
+    },
+    TaskSpec {
+        name: "ntp-sync",
+        disabled: false,
+        required: crate::v::readiness::NET_CONFIGURED,
+        started: &NTP_SYNC_STARTED,
+        spawn: spawn_ntp_sync,
     },
     TaskSpec {
         name: "net-shell",

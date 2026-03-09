@@ -10,6 +10,12 @@ use crate::v::net::VNet;
 use crate::v::net::dns::{self, DnsConfig};
 use crate::v::net::https;
 
+const SURF_TIMEOUT_MS: u32 = 35_000;
+const SURF_MAX_BYTES: usize = 4 * 1024 * 1024;
+// vhttps currently derives connect/tls budgets from timeout_ms/4.
+// Scale surf's timeout so connect/tls do not fail far earlier than requested.
+const SURF_HTTPS_TIMEOUT_MS: u32 = SURF_TIMEOUT_MS * 4;
+
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
@@ -215,7 +221,11 @@ fn bytes_to_string_lossy(bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(bytes.as_slice()).into_owned()
 }
 
-async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError> {
+async fn fetch_http_plain_body(
+    url: &str,
+    timeout_ms: u32,
+    max_rx: usize,
+) -> Result<Vec<u8>, HttpPlainFetchError> {
     let parsed = parse_http_url(url).map_err(|_| HttpPlainFetchError::BadUrl)?;
 
     let ready = crate::v::readiness::wait_for_timeout(
@@ -238,22 +248,39 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError
         Timer::after(EmbassyDuration::from_millis(50)).await;
     };
 
-    let _ = net.submit(api::Command::OpenTcpConnect {
-        remote: api::EndpointV4 {
-            addr: ip,
-            port: parsed.port,
-        },
-    });
+    let mut open_sent = false;
+    for _ in 0..64 {
+        if net
+            .submit(api::Command::OpenTcpConnect {
+                remote: api::EndpointV4 {
+                    addr: ip,
+                    port: parsed.port,
+                },
+            })
+            .is_ok()
+        {
+            open_sent = true;
+            break;
+        }
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+    if !open_sent {
+        crate::log!(
+            "surf/http: open submit failed host={} port={}\n",
+            parsed.host,
+            parsed.port
+        );
+        return Err(HttpPlainFetchError::TimedOut);
+    }
 
     let mut tcp_handle: Option<api::NetHandle> = None;
     let mut sent_get = false;
 
     // Cap to avoid unbounded kernel heap growth.
-    const MAX_RX: usize = 2 * 1024 * 1024;
     let mut rx: Vec<u8> = Vec::new();
     let mut truncated = false;
 
-    let deadline = Instant::now() + EmbassyDuration::from_secs(12);
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
 
     loop {
         for _ in 0..32 {
@@ -271,6 +298,9 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError
                 api::Event::IcmpReply { .. } => {}
                 api::Event::IcmpReplyV6 { .. } => {}
                 api::Event::TcpEstablished { handle } => {
+                    if tcp_handle.is_none() {
+                        tcp_handle = Some(handle);
+                    }
                     if tcp_handle != Some(handle) {
                         continue;
                     }
@@ -284,11 +314,29 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError
                             b"\r\nUser-Agent: TRUEOS get\r\nAccept: text/html,application/xhtml+xml,*/*;q=0.8\r\nConnection: close\r\n\r\n",
                         );
                         if let Some(h) = tcp_handle {
-                            let _ = net.submit(api::Command::SendTcp {
-                                handle: h,
-                                data: api::ByteBuf::from_slice_trunc(req.as_slice()),
-                            });
-                            sent_get = true;
+                            let mut send_ok = false;
+                            for _ in 0..64 {
+                                if net
+                                    .submit(api::Command::SendTcp {
+                                        handle: h,
+                                        data: api::ByteBuf::from_slice_trunc(req.as_slice()),
+                                    })
+                                    .is_ok()
+                                {
+                                    send_ok = true;
+                                    break;
+                                }
+                                Timer::after(EmbassyDuration::from_millis(1)).await;
+                            }
+                            if send_ok {
+                                sent_get = true;
+                            } else {
+                                crate::log!(
+                                    "surf/http: get submit failed host={} handle={}\n",
+                                    parsed.host,
+                                    h.0
+                                );
+                            }
                         }
                     }
                 }
@@ -297,8 +345,8 @@ async fn fetch_http_plain_body(url: &str) -> Result<Vec<u8>, HttpPlainFetchError
                         continue;
                     }
                     let data = data.as_slice();
-                    if rx.len() < MAX_RX {
-                        let room = MAX_RX - rx.len();
+                    if rx.len() < max_rx {
+                        let room = max_rx - rx.len();
                         let take = data.len().min(room);
                         rx.extend_from_slice(&data[..take]);
                         if take < data.len() {
@@ -360,7 +408,12 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
 
     for hop in 0..=MAX_REDIRECTS {
         if current_url.starts_with("https://") {
-            match https::fetch_https_body_async(current_url.as_str(), 12_000, 2 * 1024 * 1024).await
+            match https::fetch_https_body_async(
+                current_url.as_str(),
+                SURF_HTTPS_TIMEOUT_MS,
+                SURF_MAX_BYTES,
+            )
+            .await
             {
                 Ok(body) => return Ok(body),
                 Err(https::FetchError::Redirect { url, .. }) => {
@@ -380,7 +433,8 @@ async fn fetch_html_attempt_with_redirects(url: &str) -> Result<Vec<u8>, &'stati
                 Err(_) => break,
             }
         } else if current_url.starts_with("http://") {
-            match fetch_http_plain_body(current_url.as_str()).await {
+            match fetch_http_plain_body(current_url.as_str(), SURF_TIMEOUT_MS, SURF_MAX_BYTES).await
+            {
                 Ok(body) => return Ok(body),
                 Err(HttpPlainFetchError::Redirect(url)) => {
                     if hop >= MAX_REDIRECTS {

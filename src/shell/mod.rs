@@ -272,7 +272,9 @@ fn refresh_title_bar(io: &dyn ShellIo, term_cols: usize) {
     crate::matrix::refresh_matrix_symbols(io, term_cols);
 
     let mut time_buf: heapless::String<32> = heapless::String::new();
-    if let Some(ts) = crate::time::unix_time_seconds() {
+    if let Some(ts) =
+        crate::surface::ntp::current_unix_seconds().or_else(crate::time::unix_time_seconds)
+    {
         let (_year, _month, _day, hour, minute, _second) = unix_timestamp_to_ymdhms(ts);
         let _ = core::fmt::write(&mut time_buf, format_args!("{:02}:{:02}", hour, minute));
     } else {
