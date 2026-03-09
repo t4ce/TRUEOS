@@ -22,6 +22,8 @@ struct CachedIcon {
 }
 
 static ICON_CACHE: Once<Vec<CachedIcon>> = Once::new();
+const ICON_SHAPE_COUNT: usize = 12;
+const ICON_PALETTE_COUNT: usize = 5;
 
 #[inline]
 fn to_u8(x: f32) -> u8 {
@@ -267,18 +269,25 @@ fn build_cached_icons() -> Vec<CachedIcon> {
     }
 
     let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len() * palette.len() * 2);
-    for (icon_px, scale) in [(32.0f32, 1.0f32), (16.0f32, 0.5f32)] {
+    for (icon_px, scale, include_aa) in [(32.0f32, 1.0f32, true), (16.0f32, 0.5f32, true)] {
         for color in palette {
             let aa_color = [color[0], color[1], color[2], 0.26];
             for geom in &base_geometries {
+                let aa_count = if include_aa {
+                    geom.aa_positions.len()
+                } else {
+                    0
+                };
                 let mut baked_vertices: Vec<MyVertex> =
-                    Vec::with_capacity(geom.main_positions.len() * 2 + geom.aa_positions.len());
+                    Vec::with_capacity(geom.main_positions.len() * 2 + aa_count);
 
-                for &p in &geom.aa_positions {
-                    baked_vertices.push(MyVertex {
-                        position: [p[0] * scale, p[1] * scale],
-                        color: aa_color,
-                    });
+                if include_aa {
+                    for &p in &geom.aa_positions {
+                        baked_vertices.push(MyVertex {
+                            position: [p[0] * scale, p[1] * scale],
+                            color: aa_color,
+                        });
+                    }
                 }
 
                 for &p in &geom.main_positions {
@@ -298,13 +307,20 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                     });
                 }
 
-                let aa_offset = 0u16;
-                let shadow_offset = geom.aa_positions.len() as u16;
-                let main_offset = (geom.aa_positions.len() + geom.main_positions.len()) as u16;
+                let aa_len = if include_aa {
+                    geom.aa_positions.len()
+                } else {
+                    0
+                };
+                let shadow_offset = aa_len as u16;
+                let main_offset = (aa_len + geom.main_positions.len()) as u16;
+                let aa_idx_len = if include_aa { geom.aa_indices.len() } else { 0 };
                 let mut baked_indices: Vec<u16> =
-                    Vec::with_capacity(geom.aa_indices.len() + geom.main_indices.len() * 2);
-                for &idx in &geom.aa_indices {
-                    baked_indices.push(idx + aa_offset);
+                    Vec::with_capacity(aa_idx_len + geom.main_indices.len() * 2);
+                if include_aa {
+                    for &idx in &geom.aa_indices {
+                        baked_indices.push(idx);
+                    }
                 }
                 for &idx in &geom.main_indices {
                     baked_indices.push(idx + shadow_offset);
@@ -326,6 +342,171 @@ fn build_cached_icons() -> Vec<CachedIcon> {
 
 fn cached_icons() -> &'static [CachedIcon] {
     ICON_CACHE.call_once(build_cached_icons).as_slice()
+}
+
+#[inline]
+fn cached_icon_by_id(icon_id: u32, color_id: u32, small_set: bool) -> Option<&'static CachedIcon> {
+    let shape = (icon_id as usize) % ICON_SHAPE_COUNT;
+    let color = (color_id as usize) % ICON_PALETTE_COUNT;
+    let size_block = ICON_SHAPE_COUNT.saturating_mul(ICON_PALETTE_COUNT);
+    let base = if small_set { size_block } else { 0 };
+    let idx = base
+        .saturating_add(color.saturating_mul(ICON_SHAPE_COUNT))
+        .saturating_add(shape);
+    cached_icons().get(idx)
+}
+
+#[inline]
+fn edge_fn(ax: f32, ay: f32, bx: f32, by: f32, px: f32, py: f32) -> f32 {
+    (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_bake_lyon_icon_rgba(
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+    out_ptr: *mut u8,
+    out_len: usize,
+) -> i32 {
+    let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
+        return -1;
+    };
+
+    let side = icon.cell_px.max(1.0) as usize;
+    let need = side.saturating_mul(side).saturating_mul(4);
+    if out_ptr.is_null() || out_len == 0 {
+        return need as i32;
+    }
+    if out_len < need {
+        return -2;
+    }
+
+    let mut accum: Vec<[f32; 4]> = vec![[0.0; 4]; side.saturating_mul(side)];
+
+    let mut tri = 0usize;
+    while tri + 2 < icon.indices.len() {
+        let i0 = icon.indices[tri] as usize;
+        let i1 = icon.indices[tri + 1] as usize;
+        let i2 = icon.indices[tri + 2] as usize;
+        tri += 3;
+
+        let (Some(v0), Some(v1), Some(v2)) = (
+            icon.vertices.get(i0),
+            icon.vertices.get(i1),
+            icon.vertices.get(i2),
+        ) else {
+            continue;
+        };
+
+        let x0 = v0.position[0];
+        let y0 = v0.position[1];
+        let x1 = v1.position[0];
+        let y1 = v1.position[1];
+        let x2 = v2.position[0];
+        let y2 = v2.position[1];
+
+        let area = edge_fn(x0, y0, x1, y1, x2, y2);
+        if area.abs() < 1e-6 {
+            continue;
+        }
+
+        let min_x =
+            (libm::floorf(x0.min(x1).min(x2)) as isize).clamp(0, (side as isize) - 1) as usize;
+        let max_x =
+            (libm::ceilf(x0.max(x1).max(x2)) as isize).clamp(0, (side as isize) - 1) as usize;
+        let min_y =
+            (libm::floorf(y0.min(y1).min(y2)) as isize).clamp(0, (side as isize) - 1) as usize;
+        let max_y =
+            (libm::ceilf(y0.max(y1).max(y2)) as isize).clamp(0, (side as isize) - 1) as usize;
+
+        for py in min_y..=max_y {
+            let sy = py as f32 + 0.5;
+            for px in min_x..=max_x {
+                let sx = px as f32 + 0.5;
+
+                let w0 = edge_fn(x1, y1, x2, y2, sx, sy) / area;
+                let w1 = edge_fn(x2, y2, x0, y0, sx, sy) / area;
+                let w2 = edge_fn(x0, y0, x1, y1, sx, sy) / area;
+                if w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5 {
+                    continue;
+                }
+
+                let mut sr = w0 * v0.color[0] + w1 * v1.color[0] + w2 * v2.color[0];
+                let mut sg = w0 * v0.color[1] + w1 * v1.color[1] + w2 * v2.color[1];
+                let mut sb = w0 * v0.color[2] + w1 * v1.color[2] + w2 * v2.color[2];
+                let sa = (w0 * v0.color[3] + w1 * v1.color[3] + w2 * v2.color[3]).clamp(0.0, 1.0);
+                if sa <= 0.0 {
+                    continue;
+                }
+
+                sr = sr.clamp(0.0, 1.0);
+                sg = sg.clamp(0.0, 1.0);
+                sb = sb.clamp(0.0, 1.0);
+
+                let dst = &mut accum[py.saturating_mul(side).saturating_add(px)];
+                let inv = 1.0 - sa;
+                dst[0] = sr * sa + dst[0] * inv;
+                dst[1] = sg * sa + dst[1] * inv;
+                dst[2] = sb * sa + dst[2] * inv;
+                dst[3] = sa + dst[3] * inv;
+            }
+        }
+    }
+
+    let out = core::slice::from_raw_parts_mut(out_ptr, need);
+    let mut o = 0usize;
+    for px in accum {
+        let a = px[3].clamp(0.0, 1.0);
+        // Match the existing textured shader contract used by cmd-stream text:
+        // keep coverage in red and set alpha to fully-on. Final icon color is
+        // supplied via per-vertex tint in the quad draw helper.
+        out[o] = to_u8(a);
+        out[o + 1] = 0;
+        out[o + 2] = 0;
+        out[o + 3] = 255;
+        o += 4;
+    }
+
+    need as i32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gfx_draw_lyon_icon_no_present(
+    icon_id: u32,
+    color_id: u32,
+    small_set: u32,
+    x: f32,
+    y: f32,
+    view_w: u32,
+    view_h: u32,
+) -> i32 {
+    let fb_w = view_w.max(1) as f32;
+    let fb_h = view_h.max(1) as f32;
+    let Some(icon) = cached_icon_by_id(icon_id, color_id, small_set != 0) else {
+        return -1;
+    };
+
+    let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
+    for &idx in &icon.indices {
+        let Some(v) = icon.vertices.get(idx as usize) else {
+            continue;
+        };
+        let vv = MyVertex {
+            position: [v.position[0] + x, v.position[1] + y],
+            color: v.color,
+        };
+        push_rgb_vtx(&mut icon_blob, &vv, fb_w, fb_h);
+    }
+
+    if icon_blob.is_empty() {
+        return -2;
+    }
+
+    crate::surface::io::cabi::trueos_cabi_gfx_draw_rgb_triangles_no_present(
+        icon_blob.as_ptr(),
+        icon_blob.len(),
+    )
 }
 
 pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
