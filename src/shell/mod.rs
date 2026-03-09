@@ -12,7 +12,6 @@ pub(crate) mod shellqjs;
 pub(crate) mod shelltetris;
 pub(crate) mod table;
 pub(crate) mod txt;
-
 pub(crate) mod bench;
 pub(crate) mod cmd;
 pub(crate) mod matrix;
@@ -21,17 +20,11 @@ pub(crate) mod wizards;
 pub use wizards::*;
 pub(crate) mod output;
 pub(crate) use output::{ReverseOutput, apply_shell_scroll_region};
-
-pub mod aihttps;
-
 mod crlf;
-
 mod interface;
 pub(crate) use interface::{ShellBackend, ShellIo};
-
 pub(crate) mod backends;
 pub(crate) use backends::{NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND};
-
 pub(crate) mod uart1_com1;
 
 pub(crate) struct Utf8Decoder {
@@ -322,7 +315,6 @@ pub(crate) enum CommandAction {
     DoFormat { disc_id: u32 },
     DoInstall { disc_id: u32 },
     DoUpdate { disc_id: u32 },
-    OpenAiChat { first: String<384> },
 }
 
 #[embassy_executor::task(pool_size = 3)]

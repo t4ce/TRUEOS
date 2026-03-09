@@ -42,6 +42,7 @@ static NTP_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_TCP_BRIDGE_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_QJS_REPL_STARTED: AtomicBool = AtomicBool::new(false);
+static AI_QJS_ONESHOT_STARTED: AtomicBool = AtomicBool::new(false);
 static HTTP_TRUEOSFS_STARTED: AtomicBool = AtomicBool::new(false);
 static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -141,6 +142,13 @@ fn spawn_ai_tcp_bridge(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ai_qjs_repl(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::backends::ai_tcp::ai_qjs_repl_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
+fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(trueos_qjs::ai_task::run_once()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -502,13 +510,14 @@ const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
 
 const NET_AND_ROOT_READY: u32 =
     crate::v::readiness::NET_GATEWAY_REACHABLE | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
+    | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED
+    | crate::v::readiness::QJS_ASYNC_FS_READY;
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 
-const BOOT_NETBENCH_ENABLED: bool = false;
 const WGPU_TEXT_ENABLED: bool = true;
-const GFX_MATMUL_DEMO_ENABLED: bool = true;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec {
@@ -542,7 +551,7 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "tls-socket-service",
         disabled: false,
-        required: crate::v::readiness::NET_GATEWAY_REACHABLE,
+        required: crate::v::readiness::NET_CONFIGURED,
         started: &TLS_SOCKET_SERVICE_STARTED,
         spawn: spawn_tls_socket_service,
     },
@@ -573,6 +582,13 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &AI_QJS_REPL_STARTED,
         spawn: spawn_ai_qjs_repl,
+    },
+    TaskSpec {
+        name: "ai-qjs-oneshot",
+        disabled: false,
+        required: AI_QJS_ONESHOT_READY,
+        started: &AI_QJS_ONESHOT_STARTED,
+        spawn: spawn_ai_qjs_oneshot,
     },
     TaskSpec {
         name: "http-trueosfs",

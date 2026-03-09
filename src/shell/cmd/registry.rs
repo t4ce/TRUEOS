@@ -636,16 +636,10 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
-
-        // AI (no alias)
-        let _ = REGSHCMD("ai", &AI_ARGS, cmd::cmd_ai);
-
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
         let _ = REGSHCMD("go", &[], cmd::cmd_go);
         let _ = REGSHCMD("go.two", &[], cmd::cmd_go_two);
-
-        // Table commands
         let _ = REGSHCMD("tlb", &NO_ARGS, cmd::cmd_tlb);
         let _ = REGSHCMD("tlb.pci", &NO_ARGS, cmd::cmd_tlb_pci);
         let _ = REGSHCMD("tlb.pci.bar", &NO_ARGS, cmd::cmd_tlb_pci_bar);

@@ -168,17 +168,6 @@ pub(super) async fn handle_command_action(
             clear_statusbar(io, *term_cols, *term_rows);
             *mode = ShellMode::Idle;
         }
-        CommandAction::OpenAiChat { first } => {
-            Box::pin(crate::shell::cmd::ai::run_ai_wizard(
-                io,
-                *term_cols,
-                *term_rows,
-                spawner,
-                history,
-                first.as_str(),
-            ))
-            .await;
-        }
         CommandAction::None => {}
     }
 }
