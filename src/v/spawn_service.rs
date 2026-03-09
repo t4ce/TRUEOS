@@ -50,7 +50,6 @@ static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
 static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
-static WEBGPU_PIXI_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_INTEL_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -266,11 +265,6 @@ fn spawn_wgpu_text(spawner: Spawner) -> SpawnAttempt {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
-}
-
-fn spawn_webgpu_pixi_smoke(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
 }
 
 fn spawn_webgpu_browser(spawner: Spawner) -> SpawnAttempt {
@@ -613,13 +607,6 @@ static TASKS: &[TaskSpec] = &[
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &WGPU_TEXT_STARTED,
         spawn: spawn_wgpu_text,
-    },
-    TaskSpec {
-        name: "webgpu_pixi_smoke",
-        disabled: true,
-        required: crate::v::readiness::WGPU_TEXT_DONE,
-        started: &WEBGPU_PIXI_SMOKE_STARTED,
-        spawn: spawn_webgpu_pixi_smoke,
     },
     TaskSpec {
         name: "webgpu_browser",

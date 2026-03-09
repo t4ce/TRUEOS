@@ -8,10 +8,6 @@ use crate as qjs;
 
 mod helpers;
 
-unsafe extern "C" {
-    fn trueos_cabi_gfx_present_owner_set(owner: u32);
-}
-
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static PENDING_HTML: Mutex<Option<String>> = Mutex::new(None);
 
@@ -131,14 +127,12 @@ pub async fn boot_browser() {
         qjs::trueos_shims::log_info("qjs-browser: already running\n");
         return;
     }
-    unsafe { trueos_cabi_gfx_present_owner_set(1) };
     qjs::trueos_shims::log_info("qjs-browser: starting browser2 bootstrap\n");
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
             None => {
                 qjs::trueos_shims::log_info("qjs-browser: JS runtime init failed\n");
-                trueos_cabi_gfx_present_owner_set(0);
                 BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
                 return;
             }
@@ -150,7 +144,6 @@ pub async fn boot_browser() {
                 qjs::layout::install_layout_api(ctx);
 
                 if !install_globals(ctx) {
-                        trueos_cabi_gfx_present_owner_set(0);
                         BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
                         return;
                 }
@@ -168,7 +161,6 @@ pub async fn boot_browser() {
                     qjs::JS_EVAL_TYPE_GLOBAL,
                     "browser init",
                 ) {
-                    trueos_cabi_gfx_present_owner_set(0);
                     BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
                     return;
                 }
@@ -181,7 +173,6 @@ pub async fn boot_browser() {
             Timer::after(EmbassyDuration::from_millis(16)).await;
         }
         qjs::trueos_shims::log_info("qjs-browser: stopped\n");
-        trueos_cabi_gfx_present_owner_set(0);
         BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
     }
 }

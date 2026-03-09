@@ -145,9 +145,13 @@ function applyYoga(rows, vw) {
     n.setHeight(LINE_H);
     n.setMinHeight(LINE_H);
     if (r.kind === 'title-text') {
-      // Let Yoga own horizontal centering for title content rows.
-      n.setAlignSelf(Yoga.ALIGN_CENTER);
-      n.setWidth(Math.max(1, Math.round(String(r.text || '').length * 8)));
+      // Draw path places text at node-left, so center by placing a content-width node
+      // at a centered left margin within the same inner row width as normal rows.
+      const textW = Math.max(1, Math.round(String(r.text || '').length * 8));
+      const innerRowW = Math.max(1, vw - (LEFT_PAD * 2));
+      const centeredLeft = Math.max(0, Math.floor((innerRowW - textW) * 0.5));
+      n.setWidth(textW);
+      n.setMargin(Yoga.EDGE_LEFT, centeredLeft);
     } else {
       n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
       n.setMargin(Yoga.EDGE_LEFT, indent);

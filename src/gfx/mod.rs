@@ -98,40 +98,6 @@ fn bump_backend_epoch() {
     let _ = BACKEND_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum PresentOwner {
-    Forward = 0,
-    Pixi = 1,
-}
-
-#[inline]
-pub fn present_owner() -> PresentOwner {
-    match PRESENT_OWNER.load(Ordering::Relaxed) {
-        1 => PresentOwner::Pixi,
-        _ => PresentOwner::Forward,
-    }
-}
-
-#[inline]
-pub fn set_present_owner(owner: PresentOwner) {
-    PRESENT_OWNER.store(owner as u8, Ordering::Relaxed);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gfx_present_owner_set(owner: u32) {
-    let o = if owner == 1 {
-        PresentOwner::Pixi
-    } else {
-        PresentOwner::Forward
-    };
-    set_present_owner(o);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gfx_present_owner_get() -> u32 {
-    present_owner() as u32
-}
-
 pub struct System {
     backend: backends::Backend,
     framebuffers: Option<&'static ::limine::response::FramebufferResponse>,

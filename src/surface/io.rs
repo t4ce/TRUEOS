@@ -448,12 +448,6 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
-        // This function is used by QuickJS smokes (and other C-ABI callers) as a
-        // cooperative yield point while polling for async completions.
-        //
-        // Do NOT call `park_step()` here: it may execute `hlt`, and on configurations
-        // without a reliable periodic interrupt source that can wake the CPU, that
-        // can present as a hard BSP freeze (e.g. right after `qjs-pixi-rect-smoke: starting`).
         crate::wait::spin_step();
     }
 
@@ -1040,8 +1034,6 @@ pub mod cabi {
         });
     }
 
-    // Internal kernel-side cursor refresh path. This keeps cursor motion alive
-    // even when app/UI rendering is on-demand and no new base frames are submitted.
     pub fn kernel_cursor_overlay_tick() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
@@ -1260,8 +1252,6 @@ pub mod cabi {
         _eq_rgb: u32,
         _eq_alpha: u32,
     ) -> i32 {
-        // Minimal blend subset: support the common WebGL/Pixi cases.
-        // Equation is currently assumed FUNC_ADD.
         let en = enabled != 0;
         let mut st = GFX_CABI_STATE.lock();
         st.cur_blend = BlendDesc {
@@ -1279,9 +1269,6 @@ pub mod cabi {
         min_filter: u32,
         mag_filter: u32,
     ) -> i32 {
-        // Keep this mapping intentionally tiny: enough for Pixi/WebGL.
-        // wrap: 0=ClampToEdge, 1=Repeat
-        // filter: 0=Nearest, 1=Linear
         let ws = if wrap_s == 1 {
             SamplerWrap::Repeat
         } else {

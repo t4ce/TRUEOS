@@ -4,7 +4,7 @@ use core::f32::consts::PI;
 use lyon_geom::point;
 use lyon_tessellation::path::Path;
 use lyon_tessellation::{
-    BuffersBuilder, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
+    BuffersBuilder, LineJoin, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use spin::Once;
 use trueos_math::{cos_f32, sin_f32};
@@ -16,6 +16,7 @@ struct MyVertex {
 }
 
 struct CachedIcon {
+    cell_px: f32,
     vertices: Vec<MyVertex>,
     indices: Vec<u16>,
 }
@@ -174,6 +175,13 @@ fn build_cached_icons() -> Vec<CachedIcon> {
     const SHADOW_DY: f32 = 1.0;
     const SHADOW_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.22];
 
+    struct BaseGeom {
+        main_positions: Vec<[f32; 2]>,
+        main_indices: Vec<u16>,
+        aa_positions: Vec<[f32; 2]>,
+        aa_indices: Vec<u16>,
+    }
+
     let paths = [
         build_arrow_path(0),
         build_arrow_path(1),
@@ -196,15 +204,31 @@ fn build_cached_icons() -> Vec<CachedIcon> {
         [0.95, 0.55, 0.12, 1.0],
     ];
 
-    let mut base_geometries: Vec<(Vec<[f32; 2]>, Vec<u16>)> = Vec::with_capacity(paths.len());
+    let mut base_geometries: Vec<BaseGeom> = Vec::with_capacity(paths.len());
     for (i, path) in paths.iter().enumerate() {
-        let mut geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
+        let mut main_geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
+        let mut aa_geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
         let mut tessellator = StrokeTessellator::new();
 
-        let icon_res = tessellator.tessellate_path(
+        let main_res = tessellator.tessellate_path(
             path,
-            &StrokeOptions::default().with_line_width(2.0),
-            &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| {
+            &StrokeOptions::default()
+                .with_line_width(2.0)
+                .with_line_join(LineJoin::Round),
+            &mut BuffersBuilder::new(&mut main_geometry, |vertex: StrokeVertex| {
+                let p = vertex.position().to_array();
+                MyVertex {
+                    position: [p[0], p[1]],
+                    color: [0.0, 0.0, 0.0, 1.0],
+                }
+            }),
+        );
+        let aa_res = tessellator.tessellate_path(
+            path,
+            &StrokeOptions::default()
+                .with_line_width(3.2)
+                .with_line_join(LineJoin::Round),
+            &mut BuffersBuilder::new(&mut aa_geometry, |vertex: StrokeVertex| {
                 let p = vertex.position().to_array();
                 MyVertex {
                     position: [p[0], p[1]],
@@ -213,44 +237,88 @@ fn build_cached_icons() -> Vec<CachedIcon> {
             }),
         );
 
-        if icon_res.is_err() {
+        if main_res.is_err() || aa_res.is_err() {
             crate::log!("lyon-demo: tessellation failed at icon={}\n", i);
-            base_geometries.push((Vec::new(), Vec::new()));
+            base_geometries.push(BaseGeom {
+                main_positions: Vec::new(),
+                main_indices: Vec::new(),
+                aa_positions: Vec::new(),
+                aa_indices: Vec::new(),
+            });
             continue;
         }
 
-        let mut positions: Vec<[f32; 2]> = Vec::with_capacity(geometry.vertices.len());
-        for v in &geometry.vertices {
-            positions.push(v.position);
+        let mut main_positions: Vec<[f32; 2]> = Vec::with_capacity(main_geometry.vertices.len());
+        for v in &main_geometry.vertices {
+            main_positions.push(v.position);
         }
-        base_geometries.push((positions, geometry.indices));
+
+        let mut aa_positions: Vec<[f32; 2]> = Vec::with_capacity(aa_geometry.vertices.len());
+        for v in &aa_geometry.vertices {
+            aa_positions.push(v.position);
+        }
+
+        base_geometries.push(BaseGeom {
+            main_positions,
+            main_indices: main_geometry.indices,
+            aa_positions,
+            aa_indices: aa_geometry.indices,
+        });
     }
 
-    let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len() * palette.len());
-    for color in palette {
-        for (positions, base_indices) in &base_geometries {
-            let mut baked_vertices: Vec<MyVertex> = Vec::with_capacity(positions.len() * 2);
-            for &p in positions {
-                baked_vertices.push(MyVertex {
-                    position: [p[0] + SHADOW_DX, p[1] + SHADOW_DY],
-                    color: SHADOW_COLOR,
+    let mut out: Vec<CachedIcon> = Vec::with_capacity(paths.len() * palette.len() * 2);
+    for (icon_px, scale) in [(32.0f32, 1.0f32), (16.0f32, 0.5f32)] {
+        for color in palette {
+            let aa_color = [color[0], color[1], color[2], 0.26];
+            for geom in &base_geometries {
+                let mut baked_vertices: Vec<MyVertex> =
+                    Vec::with_capacity(geom.main_positions.len() * 2 + geom.aa_positions.len());
+
+                for &p in &geom.aa_positions {
+                    baked_vertices.push(MyVertex {
+                        position: [p[0] * scale, p[1] * scale],
+                        color: aa_color,
+                    });
+                }
+
+                for &p in &geom.main_positions {
+                    baked_vertices.push(MyVertex {
+                        position: [
+                            p[0] * scale + SHADOW_DX * scale,
+                            p[1] * scale + SHADOW_DY * scale,
+                        ],
+                        color: SHADOW_COLOR,
+                    });
+                }
+
+                for &p in &geom.main_positions {
+                    baked_vertices.push(MyVertex {
+                        color,
+                        position: [p[0] * scale, p[1] * scale],
+                    });
+                }
+
+                let aa_offset = 0u16;
+                let shadow_offset = geom.aa_positions.len() as u16;
+                let main_offset = (geom.aa_positions.len() + geom.main_positions.len()) as u16;
+                let mut baked_indices: Vec<u16> =
+                    Vec::with_capacity(geom.aa_indices.len() + geom.main_indices.len() * 2);
+                for &idx in &geom.aa_indices {
+                    baked_indices.push(idx + aa_offset);
+                }
+                for &idx in &geom.main_indices {
+                    baked_indices.push(idx + shadow_offset);
+                }
+                for &idx in &geom.main_indices {
+                    baked_indices.push(idx + main_offset);
+                }
+
+                out.push(CachedIcon {
+                    cell_px: icon_px,
+                    vertices: baked_vertices,
+                    indices: baked_indices,
                 });
             }
-            for &p in positions {
-                baked_vertices.push(MyVertex { color, position: p });
-            }
-
-            let index_offset = positions.len() as u16;
-            let mut baked_indices: Vec<u16> = Vec::with_capacity(base_indices.len() * 2);
-            baked_indices.extend_from_slice(base_indices);
-            for &idx in base_indices {
-                baked_indices.push(idx + index_offset);
-            }
-
-            out.push(CachedIcon {
-                vertices: baked_vertices,
-                indices: baked_indices,
-            });
         }
     }
     out
@@ -263,18 +331,23 @@ fn cached_icons() -> &'static [CachedIcon] {
 pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
     let fb_w = view_w.max(1) as f32;
     let fb_h = view_h.max(1) as f32;
-    const CELL_PX: f32 = 32.0;
     let icons = cached_icons();
-    let cols = core::cmp::max(1usize, (view_w as usize) / (CELL_PX as usize));
     let mut total_vertices = 0usize;
     let mut total_indices = 0usize;
     let mut first_draw_err: i32 = 0;
+    let mut cursor_x = 0.0f32;
+    let mut cursor_y = 0.0f32;
+    let mut row_h = 0.0f32;
 
     for (i, icon) in icons.iter().enumerate() {
-        let col = i % cols;
-        let row = i / cols;
-        let ox = (col as f32) * CELL_PX;
-        let oy = (row as f32) * CELL_PX;
+        let cell_px = icon.cell_px;
+        if cursor_x + cell_px > fb_w && cursor_x > 0.0 {
+            cursor_x = 0.0;
+            cursor_y += row_h;
+            row_h = 0.0;
+        }
+        let ox = cursor_x;
+        let oy = cursor_y;
         let mut icon_blob: Vec<u8> = Vec::with_capacity(icon.indices.len().saturating_mul(12));
 
         total_vertices = total_vertices.saturating_add(icon.vertices.len());
@@ -306,6 +379,13 @@ pub fn lyon_geom_api_demo_no_present(view_w: u32, view_h: u32) -> bool {
                 i,
                 icon_blob.len()
             );
+        }
+
+        cursor_x += cell_px;
+        row_h = row_h.max(cell_px);
+
+        if cursor_y > fb_h {
+            break;
         }
     }
 
