@@ -72,7 +72,7 @@ pub async fn gfx_loadscreen_task() {
         crate::log!("gfx-loadscreen: initial text draw timed out\n");
     }
 
-    Timer::after(EmbassyDuration::from_millis(15000)).await;
+    Timer::after(EmbassyDuration::from_millis(1000)).await;
     crate::gfx::set_present_owner(crate::gfx::PresentOwner::Forward);
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }
