@@ -710,7 +710,7 @@ impl TrbRing {
         self.len.saturating_sub(1)
     }
 
-    fn reserve_enqueue_slot(&mut self) -> Option<usize> {
+    fn reserve_enqueue_slot(&mut self) -> Option<(usize, bool)> {
         if self.len < 2 {
             return None;
         }
@@ -726,6 +726,7 @@ impl TrbRing {
         }
 
         let idx = self.enqueue;
+        let trb_cycle = self.cycle;
         self.enqueue += 1;
         if self.enqueue >= usable {
             unsafe { self.set_link_cycle_bit(self.cycle) };
@@ -734,7 +735,7 @@ impl TrbRing {
         }
 
         self.pending += 1;
-        Some(idx)
+        Some((idx, trb_cycle))
     }
 
     unsafe fn init_link_trb(&self) {
@@ -767,18 +768,18 @@ impl TrbRing {
     }
 
     pub fn push(&mut self, mut trb: Trb) -> bool {
-        let Some(idx) = self.reserve_enqueue_slot() else {
+        let Some((idx, trb_cycle)) = self.reserve_enqueue_slot() else {
             return false;
         };
 
-        trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
+        trb.d3 = (trb.d3 & !1) | (trb_cycle as u32);
         unsafe { write_volatile(self.trbs.add(idx), trb) };
         true
     }
 
     pub fn push_with_phys(&mut self, mut trb: Trb) -> Option<u64> {
-        let idx = self.reserve_enqueue_slot()?;
-        trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
+        let (idx, trb_cycle) = self.reserve_enqueue_slot()?;
+        trb.d3 = (trb.d3 & !1) | (trb_cycle as u32);
         unsafe { write_volatile(self.trbs.add(idx), trb) };
 
         Some(self.phys + (idx as u64) * size_of::<Trb>() as u64)

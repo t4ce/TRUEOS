@@ -9,10 +9,12 @@ import { LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
 
 const runtime = resolveRuntime();
 
+const AI_CURSOR_SLOT_BASE = 10000;
 const WHEEL_STEP_PX = 32;
+const CURSOR_EVENT_FIELDS = 6;
+const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
-const AUTO_PAINT_MS = 200;
-const BROWSER_AI_ENABLED = false;
+const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 
@@ -20,6 +22,10 @@ let cachedHtml = '';
 let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
+const kernelCursorState = new Map();
+const cursorButtonEvents = [];
+const aiCursorSlots = new Map();
+let nextAiCursorSlot = AI_CURSOR_SLOT_BASE;
 let aiStartPromise = null;
 let aiStartSpecifier = '';
 let aiWorker = null;
@@ -501,6 +507,97 @@ function onWheelDelta(deltaY) {
   return true;
 }
 
+function queueCursorButtonEvent(event) {
+  cursorButtonEvents.push(event);
+  if (cursorButtonEvents.length > 128) {
+    cursorButtonEvents.splice(0, cursorButtonEvents.length - 128);
+  }
+}
+
+function logCursorDebug(message) {
+  try {
+    console.log(message);
+  } catch (_) {}
+}
+
+function getOrCreateAiCursorSlot(cursorId) {
+  const key = String(cursorId || '').trim();
+  if (!key) return 0;
+  const existing = aiCursorSlots.get(key);
+  if (existing) return existing;
+
+  const slotId = nextAiCursorSlot;
+  nextAiCursorSlot += 1;
+  aiCursorSlots.set(key, slotId);
+  return slotId;
+}
+
+function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
+  if (!Number.isFinite(slotId) || slotId <= 0) return 0;
+
+  const id = Number(slotId) | 0;
+  const nextButtons = Number(buttonsDown || 0) >>> 0;
+  const nextX = Number(x || 0);
+  const nextY = Number(y || 0);
+  const nextFlags = Number(flags || 0) >>> 0;
+  const prev = kernelCursorState.get(id);
+  const prevButtons = prev ? (Number(prev.buttonsDown || 0) >>> 0) : 0;
+
+  kernelCursorState.set(id, {
+    slotId: id,
+    x: nextX,
+    y: nextY,
+    buttonsDown: nextButtons,
+    flags: nextFlags,
+  });
+
+  if (((nextFlags & CURSOR_FLAG_BUTTONS_CHANGED) !== 0) || nextButtons !== prevButtons) {
+    logCursorDebug(`[browser.mjs] cursor buttons slot=${id} prev=${prevButtons} next=${nextButtons}`);
+    queueCursorButtonEvent({
+      slotId: id,
+      x: nextX,
+      y: nextY,
+      buttonsDown: nextButtons,
+      previousButtonsDown: prevButtons,
+      flags: nextFlags,
+    });
+    return 1;
+  }
+
+  return 0;
+}
+
+function processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, source = 'kernel') {
+  let updated = rememberKernelCursor(slotId, x, y, buttonsDown, flags);
+
+  if (wheel !== 0) {
+    logCursorDebug(`[browser.mjs] cursor wheel source=${source} slot=${slotId} wheel=${wheel}`);
+    const dy = Number(wheel) * -WHEEL_STEP_PX;
+    if (onWheelDelta(dy)) updated += 1;
+  }
+
+  return updated;
+}
+
+function injectCursorEvent(event = null) {
+  const source = event && typeof event === 'object' ? event : {};
+  const slotId = Number(source.slotId || 0) | 0;
+  const aiCursorId = typeof source.aiCursorId === 'string' || typeof source.aiCursorId === 'number'
+    ? source.aiCursorId
+    : '';
+  const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
+  if (resolvedSlotId <= 0) return false;
+
+  const x = Number(source.x || 0);
+  const y = Number(source.y || 0);
+  const buttonsDown = Number(source.buttonsDown || 0) >>> 0;
+  const wheel = Number(source.wheel || 0) | 0;
+  const flags = Number(source.flags || 0) >>> 0;
+
+  processCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags, 'synthetic');
+  return true;
+}
+
 function pumpCursorEvents() {
   const fn = runtime.host.__trueosReadCursorEventsSince;
   if (typeof fn !== 'function') return 0;
@@ -520,12 +617,15 @@ function pumpCursorEvents() {
     let p = 3;
     for (let i = 0; i < wrote; i++) {
       if (p + 5 >= packed.length) break;
+      const slotId = Number(packed[p + 0] || 0) | 0;
+      const x = Number(packed[p + 1] || 0);
+      const y = Number(packed[p + 2] || 0);
+      const buttonsDown = Number(packed[p + 3] || 0) >>> 0;
       const wheel = Number(packed[p + 4] || 0) | 0;
-      if (wheel !== 0) {
-        const dy = Number(wheel) * -WHEEL_STEP_PX;
-        if (onWheelDelta(dy)) updated += 1;
-      }
-      p += 6;
+      const flags = Number(packed[p + 5] || 0) >>> 0;
+
+      updated += processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, 'kernel');
+      p += CURSOR_EVENT_FIELDS;
     }
 
     cursorReadSeq = nextSeq;
@@ -554,6 +654,7 @@ function startWheelPump() {
 
 function startAutoPaint() {
   const host = runtime.host;
+  if (AUTO_PAINT_MS <= 0) return;
   if (typeof host.setInterval !== 'function') return;
   try {
     host.setInterval(() => {
@@ -570,16 +671,6 @@ function normalizeAiSpecifier(specifier) {
 }
 
 function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
-  if (!BROWSER_AI_ENABLED) {
-    if (aiWorker) {
-      try { aiWorker.terminate(); } catch (_) {}
-      aiWorker = null;
-    }
-    aiStartPromise = null;
-    aiStartSpecifier = '';
-    return Promise.resolve(null);
-  }
-
   const resolvedSpecifier = normalizeAiSpecifier(specifier);
   const opts = options && typeof options === 'object' ? options : null;
   const initialInput = opts && Object.prototype.hasOwnProperty.call(opts, 'input')
@@ -600,6 +691,9 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
     .then(() => {
       const worker = attachAiWorker(new Worker(buildAiWorkerSource(resolvedSpecifier, opts)));
       aiWorker = worker;
+      try {
+        console.log('[browser.mjs] ai worker started', resolvedSpecifier);
+      } catch (_) {}
       if (initialInput) {
         pushAiInput(initialInput);
       }
@@ -618,7 +712,6 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
 }
 
 function maybeAutostartAi() {
-  if (!BROWSER_AI_ENABLED) return;
   const cfg = runtime.host.__trueosBrowserAutoStartAi;
   if (!cfg) return;
   if (cfg === true) {
@@ -638,6 +731,20 @@ function maybeAutostartAi() {
 runtime.host.__trueosBrowser = {
   paint,
   setHtml,
+  injectCursorEvent,
+  getKernelCursors() {
+    return Array.from(kernelCursorState.values()).sort((a, b) => a.slotId - b.slotId);
+  },
+  getKernelCursor(slotId) {
+    const id = Number(slotId || 0) | 0;
+    if (id <= 0) return null;
+    const state = kernelCursorState.get(id);
+    return state ? { ...state } : null;
+  },
+  popCursorButtonEvent() {
+    if (cursorButtonEvents.length <= 0) return null;
+    return cursorButtonEvents.shift() || null;
+  },
   getApiContract() {
     return cloneApiContract();
   },
@@ -660,12 +767,10 @@ runtime.host.__trueosBrowser = {
     return startAi(specifier, options);
   },
   startAiPc(input, options = null) {
-    if (!BROWSER_AI_ENABLED) return false;
     const opts = options && typeof options === 'object' ? { ...options, input } : { input };
     return startAi('/qjs/ai/ai_pc.mjs', opts);
   },
   submitAiInput(input, options = null) {
-    if (!BROWSER_AI_ENABLED) return false;
     return pushAiInput(input, options);
   },
   setScroll(y) {

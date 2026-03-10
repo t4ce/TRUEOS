@@ -121,7 +121,7 @@ fn append_cursor_cross(
 }
 
 // Debug cursor automode: synthesize 4 scout cursors when real inputs are absent.
-const CURSOR_AUTOMODE_DEBUG: bool = true;
+const CURSOR_AUTOMODE_DEBUG: bool = false;
 const CURSOR_AUTOMODE_SLOTS: usize = 4;
 
 #[inline]

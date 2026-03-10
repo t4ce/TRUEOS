@@ -58,6 +58,15 @@ static CMD_STREAM_ATLAS_META_LARGE: Mutex<Option<CmdStreamAtlasGlyphMetaTable>> 
 static CMD_STREAM_ATLAS_TEX_RECS: Mutex<Vec<CmdStreamAtlasTexRecord>> = Mutex::new(Vec::new());
 
 #[inline]
+fn cmd_stream_find_atlas_tex(kind: u32) -> Option<u32> {
+    CMD_STREAM_ATLAS_TEX_RECS
+        .lock()
+        .iter()
+        .find(|rec| rec.kind == kind)
+        .map(|rec| rec.tex_id)
+}
+
+#[inline]
 fn cmd_stream_select_atlas(kind: u32) -> Option<qjs::FontAtlasView<'static>> {
     if kind == 0 {
         qjs::font_atlas_small_view()
@@ -497,6 +506,9 @@ pub(super) unsafe extern "C" fn qjs_cmd_stream_create_atlas_texture(
     let Some(atlas) = cmd_stream_select_atlas(kind) else {
         return qjs::JSValue::undefined();
     };
+    if let Some(existing_tex_id) = cmd_stream_find_atlas_tex(kind) {
+        return qjs::JS_NewFloat64(ctx, existing_tex_id as f64);
+    }
     let tex_id = super::cmd_stream_alloc_tex_id();
     if !cmd_stream_upload_atlas_to_tex(tex_id, atlas) {
         super::cmd_stream_release_tex_id(tex_id);
