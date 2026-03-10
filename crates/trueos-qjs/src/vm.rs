@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::rc::Rc;
 use core::marker::PhantomData;
+use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
 
@@ -59,6 +60,98 @@ impl QjsVm {
     pub fn ctx_ptr(&self) -> *mut qjs::JSContext {
         self.ctx
     }
+}
+
+unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
+    if rt.is_null() {
+        return true;
+    }
+    loop {
+        let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
+        let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
+        if rc > 0 {
+            continue;
+        }
+        if rc < 0 {
+            let ctx = if !job_ctx.is_null() {
+                job_ctx
+            } else {
+                fallback_ctx
+            };
+            if !ctx.is_null() {
+                qjs::qjs_diag::dump_last_exception(ctx, "qjs teardown pending-job");
+            }
+            return false;
+        }
+        break;
+    }
+    true
+}
+
+unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
+    let mut progress = false;
+    progress |= qjs::async_ops::pump(ctx);
+    progress |= qjs::workers::pump(ctx);
+    progress |= qjs::timers::pump(ctx);
+    if !drain_pending_jobs(rt, ctx) {
+        return false;
+    }
+    if qjs::JS_IsJobPending(rt) > 0
+        || qjs::async_ops::has_pending(ctx)
+        || qjs::workers::has_pending_for_ctx(ctx)
+    {
+        qjs::trueos_shims::trueos_cabi_poll_once();
+        if !progress {
+            qjs::trueos_shims::trueos_cabi_poll_once();
+        }
+    }
+    true
+}
+
+async unsafe fn drain_runtime_until_idle(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    max_wait_ms: u64,
+) -> bool {
+    let mut elapsed_ms: u64 = 0;
+
+    loop {
+        if !pump_runtime_once(rt, ctx) {
+            return false;
+        }
+
+        let pending = qjs::JS_IsJobPending(rt) > 0
+            || qjs::async_ops::has_pending(ctx)
+            || qjs::workers::has_pending_for_ctx(ctx);
+        if !pending {
+            return true;
+        }
+
+        if elapsed_ms >= max_wait_ms {
+            qjs::trueos_shims::log_error("quickjs: runtime teardown timeout\n");
+            return false;
+        }
+
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+        elapsed_ms = elapsed_ms.saturating_add(1);
+    }
+}
+
+pub async unsafe fn teardown_main_context(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    max_wait_ms: u64,
+) -> bool {
+    if rt.is_null() || ctx.is_null() {
+        return true;
+    }
+
+    qjs::workers::terminate_all_for_context(ctx);
+    let drained = drain_runtime_until_idle(rt, ctx, max_wait_ms).await;
+    qjs::async_ops::drain_all_for_context(ctx);
+    qjs::workers::drain_all_for_context(ctx);
+    qjs::timers::drain_all_for_context(ctx);
+    drained
 }
 
 impl Drop for QjsVm {

@@ -1,3 +1,4 @@
+use alloc::{format, string::String};
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -16,6 +17,21 @@ const NTP_SERVER_HOSTS: [&str; 4] = [
 const NTP_PORT: u16 = 123;
 const NTP_TIMEOUT_MS: u64 = 4000;
 const NTP_REFRESH_SECS: u64 = 60;
+const SECONDS_PER_DAY: u64 = 86_400;
+const MONTH_NAMES: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
 // NTP packet payload is 48 bytes = 12 32-bit words.
 static NTP_FRAME_WORDS: Mutex<[u32; 12]> = Mutex::new([0u32; 12]);
@@ -176,6 +192,32 @@ pub fn current_unix_seconds() -> Option<u64> {
     let hz = embassy_time_driver::TICK_HZ;
     let elapsed_secs = if hz == 0 { 0 } else { elapsed_ticks / hz };
     Some(base.saturating_add(elapsed_secs))
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = (yoe as i32) + (era as i32) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month as u32, day as u32)
+}
+
+pub fn kernel_date_day_month_year() -> String {
+    let unix_secs = current_unix_seconds()
+        .or_else(crate::time::unix_time_seconds)
+        .unwrap_or(0);
+    let days = (unix_secs / SECONDS_PER_DAY) as i64;
+    let (year, month, day) = civil_from_days(days);
+    let month_name = MONTH_NAMES[(month.saturating_sub(1) as usize).min(MONTH_NAMES.len() - 1)];
+    format!("{} {} {}", day, month_name, year)
 }
 
 #[embassy_executor::task]

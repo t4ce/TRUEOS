@@ -30,24 +30,17 @@ enum SpawnAttempt {
     Failed(SpawnError),
 }
 
-// --- one-shot guards (kept here so boot/task wiring is centralized) ---
-
 static VGA_FONT_CACHE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEOSFS_MOUNT_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
-
 static NET_POLL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static TLS_SOCKET_SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static NTP_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
-static AI_TCP_BRIDGE_STARTED: AtomicBool = AtomicBool::new(false);
-static AI_QJS_REPL_STARTED: AtomicBool = AtomicBool::new(false);
 static AI_QJS_ONESHOT_STARTED: AtomicBool = AtomicBool::new(false);
 static HTTP_TRUEOSFS_STARTED: AtomicBool = AtomicBool::new(false);
 static FTP_SERVER_STARTED: AtomicBool = AtomicBool::new(false);
-
 static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
@@ -55,7 +48,6 @@ static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_INTEL_TRIANGLE_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
-
 static USB_CONTROLLER_TASKS_STARTED: AtomicBool = AtomicBool::new(false);
 static HID_INPUT_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static UAC_EVENT_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
@@ -64,7 +56,6 @@ static VLEDS_MUX_STARTED: AtomicBool = AtomicBool::new(false);
 static VLEDS_CYCLE_STARTED: AtomicBool = AtomicBool::new(false);
 static TRUEKEY_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
-
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
@@ -72,8 +63,6 @@ static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_BACKEND_READY_DELAY_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
-
-// --- spawn wrappers (keep per-task logic out of main.rs) ---
 
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::vga::init_font_cache_task()) {
@@ -121,7 +110,7 @@ fn spawn_tls_socket_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_ntp_sync(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::surface::ntp::ntp_sync_task()) {
+    match spawner.spawn(crate::v::net::ntp::ntp_sync_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
     }
@@ -526,10 +515,6 @@ const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
 const VIDEO_SMOKE_READY: u32 = crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
-const WGPU_TEXT_ENABLED: bool = false;
-const WEBGPU_BROWSER_ENABLED: bool = false;
-const GFX_VIRGL_SWAP_ENABLED: bool = false;
-
 static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "vga-font-cache",
@@ -581,20 +566,6 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_net_shell,
     },
     TaskSpec {
-        name: "ai-tcp-bridge",
-        disabled: true,
-        required: 0,
-        started: &AI_TCP_BRIDGE_STARTED,
-        spawn: spawn_ai_tcp_bridge,
-    },
-    TaskSpec {
-        name: "ai-qjs-repl",
-        disabled: true,
-        required: 0,
-        started: &AI_QJS_REPL_STARTED,
-        spawn: spawn_ai_qjs_repl,
-    },
-    TaskSpec {
         name: "ai-qjs-oneshot",
         disabled: false,
         required: AI_QJS_ONESHOT_READY,
@@ -624,15 +595,15 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "gfx-backend-ready",
-        disabled: !GFX_VIRGL_SWAP_ENABLED,
+        disabled: false,
         required: 0,
         started: &GFX_VIRGL_READY_TASK_STARTED,
         spawn: spawn_gfx_virgl_ready_task,
     },
     TaskSpec {
         name: "gfx-virgl-cursor-overlay",
-        disabled: !GFX_VIRGL_SWAP_ENABLED,
-        required: crate::v::readiness::GFX_BACKEND_READY | crate::v::readiness::WGPU_TEXT_DONE,
+        disabled: false,
+        required: crate::v::readiness::WGPU_TEXT_DONE,
         started: &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn: spawn_gfx_virgl_cursor_overlay_task,
     },
@@ -645,14 +616,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "wgpu_text",
-        disabled: !WGPU_TEXT_ENABLED,
+        disabled: false,
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &WGPU_TEXT_STARTED,
         spawn: spawn_wgpu_text,
     },
     TaskSpec {
         name: "webgpu_browser",
-        disabled: !WEBGPU_BROWSER_ENABLED,
+        disabled: false,
         required: crate::v::readiness::WGPU_TEXT_DONE,
         started: &WEBGPU_BROWSER_STARTED,
         spawn: spawn_webgpu_browser,
@@ -666,7 +637,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "gfx-intel-triangle-demo",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::GFX_INTEL_CLAIMED,
         started: &GFX_INTEL_TRIANGLE_DEMO_STARTED,
         spawn: spawn_gfx_intel_triangle_demo,
@@ -743,7 +714,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "video-smoke",
-        disabled: false,
+        disabled: true,
         required: VIDEO_SMOKE_READY,
         started: &VIDEO_SMOKE_STARTED,
         spawn: spawn_video_smoke,

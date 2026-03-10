@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::string::String;
+use alloc::{string::String, vec, vec::Vec};
 use core::ffi::{c_char, c_int, c_void};
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -12,6 +12,7 @@ unsafe extern "C" {
     fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
     fn trueos_cabi_ntp_current_unix_seconds() -> u64;
+    fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_len: usize) -> usize;
 }
 
 static FETCH_TMP_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -71,6 +72,23 @@ unsafe extern "C" fn trueos_ntp_unix_seconds_js(
     qjs::JS_NewFloat64(ctx, secs as f64)
 }
 
+unsafe extern "C" fn trueos_kernel_date_day_month_year_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let len = trueos_cabi_ntp_kernel_date_day_month_year(core::ptr::null_mut(), 0);
+    let mut bytes: Vec<u8> = vec![0; len];
+    if len != 0 {
+        let got = trueos_cabi_ntp_kernel_date_day_month_year(bytes.as_mut_ptr(), bytes.len());
+        if got < bytes.len() {
+            bytes.truncate(got);
+        }
+    }
+    qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
+}
+
 unsafe fn ensure_global_kernel_time(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -93,6 +111,21 @@ unsafe fn ensure_global_kernel_time(ctx: *mut qjs::JSContext) {
         global,
         b"__trueosNtpUnixSeconds\0".as_ptr() as *const c_char,
         f,
+    );
+
+    let kernel_date = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_kernel_date_day_month_year_js),
+        b"kernelDateDayMonthYear\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"kernelDateDayMonthYear\0".as_ptr() as *const c_char,
+        kernel_date,
     );
 
     qjs::js_free_value(ctx, global);
