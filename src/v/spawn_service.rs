@@ -123,20 +123,6 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_ai_tcp_bridge(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::backends::ai_tcp::ai_tcp_bridge_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
-fn spawn_ai_qjs_repl(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::backends::ai_tcp::ai_qjs_repl_task()) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(trueos_qjs::ai_task::run_once()) {
         Ok(()) => SpawnAttempt::Spawned,
@@ -145,8 +131,10 @@ fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
+    match spawner.spawn(crate::tst_http_trueosfs::http_trueosfs_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -501,16 +489,6 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
-fn spawn_qjs_shell(spawner: Spawner) -> SpawnAttempt {
-    match spawner.spawn(crate::shell::task(
-        spawner,
-        &crate::shell::backends::qjs::QJS_SHELL_BACKEND,
-    )) {
-        Ok(()) => SpawnAttempt::Spawned,
-        Err(e) => SpawnAttempt::Failed(e),
-    }
-}
-
 // --- registry ---
 
 const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
@@ -742,13 +720,6 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &NET_TCP_SHELL_STARTED,
         spawn: spawn_net_tcp_shell,
-    },
-    TaskSpec {
-        name: "qjs-shell",
-        disabled: false,
-        required: 0,
-        started: &QJS_SHELL_STARTED,
-        spawn: spawn_qjs_shell,
     },
 ];
 

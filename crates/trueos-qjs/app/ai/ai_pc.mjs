@@ -1,8 +1,24 @@
 import OpenAI from "openai";
+import { isMainThread, parentPort } from "node:worker_threads";
 
-const DEFAULT_PROMPT = "Go to Hacker News, click on the most interesting link (be prepared to justify your choice), take a screenshot, and give me a critique of the visual layout.";
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_MODEL = "gpt-5.4";
+const WORKER_RPC_TIMEOUT_MS = 30000;
+const WORKER_BROWSER_METHODS = [
+  "getApiContract",
+  "listUnavailable",
+  "getHtml",
+  "getTextRows",
+  "getDomSnapshot",
+  "getViewport",
+  "paint",
+  "setScroll",
+  "click",
+  "navigate",
+  "typeText",
+  "pressKey",
+  "captureScreenshot",
+];
 
 function getPcRuntime() {
   if (!globalThis.__trueosAiPcRuntime) {
@@ -11,13 +27,119 @@ function getPcRuntime() {
       context: null,
       page: null,
       jsOutput: [],
+      workerRpcSeq: 1,
+      workerRpcPending: Object.create(null),
+      workerRpcReady: false,
     };
   }
   return globalThis.__trueosAiPcRuntime;
 }
 
+function hasWorkerParentPort() {
+  return !isMainThread && !!parentPort && typeof parentPort.postMessage === "function";
+}
+
+function parseWorkerMessage(raw) {
+  if (typeof raw !== "string" || !raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (_err) {
+    return null;
+  }
+}
+
+function ensureWorkerRpcReady() {
+  const runtime = getPcRuntime();
+  if (runtime.workerRpcReady || !hasWorkerParentPort()) {
+    return;
+  }
+  parentPort.onMessage((raw) => {
+    const message = parseWorkerMessage(raw);
+    if (!message || message.kind !== "rpc_result") {
+      return;
+    }
+
+    const pending = runtime.workerRpcPending[message.id];
+    if (!pending) {
+      return;
+    }
+
+    delete runtime.workerRpcPending[message.id];
+    if (pending.timer && typeof clearTimeout === "function") {
+      try {
+        clearTimeout(pending.timer);
+      } catch (_err) {}
+    }
+
+    if (message.ok) {
+      pending.resolve(message.result);
+      return;
+    }
+
+    const error = new Error(typeof message.error === "string" ? message.error : "worker rpc failed");
+    if (message.code) {
+      error.code = message.code;
+    }
+    pending.reject(error);
+  });
+  runtime.workerRpcReady = true;
+}
+
+function workerRpc(method, args = []) {
+  if (!hasWorkerParentPort()) {
+    return Promise.reject(new Error(`worker rpc unavailable for ${method}`));
+  }
+
+  ensureWorkerRpcReady();
+
+  const runtime = getPcRuntime();
+  const id = runtime.workerRpcSeq;
+  runtime.workerRpcSeq += 1;
+
+  return new Promise((resolve, reject) => {
+    let timer = 0;
+    if (typeof setTimeout === "function") {
+      timer = setTimeout(() => {
+        delete runtime.workerRpcPending[id];
+        reject(new Error(`worker rpc timeout: ${method}`));
+      }, WORKER_RPC_TIMEOUT_MS);
+    }
+
+    runtime.workerRpcPending[id] = { resolve, reject, timer };
+
+    parentPort.postMessage(JSON.stringify({
+      kind: "rpc_request",
+      id,
+      method,
+      args,
+    }));
+  });
+}
+
+function createWorkerBrowserProxy() {
+  const runtime = getPcRuntime();
+  if (runtime.browser) {
+    return runtime.browser;
+  }
+
+  const proxy = {};
+  for (const method of WORKER_BROWSER_METHODS) {
+    proxy[method] = (...args) => workerRpc(`browser.${method}`, args);
+  }
+  runtime.browser = proxy;
+  runtime.context = proxy;
+  runtime.page = proxy;
+  return proxy;
+}
+
 function bindHostRuntime() {
   const runtime = getPcRuntime();
+  if (hasWorkerParentPort()) {
+    createWorkerBrowserProxy();
+    return runtime;
+  }
   const browser = globalThis.__trueosBrowser;
   if (browser && typeof browser === "object") {
     runtime.browser = browser;
@@ -103,11 +225,105 @@ function displayImage(base64Image) {
   });
 }
 
-async function askUserViaHost(question) {
-  if (typeof globalThis.__trueosShell1Ask === "function") {
-    return await globalThis.__trueosShell1Ask(question);
+function shellPrint(text) {
+  const value = typeof text === "string" ? text : String(text == null ? "" : text);
+  if (!value) {
+    return;
   }
-  throw new Error("ask_user is not wired; host must expose globalThis.__trueosShell1Ask(question)");
+  if (typeof globalThis.__trueosUart1ShellWrite === "function") {
+    try {
+      globalThis.__trueosUart1ShellWrite(value);
+      return;
+    } catch (_err) {}
+  }
+  if (hasWorkerParentPort()) {
+    void workerRpc("host.shellPrint", [value]);
+  }
+}
+
+async function awaitHostInput(question = "") {
+  if (typeof globalThis.__trueosAiAwaitInput === "function") {
+    return await globalThis.__trueosAiAwaitInput(question);
+  }
+  if (hasWorkerParentPort()) {
+    return await workerRpc("host.awaitInput", [question]);
+  }
+  throw new Error("AI input is not wired; host must expose an AI input bridge");
+}
+
+function normalizeAiInputEntry(entry) {
+  const source = entry && typeof entry === "object" && !Array.isArray(entry) ? entry : null;
+  const text = typeof entry === "string"
+    ? entry
+    : (source && typeof source.text === "string" ? source.text : "");
+  const value = text.trim();
+  if (!value) {
+    return null;
+  }
+  return {
+    text: value,
+    webSearch: !!(source && source.webSearch),
+    newConversation: !!(source && source.newConversation),
+    computerUse: !source || source.computerUse !== false,
+  };
+}
+
+function createExecJsTool() {
+  return {
+    type: "function",
+    name: "exec_js",
+    description: "Execute provided interactive JavaScript in a persistent REPL context.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description: `
+JavaScript to execute. Write small snippets of interactive code. To persist variables or functions across tool calls, you must save them to globalThis. Code is executed in an async persistent eval context, so you can use await. You have access to ONLY the following:
+- console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large base64 payloads like screenshots or buffer. If you create an image or screenshot, pass the base64 string to display().
+- display(base64_image_string): Use this to view a base64-encoded image.
+- Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y), and listUnavailable(). Placeholder computer-use entries such as click(), navigate(), typeText(), pressKey(), and captureScreenshot() may exist but can report not-yet-available.
+- context: same object as browser for now.
+- page: same object as browser for now.
+`,
+        },
+      },
+      required: ["code"],
+      additionalProperties: false,
+    },
+  };
+}
+
+function createAskUserTool() {
+  return {
+    type: "function",
+    name: "ask_user",
+    description: "Ask the user a clarification question and wait for their response.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "The exact question to show the human. Use this instead of answering with a freeform clarifying question in a final answer.",
+        },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    },
+  };
+}
+
+function buildTools(entry) {
+  const tools = [];
+  if (entry.webSearch) {
+    tools.push({ type: "web_search" });
+  }
+  if (entry.computerUse) {
+    tools.push(createExecJsTool());
+  }
+  tools.push(createAskUserTool());
+  return tools;
 }
 
 async function execJs(code) {
@@ -122,70 +338,34 @@ async function execJs(code) {
   return await factory(execConsole, displayImage, runtime.browser, runtime.context, runtime.page);
 }
 
-async function main(prompt = DEFAULT_PROMPT, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_MODEL) {
-  const client = new OpenAI();
-  const conversation = [];
-
-  conversation.push({
+async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_MODEL) {
+  const tools = buildTools(entry);
+  let nextInput = [{
     role: "user",
-    content: prompt,
-  });
+    content: entry.text,
+  }];
 
   for (let i = 0; i < maxSteps; i += 1) {
-    const resp = await client.responses.create({
+    const request = {
       model,
-      tools: [
-        {
-          type: "function",
-          name: "exec_js",
-          description: "Execute provided interactive JavaScript in a persistent REPL context.",
-          parameters: {
-            type: "object",
-            properties: {
-              code: {
-                type: "string",
-                description: `
-JavaScript to execute. Write small snippets of interactive code. To persist variables or functions across tool calls, you must save them to globalThis. Code is executed in an async persistent eval context, so you can use await. You have access to ONLY the following:
-- console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large base64 payloads like screenshots or buffer. If you create an image or screenshot, pass the base64 string to display().
-- display(base64_image_string): Use this to view a base64-encoded image.
-- Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: read-only TRUEOS browser facade if available. Use methods like getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y).
-- context: same object as browser for now.
-- page: same object as browser for now.
-`,
-              },
-            },
-            required: ["code"],
-            additionalProperties: false,
-          },
-        },
-        {
-          type: "function",
-          name: "ask_user",
-          description: "Ask the user a clarification question and wait for their response.",
-          parameters: {
-            type: "object",
-            properties: {
-              question: {
-                type: "string",
-                description: "The exact question to show the human. Use this instead of answering with a freeform clarifying question in a final answer.",
-              },
-            },
-            required: ["question"],
-            additionalProperties: false,
-          },
-        },
-      ],
-      input: conversation,
+      tools,
+      input: nextInput,
       reasoning: {
         effort: "low",
       },
-    });
+    };
+    if (previousResponseId) {
+      request.previous_response_id = previousResponseId;
+    }
 
-    conversation.push(...resp.output);
+    const resp = await client.responses.create(request);
+    if (typeof resp.id !== "string" || !resp.id) {
+      throw new Error("responses.create() did not return a response id");
+    }
+    previousResponseId = resp.id;
 
     let hadToolCall = false;
-    let latestPhase = null;
+    const toolOutputs = [];
 
     for (const item of resp.output) {
       if (item.type === "function_call" && item.name === "exec_js") {
@@ -206,7 +386,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
           });
         }
 
-        conversation.push({
+        toolOutputs.push({
           type: "function_call_output",
           call_id: item.call_id,
           output: runtime.jsOutput.slice(),
@@ -227,47 +407,73 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
         const parsed = JSON.parse(item.arguments || "{}");
         const question = parsed.question || "Please provide more information.";
         console.log(`MODEL QUESTION: ${question}`);
-        const answer = await askUserViaHost(question);
-        conversation.push({
+        shellPrint(`\r\nai: ${question}\r\n`);
+        const answerEntry = normalizeAiInputEntry(await awaitHostInput(question));
+        const answer = answerEntry ? answerEntry.text : "";
+        toolOutputs.push({
           type: "function_call_output",
           call_id: item.call_id,
           output: answer,
         });
       } else if (item.type === "message") {
         const content = Array.isArray(item.content) ? item.content[0] : item.content;
-        console.log(content && content.text ? content.text : content);
-        if ("phase" in item) {
-          latestPhase = item.phase || null;
+        const text = content && content.text ? content.text : content;
+        console.log(text);
+        if (typeof text === "string" && text) {
+          shellPrint(`${text}\r\n`);
         }
-      } else if (item.type === "output_item.done" && "phase" in item) {
-        latestPhase = item.phase || null;
       }
     }
 
-    if (!hadToolCall && latestPhase === "final_answer") {
-      return;
+    if (!hadToolCall) {
+      return previousResponseId;
     }
+
+    nextInput = toolOutputs;
+  }
+
+  return previousResponseId;
+}
+
+async function waitForNextInput(question = "") {
+  try {
+    return normalizeAiInputEntry(await awaitHostInput(question));
+  } catch (_err) {
+    return null;
   }
 }
 
-export async function startAiPc(prompt = getHostPrompt()) {
+export async function startAiPc() {
+  if (hasWorkerParentPort()) {
+    ensureWorkerRpcReady();
+  }
   if (globalThis.__trueosAiPcStarted) {
     return false;
   }
   globalThis.__trueosAiPcStarted = true;
   try {
-    await main(prompt);
-    return true;
+    const client = new OpenAI();
+    let previousResponseId = null;
+    while (true) {
+      const entry = await waitForNextInput("");
+      if (!entry) {
+        continue;
+      }
+      if (entry.newConversation) {
+        previousResponseId = null;
+      }
+      previousResponseId = await runTurn(client, entry, previousResponseId);
+    }
   } finally {
     globalThis.__trueosAiPcStarted = false;
   }
 }
 
-function getHostPrompt() {
-  if (typeof globalThis.__trueosAiPcPrompt === "string" && globalThis.__trueosAiPcPrompt) {
-    return globalThis.__trueosAiPcPrompt;
-  }
-  return DEFAULT_PROMPT;
+export async function startAiPcWorker() {
+  ensureWorkerRpcReady();
+  return await startAiPc();
 }
 
-void startAiPc(getHostPrompt());
+if (isMainThread) {
+  void startAiPc();
+}

@@ -203,6 +203,32 @@ pub(crate) fn cmd_tetris(
     CommandAction::EnterTetris
 }
 
+pub(crate) fn cmd_ai(
+    ctx: &mut ShellCommandCtx<'_>,
+    args: Option<&ParsedArgs<'_>>,
+) -> CommandAction {
+    let text = args.and_then(|a| a.get_str(0)).unwrap_or("").trim();
+    if text.is_empty() {
+        ctx.io.write_str("ai: usage ai <text>\r\n");
+        return CommandAction::None;
+    }
+
+    let entry = trueos_qjs::browser_task::AiInputEntry {
+        text: String::from(text),
+        web_search: false,
+        new_conversation: false,
+        computer_use: true,
+    };
+
+    if !trueos_qjs::browser_task::queue_ai_input(entry) {
+        ctx.io.write_str("ai: browser/ai bridge not running\r\n");
+        return CommandAction::None;
+    }
+
+    ctx.io.write_str("ai: queued\r\n");
+    CommandAction::None
+}
+
 pub(crate) fn cmd_insane(
     ctx: &mut ShellCommandCtx<'_>,
     _: Option<&ParsedArgs<'_>>,
