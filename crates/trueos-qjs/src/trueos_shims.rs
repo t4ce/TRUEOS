@@ -75,6 +75,7 @@ unsafe extern "C" {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_qjs_init();
     pub fn trueos_cabi_shell_qjs_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_qjs_write_byte(byte: u8) -> i32;
@@ -138,6 +139,14 @@ pub fn log_info(s: &str) {
 #[inline]
 pub fn log_error(s: &str) {
     write_log_stream(2, s);
+}
+
+#[inline]
+pub fn uart1_shell_write(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { trueos_cabi_uart1_shell_write(bytes.as_ptr(), bytes.len()) }
 }
 
 #[inline]

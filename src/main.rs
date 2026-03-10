@@ -33,6 +33,8 @@ mod tga;
 mod time;
 #[path = "tst/html.rs"]
 mod tst_html;
+#[path = "tst/http_trueosfs.rs"]
+mod tst_http_trueosfs;
 mod turbo;
 mod usb;
 #[path = "tst/usvg_smoke.rs"]

@@ -447,12 +447,7 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn trueos_cabi_shell_qjs_init() {
-        crate::shell::backends::qjs::qjs_shell_reset();
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_shell_qjs_write(
+    pub unsafe extern "C" fn trueos_cabi_uart1_shell_write(
         data_ptr: *const u8,
         data_len: usize,
     ) -> usize {
@@ -460,29 +455,8 @@ pub mod cabi {
             return 0;
         }
         let data = core::slice::from_raw_parts(data_ptr, data_len);
-        crate::shell::backends::qjs::qjs_shell_push_input(data)
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn trueos_cabi_shell_qjs_write_byte(byte: u8) -> i32 {
-        crate::shell::backends::qjs::qjs_shell_push_input_byte(byte);
-        0
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_shell_qjs_read(out_ptr: *mut u8, out_cap: usize) -> isize {
-        if out_ptr.is_null() || out_cap == 0 {
-            return 0;
-        }
-        let out = core::slice::from_raw_parts_mut(out_ptr, out_cap);
-        crate::shell::backends::qjs::qjs_shell_take_output(out) as isize
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn trueos_cabi_shell_qjs_read_byte() -> i32 {
-        crate::shell::backends::qjs::qjs_shell_take_output_byte()
-            .map(|b| b as i32)
-            .unwrap_or(-1)
+        crate::shell::uart1_com1::write_bytes(data);
+        data_len
     }
 
     #[unsafe(no_mangle)]

@@ -299,6 +299,70 @@ fn cmd_stream_push_tex_vtx(
     out.push(b);
     out.push(a);
 }
+
+#[inline]
+fn cmd_stream_push_rgb_vtx(out: &mut Vec<u8>, x: f32, y: f32, r: u8, g: u8, b: u8, a: u8) {
+    out.extend_from_slice(&x.to_le_bytes());
+    out.extend_from_slice(&y.to_le_bytes());
+    out.push(r);
+    out.push(g);
+    out.push(b);
+    out.push(a);
+}
+
+#[inline]
+fn cmd_stream_fill_rect(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    rgba: u32,
+) -> bool {
+    let x2 = x + width;
+    let y2 = y + height;
+    let left_px = x.min(x2);
+    let right_px = x.max(x2);
+    let top_px = y.min(y2);
+    let bottom_px = y.max(y2);
+
+    if !(left_px < right_px && top_px < bottom_px) {
+        return false;
+    }
+
+    let vw = CMD_STREAM_VIEW_W.load(Ordering::Relaxed).max(1) as f32;
+    let vh = CMD_STREAM_VIEW_H.load(Ordering::Relaxed).max(1) as f32;
+    let left = (2.0 * (left_px / vw)) - 1.0;
+    let right = (2.0 * (right_px / vw)) - 1.0;
+    let top = 1.0 - (2.0 * (top_px / vh));
+    let bottom = 1.0 - (2.0 * (bottom_px / vh));
+    let r = ((rgba >> 24) & 0xFF) as u8;
+    let g = ((rgba >> 16) & 0xFF) as u8;
+    let b = ((rgba >> 8) & 0xFF) as u8;
+    let a = (rgba & 0xFF) as u8;
+
+    let mut verts = Vec::with_capacity(6 * 12);
+
+    cmd_stream_push_rgb_vtx(&mut verts, left, top, r, g, b, a);
+    cmd_stream_push_rgb_vtx(&mut verts, right, top, r, g, b, a);
+    cmd_stream_push_rgb_vtx(&mut verts, right, bottom, r, g, b, a);
+    cmd_stream_push_rgb_vtx(&mut verts, left, top, r, g, b, a);
+    cmd_stream_push_rgb_vtx(&mut verts, right, bottom, r, g, b, a);
+    cmd_stream_push_rgb_vtx(&mut verts, left, bottom, r, g, b, a);
+
+    let temp_alpha_blend = CMD_STREAM_BLEND_ENABLED.load(Ordering::Relaxed) == 0 && a < 255;
+    if temp_alpha_blend {
+        let _ = unsafe { trueos_cabi_gfx_set_blend(1, 0x0302, 0x0303, 0x0302, 0x0303, 0, 0) };
+    }
+
+    let rc = unsafe { trueos_cabi_gfx_draw_rgb_triangles_no_present(verts.as_ptr(), verts.len()) };
+
+    if temp_alpha_blend {
+        let _ = unsafe { trueos_cabi_gfx_set_blend(0, 1, 0, 1, 0, 0, 0) };
+    }
+
+    rc == 0
+}
+
 pub fn draw_lyon_in_frame(
     icon_id: u32,
     x: f32,
@@ -648,6 +712,37 @@ pub(crate) unsafe fn try_create_native_module(
             qjs::JSValue::undefined()
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_fill_rect(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 5) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(x_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(y_f) = cmd_stream_arg_f64(ctx, args, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(w_f) = cmd_stream_arg_f64(ctx, args, 2) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(h_f) = cmd_stream_arg_f64(ctx, args, 3) else {
+                return qjs::JSValue::undefined();
+            };
+            let Some(rgba_f) = cmd_stream_arg_f64(ctx, args, 4) else {
+                return qjs::JSValue::undefined();
+            };
+
+            atlas_cmd_stream::flush_text_batches();
+            let rgba = (rgba_f as i64).max(0) as u32;
+            let _ = cmd_stream_fill_rect(x_f as f32, y_f as f32, w_f as f32, h_f as f32, rgba);
+            qjs::JSValue::undefined()
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_draw_textured_triangles_u8(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
@@ -968,6 +1063,7 @@ pub(crate) unsafe fn try_create_native_module(
                 1
             );
             export_fn!("drawTrianglesU8", qjs_cmd_stream_draw_triangles_u8, 1);
+            export_fn!("fillRect", qjs_cmd_stream_fill_rect, 5);
             export_fn!(
                 "drawTexturedTrianglesU8",
                 qjs_cmd_stream_draw_textured_triangles_u8,
@@ -1010,6 +1106,7 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("destroyTexture");
         add_export!("createAtlasTexture");
         add_export!("drawTrianglesU8");
+        add_export!("fillRect");
         add_export!("drawTexturedTrianglesU8");
         add_export!("drawAtlasText");
         add_export!("drawLyonIconInFrame");

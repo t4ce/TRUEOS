@@ -62,7 +62,7 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     ensure_global_intl(ctx);
     ensure_global_fetch(ctx);
     ensure_global_kernel_time(ctx);
-    ensure_global_shell1(ctx);
+    ensure_global_uart_shell(ctx);
 }
 
 unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
@@ -576,17 +576,7 @@ unsafe fn ensure_global_timers(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, global);
 }
 
-unsafe extern "C" fn trueos_shell_qjs_init_js(
-    _ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    _argc: c_int,
-    _argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    qjs::trueos_shims::shell_qjs_init();
-    qjs::JSValue::undefined()
-}
-
-unsafe extern "C" fn trueos_shell_qjs_write_js(
+unsafe extern "C" fn trueos_uart1_shell_write_js(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
     argc: c_int,
@@ -602,24 +592,12 @@ unsafe extern "C" fn trueos_shell_qjs_write_js(
         return js_int32(0);
     }
     let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
-    let wrote = qjs::trueos_shims::shell_qjs_write(bytes);
+    let wrote = qjs::trueos_shims::uart1_shell_write(bytes);
     qjs::JS_FreeCString(ctx, cstr);
     js_int32(wrote as i32)
 }
 
-unsafe extern "C" fn trueos_shell_qjs_read_byte_js(
-    _ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    _argc: c_int,
-    _argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    match qjs::trueos_shims::shell_qjs_read_byte() {
-        Some(byte) => js_int32(byte as i32),
-        None => qjs::JSValue::undefined(),
-    }
-}
-
-unsafe fn ensure_global_shell1(ctx: *mut qjs::JSContext) {
+unsafe fn ensure_global_uart_shell(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
     }
@@ -628,25 +606,10 @@ unsafe fn ensure_global_shell1(ctx: *mut qjs::JSContext) {
         return;
     }
 
-    let init_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_shell_qjs_init_js),
-        b"__trueosShellQjsInit\0".as_ptr() as *const c_char,
-        0,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosShellQjsInit\0".as_ptr() as *const c_char,
-        init_fn,
-    );
-
     let write_fn = qjs::JS_NewCFunction2(
         ctx,
-        Some(trueos_shell_qjs_write_js),
-        b"__trueosShellQjsWrite\0".as_ptr() as *const c_char,
+        Some(trueos_uart1_shell_write_js),
+        b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
         1,
         qjs::JS_CFUNC_GENERIC,
         0,
@@ -654,149 +617,9 @@ unsafe fn ensure_global_shell1(ctx: *mut qjs::JSContext) {
     let _ = qjs::JS_SetPropertyStr(
         ctx,
         global,
-        b"__trueosShellQjsWrite\0".as_ptr() as *const c_char,
+        b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
         write_fn,
     );
-
-    let read_byte_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(trueos_shell_qjs_read_byte_js),
-        b"__trueosShellQjsReadByte\0".as_ptr() as *const c_char,
-        0,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosShellQjsReadByte\0".as_ptr() as *const c_char,
-        read_byte_fn,
-    );
-
-    let shim_src = br#"
-(function (G) {
-    if (!G || typeof G.__trueosShellQjsReadByte !== 'function') return;
-
-    let shellInited = false;
-    function initShell() {
-        if (shellInited) return;
-        if (typeof G.__trueosShellQjsInit === 'function') {
-            try { G.__trueosShellQjsInit(); } catch (_) {}
-        }
-        shellInited = true;
-    }
-
-    function writeShell(text) {
-        initShell();
-        if (typeof G.__trueosShellQjsWrite === 'function') {
-            G.__trueosShellQjsWrite(String(text == null ? '' : text));
-        }
-    }
-
-    G.__trueosShell1Write = writeShell;
-
-    if (typeof G.__trueosShell1Ask !== 'function') {
-        G.__trueosShell1Ask = function shell1Ask(question) {
-            initShell();
-            const prompt = String(question == null ? '' : question);
-            writeShell("\r\nai: ");
-            writeShell(prompt);
-            writeShell("\r\n> ");
-
-            return new Promise((resolve, reject) => {
-                let buf = '';
-                let ignoreLf = false;
-                let done = false;
-                let timer = 0;
-
-                function finishOk(value) {
-                    if (done) return;
-                    done = true;
-                    if (timer && typeof G.clearInterval === 'function') {
-                        try { G.clearInterval(timer); } catch (_) {}
-                    }
-                    writeShell("\r\n");
-                    resolve(value);
-                }
-
-                function finishErr(err) {
-                    if (done) return;
-                    done = true;
-                    if (timer && typeof G.clearInterval === 'function') {
-                        try { G.clearInterval(timer); } catch (_) {}
-                    }
-                    reject(err);
-                }
-
-                function handleByte(byte) {
-                    if (ignoreLf) {
-                        ignoreLf = false;
-                        if (byte === 10) return;
-                    }
-                    if (byte === 13) {
-                        ignoreLf = true;
-                        finishOk(buf);
-                        return;
-                    }
-                    if (byte === 10) {
-                        finishOk(buf);
-                        return;
-                    }
-                    if (byte === 4) {
-                        finishOk(buf);
-                        return;
-                    }
-                    if (byte === 8 || byte === 127) {
-                        if (buf.length > 0) {
-                            buf = buf.slice(0, -1);
-                            writeShell("\b \b");
-                        }
-                        return;
-                    }
-                    if (byte === 0) return;
-                    const ch = String.fromCharCode(byte & 0xFF);
-                    buf += ch;
-                    writeShell(ch);
-                }
-
-                function pump() {
-                    try {
-                        while (!done) {
-                            const v = G.__trueosShellQjsReadByte();
-                            if (typeof v !== 'number' || !Number.isFinite(v)) break;
-                            handleByte(v | 0);
-                        }
-                    } catch (err) {
-                        finishErr(err);
-                    }
-                }
-
-                pump();
-                if (done) return;
-
-                if (typeof G.setInterval === 'function') {
-                    try {
-                        timer = G.setInterval(pump, 10);
-                        return;
-                    } catch (_) {}
-                }
-                finishErr(new Error('Shell1 ask requires setInterval support'));
-            });
-        };
-    }
-})(typeof globalThis !== 'undefined' ? globalThis : this);
-"#;
-
-    let shim = qjs::js_eval_bytes(
-        ctx,
-        shim_src,
-        b"<node-shell1-shim>\0".as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_GLOBAL,
-    );
-    if shim.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "node shell1 shim");
-    }
-    qjs::js_free_value(ctx, shim);
     qjs::js_free_value(ctx, global);
 }
 

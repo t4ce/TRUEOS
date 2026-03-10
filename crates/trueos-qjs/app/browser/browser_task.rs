@@ -1,4 +1,5 @@
 #![cfg(feature = "trueos")]
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -6,16 +7,34 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use crate as qjs;
 
+mod ai_api;
 mod helpers;
 
 static BROWSER_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static PENDING_HTML: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::new());
+
+#[derive(Clone)]
+pub struct AiInputEntry {
+    pub text: String,
+    pub web_search: bool,
+    pub new_conversation: bool,
+    pub computer_use: bool,
+}
 
 pub fn queue_set_html(next_html: String) -> bool {
     if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
         return false;
     }
     *PENDING_HTML.lock() = Some(next_html);
+    true
+}
+
+pub fn queue_ai_input(next: AiInputEntry) -> bool {
+    if !BROWSER_TASK_STARTED.load(Ordering::SeqCst) {
+        return false;
+    }
+    PENDING_AI_INPUT.lock().push_back(next);
     true
 }
 
@@ -36,6 +55,34 @@ unsafe fn apply_pending_html(ctx: *mut qjs::JSContext) {
         filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_GLOBAL,
         "browser setHtml",
+    );
+}
+
+unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
+    let Some(next) = PENDING_AI_INPUT.lock().pop_front() else {
+        return;
+    };
+
+    let text_lit = helpers::js_single_quoted_literal(next.text.as_str());
+    let mut src = String::new();
+    src.push_str("(function(){const __g=(typeof globalThis!=='undefined')?globalThis:this;");
+    src.push_str("if(typeof __g.__trueosAiInputPush!=='function')return;");
+    src.push_str("__g.__trueosAiInputPush({text:");
+    src.push_str(&text_lit);
+    src.push_str(",webSearch:");
+    src.push_str(if next.web_search { "true" } else { "false" });
+    src.push_str(",newConversation:");
+    src.push_str(if next.new_conversation { "true" } else { "false" });
+    src.push_str(",computerUse:");
+    src.push_str(if next.computer_use { "true" } else { "false" });
+    src.push_str("});})();");
+
+    let _ = helpers::eval_or_log(
+        ctx,
+        src.as_bytes(),
+        b"<browser-ai-input>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+        "browser ai input",
     );
 }
 
@@ -115,13 +162,17 @@ if (typeof G.clearTimeout !== 'function') G.clearTimeout = () => {};
 "#,
     );
 
-    helpers::eval_or_log(
+    if !helpers::eval_or_log(
         ctx,
         init_src.as_bytes(),
         init_filename.as_ptr() as *const c_char,
         qjs::JS_EVAL_TYPE_GLOBAL,
         "browser globals",
-    )
+    ) {
+        return false;
+    }
+
+    ai_api::install_globals(ctx)
 }
 
 #[embassy_executor::task]
@@ -170,6 +221,7 @@ pub async fn boot_browser() {
 
         loop {
             apply_pending_html(ctx);
+            apply_pending_ai_input(ctx);
             if !pump_runtime_once(rt, ctx) {
                 break;
             }

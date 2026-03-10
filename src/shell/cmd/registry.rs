@@ -635,6 +635,7 @@ pub(crate) fn init_builtin_shell_commands() {
         let _ = REGSHCMD("bench", &NO_ARGS, cmd::cmd_bench);
         let _ = REGSHCMD("bench.net", &NO_ARGS, cmd::cmd_netbench);
         let _ = REGSHCMD("file", &FILE_ARGS, cmd::cmd_file);
+        let _ = REGSHCMD("ai", &AI_ARGS, cmd::cmd_ai);
         let _ = REGSHCMD("qjs", &QJS_ARGS, cmd::cmd_qjs);
         let _ = REGSHCMD("acpi", &ACPI_ARGS, cmd::cmd_acpi);
         let _ = REGSHCMD("hv", &HV_ARGS, cmd::cmd_hv);
