@@ -16,6 +16,17 @@ function getPcRuntime() {
   return globalThis.__trueosAiPcRuntime;
 }
 
+function bindHostRuntime() {
+  const runtime = getPcRuntime();
+  const browser = globalThis.__trueosBrowser;
+  if (browser && typeof browser === "object") {
+    runtime.browser = browser;
+    runtime.context = browser;
+    runtime.page = browser;
+  }
+  return runtime;
+}
+
 function formatValue(value, depth) {
   if (depth > 2) {
     return "[depth-limit]";
@@ -93,14 +104,14 @@ function displayImage(base64Image) {
 }
 
 async function askUserViaHost(question) {
-  if (typeof globalThis.__trueosAskUser === "function") {
-    return await globalThis.__trueosAskUser(question);
+  if (typeof globalThis.__trueosShell1Ask === "function") {
+    return await globalThis.__trueosShell1Ask(question);
   }
-  throw new Error("ask_user is not wired; host must expose globalThis.__trueosAskUser(question)");
+  throw new Error("ask_user is not wired; host must expose globalThis.__trueosShell1Ask(question)");
 }
 
 async function execJs(code) {
-  const runtime = getPcRuntime();
+  const runtime = bindHostRuntime();
   const execConsole = makeExecConsole(runtime.jsOutput);
   const wrappedCode = `
     (async (console, display, browser, context, page) => {
@@ -138,9 +149,9 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large base64 payloads like screenshots or buffer. If you create an image or screenshot, pass the base64 string to display().
 - display(base64_image_string): Use this to view a base64-encoded image.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: host-provided browser object if available.
-- context: host-provided browsing context if available.
-- page: host-provided page object if available.
+- browser: read-only TRUEOS browser facade if available. Use methods like getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y).
+- context: same object as browser for now.
+- page: same object as browser for now.
 `,
               },
             },
@@ -181,7 +192,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
         hadToolCall = true;
         const parsed = JSON.parse(item.arguments || "{}");
         const code = parsed.code || "";
-        const runtime = getPcRuntime();
+        const runtime = bindHostRuntime();
 
         console.log(code);
         console.log("----");
@@ -239,6 +250,19 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
   }
 }
 
+export async function startAiPc(prompt = getHostPrompt()) {
+  if (globalThis.__trueosAiPcStarted) {
+    return false;
+  }
+  globalThis.__trueosAiPcStarted = true;
+  try {
+    await main(prompt);
+    return true;
+  } finally {
+    globalThis.__trueosAiPcStarted = false;
+  }
+}
+
 function getHostPrompt() {
   if (typeof globalThis.__trueosAiPcPrompt === "string" && globalThis.__trueosAiPcPrompt) {
     return globalThis.__trueosAiPcPrompt;
@@ -246,4 +270,4 @@ function getHostPrompt() {
   return DEFAULT_PROMPT;
 }
 
-main(getHostPrompt());
+void startAiPc(getHostPrompt());

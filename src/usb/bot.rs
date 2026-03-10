@@ -128,6 +128,11 @@ async fn bulk_xfer(
         crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
 
+    if !ring.release_completed(1) {
+        crate::log!("usb: {}: bulk ring accounting underflow\n", what);
+        return Err(());
+    }
+
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = (evt.d2 & 0x00FF_FFFF) as u32;
 
@@ -188,6 +193,11 @@ fn bulk_xfer_sync(
         xhci::debug_peek_transfer_events_for_slot(ctx.controller_id, slot_id, 4);
         crate::log!("usb: {}: timeout waiting for bulk transfer\n", what);
     })?;
+
+    if !ring.release_completed(1) {
+        crate::log!("usb: {}: bulk ring accounting underflow\n", what);
+        return Err(());
+    }
 
     let completion = (evt.d2 >> 24) & 0xFF;
     let residual = (evt.d2 & 0x00FF_FFFF) as u32;

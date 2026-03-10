@@ -380,6 +380,16 @@ impl MidiRuntime {
     }
 
     fn on_rx_complete(&mut self, completion: u32, residual: u32) {
+        let Some(ref mut ring_in) = self.ring_in else {
+            return;
+        };
+        if !ring_in.release_completed(1) {
+            crate::log!(
+                "usb: midi rx ring accounting underflow slot={}\n",
+                self.slot_id
+            );
+            return;
+        }
         self.rx_posted = false;
 
         if completion != 1 && completion != 13 {

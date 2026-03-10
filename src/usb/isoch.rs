@@ -60,8 +60,8 @@ impl IsochOutPipe {
         } = cfg;
 
         // Allocate transfer ring.
-        // Note: `TrbRing` does not currently do producer/consumer fullness tracking.
-        // UAC keeps an explicit in-flight budget; this ring only needs to be "reasonably big".
+        // `TrbRing` now enforces in-flight capacity; UAC still keeps a separate packet/buffer
+        // budget so it can pace the demo stream without exhausting DMA buffers.
         const ISOCH_TRBS: usize = 256;
         let ring_bytes = ISOCH_TRBS * size_of::<Trb>();
         let (ep_ring_phys, ep_ring_virt) = dma::alloc(ring_bytes, 64).ok_or(())?;
@@ -249,5 +249,9 @@ impl IsochOutPipe {
             trb.d3 |= 1 << 5; // IOC for final packet of a frame batch
         }
         self.ring.push(trb)
+    }
+
+    pub fn destroy(self) {
+        dma::dealloc(self.ring.trbs as *mut u8, self.ring.len * size_of::<Trb>());
     }
 }
