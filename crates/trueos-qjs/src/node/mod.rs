@@ -55,11 +55,108 @@ pub unsafe fn install(rt: *mut qjs::JSRuntime) {
 
 /// Convenience wrapper: Node mode currently reuses the same globals as the base loader.
 pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
+    ensure_global_env(ctx);
+    ensure_global_web_platform(ctx);
     ensure_global_console(ctx);
     ensure_global_timers(ctx);
     ensure_global_intl(ctx);
     ensure_global_fetch(ctx);
     ensure_global_kernel_time(ctx);
+    ensure_global_shell1(ctx);
+}
+
+unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+
+    let shim_src = br#"
+(function (G) {
+    if (!G) return;
+    if (!G.__env__ || typeof G.__env__ !== 'object') {
+        G.__env__ = Object.create(null);
+    }
+    if (typeof G.__env__.OPENAI_API_KEY !== 'string' || !G.__env__.OPENAI_API_KEY) {
+        G.__env__.OPENAI_API_KEY = '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';
+    }
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-env-shim>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node env shim");
+    }
+    qjs::js_free_value(ctx, shim);
+}
+
+unsafe fn ensure_global_web_platform(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+
+    let shim_src = br#"
+(function (G) {
+    if (!G) return;
+
+    if (typeof G.Blob !== 'function') {
+        function Blob(parts, opts) {
+            this.size = 0;
+            this.type = (opts && opts.type) ? String(opts.type) : '';
+
+            if (parts && typeof parts.length === 'number') {
+                for (let i = 0; i < parts.length; i += 1) {
+                    const p = parts[i];
+                    if (typeof p === 'string') {
+                        this.size += p.length;
+                    } else if (p && typeof p.byteLength === 'number') {
+                        this.size += Number(p.byteLength) || 0;
+                    } else if (p && typeof p.length === 'number') {
+                        this.size += Number(p.length) || 0;
+                    }
+                }
+            }
+        }
+        Blob.prototype.arrayBuffer = function () { return Promise.resolve(new ArrayBuffer(0)); };
+        Blob.prototype.text = function () { return Promise.resolve(''); };
+        Blob.prototype.slice = function () { return this; };
+        G.Blob = Blob;
+    }
+
+    if (typeof G.File !== 'function') {
+        function File(parts, name, opts) {
+            G.Blob.call(this, parts, opts);
+            this.name = String(name || 'file');
+            this.lastModified = (opts && opts.lastModified) ? Number(opts.lastModified) : 0;
+        }
+        File.prototype = Object.create(G.Blob.prototype);
+        File.prototype.constructor = File;
+        G.File = File;
+    }
+
+    if (typeof G.btoa !== 'function') {
+        G.btoa = function (_s) { return ''; };
+    }
+    if (typeof G.atob !== 'function') {
+        G.atob = function (_s) { return ''; };
+    }
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-web-platform-shim>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node web platform shim");
+    }
+    qjs::js_free_value(ctx, shim);
 }
 
 unsafe extern "C" fn trueos_ntp_unix_seconds_js(
@@ -476,6 +573,230 @@ unsafe fn ensure_global_timers(ctx: *mut qjs::JSContext) {
     }
 
     qjs::timers::install_globals(ctx, global);
+    qjs::js_free_value(ctx, global);
+}
+
+unsafe extern "C" fn trueos_shell_qjs_init_js(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    qjs::trueos_shims::shell_qjs_init();
+    qjs::JSValue::undefined()
+}
+
+unsafe extern "C" fn trueos_shell_qjs_write_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return js_int32(0);
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let wrote = qjs::trueos_shims::shell_qjs_write(bytes);
+    qjs::JS_FreeCString(ctx, cstr);
+    js_int32(wrote as i32)
+}
+
+unsafe extern "C" fn trueos_shell_qjs_read_byte_js(
+    _ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    match qjs::trueos_shims::shell_qjs_read_byte() {
+        Some(byte) => js_int32(byte as i32),
+        None => qjs::JSValue::undefined(),
+    }
+}
+
+unsafe fn ensure_global_shell1(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let init_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell_qjs_init_js),
+        b"__trueosShellQjsInit\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShellQjsInit\0".as_ptr() as *const c_char,
+        init_fn,
+    );
+
+    let write_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell_qjs_write_js),
+        b"__trueosShellQjsWrite\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShellQjsWrite\0".as_ptr() as *const c_char,
+        write_fn,
+    );
+
+    let read_byte_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell_qjs_read_byte_js),
+        b"__trueosShellQjsReadByte\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShellQjsReadByte\0".as_ptr() as *const c_char,
+        read_byte_fn,
+    );
+
+    let shim_src = br#"
+(function (G) {
+    if (!G || typeof G.__trueosShellQjsReadByte !== 'function') return;
+
+    let shellInited = false;
+    function initShell() {
+        if (shellInited) return;
+        if (typeof G.__trueosShellQjsInit === 'function') {
+            try { G.__trueosShellQjsInit(); } catch (_) {}
+        }
+        shellInited = true;
+    }
+
+    function writeShell(text) {
+        initShell();
+        if (typeof G.__trueosShellQjsWrite === 'function') {
+            G.__trueosShellQjsWrite(String(text == null ? '' : text));
+        }
+    }
+
+    G.__trueosShell1Write = writeShell;
+
+    if (typeof G.__trueosShell1Ask !== 'function') {
+        G.__trueosShell1Ask = function shell1Ask(question) {
+            initShell();
+            const prompt = String(question == null ? '' : question);
+            writeShell("\r\nai: ");
+            writeShell(prompt);
+            writeShell("\r\n> ");
+
+            return new Promise((resolve, reject) => {
+                let buf = '';
+                let ignoreLf = false;
+                let done = false;
+                let timer = 0;
+
+                function finishOk(value) {
+                    if (done) return;
+                    done = true;
+                    if (timer && typeof G.clearInterval === 'function') {
+                        try { G.clearInterval(timer); } catch (_) {}
+                    }
+                    writeShell("\r\n");
+                    resolve(value);
+                }
+
+                function finishErr(err) {
+                    if (done) return;
+                    done = true;
+                    if (timer && typeof G.clearInterval === 'function') {
+                        try { G.clearInterval(timer); } catch (_) {}
+                    }
+                    reject(err);
+                }
+
+                function handleByte(byte) {
+                    if (ignoreLf) {
+                        ignoreLf = false;
+                        if (byte === 10) return;
+                    }
+                    if (byte === 13) {
+                        ignoreLf = true;
+                        finishOk(buf);
+                        return;
+                    }
+                    if (byte === 10) {
+                        finishOk(buf);
+                        return;
+                    }
+                    if (byte === 4) {
+                        finishOk(buf);
+                        return;
+                    }
+                    if (byte === 8 || byte === 127) {
+                        if (buf.length > 0) {
+                            buf = buf.slice(0, -1);
+                            writeShell("\b \b");
+                        }
+                        return;
+                    }
+                    if (byte === 0) return;
+                    const ch = String.fromCharCode(byte & 0xFF);
+                    buf += ch;
+                    writeShell(ch);
+                }
+
+                function pump() {
+                    try {
+                        while (!done) {
+                            const v = G.__trueosShellQjsReadByte();
+                            if (typeof v !== 'number' || !Number.isFinite(v)) break;
+                            handleByte(v | 0);
+                        }
+                    } catch (err) {
+                        finishErr(err);
+                    }
+                }
+
+                pump();
+                if (done) return;
+
+                if (typeof G.setInterval === 'function') {
+                    try {
+                        timer = G.setInterval(pump, 10);
+                        return;
+                    } catch (_) {}
+                }
+                finishErr(new Error('Shell1 ask requires setInterval support'));
+            });
+        };
+    }
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-shell1-shim>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node shell1 shim");
+    }
+    qjs::js_free_value(ctx, shim);
     qjs::js_free_value(ctx, global);
 }
 

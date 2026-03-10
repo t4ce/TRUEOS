@@ -139,6 +139,13 @@ impl CdcRuntime {
     }
 
     fn on_tx_complete(&mut self, completion: u32) {
+        if !self.ring_out.release_completed(1) {
+            crate::log!(
+                "usb: cdc tx ring accounting underflow slot={}\n",
+                self.slot_id
+            );
+            return;
+        }
         self.tx_inflight = false;
         if completion != 1 {
             crate::log!(
@@ -151,6 +158,13 @@ impl CdcRuntime {
     }
 
     fn on_rx_complete(&mut self, completion: u32, residual: u32) {
+        if !self.ring_in.release_completed(1) {
+            crate::log!(
+                "usb: cdc rx ring accounting underflow slot={}\n",
+                self.slot_id
+            );
+            return;
+        }
         self.rx_posted = false;
         if completion != 1 && completion != 13 {
             crate::log!(

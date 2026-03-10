@@ -386,6 +386,14 @@ pub async fn poll_task(info: xhci::XhcInfo) {
                         |runtime| {
                             let completion = (evt.d2 >> 24) & 0xFF;
                             let residual = evt.d2 & 0x00FF_FFFF;
+                            if !runtime.ep_ring.release_completed(1) {
+                                crate::log!(
+                                    "usb: hid ring accounting underflow slot={} target={}\n",
+                                    runtime.slot_id,
+                                    runtime.ep_target
+                                );
+                                return true;
+                            }
                             let data_len =
                                 runtime.report_len.min(runtime.ep.max_packet as u32) as usize;
                             let requested = data_len as u32;

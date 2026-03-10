@@ -130,6 +130,11 @@ pub(crate) async fn control_in(
             usbv!("usb: {}: timeout waiting for transfer event\n", what);
         })?;
 
+        if !ep0_ring.release_completed(3) {
+            usbv!("usb: {}: ep0 ring accounting underflow\n", what);
+            return Err(());
+        }
+
         let completion = trb_cc(&evt);
         let remaining = (evt.d2 & 0x00FF_FFFF) as u32;
         let requested = length as u32;
@@ -252,6 +257,12 @@ pub(crate) async fn control_out(
             usbv!("usb: {}: timeout waiting for transfer event\n", what);
         })?;
 
+        let submitted_trbs = if data_trb_phys.is_some() { 3 } else { 2 };
+        if !ep0_ring.release_completed(submitted_trbs) {
+            usbv!("usb: {}: ep0 ring accounting underflow\n", what);
+            return Err(());
+        }
+
         let completion = trb_cc(&evt);
         if completion == 1 {
             return Ok(());
@@ -365,6 +376,12 @@ pub(crate) async fn control_out_cc(
     .map_err(|_| {
         usbv!("usb: {}: timeout waiting for transfer event\n", what);
     })?;
+
+    let submitted_trbs = if data_trb_phys.is_some() { 3 } else { 2 };
+    if !ep0_ring.release_completed(submitted_trbs) {
+        usbv!("usb: {}: ep0 ring accounting underflow\n", what);
+        return Err(());
+    }
 
     Ok(trb_cc(&evt))
 }

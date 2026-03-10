@@ -125,10 +125,10 @@ struct UacRuntime {
     rate_hz: u32,
     channels: u16,
     bits_per_sample: u8,
-    interval: u8,
     sync_type: u8,
     has_feedback_ep: bool,
-    speed_code: u32,
+    service_interval_us: u64,
+    target_in_flight: usize,
     phase_accum: u64,
     fill_waker: Option<Waker>,
 }
@@ -152,6 +152,25 @@ static UAC_EVENT_OWNER_CPU: [AtomicU32; MAX_XHCI_CONTROLLERS] =
 static UAC_EVENT_QUEUE: [Mutex<Deque<Trb, UAC_EVENT_QUEUE_CAP>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(Deque::new()) }; MAX_XHCI_CONTROLLERS];
 
+fn reset_event_queue_state(controller_id: usize) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    UAC_EVENT_OWNER_CPU[controller_id].store(0, Ordering::Release);
+    UAC_EVENT_QUEUE[controller_id].lock().clear();
+}
+
+fn free_dma_bufs(bufs: &mut Vec<DmaBuf, 64>, packet_bytes: usize) {
+    while let Some(buf) = bufs.pop() {
+        dma::dealloc(buf.virt, packet_bytes);
+    }
+}
+
+fn free_runtime_resources(mut rt: UacRuntime) {
+    free_dma_bufs(&mut rt.bufs, rt.pipe.max_packet as usize);
+    rt.pipe.destroy();
+}
+
 fn first_active_controller() -> Option<usize> {
     for id in 0..MAX_XHCI_CONTROLLERS {
         if UAC_SLOT[id].load(Ordering::Acquire) != 0 {
@@ -169,12 +188,16 @@ pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
         if let Some(w) = rt.fill_waker.as_ref() {
             w.wake_by_ref();
         }
-        *guard = None;
+        let Some(rt) = guard.take() else {
+            return false;
+        };
         UAC_SLOT[controller_id].store(0, Ordering::Release);
         UAC_XFER_OK[controller_id].store(0, Ordering::Release);
         UAC_XFER_ERR[controller_id].store(0, Ordering::Release);
         UAC_XFER_LAST_CC[controller_id].store(0, Ordering::Release);
-        UAC_EVENT_QUEUE[controller_id].lock().clear();
+        reset_event_queue_state(controller_id);
+        drop(guard);
+        free_runtime_resources(rt);
         return true;
     }
     false
@@ -207,6 +230,13 @@ fn process_transfer_event(controller_id: usize, evt: &Trb) -> bool {
     } else {
         UAC_XFER_ERR[controller_id].fetch_add(1, Ordering::Relaxed);
         UAC_XFER_LAST_CC[controller_id].store(cc, Ordering::Relaxed);
+    }
+    if !rt.pipe.ring.release_completed(1) {
+        crate::log!(
+            "usb: uac ring accounting underflow slot={} target={}\n",
+            rt.slot_id,
+            rt.pipe_target
+        );
     }
     if rt.in_flight > 0 {
         rt.in_flight -= 1;
@@ -245,7 +275,7 @@ pub fn release_event_queue_owner(controller_id: usize) {
         .compare_exchange(mine, 0, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        UAC_EVENT_QUEUE[controller_id].lock().clear();
+        reset_event_queue_state(controller_id);
     }
 }
 
@@ -470,6 +500,52 @@ fn select_sample_rate(info: &UacRateInfo) -> u32 {
         return min;
     }
     crate::audio::DEFAULT_RATE_HZ
+}
+
+fn service_interval_us(speed_code: u32, interval: u8) -> u64 {
+    if speed_code == 1 {
+        core::cmp::max(1, interval as u64) * 1000
+    } else {
+        125u64 * (1u64 << (interval.saturating_sub(1) as u64))
+    }
+}
+
+fn pacing_target_in_flight(buf_count: usize, service_interval_us: u64) -> usize {
+    let desired = if service_interval_us <= 125 {
+        8usize
+    } else if service_interval_us <= 250 {
+        6usize
+    } else {
+        4usize
+    };
+    let max_target = core::cmp::max(1usize, buf_count.saturating_sub(1));
+    core::cmp::min(desired, max_target)
+}
+
+fn apply_feedback_servo(
+    rt: &UacRuntime,
+    samples_needed: usize,
+    max_samples: usize,
+    channels: usize,
+) -> usize {
+    if !rt.has_feedback_ep || channels == 0 {
+        return samples_needed;
+    }
+
+    let max_aligned = max_samples - (max_samples % channels);
+    let min_aligned = channels;
+    let mut adjusted = samples_needed;
+
+    if rt.in_flight + 1 < rt.target_in_flight {
+        adjusted = core::cmp::min(adjusted.saturating_add(channels), max_aligned);
+    } else if rt.in_flight > rt.target_in_flight {
+        adjusted = adjusted.saturating_sub(channels);
+        if adjusted < min_aligned {
+            adjusted = min_aligned;
+        }
+    }
+
+    adjusted
 }
 
 fn parse_as_out_endpoint(cfg: &[u8]) -> Option<AsOutEndpoint> {
@@ -735,6 +811,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             200,
         )
         .await;
+        dma::dealloc(virt, 8);
     }
 
     // SET_CONFIGURATION
@@ -797,32 +874,52 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
     // Pre-allocate a small DMA buffer pool sized to the endpoint's packet size.
     let mut bufs: Vec<DmaBuf, 64> = Vec::new();
     for _ in 0..bufs.capacity() {
-        let (phys, virt) = dma::alloc(pipe.max_packet as usize, 64).ok_or(())?;
+        let (phys, virt) = match dma::alloc(pipe.max_packet as usize, 64) {
+            Some(pair) => pair,
+            None => {
+                free_dma_bufs(&mut bufs, pipe.max_packet as usize);
+                pipe.destroy();
+                return Err(());
+            }
+        };
         unsafe { write_bytes(virt, 0, pipe.max_packet as usize) };
         let _ = bufs.push(DmaBuf { phys, virt });
     }
 
     let pipe_target = pipe.ep_target;
+    let service_interval_us = service_interval_us(speed_code, as_out.interval);
+    let target_in_flight = pacing_target_in_flight(bufs.len(), service_interval_us);
 
     let controller_id = ctx.controller_id;
-    *UAC_RUNTIME[controller_id].lock() = Some(UacRuntime {
-        ctx: *ctx,
-        slot_id,
-        pipe_target,
-        pipe,
-        bufs,
-        buf_idx: 0,
-        in_flight: 0,
-        rate_hz: sink.fmt.rate_hz,
-        channels: sink.fmt.channels as u16,
-        bits_per_sample: sink.fmt.bits_per_sample,
-        interval: as_out.interval,
-        sync_type: as_out.sync_type,
-        has_feedback_ep: as_out.has_feedback_ep,
-        speed_code,
-        phase_accum: 0,
-        fill_waker: None,
-    });
+    reset_event_queue_state(controller_id);
+    UAC_XFER_OK[controller_id].store(0, Ordering::Release);
+    UAC_XFER_ERR[controller_id].store(0, Ordering::Release);
+    UAC_XFER_LAST_CC[controller_id].store(0, Ordering::Release);
+
+    let replaced = {
+        let mut guard = UAC_RUNTIME[controller_id].lock();
+        guard.replace(UacRuntime {
+            ctx: *ctx,
+            slot_id,
+            pipe_target,
+            pipe,
+            bufs,
+            buf_idx: 0,
+            in_flight: 0,
+            rate_hz: sink.fmt.rate_hz,
+            channels: sink.fmt.channels as u16,
+            bits_per_sample: sink.fmt.bits_per_sample,
+            sync_type: as_out.sync_type,
+            has_feedback_ep: as_out.has_feedback_ep,
+            service_interval_us,
+            target_in_flight,
+            phase_accum: 0,
+            fill_waker: None,
+        })
+    };
+    if let Some(old_rt) = replaced {
+        free_runtime_resources(old_rt);
+    }
     UAC_SLOT[controller_id].store(slot_id, Ordering::Release);
 
     crate::log!(
@@ -836,6 +933,13 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
         as_out.sync_type,
         as_out.has_feedback_ep
     );
+    if as_out.has_feedback_ep {
+        crate::log!(
+            "usb: uac: explicit feedback endpoint present; using queue-depth pacing servo target_in_flight={} service_interval={}us\n",
+            target_in_flight,
+            service_interval_us
+        );
+    }
     crate::v::readiness::set(crate::v::readiness::UAC_ATTACHED);
 
     // Best-effort: try to program sampling frequency via the UAC1 endpoint control.
@@ -870,6 +974,7 @@ pub async fn attach_device(params: AttachParams<'_>) -> Result<(), ()> {
             200,
         )
         .await;
+        dma::dealloc(virt, 8);
     }
 
     Ok(())
@@ -914,32 +1019,26 @@ pub fn reserve_demo_packet() -> Result<DemoPacketReservation, DemoQueueError> {
     }
 
     let channels = core::cmp::max(1, rt.channels as usize);
+    let max_samples_aligned = max_samples - (max_samples % channels);
     let mut samples_needed = if rt.sync_type == 0x02 {
         // Adaptive OUT endpoint: device tracks host pacing.
         // Safe fallback policy: always send full packet-sized payload.
-        max_samples - (max_samples % channels)
+        max_samples_aligned
     } else {
-        // Async/synchronous OUT fallback:
-        // - if explicit feedback endpoint exists, we still run nominal pacing for now.
-        // - otherwise same nominal pacing path.
-        let _has_feedback = rt.has_feedback_ep;
-        let tick_us: u64 = if rt.speed_code == 1 {
-            // Full-speed: bInterval is in 1ms frames.
-            core::cmp::max(1, rt.interval as u64) * 1000
-        } else {
-            // High-/Super-speed: bInterval is 125us microframes as 2^(bInterval-1).
-            125u64 * (1u64 << (rt.interval.saturating_sub(1) as u64))
-        };
-
-        rt.phase_accum = rt.phase_accum.saturating_add(rt.rate_hz as u64 * tick_us);
+        // Async/synchronous OUT fallback: nominal pacing, with a small queue-depth servo
+        // when the descriptor advertises an explicit feedback companion endpoint.
+        rt.phase_accum = rt
+            .phase_accum
+            .saturating_add(rt.rate_hz as u64 * rt.service_interval_us);
         let frames = rt.phase_accum / 1_000_000u64;
         rt.phase_accum %= 1_000_000u64;
-        (frames as usize).saturating_mul(channels)
+        let nominal_samples = (frames as usize).saturating_mul(channels);
+        apply_feedback_servo(rt, nominal_samples, max_samples, channels)
     };
 
     // Keep sample count aligned to whole frames.
     if samples_needed > max_samples {
-        samples_needed = max_samples - (max_samples % channels);
+        samples_needed = max_samples_aligned;
     }
 
     if samples_needed == 0 {

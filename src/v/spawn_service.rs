@@ -578,7 +578,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "ai-qjs-oneshot",
-        disabled: false,
+        disabled: true,
         required: AI_QJS_ONESHOT_READY,
         started: &AI_QJS_ONESHOT_STARTED,
         spawn: spawn_ai_qjs_oneshot,
