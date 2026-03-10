@@ -67,6 +67,7 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
+static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -484,6 +485,13 @@ fn spawn_boot_netbench(spawner: Spawner) -> SpawnAttempt {
     SpawnAttempt::Skipped
 }
 
+fn spawn_video_smoke(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::video_smoke::video_smoke_task()) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 fn spawn_uart_shell(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::shell::task(
         spawner,
@@ -516,8 +524,11 @@ const AI_QJS_ONESHOT_READY: u32 = crate::v::readiness::NET_CONFIGURED
 const WS_BOOT_READY: u32 = crate::v::readiness::NET_GATEWAY_REACHABLE
     | crate::v::readiness::TLS_SOCKET_SERVICE_READY
     | crate::v::readiness::TRUEOSFS_ROOT_MOUNTED;
+const VIDEO_SMOKE_READY: u32 = crate::v::readiness::TLS_SOCKET_SERVICE_READY;
 
-const WGPU_TEXT_ENABLED: bool = true;
+const WGPU_TEXT_ENABLED: bool = false;
+const WEBGPU_BROWSER_ENABLED: bool = false;
+const GFX_VIRGL_SWAP_ENABLED: bool = false;
 
 static TASKS: &[TaskSpec] = &[
     TaskSpec {
@@ -613,14 +624,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "gfx-backend-ready",
-        disabled: false,
+        disabled: !GFX_VIRGL_SWAP_ENABLED,
         required: 0,
         started: &GFX_VIRGL_READY_TASK_STARTED,
         spawn: spawn_gfx_virgl_ready_task,
     },
     TaskSpec {
         name: "gfx-virgl-cursor-overlay",
-        disabled: false,
+        disabled: !GFX_VIRGL_SWAP_ENABLED,
         required: crate::v::readiness::GFX_BACKEND_READY | crate::v::readiness::WGPU_TEXT_DONE,
         started: &GFX_VIRGL_CURSOR_OVERLAY_STARTED,
         spawn: spawn_gfx_virgl_cursor_overlay_task,
@@ -641,7 +652,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "webgpu_browser",
-        disabled: false,
+        disabled: !WEBGPU_BROWSER_ENABLED,
         required: crate::v::readiness::WGPU_TEXT_DONE,
         started: &WEBGPU_BROWSER_STARTED,
         spawn: spawn_webgpu_browser,
@@ -729,6 +740,13 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &BOOT_NETBENCH_STARTED,
         spawn: spawn_boot_netbench,
+    },
+    TaskSpec {
+        name: "video-smoke",
+        disabled: false,
+        required: VIDEO_SMOKE_READY,
+        started: &VIDEO_SMOKE_STARTED,
+        spawn: spawn_video_smoke,
     },
     TaskSpec {
         name: "uart-shell",

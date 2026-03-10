@@ -47,6 +47,7 @@ dependencies = [
  "unicode-normalization",
  "unicode-segmentation",
  "usvg",
+ "vp9-parser",
  "webpki-roots",
  "x86_64",
  "zeroize",
@@ -203,6 +204,15 @@ name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
+
+[[package]]
+name = "bitreader"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "886559b1e163d56c765bc3a985febb4eee8009f625244511d8ee3c432e08c066"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "bitvec"
@@ -2047,6 +2057,13 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "vp9-parser"
+version = "0.3.2"
+dependencies = [
+ "bitreader",
+]
 
 [[package]]
 name = "wasi"

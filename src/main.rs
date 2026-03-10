@@ -39,6 +39,7 @@ mod usb;
 mod usvg_smoke;
 mod v;
 mod vga;
+mod video_smoke;
 mod wait;
 mod x2apic;
 mod z7;
