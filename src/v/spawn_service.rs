@@ -62,6 +62,7 @@ static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
+static QJS_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_BACKEND_READY_DELAY_DEADLINE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 fn spawn_vga_font_cache(spawner: Spawner) -> SpawnAttempt {
@@ -501,6 +502,16 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+fn spawn_qjs_shell(spawner: Spawner) -> SpawnAttempt {
+    match spawner.spawn(crate::shell::task(
+        spawner,
+        &crate::shell::backends::qjs::QJS_SHELL_BACKEND,
+    )) {
+        Ok(()) => SpawnAttempt::Spawned,
+        Err(e) => SpawnAttempt::Failed(e),
+    }
+}
+
 // --- registry ---
 
 const HID_ANY_CLAIMED: u32 = crate::v::readiness::HID_KEYBOARD_CLAIMED;
@@ -732,6 +743,13 @@ static TASKS: &[TaskSpec] = &[
         required: 0,
         started: &NET_TCP_SHELL_STARTED,
         spawn: spawn_net_tcp_shell,
+    },
+    TaskSpec {
+        name: "qjs-shell",
+        disabled: false,
+        required: 0,
+        started: &QJS_SHELL_STARTED,
+        spawn: spawn_qjs_shell,
     },
 ];
 

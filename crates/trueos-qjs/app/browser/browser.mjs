@@ -1,7 +1,7 @@
 import * as parse5 from 'parse5';
 import Yoga from 'yoga-layout';
 import { createFpsOverlay } from './fps.mjs';
-import { extractCssRows } from './css.mjs';
+import { extractCssSection, resolveNodeStyle } from './css.mjs';
 import { renderScene } from './scene.mjs';
 import { BLOCK_TAGS, TEXT_LEVEL_SEMANTICS_TAGS } from './htmlDefaults.mjs';
 import { LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
@@ -50,10 +50,15 @@ function isTextNode(node) {
   return !!node && typeof node === 'object' && node.nodeName === '#text' && typeof node.value === 'string';
 }
 
-function pushRow(rows, text, depth, kind = 'text') {
+function pushRow(rows, text, depth, kind = 'text', style = null) {
   const t = collapseWhitespace(text);
   if (!t) return;
-  rows.push({ depth: Math.max(0, Number(depth || 0) | 0), text: t, kind: String(kind || 'text') });
+  rows.push({
+    depth: Math.max(0, Number(depth || 0) | 0),
+    text: t,
+    kind: String(kind || 'text'),
+    style,
+  });
 }
 
 function shouldOmitElement(tagName) {
@@ -67,7 +72,7 @@ function shouldRenderTagLines(tagName) {
   return BLOCK_TAGS.has(tag);
 }
 
-function collectRows(node, depth, rows, parentTag = '') {
+function collectRows(node, depth, rows, cssSection, parentTag = '', parentStyle = null, path = 'root', ancestors = []) {
   if (!node || typeof node !== 'object') return;
 
   if (isTextNode(node)) {
@@ -75,25 +80,27 @@ function collectRows(node, depth, rows, parentTag = '') {
     const kind = parent === 'title'
       ? 'title-text'
       : (parent === 'li' ? 'li-text' : 'text');
-    pushRow(rows, node.value, depth, kind);
+    pushRow(rows, node.value, depth, kind, parentStyle);
     return;
   }
 
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
+    const style = resolveNodeStyle(node, path, cssSection, ancestors, parentStyle);
     const renderTagLines = !shouldOmitElement(tag) && shouldRenderTagLines(tag);
-    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `<${tag}>`, depth, 'tag-open');
+    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `<${tag}>`, depth, 'tag-open', style);
     const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    const nextAncestors = ancestors.concat([{ node, path }]);
     for (let i = 0; i < kids.length; i++) {
-      collectRows(kids[i], renderTagLines ? depth + 1 : depth, rows, tag);
+      collectRows(kids[i], renderTagLines ? depth + 1 : depth, rows, cssSection, tag, style, `${path}.${i}`, nextAncestors);
     }
-    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `</${tag}>`, depth, 'tag-close');
+    if (renderTagLines && SHOW_CLOSING_TAG_ROWS) pushRow(rows, `</${tag}>`, depth, 'tag-close', style);
     return;
   }
 
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
   for (let i = 0; i < kids.length; i++) {
-    collectRows(kids[i], depth, rows, parentTag);
+    collectRows(kids[i], depth, rows, cssSection, parentTag, parentStyle, `${path}.${i}`, ancestors);
   }
 }
 
@@ -106,14 +113,14 @@ function buildDocFromHtml(html, vw) {
   }
 
   const rows = [];
-  collectRows(parsed, 0, rows);
   const cssSection = (() => {
     try {
-      return typeof extractCssRows === 'function' ? extractCssRows(parsed) : null;
+      return typeof extractCssSection === 'function' ? extractCssSection(parsed) : null;
     } catch (_) {
       return null;
     }
   })();
+  collectRows(parsed, 0, rows, cssSection);
   /* debug
   const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
   for (let i = 0; i < cssRows.length; i++) {
@@ -122,14 +129,15 @@ function buildDocFromHtml(html, vw) {
       depth: Math.max(0, Number(r && r.depth || 0) | 0),
       text: String(r && r.text || ''),
       kind: 'css',
+      style: null,
     });
   }
   */
   runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects : [];
-  // applyLightning;
   const layout = applyYoga(rows, vw);
   return {
     dom: parsed,
+    css: cssSection,
     rows,
     rowX: layout.rowX,
     rowY: layout.rowY,

@@ -75,6 +75,11 @@ unsafe extern "C" {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_shell_qjs_init();
+    pub fn trueos_cabi_shell_qjs_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell_qjs_write_byte(byte: u8) -> i32;
+    pub fn trueos_cabi_shell_qjs_read(out_ptr: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_shell_qjs_read_byte() -> i32;
 
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
@@ -133,6 +138,47 @@ pub fn log_info(s: &str) {
 #[inline]
 pub fn log_error(s: &str) {
     write_log_stream(2, s);
+}
+
+#[inline]
+pub fn shell_qjs_init() {
+    unsafe { trueos_cabi_shell_qjs_init() }
+}
+
+#[inline]
+pub fn shell_qjs_write(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { trueos_cabi_shell_qjs_write(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn shell_qjs_write_byte(byte: u8) -> bool {
+    unsafe { trueos_cabi_shell_qjs_write_byte(byte) == 0 }
+}
+
+#[inline]
+pub fn shell_qjs_read(out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+    let got = unsafe { trueos_cabi_shell_qjs_read(out.as_mut_ptr(), out.len()) };
+    if got <= 0 {
+        0
+    } else {
+        got as usize
+    }
+}
+
+#[inline]
+pub fn shell_qjs_read_byte() -> Option<u8> {
+    let v = unsafe { trueos_cabi_shell_qjs_read_byte() };
+    if (0..=255).contains(&v) {
+        Some(v as u8)
+    } else {
+        None
+    }
 }
 
 #[inline]
