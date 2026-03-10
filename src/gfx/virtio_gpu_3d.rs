@@ -781,49 +781,6 @@ pub struct VirtioGpu3d {
     resp: DmaRegion,
 }
 
-// NOTE: `with_global_gpu` is intentionally removed from cross-subsystem usage.
-// All scanout/mirror callers must use the serialized `gpu_*` wrappers.
-pub fn gpu_get_display_info(timeout_ms: u64) -> Option<(u32, u32, u32)> {
-    super::wgpu_act::gpu_get_display_info(timeout_ms)
-}
-
-pub fn gpu_resource_create_2d(
-    resource_id: u32,
-    format: u32,
-    width: u32,
-    height: u32,
-    timeout_ms: u64,
-) -> bool {
-    super::wgpu_act::gpu_resource_create_2d(resource_id, format, width, height, timeout_ms)
-}
-
-pub fn gpu_resource_attach_backing(
-    resource_id: u32,
-    backing_phys: u64,
-    backing_len: u32,
-    timeout_ms: u64,
-) -> bool {
-    super::wgpu_act::gpu_resource_attach_backing(resource_id, backing_phys, backing_len, timeout_ms)
-}
-
-pub fn gpu_set_scanout(
-    scanout_id: u32,
-    resource_id: u32,
-    width: u32,
-    height: u32,
-    timeout_ms: u64,
-) -> bool {
-    super::wgpu_act::gpu_set_scanout(scanout_id, resource_id, width, height, timeout_ms)
-}
-
-pub fn gpu_transfer_to_host_2d(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    super::wgpu_act::gpu_transfer_to_host_2d(resource_id, width, height, timeout_ms)
-}
-
-pub fn gpu_resource_flush(resource_id: u32, width: u32, height: u32, timeout_ms: u64) -> bool {
-    super::wgpu_act::gpu_resource_flush(resource_id, width, height, timeout_ms)
-}
-
 unsafe impl Send for VirtioGpu3d {}
 
 impl VirtioGpu3d {

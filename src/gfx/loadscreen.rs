@@ -42,7 +42,7 @@ fn draw_de_flag_bottom_left_in_frame(view_w: u32, view_h: u32) -> bool {
 }
 
 fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
-    let atlas = crate::gfx::webgpu_font::font_atlas_large_view();
+    let atlas = crate::gfx::text::font_atlas_large_view();
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
     let space_adv_px = atlas.cell_w as f32 * 0.60;
 

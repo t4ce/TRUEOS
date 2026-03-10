@@ -63,7 +63,6 @@ UDPPort 50000-50999
 
 sudo systemctl restart nxserver
 
-konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'
 
 PXE_IF=br0
 sudo ufw allow in on "$PXE_IF" proto udp from 192.168.178.0/24 to any port 67
@@ -128,7 +127,9 @@ lspci -nnk -s 06:00.0
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
 
-# at reboot
+
+
+## LAN bridge for QEMU (rerunnable)
 sudo nmcli con up br0-enp5s0
 sudo nmcli con up br0
 sudo ip link set tap0 master br0
@@ -136,8 +137,6 @@ sudo ip link set tap0 up
 sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=usb
-
-## LAN bridge for QEMU (rerunnable)
 UPLINK=enp5s0
 WIRED_CON="Kabelgebundene Verbindung 1"
 BR=br0
@@ -153,6 +152,7 @@ sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
 sudo nmcli con up "$SLAVE_CON"
 sudo nmcli con up br0
 
+# at reboot
 sudo modprobe tun
 if ! ip link show tap0 >/dev/null 2>&1; then
   sudo ip tuntap add dev tap0 mode tap user "$USER" group "$(id -gn)"
@@ -161,3 +161,5 @@ sudo ip link set tap0 master br0
 sudo ip link set tap0 up
 ip -d link show tap0
 bridge link show | grep -E 'tap0|br0'
+
+konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'

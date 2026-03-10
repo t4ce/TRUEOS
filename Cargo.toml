@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2024"
 
 [features]
-default = ["gfx_virgl", "gfx_intel"]
+default = ["gfx_virgl"]
 dma_nic_fpga = []
 gfx_virgl = []
 gfx_intel = []
