@@ -105,6 +105,21 @@ const MAX_PORTS_TRACKED: usize = 256;
 static PORT_VIDPID: [[AtomicU32; MAX_PORTS_TRACKED]; MAX_XHCI_CONTROLLERS] =
     [const { [const { AtomicU32::new(0) }; MAX_PORTS_TRACKED] }; MAX_XHCI_CONTROLLERS];
 
+fn reset_controller_side_state() {
+    for controller_id in 0..MAX_XHCI_CONTROLLERS {
+        for port_idx in 0..MAX_PORTS_TRACKED {
+            PORT_VIDPID[controller_id][port_idx].store(0, Ordering::Release);
+        }
+
+        TRANSFER_EVENT_BUFFERS[controller_id].lock().clear();
+        COMMAND_EVENT_BUFFERS[controller_id].lock().clear();
+
+        let mut state = EVENT_RING_STATES[controller_id].lock();
+        state.ring = None;
+        state.intr0 = null_mut();
+    }
+}
+
 pub fn set_port_vidpid(controller_id: usize, port_id: u8, vid: u16, pid: u16) {
     if controller_id >= MAX_XHCI_CONTROLLERS {
         return;
@@ -168,6 +183,7 @@ pub fn init_once() {
 
     FIRST_CONTROLLER.lock().take();
     CONTROLLERS.lock().clear();
+    reset_controller_side_state();
 
     let mut did_any = false;
     crate::pci::with_devices(|list| {
@@ -346,6 +362,7 @@ pub struct TrbRing {
     pub len: usize,
     enqueue: usize,
     cycle: bool,
+    pending: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -355,6 +372,7 @@ pub struct TrbRingState {
     pub len: usize,
     pub enqueue: usize,
     pub cycle: bool,
+    pub pending: usize,
 }
 
 // Safe because access is synchronized and the ring memory is DMA-mapped and stable.
@@ -374,13 +392,14 @@ pub struct EventRing {
 
 unsafe impl Send for EventRing {}
 
-const EVENT_BUFFER_CAP: usize = 512;
+const TRANSFER_EVENT_BUFFER_CAP: usize = 512;
+const COMMAND_EVENT_BUFFER_CAP: usize = 128;
 
-struct EventBuffer {
-    entries: Vec<Trb, EVENT_BUFFER_CAP>,
+struct EventBuffer<const CAP: usize> {
+    entries: Vec<Trb, CAP>,
 }
 
-impl EventBuffer {
+impl<const CAP: usize> EventBuffer<CAP> {
     const fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -411,7 +430,9 @@ impl EventBuffer {
     }
 }
 
-static EVENT_BUFFERS: [Mutex<EventBuffer>; MAX_XHCI_CONTROLLERS] =
+static TRANSFER_EVENT_BUFFERS: [Mutex<EventBuffer<TRANSFER_EVENT_BUFFER_CAP>>;
+    MAX_XHCI_CONTROLLERS] = [const { Mutex::new(EventBuffer::new()) }; MAX_XHCI_CONTROLLERS];
+static COMMAND_EVENT_BUFFERS: [Mutex<EventBuffer<COMMAND_EVENT_BUFFER_CAP>>; MAX_XHCI_CONTROLLERS] =
     [const { Mutex::new(EventBuffer::new()) }; MAX_XHCI_CONTROLLERS];
 
 struct EventRingState {
@@ -654,6 +675,7 @@ impl TrbRing {
             len,
             enqueue: 0,
             cycle: true,
+            pending: 0,
         };
         ring.init_link_trb();
         ring
@@ -666,6 +688,7 @@ impl TrbRing {
             len: self.len,
             enqueue: self.enqueue,
             cycle: self.cycle,
+            pending: self.pending,
         }
     }
 
@@ -678,7 +701,40 @@ impl TrbRing {
             len: state.len,
             enqueue: state.enqueue,
             cycle: state.cycle,
+            pending: state.pending,
         }
+    }
+
+    #[inline(always)]
+    fn usable_slots(&self) -> usize {
+        self.len.saturating_sub(1)
+    }
+
+    fn reserve_enqueue_slot(&mut self) -> Option<usize> {
+        if self.len < 2 {
+            return None;
+        }
+
+        let usable = self.usable_slots();
+        if self.pending >= usable {
+            return None;
+        }
+
+        if self.enqueue >= usable {
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        let idx = self.enqueue;
+        self.enqueue += 1;
+        if self.enqueue >= usable {
+            unsafe { self.set_link_cycle_bit(self.cycle) };
+            self.enqueue = 0;
+            self.cycle = !self.cycle;
+        }
+
+        self.pending += 1;
+        Some(idx)
     }
 
     unsafe fn init_link_trb(&self) {
@@ -711,53 +767,29 @@ impl TrbRing {
     }
 
     pub fn push(&mut self, mut trb: Trb) -> bool {
-        if self.len < 2 {
+        let Some(idx) = self.reserve_enqueue_slot() else {
             return false;
-        }
-
-        let usable = self.len - 1;
-        if self.enqueue >= usable {
-            // Shouldn't happen (we never enqueue into the Link TRB slot), but recover.
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
+        };
 
         trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
-        unsafe { write_volatile(self.trbs.add(self.enqueue), trb) };
-        self.enqueue += 1;
-        if self.enqueue >= usable {
-            // We just filled the last usable TRB. Ensure the Link TRB's cycle bit
-            // matches the current cycle so the controller can follow it, then
-            // toggle for the next pass.
-            unsafe { self.set_link_cycle_bit(self.cycle) };
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
+        unsafe { write_volatile(self.trbs.add(idx), trb) };
         true
     }
 
     pub fn push_with_phys(&mut self, mut trb: Trb) -> Option<u64> {
-        if self.len < 2 {
-            return None;
-        }
-
-        let usable = self.len - 1;
-        if self.enqueue >= usable {
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
-
-        let idx = self.enqueue;
+        let idx = self.reserve_enqueue_slot()?;
         trb.d3 = (trb.d3 & !1) | (self.cycle as u32);
         unsafe { write_volatile(self.trbs.add(idx), trb) };
-        self.enqueue += 1;
-        if self.enqueue >= usable {
-            unsafe { self.set_link_cycle_bit(self.cycle) };
-            self.enqueue = 0;
-            self.cycle = !self.cycle;
-        }
 
         Some(self.phys + (idx as u64) * size_of::<Trb>() as u64)
+    }
+
+    pub fn release_completed(&mut self, count: usize) -> bool {
+        if count > self.pending {
+            return false;
+        }
+        self.pending -= count;
+        true
     }
 
     pub fn crcr_value(&self) -> u64 {
@@ -928,8 +960,12 @@ pub async fn poll_task(info: XhcInfo) {
 }
 
 fn enqueue_event(controller_id: usize, evt: Trb) {
-    let mut buf = EVENT_BUFFERS[controller_id].lock();
-    buf.push(evt);
+    let evt_type = (evt.d3 >> 10) & 0x3F;
+    if evt_type == 33 {
+        COMMAND_EVENT_BUFFERS[controller_id].lock().push(evt);
+    } else {
+        TRANSFER_EVENT_BUFFERS[controller_id].lock().push(evt);
+    }
 }
 
 fn pump_one_event(ctx: &XhciContext) -> bool {
@@ -969,7 +1005,15 @@ fn try_take_matching_event<F>(controller_id: usize, predicate: &mut F) -> Option
 where
     F: FnMut(&Trb) -> bool,
 {
-    let mut buf = EVENT_BUFFERS[controller_id].lock();
+    let mut buf = TRANSFER_EVENT_BUFFERS[controller_id].lock();
+    buf.take_matching(predicate)
+}
+
+fn try_take_matching_command_event<F>(controller_id: usize, predicate: &mut F) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let mut buf = COMMAND_EVENT_BUFFERS[controller_id].lock();
     buf.take_matching(predicate)
 }
 
@@ -985,36 +1029,8 @@ where
     try_take_matching_event(controller_id, predicate)
 }
 
-pub fn drain_transfer_events_for_slot(ctx: &XhciContext, slot_id: u32, ep_mask: u32) -> usize {
-    let mut drained = 0usize;
-    loop {
-        let mut pred = |evt: &Trb| {
-            let evt_type = (evt.d3 >> 10) & 0x3F;
-            if evt_type != 32 {
-                return false;
-            }
-            let evt_slot = (evt.d3 >> 24) & 0xFF;
-            if evt_slot != slot_id {
-                return false;
-            }
-            let evt_ep_target = (evt.d3 >> 16) & 0x1F;
-            if evt_ep_target == 0 {
-                return false;
-            }
-            (ep_mask & (1u32 << evt_ep_target)) != 0
-        };
-
-        if try_take_matching_event(ctx.controller_id, &mut pred).is_some() {
-            drained += 1;
-            continue;
-        }
-        break;
-    }
-    drained
-}
-
 pub fn debug_peek_transfer_events(controller_id: usize, slot_id: u32, ep_target: u32, max: usize) {
-    let buf = EVENT_BUFFERS[controller_id].lock();
+    let buf = TRANSFER_EVENT_BUFFERS[controller_id].lock();
     let mut shown = 0usize;
     let mut total = 0usize;
 
@@ -1068,7 +1084,7 @@ pub fn debug_peek_transfer_events(controller_id: usize, slot_id: u32, ep_target:
 }
 
 pub fn debug_peek_transfer_events_for_slot(controller_id: usize, slot_id: u32, max: usize) {
-    let buf = EVENT_BUFFERS[controller_id].lock();
+    let buf = TRANSFER_EVENT_BUFFERS[controller_id].lock();
     let mut shown = 0usize;
     let mut total = 0usize;
 
@@ -1117,24 +1133,27 @@ pub fn debug_peek_transfer_events_for_slot(controller_id: usize, slot_id: u32, m
 }
 
 pub fn debug_event_buffer_summary(controller_id: usize) {
-    let buf = EVENT_BUFFERS[controller_id].lock();
     let mut transfer = 0usize;
-    let mut cmd_complete = 0usize;
     let mut port_status = 0usize;
     let mut other = 0usize;
-    for evt in buf.entries.iter() {
+
+    let transfer_buf = TRANSFER_EVENT_BUFFERS[controller_id].lock();
+    for evt in transfer_buf.entries.iter() {
         let evt_type = (evt.d3 >> 10) & 0x3F;
         match evt_type {
             32 => transfer += 1,
-            33 => cmd_complete += 1,
             34 => port_status += 1,
             _ => other += 1,
         }
     }
+
+    let command_buf = COMMAND_EVENT_BUFFERS[controller_id].lock();
+    let cmd_complete = command_buf.entries.len();
+
     crate::log!(
         "xhci: dbg: eventbuf controller_id={} len={} transfer={} cmd_complete={} port_status={} other={}\n",
         controller_id,
-        buf.entries.len(),
+        transfer_buf.entries.len() + command_buf.entries.len(),
         transfer,
         cmd_complete,
         port_status,
@@ -1148,7 +1167,8 @@ pub fn install_event_ring(ctx: &XhciContext, ring: EventRing, intr0: *mut u32) {
         state.ring = Some(ring);
         state.intr0 = intr0;
     }
-    EVENT_BUFFERS[ctx.controller_id].lock().clear();
+    TRANSFER_EVENT_BUFFERS[ctx.controller_id].lock().clear();
+    COMMAND_EVENT_BUFFERS[ctx.controller_id].lock().clear();
 }
 
 pub async fn wait_for_event<F>(
@@ -1169,6 +1189,31 @@ where
         // If the async controller poll task is starved (e.g. because some code is
         // synchronously `block_on`-polling a future), we may never see transfer events.
         // Opportunistically drain one hardware event so waits can still complete.
+        let _ = pump_one_event(ctx);
+
+        polls += 1;
+        if polls > timeout_iters {
+            return None;
+        }
+        Timer::after(delay).await;
+    }
+}
+
+async fn wait_for_command_event<F>(
+    ctx: &XhciContext,
+    mut predicate: F,
+    timeout_iters: usize,
+    delay: EmbassyDuration,
+) -> Option<Trb>
+where
+    F: FnMut(&Trb) -> bool,
+{
+    let mut polls = 0usize;
+    loop {
+        if let Some(evt) = try_take_matching_command_event(ctx.controller_id, &mut predicate) {
+            return Some(evt);
+        }
+
         let _ = pump_one_event(ctx);
 
         polls += 1;
@@ -1241,7 +1286,7 @@ pub async fn submit_cmd_and_wait(
     };
     unsafe { core::ptr::write_volatile(ctx.doorbell.add(0), 0) };
 
-    let evt = wait_for_event(
+    let evt = wait_for_command_event(
         ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
@@ -1267,6 +1312,11 @@ pub async fn submit_cmd_and_wait(
     .map_err(|_| {
         crate::log!("xhci: {}: timeout waiting for command completion\n", what);
     })?;
+
+    if !cmd_ring.release_completed(1) {
+        crate::log!("xhci: {}: cmd ring accounting underflow\n", what);
+        return Err(());
+    }
 
     let completion = (evt.d2 >> 24) & 0xFF;
     if completion != 1 {
@@ -1308,7 +1358,7 @@ pub async fn submit_cmd_and_wait_any_cc(
     };
     unsafe { core::ptr::write_volatile(ctx.doorbell.add(0), 0) };
 
-    wait_for_event(
+    let evt = wait_for_command_event(
         ctx,
         |evt| {
             let evt_type = (evt.d3 >> 10) & 0x3F;
@@ -1333,7 +1383,14 @@ pub async fn submit_cmd_and_wait_any_cc(
     .ok_or(())
     .map_err(|_| {
         crate::log!("xhci: {}: timeout waiting for command completion\n", what);
-    })
+    })?;
+
+    if !cmd_ring.release_completed(1) {
+        crate::log!("xhci: {}: cmd ring accounting underflow\n", what);
+        return Err(());
+    }
+
+    Ok(evt)
 }
 
 pub const fn lo(val: u64) -> u32 {

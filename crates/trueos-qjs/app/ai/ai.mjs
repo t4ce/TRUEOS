@@ -4,7 +4,7 @@ import OpenAI from "openai";
 
 try {
   console.log("ai: start");
-  const client = new OpenAI({ apiKey: "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" });
+  const client = new OpenAI();
   console.log("ai: request.begin");
 
 

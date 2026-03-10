@@ -18,6 +18,8 @@ let cachedHtml = '';
 let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
+let aiStartPromise = null;
+let aiStartSpecifier = '';
 
 const fpsOverlay = createFpsOverlay();
 
@@ -199,6 +201,73 @@ function ensureDoc(vw) {
   return cachedDoc;
 }
 
+function cloneRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i] || {};
+    out.push({
+      depth: Number(row.depth || 0) | 0,
+      text: String(row.text || ''),
+      kind: String(row.kind || 'text'),
+    });
+  }
+  return out;
+}
+
+function serializeNode(node, depth = 0) {
+  if (!node || typeof node !== 'object') return null;
+  if (depth > 10) {
+    return { type: 'limit' };
+  }
+  if (isTextNode(node)) {
+    return {
+      type: 'text',
+      text: String(node.value || ''),
+    };
+  }
+  const out = {
+    type: isElement(node) ? 'element' : 'node',
+    tag: isElement(node) ? String(node.tagName || '').toLowerCase() : String(node.nodeName || ''),
+    attrs: {},
+    children: [],
+  };
+  if (Array.isArray(node.attrs)) {
+    for (let i = 0; i < node.attrs.length; i += 1) {
+      const attr = node.attrs[i];
+      if (!attr || typeof attr.name !== 'string') continue;
+      out.attrs[attr.name] = String(attr.value || '');
+    }
+  }
+  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i += 1) {
+    const child = serializeNode(kids[i], depth + 1);
+    if (child) out.children.push(child);
+  }
+  return out;
+}
+
+function getDomSnapshot() {
+  const { vw } = computeViewport();
+  const doc = ensureDoc(vw);
+  return serializeNode(doc && doc.dom ? doc.dom : null, 0);
+}
+
+function getRows() {
+  const { vw } = computeViewport();
+  const doc = ensureDoc(vw);
+  return cloneRows(doc && doc.rows ? doc.rows : []);
+}
+
+function getViewport() {
+  const { vw, vh } = computeViewport();
+  return {
+    width: vw,
+    height: vh,
+    scrollY: scrollY,
+  };
+}
+
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
@@ -287,9 +356,87 @@ function startAutoPaint() {
   } catch (_) {}
 }
 
+function setAiPrompt(prompt) {
+  if (typeof prompt === 'string' && prompt) {
+    runtime.host.__trueosAiPcPrompt = prompt;
+  }
+}
+
+function normalizeAiSpecifier(specifier) {
+  if (typeof specifier === 'string' && specifier) {
+    return specifier;
+  }
+  return '/qjs/ai/ai_pc.mjs';
+}
+
+function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
+  const resolvedSpecifier = normalizeAiSpecifier(specifier);
+  const opts = options && typeof options === 'object' ? options : null;
+  if (opts && typeof opts.prompt === 'string' && opts.prompt) {
+    setAiPrompt(opts.prompt);
+  }
+  if (aiStartPromise && aiStartSpecifier === resolvedSpecifier) {
+    return aiStartPromise;
+  }
+  aiStartSpecifier = resolvedSpecifier;
+  aiStartPromise = import(resolvedSpecifier)
+    .then((mod) => {
+      try {
+        if (mod && typeof mod.startAiPc === 'function') {
+          return mod.startAiPc();
+        }
+      } catch (_) {}
+      return mod;
+    })
+    .catch((err) => {
+      aiStartPromise = null;
+      aiStartSpecifier = '';
+      try {
+        console.log('[browser.mjs] ai import failed', String(err && err.stack ? err.stack : err));
+      } catch (_) {}
+      throw err;
+    });
+  return aiStartPromise;
+}
+
+function maybeAutostartAi() {
+  const cfg = runtime.host.__trueosBrowserAutoStartAi;
+  if (!cfg) return;
+  if (cfg === true) {
+    void startAi('/qjs/ai/ai_pc.mjs');
+    return;
+  }
+  if (typeof cfg === 'string') {
+    void startAi(cfg);
+    return;
+  }
+  if (typeof cfg === 'object') {
+    const specifier = typeof cfg.specifier === 'string' && cfg.specifier ? cfg.specifier : '/qjs/ai/ai_pc.mjs';
+    void startAi(specifier, cfg);
+  }
+}
+
 runtime.host.__trueosBrowser = {
   paint,
   setHtml,
+  getHtml() {
+    return cachedHtml;
+  },
+  getTextRows() {
+    return getRows();
+  },
+  getDomSnapshot() {
+    return getDomSnapshot();
+  },
+  getViewport() {
+    return getViewport();
+  },
+  startAi(specifier, options) {
+    return startAi(specifier, options);
+  },
+  startAiPc(prompt) {
+    return startAi('/qjs/ai/ai_pc.mjs', { prompt });
+  },
   setScroll(y) {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
     paint();
@@ -304,3 +451,4 @@ setHtml(runtime.host.__trueosUiHtml || '');
 paint();
 startWheelPump();
 startAutoPaint();
+maybeAutostartAi();

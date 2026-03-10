@@ -241,6 +241,22 @@ async fn send_output_report(
     .await
     .ok_or(())?;
 
+    if !ring.release_completed(1) {
+        dma::dealloc(buf_virt, report.len().max(1));
+        return Err(());
+    }
+
+    ring_state = ring.snapshot();
+    {
+        let mut guard = LED_RUNTIMES.lock();
+        if let Some(rt) = guard
+            .iter_mut()
+            .find(|r| r.controller_id == controller_id && r.slot_id == slot_id)
+        {
+            rt.ep_out_ring = unsafe { TrbRing::from_state(ring_state) };
+        }
+    }
+
     let cc = (evt.d2 >> 24) & 0xFF;
     dma::dealloc(buf_virt, report.len().max(1));
     if cc == 1 { Ok(()) } else { Err(()) }

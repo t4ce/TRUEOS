@@ -95,6 +95,9 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     init_src.push_str(";\n");
     init_src.push_str(
         r#"
+if (typeof G.__trueosBrowserAutoStartAi === 'undefined') {
+    G.__trueosBrowserAutoStartAi = { specifier: '/qjs/ai/ai_pc.mjs' };
+}
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
 if (typeof G.window.innerHeight !== 'number') G.window.innerHeight = 800;
