@@ -7,6 +7,5 @@ pub mod pat {
 pub mod cursor;
 pub mod fs;
 pub mod io;
-pub mod ntp;
 pub mod path;
 pub mod std;
