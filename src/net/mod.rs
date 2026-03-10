@@ -4,7 +4,6 @@ pub mod device;
 pub mod dhcpv6;
 pub mod e1000;
 pub mod r8125;
-pub mod r8168;
 pub mod ring;
 pub mod tls;
 pub mod tls_socket;
@@ -17,7 +16,6 @@ use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
 use crate::net::e1000::E1000Adapter;
 use crate::net::r8125::R8125Adapter;
-use crate::net::r8168::R8168Adapter;
 use crate::net::ring::NetRing;
 use crate::net::vio::VirtioNetAdapter;
 use crate::pci::PciDevice;
@@ -34,7 +32,6 @@ enum ActiveDevice {
     Virtio(NetCore<VirtioNetAdapter>),
     E1000(NetCore<E1000Adapter>),
     R8125(NetCore<R8125Adapter>),
-    R8168(NetCore<R8168Adapter>),
 }
 
 impl NetDevice for ActiveDevice {
@@ -43,7 +40,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.mac(),
             ActiveDevice::E1000(dev) => dev.mac(),
             ActiveDevice::R8125(dev) => dev.mac(),
-            ActiveDevice::R8168(dev) => dev.mac(),
         }
     }
 
@@ -52,7 +48,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.poll_rx(),
             ActiveDevice::E1000(dev) => dev.poll_rx(),
             ActiveDevice::R8125(dev) => dev.poll_rx(),
-            ActiveDevice::R8168(dev) => dev.poll_rx(),
         }
     }
 
@@ -61,7 +56,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.pop_rx(),
             ActiveDevice::E1000(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
-            ActiveDevice::R8168(dev) => dev.pop_rx(),
         }
     }
 
@@ -70,7 +64,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.rx_queue_len(),
             ActiveDevice::E1000(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
-            ActiveDevice::R8168(dev) => dev.rx_queue_len(),
         }
     }
 
@@ -79,7 +72,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.drain_rx(limit),
             ActiveDevice::E1000(dev) => dev.drain_rx(limit),
             ActiveDevice::R8125(dev) => dev.drain_rx(limit),
-            ActiveDevice::R8168(dev) => dev.drain_rx(limit),
         }
     }
 
@@ -88,7 +80,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.transmit(frame),
             ActiveDevice::E1000(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
-            ActiveDevice::R8168(dev) => dev.transmit(frame),
         }
     }
 
@@ -97,7 +88,6 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::Virtio(dev) => dev.link_state(),
             ActiveDevice::E1000(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
-            ActiveDevice::R8168(dev) => dev.link_state(),
         }
     }
 }
@@ -110,7 +100,6 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
         ActiveDevice::Virtio(_) => "Virtio Net",
         ActiveDevice::E1000(_) => "Intel E1000",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
-        ActiveDevice::R8168(_) => "Realtek RTL8168",
     })
 }
 
@@ -121,7 +110,6 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
         ActiveDevice::Virtio(n) => n.pci_device(),
         ActiveDevice::E1000(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
-        ActiveDevice::R8168(n) => n.pci_device(),
     }
 }
 
@@ -316,13 +304,6 @@ pub fn init() {
         let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
         let mut guard = DEVICES.lock();
         guard.push(ActiveDevice::E1000(NetCore::new(adapter, ring)));
-        added += 1;
-    }
-
-    for adapter in R8168Adapter::init_all() {
-        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
-        let mut guard = DEVICES.lock();
-        guard.push(ActiveDevice::R8168(NetCore::new(adapter, ring)));
         added += 1;
     }
 

@@ -52,7 +52,7 @@ pub use surface::pat as pattern;
 pub use surface::{io, path};
 
 fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
-    let atlas = crate::gfx::webgpu_font::font_atlas_small_view();
+    let atlas = crate::gfx::text::font_atlas_small_view();
     trueos_qjs::FontAtlasView {
         alpha: atlas.alpha,
         index: atlas.index,
@@ -67,7 +67,7 @@ fn qjs_font_atlas_small_provider() -> trueos_qjs::FontAtlasView<'static> {
 }
 
 fn qjs_font_atlas_large_provider() -> trueos_qjs::FontAtlasView<'static> {
-    let atlas = crate::gfx::webgpu_font::font_atlas_large_view();
+    let atlas = crate::gfx::text::font_atlas_large_view();
     trueos_qjs::FontAtlasView {
         alpha: atlas.alpha,
         index: atlas.index,

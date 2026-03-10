@@ -59,7 +59,6 @@ static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_WS_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
 static BOOT_NETBENCH_STARTED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SMOKE_STARTED: AtomicBool = AtomicBool::new(false);
-
 static UART_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_TCP_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static QJS_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
@@ -669,14 +668,14 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "uac-event-drain",
-        disabled: true,
+        disabled: false,
         required: crate::v::readiness::UAC_ATTACHED,
         started: &UAC_EVENT_DRAIN_STARTED,
         spawn: spawn_uac_event_drain,
     },
     TaskSpec {
         name: "uac-song",
-        disabled: true,
+        disabled: false,
         required: crate::v::readiness::UAC_ATTACHED,
         started: &UAC_SONG_STARTED,
         spawn: spawn_uac_song,

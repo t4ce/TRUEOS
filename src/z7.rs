@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 extern crate alloc;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
