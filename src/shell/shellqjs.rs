@@ -840,11 +840,7 @@ async fn repl(io: &'static dyn ShellBackend) {
             trueos_qjs::js_free_value(ctx, val);
         }
 
-        // Mirror smoke teardown: stop worker VMs before dropping the main runtime.
-        trueos_qjs::workers::terminate_all_for_context(ctx);
-        let _ = drain_jobs_and_promises(io, rt, ctx, 2_000).await;
-        trueos_qjs::async_ops::drain_all_for_context(ctx);
-        trueos_qjs::workers::drain_all_for_context(ctx);
+        let _ = trueos_qjs::vm::teardown_main_context(rt, ctx, 2_000).await;
 
         trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);
@@ -979,11 +975,7 @@ pub(crate) async fn repl_shell(
             trueos_qjs::js_free_value(ctx, val);
         }
 
-        // Mirror smoke teardown: stop worker VMs before dropping the main runtime.
-        trueos_qjs::workers::terminate_all_for_context(ctx);
-        let _ = drain_jobs_and_promises(&sys, rt, ctx, 2_000).await;
-        trueos_qjs::async_ops::drain_all_for_context(ctx);
-        trueos_qjs::workers::drain_all_for_context(ctx);
+        let _ = trueos_qjs::vm::teardown_main_context(rt, ctx, 2_000).await;
 
         trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);
@@ -1301,13 +1293,7 @@ pub(crate) async fn eval_bytes_opts_async(
         }
         trueos_qjs::js_free_value(ctx, val);
 
-        // Mirror smoke teardown: stop worker VMs before dropping the main runtime.
-        trueos_qjs::workers::terminate_all_for_context(ctx);
-        let _ = drain_jobs_and_promises(io, rt, ctx, 2_000).await;
-
-        // Best-effort: reject/cleanup unresolved async ops/callback refs.
-        trueos_qjs::async_ops::drain_all_for_context(ctx);
-        trueos_qjs::workers::drain_all_for_context(ctx);
+        let _ = trueos_qjs::vm::teardown_main_context(rt, ctx, 2_000).await;
 
         trueos_qjs::JS_SetContextOpaque(ctx, core::ptr::null_mut());
         drop(vm);

@@ -5,6 +5,7 @@ pub mod dns;
 pub mod ftp;
 pub mod https;
 pub mod json;
+pub mod ntp;
 pub mod ping;
 pub mod ws;
 pub mod wss;

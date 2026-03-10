@@ -501,7 +501,21 @@ pub mod cabi {
 
     #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_ntp_current_unix_seconds() -> u64 {
-        crate::surface::ntp::current_unix_seconds().unwrap_or(0)
+        crate::v::net::ntp::current_unix_seconds().unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_ntp_kernel_date_day_month_year(
+        out_ptr: *mut u8,
+        out_len: usize,
+    ) -> usize {
+        let s = crate::v::net::ntp::kernel_date_day_month_year();
+        let bytes = s.as_bytes();
+        if !out_ptr.is_null() && out_len != 0 {
+            let n = bytes.len().min(out_len);
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, n);
+        }
+        bytes.len()
     }
 
     #[derive(Clone, Copy)]

@@ -49,12 +49,13 @@ QEMU_USB_FLAGS = \
 	-device qemu-xhci,id=xhci,p2=8,p3=8 \
 	-drive file=/dev/disk/by-partuuid/2e4e446c-bc9b-4e6c-a657-9ff9a0edccca,if=none,format=raw,id=nvme0 \
 	-device nvme,drive=nvme0,serial=t4ce \
-	-device usb-mouse,bus=xhci.0,port=2,id=usbmouse 
-
+	-device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
+	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=2,id=usbleds
+	
 #	-drive file=disk.img,if=none,format=raw,id=usbdisk  \
 #	-device usb-storage,drive=usbdisk,bus=xhci.0,port=3,id=usbms \
 #	-device usb-kbd,bus=xhci.0,port=1,id=usbkbd 
-#	-device usb-host,vendorid=0x1462,productid=0x7e03,bus=xhci.0,port=4,id=usbleds
+#	
 #  	-device usb-tablet,bus=xhci.0,port=4,id=usbtablet
 # -device usb-host,vendorid=0x07cf,productid=0x6803,bus=xhci.0,port=0,id=usbpiano
 # -device usb-host,vendorid=0x0951,productid=0x16a4,bus=xhci.0,port=4,id=usbhypx

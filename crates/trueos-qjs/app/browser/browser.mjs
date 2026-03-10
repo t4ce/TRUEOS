@@ -107,7 +107,14 @@ function buildDocFromHtml(html, vw) {
 
   const rows = [];
   collectRows(parsed, 0, rows);
-  const cssSection = extractCssRows(parsed);
+  const cssSection = (() => {
+    try {
+      return typeof extractCssRows === 'function' ? extractCssRows(parsed) : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  /* debug
   const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
   for (let i = 0; i < cssRows.length; i++) {
     const r = cssRows[i];
@@ -117,10 +124,9 @@ function buildDocFromHtml(html, vw) {
       kind: 'css',
     });
   }
-  runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects)
-    ? cssSection.cssObjects
-    : [];
-
+  */
+  runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects : [];
+  // applyLightning;
   const layout = applyYoga(rows, vw);
   return {
     dom: parsed,

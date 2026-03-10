@@ -1,28 +1,6 @@
 import OpenAI from "openai";
 
-function kernelDateDayMonthYear() {
-  const ntpSecs =
-    typeof globalThis.__trueosNtpUnixSeconds === "function"
-      ? Number(globalThis.__trueosNtpUnixSeconds())
-      : 0;
-  const unixSecs = ntpSecs > 0 ? ntpSecs : Math.floor(Date.now() / 1000);
-  const d = new Date(unixSecs * 1000);
-  const months = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
-  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-}
+
 
 try {
   console.log("ai: start");
