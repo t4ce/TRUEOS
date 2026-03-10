@@ -7,9 +7,6 @@ pub mod lyon;
 pub mod text;
 #[cfg(feature = "gfx_virgl")]
 pub mod virtio_gpu_3d;
-pub mod webgpu_font;
-#[cfg(feature = "gfx_virgl")]
-pub mod wgpu_act;
 
 use alloc::vec;
 use spin::{Mutex, Once};
