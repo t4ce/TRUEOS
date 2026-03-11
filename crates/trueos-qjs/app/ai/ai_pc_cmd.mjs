@@ -35,7 +35,7 @@ const COMMAND_DESCRIPTION_OVERRIDES = Object.freeze({
   format: "Run the shell1 format workflow.",
   bench: "Run the shell1 benchmark workflow.",
   "bench.net": "Run the shell1 network benchmark workflow.",
-  file: "Inspect a shell1 file entry or file-related target by identifier.",
+  file: "Open the interactive shell1 file wizard for manual mount selection. Avoid this for simple AI-side filesystem listing when the dedicated TRUEOSFS tree tool is available.",
   ai: "Start the shell1 AI command and optionally seed it with the first prompt text.",
   qjs: "Run the shell1 QuickJS command with optional inline source text.",
   acpi: "Run the shell1 ACPI control command for the requested state.",

@@ -216,6 +216,7 @@ pub(crate) fn cmd_ai(
     let entry = trueos_qjs::browser_task::AiInputEntry {
         text: String::from(text),
         web_search: false,
+        file_search: false,
         new_conversation: false,
         computer_use: true,
     };
