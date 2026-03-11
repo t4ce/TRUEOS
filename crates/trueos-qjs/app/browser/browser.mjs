@@ -16,6 +16,7 @@ const CURSOR_EVENT_FIELDS = 6;
 const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
+const ERROR_PREVIEW_MAX = 160;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
 const RELEASE_RECT_RGBA = 0x3f2f7fff;
@@ -278,6 +279,51 @@ function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
 
+function summarizeForError(value, maxLen = ERROR_PREVIEW_MAX) {
+  const text = collapseWhitespace(value);
+  if (!text) return '(empty)';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(1, maxLen - 3))}...`;
+}
+
+function describeError(err) {
+  if (err && typeof err.message === 'string' && err.message.trim()) {
+    return err.message.trim();
+  }
+  const text = String(err || '').trim();
+  return text || 'unknown error';
+}
+
+function detailSuffix(details = null) {
+  if (!details || typeof details !== 'object') return '';
+  const parts = [];
+  const keys = Object.keys(details);
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    const raw = details[key];
+    if (raw == null || raw === '') continue;
+    parts.push(`${key}=${summarizeForError(raw)}`);
+  }
+  return parts.length > 0 ? ` [${parts.join(' ')}]` : '';
+}
+
+function createBrowserError(code, message, details = null, cause = null) {
+  const err = new Error(`${message}${detailSuffix(details)}`);
+  err.code = String(code || 'TRUEOS_BROWSER_ERROR');
+  if (details && typeof details === 'object') err.details = { ...details };
+  if (cause) err.cause = cause;
+  runtime.host.__trueosBrowserLastError = {
+    code: err.code,
+    message: err.message,
+    details: err.details || null,
+  };
+  return err;
+}
+
+function raiseBrowserError(code, message, details = null, cause = null) {
+  throw createBrowserError(code, message, details, cause);
+}
+
 function isElement(node) {
   return !!node && typeof node === 'object' && typeof node.tagName === 'string';
 }
@@ -340,7 +386,7 @@ function collectRows(node, depth, rows, cssSection, parentTag = '', parentStyle 
   }
 }
 
-function buildDocFromParsed(parsed, vw) {
+function buildDocFromParsed(parsed, vw, context = 'document') {
   const doc = parsed && typeof parsed === 'object'
     ? parsed
     : parse5.parse('');
@@ -349,11 +395,25 @@ function buildDocFromParsed(parsed, vw) {
   const cssSection = (() => {
     try {
       return typeof extractCssSection === 'function' ? extractCssSection(doc) : null;
-    } catch (_) {
-      return null;
+    } catch (err) {
+      raiseBrowserError(
+        'TRUEOS_BROWSER_CSS_PARSE_FAILED',
+        `CSS extraction failed while building ${context}`,
+        { context, reason: describeError(err) },
+        err,
+      );
     }
   })();
-  collectRows(doc, 0, rows, cssSection);
+  try {
+    collectRows(doc, 0, rows, cssSection);
+  } catch (err) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_DOM_BUILD_FAILED',
+      `DOM row collection failed while building ${context}`,
+      { context, reason: describeError(err) },
+      err,
+    );
+  }
   /* debug
   const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
   for (let i = 0; i < cssRows.length; i++) {
@@ -367,7 +427,7 @@ function buildDocFromParsed(parsed, vw) {
   }
   */
   runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects : [];
-  const layout = applyYoga(rows, vw);
+  const layout = applyYoga(rows, vw, context);
   return {
     dom: doc,
     css: cssSection,
@@ -379,67 +439,87 @@ function buildDocFromParsed(parsed, vw) {
   };
 }
 
-function buildDocFromHtml(html, vw) {
+function buildDocFromHtml(html, vw, context = 'document') {
+  const source = String(html || '');
   let parsed;
   try {
-    parsed = parse5.parse(String(html || ''));
-  } catch (_) {
-    parsed = parse5.parse('');
+    parsed = parse5.parse(source);
+  } catch (err) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_HTML_PARSE_FAILED',
+      `HTML parse failed while building ${context}`,
+      { context, reason: describeError(err), html: source },
+      err,
+    );
   }
-  return buildDocFromParsed(parsed, vw);
+  return buildDocFromParsed(parsed, vw, context);
 }
 
-function applyYoga(rows, vw) {
-  const root = Yoga.Node.create();
-  root.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
-  root.setAlignItems(Yoga.ALIGN_FLEX_START);
-  root.setWidth(vw);
-  root.setPadding(Yoga.EDGE_LEFT, LEFT_PAD);
-  root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
+function applyYoga(rows, vw, context = 'document') {
+  let root = null;
+  try {
+    root = Yoga.Node.create();
+    root.setFlexDirection(Yoga.FLEX_DIRECTION_COLUMN);
+    root.setAlignItems(Yoga.ALIGN_FLEX_START);
+    root.setWidth(vw);
+    root.setPadding(Yoga.EDGE_LEFT, LEFT_PAD);
+    root.setPadding(Yoga.EDGE_TOP, TOP_PAD);
 
-  const nodes = [];
-  const rowX = [];
-  const rowY = [];
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const indent = r.depth * INDENT_PX;
-    const n = Yoga.Node.create();
-    n.setHeight(LINE_H);
-    n.setMinHeight(LINE_H);
-    if (r.kind === 'title-text') {
-      // Draw path places text at node-left, so center by placing a content-width node
-      // at a centered left margin within the same inner row width as normal rows.
-      const textW = Math.max(1, Math.round(String(r.text || '').length * 8));
-      const innerRowW = Math.max(1, vw - (LEFT_PAD * 2));
-      const centeredLeft = Math.max(0, Math.floor((innerRowW - textW) * 0.5));
-      n.setWidth(textW);
-      n.setMargin(Yoga.EDGE_LEFT, centeredLeft);
-    } else {
-      n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
-      n.setMargin(Yoga.EDGE_LEFT, indent);
+    const nodes = [];
+    const rowX = [];
+    const rowY = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const indent = r.depth * INDENT_PX;
+      const n = Yoga.Node.create();
+      n.setHeight(LINE_H);
+      n.setMinHeight(LINE_H);
+      if (r.kind === 'title-text') {
+        // Draw path places text at node-left, so center by placing a content-width node
+        // at a centered left margin within the same inner row width as normal rows.
+        const textW = Math.max(1, Math.round(String(r.text || '').length * 8));
+        const innerRowW = Math.max(1, vw - (LEFT_PAD * 2));
+        const centeredLeft = Math.max(0, Math.floor((innerRowW - textW) * 0.5));
+        n.setWidth(textW);
+        n.setMargin(Yoga.EDGE_LEFT, centeredLeft);
+      } else {
+        n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
+        n.setMargin(Yoga.EDGE_LEFT, indent);
+      }
+      root.insertChild(n, i);
+      nodes.push(n);
     }
-    root.insertChild(n, i);
-    nodes.push(n);
+
+    root.calculateLayout(vw, NaN, Yoga.DIRECTION_LTR);
+
+    for (let i = 0; i < nodes.length; i++) {
+      rowX.push(Math.round(Number(nodes[i].getComputedLeft() || 0)));
+      rowY.push(Math.round(Number(nodes[i].getComputedTop() || 0)));
+    }
+
+    const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)));
+    return { rowX, rowY, contentH };
+  } catch (err) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_LAYOUT_FAILED',
+      `Yoga layout failed while building ${context}`,
+      { context, reason: describeError(err), viewportWidth: vw, rowCount: Array.isArray(rows) ? rows.length : 0 },
+      err,
+    );
+  } finally {
+    if (root) {
+      try {
+        root.freeRecursive();
+      } catch (_) {}
+    }
   }
-
-  root.calculateLayout(vw, NaN, Yoga.DIRECTION_LTR);
-
-  for (let i = 0; i < nodes.length; i++) {
-    rowX.push(Math.round(Number(nodes[i].getComputedLeft() || 0)));
-    rowY.push(Math.round(Number(nodes[i].getComputedTop() || 0)));
-  }
-
-  const contentH = Math.max(1, Math.round(Number(root.getComputedHeight() || 0)));
-  root.freeRecursive();
-
-  return { rowX, rowY, contentH };
 }
 
 function ensureDoc(vw) {
   if (!cachedDoc) {
-    cachedDoc = buildDocFromHtml(cachedHtml, vw);
+    cachedDoc = buildDocFromHtml(cachedHtml, vw, 'cached html document');
   } else if (cachedDoc.width !== vw) {
-    cachedDoc = buildDocFromParsed(cachedDoc.dom, vw);
+    cachedDoc = buildDocFromParsed(cachedDoc.dom, vw, 'cached html document');
   }
   return cachedDoc;
 }
@@ -529,8 +609,14 @@ function parseFragmentForNode(node, html) {
       return parse5.parseFragment(node, source);
     }
     return parse5.parseFragment(source);
-  } catch (_) {
-    return parse5.parseFragment('');
+  } catch (err) {
+    const tagName = isElement(node) ? String(node.tagName || '').toLowerCase() : String(node && node.nodeName || 'node');
+    raiseBrowserError(
+      'TRUEOS_BROWSER_HTML_FRAGMENT_PARSE_FAILED',
+      'HTML fragment parse failed during DOM mutation',
+      { targetTag: tagName, reason: describeError(err), html: source },
+      err,
+    );
   }
 }
 
@@ -562,8 +648,13 @@ function normalizeInsertPosition(position) {
 function syncCachedHtmlFromDoc(doc) {
   try {
     cachedHtml = String(parse5.serialize(doc) || '');
-  } catch (_) {
-    cachedHtml = '';
+  } catch (err) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_HTML_SERIALIZE_FAILED',
+      'HTML serialization failed after DOM mutation',
+      { reason: describeError(err) },
+      err,
+    );
   }
 }
 
@@ -571,11 +662,15 @@ function commitDomMutation(doc) {
   const sourceDoc = doc && typeof doc === 'object'
     ? doc
     : (cachedDoc && cachedDoc.dom ? cachedDoc.dom : null);
-  if (!sourceDoc) return false;
+  if (!sourceDoc) {
+    raiseBrowserError('TRUEOS_BROWSER_DOM_COMMIT_FAILED', 'DOM mutation commit failed', {
+      reason: 'missing source document',
+    });
+  }
 
   syncCachedHtmlFromDoc(sourceDoc);
   const { vw } = computeViewport();
-  cachedDoc = buildDocFromParsed(sourceDoc, vw);
+  cachedDoc = buildDocFromParsed(sourceDoc, vw, 'mutated html document');
   paint();
   return true;
 }
@@ -584,8 +679,18 @@ function setNodeHtml(target, html) {
   const { vw } = computeViewport();
   const doc = ensureDoc(vw);
   const node = resolveDomTargetNode(doc && doc.dom ? doc.dom : null, target);
-  if (!node || typeof node !== 'object') return false;
-  if (isTextNode(node)) return false;
+  if (!node || typeof node !== 'object') {
+    raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_NOT_FOUND', 'DOM mutation target was not found', {
+      target: normalizeDomTarget(target) || '(empty)',
+      op: 'setNodeHtml',
+    });
+  }
+  if (isTextNode(node)) {
+    raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_INVALID', 'DOM mutation target cannot be a text node', {
+      target: normalizeDomTarget(target) || '(empty)',
+      op: 'setNodeHtml',
+    });
+  }
 
   const nextChildren = adoptFragmentChildren(parseFragmentForNode(node, html), node);
   node.childNodes = nextChildren;
@@ -596,7 +701,13 @@ function insertHtml(target, html, position = 'beforeend') {
   const { vw } = computeViewport();
   const doc = ensureDoc(vw);
   const node = resolveDomTargetNode(doc && doc.dom ? doc.dom : null, target);
-  if (!node || typeof node !== 'object') return false;
+  if (!node || typeof node !== 'object') {
+    raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_NOT_FOUND', 'DOM insertion target was not found', {
+      target: normalizeDomTarget(target) || '(empty)',
+      op: 'insertHtml',
+      position,
+    });
+  }
 
   const where = normalizeInsertPosition(position);
   let parent = null;
@@ -605,20 +716,45 @@ function insertHtml(target, html, position = 'beforeend') {
 
   if (where === 'beforebegin' || where === 'afterend') {
     parent = node.parentNode || null;
-    if (!parent || typeof parent !== 'object') return false;
+    if (!parent || typeof parent !== 'object') {
+      raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_INVALID', 'DOM insertion target has no parent for sibling insertion', {
+        target: normalizeDomTarget(target) || '(empty)',
+        op: 'insertHtml',
+        position: where,
+      });
+    }
     siblings = ensureChildNodes(parent);
     const nodeIndex = siblings.indexOf(node);
-    if (nodeIndex < 0) return false;
+    if (nodeIndex < 0) {
+      raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_INVALID', 'DOM insertion target was detached from its parent', {
+        target: normalizeDomTarget(target) || '(empty)',
+        op: 'insertHtml',
+        position: where,
+      });
+    }
     insertAt = where === 'beforebegin' ? nodeIndex : nodeIndex + 1;
   } else {
-    if (isTextNode(node)) return false;
+    if (isTextNode(node)) {
+      raiseBrowserError('TRUEOS_BROWSER_DOM_TARGET_INVALID', 'DOM insertion target cannot be a text node for child insertion', {
+        target: normalizeDomTarget(target) || '(empty)',
+        op: 'insertHtml',
+        position: where,
+      });
+    }
     parent = node;
     siblings = ensureChildNodes(node);
     insertAt = where === 'afterbegin' ? 0 : siblings.length;
   }
 
   const inserted = adoptFragmentChildren(parseFragmentForNode(parent, html), parent);
-  if (inserted.length <= 0) return false;
+  if (inserted.length <= 0) {
+    raiseBrowserError('TRUEOS_BROWSER_DOM_INSERT_EMPTY', 'DOM insertion produced no nodes', {
+      target: normalizeDomTarget(target) || '(empty)',
+      op: 'insertHtml',
+      position: where,
+      html,
+    });
+  }
   siblings.splice(insertAt, 0, ...inserted);
   return commitDomMutation(doc.dom);
 }
@@ -696,6 +832,7 @@ function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
   paint();
+  return true;
 }
 
 function nowMs() {
@@ -752,7 +889,22 @@ function paint() {
   const releaseRect = pendingReleaseRect;
   pendingReleaseRect = null;
 
-  renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+  try {
+    renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
+  } catch (err) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_RENDER_FAILED',
+      'Browser paint failed while rendering scene',
+      {
+        reason: describeError(err),
+        viewportWidth: vw,
+        viewportHeight: vh,
+        scrollY,
+        rowCount: Array.isArray(doc && doc.rows) ? doc.rows.length : 0,
+      },
+      err,
+    );
+  }
 
   return true;
 }
