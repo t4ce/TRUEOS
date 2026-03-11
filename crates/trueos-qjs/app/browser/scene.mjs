@@ -13,7 +13,7 @@ function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
 
-export function renderScene(doc, vw, vh, scrollY, overlayRuns) {
+export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
   const texId = Number(cmdStream.createAtlasTexture(ATLAS_KIND) || 0);
   const runs = [];
   const iconRuns = [];
@@ -48,6 +48,15 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns) {
   cmdStream.setViewport(Math.max(1, Number(vw || 1) | 0), Math.max(1, Number(vh || 1) | 0));
   cmdStream.beginFrame();
   try {
+    if (overlayRect && typeof overlayRect === 'object') {
+      cmdStream.fillRect(
+        Number(overlayRect.x || 0),
+        Number(overlayRect.y || 0),
+        Number(overlayRect.width || 0),
+        Number(overlayRect.height || 0),
+        Number(overlayRect.rgba || 0),
+      );
+    }
     // Icon quads are textured RGBA, so keep standard alpha blending enabled.
     cmdStream.setBlendEnabled(1);
     cmdStream.setBlendMode(0);

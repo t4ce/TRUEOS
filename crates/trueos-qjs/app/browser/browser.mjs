@@ -17,6 +17,7 @@ const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
+const RELEASE_RECT_RGBA = 0x3f2f7fff;
 
 let cachedHtml = '';
 let cachedDoc = null;
@@ -25,6 +26,7 @@ let scrollY = 0;
 let currentPageUrl = String(runtime.host.__trueosBrowserCurrentUrl || runtime.host.__trueosBrowserUrl || '');
 const kernelCursorState = new Map();
 const cursorButtonEvents = [];
+const cursorDragOrigins = new Map();
 const aiCursorSlots = new Map();
 let nextAiCursorSlot = AI_CURSOR_SLOT_BASE;
 let browserActionSeq = 0;
@@ -33,6 +35,7 @@ let aiStartSpecifier = '';
 let aiWorker = null;
 const aiInputQueue = [];
 const aiInputWaiters = [];
+let pendingReleaseRect = null;
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -49,6 +52,8 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getHtml',
     'getTextRows',
     'getDomSnapshot',
+    'setNodeHtml',
+    'insertHtml',
     'getViewport',
     'paint',
     'setScroll',
@@ -320,23 +325,20 @@ function collectRows(node, depth, rows, cssSection, parentTag = '', parentStyle 
   }
 }
 
-function buildDocFromHtml(html, vw) {
-  let parsed;
-  try {
-    parsed = parse5.parse(String(html || ''));
-  } catch (_) {
-    parsed = parse5.parse('');
-  }
+function buildDocFromParsed(parsed, vw) {
+  const doc = parsed && typeof parsed === 'object'
+    ? parsed
+    : parse5.parse('');
 
   const rows = [];
   const cssSection = (() => {
     try {
-      return typeof extractCssSection === 'function' ? extractCssSection(parsed) : null;
+      return typeof extractCssSection === 'function' ? extractCssSection(doc) : null;
     } catch (_) {
       return null;
     }
   })();
-  collectRows(parsed, 0, rows, cssSection);
+  collectRows(doc, 0, rows, cssSection);
   /* debug
   const cssRows = Array.isArray(cssSection && cssSection.rows) ? cssSection.rows : [];
   for (let i = 0; i < cssRows.length; i++) {
@@ -352,7 +354,7 @@ function buildDocFromHtml(html, vw) {
   runtime.host.__trueosKernelCssObjects = Array.isArray(cssSection && cssSection.cssObjects) ? cssSection.cssObjects : [];
   const layout = applyYoga(rows, vw);
   return {
-    dom: parsed,
+    dom: doc,
     css: cssSection,
     rows,
     rowX: layout.rowX,
@@ -360,6 +362,16 @@ function buildDocFromHtml(html, vw) {
     contentH: layout.contentH,
     width: vw,
   };
+}
+
+function buildDocFromHtml(html, vw) {
+  let parsed;
+  try {
+    parsed = parse5.parse(String(html || ''));
+  } catch (_) {
+    parsed = parse5.parse('');
+  }
+  return buildDocFromParsed(parsed, vw);
 }
 
 function applyYoga(rows, vw) {
@@ -409,10 +421,144 @@ function applyYoga(rows, vw) {
 }
 
 function ensureDoc(vw) {
-  if (!cachedDoc || cachedDoc.width !== vw) {
+  if (!cachedDoc) {
     cachedDoc = buildDocFromHtml(cachedHtml, vw);
+  } else if (cachedDoc.width !== vw) {
+    cachedDoc = buildDocFromParsed(cachedDoc.dom, vw);
   }
   return cachedDoc;
+}
+
+function ensureChildNodes(node) {
+  if (!node || typeof node !== 'object') return [];
+  if (!Array.isArray(node.childNodes)) node.childNodes = [];
+  return node.childNodes;
+}
+
+function setParentNode(node, parent) {
+  if (node && typeof node === 'object') {
+    node.parentNode = parent || null;
+  }
+  return node;
+}
+
+function getNodeByPath(root, path) {
+  if (!root || typeof root !== 'object') return null;
+  const rawPath = typeof path === 'string' ? path.trim() : '';
+  if (!rawPath || rawPath === 'root') return root;
+  if (!rawPath.startsWith('root.')) return null;
+
+  const parts = rawPath.slice('root.'.length).split('.');
+  let node = root;
+  for (let i = 0; i < parts.length; i += 1) {
+    const index = Number(parts[i]);
+    if (!Number.isInteger(index) || index < 0) return null;
+    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    node = kids[index] || null;
+    if (!node || typeof node !== 'object') return null;
+  }
+  return node;
+}
+
+function parseFragmentForNode(node, html) {
+  const source = String(html || '');
+  try {
+    if (isElement(node)) {
+      return parse5.parseFragment(node, source);
+    }
+    return parse5.parseFragment(source);
+  } catch (_) {
+    return parse5.parseFragment('');
+  }
+}
+
+function adoptFragmentChildren(fragment, parent) {
+  const kids = Array.isArray(fragment && fragment.childNodes) ? fragment.childNodes : [];
+  const out = [];
+  for (let i = 0; i < kids.length; i += 1) {
+    out.push(setParentNode(kids[i], parent));
+  }
+  return out;
+}
+
+function normalizeDomTarget(target) {
+  if (typeof target === 'string') return target.trim();
+  if (target && typeof target === 'object' && typeof target.path === 'string') {
+    return target.path.trim();
+  }
+  return '';
+}
+
+function normalizeInsertPosition(position) {
+  const value = String(position || 'beforeend').trim().toLowerCase();
+  if (value === 'beforebegin' || value === 'afterbegin' || value === 'beforeend' || value === 'afterend') {
+    return value;
+  }
+  return 'beforeend';
+}
+
+function syncCachedHtmlFromDoc(doc) {
+  try {
+    cachedHtml = String(parse5.serialize(doc) || '');
+  } catch (_) {
+    cachedHtml = '';
+  }
+}
+
+function commitDomMutation(doc) {
+  const sourceDoc = doc && typeof doc === 'object'
+    ? doc
+    : (cachedDoc && cachedDoc.dom ? cachedDoc.dom : null);
+  if (!sourceDoc) return false;
+
+  syncCachedHtmlFromDoc(sourceDoc);
+  const { vw } = computeViewport();
+  cachedDoc = buildDocFromParsed(sourceDoc, vw);
+  paint();
+  return true;
+}
+
+function setNodeHtml(target, html) {
+  const { vw } = computeViewport();
+  const doc = ensureDoc(vw);
+  const node = getNodeByPath(doc && doc.dom ? doc.dom : null, normalizeDomTarget(target));
+  if (!node || typeof node !== 'object') return false;
+  if (isTextNode(node)) return false;
+
+  const nextChildren = adoptFragmentChildren(parseFragmentForNode(node, html), node);
+  node.childNodes = nextChildren;
+  return commitDomMutation(doc.dom);
+}
+
+function insertHtml(target, html, position = 'beforeend') {
+  const { vw } = computeViewport();
+  const doc = ensureDoc(vw);
+  const node = getNodeByPath(doc && doc.dom ? doc.dom : null, normalizeDomTarget(target));
+  if (!node || typeof node !== 'object') return false;
+
+  const where = normalizeInsertPosition(position);
+  let parent = null;
+  let siblings = null;
+  let insertAt = 0;
+
+  if (where === 'beforebegin' || where === 'afterend') {
+    parent = node.parentNode || null;
+    if (!parent || typeof parent !== 'object') return false;
+    siblings = ensureChildNodes(parent);
+    const nodeIndex = siblings.indexOf(node);
+    if (nodeIndex < 0) return false;
+    insertAt = where === 'beforebegin' ? nodeIndex : nodeIndex + 1;
+  } else {
+    if (isTextNode(node)) return false;
+    parent = node;
+    siblings = ensureChildNodes(node);
+    insertAt = where === 'afterbegin' ? 0 : siblings.length;
+  }
+
+  const inserted = adoptFragmentChildren(parseFragmentForNode(parent, html), parent);
+  if (inserted.length <= 0) return false;
+  siblings.splice(insertAt, 0, ...inserted);
+  return commitDomMutation(doc.dom);
 }
 
 function cloneRows(rows) {
@@ -429,19 +575,21 @@ function cloneRows(rows) {
   return out;
 }
 
-function serializeNode(node, depth = 0) {
+function serializeNode(node, depth = 0, path = 'root') {
   if (!node || typeof node !== 'object') return null;
   if (depth > 10) {
-    return { type: 'limit' };
+    return { type: 'limit', path: String(path || 'root') };
   }
   if (isTextNode(node)) {
     return {
       type: 'text',
+      path: String(path || 'root'),
       text: String(node.value || ''),
     };
   }
   const out = {
     type: isElement(node) ? 'element' : 'node',
+    path: String(path || 'root'),
     tag: isElement(node) ? String(node.tagName || '').toLowerCase() : String(node.nodeName || ''),
     attrs: {},
     children: [],
@@ -455,7 +603,7 @@ function serializeNode(node, depth = 0) {
   }
   const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
   for (let i = 0; i < kids.length; i += 1) {
-    const child = serializeNode(kids[i], depth + 1);
+    const child = serializeNode(kids[i], depth + 1, `${path}.${i}`);
     if (child) out.children.push(child);
   }
   return out;
@@ -539,8 +687,10 @@ function paint() {
 
   const overlayRuns = [];
   fpsOverlay.appendRuns(overlayRuns, vw);
+  const releaseRect = pendingReleaseRect;
+  pendingReleaseRect = null;
 
-  renderScene(doc, vw, vh, scrollY, overlayRuns);
+  renderScene(doc, vw, vh, scrollY, overlayRuns, releaseRect);
 
   return true;
 }
@@ -598,6 +748,24 @@ function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
   });
 
   if (((nextFlags & CURSOR_FLAG_BUTTONS_CHANGED) !== 0) || nextButtons !== prevButtons) {
+    if (prevButtons === 0 && nextButtons !== 0) {
+      cursorDragOrigins.set(id, {
+        x: nextX,
+        y: nextY,
+      });
+    } else if (prevButtons !== 0 && nextButtons === 0) {
+      const origin = cursorDragOrigins.get(id);
+      if (origin) {
+        pendingReleaseRect = {
+          x: Number(origin.x || 0),
+          y: Number(origin.y || 0),
+          width: nextX - Number(origin.x || 0),
+          height: nextY - Number(origin.y || 0),
+          rgba: RELEASE_RECT_RGBA,
+        };
+      }
+      cursorDragOrigins.delete(id);
+    }
     logCursorDebug(`[browser.mjs] cursor buttons slot=${id} prev=${prevButtons} next=${nextButtons}`);
     queueCursorButtonEvent({
       slotId: id,
@@ -777,6 +945,8 @@ function maybeAutostartAi() {
 runtime.host.__trueosBrowser = {
   paint,
   setHtml,
+  setNodeHtml,
+  insertHtml,
   injectCursorEvent,
   getKernelCursors() {
     return Array.from(kernelCursorState.values()).sort((a, b) => a.slotId - b.slotId);
