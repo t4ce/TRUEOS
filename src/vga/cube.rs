@@ -73,14 +73,16 @@ impl Quat {
             y: ny * s,
             z: nz * s,
         }
-        .normalized()
     }
 
     fn rotate_vec(self, vx: f32, vy: f32, vz: f32) -> (f32, f32, f32) {
-        // Efficient quaternion-vector rotation (no full q*v*q^-1):
+        // v' = q * (0,v) * conj(q), optimized.
+        let qx = self.x;
+        let qy = self.y;
+        let qz = self.z;
+        let qw = self.w;
+
         // t = 2 * cross(q.xyz, v)
-        // v' = v + q.w * t + cross(q.xyz, t)
-        let (qx, qy, qz, qw) = (self.x, self.y, self.z, self.w);
         let tx = 2.0 * (qy * vz - qz * vy);
         let ty = 2.0 * (qz * vx - qx * vz);
         let tz = 2.0 * (qx * vy - qy * vx);
@@ -149,9 +151,8 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
         return;
     }
 
-    // Snapshot cursor positions up-front so we don't hold the HID runtime lock while drawing.
-    let mice = crate::usb::hid::mouse_cursor_snapshot();
-    let tablets = crate::usb::hid::tablet_cursor_snapshot();
+    // Snapshot cursor positions up-front so we don't hold the cursor store lock while drawing.
+    let cursors = crate::v::cursor::ordered_cursor_snapshot();
 
     let span = (size - 1).max(1) as f32;
 
@@ -186,16 +187,15 @@ fn draw_cursor_rings_in_tile(fb: &super::FramebufferSurface, ox: i32, oy: i32, s
         }
     }
 
-    for (mx, my) in mice {
-        let x = ox + roundf((mx as f32) * span) as i32;
-        let y = oy + roundf((my as f32) * span) as i32;
-        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_00_FF_00);
-    }
-
-    for (tx, ty) in tablets {
-        let x = ox + roundf((tx as f32) * span) as i32;
-        let y = oy + roundf((ty as f32) * span) as i32;
-        draw_ring_clipped(fb, ox, oy, size, x, y, 0x00_FF_00_FF);
+    for (idx, (cx, cy)) in cursors.into_iter().enumerate() {
+        let x = ox + roundf((cx as f32) * span) as i32;
+        let y = oy + roundf((cy as f32) * span) as i32;
+        let color = if (idx & 1) == 0 {
+            0x00_00_FF_00
+        } else {
+            0x00_FF_D0_00
+        };
+        draw_ring_clipped(fb, ox, oy, size, x, y, color);
     }
 }
 

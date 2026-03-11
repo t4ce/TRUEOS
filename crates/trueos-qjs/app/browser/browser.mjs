@@ -10,6 +10,7 @@ import { LEFT_PAD, TOP_PAD, LINE_H } from './theme.mjs';
 const runtime = resolveRuntime();
 
 const AI_CURSOR_SLOT_BASE = 10000;
+const DEFAULT_AI_CURSOR_ID = 'ai-default';
 const WHEEL_STEP_PX = 32;
 const CURSOR_EVENT_FIELDS = 6;
 const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
@@ -57,6 +58,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getViewport',
     'paint',
     'setScroll',
+    'moveCursor',
     'click',
     'navigate',
     'pressKey',
@@ -716,6 +718,17 @@ function logCursorDebug(message) {
   } catch (_) {}
 }
 
+function resolveAiCursorId(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || DEFAULT_AI_CURSOR_ID;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  return DEFAULT_AI_CURSOR_ID;
+}
+
 function getOrCreateAiCursorSlot(cursorId) {
   const key = String(cursorId || '').trim();
   if (!key) return 0;
@@ -782,7 +795,13 @@ function rememberKernelCursor(slotId, x, y, buttonsDown, flags) {
 }
 
 function processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, source = 'kernel') {
+  const prev = kernelCursorState.get(Number(slotId || 0) | 0) || null;
   let updated = rememberKernelCursor(slotId, x, y, buttonsDown, flags);
+
+  if (!prev || Number(prev.x || 0) !== Number(x || 0) || Number(prev.y || 0) !== Number(y || 0)) {
+    logCursorDebug(`[browser.mjs] cursor move source=${source} slot=${slotId} x=${Number(x || 0)} y=${Number(y || 0)}`);
+    updated += 1;
+  }
 
   if (wheel !== 0) {
     logCursorDebug(`[browser.mjs] cursor wheel source=${source} slot=${slotId} wheel=${wheel}`);
@@ -796,9 +815,7 @@ function processCursorEvent(slotId, x, y, buttonsDown, wheel, flags, source = 'k
 function injectCursorEvent(event = null) {
   const source = event && typeof event === 'object' ? event : {};
   const slotId = Number(source.slotId || 0) | 0;
-  const aiCursorId = typeof source.aiCursorId === 'string' || typeof source.aiCursorId === 'number'
-    ? source.aiCursorId
-    : '';
+  const aiCursorId = resolveAiCursorId(source.aiCursorId);
   const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
   if (resolvedSlotId <= 0) return false;
 
@@ -808,8 +825,50 @@ function injectCursorEvent(event = null) {
   const wheel = Number(source.wheel || 0) | 0;
   const flags = Number(source.flags || 0) >>> 0;
 
+  const writeCursorEvent = runtime.host.__trueosWriteCursorEvent;
+  if (typeof writeCursorEvent === 'function') {
+    try {
+      if (writeCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags)) {
+        const updated = processCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags, 'synthetic');
+        if (updated > 0 && wheel === 0) {
+          paint();
+        }
+        return true;
+      }
+    } catch (_) {}
+  }
+
   processCursorEvent(resolvedSlotId, x, y, buttonsDown, wheel, flags, 'synthetic');
   return true;
+}
+
+function moveCursor(target = null) {
+  const source = target && typeof target === 'object' ? target : {};
+  const slotId = Number(source.slotId || 0) | 0;
+  const aiCursorId = resolveAiCursorId(source.aiCursorId);
+  const resolvedSlotId = slotId > 0 ? slotId : getOrCreateAiCursorSlot(aiCursorId);
+  if (resolvedSlotId <= 0) return false;
+
+  const state = kernelCursorState.get(resolvedSlotId);
+  const x = Number(source.x);
+  const y = Number(source.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+
+  const buttonsDown = Object.prototype.hasOwnProperty.call(source, 'buttonsDown')
+    ? (Number(source.buttonsDown || 0) >>> 0)
+    : (state ? (Number(state.buttonsDown || 0) >>> 0) : 0);
+  const flags = Object.prototype.hasOwnProperty.call(source, 'flags')
+    ? (Number(source.flags || 0) >>> 0)
+    : 1;
+
+  return injectCursorEvent({
+    slotId: resolvedSlotId,
+    x,
+    y,
+    buttonsDown,
+    wheel: 0,
+    flags,
+  });
 }
 
 function pumpCursorEvents() {
@@ -884,6 +943,17 @@ function normalizeAiSpecifier(specifier) {
   return '/qjs/ai/ai_pc.mjs';
 }
 
+function placeDefaultAiCursor() {
+  const { vw, vh } = computeViewport();
+  const x = Math.max(0, Math.floor(vw * 0.25));
+  const y = Math.max(0, Math.floor(vh * 0.25));
+  moveCursor({
+    aiCursorId: DEFAULT_AI_CURSOR_ID,
+    x,
+    y,
+  });
+}
+
 function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
   const resolvedSpecifier = normalizeAiSpecifier(specifier);
   const opts = options && typeof options === 'object' ? options : null;
@@ -905,6 +975,7 @@ function startAi(specifier = '/qjs/ai/ai_pc.mjs', options = null) {
     .then(() => {
       const worker = attachAiWorker(new Worker(buildAiWorkerSource(resolvedSpecifier, opts)));
       aiWorker = worker;
+      placeDefaultAiCursor();
       try {
         console.log('[browser.mjs] ai worker started', resolvedSpecifier);
       } catch (_) {}
@@ -993,7 +1064,15 @@ runtime.host.__trueosBrowser = {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
     paint();
   },
+  moveCursor(target = null) {
+    return moveCursor(target);
+  },
   click(target = null) {
+    if (target && typeof target === 'object' && !Array.isArray(target)) {
+      if (Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y))) {
+        moveCursor(target);
+      }
+    }
     const payload = target && typeof target === 'object' && !Array.isArray(target)
       ? { target: { ...target } }
       : { target: target == null ? null : { value: target } };

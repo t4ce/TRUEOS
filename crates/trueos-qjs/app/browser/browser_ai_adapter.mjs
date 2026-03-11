@@ -5,6 +5,7 @@ const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
   newConversation: false,
   computerUse: true,
 });
+const DEFAULT_AI_CURSOR_ID = 'ai-default';
 
 const FALLBACK_BROWSER_API_CONTRACT = {
   version: 1,
@@ -19,6 +20,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getViewport',
     'paint',
     'setScroll',
+    'moveCursor',
     'click',
     'navigate',
     'pressKey',
@@ -220,6 +222,23 @@ function normalizeAiSpecifier(specifier) {
   return '/qjs/ai/ai_pc.mjs';
 }
 
+function placeDefaultAiCursor(browser) {
+  if (!browser || typeof browser.moveCursor !== 'function' || typeof browser.getViewport !== 'function') {
+    return;
+  }
+  Promise.resolve(browser.getViewport())
+    .then((viewport) => {
+      const width = Math.max(1, Number(viewport && viewport.width || 0));
+      const height = Math.max(1, Number(viewport && viewport.height || 0));
+      return browser.moveCursor({
+        aiCursorId: DEFAULT_AI_CURSOR_ID,
+        x: Math.floor(width * 0.25),
+        y: Math.floor(height * 0.25),
+      });
+    })
+    .catch(() => {});
+}
+
 function startAi(state, specifier = '/qjs/ai/ai_pc.mjs', options = null) {
   const resolvedSpecifier = normalizeAiSpecifier(specifier);
   const opts = options && typeof options === 'object' ? options : null;
@@ -241,6 +260,7 @@ function startAi(state, specifier = '/qjs/ai/ai_pc.mjs', options = null) {
     .then(() => {
       const worker = attachAiWorker(state, new Worker(buildAiWorkerSource(resolvedSpecifier)));
       state.aiWorker = worker;
+      placeDefaultAiCursor(state.browser);
       if (initialInput) {
         pushAiInput(state, initialInput);
       }

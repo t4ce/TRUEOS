@@ -128,30 +128,15 @@ const CURSOR_AUTOMODE_SLOTS: usize = 4;
 fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
     out.clear();
 
-    let mice = crate::usb::hid::mouse_cursor_snapshot();
-    for (mx, my) in mice {
-        let nx = if mx.is_finite() {
-            mx.clamp(0.0, 1.0) as f32
+    let cursors = crate::v::cursor::ordered_cursor_snapshot();
+    for (cx, cy) in cursors {
+        let nx = if cx.is_finite() {
+            cx.clamp(0.0, 1.0) as f32
         } else {
             0.0
         };
-        let ny = if my.is_finite() {
-            my.clamp(0.0, 1.0) as f32
-        } else {
-            0.0
-        };
-        out.push((nx, ny));
-    }
-
-    let tablets = crate::usb::hid::tablet_cursor_snapshot();
-    for (tx, ty) in tablets {
-        let nx = if tx.is_finite() {
-            tx.clamp(0.0, 1.0) as f32
-        } else {
-            0.0
-        };
-        let ny = if ty.is_finite() {
-            ty.clamp(0.0, 1.0) as f32
+        let ny = if cy.is_finite() {
+            cy.clamp(0.0, 1.0) as f32
         } else {
             0.0
         };
@@ -241,22 +226,11 @@ pub unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -
         return -1;
     }
 
-    let idx = (cursor_id - 1) as usize;
-    let mice = crate::usb::hid::mouse_cursor_snapshot_with_buttons();
-    let tablets = crate::usb::hid::tablet_cursor_snapshot();
-
-    if idx < mice.len() {
-        *out_buttons_down = mice[idx].2;
-        return 0;
-    }
-
-    let tidx = idx - mice.len();
-    if tidx < tablets.len() {
-        *out_buttons_down = 0;
-        return 0;
-    }
-
-    1
+    let Some(buttons_down) = crate::v::cursor::cursor_buttons(cursor_id) else {
+        return 1;
+    };
+    *out_buttons_down = buttons_down;
+    0
 }
 
 pub unsafe fn input_pop_cursor_event(out: *mut crate::usb::hid::TrueosHidCursorEvent) -> i32 {
@@ -296,4 +270,31 @@ pub unsafe fn input_read_cursor_events_since(
     *out_next_seq = next_seq;
     *out_dropped = dropped;
     wrote as u32
+}
+
+pub fn input_write_cursor_event(
+    slot_id: u32,
+    x_px: i32,
+    y_px: i32,
+    buttons_down: u32,
+    wheel: i32,
+    flags: u32,
+) -> i32 {
+    if slot_id == 0 {
+        return -1;
+    }
+
+    let (w, h) = crate::gfx::cpu_backbuffer_dimensions().unwrap_or((320, 200));
+    let max_x = w.saturating_sub(1) as i32;
+    let max_y = h.saturating_sub(1) as i32;
+    let clamped_x = x_px.clamp(0, max_x.max(0));
+    let clamped_y = y_px.clamp(0, max_y.max(0));
+    let w1 = (w.saturating_sub(1)).max(1) as f64;
+    let h1 = (h.saturating_sub(1)).max(1) as f64;
+    let nx = (clamped_x as f64) / w1;
+    let ny = (clamped_y as f64) / h1;
+    let wheel_i16 = wheel.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+
+    crate::usb::hid::inject_virtual_cursor_event(slot_id, nx, ny, buttons_down, wheel_i16, flags);
+    0
 }
