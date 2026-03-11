@@ -76,6 +76,8 @@ unsafe extern "C" {
         out_dropped: *mut u32,
     ) -> u32;
     pub fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_shell_qjs_init();
     pub fn trueos_cabi_shell_qjs_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_qjs_write_byte(byte: u8) -> i32;
@@ -84,6 +86,7 @@ unsafe extern "C" {
 
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
+    pub fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
 }
 
 #[repr(C)]
@@ -150,6 +153,30 @@ pub fn uart1_shell_write(bytes: &[u8]) -> usize {
 }
 
 #[inline]
+pub fn shell1_submit_input(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    unsafe { trueos_cabi_shell1_submit_input(bytes.as_ptr(), bytes.len()) }
+}
+
+#[inline]
+pub fn shell1_command_registry_json() -> Option<alloc::string::String> {
+    let len = unsafe { trueos_cabi_shell1_command_registry_json(core::ptr::null_mut(), 0) };
+    if len <= 0 {
+        return None;
+    }
+
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = unsafe { trueos_cabi_shell1_command_registry_json(bytes.as_mut_ptr(), bytes.len()) };
+    if got <= 0 {
+        return None;
+    }
+    bytes.truncate(got as usize);
+    alloc::string::String::from_utf8(bytes).ok()
+}
+
+#[inline]
 pub fn shell_qjs_init() {
     unsafe { trueos_cabi_shell_qjs_init() }
 }
@@ -188,6 +215,22 @@ pub fn shell_qjs_read_byte() -> Option<u8> {
     } else {
         None
     }
+}
+
+#[inline]
+pub fn gfx_capture_screenshot_data_url() -> Option<alloc::string::String> {
+    let len = unsafe { trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0) };
+    if len <= 0 {
+        return None;
+    }
+
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = unsafe { trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len()) };
+    if got <= 0 {
+        return None;
+    }
+    bytes.truncate(got as usize);
+    alloc::string::String::from_utf8(bytes).ok()
 }
 
 #[inline]

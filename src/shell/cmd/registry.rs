@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use spin::{Mutex, Once};
@@ -193,6 +194,64 @@ pub(crate) fn usage_text_for_name<const N: usize>(
         }
     }
     true
+}
+
+fn push_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch <= '\u{1F}' => {
+                let code = ch as u32;
+                let _ = write!(out, "\\u{:04X}", code);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+}
+
+pub(crate) fn command_registry_json() -> String {
+    init_builtin_shell_commands();
+
+    let cmds = registry().lock();
+    let mut out = String::new();
+    out.push('[');
+
+    for (cmd_idx, cmd) in cmds.iter().enumerate() {
+        if cmd_idx != 0 {
+            out.push(',');
+        }
+
+        out.push('{');
+        out.push_str("\"command\":");
+        push_json_string(&mut out, cmd.name);
+        out.push_str(",\"args\":[");
+
+        for (arg_idx, arg) in cmd.args.iter().enumerate() {
+            if arg_idx != 0 {
+                out.push(',');
+            }
+
+            out.push('{');
+            out.push_str("\"name\":");
+            push_json_string(&mut out, arg.name);
+            out.push_str(",\"type\":");
+            push_json_string(&mut out, arg.ty.name());
+            out.push_str(",\"required\":");
+            out.push_str(if arg.mandatory { "true" } else { "false" });
+            out.push('}');
+        }
+
+        out.push_str("]}");
+    }
+
+    out.push(']');
+    out
 }
 
 pub(crate) fn reg_sh_cmd(

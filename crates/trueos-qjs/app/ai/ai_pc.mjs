@@ -1,9 +1,15 @@
 import OpenAI from "openai";
 import { isMainThread, parentPort } from "node:worker_threads";
+import { buildAiPcShellToolBundle, findAiPcShellCommandByToolName } from "./ai_pc_cmd.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_MODEL = "gpt-5.4";
 const WORKER_RPC_TIMEOUT_MS = 30000;
+const AI_PC_TOOL_POLICY = [
+  "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
+  "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
+  "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
+].join(" ");
 const WORKER_BROWSER_METHODS = [
   "getApiContract",
   "listUnavailable",
@@ -218,9 +224,12 @@ function makeExecConsole(jsOutput) {
 
 function displayImage(base64Image) {
   const runtime = getPcRuntime();
+  const imageUrl = typeof base64Image === "string" && base64Image.startsWith("data:image/")
+    ? base64Image
+    : `data:image/png;base64,${base64Image}`;
   runtime.jsOutput.push({
     type: "input_image",
-    image_url: `data:image/png;base64,${base64Image}`,
+    image_url: imageUrl,
     detail: "original",
   });
 }
@@ -281,9 +290,9 @@ function createExecJsTool() {
           description: `
 JavaScript to execute. Write small snippets of interactive code. To persist variables or functions across tool calls, you must save them to globalThis. Code is executed in an async persistent eval context, so you can use await. You have access to ONLY the following:
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large base64 payloads like screenshots or buffer. If you create an image or screenshot, pass the base64 string to display().
-- display(base64_image_string): Use this to view a base64-encoded image.
+- display(base64_or_data_url): Use this to view a base64-encoded image or a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y), and listUnavailable(). Placeholder computer-use entries such as click(), navigate(), typeText(), pressKey(), and captureScreenshot() may exist but can report not-yet-available.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). typeText() may still report not-yet-available.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -314,16 +323,54 @@ function createAskUserTool() {
   };
 }
 
+function createShell1Tools() {
+  try {
+    return buildAiPcShellToolBundle();
+  } catch (_err) {
+    return [];
+  }
+}
+
 function buildTools(entry) {
   const tools = [];
   if (entry.webSearch) {
     tools.push({ type: "web_search" });
   }
+  tools.push(...createShell1Tools());
   if (entry.computerUse) {
     tools.push(createExecJsTool());
   }
   tools.push(createAskUserTool());
   return tools;
+}
+
+function submitShell1Input(line) {
+  const commandLine = typeof line === "string" ? line : String(line == null ? "" : line);
+  if (!commandLine) {
+    throw new Error("shell1 command line is empty");
+  }
+  if (typeof globalThis.__trueosShell1SubmitInput !== "function") {
+    throw new Error("shell1 input bridge is not available");
+  }
+  let submitted = 0;
+  submitted += Number(globalThis.__trueosShell1SubmitInput(commandLine)) || 0;
+  submitted += Number(globalThis.__trueosShell1SubmitInput("\r")) || 0;
+  return submitted;
+}
+
+function buildShell1CommandLine(command, payload) {
+  const parts = [command.command];
+  for (const arg of command.args) {
+    if (!Object.prototype.hasOwnProperty.call(payload, arg.name)) {
+      continue;
+    }
+    const value = payload[arg.name];
+    if (value == null || value === "") {
+      continue;
+    }
+    parts.push(String(value));
+  }
+  return parts.join(" ");
 }
 
 async function execJs(code) {
@@ -340,10 +387,16 @@ async function execJs(code) {
 
 async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX_STEPS, model = DEFAULT_MODEL) {
   const tools = buildTools(entry);
-  let nextInput = [{
-    role: "user",
-    content: entry.text,
-  }];
+  let nextInput = [
+    {
+      role: "system",
+      content: AI_PC_TOOL_POLICY,
+    },
+    {
+      role: "user",
+      content: entry.text,
+    },
+  ];
 
   for (let i = 0; i < maxSteps; i += 1) {
     const request = {
@@ -368,7 +421,20 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
     const toolOutputs = [];
 
     for (const item of resp.output) {
-      if (item.type === "function_call" && item.name === "exec_js") {
+      const shell1Command = item.type === "function_call"
+        ? findAiPcShellCommandByToolName(item.name)
+        : null;
+      if (shell1Command) {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const commandLine = buildShell1CommandLine(shell1Command, parsed);
+        const submitted = submitShell1Input(commandLine);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: `submitted shell1 command: ${commandLine} (${submitted} bytes). Output will appear in the shell1 terminal.`,
+        });
+      } else if (item.type === "function_call" && item.name === "exec_js") {
         hadToolCall = true;
         const parsed = JSON.parse(item.arguments || "{}");
         const code = parsed.code || "";

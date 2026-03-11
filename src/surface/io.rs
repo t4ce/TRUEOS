@@ -460,6 +460,18 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_shell1_submit_input(
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> usize {
+        if data_ptr.is_null() || data_len == 0 {
+            return 0;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        crate::shell::uart1_com1::inject_bytes(data)
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "C" fn trueos_cabi_poll_once() {
         crate::wait::spin_step();
     }

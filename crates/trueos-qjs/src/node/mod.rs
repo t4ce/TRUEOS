@@ -63,6 +63,9 @@ pub unsafe fn install_globals(ctx: *mut qjs::JSContext) {
     ensure_global_fetch(ctx);
     ensure_global_kernel_time(ctx);
     ensure_global_uart_shell(ctx);
+    ensure_global_shell1_submit_input(ctx);
+    ensure_global_shell1_runtime(ctx);
+    ensure_global_screenshot(ctx);
 }
 
 unsafe fn ensure_global_env(ctx: *mut qjs::JSContext) {
@@ -623,6 +626,150 @@ unsafe fn ensure_global_uart_shell(ctx: *mut qjs::JSContext) {
     qjs::js_free_value(ctx, global);
 }
 
+unsafe extern "C" fn trueos_shell1_submit_input_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return js_int32(0);
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let wrote = qjs::trueos_shims::shell1_submit_input(bytes);
+    qjs::JS_FreeCString(ctx, cstr);
+    js_int32(wrote as i32)
+}
+
+unsafe fn ensure_global_shell1_submit_input(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let submit_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell1_submit_input_js),
+        b"__trueosShell1SubmitInput\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1SubmitInput\0".as_ptr() as *const c_char,
+        submit_fn,
+    );
+    qjs::js_free_value(ctx, global);
+}
+
+unsafe fn ensure_global_shell1_runtime(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+
+    let Some(json) = qjs::trueos_shims::shell1_command_registry_json() else {
+        return;
+    };
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let registry_json = qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len());
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1CommandRegistryJson\0".as_ptr() as *const c_char,
+        registry_json,
+    );
+    qjs::js_free_value(ctx, global);
+
+    let shim_src = br#"
+(function (G) {
+    if (!G) return;
+    const raw = G.__trueosShell1CommandRegistryJson;
+    const parsed = typeof raw === 'string' && raw ? JSON.parse(raw) : [];
+    const commands = Array.isArray(parsed) ? parsed.map((entry) => {
+        const args = Array.isArray(entry && entry.args)
+            ? entry.args.map((arg) => Object.freeze({
+                name: String(arg && arg.name ? arg.name : ''),
+                type: String(arg && arg.type ? arg.type : 'str'),
+                required: !!(arg && arg.required),
+            }))
+            : [];
+        return Object.freeze({
+            command: String(entry && entry.command ? entry.command : ''),
+            args: Object.freeze(args),
+        });
+    }) : [];
+    G.__trueosShell1Runtime = Object.freeze({
+        commands: Object.freeze(commands),
+    });
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-shell1-runtime-shim>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node shell1 runtime shim");
+    }
+    qjs::js_free_value(ctx, shim);
+}
+
+unsafe extern "C" fn trueos_capture_screenshot_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let Some(data_url) = qjs::trueos_shims::gfx_capture_screenshot_data_url() else {
+        return js_null();
+    };
+    qjs::JS_NewStringLen(ctx, data_url.as_ptr() as *const c_char, data_url.len())
+}
+
+unsafe fn ensure_global_screenshot(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let capture_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_capture_screenshot_js),
+        b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
+        capture_fn,
+    );
+    qjs::js_free_value(ctx, global);
+}
+
 #[inline]
 fn log_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
@@ -828,6 +975,14 @@ fn js_int32(v: i32) -> qjs::JSValue {
     qjs::JSValue {
         u: qjs::JSValueUnion { int32: v },
         tag: qjs::JS_TAG_INT,
+    }
+}
+
+#[inline]
+fn js_null() -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: 0 },
+        tag: qjs::JS_TAG_NULL,
     }
 }
 
