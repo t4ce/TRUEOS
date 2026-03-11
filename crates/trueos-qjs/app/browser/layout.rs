@@ -13,6 +13,14 @@ unsafe extern "C" {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32;
+    fn trueos_cabi_input_write_cursor(
+        slot_id: u32,
+        x: i32,
+        y: i32,
+        buttons_down: u32,
+        wheel: i32,
+        flags: u32,
+    ) -> i32;
 }
 
 #[inline]
@@ -39,6 +47,18 @@ fn clamp_u8(v: i32) -> u8 {
         255
     } else {
         v as u8
+    }
+}
+
+#[inline]
+fn round_to_i32(v: f64) -> i32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    if v >= 0.0 {
+        (v + 0.5) as i32
+    } else {
+        (v - 0.5) as i32
     }
 }
 
@@ -337,6 +357,65 @@ unsafe extern "C" fn qjs_read_cursor_events_since(
     out
 }
 
+unsafe extern "C" fn qjs_write_cursor_event(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argc < 6 || argv.is_null() {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut slot_id_f = 0.0f64;
+    let mut x_f = 0.0f64;
+    let mut y_f = 0.0f64;
+    let mut buttons_f = 0.0f64;
+    let mut wheel_f = 0.0f64;
+    let mut flags_f = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut slot_id_f as *mut f64, args[0]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut x_f as *mut f64, args[1]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut y_f as *mut f64, args[2]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut buttons_f as *mut f64, args[3]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut wheel_f as *mut f64, args[4]) != 0
+        || qjs::JS_ToFloat64(ctx, &mut flags_f as *mut f64, args[5]) != 0
+    {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let slot_id = if slot_id_f.is_finite() && slot_id_f >= 1.0 {
+        slot_id_f as u32
+    } else {
+        0
+    };
+    if slot_id == 0 {
+        return qjs::JS_NewFloat64(ctx, 0.0);
+    }
+
+    let rc = trueos_cabi_input_write_cursor(
+        slot_id,
+        round_to_i32(x_f),
+        round_to_i32(y_f),
+        if buttons_f.is_finite() && buttons_f >= 0.0 {
+            buttons_f as u32
+        } else {
+            0
+        },
+        if wheel_f.is_finite() {
+            round_to_i32(wheel_f)
+        } else {
+            0
+        },
+        if flags_f.is_finite() && flags_f >= 0.0 {
+            flags_f as u32
+        } else {
+            0
+        },
+    );
+    qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
+}
+
 pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -346,6 +425,8 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static CURSOR_STATE_FN_NAME: &[u8] = b"__trueosReadCursorState\0";
     static CURSOR_EVENTS_NAME: &[u8] = b"__trueosReadCursorEventsSince\0";
     static CURSOR_EVENTS_FN_NAME: &[u8] = b"__trueosReadCursorEventsSince\0";
+    static CURSOR_WRITE_NAME: &[u8] = b"__trueosWriteCursorEvent\0";
+    static CURSOR_WRITE_FN_NAME: &[u8] = b"__trueosWriteCursorEvent\0";
     static ICON_CMDS_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static ICON_CMDS_FN_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static SVG_IMPORT_NAME: &[u8] = b"__trueosImportSvgAsset\0";
@@ -383,6 +464,21 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         CURSOR_EVENTS_NAME.as_ptr() as *const c_char,
         cursor_events_func,
+    );
+
+    let cursor_write_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_write_cursor_event),
+        CURSOR_WRITE_FN_NAME.as_ptr() as *const c_char,
+        6,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        CURSOR_WRITE_NAME.as_ptr() as *const c_char,
+        cursor_write_func,
     );
     qjs::js_free_value(ctx, global);
 }

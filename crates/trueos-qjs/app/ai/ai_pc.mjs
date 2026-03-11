@@ -8,6 +8,7 @@ const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
+  "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer browser.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
 ].join(" ");
 const WORKER_BROWSER_METHODS = [
@@ -21,6 +22,7 @@ const WORKER_BROWSER_METHODS = [
   "getViewport",
   "paint",
   "setScroll",
+  "moveCursor",
   "click",
   "navigate",
   "typeText",
@@ -294,7 +296,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,

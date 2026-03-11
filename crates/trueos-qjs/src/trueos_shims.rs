@@ -75,6 +75,14 @@ unsafe extern "C" {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_input_write_cursor(
+        slot_id: u32,
+        x: i32,
+        y: i32,
+        buttons_down: u32,
+        wheel: i32,
+        flags: u32,
+    ) -> i32;
     pub fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
