@@ -14,6 +14,8 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getHtml',
     'getTextRows',
     'getDomSnapshot',
+    'setNodeHtml',
+    'insertHtml',
     'getViewport',
     'paint',
     'setScroll',
