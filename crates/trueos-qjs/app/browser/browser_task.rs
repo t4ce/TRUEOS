@@ -18,6 +18,7 @@ static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::ne
 pub struct AiInputEntry {
     pub text: String,
     pub web_search: bool,
+    pub file_search: bool,
     pub new_conversation: bool,
     pub computer_use: bool,
 }
@@ -71,6 +72,8 @@ unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
     src.push_str(&text_lit);
     src.push_str(",webSearch:");
     src.push_str(if next.web_search { "true" } else { "false" });
+    src.push_str(",fileSearch:");
+    src.push_str(if next.file_search { "true" } else { "false" });
     src.push_str(",newConversation:");
     src.push_str(if next.new_conversation { "true" } else { "false" });
     src.push_str(",computerUse:");

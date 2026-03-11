@@ -21,6 +21,11 @@ unsafe extern "C" {
         wheel: i32,
         flags: u32,
     ) -> i32;
+    fn trueos_cabi_trueosfs_primary_html_tree(
+        max_entries: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
 }
 
 #[inline]
@@ -416,6 +421,41 @@ unsafe extern "C" fn qjs_write_cursor_event(
     qjs::JS_NewFloat64(ctx, if rc == 0 { 1.0 } else { 0.0 })
 }
 
+unsafe extern "C" fn qjs_read_primary_trueosfs_tree_html(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: i32,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let max_entries = if argc >= 1 && !argv.is_null() {
+        let args = core::slice::from_raw_parts(argv, argc as usize);
+        let mut value = 0.0f64;
+        if qjs::JS_ToFloat64(ctx, &mut value as *mut f64, args[0]) == 0
+            && value.is_finite()
+            && value > 0.0
+        {
+            value as u32
+        } else {
+            64
+        }
+    } else {
+        64
+    };
+
+    let len = trueos_cabi_trueosfs_primary_html_tree(max_entries, core::ptr::null_mut(), 0);
+    if len <= 0 {
+        return qjs::JSValue::undefined();
+    }
+
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = trueos_cabi_trueosfs_primary_html_tree(max_entries, bytes.as_mut_ptr(), bytes.len());
+    if got <= 0 {
+        return qjs::JSValue::undefined();
+    }
+    bytes.truncate(got as usize);
+    qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
+}
+
 pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     if ctx.is_null() {
         return;
@@ -427,6 +467,8 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
     static CURSOR_EVENTS_FN_NAME: &[u8] = b"__trueosReadCursorEventsSince\0";
     static CURSOR_WRITE_NAME: &[u8] = b"__trueosWriteCursorEvent\0";
     static CURSOR_WRITE_FN_NAME: &[u8] = b"__trueosWriteCursorEvent\0";
+    static TRUEOSFS_TREE_NAME: &[u8] = b"__trueosReadPrimaryTrueosFsTreeHtml\0";
+    static TRUEOSFS_TREE_FN_NAME: &[u8] = b"__trueosReadPrimaryTrueosFsTreeHtml\0";
     static ICON_CMDS_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static ICON_CMDS_FN_NAME: &[u8] = b"__trueosReadWindowSvgCmds\0";
     static SVG_IMPORT_NAME: &[u8] = b"__trueosImportSvgAsset\0";
@@ -479,6 +521,21 @@ pub unsafe fn install_layout_api(ctx: *mut qjs::JSContext) {
         global,
         CURSOR_WRITE_NAME.as_ptr() as *const c_char,
         cursor_write_func,
+    );
+
+    let trueosfs_tree_func = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_read_primary_trueosfs_tree_html),
+        TRUEOSFS_TREE_FN_NAME.as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        TRUEOSFS_TREE_NAME.as_ptr() as *const c_char,
+        trueosfs_tree_func,
     );
     qjs::js_free_value(ctx, global);
 }

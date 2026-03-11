@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads';
 
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
   webSearch: false,
+  fileSearch: false,
   newConversation: false,
   computerUse: true,
 });
@@ -15,6 +16,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getHtml',
     'getTextRows',
     'getDomSnapshot',
+    'getTrueosFsTreeHtml',
     'setNodeHtml',
     'insertHtml',
     'getViewport',
@@ -78,6 +80,7 @@ function normalizeAiInput(entry, options = null) {
   return {
     text: value,
     webSearch: !!cfg.webSearch,
+    fileSearch: !!cfg.fileSearch,
     newConversation: !!cfg.newConversation,
     computerUse: cfg.computerUse !== false,
   };
@@ -296,6 +299,15 @@ export function installBrowserAi(browser = null, host = null) {
 
   targetBrowser.getApiContract = () => cloneApiContract(runtimeHost);
   targetBrowser.listUnavailable = () => cloneApiContract(runtimeHost).unavailable;
+  targetBrowser.getTrueosFsTreeHtml = (maxEntries = 64) => {
+    if (typeof runtimeHost.__trueosReadPrimaryTrueosFsTreeHtml !== 'function') {
+      return null;
+    }
+    const limit = Number(maxEntries);
+    const normalized = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 64;
+    const html = runtimeHost.__trueosReadPrimaryTrueosFsTreeHtml(normalized);
+    return typeof html === 'string' && html ? html : null;
+  };
   targetBrowser.startAi = (specifier, options) => startAi(state, specifier, options);
   targetBrowser.startAiPc = (input, options = null) => {
     const opts = options && typeof options === 'object' ? { ...options, input } : { input };
