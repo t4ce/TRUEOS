@@ -40,6 +40,11 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    pub fn trueos_cabi_trueosfs_primary_html_tree(
+        max_entries: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_start(
         url_ptr: *const u8,

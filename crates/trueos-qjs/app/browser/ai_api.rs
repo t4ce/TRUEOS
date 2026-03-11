@@ -9,7 +9,7 @@ use crate as qjs;
 
 use super::helpers;
 
-const AI_API_CONTRACT_JSON: &str = r#"{"version":1,"available":["getApiContract","listUnavailable","getHtml","getTextRows","getDomSnapshot","setNodeHtml","insertHtml","getViewport","paint","setScroll","moveCursor","click","navigate","pressKey","captureScreenshot"],"unavailable":["typeText"],"notes":{"intent":"Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.","targetShape":"Close to future computer-use style APIs while still reflecting TRUEOS capabilities today."}}"#;
+const AI_API_CONTRACT_JSON: &str = r#"{"version":1,"available":["getApiContract","listUnavailable","getHtml","getTextRows","getDomSnapshot","getTrueosFsTreeHtml","setNodeHtml","insertHtml","getViewport","paint","setScroll","moveCursor","click","navigate","pressKey","captureScreenshot"],"unavailable":["typeText"],"notes":{"intent":"Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.","targetShape":"Close to future computer-use style APIs while still reflecting TRUEOS capabilities today."}}"#;
 
 pub unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     let mut src = String::new();

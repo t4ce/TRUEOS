@@ -41,6 +41,7 @@ let pendingReleaseRect = null;
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
   webSearch: false,
+  fileSearch: false,
   newConversation: false,
   computerUse: true,
 });
@@ -53,6 +54,7 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getHtml',
     'getTextRows',
     'getDomSnapshot',
+    'getTrueosFsTreeHtml',
     'setNodeHtml',
     'insertHtml',
     'getViewport',
@@ -90,6 +92,16 @@ function cloneApiContract() {
   return JSON.parse(JSON.stringify(source));
 }
 
+function getTrueosFsTreeHtml(maxEntries = 64) {
+  if (typeof runtime.host.__trueosReadPrimaryTrueosFsTreeHtml !== 'function') {
+    return null;
+  }
+  const limit = Number(maxEntries);
+  const normalized = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 64;
+  const html = runtime.host.__trueosReadPrimaryTrueosFsTreeHtml(normalized);
+  return typeof html === 'string' && html ? html : null;
+}
+
 function notYetAvailable(name) {
   const err = new Error(`browser API not yet available: ${name}`);
   err.code = typeof runtime.host.__trueosBrowserAiApiUnavailableCode === 'string'
@@ -125,6 +137,7 @@ function normalizeAiInput(entry, options = null) {
   return {
     text: value,
     webSearch: !!cfg.webSearch,
+    fileSearch: !!cfg.fileSearch,
     newConversation: !!cfg.newConversation,
     computerUse: cfg.computerUse !== false,
   };
@@ -462,6 +475,53 @@ function getNodeByPath(root, path) {
   return node;
 }
 
+function getNodeAttr(node, name) {
+  const attrs = Array.isArray(node && node.attrs) ? node.attrs : [];
+  for (let i = 0; i < attrs.length; i += 1) {
+    const attr = attrs[i];
+    if (!attr || typeof attr.name !== 'string') continue;
+    if (attr.name === name) return String(attr.value || '');
+  }
+  return '';
+}
+
+function findFirstNode(root, predicate) {
+  if (!root || typeof root !== 'object' || typeof predicate !== 'function') return null;
+  const queue = [root];
+  while (queue.length > 0) {
+    const node = queue.shift();
+    if (!node || typeof node !== 'object') continue;
+    if (predicate(node)) return node;
+    const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+    for (let i = 0; i < kids.length; i += 1) {
+      queue.push(kids[i]);
+    }
+  }
+  return null;
+}
+
+function resolveDomTargetNode(root, target) {
+  if (!root || typeof root !== 'object') return null;
+  const rawTarget = normalizeDomTarget(target);
+  if (!rawTarget) return null;
+
+  const byPath = getNodeByPath(root, rawTarget);
+  if (byPath) return byPath;
+
+  const lower = rawTarget.toLowerCase();
+  if (lower === 'document' || lower === 'root') return root;
+  if (lower === 'html' || lower === 'body') {
+    return findFirstNode(root, (node) => isElement(node) && String(node.tagName || '').toLowerCase() === lower);
+  }
+  if (rawTarget.startsWith('#')) {
+    const wantedId = rawTarget.slice(1);
+    if (!wantedId) return null;
+    return findFirstNode(root, (node) => isElement(node) && getNodeAttr(node, 'id') === wantedId);
+  }
+
+  return findFirstNode(root, (node) => isElement(node) && String(node.tagName || '').toLowerCase() === lower);
+}
+
 function parseFragmentForNode(node, html) {
   const source = String(html || '');
   try {
@@ -523,7 +583,7 @@ function commitDomMutation(doc) {
 function setNodeHtml(target, html) {
   const { vw } = computeViewport();
   const doc = ensureDoc(vw);
-  const node = getNodeByPath(doc && doc.dom ? doc.dom : null, normalizeDomTarget(target));
+  const node = resolveDomTargetNode(doc && doc.dom ? doc.dom : null, target);
   if (!node || typeof node !== 'object') return false;
   if (isTextNode(node)) return false;
 
@@ -535,7 +595,7 @@ function setNodeHtml(target, html) {
 function insertHtml(target, html, position = 'beforeend') {
   const { vw } = computeViewport();
   const doc = ensureDoc(vw);
-  const node = getNodeByPath(doc && doc.dom ? doc.dom : null, normalizeDomTarget(target));
+  const node = resolveDomTargetNode(doc && doc.dom ? doc.dom : null, target);
   if (!node || typeof node !== 'object') return false;
 
   const where = normalizeInsertPosition(position);
@@ -1046,6 +1106,9 @@ runtime.host.__trueosBrowser = {
   },
   getDomSnapshot() {
     return getDomSnapshot();
+  },
+  getTrueosFsTreeHtml(maxEntries = 64) {
+    return getTrueosFsTreeHtml(maxEntries);
   },
   getViewport() {
     return getViewport();

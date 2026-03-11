@@ -308,6 +308,17 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn html_tree(max_entries: usize) -> Result<String> {
+        let disk = root_disk()?;
+        crate::wait::spawn_and_wait_local(async move {
+            match crate::v::fs::trueosfs::html_tree_async(disk, max_entries).await? {
+                Some(v) => Ok(v),
+                None => Err(FsError::NoRoot),
+            }
+        })
+    }
+
+    #[inline]
     pub fn remove(path: &str) -> Result<()> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
@@ -830,6 +841,34 @@ pub mod cabi {
         match super::kfs::remove(path) {
             Ok(()) => 0,
             Err(e) => fs_error_to_code(e),
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_html_tree(
+        max_entries: u32,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize {
+        let limit = if max_entries == 0 {
+            64usize
+        } else {
+            max_entries as usize
+        };
+
+        match super::kfs::html_tree(limit) {
+            Ok(html) => {
+                let bytes = html.as_bytes();
+                if out_ptr.is_null() || out_cap == 0 {
+                    return bytes.len() as isize;
+                }
+                if bytes.len() > out_cap {
+                    return FS_ERR_NO_SPACE as isize;
+                }
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, bytes.len());
+                bytes.len() as isize
+            }
+            Err(e) => fs_error_to_code(e) as isize,
         }
     }
 

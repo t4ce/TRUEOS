@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { isMainThread, parentPort } from "node:worker_threads";
+import { readEnv } from "../vendor/openai/es2022/internal/utils/env.mjs";
 import { buildAiPcShellToolBundle, findAiPcShellCommandByToolName } from "./ai_pc_cmd.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
@@ -7,6 +8,7 @@ const DEFAULT_MODEL = "gpt-5.4";
 const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
+  "For mounted TRUEOS filesystem inspection or DOM insertion of file lists, prefer read_trueosfs_tree or browser.getTrueosFsTreeHtml(...) over the interactive shell1 file wizard.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
   "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer browser.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
@@ -17,6 +19,7 @@ const WORKER_BROWSER_METHODS = [
   "getHtml",
   "getTextRows",
   "getDomSnapshot",
+  "getTrueosFsTreeHtml",
   "setNodeHtml",
   "insertHtml",
   "getViewport",
@@ -29,6 +32,13 @@ const WORKER_BROWSER_METHODS = [
   "pressKey",
   "captureScreenshot",
 ];
+
+function getFileSearchVectorStoreIds() {
+  const vectorStoreId = readEnv("OPENAI_FILE_SEARCH_VECTOR_STORE_ID");
+  return typeof vectorStoreId === "string" && vectorStoreId
+    ? [vectorStoreId]
+    : [];
+}
 
 function getPcRuntime() {
   if (!globalThis.__trueosAiPcRuntime) {
@@ -276,6 +286,7 @@ function normalizeAiInputEntry(entry) {
   return {
     text: value,
     webSearch: !!(source && source.webSearch),
+    fileSearch: !!(source && source.fileSearch),
     newConversation: !!(source && source.newConversation),
     computerUse: !source || source.computerUse !== false,
   };
@@ -296,7 +307,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -327,6 +338,26 @@ function createAskUserTool() {
   };
 }
 
+function createReadTrueosFsTreeTool() {
+  return {
+    type: "function",
+    name: "read_trueosfs_tree",
+    description: "Read the mounted TRUEOSFS cached filesystem tree as preformatted HTML from the primary mounted root.",
+    parameters: {
+      type: "object",
+      properties: {
+        maxEntries: {
+          type: "integer",
+          description: "Maximum number of filesystem entries to include in the returned tree HTML.",
+          minimum: 1,
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  };
+}
+
 function createShell1Tools() {
   try {
     return buildAiPcShellToolBundle();
@@ -340,12 +371,32 @@ function buildTools(entry) {
   if (entry.webSearch) {
     tools.push({ type: "web_search" });
   }
+  if (entry.fileSearch) {
+    const vectorStoreIds = getFileSearchVectorStoreIds();
+    if (vectorStoreIds.length > 0) {
+      tools.push({
+        type: "file_search",
+        vector_store_ids: vectorStoreIds,
+      });
+    }
+  }
+  tools.push(createReadTrueosFsTreeTool());
   tools.push(...createShell1Tools());
   if (entry.computerUse) {
     tools.push(createExecJsTool());
   }
   tools.push(createAskUserTool());
   return tools;
+}
+
+async function readTrueosFsTree(maxEntries = 64) {
+  const runtime = bindHostRuntime();
+  if (!runtime.browser || typeof runtime.browser.getTrueosFsTreeHtml !== "function") {
+    throw new Error("TRUEOSFS tree bridge is not available");
+  }
+  const limit = Number(maxEntries);
+  const normalized = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 64;
+  return await runtime.browser.getTrueosFsTreeHtml(normalized);
 }
 
 function submitShell1Input(line) {
@@ -472,6 +523,15 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
         console.log("=====");
 
         runtime.jsOutput.length = 0;
+      } else if (item.type === "function_call" && item.name === "read_trueosfs_tree") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const html = await readTrueosFsTree(parsed.maxEntries);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: typeof html === "string" ? html : "",
+        });
       } else if (item.type === "function_call" && item.name === "ask_user") {
         hadToolCall = true;
         const parsed = JSON.parse(item.arguments || "{}");
