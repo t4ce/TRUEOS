@@ -1,7 +1,14 @@
+use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicBool, Ordering};
+use spin::{Mutex, Once};
 
 const COM1: u16 = 0x3F8;
 static INIT: AtomicBool = AtomicBool::new(false);
+static AI_INPUT: Once<Mutex<VecDeque<u8>>> = Once::new();
+
+fn ai_input() -> &'static Mutex<VecDeque<u8>> {
+    AI_INPUT.call_once(|| Mutex::new(VecDeque::new()))
+}
 
 pub(crate) fn init() {
     if INIT.swap(true, Ordering::AcqRel) {
@@ -35,9 +42,23 @@ pub(crate) fn write_bytes(bytes: &[u8]) {
     }
 }
 
+pub(crate) fn inject_bytes(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut queue = ai_input().lock();
+    for &b in bytes {
+        queue.push_back(b);
+    }
+    bytes.len()
+}
+
 pub(crate) fn read_byte() -> Option<u8> {
     if !INIT.load(Ordering::Acquire) {
         init();
+    }
+    if let Some(b) = ai_input().lock().pop_front() {
+        return Some(b);
     }
     unsafe {
         if (crate::portio::inb(COM1 + 5) & 0x01) != 0 {

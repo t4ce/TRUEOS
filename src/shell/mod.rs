@@ -1,3 +1,4 @@
+use alloc::string::String as AllocString;
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use heapless::String;
@@ -116,6 +117,23 @@ pub(crate) async fn handle_command_action_for_tools(
         history,
     )
     .await;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell1_command_registry_json(
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    let json: AllocString = crate::shell::cmd::registry::command_registry_json();
+    let bytes = json.as_bytes();
+
+    if out_ptr.is_null() || out_cap == 0 {
+        return bytes.len() as isize;
+    }
+
+    let copy_len = core::cmp::min(bytes.len(), out_cap);
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, copy_len);
+    copy_len as isize
 }
 
 #[inline]

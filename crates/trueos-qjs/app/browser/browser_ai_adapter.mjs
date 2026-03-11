@@ -17,13 +17,13 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getViewport',
     'paint',
     'setScroll',
-  ],
-  unavailable: [
     'click',
     'navigate',
-    'typeText',
     'pressKey',
     'captureScreenshot',
+  ],
+  unavailable: [
+    'typeText',
   ],
   notes: {
     intent: 'Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.',
@@ -280,11 +280,17 @@ export function installBrowserAi(browser = null, host = null) {
     return startAi(state, '/qjs/ai/ai_pc.mjs', opts);
   };
   targetBrowser.submitAiInput = (input, options = null) => pushAiInput(state, input, options);
-  targetBrowser.click = () => notYetAvailable(runtimeHost, 'click');
-  targetBrowser.navigate = () => notYetAvailable(runtimeHost, 'navigate');
   targetBrowser.typeText = () => notYetAvailable(runtimeHost, 'typeText');
-  targetBrowser.pressKey = () => notYetAvailable(runtimeHost, 'pressKey');
-  targetBrowser.captureScreenshot = () => notYetAvailable(runtimeHost, 'captureScreenshot');
+  targetBrowser.captureScreenshot = () => {
+    if (typeof runtimeHost.__trueosCaptureScreenshot !== 'function') {
+      return notYetAvailable(runtimeHost, 'captureScreenshot');
+    }
+    const image = runtimeHost.__trueosCaptureScreenshot();
+    if (typeof image !== 'string' || !image) {
+      return notYetAvailable(runtimeHost, 'captureScreenshot');
+    }
+    return image;
+  };
 
   return targetBrowser;
 }

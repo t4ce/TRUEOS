@@ -41,6 +41,7 @@ rustls = { version = "0.23", default-features = false, features = ["custom-provi
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "logging", "tls12", "zeroize"] }
 webpki-roots = { version = "1.0.6", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
@@ -70,6 +71,8 @@ debug = false
 trueos-limloader = { path = "crates/trueos-limloader" }
 
 [patch.crates-io]
+flate2 = { path = "vendor/flate2-1.1.9" }
+png = { path = "vendor/png-0.18.1" }
 num-traits = { path = "vendor/num-traits-0.2.19" }
 usvg = { path = "vendor/usvg-0.45.1" }
 imagesize = { path = "vendor/imagesize-0.13.0" }
