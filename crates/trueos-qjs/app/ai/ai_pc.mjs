@@ -16,6 +16,8 @@ const WORKER_BROWSER_METHODS = [
   "getHtml",
   "getTextRows",
   "getDomSnapshot",
+  "setNodeHtml",
+  "insertHtml",
   "getViewport",
   "paint",
   "setScroll",
@@ -222,11 +224,11 @@ function makeExecConsole(jsOutput) {
   };
 }
 
-function displayImage(base64Image) {
+function displayImage(imageInput) {
   const runtime = getPcRuntime();
-  const imageUrl = typeof base64Image === "string" && base64Image.startsWith("data:image/")
-    ? base64Image
-    : `data:image/png;base64,${base64Image}`;
+  const imageUrl = typeof imageInput === "string" && imageInput.startsWith("data:image/")
+    ? imageInput
+    : `data:image/png;base64,${imageInput}`;
   runtime.jsOutput.push({
     type: "input_image",
     image_url: imageUrl,
@@ -289,10 +291,10 @@ function createExecJsTool() {
           type: "string",
           description: `
 JavaScript to execute. Write small snippets of interactive code. To persist variables or functions across tool calls, you must save them to globalThis. Code is executed in an async persistent eval context, so you can use await. You have access to ONLY the following:
-- console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large base64 payloads like screenshots or buffer. If you create an image or screenshot, pass the base64 string to display().
-- display(base64_or_data_url): Use this to view a base64-encoded image or a full data URL.
+- console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
+- display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getViewport(), paint(), setScroll(y), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). typeText() may still report not-yet-available.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -462,7 +464,7 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
           if (out.type === "input_text") {
             console.log("JS LOG:", out.text);
           } else if (out.type === "input_image") {
-            console.log("JS IMAGE: [base64 string omitted]");
+            console.log("JS IMAGE: [image payload omitted]");
           }
         }
         console.log("=====");
