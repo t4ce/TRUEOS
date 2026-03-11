@@ -22,10 +22,12 @@ let cachedHtml = '';
 let cachedDoc = null;
 let cursorReadSeq = 0;
 let scrollY = 0;
+let currentPageUrl = String(runtime.host.__trueosBrowserCurrentUrl || runtime.host.__trueosBrowserUrl || '');
 const kernelCursorState = new Map();
 const cursorButtonEvents = [];
 const aiCursorSlots = new Map();
 let nextAiCursorSlot = AI_CURSOR_SLOT_BASE;
+let browserActionSeq = 0;
 let aiStartPromise = null;
 let aiStartSpecifier = '';
 let aiWorker = null;
@@ -50,12 +52,12 @@ const FALLBACK_BROWSER_API_CONTRACT = {
     'getViewport',
     'paint',
     'setScroll',
-  ],
-  unavailable: [
     'click',
     'navigate',
-    'typeText',
     'pressKey',
+  ],
+  unavailable: [
+    'typeText',
     'captureScreenshot',
   ],
   notes: {
@@ -486,6 +488,50 @@ function setHtml(nextHtml) {
   paint();
 }
 
+function nowMs() {
+  if (typeof Date !== 'undefined' && typeof Date.now === 'function') {
+    return Number(Date.now()) || 0;
+  }
+  return 0;
+}
+
+function pushBrowserAction(event) {
+  browserActionSeq += 1;
+  const next = {
+    seq: browserActionSeq,
+    tMs: nowMs(),
+    ...event,
+  };
+
+  runtime.host.__trueosBrowserLastAction = next;
+  runtime.host.__trueosBrowserActionSeq = browserActionSeq;
+
+  let queue = runtime.host.__trueosBrowserActionQueue;
+  if (!Array.isArray(queue)) {
+    queue = [];
+    runtime.host.__trueosBrowserActionQueue = queue;
+  }
+  queue.push(next);
+  if (queue.length > 128) {
+    queue.splice(0, queue.length - 128);
+  }
+
+  return next;
+}
+
+function dispatchBrowserAction(kind, payload, hookName) {
+  const event = pushBrowserAction({ kind, ...payload });
+  const hook = runtime.host[hookName];
+  if (typeof hook === 'function') {
+    return hook(event);
+  }
+  return {
+    ok: 1,
+    simulated: 1,
+    event,
+  };
+}
+
 function paint() {
   const { vw, vh } = computeViewport();
   const doc = ensureDoc(vw);
@@ -777,20 +823,47 @@ runtime.host.__trueosBrowser = {
     scrollY = Math.max(0, Math.round(Number(y || 0)));
     paint();
   },
-  click() {
-    return notYetAvailable('click');
+  click(target = null) {
+    const payload = target && typeof target === 'object' && !Array.isArray(target)
+      ? { target: { ...target } }
+      : { target: target == null ? null : { value: target } };
+    return dispatchBrowserAction('click', payload, '__trueosBrowserClick');
   },
-  navigate() {
-    return notYetAvailable('navigate');
+  navigate(input = null) {
+    const request = input && typeof input === 'object' && !Array.isArray(input)
+      ? { ...input }
+      : { url: String(input || '') };
+    const url = typeof request.url === 'string' ? request.url.trim() : '';
+    if (url) {
+      currentPageUrl = url;
+      runtime.host.__trueosBrowserCurrentUrl = currentPageUrl;
+    }
+    return dispatchBrowserAction('navigate', {
+      url: currentPageUrl,
+      request,
+    }, '__trueosBrowserNavigate');
   },
   typeText() {
     return notYetAvailable('typeText');
   },
-  pressKey() {
-    return notYetAvailable('pressKey');
+  pressKey(key, options = null) {
+    const keyName = typeof key === 'string'
+      ? key
+      : String(key && typeof key === 'object' && key.key != null ? key.key : '');
+    return dispatchBrowserAction('pressKey', {
+      key: keyName,
+      options: options && typeof options === 'object' ? { ...options } : null,
+    }, '__trueosBrowserPressKey');
   },
   captureScreenshot() {
-    return notYetAvailable('captureScreenshot');
+    if (typeof runtime.host.__trueosCaptureScreenshot !== 'function') {
+      return notYetAvailable('captureScreenshot');
+    }
+    const image = runtime.host.__trueosCaptureScreenshot();
+    if (typeof image !== 'string' || !image) {
+      return notYetAvailable('captureScreenshot');
+    }
+    return image;
   },
 };
 

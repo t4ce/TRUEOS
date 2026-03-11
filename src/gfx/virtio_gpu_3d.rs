@@ -1757,6 +1757,18 @@ fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
 }
 
 impl VirglGfxBackend {
+    fn publish_scanout_image_buffers(&self) {
+        let len_pixels = (self.width as usize).saturating_mul(self.height as usize);
+        if len_pixels == 0 {
+            return;
+        }
+
+        let pixels = unsafe {
+            core::slice::from_raw_parts(self.scanout_backing.virt() as *const u32, len_pixels)
+        };
+        let _ = crate::gfx::publish_virgl_image_buffer(self.width, self.height, pixels);
+    }
+
     pub fn init(
         _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
@@ -3184,6 +3196,7 @@ impl GfxDevice for VirglGfxBackend {
             let _ = self
                 .gpu
                 .transfer_to_host_2d(self.scanout_res, self.width, self.height);
+            self.publish_scanout_image_buffers();
         }
 
         self.completed_fence = fence;
