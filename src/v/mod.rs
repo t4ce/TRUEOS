@@ -1,3 +1,4 @@
+pub mod cursor;
 pub mod disc;
 pub mod fs;
 pub mod leds;

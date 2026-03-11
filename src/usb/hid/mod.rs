@@ -24,6 +24,7 @@ const HID_CURSOR_EVENT_CAP: usize = 256;
 const HID_TABLET_SAMPLE_PERIOD_MS: u32 = 10;
 const HID_TABLET_ABS_MAX: u32 = 0x7FFF;
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 2000.0;
+const HID_KIND_VIRTUAL: u8 = 0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -222,37 +223,28 @@ fn clamp01(v: f64) -> f64 {
 }
 
 pub fn mouse_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
-    let guard = HID_RUNTIMES.lock();
+    let snapshots = crate::v::cursor::mouse_cursor_snapshot();
     let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
-    for rt in guard.iter() {
-        if rt.hid_kind != 2 {
-            continue;
-        }
-        let _ = out.push((rt.mouse_x, rt.mouse_y));
+    for sample in snapshots {
+        let _ = out.push(sample);
     }
     out
 }
 
 pub fn mouse_cursor_snapshot_with_buttons() -> heapless::Vec<(f64, f64, u32), MAX_HID_DEVICES> {
-    let guard = HID_RUNTIMES.lock();
+    let snapshots = crate::v::cursor::mouse_cursor_snapshot_with_buttons();
     let mut out: heapless::Vec<(f64, f64, u32), MAX_HID_DEVICES> = heapless::Vec::new();
-    for rt in guard.iter() {
-        if rt.hid_kind != 2 {
-            continue;
-        }
-        let _ = out.push((rt.mouse_x, rt.mouse_y, rt.mouse_buttons_down));
+    for sample in snapshots {
+        let _ = out.push(sample);
     }
     out
 }
 
 pub fn tablet_cursor_snapshot() -> heapless::Vec<(f64, f64), MAX_HID_DEVICES> {
-    let guard = HID_RUNTIMES.lock();
+    let snapshots = crate::v::cursor::tablet_cursor_snapshot();
     let mut out: heapless::Vec<(f64, f64), MAX_HID_DEVICES> = heapless::Vec::new();
-    for rt in guard.iter() {
-        if rt.hid_kind != 3 {
-            continue;
-        }
-        let _ = out.push((rt.tablet_x, rt.tablet_y));
+    for sample in snapshots {
+        let _ = out.push(sample);
     }
     out
 }
@@ -386,6 +378,31 @@ static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::n
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 
 #[inline]
+fn sync_runtime_cursor_snapshot(runtime: &HidRuntime) {
+    if runtime.hid_kind == 2 {
+        crate::v::cursor::upsert_snapshot(
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.hid_kind,
+            runtime.mouse_x,
+            runtime.mouse_y,
+            runtime.mouse_buttons_down,
+        );
+    } else if runtime.hid_kind == 3 {
+        crate::v::cursor::upsert_snapshot(
+            runtime.controller_id as u32,
+            runtime.slot_id,
+            runtime.ep_target,
+            runtime.hid_kind,
+            runtime.tablet_x,
+            runtime.tablet_y,
+            0,
+        );
+    }
+}
+
+#[inline]
 fn push_cursor_event(mut evt: TrueosHidCursorEvent) {
     let mut ring = CURSOR_EVENT_RING.lock();
     ring.write_seq = ring.write_seq.wrapping_add(1);
@@ -393,6 +410,39 @@ fn push_cursor_event(mut evt: TrueosHidCursorEvent) {
     evt.seq = seq as u32;
     let idx = ((seq - 1) as usize) % HID_CURSOR_EVENT_CAP;
     ring.buf[idx] = evt;
+}
+
+pub fn inject_virtual_cursor_event(
+    slot_id: u32,
+    x: f64,
+    y: f64,
+    buttons_down: u32,
+    wheel: i16,
+    flags: u32,
+) {
+    if slot_id == 0 {
+        return;
+    }
+
+    let nx = clamp01(x);
+    let ny = clamp01(y);
+    crate::v::cursor::upsert_snapshot(0, slot_id, slot_id, HID_KIND_VIRTUAL, nx, ny, buttons_down);
+    push_cursor_event(TrueosHidCursorEvent {
+        t_ms: hid_uptime_ms() as u32,
+        seq: 0,
+        controller_id: 0,
+        slot_id,
+        ep_target: slot_id,
+        hid_kind: HID_KIND_VIRTUAL,
+        reserved0: 0,
+        reserved1: 0,
+        buttons_down,
+        wheel,
+        reserved2: 0,
+        x: nx,
+        y: ny,
+        flags,
+    });
 }
 
 pub fn read_cursor_events_since(
@@ -482,12 +532,15 @@ pub fn register_runtime(runtime: HidRuntime) {
             && r.ep_target == runtime.ep_target
     }) {
         *existing = runtime;
+        sync_runtime_cursor_snapshot(existing);
         return;
     }
+    sync_runtime_cursor_snapshot(&runtime);
     let _ = guard.push(runtime);
 }
 
 pub fn unregister_runtime(controller_id: usize, slot_id: u32) -> bool {
+    let _ = crate::v::cursor::remove_snapshots(controller_id as u32, slot_id);
     let mut guard = HID_RUNTIMES.lock();
     let mut removed = false;
     let mut idx = 0usize;
@@ -604,6 +657,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 y: runtime.mouse_y,
                 flags,
             });
+            sync_runtime_cursor_snapshot(runtime);
         }
     } else if runtime.hid_kind == 3 {
         let _ = completion;
@@ -721,6 +775,7 @@ pub fn handle_report(runtime: &mut HidRuntime, completion: u32, data: &[u8], res
                 y: runtime.tablet_y,
                 flags: (1 << 0) | (1 << 2),
             });
+            sync_runtime_cursor_snapshot(runtime);
         }
     } else {
         let _ = completion;

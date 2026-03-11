@@ -2900,22 +2900,7 @@ pub mod cabi {
             return -1;
         }
 
-        let idx = (cursor_id - 1) as usize;
-        let mice = crate::usb::hid::mouse_cursor_snapshot();
-        let tablets = crate::usb::hid::tablet_cursor_snapshot();
-
-        let sample = if idx < mice.len() {
-            Some(mice[idx])
-        } else {
-            let tidx = idx - mice.len();
-            if tidx < tablets.len() {
-                Some(tablets[tidx])
-            } else {
-                None
-            }
-        };
-
-        let Some((nx, ny)) = sample else {
+        let Some((nx, ny)) = crate::v::cursor::cursor_pos(cursor_id) else {
             return 1;
         };
 
@@ -2958,6 +2943,18 @@ pub mod cabi {
             out_next_seq,
             out_dropped,
         )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_input_write_cursor(
+        slot_id: u32,
+        x: i32,
+        y: i32,
+        buttons_down: u32,
+        wheel: i32,
+        flags: u32,
+    ) -> i32 {
+        crate::surface::cursor::input_write_cursor_event(slot_id, x, y, buttons_down, wheel, flags)
     }
 }
 
