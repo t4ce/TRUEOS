@@ -6,51 +6,6 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
 
-unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
-    if rt.is_null() {
-        return true;
-    }
-    loop {
-        let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
-        let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
-        if rc > 0 {
-            continue;
-        }
-        if rc < 0 {
-            let ctx = if !job_ctx.is_null() {
-                job_ctx
-            } else {
-                fallback_ctx
-            };
-            if !ctx.is_null() {
-                qjs::qjs_diag::dump_last_exception(ctx, "ai pending-job");
-            }
-            return false;
-        }
-        break;
-    }
-    true
-}
-
-unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
-    let mut progress = false;
-    progress |= qjs::async_ops::pump(ctx);
-    progress |= qjs::workers::pump(ctx);
-    progress |= qjs::timers::pump(ctx);
-    if !drain_pending_jobs(rt, ctx) {
-        return false;
-    }
-    if qjs::JS_IsJobPending(rt) > 0
-        || qjs::async_ops::has_pending(ctx)
-        || qjs::workers::has_pending_for_ctx(ctx)
-    {
-        qjs::trueos_shims::trueos_cabi_poll_once();
-        if !progress {
-            qjs::trueos_shims::trueos_cabi_poll_once();
-        }
-    }
-    true
-}
 
 #[embassy_executor::task]
 pub async fn run_once() {
@@ -165,7 +120,7 @@ w.postMessage("hello-from-main");
             let timeout_ms: u64 = 90_000;
 
             loop {
-                if !pump_runtime_once(rt, ctx) {
+                if !qjs::vm::pump_runtime_once(rt, ctx, "ai") {
                     break;
                 }
 

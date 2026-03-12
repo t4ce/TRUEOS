@@ -14,8 +14,11 @@ use spin::Mutex;
 use crate::trueos_shims::{
     trueos_cabi_fs_read_file, trueos_cabi_fs_write_abort, trueos_cabi_fs_write_begin,
     trueos_cabi_fs_write_chunk, trueos_cabi_fs_write_finish, trueos_cabi_net_fetch_discard,
-    trueos_cabi_net_fetch_post_json_start, trueos_cabi_net_fetch_result,
-    trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait, trueos_cabi_poll_once,
+    trueos_cabi_net_fetch_bytes_discard, trueos_cabi_net_fetch_bytes_read,
+    trueos_cabi_net_fetch_bytes_result_len, trueos_cabi_net_fetch_bytes_start,
+    trueos_cabi_net_fetch_bytes_wait, trueos_cabi_net_fetch_post_json_start,
+    trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
+    trueos_cabi_poll_once,
 };
 
 include!("../../../src/surface/cabi_codes.rs");
@@ -25,6 +28,14 @@ const ASYNC_FS_WRITE_CHUNK: usize = 256 * 1024;
 
 static ASYNC_FS_SEQ: AtomicU32 = AtomicU32::new(1);
 static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
+static ASYNC_FS_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn async_fs_diag(msg: &str) {
+    if ASYNC_FS_DIAG_LOGS.fetch_add(1, Ordering::Relaxed) < 64 {
+        crate::trueos_shims::log_info(msg);
+    }
+}
 
 #[derive(Debug)]
 enum AsyncFsRequest {
@@ -57,15 +68,20 @@ static ASYNC_FS_REQS: Mutex<VecDeque<AsyncFsRequest>> = Mutex::new(VecDeque::new
 static ASYNC_FS_DONE: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_RESULTS: Mutex<BTreeMap<u32, AsyncFsCompletion>> = Mutex::new(BTreeMap::new());
 static ASYNC_FS_WRITES: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
-static ASYNC_NET_OPS: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
+static ASYNC_NET_FILE_OPS: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
+static ASYNC_NET_BYTES_OPS: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
 
 #[inline]
 fn next_async_fs_id() -> u32 {
     ASYNC_FS_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-fn is_net_op(id: u32) -> bool {
-    ASYNC_NET_OPS.lock().contains(&id)
+fn is_net_file_op(id: u32) -> bool {
+    ASYNC_NET_FILE_OPS.lock().contains(&id)
+}
+
+fn is_net_bytes_op(id: u32) -> bool {
+    ASYNC_NET_BYTES_OPS.lock().contains(&id)
 }
 
 fn push_async_fs_req(req: AsyncFsRequest) -> Result<(), i32> {
@@ -226,6 +242,14 @@ fn start_net_fetch_to_file_via_cabi(url: &str, path: &str) -> Result<u32, i32> {
     Ok(id)
 }
 
+fn start_net_fetch_bytes_via_cabi(url: &str) -> Result<u32, i32> {
+    let id = unsafe { trueos_cabi_net_fetch_bytes_start(url.as_ptr(), url.len()) };
+    if id == 0 {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    Ok(id)
+}
+
 fn start_net_post_json_to_file_via_cabi(
     url: &str,
     path: &str,
@@ -268,6 +292,7 @@ pub fn ensure_service_started(spawner: &Spawner) -> bool {
         SERVICE_STARTED.store(false, Ordering::Release);
         return false;
     }
+    async_fs_diag("qjs-async-fs: service started\n");
     true
 }
 
@@ -281,18 +306,39 @@ pub async fn async_fs_service_task() {
             };
 
             match req {
-                AsyncFsRequest::ReadFile { id, path } => match read_file_via_cabi(path.as_str()) {
-                    Ok(bytes) => push_async_fs_completion(AsyncFsCompletion {
+                AsyncFsRequest::ReadFile { id, path } => {
+                    async_fs_diag(alloc::format!(
+                        "qjs-async-fs: read start id={} path_len={}\n",
                         id,
-                        rc: 0,
-                        data: bytes,
-                    }),
-                    Err(rc) => push_async_fs_completion(AsyncFsCompletion {
-                        id,
-                        rc,
-                        data: Vec::new(),
-                    }),
-                },
+                        path.len()
+                    ).as_str());
+                    match read_file_via_cabi(path.as_str()) {
+                        Ok(bytes) => {
+                            async_fs_diag(alloc::format!(
+                                "qjs-async-fs: read done id={} len={}\n",
+                                id,
+                                bytes.len()
+                            ).as_str());
+                            push_async_fs_completion(AsyncFsCompletion {
+                                id,
+                                rc: 0,
+                                data: bytes,
+                            })
+                        }
+                        Err(rc) => {
+                            async_fs_diag(alloc::format!(
+                                "qjs-async-fs: read error id={} rc={}\n",
+                                id,
+                                rc
+                            ).as_str());
+                            push_async_fs_completion(AsyncFsCompletion {
+                                id,
+                                rc,
+                                data: Vec::new(),
+                            })
+                        }
+                    }
+                }
                 AsyncFsRequest::WriteBegin {
                     id,
                     path,
@@ -403,7 +449,19 @@ pub fn start_net_fetch_to_file(url: &[u8], path: &[u8]) -> Result<u32, i32> {
         return Err(FS_ERR_BAD_UTF8);
     };
     let id = start_net_fetch_to_file_via_cabi(url_str, path_str)?;
-    ASYNC_NET_OPS.lock().insert(id);
+    ASYNC_NET_FILE_OPS.lock().insert(id);
+    Ok(id)
+}
+
+pub fn start_net_fetch_bytes(url: &[u8]) -> Result<u32, i32> {
+    if url.is_empty() {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let Ok(url_str) = core::str::from_utf8(url) else {
+        return Err(FS_ERR_BAD_UTF8);
+    };
+    let id = start_net_fetch_bytes_via_cabi(url_str)?;
+    ASYNC_NET_BYTES_OPS.lock().insert(id);
     Ok(id)
 }
 
@@ -439,7 +497,7 @@ pub fn start_net_post_json_to_file(
     };
 
     let id = start_net_post_json_to_file_via_cabi(url_str, path_str, body_str, bearer_str)?;
-    ASYNC_NET_OPS.lock().insert(id);
+    ASYNC_NET_FILE_OPS.lock().insert(id);
     Ok(id)
 }
 
@@ -459,6 +517,11 @@ pub fn start_read_file(path: &[u8]) -> Result<u32, i32> {
         path: path_str.to_string(),
     };
     push_async_fs_req(req)?;
+    async_fs_diag(alloc::format!(
+        "qjs-async-fs: read queued id={} path_len={}\n",
+        id,
+        path.len()
+    ).as_str());
     Ok(id)
 }
 
@@ -503,7 +566,7 @@ pub fn poll_completed(out_id: *mut u32) -> i32 {
 }
 
 pub fn result_len(op_id: u32) -> isize {
-    if is_net_op(op_id) {
+    if is_net_file_op(op_id) {
         let rc = unsafe { trueos_cabi_net_fetch_result(op_id) };
         if rc == FS_ERR_NOT_FOUND {
             return FS_ERR_NOT_FOUND as isize;
@@ -512,6 +575,9 @@ pub fn result_len(op_id: u32) -> isize {
             return rc as isize;
         }
         return 0;
+    }
+    if is_net_bytes_op(op_id) {
+        return unsafe { trueos_cabi_net_fetch_bytes_result_len(op_id) };
     }
     let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
@@ -523,25 +589,35 @@ pub fn result_len(op_id: u32) -> isize {
 }
 
 pub fn wait_net_fetch(op_id: u32, timeout_ms: u64) -> i32 {
-    if !is_net_op(op_id) {
-        return FS_ERR_BAD_PARAM;
+    if is_net_file_op(op_id) {
+        return unsafe { trueos_cabi_net_fetch_wait(op_id, timeout_ms) };
     }
-    unsafe { trueos_cabi_net_fetch_wait(op_id, timeout_ms) }
+    if is_net_bytes_op(op_id) {
+        return unsafe { trueos_cabi_net_fetch_bytes_wait(op_id, timeout_ms) };
+    }
+    FS_ERR_BAD_PARAM
 }
 
 pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
-    if is_net_op(op_id) {
+    if is_net_file_op(op_id) {
         let rc = unsafe { trueos_cabi_net_fetch_result(op_id) };
         if rc == FS_ERR_NOT_FOUND {
             return FS_ERR_NOT_FOUND as isize;
         }
         let _ = unsafe { trueos_cabi_net_fetch_discard(op_id) };
-        ASYNC_NET_OPS.lock().remove(&op_id);
+        ASYNC_NET_FILE_OPS.lock().remove(&op_id);
         if rc != 0 {
             return rc as isize;
         }
         let _ = (out_ptr, out_cap);
         return 0;
+    }
+    if is_net_bytes_op(op_id) {
+        let got = unsafe { trueos_cabi_net_fetch_bytes_read(op_id, out_ptr, out_cap) };
+        if got != FS_ERR_NOT_FOUND as isize {
+            ASYNC_NET_BYTES_OPS.lock().remove(&op_id);
+        }
+        return got;
     }
     let Some((rc, len)) = completion_rc_len(op_id) else {
         return FS_ERR_NOT_FOUND as isize;
@@ -567,9 +643,14 @@ pub fn read_result(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
 }
 
 pub fn discard(op_id: u32) -> i32 {
-    if is_net_op(op_id) {
+    if is_net_file_op(op_id) {
         let _ = unsafe { trueos_cabi_net_fetch_discard(op_id) };
-        ASYNC_NET_OPS.lock().remove(&op_id);
+        ASYNC_NET_FILE_OPS.lock().remove(&op_id);
+        return 0;
+    }
+    if is_net_bytes_op(op_id) {
+        let _ = unsafe { trueos_cabi_net_fetch_bytes_discard(op_id) };
+        ASYNC_NET_BYTES_OPS.lock().remove(&op_id);
         return 0;
     }
     remove_done_id(op_id);

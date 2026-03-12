@@ -216,10 +216,8 @@ fn _loop(
 
     let mut counter: u64 = 0;
     loop {
-        if counter.is_multiple_of(10_000) {
-            time::poll();
-            unsafe { executor.poll() };
-        }
+        time::poll();
+        unsafe { executor.poll() };
         if counter.is_multiple_of(250_000) {
             vga::cube::tick();
         }

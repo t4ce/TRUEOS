@@ -59,9 +59,6 @@ pub mod qjs_diag;
 pub mod threejs;
 
 #[cfg(feature = "trueos")]
-pub mod wgpu;
-
-#[cfg(feature = "trueos")]
 pub mod lightningcss_native;
 
 #[cfg(feature = "trueos")]

@@ -22,6 +22,22 @@ use spin::Mutex;
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
+struct CabiNetFetchBytesResult {
+    rc: Option<i32>,
+    body: Vec<u8>,
+}
+
+impl Default for CabiNetFetchBytesResult {
+    fn default() -> Self {
+        Self {
+            rc: None,
+            body: Vec::new(),
+        }
+    }
+}
+
+static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
+    Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_WAIT: WaitQueue = WaitQueue::new();
 
 // --- keep-alive pool (per host) ---
@@ -150,6 +166,152 @@ async fn net_fetch_acquire_slot() {
 
 fn net_fetch_release_slot() {
     NET_FETCH_ACTIVE.fetch_sub(1, Ordering::AcqRel);
+}
+
+async fn cabi_net_fetch_task_inner(
+    op_id: u32,
+    key: String,
+    url: String,
+    path: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    let t0 = Instant::now();
+    net_fetch_acquire_slot().await;
+    let rc =
+        match fetch_https_to_file_async(url.as_str(), path.as_str(), timeout_ms, max_bytes).await {
+            Ok(()) => 0,
+            Err(code) => code,
+        };
+    net_fetch_release_slot();
+    let elapsed_ms = t0.elapsed().as_millis();
+
+    let followers = {
+        let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
+        inflight
+            .remove(&key)
+            .map(|e| e.followers)
+            .unwrap_or_default()
+    };
+
+    let mut map = CABI_NET_FETCH_RESULTS.lock();
+    if let Some(slot) = map.get_mut(&op_id) {
+        *slot = Some(rc);
+    }
+    for fid in &followers {
+        if let Some(slot) = map.get_mut(fid) {
+            *slot = Some(rc);
+        }
+    }
+
+    crate::log!(
+        "net-fetch: done key={} rc={} ms={} followers={}\n",
+        key,
+        rc,
+        elapsed_ms,
+        followers.len()
+    );
+
+    CABI_NET_FETCH_WAIT.notify_all();
+}
+
+#[embassy_executor::task]
+async fn cabi_net_fetch_task(
+    op_id: u32,
+    key: String,
+    url: String,
+    path: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    cabi_net_fetch_task_inner(op_id, key, url, path, timeout_ms, max_bytes).await;
+}
+
+fn spawn_cabi_net_fetch(
+    op_id: u32,
+    key: String,
+    url: String,
+    path: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+        && spawner
+            .spawn(cabi_net_fetch_task(
+                op_id,
+                key.clone(),
+                url.clone(),
+                path.clone(),
+                timeout_ms,
+                max_bytes,
+            ))
+            .is_ok()
+    {
+        return;
+    }
+
+    crate::wait::spawn_local_detached(async move {
+        cabi_net_fetch_task_inner(op_id, key, url, path, timeout_ms, max_bytes).await;
+    });
+}
+
+async fn cabi_net_fetch_bytes_task_inner(
+    op_id: u32,
+    url: String,
+    timeout_ms: u32,
+    max_bytes: usize,
+) {
+    let t0 = Instant::now();
+    net_fetch_acquire_slot().await;
+    let (rc, body) = match fetch_https_body_async(url.as_str(), timeout_ms, max_bytes).await {
+        Ok(body) => (0, body),
+        Err(code) => (fetch_error_to_code(code), Vec::new()),
+    };
+    net_fetch_release_slot();
+    let elapsed_ms = t0.elapsed().as_millis();
+
+    if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
+        slot.rc = Some(rc);
+        slot.body = body;
+    }
+
+    crate::log!(
+        "net-fetch-bytes: done op_id={} rc={} ms={} len={}\n",
+        op_id,
+        rc,
+        elapsed_ms,
+        CABI_NET_FETCH_BYTES_RESULTS
+            .lock()
+            .get(&op_id)
+            .map(|v| v.body.len())
+            .unwrap_or(0)
+    );
+
+    CABI_NET_FETCH_WAIT.notify_all();
+}
+
+#[embassy_executor::task]
+async fn cabi_net_fetch_bytes_task(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
+    cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
+}
+
+fn spawn_cabi_net_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
+    if let Some(spawner) = trueos_qjs::workers::pick_background_spawner()
+        && spawner
+            .spawn(cabi_net_fetch_bytes_task(
+                op_id,
+                url.clone(),
+                timeout_ms,
+                max_bytes,
+            ))
+            .is_ok()
+    {
+        return;
+    }
+
+    crate::wait::spawn_local_detached(async move {
+        cabi_net_fetch_bytes_task_inner(op_id, url, timeout_ms, max_bytes).await;
+    });
 }
 
 /// Errors returned by [`fetch_https_body_async`].
@@ -2973,8 +3135,8 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
     // This powers the QJS URL-module cache (esm.sh / CDN imports). Some responses are
     // large and/or slow enough that a ~2.5s global deadline causes spurious
     // `NET_ERR_TIMEOUT_BODY` failures even when connectivity is fine.
-    const TIMEOUT_MS: u32 = 20_000;
-    const MAX_BYTES: usize = 4 * 1024 * 1024;
+    const TIMEOUT_MS: u32 = 45_000;
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
 
     // Normalize the cache key so coalescing matches how fetch_https_to_file_async resolves paths.
     let key = match normalize_rel(path_s, false) {
@@ -3002,47 +3164,33 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_start(
         );
     }
 
-    crate::wait::spawn_local_detached(async move {
-        let t0 = Instant::now();
-        net_fetch_acquire_slot().await;
-        let rc = match fetch_https_to_file_async(url.as_str(), path.as_str(), TIMEOUT_MS, MAX_BYTES)
-            .await
-        {
-            Ok(()) => 0,
-            Err(code) => code,
-        };
-        net_fetch_release_slot();
-        let elapsed_ms = t0.elapsed().as_millis();
+    spawn_cabi_net_fetch(op_id, key, url, path, TIMEOUT_MS, MAX_BYTES);
+    op_id
+}
 
-        // Complete leader + all followers.
-        let followers = {
-            let mut inflight = CABI_NET_FETCH_INFLIGHT.lock();
-            inflight
-                .remove(&key)
-                .map(|e| e.followers)
-                .unwrap_or_default()
-        };
+/// TRUEOS C ABI: start async HTTPS fetch to in-memory bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start(
+    url_ptr: *const u8,
+    url_len: usize,
+) -> u32 {
+    if url_ptr.is_null() || url_len == 0 {
+        return 0;
+    }
 
-        let mut map = CABI_NET_FETCH_RESULTS.lock();
-        if let Some(slot) = map.get_mut(&op_id) {
-            *slot = Some(rc);
-        }
-        for fid in &followers {
-            if let Some(slot) = map.get_mut(fid) {
-                *slot = Some(rc);
-            }
-        }
+    let url_bytes = core::slice::from_raw_parts(url_ptr, url_len);
+    let Ok(url_s) = core::str::from_utf8(url_bytes) else {
+        return 0;
+    };
 
-        crate::log!(
-            "net-fetch: done key={} rc={} ms={} followers={}\n",
-            key,
-            rc,
-            elapsed_ms,
-            followers.len()
-        );
+    const TIMEOUT_MS: u32 = 45_000;
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
 
-        CABI_NET_FETCH_WAIT.notify_all();
-    });
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_BYTES_RESULTS
+        .lock()
+        .insert(op_id, CabiNetFetchBytesResult::default());
+    spawn_cabi_net_fetch_bytes(op_id, String::from(url_s), TIMEOUT_MS, MAX_BYTES);
     op_id
 }
 
@@ -3191,6 +3339,89 @@ pub extern "C" fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32 {
         }
     }
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize {
+    let map = CABI_NET_FETCH_BYTES_RESULTS.lock();
+    match map.get(&op_id) {
+        Some(v) => match v.rc {
+            Some(0) => v.body.len() as isize,
+            Some(rc) => rc as isize,
+            None => FS_ERR_NOT_FOUND as isize,
+        },
+        None => FS_ERR_NOT_FOUND as isize,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_net_fetch_bytes_read(
+    op_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    let mut map = CABI_NET_FETCH_BYTES_RESULTS.lock();
+    let Some(entry) = map.get(&op_id) else {
+        return FS_ERR_NOT_FOUND as isize;
+    };
+    let Some(rc) = entry.rc else {
+        return FS_ERR_NOT_FOUND as isize;
+    };
+    if rc != 0 {
+        map.remove(&op_id);
+        return rc as isize;
+    }
+    let len = entry.body.len();
+    if out_ptr.is_null() || out_cap == 0 {
+        return len as isize;
+    }
+    if len > out_cap {
+        return FS_ERR_NO_SPACE as isize;
+    }
+    let entry = map.remove(&op_id).expect("entry present");
+    unsafe { core::ptr::copy_nonoverlapping(entry.body.as_ptr(), out_ptr, entry.body.len()) };
+    len as isize
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32 {
+    CABI_NET_FETCH_BYTES_RESULTS.lock().remove(&op_id);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32 {
+    if op_id == 0 {
+        return FS_ERR_BAD_PARAM;
+    }
+
+    if timeout_ms == 0 {
+        let rc = trueos_cabi_net_fetch_bytes_result_len(op_id);
+        return if rc == FS_ERR_NOT_FOUND as isize {
+            FS_ERR_NOT_FOUND
+        } else if rc < 0 {
+            rc as i32
+        } else {
+            0
+        };
+    }
+
+    let start = embassy_time::Instant::now();
+    let timeout = EmbassyDuration::from_millis(timeout_ms);
+    loop {
+        let rc = trueos_cabi_net_fetch_bytes_result_len(op_id);
+        if rc != FS_ERR_NOT_FOUND as isize {
+            return if rc < 0 { rc as i32 } else { 0 };
+        }
+
+        let elapsed = embassy_time::Instant::now().saturating_duration_since(start);
+        if elapsed >= timeout {
+            return FS_ERR_TIMEOUT;
+        }
+        let remain = timeout - elapsed;
+        let step = core::cmp::min(remain, EmbassyDuration::from_millis(100));
+        let _ = CABI_NET_FETCH_WAIT.wait_for_event_blocking(step.as_millis() as u64);
+    }
 }
 
 /// TRUEOS C ABI: wait for a net-fetch operation to complete.

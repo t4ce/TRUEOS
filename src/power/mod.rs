@@ -32,7 +32,7 @@ impl IdlePolicy {
     }
 }
 
-static IDLE_POLICY: AtomicU8 = AtomicU8::new(IdlePolicy::Spin as u8);
+static IDLE_POLICY: AtomicU8 = AtomicU8::new(IdlePolicy::Halt as u8);
 
 static MSR_ARMED: AtomicU8 = AtomicU8::new(0);
 

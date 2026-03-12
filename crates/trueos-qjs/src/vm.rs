@@ -62,7 +62,11 @@ impl QjsVm {
     }
 }
 
-unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
+pub(crate) unsafe fn drain_pending_jobs(
+    rt: *mut qjs::JSRuntime,
+    fallback_ctx: *mut qjs::JSContext,
+    label: &str,
+) -> bool {
     if rt.is_null() {
         return true;
     }
@@ -79,7 +83,7 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
                 fallback_ctx
             };
             if !ctx.is_null() {
-                qjs::qjs_diag::dump_last_exception(ctx, "qjs teardown pending-job");
+                qjs::qjs_diag::dump_last_exception(ctx, label);
             }
             return false;
         }
@@ -88,18 +92,19 @@ unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JS
     true
 }
 
-unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
+pub(crate) unsafe fn pump_runtime_once(
+    rt: *mut qjs::JSRuntime,
+    ctx: *mut qjs::JSContext,
+    label: &str,
+) -> bool {
     let mut progress = false;
     progress |= qjs::async_ops::pump(ctx);
     progress |= qjs::workers::pump(ctx);
     progress |= qjs::timers::pump(ctx);
-    if !drain_pending_jobs(rt, ctx) {
+    if !drain_pending_jobs(rt, ctx, label) {
         return false;
     }
-    if qjs::JS_IsJobPending(rt) > 0
-        || qjs::async_ops::has_pending(ctx)
-        || qjs::workers::has_pending_for_ctx(ctx)
-    {
+    if qjs::JS_IsJobPending(rt) > 0 || qjs::workers::has_pending_for_ctx(ctx) {
         qjs::trueos_shims::trueos_cabi_poll_once();
         if !progress {
             qjs::trueos_shims::trueos_cabi_poll_once();
@@ -116,7 +121,7 @@ async unsafe fn drain_runtime_until_idle(
     let mut elapsed_ms: u64 = 0;
 
     loop {
-        if !pump_runtime_once(rt, ctx) {
+        if !pump_runtime_once(rt, ctx, "teardown") {
             return false;
         }
 
