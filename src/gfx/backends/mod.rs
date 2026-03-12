@@ -30,6 +30,7 @@ impl GfxDevice for NullBackend {
         DeviceCaps {
             supports_rgbx8888: false,
             supports_host_visible_buffers: false,
+            supports_scissor: false,
         }
     }
 

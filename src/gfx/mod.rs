@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod intel;
 pub mod loadscreen;
 pub mod lyon;
+pub mod png_codec;
 pub mod screenshot;
 pub mod text;
 #[cfg(feature = "gfx_virgl")]
