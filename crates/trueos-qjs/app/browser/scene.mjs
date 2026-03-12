@@ -25,6 +25,7 @@ const HR_BOTTOM_PAD = DEFAULT_THEME.TOP_PAD;
 const ITALIC_SLANT_DEG = 12;
 const CHAMFER_PX = 5;
 const LINK_UNDERLINE_THICKNESS_PX = 1;
+const MAX_RENDER_TEXT_CHARS = 512;
 
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
@@ -329,12 +330,21 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     for (let i = 0; i < runs.length; i += 1) {
       const run = runs[i] || null;
       const rgba = Number(run && run.rgba);
+      const rawText = String(run && run.text || '');
+      const renderText = rawText.length > MAX_RENDER_TEXT_CHARS
+        ? rawText.slice(0, MAX_RENDER_TEXT_CHARS)
+        : rawText;
+      if (renderText.length !== rawText.length) {
+        try {
+          console.log(`[browser.scene] drawAtlasText truncated from ${rawText.length} to ${MAX_RENDER_TEXT_CHARS} chars`);
+        } catch (_) {}
+      }
       cmdStream.drawAtlasText(
         texId,
         ATLAS_KIND,
         Number(run && run.x || 0),
         Number(run && run.y || 0),
-        String(run && run.text || ''),
+        renderText,
         DEFAULT_THEME.FONT_PX,
         Number.isFinite(rgba) ? ((rgba >>> 8) & 0x00FFFFFF) : DEFAULT_THEME.FONT_RGB,
         Number.isFinite(rgba) ? (rgba & 0xFF) : DEFAULT_THEME.FONT_ALPHA,

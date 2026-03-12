@@ -2970,14 +2970,12 @@ impl GfxDevice for VirglGfxBackend {
                     if last_viewport != Some((vp_w, vp_h)) {
                         encode_set_viewport(&mut cmd, vp_w, vp_h);
                         last_viewport = Some((vp_w, vp_h));
-                        did_work = true;
                     }
                     let scissor =
                         self.resolved_scissor_rect(self.state.viewport, self.state.scissor);
                     if last_scissor != Some(scissor) {
                         encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
                         last_scissor = Some(scissor);
-                        did_work = true;
                     }
 
                     let blend_handle = if !self.state.blend.enabled {
@@ -3022,7 +3020,6 @@ impl GfxDevice for VirglGfxBackend {
                         }
                         encode_bind_object(&mut cmd, VIRGL_OBJECT_BLEND, blend_handle);
                         last_bound_blend = Some(blend_handle);
-                        did_work = true;
                     }
                     // Defensive isolation between colored and textured draw paths:
                     // if draw kind flips, invalidate converted/uploaded caches so
@@ -3161,7 +3158,6 @@ impl GfxDevice for VirglGfxBackend {
                             self.vbo_res,
                         );
                         last_bound_vbo = Some((self.vbo_res, frame_vbo_write_offset));
-                        did_work = true;
                     }
 
                     if pipe_desc.vertex_layout.texcoord_format == TexCoordFormat::UvF32 {
@@ -3283,7 +3279,6 @@ impl GfxDevice for VirglGfxBackend {
                                 &[virgl_view],
                             );
                             last_bound_sampler_view = Some(virgl_view);
-                            did_work = true;
                         }
                         if last_bound_sampler_state != Some(samp_handle) {
                             encode_bind_sampler_states(
@@ -3293,7 +3288,6 @@ impl GfxDevice for VirglGfxBackend {
                                 &[samp_handle],
                             );
                             last_bound_sampler_state = Some(samp_handle);
-                            did_work = true;
                         }
                         if last_bound_shader_kind != Some(draw_kind) {
                             encode_bind_shader(&mut cmd, self.vs_tex_handle, PIPE_SHADER_VERTEX);
@@ -3304,7 +3298,6 @@ impl GfxDevice for VirglGfxBackend {
                             };
                             encode_bind_shader(&mut cmd, fs_handle, PIPE_SHADER_FRAGMENT);
                             last_bound_shader_kind = Some(draw_kind);
-                            did_work = true;
                         }
                     } else {
                         // Keep color-only draws isolated from prior textured draws:
@@ -3313,12 +3306,10 @@ impl GfxDevice for VirglGfxBackend {
                         if last_bound_sampler_view != Some(0) {
                             encode_set_sampler_views(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
                             last_bound_sampler_view = Some(0);
-                            did_work = true;
                         }
                         if last_bound_sampler_state != Some(0) {
                             encode_bind_sampler_states(&mut cmd, PIPE_SHADER_FRAGMENT, 0, &[0]);
                             last_bound_sampler_state = Some(0);
-                            did_work = true;
                         }
                         if last_bound_shader_kind != Some(DrawKind::Color) {
                             encode_bind_shader(&mut cmd, self.vs_color_handle, PIPE_SHADER_VERTEX);
@@ -3328,7 +3319,6 @@ impl GfxDevice for VirglGfxBackend {
                                 PIPE_SHADER_FRAGMENT,
                             );
                             last_bound_shader_kind = Some(DrawKind::Color);
-                            did_work = true;
                         }
                     }
 
