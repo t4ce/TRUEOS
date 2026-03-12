@@ -29,6 +29,39 @@ pub(crate) fn setup_get_descriptor(desc_type: u8, desc_index: u8, length: u16) -
     }
 }
 
+pub(crate) fn setup_get_descriptor_interface(
+    desc_type: u8,
+    desc_index: u8,
+    interface_number: u16,
+    length: u16,
+) -> Trb {
+    // bmRequestType=0x81 (IN|Standard|Interface), bRequest=0x06 (GET_DESCRIPTOR)
+    let w_value = ((desc_type as u16) << 8) | (desc_index as u16);
+    Trb {
+        d0: (0x81u32) | (0x06u32 << 8) | ((w_value as u32) << 16),
+        d1: (interface_number as u32) | ((length as u32) << 16),
+        d2: 8 | (2 << 16),          // 8-byte setup, TRT=IN
+        d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
+    }
+}
+
+pub(crate) fn setup_hid_set_report(
+    report_type: u8,
+    report_id: u8,
+    interface_number: u16,
+    length: u16,
+) -> Trb {
+    // bmRequestType=0x21 (OUT|Class|Interface), bRequest=0x09 (SET_REPORT)
+    // wValue = (report_type << 8) | report_id, wIndex = interface number
+    let w_value = ((report_type as u16) << 8) | (report_id as u16);
+    Trb {
+        d0: (0x21u32) | (0x09u32 << 8) | ((w_value as u32) << 16),
+        d1: (interface_number as u32) | ((length as u32) << 16),
+        d2: 8,                      // 8-byte setup, TRT=none for control-OUT
+        d3: trb_type(2) | (1 << 6), // Setup Stage, IDT
+    }
+}
+
 pub(crate) fn setup_clear_endpoint_halt(ep_addr: u8) -> Trb {
     // bmRequestType=0x02 (OUT|Standard|Endpoint), bRequest=0x01 (CLEAR_FEATURE)
     // wValue=0 (ENDPOINT_HALT), wIndex=endpoint address
