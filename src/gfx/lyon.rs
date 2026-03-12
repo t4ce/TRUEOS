@@ -4,7 +4,8 @@ use core::f32::consts::PI;
 use lyon_geom::point;
 use lyon_tessellation::path::Path;
 use lyon_tessellation::{
-    BuffersBuilder, LineJoin, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
+    BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineJoin, StrokeOptions,
+    StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use spin::Once;
 use trueos_math::{cos_f32, sin_f32};
@@ -205,10 +206,9 @@ fn build_rect_path() -> Path {
     builder.build()
 }
 
-fn build_circle_path() -> Path {
+fn build_circle_polygon_path(r: f32) -> Path {
     let mut builder = Path::builder();
     let n = 24usize;
-    let r = 10.0f32;
     let cx = 16.0f32;
     let cy = 16.0f32;
 
@@ -220,6 +220,10 @@ fn build_circle_path() -> Path {
     }
     builder.end(true);
     builder.build()
+}
+
+fn build_circle_path() -> Path {
+    build_circle_polygon_path(10.0)
 }
 
 fn build_regular_polygon_path(sides: usize) -> Path {
@@ -305,6 +309,29 @@ fn build_cached_icons() -> Vec<CachedIcon> {
                 }
             }),
         );
+
+        if i == 6 {
+            let mut fill_geometry: VertexBuffers<MyVertex, u16> = VertexBuffers::new();
+            let fill_res = FillTessellator::new().tessellate_path(
+                &build_circle_polygon_path(5.0),
+                &FillOptions::default(),
+                &mut BuffersBuilder::new(&mut fill_geometry, |vertex: FillVertex| {
+                    let p = vertex.position().to_array();
+                    MyVertex {
+                        position: [p[0], p[1]],
+                        color: [0.0, 0.0, 0.0, 1.0],
+                    }
+                }),
+            );
+
+            if fill_res.is_ok() {
+                let fill_offset = main_geometry.vertices.len() as u16;
+                main_geometry.vertices.extend(fill_geometry.vertices);
+                for idx in fill_geometry.indices {
+                    main_geometry.indices.push(idx + fill_offset);
+                }
+            }
+        }
 
         if main_res.is_err() || aa_res.is_err() {
             crate::log!("lyon-demo: tessellation failed at icon={}\n", i);

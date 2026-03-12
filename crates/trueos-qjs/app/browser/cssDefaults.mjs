@@ -2,10 +2,12 @@ import { BLOCK_TAGS } from './htmlDefaults.mjs';
 import { FONT_PX, FONT_RGB } from './theme.mjs';
 
 const TAG_THEME_DEFAULTS = {
+  b: {
+    fontWeight: 'bold',
+  },
   button: {
     display: 'inline-block',
     backgroundColor: '#e9ecef',
-    fontWeight: '600',
     textAlign: 'center',
     marginTopPx: 4,
     marginRightPx: 0,
@@ -15,6 +17,15 @@ const TAG_THEME_DEFAULTS = {
     paddingRightPx: 12,
     paddingBottomPx: 6,
     paddingLeftPx: 12,
+  },
+  em: {
+    fontStyle: 'italic',
+  },
+  i: {
+    fontStyle: 'italic',
+  },
+  strong: {
+    fontWeight: 'bold',
   },
 };
 
@@ -73,19 +84,19 @@ export function createComputedStyle(tagName = '', path = '', parentStyle = null)
     },
   };
 
+  if (parentStyle && typeof parentStyle === 'object') {
+    for (let i = 0; i < INHERITED_STYLE_FIELDS.length; i++) {
+      const key = INHERITED_STYLE_FIELDS[i];
+      if (parentStyle[key] != null) style[key] = parentStyle[key];
+    }
+  }
+
   const tagDefaults = TAG_THEME_DEFAULTS[tag] || null;
   if (tagDefaults && typeof tagDefaults === 'object') {
     const keys = Object.keys(tagDefaults);
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       style[key] = tagDefaults[key];
-    }
-  }
-
-  if (parentStyle && typeof parentStyle === 'object') {
-    for (let i = 0; i < INHERITED_STYLE_FIELDS.length; i++) {
-      const key = INHERITED_STYLE_FIELDS[i];
-      if (parentStyle[key] != null) style[key] = parentStyle[key];
     }
   }
 
