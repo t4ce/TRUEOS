@@ -6,6 +6,7 @@ mod control;
 mod enumeration;
 pub mod hid;
 mod non_generic;
+pub mod syscall;
 pub use hid::descripto as hid_descripto;
 pub mod input;
 pub mod isoch;
@@ -76,6 +77,33 @@ pub(crate) fn identity_for_slot(controller_id: usize, slot_id: u32) -> Option<De
     }
     let idx = (slot_id as usize) & 0xFF;
     SLOT_IDENTITIES[controller_id].lock()[idx]
+}
+
+pub(crate) fn ep0_ring_state_for_slot(
+    controller_id: usize,
+    slot_id: u32,
+) -> Option<xhci::TrbRingState> {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return None;
+    }
+    DEVICES[controller_id]
+        .lock()
+        .iter()
+        .find(|d| d.slot_id == slot_id)
+        .and_then(|d| d.resources)
+        .and_then(|r| r.ep0_ring_state)
+}
+
+pub(crate) fn update_ep0_ring_state(controller_id: usize, slot_id: u32, state: xhci::TrbRingState) {
+    if controller_id >= MAX_XHCI_CONTROLLERS {
+        return;
+    }
+    let mut guard = DEVICES[controller_id].lock();
+    if let Some(entry) = guard.iter_mut().find(|d| d.slot_id == slot_id) {
+        if let Some(ref mut res) = entry.resources {
+            res.ep0_ring_state = Some(state);
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -163,6 +191,7 @@ struct DeviceResources {
     input_ctx_virt: usize,
     ep0_virt_raw: usize,
     ep0_bytes: usize,
+    ep0_ring_state: Option<xhci::TrbRingState>,
 }
 #[derive(Copy, Clone, Debug)]
 struct DeviceEntry {

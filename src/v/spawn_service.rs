@@ -610,7 +610,7 @@ static TASKS: &[TaskSpec] = &[
     },
     TaskSpec {
         name: "wgpu_text",
-        disabled: false,
+        disabled: true,
         required: crate::v::readiness::GFX_BACKEND_READY,
         started: &WGPU_TEXT_STARTED,
         spawn: spawn_wgpu_text,
@@ -618,7 +618,7 @@ static TASKS: &[TaskSpec] = &[
     TaskSpec {
         name: "webgpu_browser",
         disabled: false,
-        required: crate::v::readiness::WGPU_TEXT_DONE,
+        required: crate::v::readiness::GFX_BACKEND_READY,
         started: &WEBGPU_BROWSER_STARTED,
         spawn: spawn_webgpu_browser,
     },
