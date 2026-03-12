@@ -1,0 +1,431 @@
+extern crate alloc;
+
+use core::ffi::c_char;
+use core::ffi::c_int;
+
+use trueos_qjs as qjs;
+
+unsafe extern "C" {
+    fn trueos_cabi_uart1_shell_write(data_ptr: *const u8, data_len: usize) -> usize;
+    fn trueos_cabi_shell1_submit_input(data_ptr: *const u8, data_len: usize) -> usize;
+    fn trueos_cabi_shell1_command_registry_json(out_ptr: *mut u8, out_cap: usize) -> isize;
+    fn trueos_cabi_gfx_capture_screenshot_data_url(out_ptr: *mut u8, out_cap: usize) -> isize;
+}
+
+#[inline]
+fn js_int32(v: i32) -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: v },
+        tag: qjs::JS_TAG_INT,
+    }
+}
+
+#[inline]
+fn js_null() -> qjs::JSValue {
+    qjs::JSValue {
+        u: qjs::JSValueUnion { int32: 0 },
+        tag: qjs::JS_TAG_NULL,
+    }
+}
+
+#[inline]
+unsafe fn js_to_i32(ctx: *mut qjs::JSContext, v: qjs::JSValueConst) -> Option<i32> {
+    if v.tag == qjs::JS_TAG_INT || v.tag == qjs::JS_TAG_BOOL {
+        return Some(v.u.int32);
+    }
+    let mut out = 0.0f64;
+    if qjs::JS_ToFloat64(ctx, &mut out as *mut f64, v) != 0 {
+        return None;
+    }
+    Some(out as i32)
+}
+
+unsafe extern "C" fn trueos_uart1_shell_write_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return js_int32(0);
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let wrote = trueos_cabi_uart1_shell_write(bytes.as_ptr(), bytes.len());
+    qjs::JS_FreeCString(ctx, cstr);
+    js_int32(wrote as i32)
+}
+
+unsafe extern "C" fn trueos_shell1_submit_input_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc <= 0 {
+        return js_int32(0);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let mut len: usize = 0;
+    let cstr = qjs::JS_ToCStringLen2(ctx, &mut len as *mut usize, args[0], 0);
+    if cstr.is_null() {
+        return js_int32(0);
+    }
+    let bytes = core::slice::from_raw_parts(cstr as *const u8, len);
+    let wrote = trueos_cabi_shell1_submit_input(bytes.as_ptr(), bytes.len());
+    qjs::JS_FreeCString(ctx, cstr);
+    js_int32(wrote as i32)
+}
+
+unsafe extern "C" fn trueos_capture_screenshot_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    let len = trueos_cabi_gfx_capture_screenshot_data_url(core::ptr::null_mut(), 0);
+    if len <= 0 {
+        return js_null();
+    }
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = trueos_cabi_gfx_capture_screenshot_data_url(bytes.as_mut_ptr(), bytes.len());
+    if got <= 0 {
+        return js_null();
+    }
+    bytes.truncate(got as usize);
+    qjs::JS_NewStringLen(ctx, bytes.as_ptr() as *const c_char, bytes.len())
+}
+
+unsafe extern "C" fn trueos_xhci_list_devices_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    _argc: c_int,
+    _argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    use alloc::string::String;
+    let mut json = String::from("[");
+    let mut first = true;
+    for cid in 0..crate::usb::xhci::MAX_XHCI_CONTROLLERS {
+        for dev in crate::usb::list_device_summaries(cid) {
+            let handle = ((cid as u32) << 24) | dev.slot_id;
+            if !first {
+                json.push(',');
+            }
+            first = false;
+            json.push_str(&alloc::format!(
+                r#"{{"handle":{},"controller_id":{},"slot_id":{},"port":{},"kind":"{}","vid":"{}","pid":"{}"}}"#,
+                handle,
+                cid,
+                dev.slot_id,
+                dev.port,
+                dev.kind,
+                dev.vid.map(|v| alloc::format!("{:04x}", v)).unwrap_or_default(),
+                dev.pid.map(|v| alloc::format!("{:04x}", v)).unwrap_or_default(),
+            ));
+        }
+    }
+    json.push(']');
+    qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len())
+}
+
+unsafe extern "C" fn trueos_xhci_port_reset_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return js_int32(-1);
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(cid) = js_to_i32(ctx, args[0]) else {
+        return js_int32(-1);
+    };
+    let Some(port) = js_to_i32(ctx, args[1]) else {
+        return js_int32(-1);
+    };
+    js_int32(crate::usb::syscall::port_reset(cid as usize, port as usize))
+}
+
+unsafe extern "C" fn trueos_xhci_get_descriptor_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 4 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_null();
+    };
+    let Some(desc_type) = js_to_i32(ctx, args[1]) else {
+        return js_null();
+    };
+    let Some(desc_index) = js_to_i32(ctx, args[2]) else {
+        return js_null();
+    };
+    let length = js_to_i32(ctx, args[3]).unwrap_or(64);
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    let bytes = match crate::usb::syscall::control_get_descriptor(
+        cid,
+        slot,
+        desc_type as u8,
+        desc_index as u8,
+        length as u16,
+        500,
+    ) {
+        Some(b) => b,
+        None => return js_null(),
+    };
+    let mut hex = alloc::string::String::with_capacity(bytes.len() * 2);
+    for &b in bytes.iter() {
+        let hi = b >> 4;
+        let lo = b & 0xF;
+        hex.push(if hi < 10 {
+            (b'0' + hi) as char
+        } else {
+            (b'a' + hi - 10) as char
+        });
+        hex.push(if lo < 10 {
+            (b'0' + lo) as char
+        } else {
+            (b'a' + lo - 10) as char
+        });
+    }
+    qjs::JS_NewStringLen(ctx, hex.as_ptr() as *const c_char, hex.len())
+}
+
+unsafe extern "C" fn trueos_xhci_read_transfer_event_js(
+    ctx: *mut qjs::JSContext,
+    _this_val: qjs::JSValueConst,
+    argc: c_int,
+    argv: *const qjs::JSValueConst,
+) -> qjs::JSValue {
+    if argv.is_null() || argc < 2 {
+        return js_null();
+    }
+    let args = core::slice::from_raw_parts(argv, argc as usize);
+    let Some(handle) = js_to_i32(ctx, args[0]) else {
+        return js_null();
+    };
+    let Some(ep_target) = js_to_i32(ctx, args[1]) else {
+        return js_null();
+    };
+    let cid = ((handle as u32) >> 24) as usize;
+    let slot = (handle as u32) & 0xFF_FFFF;
+    let (cc, residual) = match crate::usb::syscall::read_transfer_event(cid, slot, ep_target as u32)
+    {
+        Some(r) => r,
+        None => return js_null(),
+    };
+    let obj = qjs::JS_NewObject(ctx);
+    if obj.is_exception() {
+        return js_null();
+    }
+    let cc_val = js_int32(cc as i32);
+    let residual_val = js_int32(residual as i32);
+    let _ = qjs::JS_SetPropertyStr(ctx, obj, b"cc\0".as_ptr() as *const c_char, cc_val);
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        obj,
+        b"residual\0".as_ptr() as *const c_char,
+        residual_val,
+    );
+    obj
+}
+
+/// Called once per new JS context to install kernel-service bindings.
+///
+/// Registered via `trueos_qjs::host_api_hook::set_context_init_hook` at boot.
+/// This is the kernel side of the QJS host API surface: uart, shell, gfx, etc.
+pub unsafe fn install(ctx: *mut qjs::JSContext) {
+    if ctx.is_null() {
+        return;
+    }
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_uart1_shell_write_js),
+        b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosUart1ShellWrite\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_shell1_submit_input_js),
+        b"__trueosShell1SubmitInput\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1SubmitInput\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_capture_screenshot_js),
+        b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosCaptureScreenshot\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_list_devices_js),
+        b"__trueosXhciListDevices\0".as_ptr() as *const c_char,
+        0,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciListDevices\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_port_reset_js),
+        b"__trueosXhciPortReset\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciPortReset\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_get_descriptor_js),
+        b"__trueosXhciGetDescriptor\0".as_ptr() as *const c_char,
+        4,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciGetDescriptor\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    let f = qjs::JS_NewCFunction2(
+        ctx,
+        Some(trueos_xhci_read_transfer_event_js),
+        b"__trueosXhciReadTransferEvent\0".as_ptr() as *const c_char,
+        2,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosXhciReadTransferEvent\0".as_ptr() as *const c_char,
+        f,
+    );
+
+    qjs::js_free_value(ctx, global);
+
+    install_shell1_runtime(ctx);
+}
+
+unsafe fn install_shell1_runtime(ctx: *mut qjs::JSContext) {
+    let len = trueos_cabi_shell1_command_registry_json(core::ptr::null_mut(), 0);
+    if len <= 0 {
+        return;
+    }
+    let mut bytes = alloc::vec![0u8; len as usize];
+    let got = trueos_cabi_shell1_command_registry_json(bytes.as_mut_ptr(), bytes.len());
+    if got <= 0 {
+        return;
+    }
+    bytes.truncate(got as usize);
+    let json = match alloc::string::String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return;
+    }
+    let registry_json = qjs::JS_NewStringLen(ctx, json.as_ptr() as *const c_char, json.len());
+    let _ = qjs::JS_SetPropertyStr(
+        ctx,
+        global,
+        b"__trueosShell1CommandRegistryJson\0".as_ptr() as *const c_char,
+        registry_json,
+    );
+    qjs::js_free_value(ctx, global);
+
+    let shim_src = br#"
+(function (G) {
+    if (!G) return;
+    const raw = G.__trueosShell1CommandRegistryJson;
+    const parsed = typeof raw === 'string' && raw ? JSON.parse(raw) : [];
+    const commands = Array.isArray(parsed) ? parsed.map((entry) => {
+        const args = Array.isArray(entry && entry.args)
+            ? entry.args.map((arg) => Object.freeze({
+                name: String(arg && arg.name ? arg.name : ''),
+                type: String(arg && arg.type ? arg.type : 'str'),
+                required: !!(arg && arg.required),
+            }))
+            : [];
+        return Object.freeze({
+            command: String(entry && entry.command ? entry.command : ''),
+            args: Object.freeze(args),
+        });
+    }) : [];
+    G.__trueosShell1Runtime = Object.freeze({
+        commands: Object.freeze(commands),
+    });
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-shell1-runtime-shim>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node shell1 runtime shim");
+    }
+    qjs::js_free_value(ctx, shim);
+}

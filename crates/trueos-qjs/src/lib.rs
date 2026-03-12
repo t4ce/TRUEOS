@@ -53,6 +53,9 @@ pub mod vm;
 pub mod workers;
 
 #[cfg(feature = "trueos")]
+pub mod host_api_hook;
+
+#[cfg(feature = "trueos")]
 pub mod qjs_diag;
 
 #[cfg(feature = "trueos")]
