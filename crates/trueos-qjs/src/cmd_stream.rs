@@ -44,6 +44,12 @@ unsafe extern "C" {
         data_len: usize,
     ) -> i32;
     fn trueos_cabi_gfx_upload_texture_png(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32;
+    fn trueos_cabi_gfx_upload_texture_png_async(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    fn trueos_cabi_gfx_texture_status(tex_id: u32) -> i32;
     fn trueos_cabi_gfx_set_sampler(
         wrap_u: u32,
         wrap_v: u32,
@@ -153,6 +159,11 @@ fn cmd_stream_alloc_tex_id() -> u32 {
 }
 
 #[inline]
+pub fn alloc_managed_tex_id() -> u32 {
+    cmd_stream_alloc_tex_id()
+}
+
+#[inline]
 fn cmd_stream_is_managed_tex(id: u32) -> bool {
     if id == 0 {
         return false;
@@ -167,6 +178,13 @@ fn cmd_stream_release_tex_id(id: u32) {
         ids.swap_remove(pos);
     }
     atlas_cmd_stream::release_tex_id(id);
+}
+
+#[inline]
+pub fn release_managed_tex_id(id: u32) {
+    if cmd_stream_is_managed_tex(id) {
+        cmd_stream_release_tex_id(id);
+    }
 }
 
 #[inline]
@@ -988,6 +1006,30 @@ pub(crate) unsafe fn try_create_native_module(
             qjs::JS_NewFloat64(ctx, tex_id as f64)
         }
 
+        unsafe extern "C" fn qjs_cmd_stream_create_texture_png_async(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 1) else {
+                return qjs::JSValue::undefined();
+            };
+            let tex_id = cmd_stream_alloc_tex_id();
+
+            let mut queued = false;
+            let _ = cmd_stream_with_u8_buffer(ctx, args[0], |ptr, len| {
+                if len > 0 && trueos_cabi_gfx_upload_texture_png_async(tex_id, ptr, len) == 0 {
+                    queued = true;
+                }
+            });
+            if !queued {
+                cmd_stream_release_tex_id(tex_id);
+                return qjs::JSValue::undefined();
+            }
+            qjs::JS_NewFloat64(ctx, tex_id as f64)
+        }
+
         unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
             ctx: *mut qjs::JSContext,
             _this_val: qjs::JSValueConst,
@@ -1067,6 +1109,22 @@ pub(crate) unsafe fn try_create_native_module(
             let _ = trueos_cabi_gfx_upload_texture_rgba(tex_id, 1, 1, clear.as_ptr(), clear.len());
             cmd_stream_release_tex_id(tex_id);
             qjs::JSValue::undefined()
+        }
+
+        unsafe extern "C" fn qjs_cmd_stream_get_texture_status(
+            ctx: *mut qjs::JSContext,
+            _this_val: qjs::JSValueConst,
+            argc: i32,
+            argv: *const qjs::JSValueConst,
+        ) -> qjs::JSValue {
+            let Some(args) = cmd_stream_args(argv, argc, 1) else {
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            };
+            let Some(tex_id_f) = cmd_stream_arg_f64(ctx, args, 0) else {
+                return qjs::JS_NewFloat64(ctx, 0.0);
+            };
+            let tex_id = (tex_id_f as i64).max(0) as u32;
+            qjs::JS_NewFloat64(ctx, trueos_cabi_gfx_texture_status(tex_id) as f64)
         }
 
         unsafe extern "C" fn qjs_cmd_stream_draw_lyon_icon_in_frame(
@@ -1264,8 +1322,10 @@ pub(crate) unsafe fn try_create_native_module(
             );
             export_fn!("createTextureRgba", qjs_cmd_stream_create_texture_rgba, 3);
             export_fn!("createTexturePng", qjs_cmd_stream_create_texture_png, 1);
+            export_fn!("createTexturePngAsync", qjs_cmd_stream_create_texture_png_async, 1);
             export_fn!("updateTextureRgba", qjs_cmd_stream_update_texture_rgba, 4);
             export_fn!("updateTexturePng", qjs_cmd_stream_update_texture_png, 2);
+            export_fn!("getTextureStatus", qjs_cmd_stream_get_texture_status, 1);
             export_fn!("destroyTexture", qjs_cmd_stream_destroy_texture, 1);
             export_fn!(
                 "createAtlasTexture",
@@ -1313,8 +1373,10 @@ pub(crate) unsafe fn try_create_native_module(
         add_export!("setPremultipliedAlpha");
         add_export!("createTextureRgba");
         add_export!("createTexturePng");
+        add_export!("createTexturePngAsync");
         add_export!("updateTextureRgba");
         add_export!("updateTexturePng");
+        add_export!("getTextureStatus");
         add_export!("destroyTexture");
         add_export!("createAtlasTexture");
         add_export!("drawTrianglesU8");
