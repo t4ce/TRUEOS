@@ -11,7 +11,7 @@ const RX_BUF_SIZE: usize = 2048;
 fn alloc_uninit_buf(len: usize) -> Vec<u8> {
     // Clippy forbids exposing uninitialized bytes as `Vec<u8>` (and it is UB per
     // `Vec::set_len` safety contract). For now we pay the initialization cost.
-    let mut v = vec![0; len];
+    let v = vec![0; len];
     v
 }
 

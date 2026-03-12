@@ -2456,7 +2456,7 @@ impl VirglGfxBackend {
                 }
             }
 
-            let (mut u_f, mut v_f) = if texcoord_format == TexCoordFormat::UvF32 {
+            let (u_f, v_f) = if texcoord_format == TexCoordFormat::UvF32 {
                 let tex_off = off + (texcoord_offset as usize);
                 if tex_off + 8 > buf.len() {
                     break;

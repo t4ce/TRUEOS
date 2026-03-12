@@ -18,7 +18,6 @@ use embassy_time_driver::{TICK_HZ, now};
 use trueos_gfx_core::GfxContext;
 
 pub(crate) use screenshot::publish_virgl_image_buffer;
-pub use screenshot::{ImageBuffer, ScreenshotAwait, virgl_screenshot_await};
 
 static SYSTEM: Once<Mutex<System>> = Once::new();
 static CPU_BACKBUFFER: Once<Mutex<Option<CpuBackbuffer>>> = Once::new();

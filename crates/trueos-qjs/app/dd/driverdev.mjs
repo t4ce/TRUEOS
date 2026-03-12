@@ -136,6 +136,61 @@ export function readTransferEvent(handle, epTarget) {
   return __trueosXhciReadTransferEvent(handle | 0, epTarget | 0);
 }
 
+export function getHidDescriptor(handle, interfaceNumber = 0, length = 64) {
+  if (typeof __trueosXhciGetHidDescriptor !== "function") return null;
+  const hex = __trueosXhciGetHidDescriptor(
+    handle | 0,
+    interfaceNumber | 0,
+    length | 0,
+  );
+  return hexToBytes(hex);
+}
+
+export function getHidReportDescriptor(handle, interfaceNumber = 0, length = 512) {
+  if (typeof __trueosXhciGetHidReportDescriptor !== "function") return null;
+  const hex = __trueosXhciGetHidReportDescriptor(
+    handle | 0,
+    interfaceNumber | 0,
+    length | 0,
+  );
+  return hexToBytes(hex);
+}
+
+// HID class SET_REPORT request.
+// reportType: 1=input, 2=output, 3=feature.
+// payload can be a Uint8Array-like object or a lower-case hex string.
+// Returns xHCI completion code (typically 1) or -1 on failure.
+export function setHidReport(handle, interfaceNumber = 0, reportType = 2, reportId = 0, payload = "") {
+  if (typeof __trueosXhciHidSetReport !== "function") return -1;
+  const payloadHex = typeof payload === "string" ? payload : bytesToHex(payload);
+  return __trueosXhciHidSetReport(
+    handle | 0,
+    interfaceNumber | 0,
+    reportType | 0,
+    reportId | 0,
+    String(payloadHex || ""),
+  );
+}
+
+export function sendLedOutputReport(handle, reportId = 0, payload = "") {
+  if (typeof __trueosLedsSendOutputReport !== "function") return -1;
+  const payloadHex = typeof payload === "string" ? payload : bytesToHex(payload);
+  return __trueosLedsSendOutputReport(
+    handle | 0,
+    reportId | 0,
+    String(payloadHex || ""),
+  );
+}
+
+export function sendLedPreferredOutputReport(handle, payload = "") {
+  if (typeof __trueosLedsSendPreferredOutputReport !== "function") return -1;
+  const payloadHex = typeof payload === "string" ? payload : bytesToHex(payload);
+  return __trueosLedsSendPreferredOutputReport(
+    handle | 0,
+    String(payloadHex || ""),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Higher-level helpers
 // ---------------------------------------------------------------------------
@@ -193,6 +248,43 @@ export function ccOk(cc) {
   return cc === CC.SUCCESS || cc === CC.SHORT_PACKET;
 }
 
+export function identifyHidDevice(handle, interfaceNumber = 0) {
+  const report = getHidReportDescriptor(handle, interfaceNumber, 512);
+  if (!report || report.length === 0) {
+    return {
+      kind: "unknown",
+      reason: "hid_report_unavailable",
+    };
+  }
+
+  const usage = findFirstApplicationUsage(report);
+  const usagePage = usage ? usage.usagePage : null;
+  const usageId = usage ? usage.usage : null;
+  let kind = "unknown";
+
+  if (usagePage === 0x01 && usageId === 0x02) {
+    kind = "mouse";
+  } else if (usagePage === 0x01 && usageId === 0x06) {
+    kind = "keyboard";
+  } else if (usagePage === 0x01 && usageId === 0x04) {
+    kind = "joystick";
+  } else if (usagePage === 0x01 && usageId === 0x05) {
+    kind = "gamepad";
+  } else if (usagePage === 0x0d) {
+    kind = "digitizer";
+  } else if (usagePage === 0x0c) {
+    kind = "consumer_control";
+  }
+
+  return {
+    kind,
+    usagePage,
+    usageId,
+    interfaceNumber,
+    reportLength: report.length,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Internal utilities
 // ---------------------------------------------------------------------------
@@ -206,6 +298,49 @@ function hexToBytes(hex) {
   return out;
 }
 
+function findFirstApplicationUsage(report) {
+  let i = 0;
+  let usagePage = null;
+  let usage = null;
+
+  while (i < report.length) {
+    const prefix = report[i++];
+    if (prefix === 0xfe) {
+      if (i + 1 >= report.length) break;
+      const size = report[i++] | 0;
+      i += 1;
+      i += size;
+      continue;
+    }
+
+    const sizeCode = prefix & 0x03;
+    const size = sizeCode === 3 ? 4 : sizeCode;
+    const itemType = (prefix >> 2) & 0x03;
+    const itemTag = (prefix >> 4) & 0x0f;
+
+    let value = 0;
+    for (let n = 0; n < size && i < report.length; n += 1) {
+      value |= (report[i++] & 0xff) << (8 * n);
+    }
+
+    if (itemType === 1 && itemTag === 0x0) {
+      usagePage = value;
+    } else if (itemType === 2 && itemTag === 0x0) {
+      usage = value;
+    } else if (itemType === 0 && itemTag === 0xa) {
+      const collectionType = value & 0xff;
+      if (collectionType === 0x01) {
+        return {
+          usagePage,
+          usage,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 export default {
   DESC,
   CC,
@@ -216,7 +351,13 @@ export default {
   portReset,
   getDescriptor,
   readTransferEvent,
+  getHidDescriptor,
+  getHidReportDescriptor,
+  setHidReport,
+  sendLedOutputReport,
+  sendLedPreferredOutputReport,
   getDeviceDescriptor,
   getString,
+  identifyHidDevice,
   ccOk,
 };

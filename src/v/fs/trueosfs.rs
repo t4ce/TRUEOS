@@ -46,6 +46,7 @@ struct RootMount {
     disk_id: block::DiscId,
     seq: u32,
     index: Option<Box<TrueosFsIndex>>,
+    building_index: bool,
     writes_since_checkpoint: u32,
     cache_gen: u32,
 }
@@ -326,6 +327,7 @@ pub async fn mount_root_async(
         return Ok(Some(disk_id));
     }
     roots.push(RootMount {
+        building_index: false,
         disk_id,
         seq: ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         index,
@@ -929,92 +931,109 @@ async fn ensure_index_async(
 ) -> Result<(), block::Error> {
     let disk_id = disk.id();
 
-    // Check if we need to build
-    {
-        let roots = ROOTS.lock();
-        if let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) {
-            if mount.index.is_some() {
-                return Ok(());
+    // Claim a single builder slot; all others wait until index becomes available.
+    loop {
+        let mut roots = ROOTS.lock();
+        match roots.iter_mut().find(|m| m.disk_id == disk_id) {
+            None => return Err(block::Error::NotReady),
+            Some(m) if m.index.is_some() => return Ok(()),
+            Some(m) if m.building_index => {
+                drop(roots);
+                Timer::after(EmbassyDuration::from_millis(5)).await;
             }
-        } else {
-            // Not mounted?
-            return Err(block::Error::NotReady);
-        }
-    }
-
-    // Build outside lock
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    let io = KernelBlockIo::new(disk);
-
-    let mut tree = Box::new(BTreeMap::new());
-
-    // Replay log
-    let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
-    let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
-
-    let mut replay_from = 0u64;
-
-    if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
-        .await
-        .map_err(map_engine_err)
-    {
-        replay_from = ckpt.replay_from_rel_blocks;
-        for (key, kind, lba) in ckpt.entries {
-            match kind {
-                trueos_fs::LogKind::Put => {
-                    tree.insert(
-                        key,
-                        IndexRef {
-                            kind,
-                            entry_lba: lba,
-                        },
-                    );
-                }
-                trueos_fs::LogKind::Delete => {
-                    tree.remove(&key);
-                }
-                _ => {}
+            Some(m) => {
+                m.building_index = true;
+                break;
             }
         }
     }
 
-    let end_rel = sb.log_head_rel_blocks;
+    // Build outside lock.
+    let build_result: Result<Box<TrueosFsIndex>, block::Error> =
+        async {
+            let params = trueos_fs::FsParams {
+                super_lba: placement.super_lba,
+                data_lba: placement.data_lba,
+                data_end_lba_exclusive: placement.data_end_lba_exclusive,
+            };
+            let io = KernelBlockIo::new(disk);
 
-    trueos_fs::replay_log_range(
-        &io,
-        &params,
-        replay_from,
-        end_rel,
-        |kind, name, lba| match kind {
-            trueos_fs::LogKind::Put => {
-                tree.insert(
-                    name,
-                    IndexRef {
-                        kind,
-                        entry_lba: lba,
-                    },
-                );
-            }
-            trueos_fs::LogKind::Delete => {
-                tree.remove(&name);
-            }
-            _ => {}
-        },
-    )
-    .await
-    .map_err(map_engine_err)?;
+            let mut tree = Box::new(BTreeMap::new());
 
-    // Store in mount
+            // Replay log.
+            let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
+            let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
+
+            let mut replay_from = 0u64;
+
+            if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
+                .await
+                .map_err(map_engine_err)
+            {
+                replay_from = ckpt.replay_from_rel_blocks;
+                for (key, kind, lba) in ckpt.entries {
+                    match kind {
+                        trueos_fs::LogKind::Put => {
+                            tree.insert(
+                                key,
+                                IndexRef {
+                                    kind,
+                                    entry_lba: lba,
+                                },
+                            );
+                        }
+                        trueos_fs::LogKind::Delete => {
+                            tree.remove(&key);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let end_rel = sb.log_head_rel_blocks;
+
+            trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, lba| {
+                match kind {
+                    trueos_fs::LogKind::Put => {
+                        tree.insert(
+                            name,
+                            IndexRef {
+                                kind,
+                                entry_lba: lba,
+                            },
+                        );
+                    }
+                    trueos_fs::LogKind::Delete => {
+                        tree.remove(&name);
+                    }
+                    _ => {}
+                }
+            })
+            .await
+            .map_err(map_engine_err)?;
+
+            Ok(tree)
+        }
+        .await;
+
+    // Always clear the build flag; publish the index only on success.
     let mut roots = ROOTS.lock();
-    if let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
-        mount.index = Some(tree);
+    let mount = roots.iter_mut().find(|m| m.disk_id == disk_id);
+    match build_result {
+        Ok(tree) => {
+            if let Some(m) = mount {
+                m.index = Some(tree);
+                m.building_index = false;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if let Some(m) = mount {
+                m.building_index = false;
+            }
+            Err(e)
+        }
     }
-
-    Ok(())
 }
 
 /// Best-effort: build an HTML `<ul>/<li>` tree of the TRUEOSFS directory structure.

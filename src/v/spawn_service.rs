@@ -44,7 +44,7 @@ static TGA_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_READY_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_VIRGL_CURSOR_OVERLAY_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_HW_CURSOR_STARTED: AtomicBool = AtomicBool::new(false);
-static WGPU_TEXT_STARTED: AtomicBool = AtomicBool::new(false);
+static GFX_LOADSCREEN_STARTED: AtomicBool = AtomicBool::new(false);
 static WEBGPU_BROWSER_STARTED: AtomicBool = AtomicBool::new(false);
 static UI2_STARTED: AtomicBool = AtomicBool::new(false);
 static GFX_MATMUL_DEMO_STARTED: AtomicBool = AtomicBool::new(false);
@@ -260,7 +260,7 @@ fn gfx_switched() -> bool {
     }
 }
 
-fn spawn_wgpu_text(spawner: Spawner) -> SpawnAttempt {
+fn spawn_gfx_loadscreen(spawner: Spawner) -> SpawnAttempt {
     match spawner.spawn(crate::gfx::loadscreen::gfx_loadscreen_task()) {
         Ok(()) => SpawnAttempt::Spawned,
         Err(e) => SpawnAttempt::Failed(e),
@@ -609,11 +609,11 @@ static TASKS: &[TaskSpec] = &[
         spawn: spawn_gfx_hw_cursor_task,
     },
     TaskSpec {
-        name: "wgpu_text",
+        name: "gfx_loadscreen",
         disabled: true,
         required: crate::v::readiness::GFX_BACKEND_READY,
-        started: &WGPU_TEXT_STARTED,
-        spawn: spawn_wgpu_text,
+        started: &GFX_LOADSCREEN_STARTED,
+        spawn: spawn_gfx_loadscreen,
     },
     TaskSpec {
         name: "webgpu_browser",

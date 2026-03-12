@@ -87,6 +87,15 @@ pub async fn send_output_report_first(report_id: u8, payload: &[u8]) -> Result<(
     send_output_report(controller_id, slot_id, report_id, payload).await
 }
 
+pub async fn send_output_report_for_handle(
+    controller_id: usize,
+    slot_id: u32,
+    report_id: u8,
+    payload: &[u8],
+) -> Result<(), ()> {
+    send_output_report(controller_id, slot_id, report_id, payload).await
+}
+
 /// Send an OUT report using the device's preferred Report ID and expected total length
 /// (derived from its HID report descriptor), padding with zeros as needed.
 pub async fn send_preferred_output_report_first(payload: &[u8]) -> Result<(), ()> {
@@ -94,6 +103,14 @@ pub async fn send_preferred_output_report_first(payload: &[u8]) -> Result<(), ()
         return Err(());
     };
 
+    send_preferred_output_report_for_handle(controller_id, slot_id, payload).await
+}
+
+pub async fn send_preferred_output_report_for_handle(
+    controller_id: usize,
+    slot_id: u32,
+    payload: &[u8],
+) -> Result<(), ()> {
     let (preferred_id, preferred_total_len) = {
         let guard = LED_RUNTIMES.lock();
         let Some(rt) = guard

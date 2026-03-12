@@ -1,8 +1,6 @@
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use alloc::boxed::Box;
-
 use super::cube::{CubeState, WireShape};
 use super::{CommandAction, PendingAction, ShellBackend, ShellIo, ShellMode};
 

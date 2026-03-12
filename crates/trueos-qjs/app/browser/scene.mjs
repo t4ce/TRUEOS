@@ -27,6 +27,25 @@ const CHAMFER_PX = 5;
 const LINK_UNDERLINE_THICKNESS_PX = 1;
 const MAX_RENDER_TEXT_CHARS = 512;
 
+function styleColorToTextRgba(style) {
+  if (!style || typeof style !== 'object') return DEFAULT_TEXT_RGBA;
+  const raw = String(style.color || '').trim().toLowerCase();
+  if (!raw) return DEFAULT_TEXT_RGBA;
+  if (raw === 'transparent') return 0x00000000;
+  const hex = raw.match(/^#([0-9a-f]{6})$/i);
+  if (!hex) return DEFAULT_TEXT_RGBA;
+  const rgb = Number.parseInt(hex[1], 16);
+  if (!Number.isFinite(rgb)) return DEFAULT_TEXT_RGBA;
+  return ((rgb & 0x00FFFFFF) << 8) | (DEFAULT_THEME.FONT_ALPHA & 0xFF);
+}
+
+function rowFontPx(row) {
+  const style = row && row.style && typeof row.style === 'object' ? row.style : null;
+  const raw = Number(style && style.fontSizePx);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_THEME.FONT_PX;
+  return Math.max(1, Math.round(raw));
+}
+
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
 }
@@ -215,7 +234,8 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         x: x + LI_TEXT_X_OFFSET,
         y,
         text,
-        rgba: DEFAULT_TEXT_RGBA,
+        rgba: styleColorToTextRgba(row && row.style),
+        fontPx: rowFontPx(row),
         italicTiltDeg: rowItalicTiltDeg(row),
         boldMode: rowIsBold(row),
       });
@@ -225,7 +245,8 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
       x,
       y,
       text,
-      rgba: DEFAULT_TEXT_RGBA,
+      rgba: styleColorToTextRgba(row && row.style),
+      fontPx: rowFontPx(row),
       italicTiltDeg: rowItalicTiltDeg(row),
       boldMode: rowIsBold(row),
     });
@@ -242,6 +263,7 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         y,
         text,
         rgba: Number.isFinite(Number(rgba)) ? Number(rgba) : DEFAULT_TEXT_RGBA,
+        fontPx: DEFAULT_THEME.FONT_PX,
         italicTiltDeg: 0,
         boldMode: 0,
       });
@@ -345,7 +367,7 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         Number(run && run.x || 0),
         Number(run && run.y || 0),
         renderText,
-        DEFAULT_THEME.FONT_PX,
+        Number.isFinite(Number(run && run.fontPx)) ? Math.max(1, Math.round(Number(run.fontPx))) : DEFAULT_THEME.FONT_PX,
         Number.isFinite(rgba) ? ((rgba >>> 8) & 0x00FFFFFF) : DEFAULT_THEME.FONT_RGB,
         Number.isFinite(rgba) ? (rgba & 0xFF) : DEFAULT_THEME.FONT_ALPHA,
         Number(run && run.italicTiltDeg || 0),

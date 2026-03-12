@@ -6,14 +6,25 @@ import * as driverdev from "../dd/driverdev.mjs";
 
 const DEFAULT_MAX_STEPS = 50;
 const DEFAULT_MODEL = "gpt-5.4";
+const DEFAULT_PARALLEL_TOOL_CALLS = true;
 const WORKER_RPC_TIMEOUT_MS = 30000;
 const AI_PC_TOOL_POLICY = [
   "Use shell1 function tools whenever the user is asking to run, open, launch, inspect, or control something that maps to a shell1 command.",
   "For mounted TRUEOS filesystem inspection or DOM insertion of file lists, prefer read_trueosfs_tree or browser.getTrueosFsTreeHtml(...) over the interactive shell1 file wizard.",
   "For xHCI/USB driver debugging tasks, prefer driverdev_* tools over ad-hoc JavaScript snippets.",
+  "When users ask what a USB HID device is, use driverdev_identify_hid_device and driverdev_get_hid_report_descriptor_hex before guessing.",
+  "If asked to control HID/LED devices, use driverdev_set_hid_output_report_hex with explicit payload bytes and report IDs instead of claiming write access is unavailable.",
+  "For devices classified as kind=leds, prefer the LED runtime interrupt-OUT tools before falling back to HID SET_REPORT control writes.",
   "Use ask_user only when the request is genuinely ambiguous or a required argument is missing.",
   "Treat cursor and pointer requests in browser/computer-use tasks as mouse-style pointer movement; prefer browser.moveCursor(...) instead of interpreting them as shell or terminal text-cursor requests unless the user explicitly says shell or terminal.",
   "Do not claim you cannot launch local apps or shell commands when a shell1 tool is available for the task.",
+].join(" ");
+const AI_PC_INSTRUCTIONS = [
+  "You are TRUEOS AI PC, a powerful kernel-level agent running inside TRUEOS.",
+  "You can inspect and influence the UI, browser state, shell1, USB/HID devices, storage, networked services, and other hardware-facing subsystems in real time.",
+  "Operate like a capable system agent in a safe session with rich hardware access, but stay grounded in the live tools and observed device state instead of assumptions.",
+  "Prefer taking concrete actions with tools over giving abstract advice when the task is actionable.",
+  AI_PC_TOOL_POLICY,
 ].join(" ");
 const WORKER_BROWSER_METHODS = [
   "getApiContract",
@@ -423,6 +434,18 @@ function bytesToHex(bytes) {
   return out;
 }
 
+function toJsonStringOrNull(value) {
+  if (value == null) {
+    return "null";
+  }
+  try {
+    const encoded = JSON.stringify(value);
+    return typeof encoded === "string" ? encoded : "null";
+  } catch (_err) {
+    return "null";
+  }
+}
+
 function createDriverDevTools() {
   return [
     {
@@ -562,6 +585,178 @@ function createDriverDevTools() {
         additionalProperties: false,
       },
     },
+    {
+      type: "function",
+      name: "driverdev_get_hid_report_descriptor_hex",
+      description: "Read a HID report descriptor from an interface and return lower-case hex bytes.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          length: {
+            type: "integer",
+            description: "Requested HID report descriptor byte length.",
+            minimum: 1,
+            maximum: 4096,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_identify_hid_device",
+      description: "Identify likely HID device kind by parsing the first application collection usage from its report descriptor.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+        },
+        required: ["handle"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_set_hid_report_hex",
+      description: "Send a HID class SET_REPORT control transfer using hex payload bytes.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          reportType: {
+            type: "integer",
+            description: "HID report type: 1=input, 2=output, 3=feature.",
+            minimum: 1,
+            maximum: 3,
+          },
+          reportId: {
+            type: "integer",
+            description: "HID report ID (0 when reports are unnumbered).",
+            minimum: 0,
+            maximum: 255,
+          },
+          payloadHex: {
+            type: "string",
+            description: "Even-length hex string containing payload bytes without spaces.",
+          },
+        },
+        required: ["handle", "payloadHex"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_set_hid_output_report_hex",
+      description: "Convenience wrapper for HID output report writes (reportType=2).",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot).",
+            minimum: 0,
+          },
+          interfaceNumber: {
+            type: "integer",
+            description: "USB interface number for the HID function.",
+            minimum: 0,
+            maximum: 255,
+          },
+          reportId: {
+            type: "integer",
+            description: "HID report ID (0 when reports are unnumbered).",
+            minimum: 0,
+            maximum: 255,
+          },
+          payloadHex: {
+            type: "string",
+            description: "Even-length hex string containing payload bytes without spaces.",
+          },
+        },
+        required: ["handle", "payloadHex"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_leds_send_output_report_hex",
+      description: "Send a report over the claimed LED runtime interrupt-OUT endpoint using an explicit report ID and payload hex.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot) for a device claimed by the leds runtime.",
+            minimum: 0,
+          },
+          reportId: {
+            type: "integer",
+            description: "Report ID byte to prefix, or 0 when the device expects no report ID prefix.",
+            minimum: 0,
+            maximum: 255,
+          },
+          payloadHex: {
+            type: "string",
+            description: "Even-length hex string containing payload bytes without spaces.",
+          },
+        },
+        required: ["handle", "payloadHex"],
+        additionalProperties: false,
+      },
+    },
+    {
+      type: "function",
+      name: "driverdev_leds_send_preferred_output_report_hex",
+      description: "Send an interrupt-OUT LED report using the runtime's preferred report ID and expected report length padding.",
+      parameters: {
+        type: "object",
+        properties: {
+          handle: {
+            type: "integer",
+            description: "Packed TRUEOS driverdev handle (controller<<24 | slot) for a device claimed by the leds runtime.",
+            minimum: 0,
+          },
+          payloadHex: {
+            type: "string",
+            description: "Even-length hex string containing payload bytes without spaces.",
+          },
+        },
+        required: ["handle", "payloadHex"],
+        additionalProperties: false,
+      },
+    },
   ];
 }
 
@@ -644,10 +839,6 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
   const tools = buildTools(entry);
   let nextInput = [
     {
-      role: "system",
-      content: AI_PC_TOOL_POLICY,
-    },
-    {
       role: "user",
       content: entry.text,
     },
@@ -656,8 +847,10 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
   for (let i = 0; i < maxSteps; i += 1) {
     const request = {
       model,
+      instructions: AI_PC_INSTRUCTIONS,
       tools,
       input: nextInput,
+      parallel_tool_calls: DEFAULT_PARALLEL_TOOL_CALLS,
       reasoning: {
         effort: "low",
       },
@@ -770,10 +963,15 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
         const parsed = JSON.parse(item.arguments || "{}");
         const langId = Number.isInteger(parsed.langId) ? parsed.langId : 0x0409;
         const value = driverdev.getString(parsed.handle, parsed.index, langId);
+        const output = typeof value === "string"
+          ? value
+          : (value && typeof value.length === "number"
+            ? bytesToHex(value)
+            : "null");
         toolOutputs.push({
           type: "function_call_output",
           call_id: item.call_id,
-          output: value,
+          output,
         });
       } else if (item.type === "function_call" && item.name === "driverdev_port_reset") {
         hadToolCall = true;
@@ -791,7 +989,97 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
         toolOutputs.push({
           type: "function_call_output",
           call_id: item.call_id,
-          output: JSON.stringify(event),
+          output: toJsonStringOrNull(event),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_get_hid_report_descriptor_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const length = Number.isInteger(parsed.length) ? parsed.length : 512;
+        const bytes = driverdev.getHidReportDescriptor(parsed.handle, interfaceNumber, length);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            hex: bytesToHex(bytes),
+            byteLength: bytes ? bytes.length : 0,
+            interfaceNumber,
+          }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_identify_hid_device") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const result = driverdev.identifyHidDevice(parsed.handle, interfaceNumber);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: toJsonStringOrNull(result),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_set_hid_report_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const reportType = Number.isInteger(parsed.reportType) ? parsed.reportType : 2;
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const payloadHex = typeof parsed.payloadHex === "string" ? parsed.payloadHex : "";
+        const rc = driverdev.setHidReport(parsed.handle, interfaceNumber, reportType, reportId, payloadHex);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            rc,
+            interfaceNumber,
+            reportType,
+            reportId,
+            payloadLenBytes: Math.floor(payloadHex.length / 2),
+          }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_set_hid_output_report_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const interfaceNumber = Number.isInteger(parsed.interfaceNumber) ? parsed.interfaceNumber : 0;
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const payloadHex = typeof parsed.payloadHex === "string" ? parsed.payloadHex : "";
+        const rc = driverdev.setHidReport(parsed.handle, interfaceNumber, 2, reportId, payloadHex);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            rc,
+            interfaceNumber,
+            reportType: 2,
+            reportId,
+            payloadLenBytes: Math.floor(payloadHex.length / 2),
+          }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_leds_send_output_report_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const reportId = Number.isInteger(parsed.reportId) ? parsed.reportId : 0;
+        const payloadHex = typeof parsed.payloadHex === "string" ? parsed.payloadHex : "";
+        const rc = driverdev.sendLedOutputReport(parsed.handle, reportId, payloadHex);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            rc,
+            reportId,
+            payloadLenBytes: Math.floor(payloadHex.length / 2),
+          }),
+        });
+      } else if (item.type === "function_call" && item.name === "driverdev_leds_send_preferred_output_report_hex") {
+        hadToolCall = true;
+        const parsed = JSON.parse(item.arguments || "{}");
+        const payloadHex = typeof parsed.payloadHex === "string" ? parsed.payloadHex : "";
+        const rc = driverdev.sendLedPreferredOutputReport(parsed.handle, payloadHex);
+        toolOutputs.push({
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: JSON.stringify({
+            rc,
+            payloadLenBytes: Math.floor(payloadHex.length / 2),
+          }),
         });
       } else if (item.type === "function_call" && item.name === "ask_user") {
         hadToolCall = true;
