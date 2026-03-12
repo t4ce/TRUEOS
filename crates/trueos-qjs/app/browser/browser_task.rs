@@ -441,7 +441,7 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     init_src.push_str(
         r#"
 if (typeof G.__trueosBrowserAutoStartAi === 'undefined') {
-    G.__trueosBrowserAutoStartAi = false;
+    G.__trueosBrowserAutoStartAi = true;
 }
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;

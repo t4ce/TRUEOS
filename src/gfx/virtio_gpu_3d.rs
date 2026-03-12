@@ -2292,7 +2292,6 @@ impl VirglGfxBackend {
                 width: present_w as i32,
                 height: present_h as i32,
             }),
-            Command::ClearColor { rgb: 0x00F4_F4F4 },
             Command::Present,
         ];
         if backend

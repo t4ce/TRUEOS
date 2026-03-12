@@ -15,6 +15,7 @@ mod efi;
 mod exceptions;
 mod gfx;
 mod globalog;
+mod host_api;
 mod hv;
 mod iso9660;
 mod limine;
@@ -148,6 +149,7 @@ pub extern "C" fn kmain() -> ! {
     vga::cube::tick();
     trueos_qjs::set_font_atlas_small_provider(qjs_font_atlas_small_provider);
     trueos_qjs::set_font_atlas_large_provider(qjs_font_atlas_large_provider);
+    trueos_qjs::host_api_hook::set_context_init_hook(host_api::install);
 
     usb::xhci::init_once();
     usb::truekey::init();

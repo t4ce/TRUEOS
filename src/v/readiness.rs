@@ -53,6 +53,11 @@ pub fn set(flags: u32) {
     READY.fetch_or(flags, Ordering::AcqRel);
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_signal_wgpu_text_done() {
+    set(WGPU_TEXT_DONE);
+}
+
 /// Wait until all required flags are set.
 ///
 /// This is a simple polling waiter to avoid additional dependencies.

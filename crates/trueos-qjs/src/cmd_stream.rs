@@ -6,7 +6,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use libm::sqrtf;
 use parry2d::math::Isometry;
 use parry2d::query;
@@ -18,9 +18,12 @@ use crate as qjs;
 #[path = "cmd_stream/atlas_cmd_stream.rs"]
 mod atlas_cmd_stream;
 
+static FIRST_QJS_END_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
+
 unsafe extern "C" {
     fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32;
     fn trueos_cabi_gfx_end_frame() -> i32;
+    fn trueos_cabi_signal_wgpu_text_done();
     fn trueos_cabi_gfx_set_blend(
         enabled: u32,
         src_rgb: u32,
@@ -751,6 +754,9 @@ pub(crate) unsafe fn try_create_native_module(
             _argv: *const qjs::JSValueConst,
         ) -> qjs::JSValue {
             atlas_cmd_stream::flush_text_batches();
+            if !FIRST_QJS_END_FRAME_SEEN.swap(true, Ordering::AcqRel) {
+                trueos_cabi_signal_wgpu_text_done();
+            }
             let _ = trueos_cabi_gfx_end_frame();
             qjs::JSValue::undefined()
         }

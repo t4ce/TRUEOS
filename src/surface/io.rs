@@ -800,6 +800,7 @@ pub mod cabi {
         swapchain_desc: SwapchainDesc,
         viewport_configured: bool,
         frame_active: bool,
+        frame_preserve_contents: bool,
         frame_clear_rgb: u32,
         frame_seq: u32,
         frame_rgb_draws: u32,
@@ -906,6 +907,7 @@ pub mod cabi {
                 },
                 viewport_configured: false,
                 frame_active: false,
+                frame_preserve_contents: false,
                 frame_clear_rgb: 0x00ff_ffff,
                 frame_seq: 0,
                 frame_rgb_draws: 0,
@@ -1788,8 +1790,8 @@ pub mod cabi {
         get_async_tex_status(tex_id)
     }
 
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
+    #[inline]
+    fn begin_frame_inner(clear_rgb: u32, preserve_contents: bool) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
         let mut st = GFX_CABI_STATE.lock();
@@ -1798,6 +1800,7 @@ pub mod cabi {
         st.epoch = crate::gfx::backend_epoch();
         st.frame_seq = st.frame_seq.wrapping_add(1);
         st.frame_active = true;
+        st.frame_preserve_contents = preserve_contents;
         st.frame_clear_rgb = clear_rgb;
         st.frame_rgb_draws = 0;
         st.frame_tex_draws = 0;
@@ -1815,6 +1818,16 @@ pub mod cabi {
             ));
         }
         0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
+        begin_frame_inner(clear_rgb, false)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame_preserve(clear_rgb: u32) -> i32 {
+        begin_frame_inner(clear_rgb, true)
     }
 
     #[unsafe(no_mangle)]
@@ -1958,7 +1971,18 @@ pub mod cabi {
     pub unsafe extern "C" fn trueos_cabi_gfx_end_frame() -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 
-        let (seq, rgb_draws, tex_draws, draw_bytes, was_active, clear_rgb, draws, rgb_src, tex_src) = {
+        let (
+            seq,
+            rgb_draws,
+            tex_draws,
+            draw_bytes,
+            was_active,
+            preserve_contents,
+            clear_rgb,
+            draws,
+            rgb_src,
+            tex_src,
+        ) = {
             let mut st = GFX_CABI_STATE.lock();
             let out = (
                 st.frame_seq,
@@ -1966,12 +1990,14 @@ pub mod cabi {
                 st.frame_tex_draws,
                 st.frame_draw_bytes,
                 st.frame_active,
+                st.frame_preserve_contents,
                 st.frame_clear_rgb,
                 core::mem::take(&mut st.frame_draws),
                 core::mem::take(&mut st.frame_rgb_blob),
                 core::mem::take(&mut st.frame_tex_blob),
             );
             st.frame_active = false;
+            st.frame_preserve_contents = false;
             out
         };
         if !was_active {
@@ -2163,7 +2189,7 @@ pub mod cabi {
                 if first_pass && need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
                 }
-                if first_pass {
+                if first_pass && !preserve_contents {
                     cmds.push(Command::ClearColor { rgb: clear_rgb });
                 }
 
@@ -2295,7 +2321,9 @@ pub mod cabi {
                 if need_set_viewport {
                     cmds.push(Command::SetViewport(vp));
                 }
-                cmds.push(Command::ClearColor { rgb: clear_rgb });
+                if !preserve_contents {
+                    cmds.push(Command::ClearColor { rgb: clear_rgb });
+                }
                 cmds.push(Command::Present);
                 if !check_submit_budget(0, cmds.len(), "end_frame_clear_only") {
                     return -11;
@@ -2332,7 +2360,6 @@ pub mod cabi {
                     !VIRGL_FIRST_FRAME_SEEN.swap(true, core::sync::atomic::Ordering::AcqRel);
                 if first {
                     crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
-                    crate::gfx::loadscreen::stop_loadscreen();
                     crate::globalog::log(format_args!(
                         "gfx: virgl first frame ready seq={} bytes={}\n",
                         seq, draw_bytes

@@ -207,7 +207,15 @@ fn ensure_atlas_uploaded() -> bool {
     true
 }
 
-fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, alpha: u8, out: &mut Vec<TexVertex>) {
+fn build_vertices(
+    text: &[u8],
+    x: f32,
+    y: f32,
+    view_w: f32,
+    view_h: f32,
+    alpha: u8,
+    out: &mut Vec<TexVertex>,
+) {
     if text.is_empty() {
         return;
     }

@@ -959,6 +959,7 @@ pub(crate) async fn enumerate_with_params(
             input_ctx_virt: input_ctx_virt as usize,
             ep0_virt_raw: ep0_virt_raw as usize,
             ep0_bytes,
+            ep0_ring_state: Some(ep0_ring.snapshot()),
         },
     );
     usbv!(
