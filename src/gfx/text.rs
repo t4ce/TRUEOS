@@ -217,7 +217,18 @@ fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, out: &m
     let atlas_w = atlas.width as f32;
     let atlas_h = atlas.height as f32;
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    let space_adv = atlas.cell_w as f32 * 0.60;
+
+    let glyph_advance_px = |ch: u8| {
+        let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
+        if slot == u16::MAX {
+            slot = fallback;
+        }
+        atlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8) as f32
+    };
 
     let mut pen_x = x;
     let mut pen_y = y;
@@ -229,7 +240,7 @@ fn build_vertices(text: &[u8], x: f32, y: f32, view_w: f32, view_h: f32, out: &m
             continue;
         }
         if ch == b' ' {
-            pen_x += space_adv;
+            pen_x += glyph_advance_px(ch);
             continue;
         }
 

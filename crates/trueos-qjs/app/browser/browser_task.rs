@@ -27,6 +27,39 @@ static PENDING_AI_INPUT: Mutex<VecDeque<AiInputEntry>> = Mutex::new(VecDeque::ne
 const PARRY_CURSOR_RADIUS: f32 = 6.0;
 const MAX_PARRY_CURSOR_EVENTS_PER_TICK: usize = 32;
 
+fn append_js_u8_array(dst: &mut String, values: &[u8]) {
+    dst.push('[');
+    for (idx, value) in values.iter().enumerate() {
+        if idx != 0 {
+            dst.push(',');
+        }
+        dst.push_str(alloc::format!("{}", value).as_str());
+    }
+    dst.push(']');
+}
+
+fn browser_text_widths_by_char() -> [u8; 256] {
+    let mut out = [0u8; 256];
+    let Some(atlas) = qjs::font_atlas_large_view() else {
+        out.fill(8);
+        return out;
+    };
+
+    for (ch, width) in out.iter_mut().enumerate() {
+        let mut slot = atlas.index.get(ch).copied().unwrap_or(u16::MAX);
+        if slot == u16::MAX {
+            slot = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
+        }
+        *width = atlas
+            .widths
+            .get(slot as usize)
+            .copied()
+            .unwrap_or(atlas.cell_w as u8);
+    }
+
+    out
+}
+
 #[derive(Clone)]
 struct ParryInteractiveRect {
     path: String,
@@ -441,12 +474,14 @@ unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -
 
 unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     let init_filename = b"<browser-globals>\0";
-    let html_lit = helpers::js_single_quoted_literal(qjs::ui_html::UI_HTML);
     let mut init_src = String::new();
+    let text_widths = browser_text_widths_by_char();
     init_src.push_str("\nconst G = (typeof globalThis !== 'undefined') ? globalThis : this;\n");
-    init_src.push_str("G.__trueosUiHtml = ");
-    init_src.push_str(&html_lit);
+    qjs::html::append_embedded_browser_globals_js(&mut init_src);
+    init_src.push_str("G.__trueosBrowserTextWidthByChar = ");
+    append_js_u8_array(&mut init_src, &text_widths);
     init_src.push_str(";\n");
+    init_src.push_str("G.__trueosBrowserDefaultFontPx = 16;\n");
     init_src.push_str(
         r#"
 if (typeof G.__trueosBrowserAutoStartAi === 'undefined') {

@@ -1713,6 +1713,9 @@ pub struct VirglGfxBackend {
     frame_counter: u64,
 }
 
+const VIRGL_SCANOUT_REASSERT_EARLY_FRAMES: u64 = 16;
+const VIRGL_SCANOUT_REASSERT_PERIOD_FRAMES: u64 = 120;
+
 fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
     // EDID base block is 128 bytes. We only parse the first block.
     if edid.len() < 128 {
@@ -1758,6 +1761,12 @@ fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
 }
 
 impl VirglGfxBackend {
+    #[inline]
+    fn should_reassert_scanout(&self, frame_no: u64) -> bool {
+        frame_no <= VIRGL_SCANOUT_REASSERT_EARLY_FRAMES
+            || frame_no.is_multiple_of(VIRGL_SCANOUT_REASSERT_PERIOD_FRAMES)
+    }
+
     fn seed_scanout_backing_from_limine(
         framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
         backing: &DmaRegion,
@@ -2141,7 +2150,7 @@ impl VirglGfxBackend {
             },
         };
 
-        Some(Self {
+        let mut backend = Self {
             gpu,
             ctx_id,
             scanout_id,
@@ -2197,7 +2206,34 @@ impl VirglGfxBackend {
             next_fence: 1,
             completed_fence: 0,
             frame_counter: 1,
-        })
+        };
+
+        let bootstrap_cmds = [
+            Command::SetViewport(Viewport {
+                x: 0,
+                y: 0,
+                width: present_w as i32,
+                height: present_h as i32,
+            }),
+            Command::ClearColor { rgb: 0x00F4_F4F4 },
+            Command::Present,
+        ];
+        if backend
+            .submit(CommandBuffer {
+                commands: &bootstrap_cmds,
+            })
+            .is_err()
+        {
+            crate::log!("virgl-backend: bootstrap present failed\n");
+            return None;
+        }
+        crate::log!(
+            "virgl-backend: bootstrap present ok display={}x{}\n",
+            present_w,
+            present_h
+        );
+
+        Some(backend)
     }
 
     fn alloc_slot<T>(slots: &mut Vec<Option<T>>, value: T) -> usize {
@@ -3283,6 +3319,25 @@ impl GfxDevice for VirglGfxBackend {
         }
 
         if did_present {
+            let mut reassert_ok = true;
+            if self.should_reassert_scanout(frame_no) {
+                reassert_ok = self.gpu.set_scanout(
+                    self.scanout_id,
+                    self.scanout_res,
+                    self.width,
+                    self.height,
+                );
+                if !reassert_ok {
+                    crate::log!(
+                        "virgl-present: set_scanout reassert failed frame={} scanout={} res={} size={}x{}\n",
+                        frame_no,
+                        self.scanout_id,
+                        self.scanout_res,
+                        self.width,
+                        self.height
+                    );
+                }
+            }
             let flush_ok = self
                 .gpu
                 .resource_flush(self.scanout_res, self.width, self.height);
@@ -3293,11 +3348,12 @@ impl GfxDevice for VirglGfxBackend {
             let n = VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
             if n < 12 {
                 crate::log!(
-                    "virgl-present: frame={} clears={} draws={} presents={} flush_ok={} size={}x{} fence={}\n",
+                    "virgl-present: frame={} clears={} draws={} presents={} reassert_ok={} flush_ok={} size={}x{} fence={}\n",
                     frame_no,
                     clear_ops,
                     draw_ops,
                     present_ops,
+                    reassert_ok,
                     flush_ok,
                     self.width,
                     self.height,

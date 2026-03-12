@@ -28,8 +28,8 @@ pub mod ai_task;
 pub mod layout;
 
 #[cfg(feature = "trueos")]
-#[path = "../app/browser/ui_html.rs"]
-pub mod ui_html;
+#[path = "../app/browser/html/mod.rs"]
+pub mod html;
 
 #[cfg(feature = "trueos")]
 pub mod cmd_stream;

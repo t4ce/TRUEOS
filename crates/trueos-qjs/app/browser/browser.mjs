@@ -405,6 +405,21 @@ function pushImageRow(rows, depth, widthPx, heightPx, style = null, meta = null,
   rows.push(row);
 }
 
+function pushHrRow(rows, depth, style = null, meta = null) {
+  const row = {
+    depth: Math.max(0, Number(depth || 0) | 0),
+    text: '',
+    kind: 'hr',
+    style,
+    heightPx: 1 + (TOP_PAD * 2),
+    ruleHeightPx: 1,
+  };
+  if (meta && typeof meta === 'object') {
+    if (typeof meta.path === 'string' && meta.path) row.path = meta.path;
+  }
+  rows.push(row);
+}
+
 function parsePositiveAttrPx(node, name, fallback = 0) {
   const raw = String(getNodeAttr(node, name) || '').trim();
   if (!raw) return Math.max(0, Number(fallback || 0) || 0);
@@ -426,6 +441,18 @@ function shouldRenderTagLines(tagName) {
   return BLOCK_TAGS.has(tag);
 }
 
+function detectLabelMarkerKind(node) {
+  const kids = Array.isArray(node && node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i += 1) {
+    const kid = kids[i];
+    if (!isElement(kid) || String(kid.tagName || '').toLowerCase() !== 'input') continue;
+    const type = String(getNodeAttr(kid, 'type') || '').trim().toLowerCase();
+    if (type === 'checkbox') return 'checkbox-text';
+    if (type === 'radio') return 'radio-text';
+  }
+  return 'text';
+}
+
 function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'root', ancestors = []) {
   if (!node || typeof node !== 'object') return;
 
@@ -433,11 +460,15 @@ function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'r
     const parent = String(parentMeta && parentMeta.tag || '').toLowerCase();
     const kind = parent === 'title'
       ? 'title-text'
-      : (parent === 'li'
-        ? 'li-text'
-        : (parent === 'a'
-          ? 'link-text'
-          : (parent === 'button' ? 'button-text' : 'text')));
+      : (parent === 'summary'
+        ? 'summary-text'
+        : (parent === 'label' && parentMeta && typeof parentMeta.markerKind === 'string'
+          ? parentMeta.markerKind
+          : (parent === 'li'
+            ? 'li-text'
+            : (parent === 'a'
+              ? 'link-text'
+              : (parent === 'button' ? 'button-text' : 'text')))))
     pushRow(rows, node.value, depth, kind, parentMeta && parentMeta.style ? parentMeta.style : null, {
       path: String(path || 'root'),
       targetPath: parent === 'a' || parent === 'button' ? String(parentMeta && parentMeta.path || '') : '',
@@ -450,6 +481,10 @@ function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'r
   if (isElement(node)) {
     const tag = String(node.tagName || '').toLowerCase();
     const style = resolveNodeStyle(node, path, cssSection, ancestors, parentMeta && parentMeta.style ? parentMeta.style : null);
+    if (tag === 'hr') {
+      pushHrRow(rows, depth, style, { path: String(path || 'root') });
+      return;
+    }
     if (tag === 'img') {
       const widthPx = parsePositiveAttrPx(node, 'width', 160);
       const heightPx = parsePositiveAttrPx(node, 'height', widthPx > 0 ? widthPx : 120);
@@ -473,6 +508,7 @@ function collectRows(node, depth, rows, cssSection, parentMeta = null, path = 'r
       path: String(path || 'root'),
       style,
       href: tag === 'a' ? String(getNodeAttr(node, 'href') || '') : '',
+      markerKind: tag === 'label' ? detectLabelMarkerKind(node) : 'text',
     };
     for (let i = 0; i < kids.length; i++) {
       collectRows(kids[i], renderTagLines ? depth + 1 : depth, rows, cssSection, nextParentMeta, `${path}.${i}`, nextAncestors);
@@ -678,11 +714,30 @@ function readNodeText(node) {
 }
 
 function estimateTextWidthPx(text, fontSizePx = FONT_PX) {
-  const value = text;
+  const value = String(text || '');
   const fontPx = Math.max(1, Number(fontSizePx || FONT_PX) || FONT_PX);
-  const glyphPx = Math.max(6, Math.round(fontPx * 0.56));
-  if (!value) return glyphPx * 4;
-  return Math.max(glyphPx, value.length * glyphPx);
+  const baseFontPx = Math.max(1, Number(runtime.host.__trueosBrowserDefaultFontPx || FONT_PX) || FONT_PX);
+  const widthTable = Array.isArray(runtime.host.__trueosBrowserTextWidthByChar)
+    ? runtime.host.__trueosBrowserTextWidthByChar
+    : null;
+  const scale = fontPx / baseFontPx;
+  if (!value) return Math.max(4, Math.round(baseFontPx * 0.5 * scale));
+  if (!widthTable || widthTable.length < 256) {
+    const glyphPx = Math.max(6, Math.round(fontPx * 0.56));
+    return Math.max(glyphPx, value.length * glyphPx);
+  }
+
+  let total = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 10 || code === 13) continue;
+    if (code >= 0 && code < 256) {
+      total += Number(widthTable[code] || 0);
+      continue;
+    }
+    total += Number(widthTable[63] || 0);
+  }
+  return Math.max(1, Math.round(total * scale));
 }
 
 function collectThemeLayoutInteractives(node, cssSection, parentStyle = null, path = 'root', ancestors = [], out = []) {
@@ -839,12 +894,18 @@ function applyYoga(rows, vw, context = 'document') {
         n.setHeight(imageH);
         n.setMinHeight(imageH);
         n.setMargin(Yoga.EDGE_LEFT, indent);
+      } else if (r.kind === 'hr') {
+        const hrH = Math.max(1, Math.round(Number(r.heightPx || 0) || 1));
+        n.setWidth(Math.max(1, vw - (LEFT_PAD * 2) - indent));
+        n.setHeight(hrH);
+        n.setMinHeight(hrH);
+        n.setMargin(Yoga.EDGE_LEFT, indent);
       } else if (r.kind === 'title-text') {
         n.setHeight(LINE_H);
         n.setMinHeight(LINE_H);
         // Draw path places text at node-left, so center by placing a content-width node
         // at a centered left margin within the same inner row width as normal rows.
-        const textW = Math.max(1, Math.round(String(r.text || '').length * 8));
+        const textW = Math.max(1, estimateTextWidthPx(String(r.text || ''), FONT_PX));
         const innerRowW = Math.max(1, vw - (LEFT_PAD * 2));
         const centeredLeft = Math.max(0, Math.floor((innerRowW - textW) * 0.5));
         n.setWidth(textW);

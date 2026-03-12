@@ -1227,7 +1227,7 @@ pub(crate) unsafe fn try_create_native_module(
                 qjs_cmd_stream_draw_textured_triangles_u8,
                 2
             );
-            export_fn!("drawAtlasText", atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text, 8);
+            export_fn!("drawAtlasText", atlas_cmd_stream::qjs_cmd_stream_draw_atlas_text, 10);
             export_fn!(
                 "drawLyonIconInFrame",
                 qjs_cmd_stream_draw_lyon_icon_in_frame,

@@ -44,7 +44,6 @@ fn draw_de_flag_bottom_left_in_frame(view_w: u32, view_h: u32) -> bool {
 fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
     let atlas = crate::gfx::text::font_atlas_large_view();
     let fallback = atlas.index.get(b'?' as usize).copied().unwrap_or(0);
-    let space_adv_px = atlas.cell_w as f32 * 0.60;
 
     let glyph_slot = |ch: u8| {
         let mut slot = atlas.index.get(ch as usize).copied().unwrap_or(fallback);
@@ -54,19 +53,18 @@ fn centered_text_origin(msg: &[u8], fb_w: f32, fb_h: f32) -> (f32, f32) {
         slot
     };
 
-    let mut width_px = 0.0f32;
-    for &ch in msg {
-        if ch == b' ' {
-            width_px += space_adv_px;
-            continue;
-        }
+    let glyph_advance_px = |ch: u8| {
         let slot = glyph_slot(ch);
-        let glyph_w_px = atlas
+        atlas
             .widths
             .get(slot as usize)
             .copied()
-            .unwrap_or(atlas.cell_w as u8) as f32;
-        width_px += glyph_w_px;
+            .unwrap_or(atlas.cell_w as u8) as f32
+    };
+
+    let mut width_px = 0.0f32;
+    for &ch in msg {
+        width_px += glyph_advance_px(ch);
     }
 
     let x = ((fb_w - width_px) * 0.5).max(0.0);
@@ -102,6 +100,6 @@ pub async fn gfx_loadscreen_task() {
             end_rc
         );
     }
-    Timer::after(EmbassyDuration::from_millis(1000)).await;
+    Timer::after(EmbassyDuration::from_millis(10000)).await;
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }
