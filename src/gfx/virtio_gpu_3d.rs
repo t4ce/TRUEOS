@@ -2686,19 +2686,21 @@ impl GfxDevice for VirglGfxBackend {
             return Err(Error::Invalid);
         }
         let idx = (raw - 1) as usize;
-        let Some(img) = self.images.get_mut(idx).and_then(|i| i.as_mut()) else {
-            return Err(Error::NotFound);
-        };
-        let expected = (img.desc.width as usize)
-            .saturating_mul(img.desc.height as usize)
-            .saturating_mul(4);
-        if data.len() < expected || img.bytes.len() < expected {
-            return Err(Error::Invalid);
-        }
-        img.bytes[..expected].copy_from_slice(&data[..expected]);
-        img.revision = img.revision.wrapping_add(1);
-        if img.revision == 0 {
-            img.revision = 1;
+        {
+            let Some(img) = self.images.get_mut(idx).and_then(|i| i.as_mut()) else {
+                return Err(Error::NotFound);
+            };
+            let expected = (img.desc.width as usize)
+                .saturating_mul(img.desc.height as usize)
+                .saturating_mul(4);
+            if data.len() < expected || img.bytes.len() < expected {
+                return Err(Error::Invalid);
+            }
+            img.bytes[..expected].copy_from_slice(&data[..expected]);
+            img.revision = img.revision.wrapping_add(1);
+            if img.revision == 0 {
+                img.revision = 1;
+            }
         }
         self.converted_cache.key = None;
         self.uploaded_cache_key = None;

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::wait;
 use alloc::vec::Vec;
 use core::ptr::null_mut;
