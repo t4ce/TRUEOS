@@ -1494,6 +1494,7 @@ static VIRGL_BLEND_BIND_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_BLEND_UNSUPPORTED_LOGS: AtomicU32 = AtomicU32::new(0);
 static VIRGL_STATE_TRANSITION_LOGS: AtomicU32 = AtomicU32::new(0);
 static CURSORQ_WIRE_LOGS: AtomicU32 = AtomicU32::new(0);
+static VIRGL_PRESENT_DIAG_LOGS: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
 fn vertex_blob_bounds(blob: &[u8]) -> Option<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)> {
@@ -2053,6 +2054,17 @@ impl VirglGfxBackend {
             crate::log!("virgl-backend: submit_3d init failed\n");
             return None;
         }
+
+        crate::log!(
+            "virgl-backend: init ok scanout={} display={}x{} refresh_millihz={:?} ctx={} scanout_res={} rt_res={}\n",
+            scanout_id,
+            present_w,
+            present_h,
+            refresh_millihz,
+            ctx_id,
+            scanout_res,
+            rt_res
+        );
 
         let swapchain = SwapchainDesc {
             format: ImageFormat::Rgba8888,
@@ -2667,6 +2679,9 @@ impl GfxDevice for VirglGfxBackend {
         let mut cmd = VirglCmdBuf::new();
         let mut did_work = false;
         let mut did_present = false;
+        let mut clear_ops: u32 = 0;
+        let mut draw_ops: u32 = 0;
+        let mut present_ops: u32 = 0;
         let mut last_viewport: Option<(u32, u32)> = None;
         let mut last_draw_key: Option<DrawStateKey> = None;
         let mut last_bound_blend: Option<u32> = None;
@@ -2698,11 +2713,13 @@ impl GfxDevice for VirglGfxBackend {
                     }
                 }
                 Op::ClearColor(rgb) => {
+                    clear_ops = clear_ops.saturating_add(1);
                     let (r, g, b) = Self::rgb_to_f32(rgb);
                     encode_clear_color(&mut cmd, r, g, b, 1.0);
                     did_work = true;
                 }
                 Op::Draw(draw) => {
+                    draw_ops = draw_ops.saturating_add(1);
                     self.state = draw.state;
                     let vertex_count = draw.vertex_count;
                     let first_vertex = draw.first_vertex;
@@ -3158,6 +3175,7 @@ impl GfxDevice for VirglGfxBackend {
                     frame_vbo_write_offset = advanced;
                 }
                 Op::Present => {
+                    present_ops = present_ops.saturating_add(1);
                     encode_resource_copy_region(
                         &mut cmd,
                         self.scanout_res,
@@ -3185,18 +3203,40 @@ impl GfxDevice for VirglGfxBackend {
         self.next_fence = self.next_fence.wrapping_add(1);
 
         if !self.gpu.submit_3d(self.ctx_id, cmd.as_bytes(), fence) {
+            crate::log!(
+                "virgl-present: submit_3d failed frame={} clears={} draws={} presents={} bytes={} ctx={}\n",
+                frame_no,
+                clear_ops,
+                draw_ops,
+                present_ops,
+                cmd.as_bytes().len(),
+                self.ctx_id
+            );
             return Err(Error::Unsupported);
         }
 
         if did_present {
-            let _ = self
+            let flush_ok = self
                 .gpu
                 .resource_flush(self.scanout_res, self.width, self.height);
-            // Experiment: inverse ordering vs prior attempt to check host-specific latching.
-            let _ = self
-                .gpu
-                .transfer_to_host_2d(self.scanout_res, self.width, self.height);
+            // Present copies the rendered host resource into the host-side scanout resource.
+            // Do not upload guest backing here: scanout_backing is only zeroed/attached during
+            // bringup and uploading it would overwrite the freshly copied frame with stale pixels.
             self.publish_scanout_image_buffers();
+            let n = VIRGL_PRESENT_DIAG_LOGS.fetch_add(1, Ordering::Relaxed);
+            if n < 12 {
+                crate::log!(
+                    "virgl-present: frame={} clears={} draws={} presents={} flush_ok={} size={}x{} fence={}\n",
+                    frame_no,
+                    clear_ops,
+                    draw_ops,
+                    present_ops,
+                    flush_ok,
+                    self.width,
+                    self.height,
+                    fence
+                );
+            }
         }
 
         self.completed_fence = fence;

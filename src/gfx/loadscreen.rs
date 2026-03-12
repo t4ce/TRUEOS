@@ -83,13 +83,25 @@ pub async fn gfx_loadscreen_task() {
         .unwrap_or((1024.0, 768.0));
     let (text_x, text_y) = centered_text_origin(MSG, fb_w, fb_h);
     crate::log!("GFX Loadscreen\n");
-    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+    let begin_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_begin_frame(0xF4F4F4) };
+    if begin_rc != 0 {
+        crate::log!("gfx-loadscreen: begin_frame failed rc={}\n", begin_rc);
+    }
     Timer::after(EmbassyDuration::from_millis(16)).await;
-    crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
-    let _ = draw_de_flag_bottom_left_in_frame(fb_w as u32, fb_h as u32);
-    let _ =
+    let lyon_ok = crate::gfx::lyon::lyon_geom_api_demo_no_present(fb_w as u32, fb_h as u32);
+    let flag_ok = draw_de_flag_bottom_left_in_frame(fb_w as u32, fb_h as u32);
+    let text_ok =
         crate::gfx::text::draw_atlas_text_in_frame(MSG, text_x, text_y, fb_w as u32, fb_h as u32);
-    unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
-    Timer::after(EmbassyDuration::from_millis(3000)).await;
+    let end_rc = unsafe { crate::surface::io::cabi::trueos_cabi_gfx_end_frame() };
+    if !lyon_ok || !flag_ok || !text_ok || end_rc != 0 {
+        crate::log!(
+            "gfx-loadscreen: lyon_ok={} flag_ok={} text_ok={} end_rc={}\n",
+            lyon_ok,
+            flag_ok,
+            text_ok,
+            end_rc
+        );
+    }
+    Timer::after(EmbassyDuration::from_millis(1000)).await;
     crate::v::readiness::set(crate::v::readiness::WGPU_TEXT_DONE);
 }

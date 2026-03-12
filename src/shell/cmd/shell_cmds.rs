@@ -333,7 +333,10 @@ pub(crate) fn cmd_surf(
 async fn surf_job(url: HString<256>) {
     match crate::tst_html::fetch_html_best_effort(url).await {
         Ok(html) => {
-            if !trueos_qjs::browser_task::queue_set_html(String::from(html.as_str())) {
+            if !trueos_qjs::browser_task::queue_set_html_with_url(
+                String::from(html.as_str()),
+                Some(String::from(url.as_str())),
+            ) {
                 crate::log!("surf: browser not running\n");
             }
         }

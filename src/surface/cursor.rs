@@ -120,10 +120,6 @@ fn append_cursor_cross(
     );
 }
 
-// Debug cursor automode: synthesize 4 scout cursors when real inputs are absent.
-const CURSOR_AUTOMODE_DEBUG: bool = false;
-const CURSOR_AUTOMODE_SLOTS: usize = 4;
-
 #[inline]
 fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
     out.clear();
@@ -144,29 +140,12 @@ fn collect_real_cursor_norm(out: &mut Vec<(f32, f32)>) {
     }
 }
 
-#[inline]
-fn automode_slot_norm(slot: usize, t_sec: f32) -> (f32, f32) {
-    let (cx, cy) = match slot {
-        0 => (0.25f32, 0.25f32),
-        1 => (0.75f32, 0.25f32),
-        2 => (0.25f32, 0.75f32),
-        _ => (0.75f32, 0.75f32),
-    };
-    let speed = match slot {
-        0 => 0.55f32,
-        1 => 0.78f32,
-        2 => 1.02f32,
-        _ => 1.33f32,
-    };
-    let phase = (slot as f32) * 1.618f32;
-    let rx = 0.16f32;
-    let ry = 0.12f32;
-    let ax = t_sec * speed + phase;
-    let ay = t_sec * (speed * 1.37f32) + phase * 0.73f32;
-    let x = (cx + rx * libm::cosf(ax)).clamp(0.02, 0.98);
-    let y = (cy + ry * libm::sinf(ay)).clamp(0.02, 0.98);
-    (x, y)
-}
+const CURSOR_COLORS: [(f32, f32, f32, f32); 4] = [
+    (0.0, 1.0, 0.2, 1.0),
+    (1.0, 0.9, 0.1, 1.0),
+    (0.2, 0.8, 1.0, 1.0),
+    (1.0, 0.4, 0.8, 1.0),
+];
 
 pub fn append_kernel_cursor_overlay_rgb(rgb_blob: &mut Vec<u8>, vp_w: u32, vp_h: u32) {
     if vp_w == 0 || vp_h == 0 {
@@ -176,45 +155,11 @@ pub fn append_kernel_cursor_overlay_rgb(rgb_blob: &mut Vec<u8>, vp_w: u32, vp_h:
     let mut real: Vec<(f32, f32)> = Vec::new();
     collect_real_cursor_norm(&mut real);
 
-    if CURSOR_AUTOMODE_DEBUG {
-        let hz = embassy_time_driver::TICK_HZ.max(1);
-        let t_sec = (embassy_time_driver::now() as f32) / (hz as f32);
-        let slot_colors: [(f32, f32, f32, f32); CURSOR_AUTOMODE_SLOTS] = [
-            (0.0, 1.0, 0.2, 0.95),
-            (1.0, 0.9, 0.1, 0.95),
-            (0.2, 0.8, 1.0, 0.95),
-            (1.0, 0.4, 0.8, 0.95),
-        ];
-
-        for slot in 0..CURSOR_AUTOMODE_SLOTS {
-            let (nx, ny) = if slot < real.len() {
-                // Real cursor claims this automode slot and halts its orbit.
-                real[slot]
-            } else {
-                automode_slot_norm(slot, t_sec)
-            };
-            let ndc_x = nx * 2.0 - 1.0;
-            let ndc_y = 1.0 - ny * 2.0;
-            append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, slot_colors[slot]);
-        }
-
-        // Keep support for N kernel cursors: render any extras beyond 4 as well.
-        for &(nx, ny) in real.iter().skip(CURSOR_AUTOMODE_SLOTS) {
-            let ndc_x = nx * 2.0 - 1.0;
-            let ndc_y = 1.0 - ny * 2.0;
-            append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, (1.0, 1.0, 1.0, 0.95));
-        }
-    } else {
-        for (i, &(nx, ny)) in real.iter().enumerate() {
-            let ndc_x = nx * 2.0 - 1.0;
-            let ndc_y = 1.0 - ny * 2.0;
-            let color = if (i & 1) == 0 {
-                (0.0, 1.0, 0.2, 0.95)
-            } else {
-                (1.0, 0.9, 0.1, 0.95)
-            };
-            append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
-        }
+    for (i, &(nx, ny)) in real.iter().enumerate() {
+        let ndc_x = nx * 2.0 - 1.0;
+        let ndc_y = 1.0 - ny * 2.0;
+        let color = CURSOR_COLORS[i & 3];
+        append_cursor_cross(rgb_blob, ndc_x, ndc_y, vp_w, vp_h, color);
     }
 }
 

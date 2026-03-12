@@ -3,11 +3,12 @@ import { DEFAULT_THEME } from './theme.mjs';
 
 const ATLAS_KIND = 1;
 const LI_ICON_ID = 5;
+const LINK_ICON_ID = LI_ICON_ID + 1;
 const LI_ICON_PALETTE = 0;
 const LI_ICON_X_SHIFT = 2;
 const LI_ICON_SIZE = 16;
 const LI_ICON_XY_NUDGE = -2;
-const LI_TEXT_X_OFFSET = 14;
+export const LI_TEXT_X_OFFSET = 14;
 
 function collapseWhitespace(s) {
   return String(s || '').replace(/\s+/g, ' ').trim();
@@ -29,11 +30,17 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     if (y > Number(vh || 0) + DEFAULT_THEME.LINE_H) continue;
     const text = collapseWhitespace(String(row && row.text || ''));
     if (!text) continue;
-    if (String(row && row.kind || '') === 'li-text') {
+    const kind = String(row && row.kind || '');
+    if (kind === 'li-text' || kind === 'link-text') {
       const iconY = y
         + Math.round((DEFAULT_THEME.LINE_H - LI_ICON_SIZE) * 0.5)
         + LI_ICON_XY_NUDGE;
-      iconRuns.push(x + LI_ICON_X_SHIFT + LI_ICON_XY_NUDGE, iconY, LI_ICON_PALETTE);
+      iconRuns.push(
+        kind === 'link-text' ? LINK_ICON_ID : LI_ICON_ID,
+        x + LI_ICON_X_SHIFT + LI_ICON_XY_NUDGE,
+        iconY,
+        LI_ICON_PALETTE,
+      );
       runs.push(x + LI_TEXT_X_OFFSET, y, text);
       continue;
     }
@@ -61,12 +68,12 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     cmdStream.setBlendEnabled(1);
     cmdStream.setBlendMode(0);
     cmdStream.setPremultipliedAlpha(0);
-    for (let i = 0; i + 2 < iconRuns.length; i += 3) {
+    for (let i = 0; i + 3 < iconRuns.length; i += 4) {
       cmdStream.drawLyonIconInFrame(
-        LI_ICON_ID,
         Number(iconRuns[i] || 0),
         Number(iconRuns[i + 1] || 0),
         Number(iconRuns[i + 2] || 0),
+        Number(iconRuns[i + 3] || 0),
       );
     }
     // Text quads share the same alpha blend path.

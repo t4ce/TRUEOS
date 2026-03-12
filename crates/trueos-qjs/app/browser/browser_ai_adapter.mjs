@@ -34,6 +34,8 @@ const FALLBACK_BROWSER_API_CONTRACT = {
   notes: {
     intent: 'Worker-facing browser contract for the AI task. Keep this surface explicit so agent logic remains isolated from the browser VM.',
     targetShape: 'Close to future computer-use style APIs while still reflecting TRUEOS capabilities today.',
+    domSnapshotShape: 'Returns a rooted tree object; use snap.nodes for a flat compatibility index.',
+    clickShape: 'click() uses the real cursor/button path and can resolve coordinates, stable paths, text=..., plain captions, and simple href/path/text selectors for interactive targets.',
   },
 };
 

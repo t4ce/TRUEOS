@@ -5,3 +5,4 @@ pub mod leds;
 pub mod net;
 pub mod readiness;
 pub mod spawn_service;
+pub mod ui2;
