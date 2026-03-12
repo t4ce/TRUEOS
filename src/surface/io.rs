@@ -1861,6 +1861,35 @@ pub mod cabi {
     }
 
     #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_png(
+        tex_id: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32 {
+        crate::gfx::init(crate::limine::framebuffer_response());
+
+        if tex_id == 0 {
+            return -1;
+        }
+        if data_ptr.is_null() {
+            return -2;
+        }
+        let data = core::slice::from_raw_parts(data_ptr, data_len);
+        let decoded = match crate::gfx::png_codec::decode_png_rgba(data) {
+            Ok(decoded) => decoded,
+            Err(err) => return err.code(),
+        };
+
+        trueos_cabi_gfx_upload_texture_rgba(
+            tex_id,
+            decoded.width,
+            decoded.height,
+            decoded.rgba.as_ptr(),
+            decoded.rgba.len(),
+        )
+    }
+
+    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn trueos_cabi_gfx_begin_frame(clear_rgb: u32) -> i32 {
         crate::gfx::init(crate::limine::framebuffer_response());
 

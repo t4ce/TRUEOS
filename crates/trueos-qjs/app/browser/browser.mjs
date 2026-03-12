@@ -1,5 +1,7 @@
 import * as parse5 from 'parse5';
+import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
+import { Buffer } from 'node:buffer';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
@@ -44,6 +46,8 @@ const aiInputWaiters = [];
 let pendingReleaseRect = null;
 let cursorMoveLogCount = 0;
 const pendingSyntheticCursorEchoes = [];
+const imageTextureCache = new Map();
+const imageTextureLoads = new Map();
 
 const fpsOverlay = createFpsOverlay();
 const DEFAULT_AI_INPUT_OPTIONS = Object.freeze({
@@ -344,6 +348,217 @@ function detailSuffix(details = null) {
     parts.push(`${key}=${summarizeForError(raw)}`);
   }
   return parts.length > 0 ? ` [${parts.join(' ')}]` : '';
+}
+
+function dataUrlToBytes(url) {
+  const value = String(url || '');
+  const match = value.match(/^data:([^,]*?),(.*)$/s);
+  if (!match) {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_DATA_URL_INVALID', 'Image data URL could not be decoded', {
+      url: value,
+    });
+  }
+
+  const meta = String(match[1] || '');
+  const payload = String(match[2] || '');
+  const parts = meta.split(';').map((part) => String(part || '').trim().toLowerCase()).filter(Boolean);
+  const mime = parts.length > 0 && !parts[0].includes('=') ? parts[0] : 'text/plain';
+  const isBase64 = parts.includes('base64');
+
+  if (isBase64) {
+    const decoded = Buffer.from(payload, 'base64');
+    return {
+      mime,
+      bytes: new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength).slice(),
+    };
+  }
+
+  const text = decodeURIComponent(payload);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) {
+    bytes[i] = text.charCodeAt(i) & 0xFF;
+  }
+  return { mime, bytes };
+}
+
+function looksLikePng(bytes) {
+  return !!bytes
+    && bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4E
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0D
+    && bytes[5] === 0x0A
+    && bytes[6] === 0x1A
+    && bytes[7] === 0x0A;
+}
+
+function looksLikeBmp(bytes) {
+  return !!bytes && bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4D;
+}
+
+function queueImageRepaint() {
+  if (typeof runtime.host.requestAnimationFrame === 'function') {
+    runtime.host.requestAnimationFrame(() => {
+      try {
+        paint();
+      } catch (_) {}
+    });
+    return;
+  }
+  try {
+    paint();
+  } catch (_) {}
+}
+
+async function fetchImageBytes(url) {
+  const value = String(url || '').trim();
+  if (!value) {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image fetch failed because src was empty');
+  }
+
+  if (value.startsWith('data:')) {
+    return dataUrlToBytes(value);
+  }
+  if (typeof fetch !== 'function') {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_UNAVAILABLE', 'Image fetch failed because fetch is unavailable', {
+      url: value,
+    });
+  }
+
+  const response = await fetch(value, { method: 'GET' });
+  if (!response || response.ok === false) {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_FAILED', 'Image fetch returned an error response', {
+      url: value,
+      status: response && typeof response.status !== 'undefined' ? response.status : 'unknown',
+    });
+  }
+  if (typeof response.arrayBuffer !== 'function') {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_BINARY_UNAVAILABLE', 'Image fetch could not read binary response data', {
+      url: value,
+    });
+  }
+
+  const buffer = await response.arrayBuffer();
+  const mime = response && response.headers && typeof response.headers.get === 'function'
+    ? String(response.headers.get('content-type') || '')
+    : '';
+  return {
+    mime,
+    bytes: new Uint8Array(buffer),
+  };
+}
+
+function resolveImageUploadKind(url, mime, bytes) {
+  const normalizedUrl = String(url || '').toLowerCase();
+  const normalizedMime = String(mime || '').toLowerCase();
+  if (normalizedMime.includes('image/png') || /\.png(?:$|[?#])/.test(normalizedUrl) || looksLikePng(bytes)) {
+    return 'png';
+  }
+  if (normalizedMime.includes('image/bmp') || normalizedMime.includes('image/x-ms-bmp') || /\.bmp(?:$|[?#])/.test(normalizedUrl) || looksLikeBmp(bytes)) {
+    return 'bmp';
+  }
+  return '';
+}
+
+async function ensureImageTexture(resolvedUrl) {
+  const cacheKey = String(resolvedUrl || '').trim();
+  if (!cacheKey) return null;
+
+  const cached = imageTextureCache.get(cacheKey) || null;
+  if (cached && (cached.state === 'ready' || cached.state === 'error')) {
+    return cached;
+  }
+
+  const inFlight = imageTextureLoads.get(cacheKey) || null;
+  if (inFlight) {
+    return inFlight;
+  }
+
+  imageTextureCache.set(cacheKey, {
+    state: 'loading',
+    texId: 0,
+    url: cacheKey,
+    mime: '',
+    error: '',
+  });
+
+  const task = (async () => {
+    try {
+      const { mime, bytes } = await fetchImageBytes(cacheKey);
+      const kind = resolveImageUploadKind(cacheKey, mime, bytes);
+      if (kind === 'bmp') {
+        throw new Error('bmp upload is not wired yet');
+      }
+      if (kind !== 'png') {
+        throw new Error('unsupported image format');
+      }
+
+      const texId = Number(cmdStream.createTexturePng(bytes) || 0);
+      if (!Number.isFinite(texId) || texId <= 0) {
+        throw new Error('texture upload failed');
+      }
+
+      const ready = {
+        state: 'ready',
+        texId,
+        url: cacheKey,
+        mime: String(mime || 'image/png'),
+        error: '',
+      };
+      imageTextureCache.set(cacheKey, ready);
+      return ready;
+    } catch (err) {
+      const failed = {
+        state: 'error',
+        texId: 0,
+        url: cacheKey,
+        mime: '',
+        error: describeError(err),
+      };
+      imageTextureCache.set(cacheKey, failed);
+      return failed;
+    } finally {
+      imageTextureLoads.delete(cacheKey);
+      queueImageRepaint();
+    }
+  })();
+
+  imageTextureLoads.set(cacheKey, task);
+  return task;
+}
+
+function applyImageResourcesToRows(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const row = list[i];
+    if (!row || String(row.kind || '') !== 'image') continue;
+    const rawSrc = String(row.src || '').trim();
+    const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+    row.resolvedSrc = resolvedSrc;
+    row.texId = 0;
+    if (!resolvedSrc) continue;
+    const cached = imageTextureCache.get(resolvedSrc) || null;
+    if (cached && cached.state === 'ready') {
+      row.texId = Number(cached.texId || 0);
+    }
+  }
+}
+
+function primeImageRows(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const row = list[i];
+    if (!row || String(row.kind || '') !== 'image') continue;
+    const resolvedSrc = String(row.resolvedSrc || '').trim();
+    if (!resolvedSrc) continue;
+    const cached = imageTextureCache.get(resolvedSrc) || null;
+    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+      continue;
+    }
+    void ensureImageTexture(resolvedSrc);
+  }
 }
 
 function createBrowserError(code, message, details = null, cause = null) {
@@ -951,6 +1166,8 @@ function ensureDoc(vw) {
   } else if (cachedDoc.width !== vw) {
     cachedDoc = buildDocFromParsed(cachedDoc.dom, vw, 'cached html document');
   }
+  applyImageResourcesToRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
+  primeImageRows(cachedDoc && cachedDoc.rows ? cachedDoc.rows : []);
   return cachedDoc;
 }
 

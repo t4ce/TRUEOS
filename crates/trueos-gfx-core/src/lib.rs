@@ -277,6 +277,14 @@ pub struct Viewport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScissorRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MapMode {
     Read,
     Write,
@@ -302,6 +310,7 @@ impl fmt::Debug for MappedRange {
 pub struct DeviceCaps {
     pub supports_rgbx8888: bool,
     pub supports_host_visible_buffers: bool,
+    pub supports_scissor: bool,
 }
 
 impl DeviceCaps {
@@ -309,6 +318,7 @@ impl DeviceCaps {
         Self {
             supports_rgbx8888: true,
             supports_host_visible_buffers: true,
+            supports_scissor: false,
         }
     }
 }
@@ -334,6 +344,7 @@ pub enum Command {
     SetSampler(SamplerDesc),
     SetBlend(BlendDesc),
     SetViewport(Viewport),
+    SetScissor(ScissorRect),
     Draw {
         vertex_count: u32,
         first_vertex: u32,

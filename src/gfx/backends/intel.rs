@@ -391,6 +391,7 @@ impl GfxDevice for IntelGfxBackend {
                 Command::SetSampler(_s) => {}
                 Command::SetBlend(_b) => {}
                 Command::SetViewport(_vp) => {}
+                Command::SetScissor(_scissor) => {}
                 Command::Draw {
                     vertex_count: _,
                     first_vertex: _,
