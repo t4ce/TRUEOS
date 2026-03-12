@@ -1,3 +1,6 @@
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use super::{stream::FormatErrorInner, unfiltering_buffer::UnfilteringBuffer, DecodingError};
 
 use fdeflate::Decompressor;

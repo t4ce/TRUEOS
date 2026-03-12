@@ -16,6 +16,8 @@
 //! Based on X and Y, we can try to calculate the breakeven point.  It seems
 //! that memoization is a net benefit for images bigger than around 13x13 pixels.
 
+use alloc::boxed::Box;
+
 use super::{unpack_bits, TransformFn};
 use crate::{BitDepth, Info};
 

@@ -116,6 +116,7 @@ const VIRGL_CCMD_CLEAR: u8 = 7;
 const VIRGL_CCMD_DRAW_VBO: u8 = 8;
 const VIRGL_CCMD_RESOURCE_INLINE_WRITE: u8 = 9;
 const VIRGL_CCMD_SET_SAMPLER_VIEWS: u8 = 10;
+const VIRGL_CCMD_SET_SCISSOR_STATE: u8 = 15;
 const VIRGL_CCMD_RESOURCE_COPY_REGION: u8 = 17;
 const VIRGL_CCMD_BIND_SAMPLER_STATES: u8 = 18;
 // NOTE: Values must match virglrenderer `enum virgl_context_cmd`.
@@ -1481,8 +1482,8 @@ DCL OUT[0], COLOR\n\
 use trueos_gfx_core::{
     BlendDesc, BlendFactor, BufferDesc, BufferId, ColorFormat, Command, CommandBuffer, DeviceCaps,
     Error, FenceId, GfxDevice, GfxPresent, ImageDesc, ImageFormat, ImageId, MapMode, MappedRange,
-    MemoryType, PipelineDesc, PipelineId, SamplerDesc, ShaderDesc, ShaderId, SwapchainDesc,
-    TexCoordFormat, VertexLayout, Viewport,
+    MemoryType, PipelineDesc, PipelineId, SamplerDesc, ScissorRect, ShaderDesc, ShaderId,
+    SwapchainDesc, TexCoordFormat, VertexLayout, Viewport,
 };
 
 // NOTE: Do not import `trueos_gfx_core::Result` as `Result` at module scope.
@@ -1605,6 +1606,7 @@ struct VirglDrawState {
     sampler: SamplerDesc,
     blend: BlendDesc,
     viewport: Viewport,
+    scissor: Option<ScissorRect>,
     clear_rgb: u32,
 }
 
@@ -1647,6 +1649,7 @@ impl Default for VirglDrawState {
                 width: 0,
                 height: 0,
             },
+            scissor: None,
             clear_rgb: 0x00FF_FFFF,
         }
     }
@@ -1765,6 +1768,50 @@ impl VirglGfxBackend {
     fn should_reassert_scanout(&self, frame_no: u64) -> bool {
         frame_no <= VIRGL_SCANOUT_REASSERT_EARLY_FRAMES
             || frame_no.is_multiple_of(VIRGL_SCANOUT_REASSERT_PERIOD_FRAMES)
+    }
+
+    fn resolved_viewport_extent(&self, vp: Viewport) -> (u32, u32) {
+        let mut vp_w = vp.width.max(0) as u32;
+        let mut vp_h = vp.height.max(0) as u32;
+        if vp_w == 0 {
+            vp_w = self.width;
+        } else {
+            vp_w = vp_w.min(self.width);
+        }
+        if vp_h == 0 {
+            vp_h = self.height;
+        } else {
+            vp_h = vp_h.min(self.height);
+        }
+        (vp_w, vp_h)
+    }
+
+    fn resolved_scissor_rect(
+        &self,
+        vp: Viewport,
+        scissor: Option<ScissorRect>,
+    ) -> (u32, u32, u32, u32) {
+        let vp_x = vp.x.max(0) as u32;
+        let vp_y = vp.y.max(0) as u32;
+        let (vp_w, vp_h) = self.resolved_viewport_extent(vp);
+        let vp_max_x = vp_x.saturating_add(vp_w).min(self.width);
+        let vp_max_y = vp_y.saturating_add(vp_h).min(self.height);
+
+        match scissor {
+            Some(rect) => {
+                let min_x = rect.x.min(self.width);
+                let min_y = rect.y.min(self.height);
+                let max_x = rect.x.saturating_add(rect.width).min(self.width);
+                let max_y = rect.y.saturating_add(rect.height).min(self.height);
+                (min_x, min_y, max_x, max_y)
+            }
+            None => (
+                vp_x.min(self.width),
+                vp_y.min(self.height),
+                vp_max_x,
+                vp_max_y,
+            ),
+        }
     }
 
     fn seed_scanout_backing_from_limine(
@@ -2121,10 +2168,11 @@ impl VirglGfxBackend {
         encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, blend_handle_disabled);
         encode_create_dsa(&mut init, dsa_handle);
         encode_bind_object(&mut init, VIRGL_OBJECT_DSA, dsa_handle);
-        encode_create_rasterizer(&mut init, rs_handle);
+        encode_create_rasterizer(&mut init, rs_handle, true);
         encode_bind_object(&mut init, VIRGL_OBJECT_RASTERIZER, rs_handle);
 
         encode_set_viewport(&mut init, present_w, present_h);
+        encode_set_scissor(&mut init, 0, 0, present_w, present_h);
 
         if !gpu.submit_3d(ctx_id, init.as_bytes(), 1) {
             crate::log!("virgl-backend: submit_3d init failed\n");
@@ -2411,8 +2459,10 @@ impl VirglGfxBackend {
 
 impl GfxDevice for VirglGfxBackend {
     fn caps(&self) -> DeviceCaps {
-        // For now, advertise the minimal set that matches our host-visible buffer strategy.
-        DeviceCaps::minimal_software()
+        DeviceCaps {
+            supports_scissor: true,
+            ..DeviceCaps::minimal_software()
+        }
     }
 
     fn create_buffer(&mut self, desc: BufferDesc) -> GfxResult<BufferId> {
@@ -2726,6 +2776,7 @@ impl GfxDevice for VirglGfxBackend {
         #[derive(Clone, Copy)]
         enum Op {
             SetViewport(Viewport),
+            SetScissor(Option<ScissorRect>),
             ClearColor(u32),
             Draw(DrawOp),
             Present,
@@ -2738,6 +2789,10 @@ impl GfxDevice for VirglGfxBackend {
                 Command::SetViewport(vp) => {
                     self.state.viewport = vp;
                     ops.push(Op::SetViewport(vp));
+                }
+                Command::SetScissor(scissor) => {
+                    self.state.scissor = scissor;
+                    ops.push(Op::SetScissor(scissor));
                 }
                 Command::ClearColor { rgb } => {
                     self.state.clear_rgb = rgb;
@@ -2775,7 +2830,6 @@ impl GfxDevice for VirglGfxBackend {
                         }));
                     }
                 }
-                Command::SetScissor(_scissor) => {}
                 Command::Present => ops.push(Op::Present),
             }
         }
@@ -2787,6 +2841,7 @@ impl GfxDevice for VirglGfxBackend {
         let mut draw_ops: u32 = 0;
         let mut present_ops: u32 = 0;
         let mut last_viewport: Option<(u32, u32)> = None;
+        let mut last_scissor: Option<(u32, u32, u32, u32)> = None;
         let mut last_draw_key: Option<DrawStateKey> = None;
         let mut last_bound_blend: Option<u32> = None;
         let mut last_bound_sampler_view: Option<u32> = None;
@@ -2798,21 +2853,30 @@ impl GfxDevice for VirglGfxBackend {
         for op in ops {
             match op {
                 Op::SetViewport(vp) => {
-                    let mut vp_w = vp.width.max(0) as u32;
-                    let mut vp_h = vp.height.max(0) as u32;
-                    if vp_w == 0 {
-                        vp_w = self.width;
-                    } else {
-                        vp_w = vp_w.min(self.width);
-                    }
-                    if vp_h == 0 {
-                        vp_h = self.height;
-                    } else {
-                        vp_h = vp_h.min(self.height);
-                    }
+                    self.state.viewport = vp;
+                    let (vp_w, vp_h) = self.resolved_viewport_extent(vp);
                     if last_viewport != Some((vp_w, vp_h)) {
                         encode_set_viewport(&mut cmd, vp_w, vp_h);
                         last_viewport = Some((vp_w, vp_h));
+                        did_work = true;
+                    }
+                    if self.state.scissor.is_none() {
+                        let scissor = self.resolved_scissor_rect(vp, None);
+                        if last_scissor != Some(scissor) {
+                            encode_set_scissor(
+                                &mut cmd, scissor.0, scissor.1, scissor.2, scissor.3,
+                            );
+                            last_scissor = Some(scissor);
+                            did_work = true;
+                        }
+                    }
+                }
+                Op::SetScissor(scissor) => {
+                    self.state.scissor = scissor;
+                    let scissor = self.resolved_scissor_rect(self.state.viewport, scissor);
+                    if last_scissor != Some(scissor) {
+                        encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
+                        last_scissor = Some(scissor);
                         did_work = true;
                     }
                 }
@@ -2867,21 +2931,17 @@ impl GfxDevice for VirglGfxBackend {
                     last_draw_key = Some(draw_key);
 
                     // Ensure current viewport is encoded before drawing.
-                    let mut vp_w = self.state.viewport.width.max(0) as u32;
-                    let mut vp_h = self.state.viewport.height.max(0) as u32;
-                    if vp_w == 0 {
-                        vp_w = self.width;
-                    } else {
-                        vp_w = vp_w.min(self.width);
-                    }
-                    if vp_h == 0 {
-                        vp_h = self.height;
-                    } else {
-                        vp_h = vp_h.min(self.height);
-                    }
+                    let (vp_w, vp_h) = self.resolved_viewport_extent(self.state.viewport);
                     if last_viewport != Some((vp_w, vp_h)) {
                         encode_set_viewport(&mut cmd, vp_w, vp_h);
                         last_viewport = Some((vp_w, vp_h));
+                        did_work = true;
+                    }
+                    let scissor =
+                        self.resolved_scissor_rect(self.state.viewport, self.state.scissor);
+                    if last_scissor != Some(scissor) {
+                        encode_set_scissor(&mut cmd, scissor.0, scissor.1, scissor.2, scissor.3);
+                        last_scissor = Some(scissor);
                         did_work = true;
                     }
 
@@ -3945,6 +4005,13 @@ fn encode_set_viewport(buf: &mut VirglCmdBuf, width: u32, height: u32) {
     buf.push(fui(half_d));
 }
 
+fn encode_set_scissor(buf: &mut VirglCmdBuf, min_x: u32, min_y: u32, max_x: u32, max_y: u32) {
+    buf.push(virgl_cmd0(VIRGL_CCMD_SET_SCISSOR_STATE, 0, 3));
+    buf.push(0); // start_slot
+    buf.push((min_x & 0xffff) | ((min_y & 0xffff) << 16));
+    buf.push((max_x & 0xffff) | ((max_y & 0xffff) << 16));
+}
+
 fn encode_create_blend(
     buf: &mut VirglCmdBuf,
     blend_handle: u32,
@@ -3999,7 +4066,7 @@ fn encode_create_dsa(buf: &mut VirglCmdBuf, dsa_handle: u32) {
     buf.push(0); // alpha_ref
 }
 
-fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32) {
+fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32, scissor_enable: bool) {
     buf.push(virgl_cmd0(
         VIRGL_CCMD_CREATE_OBJECT,
         VIRGL_OBJECT_RASTERIZER,
@@ -4010,6 +4077,9 @@ fn encode_create_rasterizer(buf: &mut VirglCmdBuf, rs_handle: u32) {
     let mut s0 = 0u32;
     // depth_clip=1
     s0 |= 1 << 1;
+    if scissor_enable {
+        s0 |= 1 << 14;
+    }
     // cull_face=PIPE_FACE_NONE(0) at bits 8..9 -> 0
     // half_pixel_center=1
     s0 |= 1 << 29;

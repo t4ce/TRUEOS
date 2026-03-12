@@ -2,6 +2,8 @@
 
 mod palette;
 
+use alloc::boxed::Box;
+
 use crate::{BitDepth, ColorType, DecodingError, Info, Transformations};
 
 use super::stream::FormatErrorInner;

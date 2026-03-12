@@ -98,17 +98,27 @@
 
 #![warn(missing_docs)]
 
-use crate::{chunk, encoder, DecodingError, EncodingError};
+use alloc::borrow::ToOwned;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use crate::{chunk, DecodingError};
 use fdeflate::BoundedDecompressionError;
+use std::convert::TryFrom;
+#[cfg(feature = "png-encoding")]
+use crate::{encoder, EncodingError};
+#[cfg(feature = "png-encoding")]
 use flate2::write::ZlibEncoder;
+#[cfg(feature = "png-encoding")]
 use flate2::Compression;
-use std::{convert::TryFrom, io::Write};
+#[cfg(feature = "png-encoding")]
+use std::io::Write;
 
 /// Default decompression limit for compressed text chunks.
 pub const DECOMPRESSION_LIMIT: usize = 2097152; // 2 MiB
 
 /// Text encoding errors that is wrapped by the standard EncodingError type
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "png-encoding")]
 pub(crate) enum TextEncodingError {
     /// Unrepresentable characters in string
     Unrepresentable,
@@ -140,6 +150,7 @@ pub(crate) enum TextDecodingError {
 }
 
 /// A generalized text chunk trait
+#[cfg(feature = "png-encoding")]
 pub trait EncodableTextChunk {
     /// Encode text chunk as `Vec<u8>` to a `Write`
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), EncodingError>;
@@ -158,10 +169,12 @@ fn decode_iso_8859_1(text: &[u8]) -> String {
     text.iter().map(|&b| b as char).collect()
 }
 
+#[cfg(feature = "png-encoding")]
 pub(crate) fn encode_iso_8859_1(text: &str) -> Result<Vec<u8>, TextEncodingError> {
     encode_iso_8859_1_iter(text).collect()
 }
 
+#[cfg(feature = "png-encoding")]
 fn encode_iso_8859_1_into(buf: &mut Vec<u8>, text: &str) -> Result<(), TextEncodingError> {
     for b in encode_iso_8859_1_iter(text) {
         buf.push(b?);
@@ -169,6 +182,7 @@ fn encode_iso_8859_1_into(buf: &mut Vec<u8>, text: &str) -> Result<(), TextEncod
     Ok(())
 }
 
+#[cfg(feature = "png-encoding")]
 fn encode_iso_8859_1_iter(text: &str) -> impl Iterator<Item = Result<u8, TextEncodingError>> + '_ {
     text.chars()
         .map(|c| u8::try_from(c as u32).map_err(|_| TextEncodingError::Unrepresentable))
@@ -211,6 +225,7 @@ impl TEXtChunk {
     }
 }
 
+#[cfg(feature = "png-encoding")]
 impl EncodableTextChunk for TEXtChunk {
     /// Encodes TEXtChunk to a Writer. The keyword and text are separated by a byte of zeroes.
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), EncodingError> {
@@ -315,6 +330,7 @@ impl ZTXtChunk {
     }
 
     /// Compresses the inner text, mutating its own state.
+    #[cfg(feature = "png-encoding")]
     pub fn compress_text(&mut self) -> Result<(), EncodingError> {
         match &self.text {
             OptCompressed::Uncompressed(s) => {
@@ -336,6 +352,7 @@ impl ZTXtChunk {
     }
 }
 
+#[cfg(feature = "png-encoding")]
 impl EncodableTextChunk for ZTXtChunk {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), EncodingError> {
         let mut data = encode_iso_8859_1(&self.keyword)?;
@@ -489,6 +506,7 @@ impl ITXtChunk {
     }
 
     /// Compresses the inner text, mutating its own state.
+    #[cfg(feature = "png-encoding")]
     pub fn compress_text(&mut self) -> Result<(), EncodingError> {
         match &self.text {
             OptCompressed::Uncompressed(s) => {
@@ -510,6 +528,7 @@ impl ITXtChunk {
     }
 }
 
+#[cfg(feature = "png-encoding")]
 impl EncodableTextChunk for ITXtChunk {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), EncodingError> {
         // Keyword

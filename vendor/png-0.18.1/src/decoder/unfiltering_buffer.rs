@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use super::stream::{DecodingError, FormatErrorInner};
 use super::zlib::UnfilterBuf;
 use crate::common::BytesPerPixel;
