@@ -451,18 +451,19 @@ pub(crate) enum NormalizeMode {
     Node,
 }
 
-fn node_builtin_shim_url(spec: &[u8]) -> Option<&'static [u8]> {
-    // esm.sh does not currently serve `node:*` specifiers directly (e.g. `https://esm.sh/node:path` is 404).
-    // For Node-ish compatibility, route common builtins to browser/polyfill packages instead.
+fn node_builtin_shim_specifier(spec: &[u8]) -> Option<&'static [u8]> {
+    // Prefer bundled `/qjs/node/*` shims when we already vendor them locally.
+    // Fall back to esm.sh only for builtins that do not have a local implementation.
     match spec {
         b"assert" => Some(b"https://esm.sh/assert@2.1.0"),
-        b"buffer" => Some(b"https://esm.sh/buffer@6.0.3"),
+        b"async_hooks" => Some(b"/qjs/node/async_hooks.mjs"),
+        b"buffer" => Some(b"/qjs/node/buffer.mjs"),
         b"crypto" => Some(b"https://esm.sh/crypto-browserify@3.12.0"),
-        b"events" => Some(b"https://esm.sh/events@3.3.0"),
+        b"events" => Some(b"/qjs/node/events.mjs"),
         b"path" => Some(b"https://esm.sh/path-browserify@1.0.1"),
         b"stream" => Some(b"https://esm.sh/stream-browserify@3.0.0"),
         b"timers" => Some(b"https://esm.sh/timers-browserify@2.0.12"),
-        b"tty" => Some(b"https://esm.sh/tty-browserify@0.0.1"),
+        b"tty" => Some(b"/qjs/node/tty.mjs"),
         b"url" => Some(b"https://esm.sh/url@0.11.3"),
         b"util" => Some(b"https://esm.sh/util@0.12.5"),
         _ => None,
@@ -602,9 +603,9 @@ pub(crate) unsafe fn normalize_with_mode(
 
                     // Try a curated polyfill mapping first.
                     let name = &spec[b"node:".len()..];
-                    if let Some(url) = node_builtin_shim_url(name) {
-                        log_normalized(url);
-                        return js_strdup(ctx, url);
+                    if let Some(specifier) = node_builtin_shim_specifier(name) {
+                        log_normalized(specifier);
+                        return js_strdup(ctx, specifier);
                     }
 
                     // Fallback: strip `node:` and ask esm.sh for the corresponding package name.
@@ -619,9 +620,9 @@ pub(crate) unsafe fn normalize_with_mode(
 
         // In Node mode, treat common Node builtins as shims.
         if mode == NormalizeMode::Node {
-            if let Some(url) = node_builtin_shim_url(spec) {
-                log_normalized(url);
-                return js_strdup(ctx, url);
+            if let Some(specifier) = node_builtin_shim_specifier(spec) {
+                log_normalized(specifier);
+                return js_strdup(ctx, specifier);
             }
         }
 

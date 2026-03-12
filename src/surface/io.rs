@@ -618,10 +618,28 @@ pub mod cabi {
     static ASYNC_PNG_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
     static ASYNC_PNG_WORKER_STARTED: core::sync::atomic::AtomicBool =
         core::sync::atomic::AtomicBool::new(false);
+    static ASYNC_PNG_DIAG_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
 
     struct AsyncPngUploadReq {
         tex_id: u32,
         bytes: Vec<u8>,
+    }
+
+    fn log_async_png_worker_site(tag: &str) {
+        let cpu = crate::percpu::this_cpu();
+        let slot = cpu.cpu_index();
+        let lapic = cpu.lapic_id();
+        let total = crate::smp::cpu_count().max(1);
+        crate::globalog::log(format_args!(
+            "async-png: {} slot={} lapic={} total_cpus={}\n",
+            tag, slot, lapic, total
+        ));
+        if total > 1 && slot == 0 {
+            crate::globalog::log(format_args!(
+                "async-png: WARNING running on BSP despite multicore availability\n"
+            ));
+        }
     }
 
     fn set_async_tex_status(tex_id: u32, status: i32) {
@@ -659,6 +677,16 @@ pub mod cabi {
     }
 
     async fn async_png_decode_upload_inner(tex_id: u32, bytes: Vec<u8>) {
+        let start = embassy_time_driver::now();
+        let log_n = ASYNC_PNG_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if log_n < 16 {
+            log_async_png_worker_site("decode-start");
+            crate::globalog::log(format_args!(
+                "async-png: decode-start tex_id={} bytes={}\n",
+                tex_id,
+                bytes.len()
+            ));
+        }
         let rc = match crate::gfx::png_codec::decode_png_rgba(bytes.as_slice()) {
             Ok(decoded) => upload_texture_rgba_inner(
                 tex_id,
@@ -675,6 +703,22 @@ pub mod cabi {
         } else {
             set_async_tex_status(tex_id, rc);
         }
+        if log_n < 16 {
+            let elapsed_ticks = embassy_time_driver::now().saturating_sub(start);
+            crate::globalog::log(format_args!(
+                "async-png: decode-done tex_id={} rc={} ticks={} host_ready={}\n",
+                tex_id,
+                rc,
+                elapsed_ticks,
+                (rc == 0) as u8
+            ));
+            if rc == 0 {
+                crate::globalog::log(format_args!(
+                    "async-png: tex_id={} host-ready only; virgl upload still occurs lazily on first textured submit\n",
+                    tex_id
+                ));
+            }
+        }
     }
 
     async fn async_png_upload_service_inner() {
@@ -690,6 +734,7 @@ pub mod cabi {
 
     #[embassy_executor::task]
     async fn async_png_upload_service_task() {
+        log_async_png_worker_site("worker-start");
         async_png_upload_service_inner().await;
     }
 
@@ -716,6 +761,12 @@ pub mod cabi {
                 }
             }
             return;
+        }
+
+        if crate::smp::cpu_count() > 1 {
+            crate::globalog::log(format_args!(
+                "async-png: no background spawner available on multicore system; worker not started\n"
+            ));
         }
 
         if crate::smp::cpu_count() <= 1
