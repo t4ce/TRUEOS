@@ -1,7 +1,6 @@
 import * as parse5 from 'parse5';
 import * as cmdStream from 'trueos:cmd_stream';
 import Yoga from 'yoga-layout';
-import { Buffer } from 'node:buffer';
 import { Worker } from 'node:worker_threads';
 import { createFpsOverlay } from './fps.mjs';
 import { extractCssSection, resolveNodeStyle } from './css.mjs';
@@ -350,52 +349,67 @@ function detailSuffix(details = null) {
   return parts.length > 0 ? ` [${parts.join(' ')}]` : '';
 }
 
-function dataUrlToBytes(url) {
-  const value = String(url || '');
-  const match = value.match(/^data:([^,]*?),(.*)$/s);
-  if (!match) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_DATA_URL_INVALID', 'Image data URL could not be decoded', {
-      url: value,
+const MAX_FETCHED_IMAGE_BINARIES = 3;
+const fetchedImageBinaryUrls = new Set();
+const pendingImagePrimeUrls = new Set();
+let imagePrimeScheduled = false;
+
+function resolveFetchableImageKind(url) {
+  const normalizedUrl = String(url || '').toLowerCase();
+  if (/\.png(?:$|[?#])/.test(normalizedUrl)) return 'png';
+  if (/\.bmp(?:$|[?#])/.test(normalizedUrl)) return 'bmp';
+  if (/\.svg(?:$|[?#])/.test(normalizedUrl)) return 'svg';
+  return '';
+}
+
+function noteFetchedImageBinary(url) {
+  const key = String(url || '').trim();
+  if (!key || fetchedImageBinaryUrls.has(key)) return;
+  if (fetchedImageBinaryUrls.size >= MAX_FETCHED_IMAGE_BINARIES) {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_IMAGE_FETCH_LIMIT_REACHED',
+      'Image fetch limit reached for binary image resources',
+      { url: key, limit: MAX_FETCHED_IMAGE_BINARIES },
+    );
+  }
+  fetchedImageBinaryUrls.add(key);
+}
+
+function flushQueuedImagePrimes() {
+  imagePrimeScheduled = false;
+  if (pendingImagePrimeUrls.size <= 0) return;
+  const urls = Array.from(pendingImagePrimeUrls);
+  pendingImagePrimeUrls.clear();
+  for (let i = 0; i < urls.length; i += 1) {
+    const resolvedSrc = String(urls[i] || '').trim();
+    if (!resolvedSrc) continue;
+    const cached = imageTextureCache.get(resolvedSrc) || null;
+    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+      continue;
+    }
+    void ensureImageTexture(resolvedSrc);
+  }
+}
+
+function scheduleImagePrimeFlush() {
+  if (imagePrimeScheduled) return;
+  imagePrimeScheduled = true;
+  const job = () => {
+    try {
+      flushQueuedImagePrimes();
+    } catch (_) {}
+  };
+  if (typeof Promise === 'function' && typeof Promise.resolve === 'function') {
+    Promise.resolve().then(job).catch(() => {
+      imagePrimeScheduled = false;
     });
+    return;
   }
-
-  const meta = String(match[1] || '');
-  const payload = String(match[2] || '');
-  const parts = meta.split(';').map((part) => String(part || '').trim().toLowerCase()).filter(Boolean);
-  const mime = parts.length > 0 && !parts[0].includes('=') ? parts[0] : 'text/plain';
-  const isBase64 = parts.includes('base64');
-
-  if (isBase64) {
-    const decoded = Buffer.from(payload, 'base64');
-    return {
-      mime,
-      bytes: new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength).slice(),
-    };
+  if (typeof runtime.host.requestAnimationFrame === 'function') {
+    runtime.host.requestAnimationFrame(job);
+    return;
   }
-
-  const text = decodeURIComponent(payload);
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i += 1) {
-    bytes[i] = text.charCodeAt(i) & 0xFF;
-  }
-  return { mime, bytes };
-}
-
-function looksLikePng(bytes) {
-  return !!bytes
-    && bytes.length >= 8
-    && bytes[0] === 0x89
-    && bytes[1] === 0x50
-    && bytes[2] === 0x4E
-    && bytes[3] === 0x47
-    && bytes[4] === 0x0D
-    && bytes[5] === 0x0A
-    && bytes[6] === 0x1A
-    && bytes[7] === 0x0A;
-}
-
-function looksLikeBmp(bytes) {
-  return !!bytes && bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4D;
+  job();
 }
 
 function queueImageRepaint() {
@@ -412,54 +426,44 @@ function queueImageRepaint() {
   } catch (_) {}
 }
 
-async function fetchImageBytes(url) {
+async function requestNativeImageTexture(url) {
   const value = String(url || '').trim();
   if (!value) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image fetch failed because src was empty');
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image request failed because src was empty');
   }
 
-  if (value.startsWith('data:')) {
-    return dataUrlToBytes(value);
+  if (!value.startsWith('data:')) {
+    const requestedKind = resolveFetchableImageKind(value);
+    if (!requestedKind) {
+      raiseBrowserError(
+        'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
+        'Image fetch is restricted to png, bmp, or svg URLs',
+        { url: value },
+      );
+    }
+    noteFetchedImageBinary(value);
   }
-  if (typeof fetch !== 'function') {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_UNAVAILABLE', 'Image fetch failed because fetch is unavailable', {
+
+  if (typeof runtime.host.__trueosRequestImageTexture !== 'function') {
+    raiseBrowserError(
+      'TRUEOS_BROWSER_IMAGE_NATIVE_UNAVAILABLE',
+      'Image request failed because the native image API is unavailable',
+      { url: value },
+    );
+  }
+  const result = await runtime.host.__trueosRequestImageTexture(value);
+  const texId = Math.max(0, Number(result && result.texId || 0) | 0);
+  if (texId <= 0) {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_FAILED', 'Native image request did not produce a texture', {
       url: value,
     });
   }
-
-  const response = await fetch(value, { method: 'GET' });
-  if (!response || response.ok === false) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_FAILED', 'Image fetch returned an error response', {
-      url: value,
-      status: response && typeof response.status !== 'undefined' ? response.status : 'unknown',
-    });
-  }
-  if (typeof response.arrayBuffer !== 'function') {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_BINARY_UNAVAILABLE', 'Image fetch could not read binary response data', {
-      url: value,
-    });
-  }
-
-  const buffer = await response.arrayBuffer();
-  const mime = response && response.headers && typeof response.headers.get === 'function'
-    ? String(response.headers.get('content-type') || '')
-    : '';
   return {
-    mime,
-    bytes: new Uint8Array(buffer),
+    texId,
+    mime: String(result && result.mime || ''),
+    pixelWidth: Math.max(0, Number(result && result.width || 0) | 0),
+    pixelHeight: Math.max(0, Number(result && result.height || 0) | 0),
   };
-}
-
-function resolveImageUploadKind(url, mime, bytes) {
-  const normalizedUrl = String(url || '').toLowerCase();
-  const normalizedMime = String(mime || '').toLowerCase();
-  if (normalizedMime.includes('image/png') || /\.png(?:$|[?#])/.test(normalizedUrl) || looksLikePng(bytes)) {
-    return 'png';
-  }
-  if (normalizedMime.includes('image/bmp') || normalizedMime.includes('image/x-ms-bmp') || /\.bmp(?:$|[?#])/.test(normalizedUrl) || looksLikeBmp(bytes)) {
-    return 'bmp';
-  }
-  return '';
 }
 
 async function ensureImageTexture(resolvedUrl) {
@@ -486,29 +490,18 @@ async function ensureImageTexture(resolvedUrl) {
 
   const task = (async () => {
     try {
-      const { mime, bytes } = await fetchImageBytes(cacheKey);
-      const kind = resolveImageUploadKind(cacheKey, mime, bytes);
-      if (kind === 'bmp') {
-        throw new Error('bmp upload is not wired yet');
-      }
-      if (kind !== 'png') {
-        throw new Error('unsupported image format');
-      }
+      const loaded = await requestNativeImageTexture(cacheKey);
 
-      const texId = Number(cmdStream.createTexturePng(bytes) || 0);
-      if (!Number.isFinite(texId) || texId <= 0) {
-        throw new Error('texture upload failed');
-      }
-
-      const ready = {
+      imageTextureCache.set(cacheKey, {
         state: 'ready',
-        texId,
+        texId: Math.max(0, Number(loaded.texId || 0) | 0),
         url: cacheKey,
-        mime: String(mime || 'image/png'),
+        mime: String(loaded.mime || 'image/png'),
+        pixelWidth: Math.max(0, Number(loaded.pixelWidth || 0) | 0),
+        pixelHeight: Math.max(0, Number(loaded.pixelHeight || 0) | 0),
         error: '',
-      };
-      imageTextureCache.set(cacheKey, ready);
-      return ready;
+      });
+      return imageTextureCache.get(cacheKey);
     } catch (err) {
       const failed = {
         state: 'error',
@@ -538,10 +531,14 @@ function applyImageResourcesToRows(rows) {
     const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
     row.resolvedSrc = resolvedSrc;
     row.texId = 0;
+    row.imagePixelWidth = 0;
+    row.imagePixelHeight = 0;
     if (!resolvedSrc) continue;
     const cached = imageTextureCache.get(resolvedSrc) || null;
     if (cached && cached.state === 'ready') {
       row.texId = Number(cached.texId || 0);
+      row.imagePixelWidth = Math.max(0, Number(cached.pixelWidth || 0) | 0);
+      row.imagePixelHeight = Math.max(0, Number(cached.pixelHeight || 0) | 0);
     }
   }
 }
@@ -557,8 +554,9 @@ function primeImageRows(rows) {
     if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
       continue;
     }
-    void ensureImageTexture(resolvedSrc);
+    pendingImagePrimeUrls.add(resolvedSrc);
   }
+  scheduleImagePrimeFlush();
 }
 
 function createBrowserError(code, message, details = null, cause = null) {

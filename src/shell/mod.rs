@@ -12,7 +12,6 @@ pub(crate) mod bench;
 pub(crate) mod cmd;
 pub(crate) mod cube;
 pub(crate) mod matrix;
-pub(crate) mod shellqjs;
 pub(crate) mod shelltetris;
 pub(crate) mod statusbar;
 pub(crate) mod table;
@@ -327,7 +326,6 @@ pub(crate) enum CommandAction {
     EnterRain,
     EnterTetris,
     EnterTxtEdt { filename: String<48>, slot_id: u8 },
-    Qjs { src: String<192> },
     RunNetbench { nic_index: usize },
     RunBenchFs { disk_id: u32 },
     DoFormat { disc_id: u32 },

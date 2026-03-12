@@ -153,6 +153,10 @@ fn pick_spawner_affinity_first() -> Option<(u32, u8, embassy_executor::SendSpawn
     Some(pool[idx % pool.len()].clone())
 }
 
+pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
+    pick_spawner_affinity_first().map(|(_, _, spawner)| spawner)
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CtxRole {
     Main,

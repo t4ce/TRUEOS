@@ -72,7 +72,7 @@ function writeTexturedVertex(view, vertexIndex, x, y, u, v, r, g, b, a) {
   view.setUint8(base + 19, a);
 }
 
-function buildTexturedQuadVertices(x, y, width, height, vw, vh) {
+function buildTexturedQuadVertices(x, y, width, height, vw, vh, u0 = 0, v0 = 0, u1 = 1, v1 = 1) {
   const x0 = pxToNdcX(x, vw);
   const y0 = pxToNdcY(y, vh);
   const x1 = pxToNdcX(x + width, vw);
@@ -80,14 +80,45 @@ function buildTexturedQuadVertices(x, y, width, height, vw, vh) {
   const buffer = new ArrayBuffer(6 * 20);
   const view = new DataView(buffer);
 
-  writeTexturedVertex(view, 0, x0, y1, 0, 1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 1, x1, y1, 1, 1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 2, x1, y0, 1, 0, 255, 255, 255, 255);
-  writeTexturedVertex(view, 3, x0, y1, 0, 1, 255, 255, 255, 255);
-  writeTexturedVertex(view, 4, x1, y0, 1, 0, 255, 255, 255, 255);
-  writeTexturedVertex(view, 5, x0, y0, 0, 0, 255, 255, 255, 255);
+  writeTexturedVertex(view, 0, x0, y1, u0, v1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 1, x1, y1, u1, v1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 2, x1, y0, u1, v0, 255, 255, 255, 255);
+  writeTexturedVertex(view, 3, x0, y1, u0, v1, 255, 255, 255, 255);
+  writeTexturedVertex(view, 4, x1, y0, u1, v0, 255, 255, 255, 255);
+  writeTexturedVertex(view, 5, x0, y0, u0, v0, 255, 255, 255, 255);
 
   return new Uint8Array(buffer);
+}
+
+function buildCenteredImagePlacement(run) {
+  const boxWidth = Math.max(1, Math.round(Number(run && run.width || 0) || 1));
+  const boxHeight = Math.max(1, Math.round(Number(run && run.height || 0) || 1));
+  const pixelWidth = Math.max(0, Math.round(Number(run && run.pixelWidth || 0) || 0));
+  const pixelHeight = Math.max(0, Math.round(Number(run && run.pixelHeight || 0) || 0));
+  if (pixelWidth <= 0 || pixelHeight <= 0) {
+    return {
+      drawX: Number(run && run.x || 0),
+      drawY: Number(run && run.y || 0),
+      drawWidth: boxWidth,
+      drawHeight: boxHeight,
+      u0: 0,
+      v0: 0,
+      u1: 1,
+      v1: 1,
+    };
+  }
+
+  const drawWidth = Math.max(1, Math.min(boxWidth, pixelWidth));
+  const drawHeight = Math.max(1, Math.min(boxHeight, pixelHeight));
+  const drawX = Number(run && run.x || 0) + Math.floor((boxWidth - drawWidth) * 0.5);
+  const drawY = Number(run && run.y || 0) + Math.floor((boxHeight - drawHeight) * 0.5);
+  const cropLeft = Math.max(0, (pixelWidth - drawWidth) * 0.5);
+  const cropTop = Math.max(0, (pixelHeight - drawHeight) * 0.5);
+  const u0 = cropLeft / pixelWidth;
+  const v0 = cropTop / pixelHeight;
+  const u1 = (cropLeft + drawWidth) / pixelWidth;
+  const v1 = (cropTop + drawHeight) / pixelHeight;
+  return { drawX, drawY, drawWidth, drawHeight, u0, v0, u1, v1 };
 }
 
 export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = null) {
@@ -146,6 +177,8 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
         width: innerWidth,
         height: innerHeight,
         texId: Math.max(0, Number(row && row.texId || 0)),
+        pixelWidth: Math.max(0, Number(row && row.imagePixelWidth || 0) | 0),
+        pixelHeight: Math.max(0, Number(row && row.imagePixelHeight || 0) | 0),
       });
       continue;
     }
@@ -230,9 +263,21 @@ export function renderScene(doc, vw, vh, scrollY, overlayRuns, overlayRect = nul
     for (let i = 0; i < imageRuns.length; i += 1) {
       const run = imageRuns[i];
       if (run.texId > 0) {
+        const placement = buildCenteredImagePlacement(run);
         cmdStream.drawTexturedTrianglesU8(
           run.texId,
-          buildTexturedQuadVertices(run.x, run.y, run.width, run.height, vw, vh),
+          buildTexturedQuadVertices(
+            placement.drawX,
+            placement.drawY,
+            placement.drawWidth,
+            placement.drawHeight,
+            vw,
+            vh,
+            placement.u0,
+            placement.v0,
+            placement.u1,
+            placement.v1,
+          ),
         );
       }
       cmdStream.fillRect(run.x, run.y, run.width, run.height, IMAGE_STROKE_RGBA, 1, 0);
