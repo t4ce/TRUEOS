@@ -892,6 +892,10 @@ pub mod cabi {
     const MAX_EST_SUBMIT_BYTES: usize = 512 * 1024;
     static SUBMIT_BUDGET_LOGS: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
+    static VIRGL_END_FRAME_DIAG_LOGS: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0);
+    static VIRGL_FIRST_FRAME_SEEN: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
 
     struct GfxCabiState {
         pipeline: PipelineId,
@@ -2374,6 +2378,34 @@ pub mod cabi {
             st.base_cache_draws = draws.clone();
             st.base_cache_rgb_blob = rgb_src.clone();
             st.base_cache_tex_blob = tex_src.clone();
+
+            if crate::gfx::is_virgl_active() {
+                let first =
+                    !VIRGL_FIRST_FRAME_SEEN.swap(true, core::sync::atomic::Ordering::AcqRel);
+                if first {
+                    crate::v::readiness::set(crate::v::readiness::GFX_VIRGL_READY);
+                    crate::globalog::log(format_args!(
+                        "gfx: virgl first frame ready seq={} bytes={}\n",
+                        seq, draw_bytes
+                    ));
+                }
+                let n =
+                    VIRGL_END_FRAME_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                if first || n < 12 {
+                    crate::globalog::log(format_args!(
+                        "gfx-cabi: virgl end_frame ok seq={} rgb={} tex={} bytes={} first={}\n",
+                        seq, rgb_draws, tex_draws, draw_bytes, first as u8
+                    ));
+                }
+            }
+        } else if crate::gfx::is_virgl_active() {
+            let n = VIRGL_END_FRAME_DIAG_LOGS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n < 12 {
+                crate::globalog::log(format_args!(
+                    "gfx-cabi: virgl end_frame failed seq={} rgb={} tex={} bytes={} rc={}\n",
+                    seq, rgb_draws, tex_draws, draw_bytes, ret
+                ));
+            }
         }
 
         if seq <= 10 || (seq % 20) == 0 {
