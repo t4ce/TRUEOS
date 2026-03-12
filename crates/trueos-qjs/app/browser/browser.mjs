@@ -22,6 +22,8 @@ const CURSOR_EVENT_FIELDS = 6;
 const CURSOR_FLAG_BUTTONS_CHANGED = 1 << 2;
 const INDENT_PX = 12;
 const AUTO_PAINT_MS = Math.max(0, Number(runtime.host.__trueosBrowserAutoPaintMs || 0) || 0);
+const INITIAL_NAVIGATE_TO_W3C_PNG = true;
+const INITIAL_W3C_PNG_URL = 'https://www.w3.org/Graphics/PNG/Inline-img.html';
 const ERROR_PREVIEW_MAX = 160;
 const OMIT_TAGS = new Set(['html', 'body', 'script', 'style', 'meta', 'link', 'li']);
 const SHOW_CLOSING_TAG_ROWS = false;
@@ -61,7 +63,6 @@ const FALLBACK_BROWSER_API_CONTRACT = {
   version: 1,
   available: [
     'getApiContract',
-    'listUnavailable',
     'getHtml',
     'getTextRows',
     'getDomSnapshot',
@@ -381,28 +382,52 @@ function dataUrlToBytes(url) {
   return { mime, bytes };
 }
 
-function looksLikePng(bytes) {
-  return !!bytes
-    && bytes.length >= 8
-    && bytes[0] === 0x89
-    && bytes[1] === 0x50
-    && bytes[2] === 0x4E
-    && bytes[3] === 0x47
-    && bytes[4] === 0x0D
-    && bytes[5] === 0x0A
-    && bytes[6] === 0x1A
-    && bytes[7] === 0x0A;
+function readPngDimensions(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : null;
+  if (!data || data.length < 24) {
+    return { width: 0, height: 0 };
+  }
+  if (
+    data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4E || data[3] !== 0x47
+    || data[4] !== 0x0D || data[5] !== 0x0A || data[6] !== 0x1A || data[7] !== 0x0A
+  ) {
+    return { width: 0, height: 0 };
+  }
+  if (String.fromCharCode(data[12], data[13], data[14], data[15]) !== 'IHDR') {
+    return { width: 0, height: 0 };
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    width: Math.max(0, view.getUint32(16, false) | 0),
+    height: Math.max(0, view.getUint32(20, false) | 0),
+  };
 }
 
-function looksLikeBmp(bytes) {
-  return !!bytes && bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4D;
+function waitForNextImageUploadTick() {
+  return new Promise((resolve) => {
+    if (typeof setTimeout === 'function') {
+      setTimeout(() => resolve(), 1);
+      return;
+    }
+    throw new Error('image upload wait requires setTimeout');
+  });
 }
 
-function looksLikeSvg(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return false;
-  const head = Array.from(bytes.slice(0, Math.min(bytes.length, 256)), (value) => String.fromCharCode(value)).join('');
-  const trimmed = head.replace(/^\s+/, '').toLowerCase();
-  return trimmed.startsWith('<svg') || trimmed.startsWith('<?xml');
+async function waitForTextureReady(texId) {
+  const id = Math.max(0, Number(texId || 0) | 0);
+  if (id <= 0) {
+    throw new Error('invalid texture id');
+  }
+  while (true) {
+    const status = Math.round(Number(cmdStream.getTextureStatus(id) || 0) || 0);
+    if (status === 2) {
+      return true;
+    }
+    if (status < 0) {
+      throw new Error(`texture upload failed (${status})`);
+    }
+    await waitForNextImageUploadTick();
+  }
 }
 
 const MAX_FETCHED_IMAGE_BINARIES = 3;
@@ -482,119 +507,43 @@ function queueImageRepaint() {
   } catch (_) {}
 }
 
-async function fetchImageBytes(url) {
+async function requestReadyImageTexture(url) {
   const value = String(url || '').trim();
   if (!value) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image fetch failed because src was empty');
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_URL_MISSING', 'Image request failed because src was empty');
   }
 
-  if (value.startsWith('data:')) {
-    return dataUrlToBytes(value);
+  if (!value.startsWith('data:')) {
+    const requestedKind = resolveFetchableImageKind(value);
+    if (!requestedKind) {
+      raiseBrowserError(
+        'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
+        'Image fetch is restricted to png, bmp, or svg URLs',
+        { url: value },
+      );
+    }
+    noteFetchedImageBinary(value);
   }
-  const requestedKind = resolveFetchableImageKind(value);
-  if (!requestedKind) {
-    raiseBrowserError(
-      'TRUEOS_BROWSER_IMAGE_FETCH_KIND_UNSUPPORTED',
-      'Image fetch is restricted to png, bmp, or svg URLs',
-      { url: value },
-    );
-  }
-  if (typeof fetch !== 'function') {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_UNAVAILABLE', 'Image fetch failed because fetch is unavailable', {
+
+  if (typeof runtime.host.__trueosResolveReadyImageTexture !== 'function') {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_UNAVAILABLE', 'Native image request is unavailable', {
       url: value,
     });
   }
 
-  noteFetchedImageBinary(value);
-
-  const response = await fetch(value, {
-    method: 'GET',
-    __trueosBinary: true,
-    __trueosImageFetch: true,
-  });
-  if (!response || response.ok === false) {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_FAILED', 'Image fetch returned an error response', {
-      url: value,
-      status: response && typeof response.status !== 'undefined' ? response.status : 'unknown',
-    });
-  }
-  if (typeof response.arrayBuffer !== 'function') {
-    raiseBrowserError('TRUEOS_BROWSER_IMAGE_FETCH_BINARY_UNAVAILABLE', 'Image fetch could not read binary response data', {
+  const result = await runtime.host.__trueosResolveReadyImageTexture(value);
+  const texId = Math.max(0, Number(result && result.texId || 0) | 0);
+  if (texId <= 0) {
+    raiseBrowserError('TRUEOS_BROWSER_IMAGE_NATIVE_FAILED', 'Native image request did not yield a texture id', {
       url: value,
     });
   }
-
-  const buffer = await response.arrayBuffer();
-  const mime = response && response.headers && typeof response.headers.get === 'function'
-    ? String(response.headers.get('content-type') || '')
-    : '';
   return {
-    mime,
-    bytes: new Uint8Array(buffer),
+    texId,
+    mime: String(result && result.mime || ''),
+    pixelWidth: Math.max(0, Number(result && result.width || 0) | 0),
+    pixelHeight: Math.max(0, Number(result && result.height || 0) | 0),
   };
-}
-
-function resolveImageUploadKind(url, mime, bytes) {
-  const normalizedUrl = String(url || '').toLowerCase();
-  const normalizedMime = String(mime || '').toLowerCase();
-  if (normalizedMime.includes('image/png') || /\.png(?:$|[?#])/.test(normalizedUrl) || looksLikePng(bytes)) {
-    return 'png';
-  }
-  if (normalizedMime.includes('image/bmp') || normalizedMime.includes('image/x-ms-bmp') || /\.bmp(?:$|[?#])/.test(normalizedUrl) || looksLikeBmp(bytes)) {
-    return 'bmp';
-  }
-  if (normalizedMime.includes('image/svg+xml') || /\.svg(?:$|[?#])/.test(normalizedUrl) || looksLikeSvg(bytes)) {
-    return 'svg';
-  }
-  return '';
-}
-
-function readPngDimensions(bytes) {
-  const data = bytes instanceof Uint8Array ? bytes : null;
-  if (!data || data.length < 24) {
-    return { width: 0, height: 0 };
-  }
-  if (
-    data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4E || data[3] !== 0x47
-    || data[4] !== 0x0D || data[5] !== 0x0A || data[6] !== 0x1A || data[7] !== 0x0A
-  ) {
-    return { width: 0, height: 0 };
-  }
-  if (String.fromCharCode(data[12], data[13], data[14], data[15]) !== 'IHDR') {
-    return { width: 0, height: 0 };
-  }
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  return {
-    width: Math.max(0, view.getUint32(16, false) | 0),
-    height: Math.max(0, view.getUint32(20, false) | 0),
-  };
-}
-
-function waitForNextImageUploadTick() {
-  return new Promise((resolve) => {
-    if (typeof setTimeout === 'function') {
-      setTimeout(() => resolve(), 1);
-      return;
-    }
-    throw new Error('image upload wait requires setTimeout');
-  });
-}
-
-async function waitForTextureReady(texId) {
-  const id = Math.max(0, Number(texId || 0) | 0);
-  if (id <= 0) {
-    throw new Error('invalid texture id');
-  }
-  while (true) {
-    const status = Math.round(Number(cmdStream.getTextureStatus(id) || 0) || 0);
-    if (status === 2) {
-      return true;
-    }
-    if (status < 0) {
-      throw new Error(`texture upload failed (${status})`);
-    }
-    await waitForNextImageUploadTick();
-  }
 }
 
 async function ensureImageTexture(resolvedUrl) {
@@ -621,45 +570,36 @@ async function ensureImageTexture(resolvedUrl) {
 
   const task = (async () => {
     try {
-      const { mime, bytes } = await fetchImageBytes(cacheKey);
-      const kind = resolveImageUploadKind(cacheKey, mime, bytes);
-      if (kind === 'bmp') {
-        throw new Error('bmp upload is not wired yet');
+      let ready;
+      if (cacheKey.startsWith('data:')) {
+        const { mime, bytes } = dataUrlToBytes(cacheKey);
+        const dims = readPngDimensions(bytes);
+        const texId = Number(cmdStream.createTexturePngAsync(bytes) || 0);
+        if (!Number.isFinite(texId) || texId <= 0) {
+          throw new Error('inline image texture upload failed');
+        }
+        await waitForTextureReady(texId);
+        ready = {
+          state: 'ready',
+          texId,
+          url: cacheKey,
+          mime: String(mime || 'image/png'),
+          pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
+          pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
+          error: '',
+        };
+      } else {
+        const loaded = await requestReadyImageTexture(cacheKey);
+        ready = {
+          state: 'ready',
+          texId: Math.max(0, Number(loaded.texId || 0) | 0),
+          url: cacheKey,
+          mime: String(loaded.mime || 'image/png'),
+          pixelWidth: Math.max(0, Number(loaded.pixelWidth || 0) | 0),
+          pixelHeight: Math.max(0, Number(loaded.pixelHeight || 0) | 0),
+          error: '',
+        };
       }
-      if (kind === 'svg') {
-        throw new Error('svg fetch is enabled, but svg parse/upload is not wired yet');
-      }
-      if (kind !== 'png') {
-        throw new Error('unsupported image format');
-      }
-
-      const dims = readPngDimensions(bytes);
-      const texId = Number(cmdStream.createTexturePngAsync(bytes) || 0);
-      if (!Number.isFinite(texId) || texId <= 0) {
-        throw new Error('texture upload failed');
-      }
-
-      imageTextureCache.set(cacheKey, {
-        state: 'loading',
-        texId,
-        url: cacheKey,
-        mime: String(mime || 'image/png'),
-        pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
-        pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
-        error: '',
-      });
-
-      await waitForTextureReady(texId);
-
-      const ready = {
-        state: 'ready',
-        texId,
-        url: cacheKey,
-        mime: String(mime || 'image/png'),
-        pixelWidth: Math.max(0, Number(dims.width || 0) | 0),
-        pixelHeight: Math.max(0, Number(dims.height || 0) | 0),
-        error: '',
-      };
       imageTextureCache.set(cacheKey, ready);
       return ready;
     } catch (err) {
@@ -1073,6 +1013,45 @@ function buildDocFromHtml(html, vw, context = 'document') {
     );
   }
   return buildDocFromParsed(parsed, vw, context);
+}
+
+function collectImagePrimeUrls(node, out = null) {
+  const urls = Array.isArray(out) ? out : [];
+  if (!node || typeof node !== 'object') return urls;
+  if (isElement(node) && String(node.tagName || '').toLowerCase() === 'img') {
+    const rawSrc = String(getNodeAttr(node, 'src') || '').trim();
+    const resolvedSrc = rawSrc ? resolveNavigationUrl(rawSrc) : '';
+    if (resolvedSrc) {
+      urls.push(resolvedSrc);
+    }
+  }
+  const kids = Array.isArray(node.childNodes) ? node.childNodes : [];
+  for (let i = 0; i < kids.length; i += 1) {
+    collectImagePrimeUrls(kids[i], urls);
+  }
+  return urls;
+}
+
+function primeHtmlImageUrls(html) {
+  const source = String(html || '');
+  if (!source) return;
+  let parsed;
+  try {
+    parsed = parse5.parse(source);
+  } catch (_) {
+    return;
+  }
+  const urls = collectImagePrimeUrls(parsed, []);
+  for (let i = 0; i < urls.length; i += 1) {
+    const resolvedSrc = String(urls[i] || '').trim();
+    if (!resolvedSrc) continue;
+    const cached = imageTextureCache.get(resolvedSrc) || null;
+    if (cached && (cached.state === 'ready' || cached.state === 'loading' || cached.state === 'error')) {
+      continue;
+    }
+    pendingImagePrimeUrls.add(resolvedSrc);
+  }
+  scheduleImagePrimeFlush();
 }
 
 function readNodeText(node) {
@@ -1724,6 +1703,7 @@ function getViewport() {
 function setHtml(nextHtml) {
   cachedHtml = String(nextHtml || '');
   cachedDoc = null;
+  primeHtmlImageUrls(cachedHtml);
   paint();
   return true;
 }
@@ -1823,10 +1803,13 @@ async function loadUrlIntoBrowser(url, request = null) {
   setCurrentPageUrl(resolved);
   const hook = runtime.host.__trueosBrowserNavigate;
   if (typeof hook === 'function') {
-    return dispatchBrowserAction('navigate', {
+    const hookResult = dispatchBrowserAction('navigate', {
       url: currentPageUrl,
       request,
     }, '__trueosBrowserNavigate');
+    if (hookResult && hookResult.handled) {
+      return hookResult;
+    }
   }
   if (typeof fetch !== 'function') {
     return dispatchBrowserAction('navigate', {
@@ -2587,9 +2570,15 @@ if (typeof (runtime.host.window || runtime.host).addEventListener === 'function'
   (runtime.host.window || runtime.host).addEventListener('resize', paint);
 }
 
-setHtml(runtime.host.__trueosUiHtml || '');
+if (INITIAL_NAVIGATE_TO_W3C_PNG) {
+  loadUrlIntoBrowser(INITIAL_W3C_PNG_URL).catch((err) => {
+    try { console.log('[browser.mjs] initial navigation failed', String(err && err.stack ? err.stack : err)); } catch (_) {}
+    setHtml(runtime.host.__trueosUiHtml || '');
+  });
+} else {
+  setHtml(runtime.host.__trueosUiHtml || '');
+}
 installAiInputBridge();
-paint();
 startWheelPump();
 startAutoPaint();
 maybeAutostartAi();

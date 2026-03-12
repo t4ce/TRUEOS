@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_char;
 use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use parry2d::math::{Isometry, Vector};
 use parry2d::query;
@@ -426,51 +427,6 @@ unsafe fn apply_pending_ai_input(ctx: *mut qjs::JSContext) {
     );
 }
 
-unsafe fn drain_pending_jobs(rt: *mut qjs::JSRuntime, fallback_ctx: *mut qjs::JSContext) -> bool {
-    if rt.is_null() {
-        return true;
-    }
-    loop {
-        let mut job_ctx: *mut qjs::JSContext = core::ptr::null_mut();
-        let rc = qjs::JS_ExecutePendingJob(rt, &mut job_ctx as *mut *mut qjs::JSContext);
-        if rc > 0 {
-            continue;
-        }
-        if rc < 0 {
-            let ctx = if !job_ctx.is_null() {
-                job_ctx
-            } else {
-                fallback_ctx
-            };
-            if !ctx.is_null() {
-                qjs::qjs_diag::dump_last_exception(ctx, "browser pending-job");
-            }
-            return false;
-        }
-        break;
-    }
-    true
-}
-
-unsafe fn pump_runtime_once(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext) -> bool {
-    let mut progress = false;
-    progress |= qjs::async_ops::pump(ctx);
-    progress |= qjs::workers::pump(ctx);
-    progress |= qjs::timers::pump(ctx);
-    if !drain_pending_jobs(rt, ctx) {
-        return false;
-    }
-    if qjs::JS_IsJobPending(rt) > 0
-        || qjs::async_ops::has_pending(ctx)
-        || qjs::workers::has_pending_for_ctx(ctx)
-    {
-        qjs::trueos_shims::trueos_cabi_poll_once();
-        if !progress {
-            qjs::trueos_shims::trueos_cabi_poll_once();
-        }
-    }
-    true
-}
 
 unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     let init_filename = b"<browser-globals>\0";
@@ -485,7 +441,7 @@ unsafe fn install_globals(ctx: *mut qjs::JSContext) -> bool {
     init_src.push_str(
         r#"
 if (typeof G.__trueosBrowserAutoStartAi === 'undefined') {
-    G.__trueosBrowserAutoStartAi = { specifier: '/qjs/ai/ai_pc.mjs' };
+    G.__trueosBrowserAutoStartAi = false;
 }
 if (!G.window) G.window = G;
 if (typeof G.window.innerWidth !== 'number') G.window.innerWidth = 1280;
@@ -524,6 +480,12 @@ pub async fn boot_browser() {
         return;
     }
     qjs::trueos_shims::log_info("qjs-browser: starting browser2 bootstrap\n");
+    let spawner = unsafe { Spawner::for_current_executor().await };
+    if !qjs::async_fs::ensure_service_started(&spawner) {
+        qjs::trueos_shims::log_error("qjs-browser: async-fs service start failed\n");
+        BROWSER_TASK_STARTED.store(false, Ordering::SeqCst);
+        return;
+    }
     unsafe {
         let vm = match qjs::vm::QjsVm::new_node() {
             Some(vm) => vm,
@@ -567,7 +529,7 @@ pub async fn boot_browser() {
             apply_pending_html(ctx);
             apply_pending_ai_input(ctx);
             process_parry_clicks(ctx, &mut parry_cursors);
-            if !pump_runtime_once(rt, ctx) {
+            if !qjs::vm::pump_runtime_once(rt, ctx, "browser") {
                 break;
             }
             Timer::after(EmbassyDuration::from_millis(16)).await;
