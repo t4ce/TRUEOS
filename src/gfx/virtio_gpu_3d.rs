@@ -1758,6 +1758,66 @@ fn edid_preferred_refresh_millihz(edid: &[u8]) -> Option<u32> {
 }
 
 impl VirglGfxBackend {
+    fn seed_scanout_backing_from_limine(
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        backing: &DmaRegion,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        use ::limine::framebuffer::MemoryModel;
+
+        let fb = framebuffers
+            .and_then(|resp| resp.framebuffers().next())
+            .or_else(|| {
+                crate::limine::framebuffer_response().and_then(|resp| resp.framebuffers().next())
+            });
+        let Some(fb) = fb else {
+            return false;
+        };
+        if fb.memory_model() != MemoryModel::RGB || fb.bpp() != 32 {
+            return false;
+        }
+
+        let dst_width = width as usize;
+        let dst_height = height as usize;
+        if dst_width == 0 || dst_height == 0 {
+            return false;
+        }
+
+        let src_width = fb.width() as usize;
+        let src_height = fb.height() as usize;
+        if src_width == 0 || src_height == 0 {
+            return false;
+        }
+
+        let copy_width = src_width.min(dst_width);
+        let copy_height = src_height.min(dst_height);
+        if copy_width == 0 || copy_height == 0 {
+            return false;
+        }
+
+        let dst_pitch = dst_width.saturating_mul(4);
+        let src_pitch = fb.pitch() as usize;
+
+        unsafe {
+            core::ptr::write_bytes(backing.virt(), 0, backing.len());
+            for y in 0..copy_height {
+                let src = fb.addr().add(y.saturating_mul(src_pitch)) as *const u32;
+                let dst = backing.virt().add(y.saturating_mul(dst_pitch)) as *mut u32;
+                core::ptr::copy_nonoverlapping(src, dst, copy_width);
+            }
+        }
+
+        crate::log!(
+            "virgl-backend: seeded scanout from limine fb src={}x{} copy={}x{}\n",
+            src_width,
+            src_height,
+            copy_width,
+            copy_height
+        );
+        true
+    }
+
     fn publish_scanout_image_buffers(&self) {
         let len_pixels = (self.width as usize).saturating_mul(self.height as usize);
         if len_pixels == 0 {
@@ -1771,7 +1831,7 @@ impl VirglGfxBackend {
     }
 
     pub fn init(
-        _framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
+        framebuffers: Option<&'static ::limine::response::FramebufferResponse>,
     ) -> Option<Self> {
         let mut gpu = VirtioGpu3d::init_first()?;
         let mut display = None;
@@ -1831,10 +1891,6 @@ impl VirglGfxBackend {
             return None;
         }
 
-        // Clear the scanout backing so we start from a known state.
-        let clear_len = res_bytes.min(scanout_backing.len());
-        unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, clear_len) };
-
         if scanout_backing.len() < res_bytes {
             crate::log!(
                 "virgl-backend: scanout backing too small len={} need={}\n",
@@ -1842,6 +1898,17 @@ impl VirglGfxBackend {
                 res_bytes
             );
             return None;
+        }
+
+        if !Self::seed_scanout_backing_from_limine(
+            framebuffers,
+            &scanout_backing,
+            present_w,
+            present_h,
+        ) {
+            let clear_len = res_bytes.min(scanout_backing.len());
+            unsafe { core::ptr::write_bytes(scanout_backing.virt(), 0, clear_len) };
+            crate::log!("virgl-backend: no limine fb seed; scanout backing cleared\n");
         }
 
         if !gpu.resource_attach_backing(scanout_res, scanout_backing.phys(), res_bytes as u32) {

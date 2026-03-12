@@ -8,6 +8,7 @@ export function createFpsOverlay() {
     y: 8,
     stepPx: 12,
     rightPad: 8,
+    rgba: 0x101010ff,
   };
 
   function appendRuns(textRuns, vw) {
@@ -20,9 +21,9 @@ export function createFpsOverlay() {
     }
 
     const glyphCount = st.text.length;
-    if (st.runs.length < (glyphCount * 3)) {
+    if (st.runs.length < (glyphCount * 4)) {
       for (let i = 0; i < st.text.length; i++) {
-        st.runs.push(st.x + (i * st.stepPx), st.y, st.text[i]);
+        st.runs.push(st.x + (i * st.stepPx), st.y, st.text[i], st.rgba);
       }
     }
 
@@ -31,7 +32,7 @@ export function createFpsOverlay() {
     if (nextX !== st.x) {
       st.x = nextX;
       for (let i = 0; i < glyphCount; i++) {
-        st.runs[(i * 3) + 0] = st.x + (i * st.stepPx);
+        st.runs[(i * 4) + 0] = st.x + (i * st.stepPx);
       }
     }
 
@@ -50,7 +51,7 @@ export function createFpsOverlay() {
         // Update only glyph slots that changed.
         for (let i = 0; i < nextText.length; i++) {
           if (st.text[i] === nextText[i]) continue;
-          st.runs[(i * 3) + 2] = nextText[i];
+          st.runs[(i * 4) + 2] = nextText[i];
         }
         st.text = nextText;
       }

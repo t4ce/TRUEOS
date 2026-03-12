@@ -331,11 +331,19 @@ pub(crate) fn cmd_surf(
 
 #[task]
 async fn surf_job(url: HString<256>) {
+    let source_url = {
+        let raw = url.as_str().trim();
+        if raw.starts_with("https://") || raw.starts_with("http://") {
+            String::from(raw)
+        } else {
+            alloc::format!("https://{}", raw)
+        }
+    };
     match crate::tst_html::fetch_html_best_effort(url).await {
         Ok(html) => {
             if !trueos_qjs::browser_task::queue_set_html_with_url(
                 String::from(html.as_str()),
-                Some(String::from(url.as_str())),
+                Some(source_url),
             ) {
                 crate::log!("surf: browser not running\n");
             }
