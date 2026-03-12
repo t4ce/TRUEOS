@@ -248,6 +248,48 @@ function displayImage(imageInput) {
   });
 }
 
+function base64DecodedByteLength(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return 0;
+  }
+  const padding = text.endsWith("==") ? 2 : (text.endsWith("=") ? 1 : 0);
+  return Math.max(0, Math.floor((text.length * 3) / 4) - padding);
+}
+
+function extractImageUrlByteLength(imageUrl) {
+  if (typeof imageUrl !== "string") {
+    return 0;
+  }
+  const marker = ";base64,";
+  const markerIndex = imageUrl.indexOf(marker);
+  if (markerIndex < 0) {
+    return 0;
+  }
+  return base64DecodedByteLength(imageUrl.slice(markerIndex + marker.length));
+}
+
+function logScreenshotUploadSizes(input) {
+  if (!Array.isArray(input)) {
+    return;
+  }
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (!part || part.type !== "input_image") {
+        continue;
+      }
+      const byteLength = extractImageUrlByteLength(part.image_url);
+      if (byteLength > 0) {
+        console.log(`[ai_pc.mjs] screenshot upload png_bytes=${byteLength}`);
+      }
+    }
+  }
+}
+
 function shellPrint(text) {
   const value = typeof text === "string" ? text : String(text == null ? "" : text);
   if (!value) {
@@ -307,7 +349,7 @@ JavaScript to execute. Write small snippets of interactive code. To persist vari
 - console.log(x): Use this to read contents back to you. But be minimal: otherwise the output may be too long. Avoid using console.log() for large image payloads like screenshots or buffers. If you create an image or screenshot, pass the image data directly to display().
 - display(base64_or_data_url): Use this to view either a bare base64-encoded PNG payload or a full data URL. browser.captureScreenshot() already returns a full data URL.
 - Do not write screenshots or image data to temporary files or disk just to pass them back. Keep image data in memory and send it directly to display().
-- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). DOM snapshots now include a stable path field for each node, and insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
+- browser: TRUEOS browser facade. Call browser.getApiContract() first for the supported contract. Current live methods include getHtml(), getTextRows(), getDomSnapshot(), getTrueosFsTreeHtml(maxEntries?), setNodeHtml(pathOrTarget, html), insertHtml(pathOrTarget, html, position), getViewport(), paint(), setScroll(y), moveCursor({ x, y, aiCursorId?, slotId?, buttonsDown?, flags? }), click(...), navigate(...), pressKey(...), captureScreenshot(), and listUnavailable(). getDomSnapshot() returns a rooted tree object with a stable path field on each node; for flat scans, use snap.nodes. click(...) now drives the real cursor/button path and accepts coordinates, stable paths, text=..., plain caption text, and simple selectors like a[href="..."] when the target is interactive. insertHtml() supports beforebegin, afterbegin, beforeend, and afterend. Use moveCursor for visible pointer movement rather than asking about a terminal text cursor.
 - context: same object as browser for now.
 - page: same object as browser for now.
 `,
@@ -465,6 +507,8 @@ async function runTurn(client, entry, previousResponseId, maxSteps = DEFAULT_MAX
     if (previousResponseId) {
       request.previous_response_id = previousResponseId;
     }
+
+    logScreenshotUploadSizes(request.input);
 
     const resp = await client.responses.create(request);
     if (typeof resp.id !== "string" || !resp.id) {

@@ -1,6 +1,23 @@
 import { BLOCK_TAGS } from './htmlDefaults.mjs';
 import { FONT_PX, FONT_RGB } from './theme.mjs';
 
+const TAG_THEME_DEFAULTS = {
+  button: {
+    display: 'inline-block',
+    backgroundColor: '#e9ecef',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTopPx: 4,
+    marginRightPx: 0,
+    marginBottomPx: 4,
+    marginLeftPx: 0,
+    paddingTopPx: 6,
+    paddingRightPx: 12,
+    paddingBottomPx: 6,
+    paddingLeftPx: 12,
+  },
+};
+
 export const INHERITED_STYLE_FIELDS = [
   'color',
   'fontSizePx',
@@ -55,6 +72,15 @@ export function createComputedStyle(tagName = '', path = '', parentStyle = null)
       inline: false,
     },
   };
+
+  const tagDefaults = TAG_THEME_DEFAULTS[tag] || null;
+  if (tagDefaults && typeof tagDefaults === 'object') {
+    const keys = Object.keys(tagDefaults);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      style[key] = tagDefaults[key];
+    }
+  }
 
   if (parentStyle && typeof parentStyle === 'object') {
     for (let i = 0; i < INHERITED_STYLE_FIELDS.length; i++) {
